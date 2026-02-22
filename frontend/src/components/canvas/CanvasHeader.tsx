@@ -1,0 +1,480 @@
+'use client';
+
+import { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  RiDownloadLine,
+  RiCloseLine,
+  RiFileCopyLine,
+  RiShareLine,
+  RiCheckLine,
+  RiFileTextLine,
+  RiTableLine,
+  RiExpandDiagonalLine,
+  RiCollapseDiagonalLine,
+  RiArrowDownSLine,
+  RiChatForwardLine,
+  RiHistoryLine,
+} from '@remixicon/react';
+import { CanvasContent, ContentVersion } from '@/types/canvas';
+import { useCanvasStore } from '@/stores/canvasStore';
+import { cn } from '@/lib/cn';
+
+interface CanvasHeaderProps {
+  content: CanvasContent;
+}
+
+function formatTimestamp(ts: string): string {
+  try {
+    const d = new Date(ts);
+    return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+      + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return ts;
+  }
+}
+
+export function CanvasHeader({ content }: CanvasHeaderProps) {
+  const { mode, setMode, closeCanvas, setContentVersion } = useCanvasStore();
+  const [copied, setCopied] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [versionMenuOpen, setVersionMenuOpen] = useState(false);
+
+  const versions = content.versions || [];
+  const hasVersions = versions.length > 0;
+  const isViewingHistory = content.currentVersionIndex >= 0;
+
+  // Determine which linkedMessageId to use for "jump to conversation"
+  const activeLinkedMessageId = useMemo(() => {
+    if (isViewingHistory && content.currentVersionIndex < versions.length) {
+      return versions[content.currentVersionIndex].linkedMessageId;
+    }
+    return content.linkedMessageId;
+  }, [isViewingHistory, content.currentVersionIndex, versions, content.linkedMessageId]);
+
+  const toggleMode = () => {
+    setMode(mode === 'split' ? 'focused' : 'split');
+  };
+
+  const handleVersionSelect = (index: number) => {
+    setContentVersion(content.id, index);
+    setVersionMenuOpen(false);
+  };
+
+  const handleJumpToConversation = () => {
+    if (!activeLinkedMessageId) return;
+    // Dispatch custom event for ChatPanel to handle scrolling
+    window.dispatchEvent(new CustomEvent('scroll-to-message', {
+      detail: { messageId: activeLinkedMessageId },
+    }));
+  };
+
+  // Copy content to clipboard
+  const handleCopy = async () => {
+    try {
+      let contentText: string;
+      const d = content.data as Record<string, unknown>;
+
+      if (content.type === 'report') {
+        const parts: string[] = [];
+        if (typeof d.headline === 'string') parts.push(`# ${d.headline}`);
+        if (typeof d.subtitle === 'string') parts.push(d.subtitle);
+        if (typeof d.content === 'string') parts.push(d.content);
+        if (Array.isArray(d.insights)) {
+          parts.push('\n## 关键洞察');
+          (d.insights as Array<Record<string, string>>).forEach((i) => parts.push(`- ${i.text || i.title || ''}`));
+        }
+        if (Array.isArray(d.recommendations)) {
+          parts.push('\n## 优化建议');
+          (d.recommendations as Array<Record<string, string>>).forEach((r) => parts.push(`- ${r.text || r.title || ''}`));
+        }
+        contentText = parts.filter(Boolean).join('\n') || JSON.stringify(d, null, 2);
+      } else if (content.type === 'dataTable') {
+        const cols = Array.isArray(d.columns) ? (d.columns as Array<Record<string, string>>) : [];
+        const rows = Array.isArray(d.rows) ? (d.rows as Array<Record<string, unknown>>) : [];
+        const header = cols.map((c) => c.label || c.key || '').join('\t');
+        const body = rows.map((row) =>
+          cols.map((c) => {
+            const val = row[c.key || ''];
+            return val != null ? String(val) : '';
+          }).join('\t')
+        ).join('\n');
+        contentText = header + '\n' + body;
+      } else if (content.type === 'questionList') {
+        const questions = Array.isArray(d.questions) ? (d.questions as Array<Record<string, string>>) : [];
+        contentText = questions.map((q, i) => `${i + 1}. ${q.text || q.question || JSON.stringify(q)}`).join('\n');
+      } else {
+        const summary = typeof d.description === 'string' ? d.description : '';
+        contentText = summary || JSON.stringify(d, null, 2);
+      }
+
+      await navigator.clipboard.writeText(contentText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error('Copy failed:', error);
+    }
+  };
+
+  // Export content
+  const handleExport = (format: 'pdf' | 'excel' | 'json') => {
+    switch (format) {
+      case 'json': {
+        const jsonStr = JSON.stringify(content.data, null, 2);
+        const jsonBlob = new Blob([jsonStr], { type: 'application/json' });
+        const jsonUrl = URL.createObjectURL(jsonBlob);
+        const jsonLink = document.createElement('a');
+        jsonLink.href = jsonUrl;
+        jsonLink.download = `${content.title}.json`;
+        jsonLink.click();
+        URL.revokeObjectURL(jsonUrl);
+        break;
+      }
+      case 'pdf':
+        console.log('Export PDF:', content.id);
+        break;
+      case 'excel':
+        console.log('Export Excel:', content.id);
+        break;
+    }
+    setExportMenuOpen(false);
+  };
+
+  // Get icon based on content type
+  const getTypeIcon = () => {
+    switch (content.type) {
+      case 'report':
+        return <RiFileTextLine className="w-4 h-4" style={{ color: 'var(--color-primary)' }} />;
+      case 'dataTable':
+        return <RiTableLine className="w-4 h-4" style={{ color: 'var(--info)' }} />;
+      default:
+        return <RiFileTextLine className="w-4 h-4" style={{ color: 'var(--text-tertiary)' }} />;
+    }
+  };
+
+  const actionBtnStyle = { color: 'var(--text-tertiary)' };
+  const handleActionEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.background = 'var(--bg-elevated)';
+    e.currentTarget.style.color = 'var(--text-primary)';
+  };
+  const handleActionLeave = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.background = 'transparent';
+    e.currentTarget.style.color = 'var(--text-tertiary)';
+  };
+  const handleMenuItemEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.background = 'var(--bg-elevated)';
+  };
+  const handleMenuItemLeave = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.background = 'transparent';
+  };
+
+  const dropdownClass = 'absolute right-0 top-full mt-1 rounded-lg shadow-lg py-1 z-20 min-w-[140px]';
+  const dropdownStyle = {
+    backgroundColor: 'var(--bg-secondary)',
+    border: '1px solid var(--border-default)',
+  };
+  const menuItemClass = 'w-full px-3 py-2 text-left text-sm flex items-center gap-2 transition-colors';
+
+  return (
+    <div
+      className="transition-colors"
+      style={{
+        borderBottom: '1px solid var(--border-default)',
+        backgroundColor: 'var(--bg-primary)',
+      }}
+    >
+      {/* Top row: title + actions */}
+      <div className="flex items-center justify-between px-4 py-3">
+        {/* Left: Title and type */}
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className="p-1.5 rounded-lg"
+            style={{
+              backgroundColor: 'var(--bg-elevated)',
+              border: '1px solid var(--border-default)',
+            }}
+          >
+            {getTypeIcon()}
+          </div>
+          <div className="min-w-0">
+            <h2 className="font-semibold truncate text-sm" style={{ color: 'var(--text-primary)' }}>
+              {content.title}
+            </h2>
+            <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
+              <span className="capitalize">
+                {content.type === 'dataTable' ? '数据表格' :
+                 content.type === 'report' ? '分析报告' :
+                 content.type === 'chart' ? '数据图表' :
+                 content.type === 'questionList' ? '问题列表' :
+                 content.type === 'fetchResults' ? '抓取结果' :
+                 '选择项'}
+              </span>
+              {content.category === 'baseline' && (
+                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-500/15 text-violet-300 border border-violet-500/30">
+                  基线
+                </span>
+              )}
+              {content.category === 'scenario' && (
+                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">
+                  {content.scenarioLabel || '场景'}
+                </span>
+              )}
+            </span>
+          </div>
+        </div>
+
+        {/* Right: Action buttons */}
+        <div className="flex items-center gap-1">
+          {/* Copy button */}
+          <button
+            onClick={handleCopy}
+            className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
+            style={copied
+              ? { backgroundColor: 'var(--status-success-bg, rgba(34,197,94,0.1))', color: 'var(--status-success)' }
+              : actionBtnStyle
+            }
+            onMouseEnter={copied ? undefined : handleActionEnter}
+            onMouseLeave={copied ? undefined : handleActionLeave}
+            title={copied ? '已复制' : '复制内容'}
+          >
+            <AnimatePresence mode="wait">
+              {copied ? (
+                <motion.div key="check" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
+                  <RiCheckLine className="w-4 h-4" />
+                </motion.div>
+              ) : (
+                <motion.div key="copy" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
+                  <RiFileCopyLine className="w-4 h-4" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </button>
+
+          {/* Share button — disabled */}
+          <button
+            disabled
+            className="p-2 rounded-lg transition-all duration-200 cursor-not-allowed opacity-40"
+            style={actionBtnStyle}
+            title="即将推出"
+          >
+            <RiShareLine className="w-4 h-4" />
+          </button>
+
+          {/* Export button with dropdown */}
+          {(content.type === 'report' || content.type === 'dataTable') && (
+            <div className="relative">
+              <button
+                onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
+                style={actionBtnStyle}
+                onMouseEnter={handleActionEnter}
+                onMouseLeave={handleActionLeave}
+                title="导出"
+              >
+                <RiDownloadLine className="w-4 h-4" />
+              </button>
+
+              <AnimatePresence>
+                {exportMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -5, scale: 0.95 }}
+                    className={dropdownClass}
+                    style={dropdownStyle}
+                  >
+                    <button
+                      disabled
+                      className={`${menuItemClass} cursor-not-allowed opacity-40`}
+                      style={{ color: 'var(--text-tertiary)' }}
+                      title="即将推出"
+                    >
+                      <RiFileTextLine className="w-3.5 h-3.5" />
+                      导出 PDF（即将推出）
+                    </button>
+                    <button
+                      disabled
+                      className={`${menuItemClass} cursor-not-allowed opacity-40`}
+                      style={{ color: 'var(--text-tertiary)' }}
+                      title="即将推出"
+                    >
+                      <RiTableLine className="w-3.5 h-3.5" />
+                      导出 Excel（即将推出）
+                    </button>
+                    <button
+                      onClick={() => handleExport('json')}
+                      className={menuItemClass}
+                      style={{ color: 'var(--text-primary)' }}
+                      onMouseEnter={handleMenuItemEnter}
+                      onMouseLeave={handleMenuItemLeave}
+                    >
+                      <span className="text-xs font-mono">{'{}'}</span>
+                      导出 JSON
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {/* Divider */}
+          <div className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border-default)' }} />
+
+          {/* Expand/Collapse button */}
+          <button
+            onClick={toggleMode}
+            className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
+            style={actionBtnStyle}
+            onMouseEnter={handleActionEnter}
+            onMouseLeave={handleActionLeave}
+            title={mode === 'split' ? '展开' : '收起'}
+          >
+            {mode === 'split' ? (
+              <RiExpandDiagonalLine className="w-4 h-4" />
+            ) : (
+              <RiCollapseDiagonalLine className="w-4 h-4" />
+            )}
+          </button>
+
+          {/* Close button */}
+          <button
+            onClick={closeCanvas}
+            className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
+            style={actionBtnStyle}
+            onMouseEnter={handleActionEnter}
+            onMouseLeave={handleActionLeave}
+            title="关闭"
+          >
+            <RiCloseLine className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Click outside to close menus */}
+        {(exportMenuOpen || versionMenuOpen) && (
+          <div
+            className="fixed inset-0 z-10"
+            onClick={() => {
+              setExportMenuOpen(false);
+              setVersionMenuOpen(false);
+            }}
+          />
+        )}
+      </div>
+
+      {/* Version bar: version selector + jump to conversation */}
+      {(hasVersions || activeLinkedMessageId) && (
+        <div
+          className="flex items-center justify-between px-4 py-2"
+          style={{ borderTop: '1px solid var(--border-default)', backgroundColor: 'var(--bg-secondary)' }}
+        >
+          <div className="flex items-center gap-3">
+            {/* Version selector */}
+            {hasVersions && (
+              <div className="relative">
+                <button
+                  onClick={() => setVersionMenuOpen(!versionMenuOpen)}
+                  className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors cursor-pointer',
+                    isViewingHistory
+                      ? 'bg-[--brand-bg] text-[--brand-primary] border border-[--brand-border]'
+                      : 'text-[--text-secondary] hover:bg-[--bg-tertiary] border border-transparent'
+                  )}
+                >
+                  <RiHistoryLine className="w-3.5 h-3.5" />
+                  {isViewingHistory
+                    ? `v${versions[content.currentVersionIndex]?.versionNumber ?? '?'}`
+                    : `v${versions.length + 1} (最新)`
+                  }
+                  <RiArrowDownSLine className="w-3.5 h-3.5" />
+                </button>
+
+                <AnimatePresence>
+                  {versionMenuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -5, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -5, scale: 0.95 }}
+                      className="absolute left-0 top-full mt-1 rounded-lg shadow-lg py-1 z-20 min-w-[220px]"
+                      style={dropdownStyle}
+                    >
+                      {/* Latest (current) */}
+                      <button
+                        onClick={() => handleVersionSelect(-1)}
+                        className={cn(menuItemClass, 'text-xs')}
+                        style={{
+                          color: !isViewingHistory ? 'var(--brand-primary)' : 'var(--text-primary)',
+                          backgroundColor: !isViewingHistory ? 'var(--brand-bg)' : undefined,
+                        }}
+                        onMouseEnter={isViewingHistory ? handleMenuItemEnter : undefined}
+                        onMouseLeave={isViewingHistory ? handleMenuItemLeave : undefined}
+                      >
+                        <span className="font-medium">v{versions.length + 1}</span>
+                        <span style={{ color: 'var(--text-tertiary)' }}>
+                          {formatTimestamp(content.createdAt?.toISOString?.() || new Date().toISOString())}
+                        </span>
+                        <span
+                          className="ml-auto px-1.5 py-0.5 rounded text-[10px]"
+                          style={{ backgroundColor: 'var(--status-success-bg)', color: 'var(--success)' }}
+                        >
+                          最新
+                        </span>
+                      </button>
+                      {/* Historical versions */}
+                      {versions.map((v, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => handleVersionSelect(idx)}
+                          className={cn(menuItemClass, 'text-xs')}
+                          style={{
+                            color: isViewingHistory && content.currentVersionIndex === idx
+                              ? 'var(--brand-primary)'
+                              : 'var(--text-primary)',
+                            backgroundColor: isViewingHistory && content.currentVersionIndex === idx
+                              ? 'var(--brand-bg)'
+                              : undefined,
+                          }}
+                          onMouseEnter={handleMenuItemEnter}
+                          onMouseLeave={handleMenuItemLeave}
+                        >
+                          <span className="font-medium">v{v.versionNumber}</span>
+                          <span style={{ color: 'var(--text-tertiary)' }}>
+                            {formatTimestamp(v.timestamp)}
+                          </span>
+                        </button>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+
+            {/* Viewing history indicator */}
+            {isViewingHistory && (
+              <button
+                onClick={() => handleVersionSelect(-1)}
+                className="text-xs px-2 py-1 rounded-md cursor-pointer transition-colors"
+                style={{ color: 'var(--brand-primary)' }}
+              >
+                回到最新版本
+              </button>
+            )}
+          </div>
+
+          {/* Jump to conversation */}
+          {activeLinkedMessageId && (
+            <button
+              onClick={handleJumpToConversation}
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors cursor-pointer"
+              style={{ color: 'var(--text-tertiary)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--brand-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)'; }}
+            >
+              <RiChatForwardLine className="w-3.5 h-3.5" />
+              跳转到对应对话
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

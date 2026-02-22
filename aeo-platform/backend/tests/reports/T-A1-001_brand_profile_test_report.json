@@ -1,0 +1,347 @@
+{
+  "test_case_id": "T-A1-001",
+  "test_name": "A1 品牌档案收集测试",
+  "test_time": "2026-02-01T01:14:07.969179",
+  "test_brand": "纽崔莱",
+  "input_params": {
+    "brand_name": "纽崔莱",
+    "official_website": null,
+    "industry_hint": null
+  },
+  "status": "PASSED",
+  "tool_result": {
+    "success": true,
+    "content": "成功分析品牌 '纽崔莱'，识别出 12 个竞品",
+    "data": {
+      "brand_profile": {
+        "brand_name": "纽崔莱",
+        "brand_name_en": "Nutrilite",
+        "official_website": "https://www.nutrilite.com",
+        "industry": "营养保健品",
+        "description": "纽崔莱是全球知名的营养保健品牌，隶属于安利公司旗下。作为植物营养素的先驱者，纽崔莱专注于研发和生产高品质的维生素、矿物质、植物营养素等膳食补充剂产品。品牌以'自然的精华，科学的验证'为理念，致力于为消费者提供全面、均衡的营养解决方案。",
+        "core_products": [
+          "多种维生素矿物质补充剂",
+          "植物蛋白粉",
+          "鱼油软胶囊",
+          "钙镁片",
+          "银杏叶提取物",
+          "越橘益视胶囊",
+          "倍力健",
+          "纽崔莱蛋白粉"
+        ],
+        "brand_keywords": [
+          "营养保健",
+          "维生素",
+          "膳食补充剂",
+          "植物营养素",
+          "健康管理",
+          "天然有机"
+        ],
+        "brand_positioning": "高端天然营养保健品品牌，强调科学研发与自然精华的结合，定位于追求健康生活品质的中高收入消费群体",
+        "target_audience": "25-55岁注重健康管理的都市白领、中高收入家庭、中老年人群，以及运动健身人群",
+        "founded_year": "1934年",
+        "price_positioning": "中高端价位"
+      },
+      "competitors": [
+        {
+          "name": "汤臣倍健",
+          "name_en": "By-Health",
+          "website": "https://www.by-health.com",
+          "description": "中国领先的膳食营养补充剂品牌，A股上市公司，产品涵盖维生素、蛋白质、矿物质等多个品类，国内市场份额领先",
+          "relevance_score": 9,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "蛋白质粉",
+            "维生素片",
+            "钙片",
+            "鱼油",
+            "健力多"
+          ],
+          "competitive_advantage": "国内市场份额领先，产品线丰富，渠道覆盖广，品牌认知度高"
+        },
+        {
+          "name": "GNC健安喜",
+          "name_en": "GNC",
+          "website": "https://www.gnc.com",
+          "description": "美国知名保健品牌，全球最大的健康营养品零售商之一，以专业、科学著称，产品线全面",
+          "relevance_score": 9,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "维生素",
+            "矿物质",
+            "蛋白质",
+            "鱼油",
+            "关节保健"
+          ],
+          "competitive_advantage": "国际品牌影响力，专业科学形象，产品研发能力强"
+        },
+        {
+          "name": "Swisse",
+          "name_en": "Swisse",
+          "website": "https://www.swisse.com",
+          "description": "澳大利亚领先的自然健康品牌，被合生元收购后加大中国市场投入，以天然成分著称",
+          "relevance_score": 8,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "胶原蛋白",
+            "葡萄籽",
+            "维生素",
+            "鱼油",
+            "护肝片"
+          ],
+          "competitive_advantage": "澳洲天然形象，产品创新能力强，跨境电商渠道优势"
+        },
+        {
+          "name": "安利纽崔莱",
+          "name_en": "Amway Nutrilite",
+          "website": "https://www.amway.com",
+          "description": "与纽崔莱同属安利的营养保健品系列，在中国市场采用直销模式，拥有完善的销售网络",
+          "relevance_score": 10,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "多种维生素",
+            "蛋白质粉",
+            "矿物质",
+            "植物提取物"
+          ],
+          "competitive_advantage": "同一母公司，资源共享，直销网络完善，品牌信任度高"
+        },
+        {
+          "name": "养生堂",
+          "name_en": "C-Health",
+          "website": "https://www.c-health.com",
+          "description": "中国知名天然维生素品牌，以天然维生素E起家，逐渐扩展到其他保健品领域",
+          "relevance_score": 8,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "天然维生素E",
+            "维生素C",
+            "胡萝卜素",
+            "养生堂龟鳖丸"
+          ],
+          "competitive_advantage": "天然维生素专家形象，国产品牌优势，价格定位适中"
+        },
+        {
+          "name": "善存",
+          "name_en": "Centrum",
+          "website": "https://www.centrum.com",
+          "description": "全球领先的维生素矿物质品牌，辉瑞旗下产品，以全面的配方著称",
+          "relevance_score": 8,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "多维元素片",
+            "钙尔奇",
+            "善存片"
+          ],
+          "competitive_advantage": "国际制药企业背景，产品配方科学，品牌历史悠久"
+        },
+        {
+          "name": "康宝莱",
+          "name_en": "Herbalife",
+          "website": "https://www.herbalife.com",
+          "description": "全球知名营养和体重管理公司，采用直销模式，产品包括蛋白粉、维生素等",
+          "relevance_score": 8,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "蛋白奶昔",
+            "维生素",
+            "矿物质",
+            "草本营养品"
+          ],
+          "competitive_advantage": "体重管理细分领域领先，直销模式成熟，国际品牌"
+        },
+        {
+          "name": "21金维他",
+          "name_en": "21st Century",
+          "website": "https://www.21stcentury.com.cn",
+          "description": "中国老牌多维元素片品牌，价格亲民，市场覆盖面广",
+          "relevance_score": 7,
+          "competition_type": "间接竞争",
+          "core_products": [
+            "多维元素片",
+            "维生素",
+            "矿物质"
+          ],
+          "competitive_advantage": "价格优势，国产品牌认知度高，渠道下沉"
+        },
+        {
+          "name": "澳佳宝",
+          "name_en": "Blackmores",
+          "website": "https://www.blackmores.com.au",
+          "description": "澳大利亚顶级天然营养品品牌，被称为'澳洲保健品的国宝'",
+          "relevance_score": 8,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "鱼油",
+            "维生素",
+            "矿物质",
+            "孕妇营养",
+            "关节保健"
+          ],
+          "competitive_advantage": "澳洲天然形象，产品品质高，高端定位"
+        },
+        {
+          "name": "葆婴",
+          "name_en": "USANA",
+          "website": "https://www.usana.com",
+          "description": "美国高端营养补充剂品牌，以科学配方和高品质著称，采用直销模式",
+          "relevance_score": 7,
+          "competition_type": "间接竞争",
+          "core_products": [
+            "维生素",
+            "矿物质",
+            "蛋白质",
+            "细胞营养"
+          ],
+          "competitive_advantage": "高端定位，科学配方严谨，直销网络"
+        },
+        {
+          "name": "同仁堂健康",
+          "name_en": "Tong Ren Tang Health",
+          "website": "https://www.trthealth.com",
+          "description": "同仁堂旗下健康产品品牌，依托传统中医药文化，现代与传统结合",
+          "relevance_score": 7,
+          "competition_type": "潜在竞争",
+          "core_products": [
+            "保健食品",
+            "中药滋补品",
+            "健康饮品"
+          ],
+          "competitive_advantage": "百年品牌信誉，中医药传统背书，高端礼品市场"
+        },
+        {
+          "name": "艾兰得",
+          "name_en": "Aland",
+          "website": "https://www.aland.com.cn",
+          "description": "中国领先的营养保健品出口企业，近年来加大国内市场开拓",
+          "relevance_score": 6,
+          "competition_type": "潜在竞争",
+          "core_products": [
+            "维生素",
+            "矿物质",
+            "植物提取物",
+            "OEM代工"
+          ],
+          "competitive_advantage": "出口品质，供应链优势，价格竞争力"
+        }
+      ],
+      "competitive_landscape": {
+        "market_overview": "中国营养保健品市场规模持续扩大，消费者健康意识提升，行业竞争激烈。国际品牌与本土品牌并存，直销与非直销模式竞争加剧。高端市场由国际品牌主导，中端市场国产品牌快速崛起。",
+        "competition_intensity": "高",
+        "key_battlegrounds": [
+          "产品品质与科学配方",
+          "品牌信任度与口碑",
+          "渠道覆盖与触达能力",
+          "价格性价比",
+          "直销与新零售模式创新"
+        ]
+      },
+      "analysis_summary": "纽崔莱作为安利旗下的高端营养保健品品牌，凭借80多年的历史和科研积累，在行业中占据重要地位。其核心优势在于品牌信誉、产品质量和直销网络，但也面临来自国内外品牌的多重竞争压力。国内品牌如汤臣倍健、养生堂在性价比和渠道方面具有优势，而国际品牌如GNC、Swisse、澳佳宝则凭借原产地优势和品牌形象抢占高端市场。纽崔莱需要持续强化科研创新、优化产品组合，并适应中国市场的数字化转型趋势，以保持竞争优势。"
+    },
+    "error": null,
+    "duration_seconds": 29.148304
+  },
+  "validation": {
+    "tool_execution_success": true,
+    "has_brand_profile": true,
+    "has_competitors": true,
+    "required_fields_present": [
+      "brand_name",
+      "brand_name_en",
+      "official_website",
+      "industry",
+      "description",
+      "core_products",
+      "brand_keywords",
+      "brand_positioning",
+      "target_audience",
+      "founded_year",
+      "price_positioning"
+    ],
+    "required_fields_missing": [],
+    "brand_name_match": true,
+    "competitor_count": 12,
+    "details": {
+      "brand_profile": {
+        "brand_name": "纽崔莱",
+        "brand_name_en": "Nutrilite",
+        "official_website": "https://www.nutrilite.com",
+        "industry": "营养保健品",
+        "description": "纽崔莱是全球知名的营养保健品牌，隶属于安利公司旗下。作为植物营养素的先驱者，纽崔莱专注于研发和生产高品质的维生素、矿物质、植物营养素等膳食补充剂产品。品牌以'自然的精华，科学的验证'为理念，致力于为消费者提供全面、均衡的营养解决方案。",
+        "core_products": [
+          "多种维生素矿物质补充剂",
+          "植物蛋白粉",
+          "鱼油软胶囊",
+          "钙镁片",
+          "银杏叶提取物",
+          "越橘益视胶囊",
+          "倍力健",
+          "纽崔莱蛋白粉"
+        ],
+        "brand_keywords": [
+          "营养保健",
+          "维生素",
+          "膳食补充剂",
+          "植物营养素",
+          "健康管理",
+          "天然有机"
+        ],
+        "brand_positioning": "高端天然营养保健品品牌，强调科学研发与自然精华的结合，定位于追求健康生活品质的中高收入消费群体",
+        "target_audience": "25-55岁注重健康管理的都市白领、中高收入家庭、中老年人群，以及运动健身人群",
+        "founded_year": "1934年",
+        "price_positioning": "中高端价位"
+      },
+      "competitors": [
+        {
+          "name": "汤臣倍健",
+          "name_en": "By-Health",
+          "website": "https://www.by-health.com",
+          "description": "中国领先的膳食营养补充剂品牌，A股上市公司，产品涵盖维生素、蛋白质、矿物质等多个品类，国内市场份额领先",
+          "relevance_score": 9,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "蛋白质粉",
+            "维生素片",
+            "钙片",
+            "鱼油",
+            "健力多"
+          ],
+          "competitive_advantage": "国内市场份额领先，产品线丰富，渠道覆盖广，品牌认知度高"
+        },
+        {
+          "name": "GNC健安喜",
+          "name_en": "GNC",
+          "website": "https://www.gnc.com",
+          "description": "美国知名保健品牌，全球最大的健康营养品零售商之一，以专业、科学著称，产品线全面",
+          "relevance_score": 9,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "维生素",
+            "矿物质",
+            "蛋白质",
+            "鱼油",
+            "关节保健"
+          ],
+          "competitive_advantage": "国际品牌影响力，专业科学形象，产品研发能力强"
+        },
+        {
+          "name": "Swisse",
+          "name_en": "Swisse",
+          "website": "https://www.swisse.com",
+          "description": "澳大利亚领先的自然健康品牌，被合生元收购后加大中国市场投入，以天然成分著称",
+          "relevance_score": 8,
+          "competition_type": "直接竞争",
+          "core_products": [
+            "胶原蛋白",
+            "葡萄籽",
+            "维生素",
+            "鱼油",
+            "护肝片"
+          ],
+          "competitive_advantage": "澳洲天然形象，产品创新能力强，跨境电商渠道优势"
+        }
+      ]
+    }
+  },
+  "conclusion": "✓ 测试通过 - A1 Tool 成功收集了纽崔莱品牌档案，包含 11 个字段，识别了 12 个竞品"
+}

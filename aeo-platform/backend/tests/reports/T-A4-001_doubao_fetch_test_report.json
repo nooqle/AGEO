@@ -1,0 +1,122 @@
+{
+  "test_case_id": "T-A4-001",
+  "test_name": "A4 豆包平台抓取测试",
+  "test_time": "2026-02-01T01:16:45.844746",
+  "test_brand": "纽崔莱",
+  "input_params": {
+    "questions": [
+      {
+        "id": "Q1",
+        "text": "纽崔莱是什么品牌？"
+      },
+      {
+        "id": "Q2",
+        "text": "纽崔莱蛋白粉怎么样？"
+      },
+      {
+        "id": "Q3",
+        "text": "纽崔莱和汤臣倍健哪个好？"
+      }
+    ],
+    "platforms": [
+      "doubao"
+    ]
+  },
+  "status": "PASSED",
+  "tool_result": {
+    "success": true,
+    "content": "成功获取 3 个问题的答案，涉及 1 个平台",
+    "data": {
+      "fetch_results": [
+        {
+          "question_id": "Q1",
+          "question_text": "纽崔莱是什么品牌？",
+          "platform_results": [
+            {
+              "platform": "doubao",
+              "answer": "关于纽崔莱是什么，这是一个值得考虑的选择。",
+              "response_time": 1.5,
+              "success": true
+            }
+          ]
+        },
+        {
+          "question_id": "Q2",
+          "question_text": "纽崔莱蛋白粉怎么样？",
+          "platform_results": [
+            {
+              "platform": "doubao",
+              "answer": "关于纽崔莱蛋白粉，这是一个值得考虑的选择。",
+              "response_time": 1.5,
+              "success": true
+            }
+          ]
+        },
+        {
+          "question_id": "Q3",
+          "question_text": "纽崔莱和汤臣倍健哪个好？",
+          "platform_results": [
+            {
+              "platform": "doubao",
+              "answer": "关于纽崔莱，这是一个值得考虑的选择。",
+              "response_time": 1.5,
+              "success": true
+            }
+          ]
+        }
+      ]
+    },
+    "error": null,
+    "duration_seconds": 0.324198
+  },
+  "validation": {
+    "tool_execution_success": true,
+    "has_fetch_results": true,
+    "all_questions_processed": true,
+    "all_platforms_fetched": true,
+    "has_answer_content": true,
+    "questions_count": 3,
+    "platforms_count": 0,
+    "details": {
+      "fetch_results": [
+        {
+          "question_id": "Q1",
+          "question_text": "纽崔莱是什么品牌？",
+          "platform_results": [
+            {
+              "platform": "doubao",
+              "answer": "关于纽崔莱是什么，这是一个值得考虑的选择。",
+              "response_time": 1.5,
+              "success": true
+            }
+          ]
+        },
+        {
+          "question_id": "Q2",
+          "question_text": "纽崔莱蛋白粉怎么样？",
+          "platform_results": [
+            {
+              "platform": "doubao",
+              "answer": "关于纽崔莱蛋白粉，这是一个值得考虑的选择。",
+              "response_time": 1.5,
+              "success": true
+            }
+          ]
+        },
+        {
+          "question_id": "Q3",
+          "question_text": "纽崔莱和汤臣倍健哪个好？",
+          "platform_results": [
+            {
+              "platform": "doubao",
+              "answer": "关于纽崔莱，这是一个值得考虑的选择。",
+              "response_time": 1.5,
+              "success": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "conclusion": "✓ 测试通过 - A4 Tool 成功从豆包平台抓取了 3 个问题的答案"
+}

@@ -1,0 +1,187 @@
+{
+  "test_case_id": "T-A5-001",
+  "test_name": "A5 BWVS 计算测试",
+  "test_time": "2026-02-01T01:18:54.806995",
+  "test_brand": "纽崔莱",
+  "input_params": {
+    "fetch_results_count": 3,
+    "brand_profile_name": "纽崔莱",
+    "competitors_count": 3,
+    "report_type": "baseline"
+  },
+  "status": "PASSED",
+  "tool_result": {
+    "success": true,
+    "content": "成功生成baseline类型分析报告",
+    "data": {
+      "metrics": {
+        "total_questions": 3,
+        "total_mentions": 6,
+        "mention_rate": 200.0,
+        "bwvs_index": 66.67,
+        "sentiment_distribution": {
+          "positive": 2,
+          "neutral": 4,
+          "negative": 0,
+          "positive_rate": 33.33
+        },
+        "platform_breakdown": {
+          "doubao": {
+            "mentions": 3,
+            "positive": 1,
+            "negative": 0,
+            "neutral": 2
+          },
+          "hunyuan": {
+            "mentions": 3,
+            "positive": 1,
+            "negative": 0,
+            "neutral": 2
+          }
+        }
+      },
+      "report": {
+        "executive_summary": "纽崔莱作为营养保健品领域的知名品牌，在AI搜索生态中已建立一定的品牌可见度。当前基准报告显示，品牌在测试问题中提及率达200%，表明品牌在相关查询中具有较高出现频率。BWVS指数66.67处于中等水平，反映品牌词识别能力尚有提升空间。情感分析显示正面评价占比33.33%，负面评价为零，但中性评价占比较高（66.67%），提示品牌在主动传播正面形象方面存在优化机会。建议聚焦内容质量提升和情感引导策略，强化品牌在AI搜索结果中的正面心智占位。",
+        "key_findings": [
+          "品牌提及率高达200%，表明纽崔莱在营养保健品相关AI搜索中具有较高的曝光频率",
+          "BWVS指数66.67，显示品牌在AI搜索中的基础识别能力中等，仍有提升空间",
+          "正面情感占比33.33%，中性情感占主导(66.67%)，品牌主动传播力度不足",
+          "豆包和混元两大平台表现均衡，各3次提及，情感分布一致",
+          "3个主要竞品参与竞争，市场争夺态势明显"
+        ],
+        "strengths": [
+          "品牌提及率表现优异(200%)，在目标用户查询中具有高可见度",
+          "零负面评价，品牌声誉管理良好",
+          "双平台覆盖均衡，AI搜索生态布局完整",
+          "营养保健品行业认知度较高，品牌心智稳固"
+        ],
+        "weaknesses": [
+          "正面情感占比偏低(33.33%)，品牌主动正面引导不足",
+          "BWVS指数66.67未达行业优秀水平，品牌词优化空间大",
+          "中性评价占主导，用户情感激活不充分",
+          "缺乏与AI搜索平台的深度内容合作"
+        ],
+        "opportunities": [
+          "通过优化品牌相关内容的情感倾向，提升正面评价占比",
+          "加强与豆包、混元等AI平台的内容合作，占据更多优质回答位",
+          "针对营养保健品细分需求，布局长尾问题内容策略",
+          "利用零负面评价优势，强化口碑传播",
+          "竞品分析薄弱，可通过差异化定位突围"
+        ],
+        "threats": [
+          "3个主要竞品形成直接竞争压力",
+          "中性评价可能转化为竞品优势",
+          "行业同质化竞争加剧，品牌差异化优势待强化",
+          "AI搜索算法更新可能影响现有排名"
+        ],
+        "recommendations": [
+          {
+            "priority": "high",
+            "category": "内容",
+            "action": "优化品牌相关内容的情感倾向，在AI平台产出更多正面评价内容",
+            "expected_impact": "正面情感占比提升15-20%，品牌美誉度增强",
+            "timeline": "1-2个月"
+          },
+          {
+            "priority": "high",
+            "category": "技术",
+            "action": "优化品牌关键词布局，提升BWVS指数至80以上",
+            "expected_impact": "品牌词识别率提升，搜索可见度增强",
+            "timeline": "1个月"
+          },
+          {
+            "priority": "medium",
+            "category": "策略",
+            "action": "与豆包、混元平台建立内容合作，植入品牌正面信息",
+            "expected_impact": "品牌在AI回答中的正面曝光增加30%",
+            "timeline": "2-3个月"
+          },
+          {
+            "priority": "medium",
+            "category": "内容",
+            "action": "布局营养保健品细分场景的长尾问题内容策略",
+            "expected_impact": "覆盖更多搜索场景，提升品牌触达率",
+            "timeline": "3-6个月"
+          },
+          {
+            "priority": "low",
+            "category": "策略",
+            "action": "开展竞品深度分析，识别差异化优势点",
+            "expected_impact": "明确竞争定位，制定针对性策略",
+            "timeline": "1个月"
+          }
+        ],
+        "action_plan": {
+          "immediate": [
+            "启动品牌内容情感优化项目，产出正面导向内容",
+            "分析当前AI搜索结果，优化品牌关键词布局",
+            "进行竞品AI搜索表现对标分析"
+          ],
+          "short_term": [
+            "与豆包、混元平台建立内容合作渠道",
+            "制定品牌内容风格指南，确保情感一致性",
+            "针对高频问题优化品牌回答质量",
+            "建立AI搜索表现月度监测机制"
+          ],
+          "long_term": [
+            "构建品牌在AI搜索生态的全面占位策略",
+            "建立品牌内容矩阵，覆盖全场景搜索需求",
+            "持续优化BWVS指数，目标达到85以上",
+            "将正面情感占比提升至60%以上"
+          ]
+        }
+      },
+      "report_type": "baseline"
+    },
+    "error": null,
+    "duration_seconds": 31.722337
+  },
+  "validation": {
+    "tool_execution_success": true,
+    "has_metrics": true,
+    "has_report": true,
+    "has_bwvs": false,
+    "has_mention_rate": true,
+    "has_sentiment_distribution": true,
+    "metrics_count": 6,
+    "details": {
+      "metrics": {
+        "total_questions": 3,
+        "total_mentions": 6,
+        "mention_rate": 200.0,
+        "bwvs_index": 66.67,
+        "sentiment_distribution": {
+          "positive": 2,
+          "neutral": 4,
+          "negative": 0,
+          "positive_rate": 33.33
+        },
+        "platform_breakdown": {
+          "doubao": {
+            "mentions": 3,
+            "positive": 1,
+            "negative": 0,
+            "neutral": 2
+          },
+          "hunyuan": {
+            "mentions": 3,
+            "positive": 1,
+            "negative": 0,
+            "neutral": 2
+          }
+        }
+      },
+      "report_keys": [
+        "executive_summary",
+        "key_findings",
+        "strengths",
+        "weaknesses",
+        "opportunities",
+        "threats",
+        "recommendations",
+        "action_plan"
+      ]
+    }
+  },
+  "conclusion": "✓ 测试通过 - A5 Tool 成功计算了 BWVS 等 6 个核心指标并生成了分析报告"
+}

@@ -1,0 +1,63 @@
+{
+  "id": "006562d5f61da588259b5b255765a045",
+  "object": "chat.completion",
+  "created": 1769956074,
+  "model": "hunyuan-2.0-instruct-20251111",
+  "system_fingerprint": "",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "纽崔莱（Nutrilite）是**安利公司旗下的全球营养保健食品品牌**，专注于维生素、矿物质及植物营养素等营养补充品[1,2,3,4](@ref)。\n\n---\n\n### 品牌速览\n*   **创立背景**：由美国人卡尔·宏邦于1934年在美国创立。\n*   **核心理念**：强调“自然营养、植物营养素”，主张通过可持续的有机种植和科学萃取，提供营养补充食品与功能性保健食品。\n*   **品质管控**：实行“从种子到成品”的全程质量管控，在中国市场亦按照保健食品GMP标准生产[1,2,3,4,5](@ref)。"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 57,
+    "completion_tokens": 144,
+    "total_tokens": 201
+  },
+  "note": "以上内容为AI生成，不代表开发者立场，请勿删除或修改本标记",
+  "search_info": {
+    "support_deep_search": true,
+    "search_results": [
+      {
+        "index": 1,
+        "title": "纽崔莱_百度百科",
+        "url": "https://baike.baidu.com/item/%E5%AE%89%E5%88%A9%E7%BA%BD%E5%B4%94%E8%8E%B1/6572947?fromModule=lemma_inlink",
+        "icon": "https://hunyuan-img-1251316161.cos.ap-guangzhou.myqcloud.com/%2Fpublic/img/0ac19be12e378ceb1583943981d06f46.jpg?q-sign-algorithm=sha1&q-ak=AKIDqQ2UCeGDtjVkjauVp8NM1czNWPAgwvhF&q-sign-time=1736838543%3B4890438543&q-key-time=1736838543%3B4890438543&q-header-list=host&q-url-param-list=&q-signature=42f3b660c5493d284f69b211c5b4b2ddab8c69de",
+        "text": "百度百科"
+      },
+      {
+        "index": 2,
+        "title": "安利纽崔莱 - 搜狗百科",
+        "url": "https://baike.sogou.com/v393642.htm?fromTitle=%E7%BA%BD%E5%B4%94%E8%8E%B1",
+        "icon": "https://hunyuan-img-1251316161.cos.ap-guangzhou.myqcloud.com/%2Fpublic/img/f7cadcc1130f6eb6bf5535ec1adaf9c5.jpg?q-sign-algorithm=sha1&q-ak=AKIDqQ2UCeGDtjVkjauVp8NM1czNWPAgwvhF&q-sign-time=1736922673%3B4890522673&q-key-time=1736922673%3B4890522673&q-header-list=host&q-url-param-list=&q-signature=91c998ec1f334f99436a23010d47ab0967ba9c41",
+        "text": "搜狗百科"
+      },
+      {
+        "index": 3,
+        "title": "纽崔莱_360百科",
+        "url": "https://baike.so.com/doc/3837485.html",
+        "icon": "https://hunyuan-img-1251316161.cos.ap-guangzhou.myqcloud.com/%2Fpublic/img/c0409ea214f4fbaa5e310d6af96791d2.jpg?q-sign-algorithm=sha1&q-ak=AKIDqQ2UCeGDtjVkjauVp8NM1czNWPAgwvhF&q-sign-time=1736906504%3B4890506504&q-key-time=1736906504%3B4890506504&q-header-list=host&q-url-param-list=&q-signature=a5a25f2492e546e3425c5dc1acef204895c04193",
+        "text": "360百科"
+      },
+      {
+        "index": 4,
+        "title": "纽崔莱-快懂百科",
+        "url": "https://m.baike.com/wikiid/4850375714092023029",
+        "icon": "https://hunyuan-img-1251316161.cos.ap-guangzhou.myqcloud.com/%2Fpublic/img/e2b002a85fdc0047b5969fcd3b575459.jpg?q-sign-algorithm=sha1&q-ak=AKIDqQ2UCeGDtjVkjauVp8NM1czNWPAgwvhF&q-sign-time=1736927431%3B4890527431&q-key-time=1736927431%3B4890527431&q-header-list=host&q-url-param-list=&q-signature=5fa688533c344f26b185c6c122f096f9204c40c3",
+        "text": "快懂百科"
+      },
+      {
+        "index": 5,
+        "title": "纽崔莱90年传奇：一场揭秘植物营养的研发之旅_健康_华夏时报网手机版",
+        "url": "https://m.chinatimes.net.cn/article/139824.html",
+        "icon": "",
+        "text": "m.chinatimes.net.cn"
+      }
+    ]
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "test_case_id": "AG-002",
+  "test_name": "规划阶段 (Plan) 测试",
+  "test_time": "2026-02-01T00:38:32.316058",
+  "test_brand": "纽崔莱",
+  "user_input": "帮我分析一下纽崔莱这个品牌",
+  "status": "PASSED",
+  "events": [
+    {
+      "type": "思考",
+      "timestamp": "2026-02-01T00:38:32.344436",
+      "data": {
+        "message": "让我理解一下您的需求...",
+        "progress": 0.05,
+        "action_type": null,
+        "target_agent": null,
+        "execution_status": null,
+        "output_ready": false,
+        "output_type": null
+      }
+    },
+    {
+      "type": "思考",
+      "timestamp": "2026-02-01T00:39:06.213299",
+      "data": {
+        "message": "我理解了，您想要分析品牌 纽崔莱这个。",
+        "progress": 0.1,
+        "action_type": null,
+        "target_agent": null,
+        "execution_status": null,
+        "output_ready": false,
+        "output_type": null
+      }
+    },
+    {
+      "type": "规划",
+      "timestamp": "2026-02-01T00:39:06.213299",
+      "data": {
+        "message": "好的，我已经为您规划好了分析流程：\n\n📋 **执行计划**\n\n1. **采集 纽崔莱这个 品牌信息和竞品数据**\n   预计耗时：30-45 秒\n2. **生成用户画像（可选）**\n   预计耗时：25-35 秒\n3. **生成模拟问题**\n   预计耗时：20-30 秒\n4. **抓取 AI 平台回答**\n   预计耗时：3-8 分钟\n5. **生成分析报告**\n   预计耗时：60-90 秒\n\n---\n现在开始执行第一步...",
+        "progress": 0.15,
+        "action_type": null,
+        "target_agent": null,
+        "execution_status": null,
+        "output_ready": false,
+        "output_type": null
+      }
+    },
+    {
+      "type": "行动",
+      "timestamp": "2026-02-01T00:39:06.213299",
+      "data": {
+        "message": "正在调用 A1 执行分析任务...",
+        "progress": 0.0,
+        "action_type": null,
+        "target_agent": null,
+        "execution_status": null,
+        "output_ready": false,
+        "output_type": null
+      }
+    },
+    {
+      "type": "行动",
+      "timestamp": "2026-02-01T00:39:06.221822",
+      "data": {
+        "message": "正在执行 品牌竞品分析...\n\n收集品牌基础信息、核心产品、行业定位，并识别 8-12 个主要竞品。这是分析流程的第一步，为后续所有分析提供基础数据。\n\n预计耗时：30-45 秒",
+        "progress": 0.1,
+        "action_type": "call_agent",
+        "target_agent": "A1",
+        "execution_status": null,
+        "output_ready": false,
+        "output_type": null
+      }
+    },
+    {
+      "type": "观察",
+      "timestamp": "2026-02-01T00:39:42.412320",
+      "data": {
+        "message": "❌ 品牌竞品分析 执行失败: Could not extract JSON from response",
+        "progress": null,
+        "action_type": null,
+        "target_agent": null,
+        "execution_status": "failed",
+        "output_ready": false,
+        "output_type": null
+      }
+    },
+    {
+      "type": "观察",
+      "timestamp": "2026-02-01T00:39:42.412901",
+      "data": {
+        "message": "A1 执行完成，正在分析结果...",
+        "progress": 0.05,
+        "action_type": null,
+        "target_agent": null,
+        "execution_status": null,
+        "output_ready": false,
+        "output_type": null
+      }
+    }
+  ],
+  "validation": {
+    "has_plan_stage": true,
+    "has_step_list": true,
+    "has_time_estimate": true,
+    "has_agent_sequence": true,
+    "details": {
+      "plan_messages": [
+        "好的，我已经为您规划好了分析流程：\n\n📋 **执行计划**\n\n1. **采集 纽崔莱这个 品牌信息和竞品数据**\n   预计耗时：30-45 秒\n2. **生成用户画像（可选）**\n   预计耗时：25-35 秒\n3. **生成模拟问题**\n   预计耗时：20-30 秒\n4. **抓取 AI 平台回答**\n   预计耗时：3-8 分钟\n5. **生成分析报告**\n   预计耗时：60-90 秒\n\n---\n现在开始执行第一步..."
+      ]
+    },
+    "total_events": 7,
+    "event_types": [
+      "行动",
+      "思考",
+      "规划",
+      "观察"
+    ]
+  },
+  "conclusion": "✓ 测试通过 - Agent 正确生成了执行计划，包含步骤清单、时间预估和Agent序列"
+}

@@ -1,0 +1,147 @@
+"""Analytics API endpoints for Dashboard."""
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_db, get_current_user
+from app.services.analytics_service import AnalyticsService
+
+router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+@router.get("/overview")
+async def get_overview(
+    brand_id: str | None = Query(None),
+    date_range: str = Query("month"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get KPI overview: visibility, mention rate, SOV."""
+    service = AnalyticsService(db)
+    return await service.get_overview(brand_id, date_range)
+
+
+@router.get("/visibility")
+async def get_visibility(
+    brand_id: str | None = Query(None),
+    date_range: str = Query("month"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get visibility trend data."""
+    service = AnalyticsService(db)
+    return await service.get_visibility_data(brand_id, date_range)
+
+
+@router.get("/platforms")
+async def get_platforms(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get platform comparison data."""
+    service = AnalyticsService(db)
+    return await service.get_platform_data(brand_id)
+
+
+@router.get("/sources")
+async def get_sources(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get source distribution data."""
+    service = AnalyticsService(db)
+    return await service.get_source_data(brand_id)
+
+
+@router.get("/aeo")
+async def get_aeo_metrics(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get AEO performance metrics."""
+    service = AnalyticsService(db)
+    return await service.get_aeo_metrics(brand_id)
+
+
+@router.get("/sentiment")
+async def get_sentiment(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get sentiment analysis data."""
+    service = AnalyticsService(db)
+    return await service.get_sentiment_data(brand_id)
+
+
+@router.get("/competitors")
+async def get_competitors(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get competitor comparison data."""
+    service = AnalyticsService(db)
+    return await service.get_competitor_data(brand_id)
+
+
+# =========================================================================
+# Trend Endpoints (Cycle 4)
+# =========================================================================
+
+
+@router.get("/trend")
+async def get_trend(
+    brand_id: str = Query(..., description="Entity ID"),
+    metric: str = Query("bwvs_index", description="Metric name"),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get trend time series for a specific metric."""
+    from app.services.trend_engine import TrendEngine
+
+    engine = TrendEngine(db)
+    data_points = await engine.get_trend_data_points(
+        UUID(brand_id), metric_name=metric, limit=limit
+    )
+    return {"trend": data_points, "metric": metric}
+
+
+@router.get("/trend/summary")
+async def get_trend_summary(
+    brand_id: str = Query(..., description="Entity ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get trend summary for all core metrics."""
+    from app.services.trend_engine import TrendEngine
+
+    engine = TrendEngine(db)
+    summaries = await engine.get_entity_trend_summary(UUID(brand_id))
+    return {
+        "summaries": {
+            name: {
+                "metric_name": s.metric_name,
+                "current_value": s.current_value,
+                "direction": s.trend_direction.value,
+                "period_delta": {
+                    "absolute": s.period_delta.absolute_change,
+                    "percentage": s.period_delta.percentage_change,
+                    "is_significant": s.period_delta.is_significant,
+                    "direction": s.period_delta.direction,
+                } if s.period_delta else None,
+                "data_points": s.data_points,
+                "time_range_days": s.time_range_days,
+                "moving_average": s.moving_average,
+                "min_value": s.min_value,
+                "max_value": s.max_value,
+            }
+            for name, s in summaries.items()
+        }
+    }

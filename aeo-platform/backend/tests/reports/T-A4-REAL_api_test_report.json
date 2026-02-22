@@ -1,0 +1,16 @@
+{
+  "test_case_id": "T-A4-REAL",
+  "test_name": "A4 真实豆包 API 抓取测试",
+  "test_time": "2026-02-01T09:33:57.036471",
+  "status": "PASSED",
+  "validation": {
+    "tool_execution_success": true,
+    "has_fetch_results": true,
+    "has_real_answer": true,
+    "is_not_simulated": true,
+    "api_response_time": 17.75,
+    "answer_preview": "纽崔莱是安利旗下的知名营养品牌，其蛋白粉产品在市场上有较高的知名度，以下从几个方面客观分析：\n\n1. **成分与营养**：通常以大豆分离蛋白、乳清蛋白等为主要原料，蛋白质含量较高（一般每100克含80",
+    "details": {}
+  },
+  "conclusion": "✓ 测试通过 - A4 Tool 成功调用真实豆包 API，响应时间 17.75秒"
+}

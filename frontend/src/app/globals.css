@@ -1,0 +1,715 @@
+@import "tailwindcss";
+
+/* Tailwind v4 Theme — maps CSS variables to utility classes */
+@theme {
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-tertiary: var(--bg-tertiary);
+  --color-bg-elevated: var(--bg-elevated);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-text-disabled: var(--text-disabled);
+
+  --color-brand: var(--brand-primary);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-active: var(--brand-active);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-info: var(--info);
+
+  --color-border-default: var(--border-default);
+  --color-border-hover: var(--border-hover);
+  --color-border-focus: var(--border-focus);
+}
+
+/* Specta AI 深色主题设计系统 */
+:root {
+  /* 背景层级 */
+  --bg-primary: #0D0D0D;
+  --bg-secondary: #1A1A1A;
+  --bg-tertiary: #262626;
+  --bg-elevated: #2D2D2D;
+
+  /* 文字层级 */
+  --text-primary: #FFFFFF;
+  --text-secondary: #A3A3A3;
+  --text-tertiary: #8A8A8A;
+  --text-disabled: #525252;
+  --text-muted: #6B6B6B;
+
+  /* 品牌色 */
+  --brand-primary: #6366F1;
+  --brand-hover: #818CF8;
+  --brand-active: #4F46E5;
+
+  /* 语义色 */
+  --success: #22C55E;
+  --warning: #F59E0B;
+  --error: #EF4444;
+  --info: #3B82F6;
+
+  /* 边框 */
+  --border-default: #333333;
+  --border-hover: #404040;
+  --border-focus: #6366F1;
+
+  /* TPAOR 阶段色 */
+  --phase-thought: #8B5CF6;
+  --phase-plan: #3B82F6;
+  --phase-action: #F59E0B;
+  --phase-observe: #22C55E;
+  --phase-response: #6366F1;
+
+  /* 过渡动画 */
+  --transition-fast: 150ms ease-out;
+  --transition-normal: 200ms ease-out;
+  --transition-slow: 300ms ease-out;
+  --transition-bounce: 300ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+  /* 以下变量在 design-system.css 中存在但 globals.css 中缺失，统一补入 */
+  --bg-card: rgba(17, 17, 17, 0.8);
+  --color-primary: #6366F1;
+  --color-primary-light: #818CF8;
+  --color-primary-dark: #4F46E5;
+  --color-primary-glow: rgba(99, 102, 241, 0.4);
+  --color-secondary: #10B981;
+  --status-success: #22C55E;
+  --status-warning: #F59E0B;
+  --status-error: #EF4444;
+  --status-info: #3B82F6;
+  --status-success-bg: rgba(34, 197, 94, 0.1);
+  --status-warning-bg: rgba(245, 158, 11, 0.1);
+  --status-error-bg: rgba(239, 68, 68, 0.1);
+  --status-info-bg: rgba(59, 130, 246, 0.1);
+
+  /* 品牌色辅助变量（深色模式） */
+  --brand-bg:       rgba(99, 102, 241, 0.1);
+  --brand-bg-hover: rgba(99, 102, 241, 0.15);
+  --brand-border:   rgba(99, 102, 241, 0.3);
+  --brand-text:     #818CF8;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.3);
+  --glass-bg: rgba(17, 17, 17, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.08);
+}
+
+/* 全局样式 */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* 动画 */
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* 打字机光标动画 */
+@keyframes cursor-blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.typing-cursor {
+  animation: cursor-blink 1s infinite;
+}
+
+/* Shimmer 动画 */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 25%,
+    var(--bg-elevated) 50%,
+    var(--bg-tertiary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Fade In 动画 */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+/* Slide In 动画 */
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out forwards;
+}
+
+@keyframes slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.3s ease-out forwards;
+}
+
+/* Scale In 动画 */
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out forwards;
+}
+
+/* Slide Up 动画 (StageResultCard 入场) */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 200ms ease-out;
+}
+
+/* Fade to Muted 动画 (StageResultCard 完成后淡化) */
+@keyframes fadeToMuted {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.5;
+  }
+}
+
+.animate-fade-to-muted {
+  animation: fadeToMuted 500ms ease-out 2s forwards;
+}
+
+/* =========================================================================
+   Cycle 3: Reconnection, Replay, Follow-Up animations
+   ========================================================================= */
+
+/* Reconnection banner fade-out */
+@keyframes banner-fade-out {
+  from {
+    opacity: 1;
+    max-height: 60px;
+  }
+  to {
+    opacity: 0;
+    max-height: 0;
+    padding: 0;
+    margin: 0;
+  }
+}
+
+.animate-banner-fade-out {
+  animation: banner-fade-out 500ms ease-out forwards;
+}
+
+/* Staggered entry for replay cards and follow-up chips */
+.animate-stagger-1 { animation-delay: 0ms; }
+.animate-stagger-2 { animation-delay: 150ms; }
+.animate-stagger-3 { animation-delay: 300ms; }
+.animate-stagger-4 { animation-delay: 450ms; }
+.animate-stagger-5 { animation-delay: 600ms; }
+
+/* Completion glow pulse (for sidebar entity dot) */
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(34, 197, 94, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+  }
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 2s ease-in-out 3;
+}
+
+/* Safe-to-leave message fade */
+@keyframes safe-leave-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  25% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-safe-leave {
+  animation: safe-leave-fade 10s ease-in-out forwards;
+}
+
+/* Three-dot loading for reconnection text */
+@keyframes dot-loading {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60%, 100% { content: '...'; }
+}
+
+.dot-loading::after {
+  content: '';
+  animation: dot-loading 1.5s steps(1) infinite;
+}
+
+/* =========================================================================
+   End Cycle 3 additions
+   ========================================================================= */
+
+/* =========================================================================
+   Cycle 4: Continuous Monitoring animations
+   ========================================================================= */
+
+/* Schedule status active — green breathing glow */
+@keyframes status-breathing {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.7);
+    opacity: 0.7;
+  }
+}
+
+.schedule-status-active {
+  animation: status-breathing 2s ease-in-out infinite;
+}
+
+/* Notification badge bounce on count change */
+@keyframes badge-bounce {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.2);
+  }
+  60% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.notification-badge {
+  animation: badge-bounce 300ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+/* AlertCard read transition */
+.alert-card {
+  transition: background-color 300ms ease-out, opacity 300ms ease-out;
+}
+
+.alert-card-unread {
+  background-color: var(--bg-tertiary);
+}
+
+.alert-card-read {
+  background-color: transparent;
+}
+
+/* AlertCard dismiss slide-out */
+@keyframes alert-dismiss {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+}
+
+.alert-card-dismiss {
+  animation: alert-dismiss 200ms ease-in forwards;
+}
+
+/* NotificationPanel open animation — handled via animate-scale-in */
+
+/* NotificationPanel close */
+@keyframes panel-close {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+.animate-panel-close {
+  animation: panel-close 150ms ease-in forwards;
+}
+
+/* =========================================================================
+   End Cycle 4 additions
+   ========================================================================= */
+
+/* Markdown 样式 - 深色主题 */
+.prose-chat {
+  color: var(--text-secondary);
+}
+
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3 {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.prose-chat h1 {
+  font-size: 1.25rem;
+}
+
+.prose-chat h2 {
+  font-size: 1.125rem;
+}
+
+.prose-chat h3 {
+  font-size: 1rem;
+}
+
+.prose-chat p {
+  margin-bottom: 0.5rem;
+}
+
+.prose-chat ul,
+.prose-chat ol {
+  padding-left: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.prose-chat li {
+  margin-bottom: 0.25rem;
+}
+
+.prose-chat code {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.prose-chat pre {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--border-default);
+}
+
+.prose-chat pre code {
+  background-color: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.prose-chat table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.5rem;
+}
+
+.prose-chat th,
+.prose-chat td {
+  border: 1px solid var(--border-default);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.prose-chat th {
+  background-color: var(--bg-tertiary);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.prose-chat td {
+  color: var(--text-secondary);
+}
+
+.prose-chat a {
+  color: var(--brand-primary);
+  text-decoration: none;
+}
+
+.prose-chat a:hover {
+  text-decoration: underline;
+}
+
+.prose-chat blockquote {
+  border-left: 3px solid var(--brand-primary);
+  padding-left: 1rem;
+  margin: 0.5rem 0;
+  color: var(--text-tertiary);
+}
+
+/* 选中文字样式 */
+::selection {
+  background-color: rgba(99, 102, 241, 0.3);
+  color: var(--text-primary);
+}
+
+/* 焦点样式 */
+:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+}
+
+/* 禁用状态 */
+:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 按钮基础样式 */
+button {
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+/* 输入框基础样式 */
+input,
+textarea {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  transition: border-color var(--transition-fast);
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--border-focus);
+  outline: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* ============================================
+   Light 主题覆盖 — html[data-theme="light"]
+   ============================================ */
+html[data-theme="light"] {
+  /* 背景层级 — 由浅到深，间隔明显 (Linear/Notion 风格) */
+  --bg-primary:    #F8F9FA;
+  --bg-secondary:  #FFFFFF;
+  --bg-tertiary:   #F1F3F5;
+  --bg-elevated:   #FFFFFF;
+  --bg-card:       rgba(255, 255, 255, 0.95);
+
+  /* 文字层级 — 基于 Slate 色阶，柔和不刺眼 */
+  --text-primary:   #1A1A2E;
+  --text-secondary: #64748B;
+  --text-tertiary:  #94A3B8;
+  --text-disabled:  #CBD5E1;
+  --text-muted:     #B0BEC5;
+
+  /* 边框 — 轻量化 */
+  --border-default: #E2E8F0;
+  --border-hover:   #CBD5E1;
+  --border-focus:   #6366F1;
+
+  /* 品牌色 — Indigo 系列 */
+  --brand-primary:  #6366F1;
+  --brand-hover:    #4F46E5;
+  --brand-active:   #4338CA;
+  --color-primary:  #6366F1;
+  --color-primary-light: #A5B4FC;
+  --color-primary-dark:  #4F46E5;
+  --color-primary-glow:  rgba(99, 102, 241, 0.08);
+
+  /* 品牌色辅助变量 */
+  --brand-bg:       #EEF2FF;
+  --brand-bg-hover: #E0E7FF;
+  --brand-border:   #C7D2FE;
+  --brand-text:     #4338CA;
+
+  /* 语义/状态色 */
+  --success: #16A34A;
+  --warning: #D97706;
+  --error:   #DC2626;
+  --info:    #2563EB;
+  --status-success: #16A34A;
+  --status-warning: #D97706;
+  --status-error:   #DC2626;
+  --status-info:    #2563EB;
+  --status-success-bg: rgba(22, 163, 74, 0.10);
+  --status-warning-bg: rgba(217, 119, 6, 0.10);
+  --status-error-bg:   rgba(220, 38, 38, 0.10);
+  --status-info-bg:    rgba(37, 99, 235, 0.10);
+
+  /* TPAOR 阶段色 */
+  --phase-thought:  #7C3AED;
+  --phase-plan:     #2563EB;
+  --phase-action:   #D97706;
+  --phase-observe:  #16A34A;
+  --phase-response: #4338CA;
+
+  /* 阴影 — 极轻 */
+  --shadow-sm:   0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md:   0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+  --shadow-lg:   0 8px 16px -4px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+  --shadow-glow: 0 0 16px rgba(99, 102, 241, 0.10);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+
+  /* Glass */
+  --glass-bg:     rgba(255, 255, 255, 0.80);
+  --glass-border: rgba(0, 0, 0, 0.05);
+}
+
+/* 主题切换过渡动画 */
+html.theme-transitioning,
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+  transition:
+    background-color 200ms ease-out,
+    border-color 200ms ease-out,
+    color 200ms ease-out,
+    box-shadow 200ms ease-out !important;
+}
+
+/* Glass Morphism Light 覆盖 */
+html[data-theme="light"] .glass {
+  background: rgba(255, 255, 255, 0.80);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+html[data-theme="light"] .glass-strong {
+  background: rgba(255, 255, 255, 0.90);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* 浅色下输入框微弱内阴影，创造凹陷感 */
+html[data-theme="light"] textarea,
+html[data-theme="light"] input {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* Message highlight animation — triggered when jumping from Canvas to Chat */
+@keyframes message-highlight-pulse {
+  0% { background-color: var(--brand-bg); box-shadow: 0 0 0 2px var(--brand-border); }
+  50% { background-color: var(--brand-bg-hover); box-shadow: 0 0 0 2px var(--brand-primary); }
+  100% { background-color: transparent; box-shadow: none; }
+}
+
+.message-highlight {
+  animation: message-highlight-pulse 3s ease-out;
+  border-radius: 12px;
+}

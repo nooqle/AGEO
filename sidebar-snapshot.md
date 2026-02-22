@@ -1,0 +1,104 @@
+- generic [active] [ref=e1]:
+  - button "Open Next.js Dev Tools" [ref=e33] [cursor=pointer]:
+    - img [ref=e34]
+  - alert [ref=e37]
+  - generic [ref=e702]:
+    - banner [ref=e703]:
+      - generic [ref=e704]:
+        - img "Specta AI" [ref=e705]
+        - generic [ref=e706]: Specta AI
+      - generic [ref=e707]:
+        - button "新建分析" [ref=e708] [cursor=pointer]:
+          - img [ref=e709]
+          - generic [ref=e711]: 新建分析
+        - button "设置" [ref=e712] [cursor=pointer]:
+          - img [ref=e713]
+    - generic [ref=e717]:
+      - generic [ref=e718]:
+        - generic [ref=e719]: 共 4 个品牌 · 238 次分析
+        - button "新建分析" [ref=e720] [cursor=pointer]
+      - generic [ref=e721]:
+        - generic [ref=e722]:
+          - generic [ref=e723]:
+            - text: 品牌可见度
+            - generic [ref=e725]: "?"
+          - generic [ref=e727]: "--"
+          - generic [ref=e728]: BWVS 指数
+        - generic [ref=e729]:
+          - generic [ref=e730]:
+            - text: 提及率
+            - generic [ref=e732]: "?"
+          - generic [ref=e734]: "--"
+          - generic [ref=e735]: AI 搜索可见性
+        - generic [ref=e736]:
+          - generic [ref=e737]:
+            - text: 声量份额
+            - generic [ref=e739]: "?"
+          - generic [ref=e741]: "--"
+          - generic [ref=e742]: 相对竞品
+        - generic [ref=e743]:
+          - generic [ref=e744]: 品牌数量
+          - generic [ref=e746]: "4"
+          - generic [ref=e747]: 已添加品牌
+      - generic [ref=e748]:
+        - paragraph [ref=e749]: 运行首次品牌分析即可查看数据洞察
+        - button "开始分析" [ref=e750] [cursor=pointer]
+      - generic [ref=e751]:
+        - generic [ref=e752]:
+          - heading "品牌管理" [level=2] [ref=e753]
+          - button "管理全部" [ref=e754] [cursor=pointer]
+        - generic [ref=e755]:
+          - generic [ref=e757] [cursor=pointer]:
+            - generic [ref=e759]: 测
+            - generic [ref=e760]: 测试品牌
+            - generic [ref=e761]: test.com
+            - generic [ref=e763]: 测试
+            - generic [ref=e764]: 未分析
+          - generic [ref=e766] [cursor=pointer]:
+            - generic [ref=e768]: 纽
+            - generic [ref=e769]: 纽崔莱
+            - generic [ref=e770]: amway.com.cn
+            - generic [ref=e772]: 保健品
+            - generic [ref=e773]: 未分析
+          - generic [ref=e775] [cursor=pointer]:
+            - generic [ref=e777]: 雅
+            - generic [ref=e778]: 雅姿
+            - generic [ref=e779]: amway.com.cn
+            - generic [ref=e781]: 直销，护肤品
+            - generic [ref=e782]: 2 天前分析
+          - generic [ref=e784] [cursor=pointer]:
+            - generic [ref=e786]: 观
+            - generic [ref=e787]: 观夏
+            - generic [ref=e788]: tosummer.com
+            - generic [ref=e790]: 香氛生活方式品牌
+            - generic [ref=e791]: 未分析
+          - generic [ref=e793] [cursor=pointer]:
+            - img [ref=e795]
+            - generic [ref=e797]: 添加品牌
+      - generic [ref=e798]:
+        - generic [ref=e799]:
+          - generic [ref=e800]:
+            - generic [ref=e801]:
+              - img [ref=e802]
+              - heading "数据洞察" [level=2] [ref=e804]
+            - generic [ref=e805]:
+              - generic [ref=e806]:
+                - button "全部平台" [ref=e807] [cursor=pointer]
+                - button "DeepSeek" [ref=e808] [cursor=pointer]
+                - button "Kimi" [ref=e809] [cursor=pointer]
+                - button "豆包" [ref=e810] [cursor=pointer]
+                - button "混元" [ref=e811] [cursor=pointer]
+              - generic [ref=e812]:
+                - button "7D" [ref=e813] [cursor=pointer]
+                - button "30D" [ref=e814] [cursor=pointer]
+                - button "90D" [ref=e815] [cursor=pointer]
+          - generic [ref=e816]:
+            - button "可见度" [ref=e817] [cursor=pointer]
+            - button "平台对比" [ref=e818] [cursor=pointer]
+            - button "来源分布" [ref=e819] [cursor=pointer]
+            - button "AEO 指标" [ref=e820] [cursor=pointer]
+            - button "优化建议" [ref=e821] [cursor=pointer]
+        - generic [ref=e823]:
+          - img [ref=e825]
+          - paragraph [ref=e827]: 暂无可见度数据
+          - paragraph [ref=e828]: 完成品牌分析后即可查看可见度趋势
