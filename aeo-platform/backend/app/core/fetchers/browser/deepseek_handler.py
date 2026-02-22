@@ -26,11 +26,13 @@ class DeepSeekHandler(BaseBrowserHandler):
     PLATFORM = Platform.DEEPSEEK
 
     # Selectors for DeepSeek Web UI
-    LOGIN_CHECK_SELECTOR = "[data-testid='user-menu']"  # Selector indicating logged in
-    TEXTAREA_SELECTOR = "textarea"  # Input textarea
-    SEND_BUTTON_SELECTOR = "button[type='submit']"  # Send button
-    ANSWER_SELECTOR = ".message-content"  # Answer content
-    SEARCH_TOGGLE_SELECTOR = "[data-testid='search-toggle']"  # Search toggle
+    # Verified against live DOM 2026-02-23: DeepSeek uses ds- prefixed stable classes
+    # and div[role="button"] instead of <button> elements.
+    LOGIN_CHECK_SELECTOR = "textarea[placeholder*='DeepSeek']"  # Exists on main chat, not on sign_in page
+    TEXTAREA_SELECTOR = "textarea"  # Single textarea on page
+    # No submit button selector needed — Enter key is used (more reliable than clicking)
+    ANSWER_SELECTOR = "div.ds-markdown"  # Stable ds- prefixed class for AI reply content
+    NEW_CHAT_SELECTOR = "div[class*='_5a8ac7a']"  # "开启新对话" button
 
     async def fetch(self, question: str) -> AsyncGenerator:
         """Fetch answer from DeepSeek Web.
@@ -140,10 +142,12 @@ class DeepSeekHandler(BaseBrowserHandler):
             # Polling snapshot() is slow (full DOM scan); wait_for_selector is O(1).
             await asyncio.sleep(5)  # Initial wait, give DeepSeek time to start generating
 
+            # DeepSeek uses div[role="button"] not <button>; use :is() to match both
             # Wait for the stop button to appear — confirms generation has started
+            stop_selector = ":is(button,[role='button']):has-text('停止')"
             try:
                 await self.client.page.wait_for_selector(
-                    "button:has-text('停止生成'), button:has-text('Stop')",
+                    stop_selector,
                     state="visible",
                     timeout=15000,
                 )
@@ -153,8 +157,8 @@ class DeepSeekHandler(BaseBrowserHandler):
             # Wait for the stop button to disappear — confirms generation is done
             try:
                 await self.client.page.wait_for_selector(
-                    "button:has-text('停止生成'), button:has-text('Stop')",
-                    state="detached",
+                    stop_selector,
+                    state="hidden",
                     timeout=120000,
                 )
                 logger.debug("[DeepSeek] Generation complete (stop button disappeared)")
@@ -232,12 +236,12 @@ class DeepSeekHandler(BaseBrowserHandler):
             Answer text
         """
         try:
-            # Get all message content
+            # div.ds-markdown is the stable DS design-system class for AI response content
             result = await self.client.eval(
                 """
-                const messages = document.querySelectorAll('.message-content');
+                const messages = document.querySelectorAll('div.ds-markdown');
                 const lastMessage = messages[messages.length - 1];
-                return lastMessage ? lastMessage.textContent : '';
+                return lastMessage ? lastMessage.innerText : '';
                 """
             )
             return result.get("output", "")

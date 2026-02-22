@@ -576,6 +576,18 @@ export function useWebSocket(sessionId: string | null) {
             })) as ProgressStep[])
           : (useConversationStore.getState().executionProgress?.steps || []);
 
+        // Merge with existing steps: a completed step must not regress to pending
+        // This guards against out-of-order backend events (e.g. A4 still running
+        // but a new progress event carries A4=pending in the steps array).
+        const oldSteps = useConversationStore.getState().executionProgress?.steps || [];
+        const mergedSteps = mappedSteps.map((newStep: ProgressStep) => {
+          const oldStep = oldSteps.find((s: ProgressStep) => s.id === newStep.id);
+          if (oldStep?.status === 'completed' && newStep.status === 'pending') {
+            return { ...newStep, status: 'completed' as const };
+          }
+          return newStep;
+        });
+
         setExecutionProgress({
           stage: data.stage || '',
           stageName: data.stage_name || '',
@@ -586,7 +598,7 @@ export function useWebSocket(sessionId: string | null) {
             ? ((data.status || 'running') as ExecutionProgress['status'])
             : 'running',
           details: data.message || data.details || '',
-          steps: mappedSteps,
+          steps: mergedSteps,
           subTasks: Array.isArray(data.sub_tasks)
             ? (data.sub_tasks.map((t, index) => ({
                 id: String((t as Record<string, unknown>).id || index),

@@ -141,11 +141,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         if (!cancelled) setIsLoadingHistory(false);
       }
     };
-    if (messages.length === 0) {
-      loadHistory();
-    } else {
-      setIsLoadingHistory(false);
-    }
+    // Always load on mount — resetConversation() already cleared stale state,
+    // and key={sessionId} guarantees a fresh mount on every session change.
+    loadHistory();
     return () => { cancelled = true; };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -384,7 +382,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const hasBrandParam = !!searchParams.get('brand');
   const showExampleBrands = messages.length === 0 && !isAgentExecuting && !isLoadingHistory && !hasBrandParam;
 
-  const inputDisabled = Boolean(!isConnected || stopState?.isStopped || (pendingConfirmation && !pendingConfirmation.allowTextInput));
+  const inputDisabled = Boolean(!isConnected || (pendingConfirmation && !pendingConfirmation.allowTextInput));
 
   // Determine follow-up suggestions to show (backend-provided or defaults)
   const suggestionsToShow = followUpSuggestions.length > 0 ? followUpSuggestions : (
@@ -507,19 +505,22 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           )}
 
           {/* Mini Progress */}
-          {isAgentExecuting && executionProgress && executionProgress.steps && executionProgress.steps.length > 0 && (
-            <div className="mt-4">
-              <MiniProgress
-                steps={executionProgress.steps.map((s) => ({
-                  id: s.id,
-                  label: s.label,
-                  description: s.description,
-                  status: s.status,
-                }))}
-                isExecuting={isAgentExecuting}
-              />
-            </div>
-          )}
+          {isAgentExecuting && executionProgress && executionProgress.steps && executionProgress.steps.length > 0 && (() => {
+            const visibleSteps = executionProgress.steps.filter(s => s.status !== 'skipped');
+            return visibleSteps.length > 0 ? (
+              <div className="mt-4">
+                <MiniProgress
+                  steps={visibleSteps.map((s) => ({
+                    id: s.id,
+                    label: s.label,
+                    description: s.description,
+                    status: s.status,
+                  }))}
+                  isExecuting={isAgentExecuting}
+                />
+              </div>
+            ) : null;
+          })()}
 
           {/* Cycle 3: Safe-to-leave signal */}
           {showSafeToLeave && isAgentExecuting && (

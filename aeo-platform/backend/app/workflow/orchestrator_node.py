@@ -384,6 +384,11 @@ DIRECTIVE_A2_ASK_PATH = (
     "不要调用 question_simulation，不要自行决定模式，必须等用户选择后再继续。"
 )
 
+DIRECTIVE_A3_NEXT_FETCH = (
+    "【强制操作】先用一句话（10字以内）向用户汇报问题已生成，"
+    "然后直接调用 answer_fetch 工具执行下一步，不要询问用户。"
+)
+
 
 def build_orchestrator_system_prompt(state: AgentState) -> str:
     """Build dynamic system prompt based on current state."""
@@ -529,8 +534,8 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         sq = state.get("simulated_questions")
         if sq:
             qs = sq.get("simulated_questions", [])
-            return f"问题模拟完成。共生成 {len(qs)} 组模拟问题。"
-        return "问题模拟完成，但未获取到有效数据。"
+            return f"问题模拟完成。共生成 {len(qs)} 组模拟问题。{DIRECTIVE_A3_NEXT_FETCH}"
+        return f"问题模拟完成，但未获取到有效数据。{DIRECTIVE_A3_NEXT_FETCH}"
 
     if tool_name == "answer_fetch":
         fr = state.get("fetch_results")
@@ -677,9 +682,20 @@ WORKFLOW_STEPS = [
 def _build_workflow_steps(state: AgentState) -> list[dict[str, str]]:
     """Build workflow steps list with completion status from state."""
     user_decisions = state.get("user_decisions", {})
+    analysis_mode = state.get("analysis_mode", "persona")
     steps = []
     for step_id, label, state_key in WORKFLOW_STEPS:
-        if state.get(state_key):
+        # A5 completion check depends on analysis_mode:
+        # baseline mode writes to baseline_metrics; persona/default to metrics.
+        if step_id == "A5":
+            if analysis_mode == "baseline":
+                completed = bool(state.get("baseline_metrics"))
+            else:
+                completed = bool(state.get("metrics"))
+        else:
+            completed = bool(state.get(state_key))
+
+        if completed:
             status = "completed"
         elif _is_step_skipped(step_id, state, user_decisions):
             status = "skipped"
@@ -691,9 +707,14 @@ def _build_workflow_steps(state: AgentState) -> list[dict[str, str]]:
 
 def _is_step_skipped(step_id: str, state: AgentState, user_decisions: dict) -> bool:
     """Determine if a step was intentionally skipped."""
+    analysis_mode = state.get("analysis_mode")
+    if step_id == "A1":
+        # A1 is skipped in baseline mode (re-run baseline skips brand analysis)
+        if analysis_mode == "baseline":
+            return True
     if step_id == "A2":
         # A2 is skipped in baseline mode
-        if state.get("analysis_mode") == "baseline":
+        if analysis_mode == "baseline":
             return True
         if user_decisions.get("a3_mode") == "brand":
             return True
@@ -1124,6 +1145,22 @@ async def _handle_tool_call(
             status="running",
             steps=workflow_steps,
         )
+
+        # Fallback: if LLM produced no reply text, emit a short status line
+        # so the user sees something before the long-running agent starts.
+        if not reply_text.strip():
+            FALLBACK_TEXTS = {
+                "brand_analysis": "正在收集品牌基本信息和竞品格局，请稍候...",
+                "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
+                "question_simulation": "正在模拟真实用户可能在 AI 搜索中提出的问题，通常需要 10-20 秒...",
+                "answer_fetch": "正在分别向 Kimi、DeepSeek、豆包、混元提问，收集各平台对品牌的真实回答，约需 1-3 分钟...",
+                "data_analytics": "正在分析各平台回答数据，计算品牌曝光率、情感分布和 BWVS 指数，即将完成...",
+            }
+            fallback_text = FALLBACK_TEXTS.get(tool_name, f"正在执行：{display_name}，请稍候...")
+            await send_reply_event(
+                session_id, fallback_text, is_delta=True, is_new_round=True
+            )
+            await send_reply_event(session_id, "", is_complete=True)
 
         # Layer 2: plan event
         await send_plan_event(

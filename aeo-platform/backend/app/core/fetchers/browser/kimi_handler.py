@@ -26,11 +26,12 @@ class KimiHandler(BaseBrowserHandler):
     PLATFORM = Platform.KIMI
 
     # Selectors for Kimi Web UI
-    LOGIN_CHECK_SELECTOR = ".user-avatar"  # Selector indicating logged in
-    NEW_CHAT_SELECTOR = "[data-testid='new-chat']"  # New chat button
-    TEXTAREA_SELECTOR = "textarea"  # Input textarea
-    SEND_BUTTON_SELECTOR = "button[type='submit']"  # Send button
-    ANSWER_SELECTOR = ".message-content"  # Answer content
+    # Presence of .not-login-container means the user is NOT logged in
+    NOT_LOGGED_IN_SELECTOR = ".not-login-container"
+    NEW_CHAT_SELECTOR = ".new-chat-btn"  # New chat button
+    TEXTAREA_SELECTOR = ".chat-input-editor"  # contenteditable input div
+    SEND_BUTTON_SELECTOR = ".send-button-container"  # Send button
+    ANSWER_SELECTOR = ".message-list"  # Answer message list
 
     async def fetch(self, question: str) -> AsyncGenerator:
         """Fetch answer from Kimi Web.
@@ -64,7 +65,9 @@ class KimiHandler(BaseBrowserHandler):
                 "检查登录状态...",
                 progress=0.3,
             )
-            is_logged_in = await self._check_login_status(self.LOGIN_CHECK_SELECTOR)
+            # .not-login-container present => user is NOT logged in
+            not_logged_in_present = await self._check_login_status(self.NOT_LOGGED_IN_SELECTOR)
+            is_logged_in = not not_logged_in_present
 
             if not is_logged_in:
                 # Need to login
@@ -80,9 +83,9 @@ class KimiHandler(BaseBrowserHandler):
                 await self.client.close()
                 await self.client.open(self.URL, headed=True)
 
-                # Wait for login
-                login_success = await self._wait_for_login(
-                    self.LOGIN_CHECK_SELECTOR,
+                # Wait until .not-login-container disappears (login completed)
+                login_success = await self._wait_for_login_disappear(
+                    self.NOT_LOGGED_IN_SELECTOR,
                     timeout=300,
                 )
 
@@ -146,7 +149,7 @@ class KimiHandler(BaseBrowserHandler):
                 waited += 3
                 length_result = await self.client.eval(
                     """
-                    const messages = document.querySelectorAll('.message-content');
+                    const messages = document.querySelectorAll('.message-list .markdown-body');
                     const last = messages[messages.length - 1];
                     return last ? String(last.textContent.length) : '0';
                     """
@@ -205,6 +208,34 @@ class KimiHandler(BaseBrowserHandler):
                 requires_action=False,
             )
 
+    async def _wait_for_login_disappear(
+        self,
+        not_logged_in_selector: str,
+        timeout: int = 300,
+        poll_interval: float = 2.0,
+    ) -> bool:
+        """Wait until the not-logged-in container disappears (login completed).
+
+        The base class _wait_for_login waits for a selector to appear, but for
+        Kimi we need the inverse: wait until .not-login-container is gone.
+
+        Args:
+            not_logged_in_selector: Selector that is present when NOT logged in
+            timeout: Maximum wait time in seconds
+            poll_interval: Polling interval in seconds
+
+        Returns:
+            True if login completed (selector gone)
+        """
+        elapsed = 0.0
+        while elapsed < timeout:
+            still_not_logged_in = await self._check_login_status(not_logged_in_selector)
+            if not still_not_logged_in:
+                return True
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+        return False
+
     def _find_textarea_ref(self, snapshot: dict) -> str | None:
         """Find textarea reference from snapshot.
 
@@ -230,10 +261,10 @@ class KimiHandler(BaseBrowserHandler):
             Answer text
         """
         try:
-            # Get last message content
+            # Get last AI message from message list
             result = await self.client.eval(
                 """
-                const messages = document.querySelectorAll('.message-content');
+                const messages = document.querySelectorAll('.message-list .markdown-body');
                 const lastMessage = messages[messages.length - 1];
                 return lastMessage ? lastMessage.textContent : '';
                 """
