@@ -1161,7 +1161,7 @@ async def _handle_tool_call(
                 "brand_analysis": "正在收集品牌基本信息和竞品格局，请稍候...",
                 "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
                 "question_simulation": "正在模拟真实用户可能在 AI 搜索中提出的问题，通常需要 10-20 秒...",
-                "answer_fetch": "正在分别向 Kimi、DeepSeek、豆包、混元提问，收集各平台对品牌的真实回答，约需 1-3 分钟...",
+                "answer_fetch": "正在向豆包、混元、Kimi、DeepSeek 四个平台提问，抓取各平台对品牌的真实回答。此过程约需 15 分钟，请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。",
                 "data_analytics": "正在分析各平台回答数据，计算品牌曝光率、情感分布和 BWVS 指数，即将完成...",
             }
             fallback_text = FALLBACK_TEXTS.get(tool_name, f"正在执行：{display_name}，请稍候...")
