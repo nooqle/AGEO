@@ -535,7 +535,12 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         if sq:
             qs = sq.get("simulated_questions", [])
             return f"问题模拟完成。共生成 {len(qs)} 组模拟问题。{DIRECTIVE_A3_NEXT_FETCH}"
-        return f"问题模拟完成，但未获取到有效数据。{DIRECTIVE_A3_NEXT_FETCH}"
+        return (
+            "问题模拟未获取到有效数据，流程中止。"
+            "【强制操作】直接告知用户问题模拟失败、未能生成有效问题，"
+            "并提供两个选项：1) 重试问题模拟；2) 换一种方式描述需求。"
+            "不要继续调用 answer_fetch，等待用户指示。"
+        )
 
     if tool_name == "answer_fetch":
         fr = state.get("fetch_results")
