@@ -444,7 +444,10 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
 {entity_context}
 
 A1 完成后的流程（最高优先级）：
-品牌分析（A1）完成后，你必须先用一句话汇报品牌信息，然后立即调用 ask_user 展示品牌信息让用户确认。绝不直接调用 persona_generation 或 question_simulation，必须先 ask_user。之后根据是否已有基线分析决定下一步：
+品牌分析（A1）完成后，你必须立即调用 ask_user，使用以下固定消息请求用户确认开始基线分析（不要展示品牌信息，不要自行改写消息内容）：
+消息："品牌与竞品信息已调研完毕，接下来，我将做一次品牌的基线公域大模型分析，这个分析会自动持续化运行较长时间，请你确认。"
+选项：确认，开始分析（推荐）/ 取消
+绝不直接调用 persona_generation 或 question_simulation，必须先 ask_user。之后根据是否已有基线分析决定下一步：
 
 【情况A：尚无基线分析（baseline_metrics 为空）】
 用户确认品牌信息后，必须按以下顺序执行基线分析，不可跳过：
