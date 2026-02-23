@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { RiListCheck3, RiArrowDownSLine } from '@remixicon/react';
+import { RiCheckboxCircleLine, RiArrowDownSLine, RiLoader4Line } from '@remixicon/react';
 import { cn } from '@/lib/cn';
 
 interface PlanCardProps {
@@ -15,45 +15,43 @@ export function PlanCard({ planText, isActive }: PlanCardProps) {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 6 }}
+      initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className={cn(
-        'rounded-xl border p-3 transition-all',
-        isActive
-          ? 'border-indigo-500/30 bg-indigo-500/5'
-          : 'border-[--border-default] bg-[--bg-secondary]'
-      )}
+      className="space-y-1"
     >
+      {/* Header row — no border box, just an inline row */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center gap-2 w-full text-left"
+        className="flex items-center gap-2 group cursor-pointer"
       >
-        <div className={cn(
-          'p-1 rounded-md',
-          isActive ? 'bg-indigo-500/10 text-indigo-400' : 'bg-[--bg-tertiary] text-[--text-secondary]'
-        )}>
-          <RiListCheck3 className="w-3.5 h-3.5" />
-        </div>
+        {isActive ? (
+          <RiLoader4Line className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />
+        ) : (
+          <RiCheckboxCircleLine className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+        )}
         <span className={cn(
-          'text-xs font-medium flex-1',
-          isActive ? 'text-indigo-300' : 'text-[--text-secondary]'
+          'text-xs font-medium transition-colors',
+          isActive ? 'text-indigo-300' : 'text-[--text-tertiary]',
+          'group-hover:text-[--text-secondary]'
         )}>
-          {isActive ? '执行计划' : '计划'}
+          {isActive ? '正在制定计划...' : '执行计划'}
         </span>
         {isActive && (
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500" />
+          <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-60" />
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-indigo-500" />
           </span>
         )}
         <motion.div
           animate={{ rotate: isExpanded ? 180 : 0 }}
           transition={{ duration: 0.2 }}
+          className="text-[--text-tertiary] opacity-0 group-hover:opacity-100 transition-opacity"
         >
-          <RiArrowDownSLine className="w-3.5 h-3.5 text-[--text-tertiary]" />
+          <RiArrowDownSLine className="w-3 h-3" />
         </motion.div>
       </button>
 
+      {/* Expanded content — left-border accent, no full box */}
       <AnimatePresence>
         {isExpanded && (
           <motion.div
@@ -63,9 +61,11 @@ export function PlanCard({ planText, isActive }: PlanCardProps) {
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <p className="text-sm text-[--text-primary] mt-2 leading-relaxed whitespace-pre-wrap">
-              {planText}
-            </p>
+            <div className="ml-[22px] pl-3 border-l-2 border-[--border-default]">
+              <p className="text-xs text-[--text-secondary] leading-relaxed whitespace-pre-wrap py-0.5">
+                {planText}
+              </p>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

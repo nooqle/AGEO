@@ -726,7 +726,7 @@ export function useWebSocket(sessionId: string | null) {
           relatedMessageId: relatedMessageId,
           versions: [],
           currentVersionIndex: -1,
-          linkedMessageId: linkedMessageId,
+          linkedMessageId: agentMessageIdRef.current || linkedMessageId,
           category: category,
           scenarioLabel: scenarioLabel,
         } as CanvasContent);

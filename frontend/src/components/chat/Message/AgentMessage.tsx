@@ -40,6 +40,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
     || (message.outputCards && message.outputCards.length > 0)
     || (message.attachments && message.attachments.length > 0)
     || isStreaming;
+
   // Auto-scroll to bottom during streaming
   useEffect(() => {
     if (isStreaming && messageEndRef.current) {
@@ -51,7 +52,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
 
   return (
     <motion.div
-      className="flex gap-4 max-w-full"
+      className="flex gap-3 max-w-full"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
@@ -59,23 +60,23 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
       {/* Agent avatar */}
       <div className="flex-shrink-0">
         <motion.div
-          className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#6366F1] to-[#8B5CF6] flex items-center justify-center shadow-lg"
+          className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#6366F1] to-[#8B5CF6] flex items-center justify-center shadow-md"
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
           transition={{ type: 'spring', stiffness: 500, damping: 30 }}
         >
-          <RiSparklingLine className="w-4 h-4 text-white" />
+          <RiSparklingLine className="w-3.5 h-3.5 text-white" />
         </motion.div>
       </div>
 
-      {/* Message content - 4 layer architecture */}
-      <div className="flex-1 min-w-0 space-y-4">
+      {/* Message content */}
+      <div className="flex-1 min-w-0 space-y-3 pt-0.5">
         {/* Timestamp */}
-        <div className="text-xs text-[--text-tertiary]">
+        <div className="text-[10px] text-[--text-tertiary] leading-none">
           {formatTime(message.timestamp)}
         </div>
 
-        {/* Layer 2: Plan Card */}
+        {/* Layer 2: Plan — lightweight row, no box */}
         {layers?.planText && (
           <PlanCard
             planText={layers.planText}
@@ -83,7 +84,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           />
         )}
 
-        {/* Layer 3: Action Log */}
+        {/* Layer 3: Action Log — lightweight rows, no box */}
         {layers?.actionLogs && layers.actionLogs.length > 0 && (
           <ActionLog
             logs={layers.actionLogs}
@@ -91,11 +92,10 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           />
         )}
 
-        {/* Layer 1: Main reply content */}
+        {/* Layer 1: Main reply content — most prominent, no container */}
         {mainContent && (
           <motion.div
-            className="px-1 py-0"
-            initial={{ opacity: 0, y: 6 }}
+            initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2 }}
           >
@@ -106,17 +106,17 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
         {/* Output cards */}
         {message.outputCards && message.outputCards.length > 0 && (
           <motion.div
-            className="space-y-3"
-            initial={{ opacity: 0, y: 10 }}
+            className="space-y-2"
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
+            transition={{ delay: 0.15 }}
           >
             {message.outputCards.map((card, index) => (
               <motion.div
                 key={card.id}
-                initial={{ opacity: 0, x: -10 }}
+                initial={{ opacity: 0, x: -8 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.15 + index * 0.08, type: 'spring', stiffness: 320, damping: 28 }}
+                transition={{ delay: 0.1 + index * 0.06, type: 'spring', stiffness: 320, damping: 28 }}
               >
                 <OutputCard card={card} />
               </motion.div>
@@ -129,14 +129,16 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           <AttachmentList attachments={message.attachments} />
         )}
 
-        {/* Layer 4: Inline confirmation (guided or simple) */}
+        {/* Layer 4: Inline confirmation */}
         {message.inlineConfirmation && onConfirmation && (
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
+            className="space-y-3"
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
           >
             {message.inlineConfirmation.type === 'guided' ? (
+              /* Guided options keep a light container for structure */
               <div className="rounded-xl border border-[--border-default] bg-[--bg-secondary] p-4">
                 <GuidedOptions
                   message={message.inlineConfirmation.message}
@@ -146,19 +148,22 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                 />
               </div>
             ) : (
-              <div className="rounded-xl border border-[--border-default] bg-[--bg-secondary] p-4">
-                <p className="text-sm text-[--text-primary] mb-3">{message.inlineConfirmation.message}</p>
+              /* Simple confirmation — no heavy box, just buttons */
+              <div className="space-y-3">
                 <div className="flex flex-wrap gap-2">
-                  {message.inlineConfirmation.options.map((option) => (
+                  {message.inlineConfirmation.options.map((option, i) => (
                     <button
                       key={option.id}
                       onClick={() => onConfirmation(option.id)}
                       disabled={!!message.inlineConfirmation?.selectedOptionId}
                       className={cn(
-                        'px-4 py-2 rounded-xl text-sm font-medium transition-all',
-                        'bg-[--bg-secondary] border border-[--border-default] text-[--text-primary] hover:bg-[--bg-tertiary] hover:border-[--border-hover]',
-                        message.inlineConfirmation?.selectedOptionId === option.id && 'ring-2 ring-indigo-500',
-                        message.inlineConfirmation?.selectedOptionId && message.inlineConfirmation.selectedOptionId !== option.id && 'opacity-50'
+                        'px-4 py-1.5 rounded-full text-sm font-medium transition-all border',
+                        // Primary style: first option or recommended
+                        i === 0 && !message.inlineConfirmation?.selectedOptionId
+                          ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
+                          : 'bg-transparent border-[--border-hover] text-[--text-primary] hover:bg-[--bg-tertiary]',
+                        message.inlineConfirmation?.selectedOptionId === option.id && 'ring-2 ring-indigo-500 ring-offset-1 ring-offset-[--bg-primary]',
+                        message.inlineConfirmation?.selectedOptionId && message.inlineConfirmation.selectedOptionId !== option.id && 'opacity-40 cursor-not-allowed'
                       )}
                     >
                       {option.label}
@@ -166,7 +171,8 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                   ))}
                 </div>
                 {!message.inlineConfirmation.selectedOptionId && (
-                  <p className="text-xs text-[--text-tertiary] mt-3">
+                  <p className="text-[11px] text-[--text-tertiary] flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />
                     Specta AI 将在你回复后继续工作
                   </p>
                 )}
@@ -191,7 +197,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
         {/* Legacy confirmation request (backward compat) */}
         {message.confirmationRequest && onConfirmation && !message.inlineConfirmation && (
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
           >
@@ -209,23 +215,23 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           </motion.div>
         )}
 
-        {/* Thought process - collapsible */}
+        {/* Thought process — collapsible, very subtle */}
         {hasThought && (
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <button
               onClick={() => setShowThought(!showThought)}
               className={cn(
-                'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all',
-                'bg-[--bg-secondary] border border-[--border-default] hover:bg-[--bg-tertiary] hover:border-[--border-hover] text-[--text-secondary] hover:text-[--text-primary]'
+                'flex items-center gap-1.5 text-[11px] transition-colors cursor-pointer',
+                'text-[--text-tertiary] hover:text-[--text-secondary]'
               )}
             >
-              <RiBrainLine className="w-3.5 h-3.5" />
-              <span>{isThinking ? '思考中...' : '思考过程'}</span>
+              <RiBrainLine className="w-3 h-3" />
+              <span>{isThinking ? '思考中...' : '查看思考过程'}</span>
               <motion.div
                 animate={{ rotate: showThought ? 180 : 0 }}
                 transition={{ duration: 0.2 }}
               >
-                <RiArrowDownSLine className="w-3.5 h-3.5" />
+                <RiArrowDownSLine className="w-3 h-3" />
               </motion.div>
             </button>
 
@@ -235,11 +241,11 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.3 }}
+                  transition={{ duration: 0.25 }}
                   className="overflow-hidden"
                 >
-                  <div className="rounded-lg border border-[--border-default] bg-[--bg-primary] px-3 py-2">
-                    <p className="text-xs text-[--text-tertiary] whitespace-pre-wrap leading-relaxed">
+                  <div className="ml-4 pl-3 border-l-2 border-[--border-default]">
+                    <p className="text-[11px] text-[--text-tertiary] whitespace-pre-wrap leading-relaxed">
                       {layers?.thought}
                     </p>
                   </div>
