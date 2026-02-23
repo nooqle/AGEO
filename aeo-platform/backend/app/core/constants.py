@@ -68,13 +68,16 @@ class PlatformConstants:
     API_PLATFORMS: Final[list[str]] = ["doubao", "hunyuan"]
     BROWSER_PLATFORMS: Final[list[str]] = ["kimi", "deepseek"]
 
-    # Platform-specific timeouts
+    # Platform-specific timeouts (per-question, seconds)
     PLATFORM_TIMEOUTS: Final[dict[str, int]] = {
         "doubao": 30,
         "hunyuan": 30,
-        "kimi": 200,
-        "deepseek": 200,
+        "kimi": 60,
+        "deepseek": 60,
     }
+
+    # Global per-pipeline timeout (seconds): caps entire browser platform regardless of question count
+    BROWSER_PIPELINE_TIMEOUT: Final[int] = 240  # 4 minutes max per browser platform
 
 
 class CacheConstants:

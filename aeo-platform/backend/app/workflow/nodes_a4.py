@@ -378,16 +378,42 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 return results
 
             # Only run browser pipelines for successfully initialized handlers
+            # Each pipeline is wrapped with a global timeout to prevent indefinite blocking.
+            pipeline_timeout = float(PlatformConstants.BROWSER_PIPELINE_TIMEOUT)
+
+            async def _pipeline_with_global_timeout(
+                handler, browser_client, platform: str, platform_name: str,
+            ) -> list[tuple[int, dict[str, Any]]]:
+                """Run _browser_pipeline capped at BROWSER_PIPELINE_TIMEOUT seconds total."""
+                try:
+                    return await asyncio.wait_for(
+                        _browser_pipeline(handler, browser_client, platform, platform_name),
+                        timeout=pipeline_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[A4] %s pipeline hit global timeout (%.0fs), returning partial results",
+                        platform_name, pipeline_timeout,
+                    )
+                    # Return timeout failure for all questions not yet processed
+                    return [(i, {
+                        "platform": platform,
+                        "platform_name": platform_name,
+                        "fetch_method": "browser",
+                        "success": False,
+                        "error": f"平台整体超时（{pipeline_timeout:.0f}s），跳过剩余问题",
+                    }) for i in range(total)]
+
             browser_tasks = []
             browser_task_platforms = []
             if kimi_handler is not None and kimi_browser_client is not None:
                 browser_tasks.append(
-                    _browser_pipeline(kimi_handler, kimi_browser_client, "kimi", "Kimi")
+                    _pipeline_with_global_timeout(kimi_handler, kimi_browser_client, "kimi", "Kimi")
                 )
                 browser_task_platforms.append("kimi")
             if deepseek_handler is not None and deepseek_browser_client is not None:
                 browser_tasks.append(
-                    _browser_pipeline(deepseek_handler, deepseek_browser_client, "deepseek", "DeepSeek")
+                    _pipeline_with_global_timeout(deepseek_handler, deepseek_browser_client, "deepseek", "DeepSeek")
                 )
                 browser_task_platforms.append("deepseek")
 
