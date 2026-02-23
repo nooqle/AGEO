@@ -3,6 +3,7 @@
 import { useEffect, useCallback } from 'react';
 import { RiErrorWarningLine, RiCloseLine } from '@remixicon/react';
 import { cn } from '@/lib/cn';
+import { MarkdownContent } from './Message/MarkdownContent';
 
 export interface ConfirmationOption {
   id: string;
@@ -77,7 +78,7 @@ export function ConfirmationCard({
 
       {/* 内容 */}
       <div className="px-4 py-4">
-        <p className="text-sm text-[--text-secondary] leading-relaxed">{message}</p>
+        <MarkdownContent content={message} />
 
         {/* 按钮组 */}
         <div className="flex flex-wrap gap-3 mt-4">

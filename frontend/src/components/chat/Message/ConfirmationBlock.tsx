@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { RiTimeLine, RiCheckboxCircleLine, RiMessage3Line, RiErrorWarningLine } from '@remixicon/react';
 import { ConfirmationRequest } from '@/types/message';
 import { cn } from '@/lib/cn';
+import { MarkdownContent } from './MarkdownContent';
 
 interface ConfirmationBlockProps {
   request: ConfirmationRequest;
@@ -92,8 +93,8 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
       </div>
 
       {/* 消息 */}
-      <div className="bg-[--bg-secondary] border border-[--border-default] rounded-lg p-3 mb-4">
-        <p className="text-sm text-[--text-primary]">{request.message}</p>
+      <div className="bg-[--bg-secondary] border border-[--border-default] rounded-lg p-4 mb-4 max-h-80 overflow-y-auto">
+        <MarkdownContent content={request.message} />
       </div>
 
       {/* 选项按钮 */}

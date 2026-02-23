@@ -115,7 +115,7 @@ async def _retry_fetch(
 async def _browser_fetch_with_timeout(
     fetch_fn: Callable[..., Coroutine[Any, Any, dict[str, Any]]],
     *args: Any,
-    timeout: float = BROWSER_TIMEOUT_SECONDS,
+    timeout: float = 200.0,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Run a browser fetch with a strict timeout and no retries.

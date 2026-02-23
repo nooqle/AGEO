@@ -434,24 +434,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         </div>
       )}
 
-      {pendingConfirmation && (
-        <div className="absolute inset-0 z-20 bg-black/40 backdrop-blur-md flex items-start justify-center px-4 py-12">
-          <div className="w-full max-w-2xl">
-            <ConfirmationCard
-              title={pendingConfirmation.stepName || '需要您的确认'}
-              message={pendingConfirmation.message}
-              options={pendingConfirmation.options.map((option) => ({
-                id: option.id,
-                label: option.label,
-                description: option.description,
-                variant: option.recommended ? 'primary' : 'secondary',
-              }))}
-              onConfirm={handleConfirmation}
-            />
-          </div>
-        </div>
-      )}
-
       {/* Message list */}
       <div
         ref={scrollRef}

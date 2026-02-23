@@ -417,12 +417,12 @@ async def a1_brand_node(state: AgentState) -> Command:
             session_id, "agent_summary", summary, step="A1", is_complete=True
         )
 
-        # Save and send artifact to Canvas
+        # Save and send brand profile artifact to Canvas
         from app.workflow.events import save_and_send_artifact
         await save_and_send_artifact(
             session_id=session_id,
-            output_type="report",
-            title="品牌分析报告",
+            output_type="workflow",
+            title="品牌档案",
             data={
                 "brandProfile": data["brand_profile"],
                 "brand_profile": data["brand_profile"],

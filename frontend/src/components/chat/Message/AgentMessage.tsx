@@ -40,14 +40,14 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
     || (message.outputCards && message.outputCards.length > 0)
     || (message.attachments && message.attachments.length > 0)
     || isStreaming;
-  if (!hasVisibleContent) return null;
-
   // Auto-scroll to bottom during streaming
   useEffect(() => {
     if (isStreaming && messageEndRef.current) {
       messageEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
   }, [message.content, isStreaming]);
+
+  if (!hasVisibleContent) return null;
 
   return (
     <motion.div

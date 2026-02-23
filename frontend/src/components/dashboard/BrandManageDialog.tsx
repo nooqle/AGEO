@@ -109,7 +109,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                 <div
                   className="flex items-center gap-2 flex-1 px-3 py-2 rounded-lg"
                   style={{
-                    background: 'var(--bg-tertiary)',
+                    background: 'var(--bg-primary)',
                     border: '1px solid var(--border-default)',
                   }}
                 >
@@ -120,7 +120,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="搜索品牌名称或域名..."
                     className="bg-transparent text-sm outline-none flex-1"
-                    style={{ color: 'var(--text-primary)', border: 'none' }}
+                    style={{ color: 'var(--text-primary)', border: 'none', background: 'transparent', boxShadow: 'none' }}
                   />
                 </div>
                 <button

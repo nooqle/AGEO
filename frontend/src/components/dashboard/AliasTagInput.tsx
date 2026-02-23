@@ -35,9 +35,9 @@ export function AliasTagInput({
 
   return (
     <div
-      className="flex flex-wrap gap-1.5 p-2 rounded-lg min-h-[38px] transition-colors"
+      className="flex flex-wrap gap-1.5 px-3 py-2 rounded-lg min-h-[38px] transition-colors"
       style={{
-        background: 'var(--bg-tertiary)',
+        background: 'var(--bg-primary)',
         border: '1px solid var(--border-default)',
       }}
     >
@@ -71,6 +71,8 @@ export function AliasTagInput({
         style={{
           color: 'var(--text-primary)',
           border: 'none',
+          background: 'transparent',
+          boxShadow: 'none',
         }}
       />
     </div>
