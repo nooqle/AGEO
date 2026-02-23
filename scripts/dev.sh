@@ -1,5 +1,5 @@
 #!/bin/bash
-# Miitus AI - Development Environment Startup Script
+# Specta AI - Development Environment Startup Script
 # Usage: ./scripts/dev.sh
 
 # Colors
@@ -16,7 +16,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  Miitus AI Development Environment${NC}"
+echo -e "${GREEN}  Specta AI Development Environment${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 

@@ -56,8 +56,10 @@ class BaseBrowserHandler(ABC):
         """
         try:
             if self._is_playwright:
-                # Playwright: use wait with short timeout
-                result = await self.client.wait(selector=check_selector)
+                # Use a short 4-second timeout: we just need to detect presence/absence
+                # of the element, not wait for a full page load.  The old 15-second
+                # default wasted ~180 s per pipeline (12 questions × 15 s each).
+                result = await self.client.wait(selector=check_selector, timeout=4000)
                 return result.get("success", False)
             else:
                 # AgentBrowser: use CLI command

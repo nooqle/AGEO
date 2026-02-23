@@ -469,13 +469,22 @@ async def a5_analytics_node(state: AgentState) -> Command:
             "metrics": metrics,
             "report": report_data,
             "current_step": "A5",
-            "progress": 0.95,
+            "progress": 1.0,
         }
         # Baseline mode: also write to baseline_* fields for long-term storage
         if is_baseline:
             update_dict["baseline_metrics"] = metrics
             update_dict["baseline_report"] = report_data
             update_dict["baseline_fetch_results"] = fetch_results
+
+        await send_progress_event(
+            session_id=session_id,
+            step="A5",
+            step_name="数据分析报告",
+            progress=1.0,
+            message="分析完成",
+            status="completed",
+        )
 
         return Command(update=update_dict)
 

@@ -59,18 +59,20 @@ class KimiHandler(BaseBrowserHandler):
             await self.client.open(self.URL, headed=False)
             await asyncio.sleep(2)  # Wait for page load
 
-            # Step 3: Check login status
+            # Step 3: Check login status — check for chat input presence (positive check).
+            # Kimi is accessible without login; we only open headed mode if the
+            # chat input cannot be found within a short timeout.
             yield self._create_event(
                 BrowserState.CHECKING_LOGIN,
                 "检查登录状态...",
                 progress=0.3,
             )
-            # .not-login-container present => user is NOT logged in
-            not_logged_in_present = await self._check_login_status(self.NOT_LOGGED_IN_SELECTOR)
-            is_logged_in = not not_logged_in_present
+            # Positive check: if the contenteditable input is present, we're ready
+            INPUT_READY_SELECTOR = "[contenteditable='true'], textarea"
+            input_ready = await self._check_login_status(INPUT_READY_SELECTOR)
 
-            if not is_logged_in:
-                # Need to login
+            if not input_ready:
+                # Chat input not found — may need login
                 yield self._create_event(
                     BrowserState.WAITING_FOR_LOGIN,
                     "检测到需要登录，请在浏览器窗口中完成登录",
@@ -83,9 +85,9 @@ class KimiHandler(BaseBrowserHandler):
                 await self.client.close()
                 await self.client.open(self.URL, headed=True)
 
-                # Wait until .not-login-container disappears (login completed)
-                login_success = await self._wait_for_login_disappear(
-                    self.NOT_LOGGED_IN_SELECTOR,
+                # Wait until the chat input appears (login completed)
+                login_success = await self._wait_for_login(
+                    INPUT_READY_SELECTOR,
                     timeout=300,
                 )
 

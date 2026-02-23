@@ -6,31 +6,42 @@ Supports Windows, Linux, and macOS.
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
-from playwright.async_api import async_playwright, Page, Browser, BrowserContext
+from playwright.async_api import async_playwright, Page, BrowserContext
 
 from app.core.playwright_installer import ensure_playwright_ready
 
 logger = logging.getLogger(__name__)
 
+# Persistent browser session storage: ~/.specta/browser_sessions/<name>/
+# Cookies and localStorage survive across backend restarts so users only
+# need to log in to Kimi / DeepSeek once per machine.
+_SESSION_BASE_DIR = Path.home() / ".specta" / "browser_sessions"
+
 
 class PlaywrightBrowserClient:
-    """Browser client using Playwright directly.
+    """Browser client using Playwright directly with persistent sessions.
 
     Provides similar interface to AgentBrowserClient but uses
-    Playwright Python API instead of CLI.
+    Playwright Python API instead of CLI.  Browser cookies and
+    localStorage are stored in ~/.specta/browser_sessions/<session_name>/
+    so login state is preserved across runs.
     """
 
     def __init__(self, session_name: str = "default"):
         """Initialize the browser client.
 
         Args:
-            session_name: Session name for isolated browser instances
+            session_name: Session name — maps to a persistent user-data
+                directory so cookies survive backend restarts.
         """
         self.session_name = session_name
+        self.user_data_dir = _SESSION_BASE_DIR / session_name
         self.playwright = None
-        self.browser: Browser | None = None
+        # With launch_persistent_context there is no separate Browser object;
+        # the context IS the browser.
         self.context: BrowserContext | None = None
         self.page: Page | None = None
 
@@ -58,20 +69,31 @@ class PlaywrightBrowserClient:
         try:
             await self._ensure_playwright()
 
-            if self.browser is None and self.playwright is not None:
-                self.browser = await self.playwright.chromium.launch(
+            if self.context is None and self.playwright is not None:
+                # Ensure the user-data directory exists before launching.
+                self.user_data_dir.mkdir(parents=True, exist_ok=True)
+
+                # launch_persistent_context saves cookies, localStorage, etc.
+                # to user_data_dir so login sessions survive backend restarts.
+                self.context = await self.playwright.chromium.launch_persistent_context(
+                    str(self.user_data_dir),
                     headless=not headed,
                     args=["--disable-blink-features=AutomationControlled"],
-                )
-
-            if self.context is None and self.browser is not None:
-                self.context = await self.browser.new_context(
                     viewport={"width": 1280, "height": 720},
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 )
+                logger.info(
+                    "[Browser] Launched persistent context for '%s' (headless=%s, dir=%s)",
+                    self.session_name, not headed, self.user_data_dir,
+                )
 
             if self.page is None and self.context is not None:
-                self.page = await self.context.new_page()
+                # Reuse the first existing page if present (persistent context
+                # may restore previous tabs), otherwise open a fresh one.
+                if self.context.pages:
+                    self.page = self.context.pages[0]
+                else:
+                    self.page = await self.context.new_page()
 
             if self.page is not None:
                 # domcontentloaded fires once DOM is parsed; networkidle may never
@@ -183,10 +205,25 @@ class PlaywrightBrowserClient:
             # Handle @ref format
             if ref.startswith("@"):
                 ref_id = ref[1:]
-                elements = await self.page.query_selector_all("textarea, input")
+                # IMPORTANT: use same selector as snapshot() so index N in @eN
+                # maps to the same element in both calls.
+                elements = await self.page.query_selector_all(
+                    "button, input, textarea, a, [role='button'], [role='textbox']"
+                )
                 idx = int(ref_id.replace("e", ""))
                 if idx < len(elements):
-                    await elements[idx].fill(text)
+                    element = elements[idx]
+                    is_contenteditable = await element.evaluate(
+                        "el => el.isContentEditable"
+                    )
+                    if is_contenteditable:
+                        # contenteditable divs (e.g. Kimi chat input) need real
+                        # keyboard events so React's synthetic event system fires.
+                        await element.click()
+                        await self.page.keyboard.press("Control+a")
+                        await self.page.keyboard.type(text)
+                    else:
+                        await element.fill(text)
                     return {"success": True}
                 else:
                     return {"error": f"Element {ref} not found"}
@@ -230,6 +267,7 @@ class PlaywrightBrowserClient:
         ms: int | None = None,
         text: str | None = None,
         selector: str | None = None,
+        timeout: int = 15000,
     ) -> dict[str, Any]:
         """Wait for a condition.
 
@@ -237,6 +275,7 @@ class PlaywrightBrowserClient:
             ms: Milliseconds to wait
             text: Text to wait for
             selector: Selector to wait for
+            timeout: Selector wait timeout in milliseconds (default 15000)
 
         Returns:
             Command output
@@ -250,11 +289,11 @@ class PlaywrightBrowserClient:
                 return {"success": True}
 
             if text:
-                await self.page.wait_for_selector(f"text={text}", timeout=15000)
+                await self.page.wait_for_selector(f"text={text}", timeout=timeout)
                 return {"success": True}
 
             if selector:
-                await self.page.wait_for_selector(selector, timeout=15000)
+                await self.page.wait_for_selector(selector, timeout=timeout)
                 return {"success": True}
 
             return {"success": True}
@@ -270,26 +309,22 @@ class PlaywrightBrowserClient:
         Returns:
             Command output
         """
-        try:
-            if self.page is None:
-                return {"error": "Page not opened"}
+        if self.page is None:
+            return {"error": "Page not opened"}
 
-            # Try multiple strategies
-            # 1. Exact text match
-            element = self.page.get_by_text(text, exact=False).first
-            if element:
-                await element.click()
-                return {"success": True}
+        # Playwright Locators are always truthy; use count() to check existence.
+        for locator in [
+            self.page.get_by_text(text, exact=False),
+            self.page.get_by_role("button", name=text),
+        ]:
+            try:
+                if await locator.count() > 0:
+                    await locator.first.click()
+                    return {"success": True}
+            except Exception:
+                continue
 
-            # 2. Button with text
-            element = self.page.get_by_role("button", name=text).first
-            if element:
-                await element.click()
-                return {"success": True}
-
-            return {"error": f"Element with text '{text}' not found"}
-        except Exception as e:
-            return {"error": str(e)}
+        return {"error": f"Element with text '{text}' not found"}
 
     async def find_and_fill(self, label: str, text: str) -> dict[str, Any]:
         """Find input by label/placeholder and fill.
@@ -301,31 +336,23 @@ class PlaywrightBrowserClient:
         Returns:
             Command output
         """
-        try:
-            if self.page is None:
-                return {"error": "Page not opened"}
+        if self.page is None:
+            return {"error": "Page not opened"}
 
-            # Try by placeholder
-            element = self.page.get_by_placeholder(label).first
-            if element:
-                await element.fill(text)
-                return {"success": True}
+        # Playwright Locators are always truthy; use count() to check existence.
+        for locator in [
+            self.page.get_by_placeholder(label),
+            self.page.get_by_label(label),
+            self.page.get_by_role("textbox", name=label),
+        ]:
+            try:
+                if await locator.count() > 0:
+                    await locator.first.fill(text)
+                    return {"success": True}
+            except Exception:
+                continue
 
-            # Try by label
-            element = self.page.get_by_label(label).first
-            if element:
-                await element.fill(text)
-                return {"success": True}
-
-            # Try by role
-            element = self.page.get_by_role("textbox", name=label).first
-            if element:
-                await element.fill(text)
-                return {"success": True}
-
-            return {"error": f"Input '{label}' not found"}
-        except Exception as e:
-            return {"error": str(e)}
+        return {"error": f"Input '{label}' not found"}
 
     async def press(self, key: str) -> dict[str, Any]:
         """Press a key.
@@ -375,12 +402,10 @@ class PlaywrightBrowserClient:
                 self.page = None
 
             if self.context:
+                # Closing the persistent context flushes cookies/storage to
+                # disk and terminates the browser process.
                 await self.context.close()
                 self.context = None
-
-            if self.browser:
-                await self.browser.close()
-                self.browser = None
 
             if self.playwright:
                 await self.playwright.stop()

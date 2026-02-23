@@ -103,13 +103,39 @@ class DeepSeekHandler(BaseBrowserHandler):
                 "开启联网搜索...",
                 progress=0.5,
             )
-            try:
-                # Try to enable search toggle
-                await self.client.find_and_click("联网搜索")
-                await asyncio.sleep(0.5)
-            except Exception:
-                # Search might already be enabled or not available
-                pass
+            # Try multiple possible texts/selectors for the web search toggle.
+            # DeepSeek UI has changed button labels across versions.
+            search_enabled = False
+            for btn_text in ["联网搜索", "联网", "Search", "深度搜索"]:
+                try:
+                    if self.client.page is None:
+                        break
+                    locator = self.client.page.get_by_text(btn_text, exact=False)
+                    if await locator.count() > 0:
+                        await locator.first.click()
+                        await asyncio.sleep(0.5)
+                        search_enabled = True
+                        logger.info("[DeepSeek] Enabled web search via text: %s", btn_text)
+                        break
+                except Exception:
+                    continue
+            if not search_enabled:
+                # CSS selector fallback for icon-only buttons
+                try:
+                    if self.client.page is not None:
+                        for sel in [
+                            "[aria-label*='搜索']",
+                            "[aria-label*='search' i]",
+                            "[data-testid*='search']",
+                        ]:
+                            els = await self.client.page.query_selector_all(sel)
+                            if els:
+                                await els[0].click()
+                                await asyncio.sleep(0.5)
+                                logger.info("[DeepSeek] Enabled web search via selector: %s", sel)
+                                break
+                except Exception:
+                    pass
 
             # Step 5: Submit question
             yield self._create_event(

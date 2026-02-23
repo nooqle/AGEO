@@ -105,10 +105,13 @@ async def _retry_fetch(
 
         if attempt < MAX_RETRIES:
             wait = RETRY_BACKOFF_BASE ** attempt  # 1s, 2s
-            logger.info("[A4] %s attempt %d failed, retrying in %.1fs", platform, attempt + 1, wait)
+            logger.info(
+                "[A4] %s attempt %d failed (%s), retrying in %.1fs",
+                platform, attempt + 1, last_result.get("error", "unknown"), wait,
+            )
             await asyncio.sleep(wait)
 
-    logger.warning("[A4] %s failed after %d attempts", platform, MAX_RETRIES + 1)
+    logger.warning("[A4] %s failed after %d attempts: %s", platform, MAX_RETRIES + 1, last_result.get("error"))
     return last_result
 
 
@@ -223,7 +226,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         try:
             if _pf is None or "kimi" in _pf:
-                kimi_browser_client = PlaywrightBrowserClient(session_name=f"{session_id}_kimi")
+                kimi_browser_client = PlaywrightBrowserClient(session_name="kimi")
                 kimi_handler = KimiHandler(kimi_browser_client)
             else:
                 kimi_browser_client = None
@@ -235,7 +238,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         try:
             if _pf is None or "deepseek" in _pf:
-                deepseek_browser_client = PlaywrightBrowserClient(session_name=f"{session_id}_deepseek")
+                deepseek_browser_client = PlaywrightBrowserClient(session_name="deepseek")
                 deepseek_handler = DeepSeekHandler(deepseek_browser_client)
             else:
                 deepseek_browser_client = None
