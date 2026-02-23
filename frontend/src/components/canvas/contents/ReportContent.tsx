@@ -199,7 +199,7 @@ export function ReportContent({ content }: ReportContentProps) {
                     'text-[--text-tertiary]'
                   )}>
                     {deltaPrev.bwvs_index.direction === 'up' ? '+' : ''}
-                    {deltaPrev.bwvs_index.value.toFixed(1)} vs 上次
+                    {(deltaPrev.bwvs_index.value ?? 0).toFixed(1)} vs 上次
                   </div>
                 ) : data.overallScore !== undefined && !deltaPrev && (
                   <div className="text-[10px] text-[--text-disabled] mt-1 italic">首次分析</div>

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { RiAddLine, RiTimeLine, RiMoreLine, RiDeleteBinLine, RiEditLine } from '@remixicon/react';
+import { RiTimeLine, RiMoreLine, RiDeleteBinLine, RiEditLine } from '@remixicon/react';
 import { cn } from '@/lib/cn';
 import { ArtifactNav } from './ArtifactNav';
 import { NotificationBell } from '@/components/notifications/NotificationBell';
@@ -173,15 +173,6 @@ export function ChatSidebar({
         <div className="flex items-center gap-1">
           <ThemeToggle />
           <NotificationBell align="left" />
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="p-1.5 rounded-lg transition-colors"
-            title="新建分析"
-            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--bg-elevated)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-          >
-            <RiAddLine className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
-          </button>
         </div>
       </div>
 
