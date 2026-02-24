@@ -1,10 +1,17 @@
 """Kimi browser handler."""
 
 import asyncio
+import json
 import logging
+import re
 from typing import AsyncGenerator
 
 logger = logging.getLogger(__name__)
+
+
+def _is_junk_title(title: str) -> bool:
+    """Return True if the title is just numbers, dashes, or punctuation."""
+    return bool(re.fullmatch(r'[-\d\s.\[\]()]+', title))
 
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
 from app.schemas.fetch import (
@@ -19,7 +26,7 @@ from app.schemas.fetch import (
 class KimiHandler(BaseBrowserHandler):
     """Kimi browser-based handler.
 
-    Uses agent-browser to interact with Kimi Web UI.
+    Uses Playwright to interact with Kimi Web UI.
     """
 
     URL = "https://kimi.moonshot.cn/"
@@ -31,12 +38,26 @@ class KimiHandler(BaseBrowserHandler):
 
     # Content detection: tried in priority order each poll cycle.
     # Multiple fallbacks in case Kimi renames classes across versions.
-    CONTENT_SELECTORS = [
-        ".message-list .markdown-body",       # original / most specific
-        "[class*='message'] .markdown-body",  # partial class match
-        ".chat-message [class*='content']",   # alternative structure
-        "[class*='markdown-body']",           # last resort: any markdown-body
-    ]
+    CONTENT_SELECTORS_JS = json.dumps([
+        ".message-list .markdown-body",
+        "[class*='message'] .markdown-body",
+        ".chat-message [class*='content']",
+        "[class*='markdown-body']",
+    ])
+
+    # JS wrapped in arrow function to avoid bare-return SyntaxError in page.evaluate
+    CONTENT_CHECK_JS = f"""() => {{
+        const selectors = {CONTENT_SELECTORS_JS};
+        let maxLen = 0;
+        for (const sel of selectors) {{
+            const nodes = document.querySelectorAll(sel);
+            if (nodes.length > 0) {{
+                const last = nodes[nodes.length - 1];
+                maxLen = Math.max(maxLen, (last.textContent || '').length);
+            }}
+        }}
+        return String(maxLen);
+    }}"""
 
     async def fetch(self, question: str) -> AsyncGenerator:
         """Fetch answer from Kimi Web.
@@ -56,8 +77,6 @@ class KimiHandler(BaseBrowserHandler):
             )
 
             # Step 2: Navigate or start new chat.
-            # Fast path: if already on kimi.moonshot.cn, click 新建对话 (~1s)
-            # instead of full page.goto (~4s+).
             yield self._create_event(
                 BrowserState.NAVIGATING,
                 f"正在访问 {self.URL}...",
@@ -76,7 +95,6 @@ class KimiHandler(BaseBrowserHandler):
                         fast_path_ok = True
                         logger.info("[Kimi] Fast path: clicked 新建对话")
                     else:
-                        # Try text-based fallback
                         btn = page.get_by_text("新建对话", exact=False).first
                         if await btn.count() > 0:
                             await btn.click()
@@ -93,12 +111,66 @@ class KimiHandler(BaseBrowserHandler):
             if self.client.page:
                 logger.info("[Kimi] Page URL: %s", self.client.page.url)
 
-            # Step 3: Kimi is publicly accessible (no login required).
+            # Step 3: Check login status.
             yield self._create_event(
                 BrowserState.CHECKING_LOGIN,
-                "页面加载完成，准备提问...",
+                "检查登录状态...",
                 progress=0.3,
             )
+
+            # Detect login modal (Kimi may require login via WeChat/phone)
+            login_detected = False
+            if self.client.page is not None:
+                try:
+                    login_check = await self.client.page.evaluate("""() => {
+                        const selectors = [
+                            '.login-modal-content',
+                            '.wechat-login',
+                            '[class*="login-modal"]',
+                            '[class*="login-dialog"]',
+                            '[class*="auth-modal"]',
+                        ];
+                        for (const sel of selectors) {
+                            if (document.querySelector(sel)) return sel;
+                        }
+                        // Also check if input is available (no login needed)
+                        const input = document.querySelector('.chat-input-editor');
+                        if (input) return '__input_ready__';
+                        return '__no_input__';
+                    }""")
+                    result_str = login_check if isinstance(login_check, str) else str(login_check)
+                    if result_str == '__input_ready__':
+                        logger.info("[Kimi] Input ready, no login required")
+                    elif result_str == '__no_input__':
+                        # No input and no login modal — might still need login
+                        login_detected = True
+                        logger.info("[Kimi] No input found, assuming login required")
+                    else:
+                        login_detected = True
+                        logger.info("[Kimi] Login modal detected via: %s", result_str)
+                except Exception as e:
+                    logger.debug("[Kimi] Login detection check failed: %s", e)
+
+            if login_detected:
+                INPUT_READY_SELECTOR = ".chat-input-editor, [class*='chat-input']"
+                yield self._create_event(
+                    BrowserState.WAITING_FOR_LOGIN,
+                    "检测到需要登录，请在浏览器窗口中完成登录",
+                    progress=0.35,
+                    requires_action=True,
+                    action_hint="请在弹出的浏览器窗口中完成 Kimi 登录",
+                )
+                await self.client.close()
+                await self.client.open(self.URL, headed=True)
+                login_success = await self._wait_for_login(INPUT_READY_SELECTOR, timeout=300)
+                if not login_success:
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        "登录超时，请重试",
+                        progress=0,
+                        requires_action=False,
+                    )
+                    return
 
             # Step 4: Confirm input is ready.
             yield self._create_event(
@@ -108,8 +180,9 @@ class KimiHandler(BaseBrowserHandler):
             )
 
             # Step 5: Submit question.
-            # Primary: direct locator on Kimi's contenteditable input (.chat-input-editor).
-            # Fallback 1: snapshot textbox ref.
+            # Primary: keyboard.type on contenteditable (.chat-input-editor).
+            # Fallback 1: snapshot textbox ref (uses PlaywrightBrowserClient.fill
+            #   which has special contenteditable handling via keyboard events).
             # Fallback 2: find_and_fill by placeholder text.
             yield self._create_event(
                 BrowserState.SUBMITTING,
@@ -124,17 +197,18 @@ class KimiHandler(BaseBrowserHandler):
                     if await editor.count() > 0:
                         await editor.click()
                         await asyncio.sleep(0.2)
-                        # For contenteditable, fill() sets the text directly
-                        await editor.fill(question)
+                        # Use keyboard.type() instead of fill() for contenteditable
+                        # to ensure React/Vue frameworks detect the input change.
+                        await self.client.page.keyboard.press("Control+a")
+                        await self.client.page.keyboard.type(question)
                         await asyncio.sleep(0.3)
                         await self.client.page.keyboard.press("Enter")
                         submitted = True
-                        logger.info("[Kimi] Question submitted via .chat-input-editor locator")
+                        logger.info("[Kimi] Question submitted via .chat-input-editor keyboard")
                 except Exception as e:
                     logger.debug("[Kimi] Direct locator submit failed: %s", e)
 
             if not submitted:
-                # Fallback: snapshot-based ref
                 snapshot = await self.client.snapshot(interactive_only=True)
                 textarea_ref = self._find_textarea_ref(snapshot)
                 if textarea_ref:
@@ -145,52 +219,36 @@ class KimiHandler(BaseBrowserHandler):
                     logger.info("[Kimi] Question submitted via snapshot ref %s", textarea_ref)
 
             if not submitted:
-                # Last resort: find_and_fill by placeholder text
                 await self.client.find_and_fill("发送消息", question)
                 await self.client.press("Enter")
                 logger.info("[Kimi] Question submitted via find_and_fill fallback")
 
             # Step 6: Wait for response via content-stability detection.
-            # max_wait MUST be < (per-question timeout − navigation time).
-            # Per-question timeout = 90s; navigation ≈ 8s; so max_wait = 75s.
+            # Budget: 90s external timeout − ~15s navigation/submit − ~10s extraction
+            #       = ~65s available. Use max_wait=50 for safety margin.
             yield self._create_event(
                 BrowserState.WAITING_RESPONSE,
                 "等待 AI 回复...",
                 progress=0.7,
             )
-            await asyncio.sleep(5)   # Give Kimi time to start generating
-            max_wait = 75            # Hard cap well within 90s per-question timeout
-            waited = 5
+
+            # Wait for any previous content to clear (prevents answer bleed
+            # from the previous question when reusing the same browser session).
+            await asyncio.sleep(3)
+            max_wait = 50
+            waited = 3
             prev_len = 0
             stable_count = 0
-
-            # Build JS that tries multiple selectors and returns the max content length
-            content_check_js = """
-                const selectors = [
-                    '.message-list .markdown-body',
-                    '[class*="message"] .markdown-body',
-                    '.chat-message [class*="content"]',
-                    '[class*="markdown-body"]',
-                ];
-                let maxLen = 0;
-                for (const sel of selectors) {
-                    const nodes = document.querySelectorAll(sel);
-                    if (nodes.length > 0) {
-                        const last = nodes[nodes.length - 1];
-                        maxLen = Math.max(maxLen, (last.textContent || '').length);
-                    }
-                }
-                return String(maxLen);
-            """
 
             while waited < max_wait:
                 await asyncio.sleep(3)
                 waited += 3
-                result = await self.client.eval(content_check_js)
+                result = await self.client.eval(self.CONTENT_CHECK_JS)
+                if "error" in result:
+                    logger.warning("[Kimi] eval error at %ds: %s", waited, result["error"])
                 cur_len = int(result.get("output", "0") or "0")
-                # Log every ~15s so we can diagnose issues without spamming
-                if waited % 15 == 0 or cur_len != prev_len:
-                    logger.info("[Kimi] Wait %ds: content_len=%d (prev=%d)", waited, cur_len, prev_len)
+                logger.info("[Kimi] Poll %ds: content_len=%d (prev=%d, stable=%d)",
+                            waited, cur_len, prev_len, stable_count)
                 if cur_len > 0 and cur_len == prev_len:
                     stable_count += 1
                     if stable_count >= 2:
@@ -201,24 +259,26 @@ class KimiHandler(BaseBrowserHandler):
                 prev_len = cur_len
 
             if prev_len == 0:
-                logger.warning("[Kimi] No content detected after %ds — dumping page structure for diagnosis", waited)
+                logger.warning("[Kimi] No content detected after %ds — dumping page structure", waited)
                 try:
                     dump = await self.client.page.evaluate("""() => {
-                        // Sample page text
-                        const bodyText = (document.body?.innerText || '').slice(0, 300);
-                        // All unique class names on the page (to find new selector)
+                        const bodyText = (document.body?.innerText || '').slice(0, 500);
                         const allCls = new Set();
                         document.querySelectorAll('*').forEach(el => {
-                            (el.className || '').split(' ').forEach(c => { if (c.trim()) allCls.add(c.trim()); });
+                            // SVG elements have className as SVGAnimatedString, not string
+                            const cn = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '');
+                            cn.split(' ').forEach(c => { if (c.trim()) allCls.add(c.trim()); });
                         });
                         const mdLike = [...allCls].filter(c =>
                             c.includes('markdown') || c.includes('message') ||
                             c.includes('chat') || c.includes('answer') ||
-                            c.includes('content') || c.includes('reply')
-                        ).slice(0, 40);
+                            c.includes('content') || c.includes('reply') ||
+                            c.includes('segment') || c.includes('bubble') ||
+                            c.includes('text') || c.includes('response')
+                        ).slice(0, 60);
                         return { bodyText, mdLike };
                     }""")
-                    logger.warning("[Kimi] Page text: %s", dump.get("bodyText", "")[:200])
+                    logger.warning("[Kimi] Page text: %s", str(dump.get("bodyText", ""))[:300])
                     logger.warning("[Kimi] Relevant classes: %s", dump.get("mdLike", []))
                 except Exception as e:
                     logger.warning("[Kimi] Could not dump page: %s", e)
@@ -230,6 +290,19 @@ class KimiHandler(BaseBrowserHandler):
                 progress=0.9,
             )
             answer_text = await self._extract_answer()
+
+            # Validate answer before reporting success
+            if not answer_text or len(answer_text.strip()) < 10:
+                logger.warning("[Kimi] Answer too short or empty (%d chars), reporting error",
+                               len(answer_text) if answer_text else 0)
+                yield self._create_event(
+                    BrowserState.ERROR,
+                    "未能提取到有效回答",
+                    progress=0,
+                    requires_action=False,
+                )
+                return
+
             search_refs = await self._extract_references()
 
             fetch_result = FetchResult(
@@ -274,23 +347,29 @@ class KimiHandler(BaseBrowserHandler):
             return None
 
     async def _extract_answer(self) -> str:
-        """Extract the last AI response from the page."""
+        """Extract the last AI response from the page.
+
+        Clones the DOM node and strips inline citation markers before
+        extracting textContent so that reference numbers do not pollute
+        the answer text.
+        """
         try:
-            result = await self.client.eval("""
-                const selectors = [
-                    '.message-list .markdown-body',
-                    '[class*="message"] .markdown-body',
-                    '.chat-message [class*="content"]',
-                    '[class*="markdown-body"]',
-                ];
-                for (const sel of selectors) {
+            result = await self.client.eval(f"""() => {{
+                const selectors = {self.CONTENT_SELECTORS_JS};
+                for (const sel of selectors) {{
                     const nodes = document.querySelectorAll(sel);
-                    if (nodes.length > 0) {
-                        return nodes[nodes.length - 1].textContent || '';
-                    }
-                }
+                    if (nodes.length > 0) {{
+                        const clone = nodes[nodes.length - 1].cloneNode(true);
+                        // Remove inline citation markers
+                        clone.querySelectorAll(
+                            '[class*="cite"], [class*="citation"], [class*="ref-num"], ' +
+                            'sup, a[data-index]'
+                        ).forEach(el => el.remove());
+                        return clone.textContent || '';
+                    }}
+                }}
                 return '';
-            """)
+            }}""")
             text = result.get("output", "")
             if text:
                 logger.info("[Kimi] Extracted answer (%d chars)", len(text))
@@ -302,17 +381,12 @@ class KimiHandler(BaseBrowserHandler):
             return ""
 
     async def _extract_references(self) -> list[SearchReference]:
-        """Extract search references from page."""
-        refs = []
+        """Extract search references from page.
 
-        # Try to expand the reference panel first
-        for btn_text in ["来源", "Sources", "References", "引用来源"]:
-            try:
-                await self.client.find_and_click(btn_text)
-                await asyncio.sleep(1.5)
-                break
-            except Exception:
-                continue
+        Strategy: try CSS selectors directly first, then attempt to expand
+        reference panel only if needed (avoids clicking wrong elements).
+        """
+        refs = []
 
         selectors_to_try = [
             ".source-item a",
@@ -322,58 +396,91 @@ class KimiHandler(BaseBrowserHandler):
             ".message-content a[href^='http']",
         ]
 
-        import json
-
+        # Phase 1: Try selectors without clicking anything first
         for selector in selectors_to_try:
+            refs = await self._try_ref_selector(selector)
+            if refs:
+                logger.info("[Kimi] Extracted %d references via selector: %s", len(refs), selector)
+                return refs
+
+        # Phase 2: Try to expand the reference panel, then re-check
+        for btn_text in ["来源", "Sources", "References", "引用来源"]:
             try:
-                result = await self.client.eval(
-                    f"""
-                    const links = document.querySelectorAll({repr(selector)});
-                    return JSON.stringify([...links].map((el, idx) => ({{
-                        index: idx + 1,
-                        title: (el.textContent || el.title || '').trim().slice(0, 200),
-                        url: el.href || '',
-                    }})));
-                    """
-                )
-                data = json.loads(result.get("output", "[]") or "[]")
-                if data:
-                    cleaned = []
-                    for item in data:
-                        url = item.get("url", "")
-                        if url and not url.startswith(("javascript:", "#", "/")):
-                            cleaned.append(SearchReference(
-                                index=len(cleaned) + 1,
-                                title=item.get("title", ""),
-                                url=url,
-                                snippet=None,
-                                site_name=None,
-                                is_official=False,
-                            ))
-                    if cleaned:
-                        logger.info("[Kimi] Extracted %d references via selector: %s", len(cleaned), selector)
-                        refs = cleaned
-                        break
-            except Exception as e:
-                logger.debug("[Kimi] Selector '%s' failed: %s", selector, e)
+                result = await self.client.find_and_click(btn_text)
+                if result.get("success"):
+                    await asyncio.sleep(1.5)
+                    break
+            except Exception:
                 continue
 
-        if not refs:
-            # Diagnostic: dump all http links to find the right structure
-            try:
-                diag = await self.client.eval("""
-                    const links = Array.from(document.querySelectorAll('a[href^="http"]'));
-                    return JSON.stringify(links.slice(0, 10).map(a => ({
-                        url: a.href.slice(0, 80),
-                        txt: (a.textContent || '').trim().slice(0, 40),
-                        cls: (a.className || '').slice(0, 60),
-                        pCls: (a.parentElement?.className || '').slice(0, 60),
-                    })));
-                """)
-                link_data = json.loads(diag.get("output", "[]") or "[]")
-                logger.warning("[Kimi] No references found. Sample http links (%d): %s",
-                               len(link_data), link_data[:5])
-            except Exception:
-                logger.warning("[Kimi] No references found after trying all selectors")
+        for selector in selectors_to_try:
+            refs = await self._try_ref_selector(selector)
+            if refs:
+                logger.info("[Kimi] Extracted %d references (after expand) via: %s", len(refs), selector)
+                return refs
+
+        # Diagnostic: dump sample http links
+        try:
+            diag = await self.client.eval("""() => {
+                const links = Array.from(document.querySelectorAll('a[href^="http"]'));
+                return JSON.stringify(links.slice(0, 10).map(a => ({
+                    url: a.href.slice(0, 80),
+                    txt: (a.textContent || '').trim().slice(0, 40),
+                    cls: (a.className || '').slice(0, 60),
+                    pCls: (a.parentElement?.className || '').slice(0, 60),
+                })));
+            }""")
+            link_data = json.loads(diag.get("output", "[]") or "[]")
+            logger.warning("[Kimi] No references found. Sample http links (%d): %s",
+                           len(link_data), link_data[:5])
+        except Exception:
+            logger.warning("[Kimi] No references found after trying all selectors")
 
         return refs
+
+    async def _try_ref_selector(self, selector: str) -> list[SearchReference]:
+        """Try a single CSS selector to extract references.
+
+        If the extracted title looks like a bare number or dash-number,
+        falls back to using the URL domain as the title.
+        """
+        try:
+            js_selector = json.dumps(selector)
+            result = await self.client.eval(
+                f"""() => {{
+                    const links = document.querySelectorAll({js_selector});
+                    return JSON.stringify([...links].map((el, idx) => ({{
+                        index: idx + 1,
+                        title: (el.getAttribute('title') || el.textContent || '').trim().slice(0, 200),
+                        url: el.href || '',
+                    }})));
+                }}"""
+            )
+            data = json.loads(result.get("output", "[]") or "[]")
+            if not data:
+                return []
+            cleaned = []
+            for item in data:
+                url = item.get("url", "")
+                if url and not url.startswith(("javascript:", "#", "/")):
+                    title = item.get("title", "")
+                    # If title is empty or just numbers/dashes, use URL domain
+                    if not title or _is_junk_title(title):
+                        try:
+                            from urllib.parse import urlparse
+                            title = urlparse(url).hostname or url[:60]
+                            title = title.removeprefix("www.")
+                        except Exception:
+                            title = url[:60]
+                    cleaned.append(SearchReference(
+                        index=len(cleaned) + 1,
+                        title=title,
+                        url=url,
+                        snippet=None,
+                        site_name=None,
+                        is_official=False,
+                    ))
+            return cleaned
+        except Exception as e:
+            logger.debug("[Kimi] Selector '%s' failed: %s", selector, e)
+            return []

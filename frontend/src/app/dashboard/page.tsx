@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { Suspense, useState, useCallback } from 'react';
 import { DashboardTopBar } from '@/components/layout/DashboardTopBar';
 import { DashboardPage } from '@/components/dashboard/DashboardPage';
 import { EntityFormDialog } from '@/components/dashboard/EntityFormDialog';
@@ -9,7 +9,7 @@ import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import type { CreateEntityInput } from '@/types/entity';
 
-export default function Dashboard() {
+function DashboardContent() {
   const [entityFormOpen, setEntityFormOpen] = useState(false);
   const addEntity = useEntityStore((s) => s.addEntity);
 
@@ -39,5 +39,13 @@ export default function Dashboard() {
         onSubmit={handleCreateBrand}
       />
     </div>
+  );
+}
+
+export default function Dashboard() {
+  return (
+    <Suspense>
+      <DashboardContent />
+    </Suspense>
   );
 }

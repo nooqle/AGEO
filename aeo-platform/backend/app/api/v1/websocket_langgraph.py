@@ -14,7 +14,6 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from app.workflow.graph import get_compiled_workflow
 from app.workflow.state import AgentState
-from app.services.websocket_manager import ws_manager
 from app.core.database import AsyncSessionLocal
 from app.core.websocket_server import manager as ws_session_manager
 from app.services.message_service import MessageService
@@ -487,7 +486,7 @@ async def handle_user_message_langgraph(
         )
         traceback.print_exc()
 
-        await ws_manager.emit_to_websocket(
+        await ws_session_manager.emit_to_websocket(
             websocket,
             "error",
             {
@@ -616,7 +615,7 @@ async def handle_confirmation_langgraph(
         # Get current state
         current_state = workflow.get_state(config)
         if not current_state or not current_state.values:
-            await ws_manager.emit_to_websocket(
+            await ws_session_manager.emit_to_websocket(
                 websocket,
                 "error",
                 {"message": "无法获取当前工作流状态"},
@@ -669,7 +668,7 @@ async def handle_confirmation_langgraph(
         traceback.print_exc()
 
         # Use consistent error format matching events.py send_error_event
-        await ws_manager.emit_to_websocket(
+        await ws_session_manager.emit_to_websocket(
             websocket,
             "error",
             {

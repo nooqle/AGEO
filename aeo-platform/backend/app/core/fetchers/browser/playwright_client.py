@@ -376,7 +376,9 @@ class PlaywrightBrowserClient:
         """Execute JavaScript in the page.
 
         Args:
-            script: JavaScript code
+            script: JavaScript code (must be a function expression like
+                ``() => { ... }`` or a simple expression; bare ``return``
+                statements outside a function cause a SyntaxError).
 
         Returns:
             Script output
@@ -388,6 +390,7 @@ class PlaywrightBrowserClient:
             result = await self.page.evaluate(script)
             return {"output": str(result) if result is not None else ""}
         except Exception as e:
+            logger.warning("[Browser] eval() failed: %s | script: %.120s", e, script.strip())
             return {"error": str(e)}
 
     async def close(self) -> dict[str, Any]:

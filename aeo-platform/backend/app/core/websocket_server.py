@@ -1,12 +1,8 @@
 """WebSocket server for real-time communication using FastAPI native WebSocket."""
 
 import logging
-from uuid import UUID
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 
-from app.api.deps import get_user_from_token
-from app.core.database import AsyncSessionLocal
-from app.models.session import Session
 
 # 定义执行步骤模板
 EXECUTION_STEPS = [
@@ -27,7 +23,6 @@ TPAOR_PHASE_MAP = {
 }
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
 
 
 class ConnectionManager:
@@ -134,66 +129,3 @@ async def handle_stop(websocket: WebSocket, session_id: str):
         },
     )
 
-
-# ========== WebSocket Endpoint ==========
-
-
-@router.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    """WebSocket connection handler."""
-    token = websocket.query_params.get("token")
-    if not token:
-        await websocket.close(code=1008, reason="Unauthorized")
-        return
-
-    try:
-        session_uuid = UUID(session_id)
-    except ValueError:
-        await websocket.close(code=1008, reason="Invalid session")
-        return
-
-    async with AsyncSessionLocal() as db:
-        user = await get_user_from_token(token, db)
-        if not user:
-            await websocket.close(code=1008, reason="Unauthorized")
-            return
-        session = await db.get(Session, session_uuid)
-        if not session or session.user_id != user.id:
-            await websocket.close(code=1008, reason="Access denied")
-            return
-
-    await websocket.accept()
-    await manager.connect(websocket, session_id)
-
-    try:
-        while True:
-            # Receive message
-            message = await websocket.receive_json()
-            event = message.get("event")
-            data = message.get("data", {})
-
-            logger.info(
-                f"[WebSocket] Received event: {event} from session: {session_id}"
-            )
-
-            # Route to corresponding handler
-            if event == "user_message":
-                await handle_user_message(websocket, session_id, data)
-            elif event == "confirmation":
-                await handle_confirmation(websocket, session_id, data)
-            elif event == "stop":
-                await handle_stop(websocket, session_id)
-            elif event == "ping":
-                await manager.emit_to_websocket(websocket, "pong", {})
-            else:
-                logger.warning(f"[WebSocket] Unknown event: {event}")
-
-    except WebSocketDisconnect:
-        logger.info(f"[WebSocket] Client disconnected: {id(websocket)}")
-        manager.disconnect(websocket)
-    except Exception as e:
-        logger.error(f"[WebSocket] Error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        manager.disconnect(websocket)

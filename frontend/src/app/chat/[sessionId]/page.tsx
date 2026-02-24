@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import { ChatLayout } from '@/components/layout/ChatLayout';
 import { ChatPanel } from '@/components/chat';
 import { CanvasPanel } from '@/components/canvas/CanvasPanel';
@@ -9,7 +9,7 @@ import { ChatSidebar } from '@/components/layout/ChatSidebar';
 import { TaskNotificationPoller } from '@/components/chat/TaskNotificationPoller';
 import { api } from '@/services/api';
 
-export default function ChatPage() {
+function ChatPageContent() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -63,5 +63,13 @@ export default function ChatPage() {
       <ChatPanel key={sessionId} sessionId={sessionId} />
       <TaskNotificationPoller activeSessionId={sessionId} />
     </ChatLayout>
+  );
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense>
+      <ChatPageContent />
+    </Suspense>
   );
 }

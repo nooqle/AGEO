@@ -6,9 +6,9 @@ from various AI platforms (Doubao, Hunyuan, Kimi, DeepSeek, etc.)
 Optimizations:
 - API-first strategy: Doubao/Hunyuan (API) execute first, Kimi/DeepSeek (Browser) second
 - API platforms retry up to 2 times on failure (exponential backoff)
-- Browser platforms have a strict 15s timeout per question and no retries
+- Browser platforms have a 90s per-question timeout (from PlatformConstants), no retries
 - Browser failures do not block the overall flow
-- Minimum 2 platforms with data required to proceed
+- Minimum 2 platforms with data required to proceed (adjusted for selective_refetch)
 """
 
 import asyncio
@@ -23,6 +23,7 @@ from app.workflow.events import (
     send_progress_event,
     send_error_event,
     send_stage_result,
+    send_browser_state_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,7 +163,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
     Uses API-first strategy:
     - Phase 1: Doubao + Hunyuan (API, fast, with retries) in parallel
-    - Phase 2: Kimi + DeepSeek (Browser, 15s timeout, no retries) in parallel
+    - Phase 2: Kimi + DeepSeek (Browser, 90s per-question timeout, no retries) in parallel
     Browser failures do not block the overall flow.
     """
     session_id = state["session_id"]
@@ -359,6 +360,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         handler, q_text, brand_profile,
                         platform, platform_name, BrowserState,
                         timeout=_get_browser_timeout(platform),
+                        session_id=session_id,
                     )
 
                     # Update circuit breaker state
@@ -844,12 +846,23 @@ async def _fetch_from_browser(
     platform: str,
     platform_name: str,
     browser_state,
+    session_id: str = "",
 ) -> dict[str, Any]:
     start_time = datetime.now(timezone.utc)
     result_data = None
     error_message = None
 
     async for event in handler.fetch(question):
+        if event.state == browser_state.WAITING_FOR_LOGIN and session_id:
+            await send_browser_state_event(
+                session_id=session_id,
+                platform=platform,
+                state=event.state.value,
+                message=event.message,
+                progress=event.progress,
+                requires_action=event.requires_action,
+                action_hint=event.action_hint,
+            )
         if event.state == browser_state.ERROR:
             error_message = event.message or event.error or "抓取失败"
         if event.state == browser_state.COMPLETED and event.data:
@@ -857,8 +870,8 @@ async def _fetch_from_browser(
 
     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
-    if result_data and result_data.answer_text is not None:
-        answer_text = result_data.answer_text or ""
+    if result_data and result_data.answer_text and len(result_data.answer_text.strip()) >= 10:
+        answer_text = result_data.answer_text
         return {
             "platform": platform,
             "platform_name": platform_name,
@@ -866,7 +879,7 @@ async def _fetch_from_browser(
             "success": True,
             "answer": {
                 "content": answer_text,
-                "word_count": len(answer_text.split()),
+                "word_count": len(answer_text),
                 "has_brand_mention": _check_brand_mention(
                     answer_text, brand_profile.get("brand_name", "")
                 ),

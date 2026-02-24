@@ -241,7 +241,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     agent_task: asyncio.Task | None = None
 
     def _on_agent_done(task: asyncio.Task):
-        """Log errors from background agent task."""
+        """Log errors from background agent task and notify frontend."""
         nonlocal agent_task
         agent_task = None
         if task.cancelled():
@@ -249,6 +249,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         exc = task.exception()
         if exc:
             logger.error(f"[WebSocket] Agent task error: {exc}")
+            # Notify frontend about the unhandled error so it doesn't hang
+            asyncio.create_task(
+                manager.emit_to_websocket(websocket, "error", {
+                    "step": "system",
+                    "error": f"任务异常终止: {exc}",
+                    "recoverable": True,
+                })
+            )
 
     try:
         while True:

@@ -1,10 +1,17 @@
 """DeepSeek browser handler."""
 
 import asyncio
+import json
 import logging
+import re
 from typing import AsyncGenerator
 
 logger = logging.getLogger(__name__)
+
+
+def _is_junk_title(title: str) -> bool:
+    """Return True if the title is just numbers, dashes, or punctuation."""
+    return bool(re.fullmatch(r'[-\d\s.\[\]()]+', title))
 
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
 from app.schemas.fetch import (
@@ -19,7 +26,7 @@ from app.schemas.fetch import (
 class DeepSeekHandler(BaseBrowserHandler):
     """DeepSeek browser-based handler.
 
-    Uses agent-browser to interact with DeepSeek Web UI.
+    Uses Playwright to interact with DeepSeek Web UI.
     """
 
     URL = "https://chat.deepseek.com/"
@@ -28,6 +35,13 @@ class DeepSeekHandler(BaseBrowserHandler):
     # Selectors for DeepSeek Web UI
     TEXTAREA_SELECTOR = "textarea"
     ANSWER_SELECTOR = "div.ds-markdown"
+
+    # JS wrapped in arrow function to avoid bare-return SyntaxError
+    CONTENT_CHECK_JS = """() => {
+        const msgs = document.querySelectorAll('div.ds-markdown');
+        const last = msgs[msgs.length - 1];
+        return last ? String(last.textContent.length) : '0';
+    }"""
 
     async def fetch(self, question: str) -> AsyncGenerator:
         """Fetch answer from DeepSeek Web.
@@ -47,8 +61,6 @@ class DeepSeekHandler(BaseBrowserHandler):
             )
 
             # Step 2: Navigate or start new chat.
-            # Optimization: if browser is already on chat.deepseek.com, click
-            # 新对话 (~1.5s) instead of doing a full page.goto (~3s+).
             yield self._create_event(
                 BrowserState.NAVIGATING,
                 f"正在访问 {self.URL}...",
@@ -58,7 +70,6 @@ class DeepSeekHandler(BaseBrowserHandler):
             fast_path_ok = False
             if page is not None and "chat.deepseek.com" in (page.url or ""):
                 try:
-                    # Look for the new-chat button by visible text
                     new_chat = page.get_by_text("新对话", exact=False).first
                     if await new_chat.count() > 0:
                         await new_chat.click()
@@ -75,7 +86,7 @@ class DeepSeekHandler(BaseBrowserHandler):
             if self.client.page:
                 logger.info("[DeepSeek] Page URL: %s", self.client.page.url)
 
-            # Step 3: Check login — positive check for the text input being present.
+            # Step 3: Check login
             yield self._create_event(
                 BrowserState.CHECKING_LOGIN,
                 "检查登录状态...",
@@ -105,9 +116,6 @@ class DeepSeekHandler(BaseBrowserHandler):
                     return
 
             # Step 4: Ensure web search (联网搜索) is ON.
-            # DeepSeek uses pure SVG icon-buttons with no text/aria-label.
-            # We locate the input toolbar via the textarea, then inspect
-            # aria-pressed / class variants to detect and toggle the state.
             yield self._create_event(
                 BrowserState.ENABLING_SEARCH,
                 "确认联网搜索已开启...",
@@ -122,47 +130,75 @@ class DeepSeekHandler(BaseBrowserHandler):
                 f"提交问题: {question[:30]}...",
                 progress=0.6,
             )
+            submitted = False
             snapshot = await self.client.snapshot(interactive_only=True)
             textarea_ref = self._find_textarea_ref(snapshot)
             if textarea_ref:
                 await self.client.fill(textarea_ref, question)
                 await asyncio.sleep(0.5)
                 await self.client.press("Enter")
+                submitted = True
+                logger.info("[DeepSeek] Question submitted via snapshot ref %s", textarea_ref)
             else:
                 await self.client.find_and_fill("发送消息", question)
                 await self.client.press("Enter")
+                submitted = True
+                logger.info("[DeepSeek] Question submitted via find_and_fill fallback")
 
             # Step 6: Wait for response via content-stability detection.
-            # Poll div.ds-markdown text length; exit when stable for 2 polls.
+            # Budget: 90s external timeout − ~15s navigation/submit − ~10s extraction
+            #       = ~65s available. Use max_wait=50 for safety margin.
             yield self._create_event(
                 BrowserState.WAITING_RESPONSE,
                 "等待 AI 回复...",
                 progress=0.7,
             )
-            await asyncio.sleep(4)  # Initial wait for generation to start
-            max_wait = 75  # within 90s per-question timeout
-            waited = 4
+            await asyncio.sleep(3)
+            max_wait = 50
+            waited = 3
             prev_len = 0
             stable_count = 0
+
             while waited < max_wait:
                 await asyncio.sleep(3)
                 waited += 3
-                length_result = await self.client.eval(
-                    """
-                    const msgs = document.querySelectorAll('div.ds-markdown');
-                    const last = msgs[msgs.length - 1];
-                    return last ? String(last.textContent.length) : '0';
-                    """
-                )
+                length_result = await self.client.eval(self.CONTENT_CHECK_JS)
+                if "error" in length_result:
+                    logger.warning("[DeepSeek] eval error at %ds: %s", waited, length_result["error"])
                 cur_len = int(length_result.get("output", "0") or "0")
+                logger.info("[DeepSeek] Poll %ds: content_len=%d (prev=%d, stable=%d)",
+                            waited, cur_len, prev_len, stable_count)
                 if cur_len > 0 and cur_len == prev_len:
                     stable_count += 1
                     if stable_count >= 2:
-                        logger.debug("[DeepSeek] Content stable at %d chars", cur_len)
+                        logger.info("[DeepSeek] Content stable at %d chars after %ds", cur_len, waited)
                         break
                 else:
                     stable_count = 0
                 prev_len = cur_len
+
+            if prev_len == 0:
+                logger.warning("[DeepSeek] No content detected after %ds — dumping page structure", waited)
+                try:
+                    dump = await self.client.page.evaluate("""() => {
+                        const bodyText = (document.body?.innerText || '').slice(0, 500);
+                        const allCls = new Set();
+                        document.querySelectorAll('*').forEach(el => {
+                            const cn = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '');
+                            cn.split(' ').forEach(c => { if (c.trim()) allCls.add(c.trim()); });
+                        });
+                        const mdLike = [...allCls].filter(c =>
+                            c.includes('markdown') || c.includes('message') ||
+                            c.includes('chat') || c.includes('answer') ||
+                            c.includes('content') || c.includes('reply') ||
+                            c.includes('ds-')
+                        ).slice(0, 40);
+                        return { bodyText, mdLike };
+                    }""")
+                    logger.warning("[DeepSeek] Page text: %s", str(dump.get("bodyText", ""))[:300])
+                    logger.warning("[DeepSeek] Relevant classes: %s", dump.get("mdLike", []))
+                except Exception as e:
+                    logger.warning("[DeepSeek] Could not dump page: %s", e)
 
             # Step 7: Extract answer
             yield self._create_event(
@@ -171,6 +207,19 @@ class DeepSeekHandler(BaseBrowserHandler):
                 progress=0.9,
             )
             answer_text = await self._extract_answer()
+
+            # Validate answer before reporting success
+            if not answer_text or len(answer_text.strip()) < 10:
+                logger.warning("[DeepSeek] Answer too short or empty (%d chars), reporting error",
+                               len(answer_text) if answer_text else 0)
+                yield self._create_event(
+                    BrowserState.ERROR,
+                    "未能提取到有效回答",
+                    progress=0,
+                    requires_action=False,
+                )
+                return
+
             search_refs = await self._extract_references()
 
             result = FetchResult(
@@ -208,19 +257,14 @@ class DeepSeekHandler(BaseBrowserHandler):
 
         DeepSeek renders toolbar toggles as pure SVG icon-buttons with no
         visible text or aria-label.  Strategy:
-        1. Find the textarea, walk up the DOM to locate the input toolbar
-           (a container with 1-8 interactive elements).
-        2. Among those, look for an element with aria-pressed / aria-checked.
-        3. If the web-search button (typically index 1: [DeepThink, WebSearch])
-           reports pressed=false, click it.
-        4. Log everything so we can diagnose DOM changes.
+        1. Find the textarea, walk up the DOM to locate the input toolbar.
+        2. Among toolbar buttons, find the WebSearch toggle specifically
+           (by text or index), not just the first pressed=false button.
+        3. If it's off, click to enable.
         """
         try:
             info = await self.client.page.evaluate("""() => {
-                // Broad query: buttons + anything with aria-pressed/checked/switch
                 const INTERACTIVE = 'button, [role="button"], [role="switch"], [aria-pressed], [aria-checked]';
-
-                // --- 1. Find toolbar near textarea ---
                 const textarea = document.querySelector('textarea');
                 let toolbarEls = null;
                 let toolbarContainerCls = '';
@@ -248,7 +292,6 @@ class DeepSeekHandler(BaseBrowserHandler):
                     txt:    (el.innerText || el.textContent || '').trim().slice(0, 40),
                 });
 
-                // --- 2. All aria-pressed/checked elements on page ---
                 const allToggles = Array.from(
                     document.querySelectorAll('[aria-pressed], [aria-checked], [role="switch"]')
                 ).map(descEl);
@@ -267,82 +310,82 @@ class DeepSeekHandler(BaseBrowserHandler):
                 len(toolbar), toolbar, len(all_toggles), all_toggles,
             )
 
-            # --- Determine which element to click ---
-            # Priority 1: any toolbar button that explicitly says pressed=false
-            #   (web search is typically the 2nd toggle, after deep-think)
-            # Priority 2: fall back to clicking toolbar button at index 1
+            if not toolbar:
+                if not all_toggles:
+                    logger.warning("[DeepSeek] No toolbar or toggle elements found near textarea")
+                return
 
-            clicked = False
+            # Find the WebSearch toggle specifically.
+            # Layout is typically [DeepThink, Search, upload_icon, ...].
+            # We identify Search by: text contains "search"/"联网", or it's a
+            # toggle-button at index 1 (when DeepThink is at index 0).
+            search_idx = self._find_web_search_index(toolbar)
+            if search_idx is None:
+                logger.warning("[DeepSeek] Could not identify WebSearch toggle in toolbar")
+                return
 
-            # Check toolbar buttons for a "pressed=false" toggle
-            for i, btn in enumerate(toolbar):
-                pressed = btn.get("pressed", "")
-                if pressed == "false":
-                    # This toggle is OFF — click it
-                    await self.client.page.evaluate(f"""() => {{
-                        const INTERACTIVE = 'button, [role="button"], [role="switch"], [aria-pressed], [aria-checked]';
-                        const textarea = document.querySelector('textarea');
-                        let c = textarea && textarea.parentElement;
-                        while (c && c !== document.body) {{
-                            const els = Array.from(c.querySelectorAll(INTERACTIVE));
-                            if (els.length >= 1 && els.length <= 8) {{
-                                els[{i}] && els[{i}].click();
-                                return 'clicked';
-                            }}
-                            c = c.parentElement;
-                        }}
-                        return 'not found';
-                    }}""")
-                    await asyncio.sleep(0.5)
-                    logger.info("[DeepSeek] Clicked toolbar[%d] (pressed=false → enabling)", i)
-                    clicked = True
-                    break
-                elif pressed == "true":
-                    logger.info("[DeepSeek] Toolbar[%d] already pressed=true, skipping", i)
-                    clicked = True  # already on
-                    break
+            btn = toolbar[search_idx]
+            pressed = btn.get("pressed", "")
+            cls = btn.get("cls", "")
 
-            if not clicked and toolbar:
-                # No aria-pressed found — use class-based detection.
-                # DeepSeek DS system: active toggle = ds-toggle-button--selected,
-                # inactive = ds-toggle-button--md (no --selected suffix).
-                # Web search is the first button whose cls contains 'toggle-button'
-                # (skip plain icon-buttons at the end of the toolbar).
-                for i, btn in enumerate(toolbar):
-                    cls_i = btn.get("cls", "")
-                    if "toggle-button" not in cls_i:
-                        continue  # skip non-toggle buttons (file upload, etc.)
-                    txt_i = btn.get("txt", "").lower()
-                    # Match "Search" or "联网" text; also accept index 1 as fallback
-                    # (layout: [DeepThink, Search, ...])
-                    if "search" in txt_i or "联网" in txt_i or i == 1:
-                        if "--selected" in cls_i:
-                            logger.info("[DeepSeek] Web search already ON (toolbar[%d], --selected)", i)
-                        else:
-                            # OFF — click to enable
-                            await self.client.page.evaluate(f"""() => {{
-                                const INTERACTIVE = 'button, [role="button"], [role="switch"], [aria-pressed], [aria-checked]';
-                                const textarea = document.querySelector('textarea');
-                                let c = textarea && textarea.parentElement;
-                                while (c && c !== document.body) {{
-                                    const els = Array.from(c.querySelectorAll(INTERACTIVE));
-                                    if (els.length >= 1 && els.length <= 8) {{
-                                        els[{i}] && els[{i}].click();
-                                        return 'clicked';
-                                    }}
-                                    c = c.parentElement;
-                                }}
-                                return 'not found';
-                            }}""")
-                            await asyncio.sleep(0.5)
-                            logger.info("[DeepSeek] Enabled web search toolbar[%d] (was OFF, cls=%s)", i, cls_i)
-                        break
+            # Check state via aria-pressed first, then class-based fallback
+            if pressed == "true":
+                logger.info("[DeepSeek] Web search already ON (toolbar[%d], pressed=true)", search_idx)
+                return
+            if pressed == "false":
+                await self._click_toolbar_button(search_idx)
+                logger.info("[DeepSeek] Enabled web search toolbar[%d] (pressed false→true)", search_idx)
+                return
 
-            if not toolbar and not all_toggles:
-                logger.warning("[DeepSeek] No toolbar or toggle elements found near textarea")
+            # No aria-pressed: use class-based detection
+            if "--selected" in cls:
+                logger.info("[DeepSeek] Web search already ON (toolbar[%d], --selected)", search_idx)
+            else:
+                await self._click_toolbar_button(search_idx)
+                logger.info("[DeepSeek] Enabled web search toolbar[%d] (was OFF, cls=%s)", search_idx, cls[:60])
 
         except Exception as e:
             logger.debug("[DeepSeek] _ensure_web_search_on failed: %s", e)
+
+    def _find_web_search_index(self, toolbar: list[dict]) -> int | None:
+        """Find the index of the WebSearch toggle button in the toolbar."""
+        # Pass 1: Look for a toggle-button with Search/联网 text
+        for i, btn in enumerate(toolbar):
+            cls = btn.get("cls", "")
+            if "toggle-button" not in cls:
+                continue
+            txt = btn.get("txt", "").lower()
+            if "search" in txt or "联网" in txt:
+                return i
+
+        # Pass 2: If there are exactly 2 toggle-buttons, the second is likely Search
+        toggle_indices = [i for i, b in enumerate(toolbar) if "toggle-button" in b.get("cls", "")]
+        if len(toggle_indices) >= 2:
+            return toggle_indices[1]  # [DeepThink, Search]
+
+        # Pass 3: Fallback to index 1 if it exists and is a toggle
+        if len(toolbar) > 1 and "toggle-button" in toolbar[1].get("cls", ""):
+            return 1
+
+        return None
+
+    async def _click_toolbar_button(self, index: int) -> None:
+        """Click a toolbar button by index (re-locating from textarea)."""
+        await self.client.page.evaluate(f"""() => {{
+            const INTERACTIVE = 'button, [role="button"], [role="switch"], [aria-pressed], [aria-checked]';
+            const textarea = document.querySelector('textarea');
+            let c = textarea && textarea.parentElement;
+            while (c && c !== document.body) {{
+                const els = Array.from(c.querySelectorAll(INTERACTIVE));
+                if (els.length >= 1 && els.length <= 8) {{
+                    els[{index}] && els[{index}].click();
+                    return 'clicked';
+                }}
+                c = c.parentElement;
+            }}
+            return 'not found';
+        }}""")
+        await asyncio.sleep(0.5)
 
     def _find_textarea_ref(self, snapshot: dict) -> str | None:
         """Find textarea reference from snapshot."""
@@ -356,101 +399,211 @@ class DeepSeekHandler(BaseBrowserHandler):
             return None
 
     async def _extract_answer(self) -> str:
-        """Extract answer text from page."""
+        """Extract answer text from page.
+
+        Clones the DOM node and strips inline citation markers before
+        extracting innerText so that superscript reference numbers
+        (e.g. [4], [7]) do not pollute the answer text.
+        """
         try:
-            result = await self.client.eval(
-                """
+            result = await self.client.eval("""() => {
                 const messages = document.querySelectorAll('div.ds-markdown');
                 const lastMessage = messages[messages.length - 1];
-                return lastMessage ? lastMessage.innerText : '';
-                """
-            )
-            return result.get("output", "")
+                if (!lastMessage) return '';
+                const clone = lastMessage.cloneNode(true);
+                // Remove inline citation markers (superscript numbers / cite links)
+                clone.querySelectorAll(
+                    '[class*="cite"], [class*="citation"], [class*="ref-num"], ' +
+                    'sup, a.ds-markdown-cite, a[data-index]'
+                ).forEach(el => el.remove());
+                return clone.innerText;
+            }""")
+            text = result.get("output", "")
+            if text:
+                logger.info("[DeepSeek] Extracted answer (%d chars)", len(text))
+            else:
+                logger.warning("[DeepSeek] Answer extraction returned empty string")
+            return text
         except Exception:
             return ""
 
     async def _extract_references(self) -> list[SearchReference]:
         """Extract search references from page.
 
-        Tries multiple selectors with fallback so that UI changes don't cause
-        silent failures.
+        Strategy:
+        1. Use a dedicated JS snippet that extracts citation links from
+           the last answer, reading the title attribute or parent tooltip
+           to get meaningful titles (not just the superscript number).
+        2. Fallback to generic selectors if step 1 yields nothing.
+        3. Attempt to expand the reference panel and re-check.
         """
-        refs = []
+        # Phase 1: Extract citation links with smart title resolution
+        refs = await self._extract_citation_links()
+        if refs:
+            logger.info("[DeepSeek] Extracted %d references via citation links", len(refs))
+            return refs
 
-        # Try to expand the reference panel first
-        for btn_text in ["引用", "来源", "References", "Sources"]:
-            try:
-                await self.client.find_and_click(btn_text)
-                await asyncio.sleep(2)
-                break
-            except Exception:
-                continue
-
-        selectors_to_try = [
-            ".citation-item",
-            "[class*='citation']",
+        # Phase 2: Generic selectors (reference panel elements)
+        panel_selectors = [
             "[class*='reference'] a[href^='http']",
             ".search-result a[href^='http']",
-            ".markdown-body a[href^='http']",
-            "a[href^='http'][target='_blank']",
         ]
+        for selector in panel_selectors:
+            refs = await self._try_ref_selector(selector)
+            if refs:
+                logger.info("[DeepSeek] Extracted %d references via selector: %s", len(refs), selector)
+                return refs
 
-        import json
-
-        for selector in selectors_to_try:
+        # Phase 3: Try to expand the reference panel, then re-check
+        for btn_text in ["引用", "来源", "References", "Sources"]:
             try:
-                result = await self.client.eval(
-                    f"""
-                    const items = document.querySelectorAll({repr(selector)});
-                    return JSON.stringify([...items].map((el, idx) => ({{
-                        index: idx + 1,
-                        title: (el.textContent || el.title || '').trim().slice(0, 200),
-                        url: el.href || el.getAttribute('href') || '',
-                    }})));
-                    """
-                )
-                data = json.loads(result.get("output", "[]") or "[]")
-                if data:
-                    cleaned = []
-                    for item in data:
-                        url = item.get("url", "")
-                        if url and not url.startswith(("javascript:", "#", "/")):
-                            cleaned.append(SearchReference(
-                                index=len(cleaned) + 1,
-                                title=item.get("title", ""),
-                                url=url,
-                                snippet=None,
-                                site_name=None,
-                                is_official=False,
-                            ))
-                    if cleaned:
-                        logger.info(
-                            "[DeepSeek] Extracted %d references using selector: %s",
-                            len(cleaned), selector,
-                        )
-                        refs = cleaned
-                        break
-            except Exception as e:
-                logger.debug("[DeepSeek] Selector '%s' failed: %s", selector, e)
+                result = await self.client.find_and_click(btn_text)
+                if result.get("success"):
+                    await asyncio.sleep(2)
+                    break
+            except Exception:
                 continue
 
-        if not refs:
-            # Diagnostic: dump all http links on page to find the right selector
-            try:
-                diag = await self.client.eval("""
-                    const links = Array.from(document.querySelectorAll('a[href^="http"]'));
-                    return JSON.stringify(links.slice(0, 20).map(a => ({
-                        url: a.href.slice(0, 80),
-                        txt: (a.textContent || '').trim().slice(0, 40),
-                        cls: (a.className || '').slice(0, 60),
-                        pCls: (a.parentElement?.className || '').slice(0, 60),
-                    })));
-                """)
-                import json as _json
-                link_data = _json.loads(diag.get("output", "[]") or "[]")
-                logger.warning("[DeepSeek] No references found. Sample http links (%d): %s",
-                               len(link_data), link_data[:5])
-            except Exception:
-                logger.warning("[DeepSeek] No references found after trying all selectors")
+        for selector in panel_selectors:
+            refs = await self._try_ref_selector(selector)
+            if refs:
+                logger.info("[DeepSeek] Extracted %d references (after expand) via: %s", len(refs), selector)
+                return refs
+
+        # Diagnostic: dump sample http links
+        try:
+            diag = await self.client.eval("""() => {
+                const links = Array.from(document.querySelectorAll('a[href^="http"]'));
+                return JSON.stringify(links.slice(0, 20).map(a => ({
+                    url: a.href.slice(0, 80),
+                    txt: (a.textContent || '').trim().slice(0, 40),
+                    cls: (a.className || '').slice(0, 60),
+                    pCls: (a.parentElement?.className || '').slice(0, 60),
+                })));
+            }""")
+            link_data = json.loads(diag.get("output", "[]") or "[]")
+            logger.warning("[DeepSeek] No references found. Sample http links (%d): %s",
+                           len(link_data), link_data[:5])
+        except Exception:
+            logger.warning("[DeepSeek] No references found after trying all selectors")
 
         return refs
+
+    async def _extract_citation_links(self) -> list[SearchReference]:
+        """Extract citation links from the last answer with smart title resolution.
+
+        DeepSeek renders inline citation markers as <a> tags whose textContent
+        is just a number (e.g. "4").  This method extracts the href (real URL)
+        and attempts to read a meaningful title from the element's title
+        attribute, aria-label, or a nearby tooltip / parent container.
+        If no title is available, falls back to the URL domain.
+        """
+        try:
+            result = await self.client.eval("""() => {
+                const messages = document.querySelectorAll('div.ds-markdown');
+                const lastMsg = messages[messages.length - 1];
+                if (!lastMsg) return '[]';
+
+                // Collect all <a> tags with external http links inside the answer
+                const links = Array.from(lastMsg.querySelectorAll('a[href^="http"]'));
+                const seen = new Set();
+                const refs = [];
+
+                for (const a of links) {
+                    const url = a.href;
+                    if (!url || seen.has(url)) continue;
+                    seen.add(url);
+
+                    // Try to get a meaningful title from multiple sources
+                    let title = (a.getAttribute('title') || '').trim();
+                    if (!title) title = (a.getAttribute('aria-label') || '').trim();
+                    if (!title) {
+                        // Check data attributes
+                        title = (a.getAttribute('data-title') || '').trim();
+                    }
+                    if (!title) {
+                        // Look at parent tooltip or wrapper text (skip if it's just a number)
+                        const parent = a.closest('[class*="tooltip"], [class*="popup"], [class*="citation-content"]');
+                        if (parent) {
+                            const pText = (parent.textContent || '').trim();
+                            if (pText.length > 5) title = pText.slice(0, 200);
+                        }
+                    }
+                    if (!title || /^[-\\d\\s.]+$/.test(title)) {
+                        // Title is empty or just numbers/dashes — use URL domain
+                        try {
+                            title = new URL(url).hostname.replace(/^www\\./, '');
+                        } catch {
+                            title = url.slice(0, 60);
+                        }
+                    }
+
+                    refs.push({ index: refs.length + 1, title, url });
+                }
+                return JSON.stringify(refs);
+            }""")
+            data = json.loads(result.get("output", "[]") or "[]")
+            if not data:
+                return []
+            return [
+                SearchReference(
+                    index=item["index"],
+                    title=item["title"],
+                    url=item["url"],
+                    snippet=None,
+                    site_name=None,
+                    is_official=False,
+                )
+                for item in data
+                if item.get("url")
+            ]
+        except Exception as e:
+            logger.debug("[DeepSeek] _extract_citation_links failed: %s", e)
+            return []
+
+    async def _try_ref_selector(self, selector: str) -> list[SearchReference]:
+        """Try a single CSS selector to extract references.
+
+        If the extracted title looks like a bare number or dash-number,
+        falls back to using the URL domain as the title.
+        """
+        try:
+            js_selector = json.dumps(selector)
+            result = await self.client.eval(
+                f"""() => {{
+                    const items = document.querySelectorAll({js_selector});
+                    return JSON.stringify([...items].map((el, idx) => ({{
+                        index: idx + 1,
+                        title: (el.getAttribute('title') || el.textContent || '').trim().slice(0, 200),
+                        url: el.href || el.getAttribute('href') || '',
+                    }})));
+                }}"""
+            )
+            data = json.loads(result.get("output", "[]") or "[]")
+            if not data:
+                return []
+            cleaned = []
+            for item in data:
+                url = item.get("url", "")
+                if url and not url.startswith(("javascript:", "#", "/")):
+                    title = item.get("title", "")
+                    # If title is empty or just numbers/dashes, use URL domain
+                    if not title or _is_junk_title(title):
+                        try:
+                            from urllib.parse import urlparse
+                            title = urlparse(url).hostname or url[:60]
+                            title = title.removeprefix("www.")
+                        except Exception:
+                            title = url[:60]
+                    cleaned.append(SearchReference(
+                        index=len(cleaned) + 1,
+                        title=title,
+                        url=url,
+                        snippet=None,
+                        site_name=None,
+                        is_official=False,
+                    ))
+            return cleaned
+        except Exception as e:
+            logger.debug("[DeepSeek] Selector '%s' failed: %s", selector, e)
+            return []

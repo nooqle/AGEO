@@ -264,6 +264,10 @@ async def send_error_event(
     """Send error event."""
     if _is_headless(session_id):
         return
+    # Guard: never send empty error string to frontend
+    if not error or not error.strip():
+        error = f"未知错误 ({step})"
+        logger.warning("[Events] send_error_event called with empty error for step %s", step)
     await manager.emit_to_session(
         session_id,
         "error",
@@ -381,6 +385,42 @@ async def send_stage_result(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     )
+
+
+async def send_browser_state_event(
+    session_id: str,
+    platform: str,
+    state: str,
+    message: str,
+    progress: float = 0.0,
+    requires_action: bool = False,
+    action_hint: str | None = None,
+) -> None:
+    """Send browser state event to frontend.
+
+    Used to notify frontend about browser login requirements and state changes.
+
+    Args:
+        session_id: WebSocket session id.
+        platform: Platform name (e.g. 'kimi', 'deepseek').
+        state: Browser state string (e.g. 'waiting_for_login').
+        message: Human-readable status message.
+        progress: Progress value (0-1).
+        requires_action: Whether user action is required.
+        action_hint: Hint for what the user should do.
+    """
+    if _is_headless(session_id):
+        return
+    payload: dict[str, Any] = {
+        "platform": platform,
+        "state": state,
+        "message": message,
+        "progress": progress,
+        "requires_action": requires_action,
+    }
+    if action_hint:
+        payload["action_hint"] = action_hint
+    await manager.emit_to_session(session_id, "browser_state", payload)
 
 
 async def send_confirmation_request(
