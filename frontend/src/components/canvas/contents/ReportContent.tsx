@@ -273,7 +273,7 @@ export function ReportContent({ content }: ReportContentProps) {
                     <div className={cn(
                       'w-3 h-3 rounded-full',
                       key === 'positive' ? 'bg-emerald-500' :
-                      key === 'negative' ? 'bg-red-500' : 'bg-gray-500'
+                      key === 'negative' ? 'bg-red-500' : 'bg-[--text-tertiary]'
                     )} />
                     <span className="text-xs text-[--text-secondary]">
                       {key === 'positive' ? '正面' : key === 'negative' ? '负面' : '中性'}: {val}
@@ -409,7 +409,7 @@ export function ReportContent({ content }: ReportContentProps) {
                         'text-[10px] px-2 py-0.5 rounded-full',
                         status === 'success' ? 'bg-emerald-500/10 text-emerald-400' :
                         status === 'failed' ? 'bg-red-500/10 text-red-400' :
-                        'bg-gray-500/10 text-gray-400'
+                        'bg-[--text-tertiary]/10 text-[--text-tertiary]'
                       )}>
                         {status === 'success' ? '成功' : status === 'failed' ? '失败' : status}
                       </span>

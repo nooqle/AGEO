@@ -6,7 +6,7 @@ Adapted for orchestrator-based dynamic routing (no hardcoded EXECUTION_STEPS).
 
 import json
 import logging
-from typing import Any
+from typing import Any, Literal, TypedDict
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket
@@ -24,6 +24,29 @@ from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Confirmation Protocol Types
+# ---------------------------------------------------------------------------
+# These TypedDicts define the structured selection payloads sent by the
+# frontend via the ``confirmation`` WebSocket event.  The ``type`` field
+# discriminates between variants.
+
+class PersonaPathSelection(TypedDict):
+    """Frontend sends this when the user selects personas from the pipeline."""
+    type: Literal["persona_path_selection"]
+    selectedPersonaIds: list[str]
+    selectedPersonaNames: list[str]
+
+
+class SkipSelection(TypedDict):
+    """Frontend sends this when the user clicks 'skip' on persona selection."""
+    type: Literal["skip"]
+
+
+# Union of all structured confirmation payloads
+ConfirmationSelection = PersonaPathSelection | SkipSelection
 
 
 # Step progression for inferring progress from restored state
@@ -636,10 +659,11 @@ async def handle_confirmation_langgraph(
         history = list(state_values.get("orchestrator_history", []))
         user_decisions = dict(state_values.get("user_decisions", {}))
 
-        # Parse structured selection (persona_path_selection / skip)
+        # Parse structured selection — see ConfirmationSelection type above
         if isinstance(selection, dict) and selection.get("type") == "persona_path_selection":
-            selected_ids = selection.get("selectedPersonaIds", [])
-            selected_names = selection.get("selectedPersonaNames", [])
+            sel: PersonaPathSelection = selection  # type: ignore[assignment]
+            selected_ids = sel.get("selectedPersonaIds", [])
+            selected_names = sel.get("selectedPersonaNames", [])
             user_content = f"用户选择了以下画像进行聚焦分析：{', '.join(selected_names)}"
             user_decisions["a3_mode"] = "persona"
             user_decisions["selected_persona_ids"] = selected_names  # Use names for A3 matching

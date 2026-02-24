@@ -48,6 +48,8 @@ def _get_layers(session_id: str) -> dict[str, Any]:
         _session_layers.pop(sid, None)
 
     if session_id not in _session_layers:
+        # NOTE: Field names use camelCase intentionally — they are stored in
+        # message.metadata.layers and consumed by the frontend as-is.
         _session_layers[session_id] = {
             "_created_at": now,
             "thought": "",

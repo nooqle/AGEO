@@ -1070,7 +1070,23 @@ def _build_pipeline_data(personas: list[dict]) -> dict:
     """Build 3-column pipeline data from A2 persona output for touchpoint map visualization.
 
     Columns: User Profile -> Usage Scenario -> Brand Interaction Intent
+
+    Returns a dict with ``columns`` (list of 3 column dicts) and ``edges``
+    (list of source->target links).  Returns an empty structure if *personas*
+    is empty or not a list.
     """
+    _empty: dict = {
+        "columns": [
+            {"key": "profile", "label": "用户画像", "color": "purple", "nodes": []},
+            {"key": "scenario", "label": "使用场景", "color": "blue", "nodes": []},
+            {"key": "intent", "label": "互动意图", "color": "orange", "nodes": []},
+        ],
+        "edges": [],
+    }
+    if not personas or not isinstance(personas, list):
+        logger.warning("[Pipeline] _build_pipeline_data called with empty/invalid personas")
+        return _empty
+
     profiles = []
     scenarios = []
     intents = []
@@ -1079,6 +1095,8 @@ def _build_pipeline_data(personas: list[dict]) -> dict:
     scenario_dedup: dict[str, str] = {}  # name -> id
 
     for pi, p in enumerate(personas):
+        if not isinstance(p, dict):
+            continue
         p_name = p.get("persona_name", p.get("name", f"画像{pi+1}"))
         p_id = f"profile_{pi}"
 
