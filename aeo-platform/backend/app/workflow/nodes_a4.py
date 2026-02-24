@@ -512,7 +512,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # Layer 2 degradation: send notice based on platform success count
         from app.workflow.resilience import DegradationRegistry
 
-        total_platforms = len(PLATFORMS)
+        # When platform_filter is set, total is the filtered set, not all platforms
+        total_platforms = len(platform_filter) if platform_filter else len(PLATFORMS)
         fail_count = total_platforms - len(successful_platforms)
 
         # Build per-platform status from fetch_results for degradation notice
@@ -527,12 +528,17 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 else:
                     platform_statuses[pname] = "failed"
 
-        if len(successful_platforms) < MIN_PLATFORMS_REQUIRED:
+        # When platform_filter is active (selective_refetch), adjust the minimum
+        # threshold to the number of requested platforms (min 1), so that a
+        # single-platform refetch doesn't trigger a spurious degradation notice.
+        effective_min = min(MIN_PLATFORMS_REQUIRED, len(platform_filter)) if platform_filter else MIN_PLATFORMS_REQUIRED
+
+        if len(successful_platforms) < effective_min:
             logger.warning(
                 "[A4] Only %d platform(s) succeeded (%s), minimum %d required",
                 len(successful_platforms),
                 ", ".join(successful_platforms) if successful_platforms else "none",
-                MIN_PLATFORMS_REQUIRED,
+                effective_min,
             )
             if len(successful_platforms) > 0:
                 # Some data available -- send degradation notice, not error

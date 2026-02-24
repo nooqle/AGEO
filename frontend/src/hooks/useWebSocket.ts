@@ -976,15 +976,20 @@ export function useWebSocket(sessionId: string | null) {
         break;
 
       case 'error': {
+        // Guard: ignore spurious empty error events (data = {}) that have no
+        // actionable content — these come from ASGI exception handling during
+        // hot-reload or disconnect and should not interrupt running tasks.
+        const hasErrorContent = typeof data.message === 'string' || typeof data.error === 'string';
+        if (!hasErrorContent) {
+          console.warn('[WebSocket] Received empty error event, ignoring:', data);
+          break;
+        }
         console.error('[WebSocket] Error:', data);
         const errorMsg = typeof data.message === 'string'
           ? data.message
-          : typeof data.error === 'string'
-          ? data.error
-          : '执行过程中发生错误，请重试';
+          : (data.error as string);
         toast.error(errorMsg);
-        // 所有错误都解锁输入框 — 不再区分 fatal/non-fatal
-        // 用户必须随时可以继续输入或重试
+        // 所有有效错误都解锁输入框 — 用户必须随时可以继续输入或重试
         stopExecution();
         break;
       }

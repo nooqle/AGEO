@@ -289,12 +289,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     )
                     agent_task.add_done_callback(_on_agent_done)
             elif event == "confirmation":
-                if agent_task and not agent_task.done():
+                _running = agent_task  # local ref to avoid race with _on_agent_done
+                if _running and not _running.done():
                     # Race condition: agent_task may still be running _save_final_message
                     # after sending inline_confirmation. Wait for it to finish.
                     logger.info("[WebSocket] Agent task still running, waiting for completion before handling confirmation...")
                     try:
-                        await asyncio.wait_for(agent_task, timeout=60)
+                        await asyncio.wait_for(_running, timeout=60)
                     except asyncio.TimeoutError:
                         logger.warning("[WebSocket] Agent task did not complete in 60s, ignoring confirmation")
                         await manager.emit_to_websocket(websocket, "error", {
@@ -334,14 +335,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             pass
         # Let agent task finish naturally so _save_final_message can persist
         # the agent reply to DB. WS send errors are caught by emit functions.
-        if agent_task and not agent_task.done():
+        # Capture a local reference first — _on_agent_done may set agent_task=None
+        # concurrently, which would cause AttributeError on .cancel().
+        _pending = agent_task
+        if _pending and not _pending.done():
             try:
-                await asyncio.wait_for(agent_task, timeout=30.0)
+                await asyncio.wait_for(_pending, timeout=30.0)
             except asyncio.TimeoutError:
                 logger.warning("[WebSocket] Agent task timed out after disconnect, cancelling")
-                agent_task.cancel()
+                _pending.cancel()
                 try:
-                    await agent_task
+                    await _pending
                 except (asyncio.CancelledError, Exception):
                     pass
             except Exception:
