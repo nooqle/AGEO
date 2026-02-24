@@ -307,6 +307,10 @@ async def handle_user_message_langgraph(
         except Exception as e:
             logger.error(f"[LangGraph] Error looking up entity: {e}")
 
+    # Reset layer accumulator for this execution round
+    from app.workflow.events import reset_session_layers
+    reset_session_layers(session_id)
+
     workflow = None
     config = None
     try:
@@ -529,7 +533,12 @@ async def _process_langgraph_event(session_id: str, event: dict):
 
 
 async def _save_final_message(session_id: str, workflow, config: dict):
-    """Save final agent message to database."""
+    """Save final agent message to database, including accumulated layers."""
+    from app.workflow.events import pop_accumulated_layers
+
+    # Always pop layers to prevent memory leak, regardless of final_state
+    layers = pop_accumulated_layers(session_id)
+
     try:
         # Get final state
         final_state = workflow.get_state(config)
@@ -562,6 +571,7 @@ async def _save_final_message(session_id: str, workflow, config: dict):
                     metadata={
                         "metrics": metrics,
                         "report_summary": report.get("key_findings", []),
+                        "layers": layers,
                     },
                 )
             logger.info(f"[LangGraph] Agent message saved for session {session_id}")

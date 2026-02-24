@@ -6,7 +6,6 @@ import { useConversationStore } from '@/stores/conversationStore';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { MessageList } from './MessageList';
-import { MiniProgress } from './MiniProgress';
 import { ConfirmationCard } from './ConfirmationCard';
 import { StageResultCard } from './StageResultCard';
 import { TaskStatusBadge } from './TaskStatusBadge';
@@ -22,8 +21,9 @@ import type { CanvasContent, CanvasContentType, CanvasContentDataMap } from '@/t
 import type { ContextTag } from '@/stores/contextStore';
 import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
 import type { StageResult } from '@/types/snapshot';
+import type { ActionLogEntry } from '@/types/message';
 
-const VALID_OUTPUT_TYPES: CanvasContentType[] = ['report', 'chart', 'dataTable', 'selection', 'workflow', 'questionList', 'fetchResults'];
+const VALID_OUTPUT_TYPES: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
 
 interface ChatPanelProps {
   sessionId: string;
@@ -116,7 +116,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       try {
         const msgs = await api.getMessages(sessionId, { limit: 100 });
         if (cancelled || !msgs || msgs.length === 0) return;
-        // Convert API messages to store format, reconstructing outputCards from output_data
+        // Convert API messages to store format, reconstructing outputCards and layers from metadata
         for (const msg of msgs) {
           const role = msg.role === 'agent' || msg.role === 'assistant' ? 'agent' : 'user';
           const outputType = msg.output_type && VALID_OUTPUT_TYPES.includes(msg.output_type as CanvasContentType)
@@ -129,10 +129,44 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             title: (parsed as Record<string, unknown>)?.headline as string || (parsed as Record<string, unknown>)?.title as string || msg.content || '分析结果',
             preview: { description: (parsed as Record<string, unknown>)?.executive_summary as string || (parsed as Record<string, unknown>)?.description as string },
           }] : undefined;
+
+          // Reconstruct layers from persisted metadata
+          const meta = msg.metadata as Record<string, unknown> | null;
+          const persistedLayers = meta?.layers as Record<string, unknown> | undefined;
+          const layers = persistedLayers ? {
+            thought: (persistedLayers.thought as string) || undefined,
+            planText: (persistedLayers.planText as string) || undefined,
+            actionLogs: Array.isArray(persistedLayers.actionLogs)
+              ? (persistedLayers.actionLogs as Array<Record<string, unknown>>).map((log, i) => ({
+                  id: `log_${i}`,
+                  actionType: ((log.action_type as string) || 'generic') as ActionLogEntry['actionType'],
+                  message: (log.message as string) || '',
+                  step: (log.step as string) || '',
+                  timestamp: (log.timestamp as string) || '',
+                  isComplete: Boolean(log.is_complete),
+                }))
+              : [],
+          } : undefined;
+
+          // Reconstruct stage results from persisted metadata
+          const persistedStageResults = persistedLayers?.stageResults as Array<Record<string, unknown>> | undefined;
+          if (persistedStageResults && Array.isArray(persistedStageResults)) {
+            for (const sr of persistedStageResults) {
+              addStageResult({
+                stage: (sr.stage as string) || '',
+                stageName: (sr.stage_name as string) || '',
+                resultType: (sr.result_type as StageResult['resultType']) || 'brand_profile',
+                data: (sr.data as Record<string, unknown>) || {},
+                timestamp: (sr.timestamp as string) || '',
+              });
+            }
+          }
+
           addMessage({
             type: role,
             content: msg.content || '',
             ...(outputCards ? { outputCards } : {}),
+            ...(layers ? { layers } : {}),
           });
         }
       } catch {
@@ -155,7 +189,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       try {
         const outputs = await api.getOutputs(sessionId);
         if (cancelled || !outputs || outputs.length === 0) return;
-        const validTypes: CanvasContentType[] = ['report', 'chart', 'dataTable', 'selection', 'workflow', 'questionList', 'fetchResults'];
+        const validTypes: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
         for (const output of outputs) {
           const outputType: CanvasContentType = validTypes.includes(output.type as CanvasContentType)
             ? (output.type as CanvasContentType)
@@ -486,23 +520,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             </div>
           )}
 
-          {/* Mini Progress */}
-          {isAgentExecuting && executionProgress && executionProgress.steps && executionProgress.steps.length > 0 && (() => {
-            const visibleSteps = executionProgress.steps.filter(s => s.status !== 'skipped');
-            return visibleSteps.length > 0 ? (
-              <div className="mt-4">
-                <MiniProgress
-                  steps={visibleSteps.map((s) => ({
-                    id: s.id,
-                    label: s.label,
-                    description: s.description,
-                    status: s.status,
-                  }))}
-                  isExecuting={isAgentExecuting}
-                />
-              </div>
-            ) : null;
-          })()}
 
           {/* Cycle 3: Safe-to-leave signal */}
           {showSafeToLeave && isAgentExecuting && (

@@ -95,7 +95,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
         "name": "answer_fetch",
         "description": (
             "从多个AI平台（豆包、混元、Kimi、DeepSeek）抓取对模拟问题的回答。"
-            "耗时较长（5-10分钟），需要先完成问题模拟。"
+            "API平台（豆包/混元）并行抓取约30秒，浏览器平台（Kimi/DeepSeek）各需3-5分钟串行处理，总计约8-12分钟。需要先完成问题模拟。"
         ),
         "parameters": {
             "type": "object",
@@ -260,7 +260,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 "waiting_tips": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "等待提示（仅在用户确认后将立即执行耗时操作时提供，如AI答案抓取预计5-10分钟。普通确认或选择场景不要填写此字段）",
+                    "description": "等待提示（仅在用户确认后将立即执行耗时操作时提供，如AI答案抓取预计8-12分钟。普通确认或选择场景不要填写此字段）",
                 },
                 "checklist": {
                     "type": "array",
@@ -492,6 +492,7 @@ A1 完成后的流程（最高优先级）：
 - 当用户提供品牌名称时，你必须调用 brand_analysis 工具获取真实数据
 - 不要在回复中直接给出"品牌分析结果"——所有分析数据必须通过工具获取
 - 如果你不确定该做什么，调用 ask_user 询问用户，而不是自己猜测
+- 不要在回复中编造具体的时间估计（如"约15秒"、"大约3分钟"、"第3/4步"等）。如需提及耗时，仅使用工具描述中给出的时间范围（如answer_fetch约8-12分钟）。其他步骤不要预估时间，使用"请稍候"即可
 
 失败处理（重要）：
 - 绝对不要提供"停止分析"或"取消分析"作为选项。我们的目标是引导用户完成分析，而不是放弃。
@@ -1165,9 +1166,9 @@ async def _handle_tool_call(
             FALLBACK_TEXTS = {
                 "brand_analysis": "正在收集品牌基本信息和竞品格局，请稍候...",
                 "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
-                "question_simulation": "正在模拟真实用户可能在 AI 搜索中提出的问题，通常需要 10-20 秒...",
-                "answer_fetch": "正在向豆包、混元、Kimi、DeepSeek 四个平台提问，抓取各平台对品牌的真实回答。此过程约需 15 分钟，请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。",
-                "data_analytics": "正在分析各平台回答数据，计算品牌曝光率、情感分布和 BWVS 指数，即将完成...",
+                "question_simulation": "正在模拟真实用户可能在 AI 搜索中提出的问题，请稍候...",
+                "answer_fetch": "正在向豆包、混元、Kimi、DeepSeek 四个平台提问，抓取各平台对品牌的真实回答。API 平台（豆包/混元）并行抓取约 30 秒，浏览器平台（Kimi/DeepSeek）各需 3-5 分钟，总计约 8-12 分钟。请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。",
+                "data_analytics": "正在分析各平台回答数据，计算品牌曝光率、情感分布和 BWVS 指数，请稍候...",
             }
             fallback_text = FALLBACK_TEXTS.get(tool_name, f"正在执行：{display_name}，请稍候...")
             await send_reply_event(

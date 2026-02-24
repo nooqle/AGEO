@@ -83,7 +83,7 @@ export function TPAORBlock({
   defaultExpanded = false,
   progress,
 }: TPAORBlockProps) {
-  const [isExpanded, setIsExpanded] = useState(defaultExpanded || isActive);
+  const [isExpanded, setIsExpanded] = useState(false);
   const config = phaseConfig[phase];
   const Icon = config.icon;
 

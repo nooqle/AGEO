@@ -40,6 +40,30 @@ def get_llm_model_compat() -> BaseLLMModel:
     return get_llm_model()
 
 
+def _get_fast_model() -> BaseLLMModel:
+    """Get LLM model with thinking/reasoning disabled for structured output tasks.
+
+    For tasks that only need JSON output (A2 personas, A3 questions), deep
+    reasoning adds 30-60s of latency with no quality benefit.
+    """
+    from app.config import get_settings
+    settings = get_settings()
+    provider = getattr(settings, "LLM_PROVIDER", "minimax").lower()
+
+    if provider == "glm5":
+        from app.core.llm.glm5 import GLM5Config, GLM5Model
+        config = GLM5Config()
+        config.thinking_enabled = False
+        return GLM5Model(config)
+    if provider == "minimax":
+        from app.core.llm.minimax import MiniMaxConfig, MiniMaxModel
+        config = MiniMaxConfig()
+        config.reasoning_split = False
+        return MiniMaxModel(config)
+    # Fallback: return default model
+    return get_llm_model()
+
+
 def parse_llm_response(response) -> dict | None:
     """Parse MiniMax response and extract JSON data."""
     content = response.content if hasattr(response, "content") else str(response)
@@ -708,7 +732,9 @@ async def a2_persona_node(state: AgentState) -> Command:
     )
 
     try:
-        model = get_llm_model_compat()
+        # A2 outputs structured JSON — disable thinking/reasoning for speed.
+        # Thinking adds ~30-60s of reasoning tokens before actual JSON output.
+        model = _get_fast_model()
         user_content = _build_a2_user_content(brand_profile, competitors)
 
         # --- Attempt 1: standard simplified prompt ---
@@ -786,38 +812,20 @@ async def a2_persona_node(state: AgentState) -> Command:
             is_complete=True,
         )
 
-        # Build selection items for inline persona picker
-        _priority_zh_to_en = {
-            "核心人群": "core",
-            "增长人群": "growth",
-            "机会人群": "opportunity",
-        }
-        selection_items = []
-        for p in personas:
-            raw_priority = p.get("persona_priority", p.get("priority", ""))
-            priority_en = _priority_zh_to_en.get(raw_priority, raw_priority)
-            selection_items.append({
-                "id": p.get("persona_name", p.get("name", "")),
-                "name": p.get("persona_name", p.get("name", "")),
-                "description": p.get("persona_description", p.get("description", ""))[:120],
-                "priority": priority_en,
-                "scenarios": [
-                    s.get("scenario_name", s) if isinstance(s, dict) else str(s)
-                    for s in p.get("usage_scenarios", [])
-                ],
-            })
+        # Build pipeline data (3-column: profile → scenario → intent)
+        pipeline_data = _build_pipeline_data(personas)
 
-        # Send persona selection artifact (A2 deliverable)
+        # Send pipeline artifact with selection capability (A2 deliverable)
         from app.workflow.events import save_and_send_artifact
         await save_and_send_artifact(
             session_id=session_id,
-            output_type="selection",
-            title="用户画像选择",
+            output_type="pipeline",
+            title="营销触点地图",
             data={
-                "personas": selection_items,
+                "pipeline": pipeline_data,
                 "maxSelection": 3,
                 "minSelection": 1,
-                "description": "请选择您希望重点分析的用户画像（可多选）",
+                "description": "请在管道图中选择您希望重点分析的用户画像（可多选）",
             },
         )
 

@@ -127,12 +127,13 @@ function EntityFormDialogInner({
 
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-              域名
+              官网 *
             </label>
             <input
               type="text"
               value={domain}
               onChange={(e) => setDomain(e.target.value)}
+              required
               className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-colors"
               style={{
                 background: 'var(--bg-primary)',
@@ -145,19 +146,20 @@ function EntityFormDialogInner({
 
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-              所属行业
+              品类 *
             </label>
             <input
               type="text"
               value={industry}
               onChange={(e) => setIndustry(e.target.value)}
+              required
               className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-colors"
               style={{
                 background: 'var(--bg-primary)',
                 border: '1px solid var(--border-default)',
                 color: 'var(--text-primary)',
               }}
-              placeholder="例如：科技"
+              placeholder="例如：护肤品"
             />
           </div>
 
@@ -191,7 +193,7 @@ function EntityFormDialogInner({
             </button>
             <button
               type="submit"
-              disabled={!name.trim()}
+              disabled={!name.trim() || !domain.trim() || !industry.trim()}
               className="btn-primary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
             >
               {isEdit ? '更新品牌' : '创建品牌'}

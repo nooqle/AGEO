@@ -19,8 +19,8 @@ const statusConfig: Record<ExecutionStepStatus, { icon: React.ReactNode; label: 
   pending: {
     icon: <RiTimeLine className="w-4 h-4" />,
     label: '等待中',
-    color: 'text-gray-400',
-    bgColor: 'bg-gray-100',
+    color: 'text-[--text-disabled]',
+    bgColor: 'bg-[--bg-tertiary]',
   },
   running: {
     icon: <RiLoader4Line className="w-4 h-4 animate-spin" />,
@@ -54,7 +54,7 @@ export function ExecutionStepMessage({
   onSkip,
   onRetry,
 }: ExecutionStepMessageProps) {
-  const [isExpanded, setIsExpanded] = useState(step.status === 'running' || step.status === 'waiting_confirmation');
+  const [isExpanded, setIsExpanded] = useState(false);
   const status = statusConfig[step.status];
 
   const toggleExpand = () => setIsExpanded(!isExpanded);
@@ -89,11 +89,11 @@ export function ExecutionStepMessage({
         <motion.div
           className={cn(
             'rounded-xl border overflow-hidden transition-all',
-            step.status === 'running' && 'border-indigo-200 shadow-sm',
-            step.status === 'waiting_confirmation' && 'border-amber-200 shadow-sm',
-            step.status === 'completed' && 'border-green-200',
-            step.status === 'failed' && 'border-red-200',
-            'bg-white'
+            step.status === 'running' && 'border-indigo-200/50 shadow-sm',
+            step.status === 'waiting_confirmation' && 'border-amber-200/50 shadow-sm',
+            step.status === 'completed' && 'border-green-200/50',
+            step.status === 'failed' && 'border-red-200/50',
+            'bg-[--bg-secondary]'
           )}
           initial={{ opacity: 0, y: 5 }}
           animate={{ opacity: 1, y: 0 }}
@@ -104,7 +104,7 @@ export function ExecutionStepMessage({
             onClick={toggleExpand}
             className={cn(
               'w-full px-4 py-3 flex items-center justify-between transition-colors',
-              'hover:bg-gray-50'
+              'hover:bg-[--bg-tertiary]'
             )}
           >
             <div className="flex items-center gap-3">
@@ -112,14 +112,14 @@ export function ExecutionStepMessage({
                 {status.icon}
                 <span>{status.label}</span>
               </span>
-              <span className="text-sm font-medium text-gray-900">{step.stepName}</span>
-              <span className="text-xs text-gray-400">
+              <span className="text-sm font-medium text-[--text-primary]">{step.stepName}</span>
+              <span className="text-xs text-[--text-disabled]">
                 ({step.stepIndex}/{step.totalSteps})
               </span>
             </div>
             <div className="flex items-center gap-2">
               {step.startTime && (
-                <span className="text-xs text-gray-400">
+                <span className="text-xs text-[--text-disabled]">
                   {formatTime(step.startTime)}
                 </span>
               )}
@@ -127,7 +127,7 @@ export function ExecutionStepMessage({
                 animate={{ rotate: isExpanded ? 180 : 0 }}
                 transition={{ duration: 0.2 }}
               >
-                <RiArrowDownSLine className="w-4 h-4 text-gray-400" />
+                <RiArrowDownSLine className="w-4 h-4 text-[--text-disabled]" />
               </motion.div>
             </div>
           </button>
@@ -140,13 +140,13 @@ export function ExecutionStepMessage({
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
                 transition={{ duration: 0.25, ease: 'easeInOut' }}
-                className="border-t border-gray-100"
+                className="border-t border-[--border-default]"
               >
                 <div className="p-4 space-y-3">
                   {/* 描述 */}
                   {step.description && (
-                    <motion.p 
-                      className="text-sm text-gray-600"
+                    <motion.p
+                      className="text-sm text-[--text-secondary]"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ delay: 0.1 }}
@@ -185,13 +185,13 @@ export function ExecutionStepMessage({
                   {/* 执行结果摘要 */}
                   {step.result && (
                     <motion.div 
-                      className="bg-gray-50 rounded-lg p-3 border border-gray-200"
+                      className="bg-[--bg-tertiary] rounded-lg p-3 border border-[--border-default]"
                       initial={{ opacity: 0, y: 5 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
                     >
-                      <div className="text-xs font-medium text-gray-500 mb-1">执行结果</div>
-                      <div className="text-sm text-gray-900">
+                      <div className="text-xs font-medium text-[--text-tertiary] mb-1">执行结果</div>
+                      <div className="text-sm text-[--text-primary]">
                         {typeof step.result === 'string'
                           ? step.result
                           : JSON.stringify(step.result, null, 2)}
@@ -218,7 +218,7 @@ export function ExecutionStepMessage({
                       </motion.button>
                       <motion.button
                         onClick={onSkip}
-                        className="px-4 py-2 text-gray-600 text-sm font-medium hover:text-gray-900 transition-colors"
+                        className="px-4 py-2 text-[--text-secondary] text-sm font-medium hover:text-[--text-primary] transition-colors"
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                       >

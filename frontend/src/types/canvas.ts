@@ -4,7 +4,7 @@ export type CanvasContentType =
   | 'report'
   | 'chart'
   | 'dataTable'
-  | 'selection'
+  | 'pipeline'
   | 'workflow'
   | 'questionList'
   | 'fetchResults';
@@ -64,25 +64,10 @@ export type DataTableCanvasData = CanvasPreviewData & {
   rows?: TableRow[];
 };
 
-export type PersonaSelectionItem = {
-  id: string;
-  name: string;
-  emoji: string;
-  description: string;
-  ageRange: string;
-  characteristics: string[];
-  recommendationScore: number;
-  relatedWeakness?: string;
-  recommendationReason?: string;
-  priority?: 'core' | 'growth' | 'opportunity';
-  scenarios?: string[];
-};
-
-export type SelectionCanvasData = CanvasPreviewData & {
-  personas?: PersonaSelectionItem[];
+export type PipelineCanvasData = CanvasPreviewData & {
+  pipeline?: import('./touchpoint').PipelineData;
   maxSelection?: number;
   minSelection?: number;
-  estimatedTime?: string;
 };
 
 export type WorkflowBrandProfile = {
@@ -252,7 +237,7 @@ export type CanvasContentDataMap = {
   report: ReportCanvasData;
   chart: ChartCanvasData;
   dataTable: DataTableCanvasData;
-  selection: SelectionCanvasData;
+  pipeline: PipelineCanvasData;
   workflow: WorkflowCanvasData;
   questionList: QuestionListCanvasData;
   fetchResults: FetchResultsCanvasData;
@@ -300,9 +285,9 @@ export type CanvasContent =
     }
   | {
       id: string;
-      type: 'selection';
+      type: 'pipeline';
       title: string;
-      data: SelectionCanvasData;
+      data: PipelineCanvasData;
       createdAt: Date;
       relatedMessageId: string;
       versions: ContentVersion[];
@@ -355,7 +340,7 @@ export type CanvasContent =
 export type ReportCanvasContent = Extract<CanvasContent, { type: 'report' }>;
 export type ChartCanvasContent = Extract<CanvasContent, { type: 'chart' }>;
 export type DataTableCanvasContent = Extract<CanvasContent, { type: 'dataTable' }>;
-export type SelectionCanvasContent = Extract<CanvasContent, { type: 'selection' }>;
+export type PipelineCanvasContent = Extract<CanvasContent, { type: 'pipeline' }>;
 export type WorkflowCanvasContent = Extract<CanvasContent, { type: 'workflow' }>;
 export type QuestionListCanvasContent = Extract<CanvasContent, { type: 'questionList' }>;
 export type FetchResultsCanvasContent = Extract<CanvasContent, { type: 'fetchResults' }>;

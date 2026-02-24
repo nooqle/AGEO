@@ -270,7 +270,7 @@ function QualityIndicator({ level }: { level: QualityLevel }) {
 }
 
 export function StageResultCard({ result, isLatest, isReplay, className }: StageResultCardProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
   const Icon = STAGE_ICONS[result.resultType] || RiBarChartBoxLine;
   const accentColor = STAGE_COLORS[result.resultType] || '#6366F1';
 
@@ -341,7 +341,7 @@ export function StageResultCard({ result, isLatest, isReplay, className }: Stage
       aria-live="polite"
       aria-label={`${result.stageName} ${isVerifying ? '正在验证数据质量' : '结果'}`}
       className={cn(
-        'rounded-[10px] border-l-[3px] overflow-hidden transition-all duration-200',
+        'rounded-[10px] border-l-2 overflow-hidden transition-all duration-200',
         isLatest ? 'animate-slide-up' : 'animate-fade-to-muted',
         className,
       )}

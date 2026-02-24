@@ -21,6 +21,7 @@ from langgraph.types import Command
 from app.workflow.state import AgentState
 from app.workflow.events import (
     send_progress_event,
+    send_reply_event,
     send_error_event,
     send_stage_result,
     send_browser_state_event,
@@ -183,6 +184,17 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 "progress": 0.6,
             },
         )
+
+    # Send user-visible reply with expected duration
+    duration_msg = (
+        f"开始向豆包、混元、Kimi、DeepSeek 四个平台提问，共 {len(questions)} 个问题。\n\n"
+        "- API 平台（豆包/混元）：并行抓取，约 30 秒\n"
+        "- 浏览器平台（Kimi/DeepSeek）：各需 3-5 分钟\n"
+        "- 预计总耗时约 8-12 分钟\n\n"
+        "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
+    )
+    await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
+    await send_reply_event(session_id, "", is_complete=True)
 
     await send_progress_event(
         session_id=session_id,
@@ -774,6 +786,17 @@ async def _fetch_from_doubao(
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         answer_text = response.answer_text
 
+        if not answer_text or not answer_text.strip():
+            logger.warning("[A4] doubao returned empty answer for question: %s", question[:60])
+            return {
+                "platform": "doubao",
+                "platform_name": "豆包",
+                "fetch_method": "api",
+                "success": False,
+                "error": "empty answer from API",
+                "duration": duration,
+            }
+
         return {
             "platform": "doubao",
             "platform_name": "豆包",
@@ -791,12 +814,14 @@ async def _fetch_from_doubao(
         }
     except Exception as e:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        logger.warning("[A4] doubao exception: %s(%s) for question: %s",
+                       type(e).__name__, e, question[:60])
         return {
             "platform": "doubao",
             "platform_name": "豆包",
             "fetch_method": "api",
             "success": False,
-            "error": str(e),
+            "error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__,
             "duration": duration,
         }
 

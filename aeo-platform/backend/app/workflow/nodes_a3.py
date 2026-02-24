@@ -25,7 +25,7 @@ from app.workflow.events import (
     send_stage_result,
 )
 from app.workflow.nodes_streaming import call_llm_streaming
-from app.core.llm import get_llm_model
+from app.workflow.nodes import _get_fast_model
 from app.core.utils import extract_json_from_content
 
 # Platforms to distribute questions across
@@ -117,7 +117,6 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
                 "core_question": core_question,
                 "user_intent": template["user_intent"],
                 "decision_stage": template["decision_stage"],
-                "platform": template.get("platform", "kimi"),  # Default platform
             }
             simulated_questions.append(question_obj)
 
@@ -128,7 +127,6 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
                 "category": template["category"],
                 "intent": template["user_intent"],
                 "stage": template["decision_stage"],
-                "platform": template.get("platform", "kimi"),
             })
 
         question_count = len(simulated_questions)
@@ -138,7 +136,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             step="A3",
             step_name="问题模拟生成",
             progress=1.0,
-            message=f"成功加载 {question_count} 个核心问题（覆盖 2 个 AI 平台）",
+            message=f"成功加载 {question_count} 个核心问题（覆盖 4 个 AI 平台）",
             status="completed",
         )
 
@@ -299,7 +297,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             brand_profile, selected_personas
         )
 
-        model = get_llm_model()
+        model = _get_fast_model()
         response = await call_llm_streaming(
             session_id=session_id,
             model=model,
@@ -639,7 +637,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         system_prompt = _build_baseline_system_prompt()
         user_content = _build_baseline_user_content(brand_profile, competitors)
 
-        model = get_llm_model()
+        model = _get_fast_model()
         response = await call_llm_streaming(
             session_id=session_id,
             model=model,

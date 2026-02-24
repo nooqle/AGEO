@@ -5,14 +5,14 @@
  */
 
 export const chart = {
-  grid: '#333333',
+  grid: '#484848',
   axis: {
     tick: '#737373',       // --text-tertiary
     fontSize: 12,
   },
   tooltip: {
     bg: '#1A1A1A',         // --bg-tertiary
-    border: '#333333',
+    border: '#484848',
     radius: '8px',
     text: '#E5E5E5',
   },

@@ -25,7 +25,7 @@ export function FocusCard({ title, stats, content, className }: FocusCardProps) 
       style={{
         background: 'var(--bg-secondary)',
         border: '1px solid var(--border-default)',
-        borderLeft: '3px solid var(--info, #3B82F6)',
+        borderLeft: '2px solid var(--info, #3B82F6)',
         padding: '14px 18px',
       }}
     >

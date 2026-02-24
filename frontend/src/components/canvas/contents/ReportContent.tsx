@@ -571,7 +571,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 return (
                   <div
                     key={index}
-                    className="p-4 bg-[--bg-secondary] rounded-lg border-l-[3px]"
+                    className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
                     style={{
                       borderLeftColor: priorityColor,
                       borderTop: '1px solid var(--border-default)',
@@ -633,7 +633,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 return (
                   <div
                     key={i}
-                    className="p-4 bg-[--bg-secondary] rounded-lg border-l-[3px]"
+                    className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
                     style={{
                       borderLeftColor: levelColor,
                       borderTop: '1px solid var(--border-default)',

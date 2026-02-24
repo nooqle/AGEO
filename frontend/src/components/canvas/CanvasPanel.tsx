@@ -8,7 +8,7 @@ import { CanvasTabs } from './CanvasTabs';
 import { ReportContent } from './contents/ReportContent';
 import { ChartContent } from './contents/ChartContent';
 import { DataTableContent } from './contents/DataTableContent';
-import { SelectionContent } from './contents/SelectionContent';
+import { PipelineContent } from './contents/PipelineContent';
 import { WorkflowContent } from './contents/WorkflowContent';
 import { QuestionListContent } from './contents/QuestionListContent';
 import { FetchResultsContent } from './contents/FetchResultsContent';
@@ -77,8 +77,8 @@ export function CanvasPanel() {
         return <ChartContent content={activeContent} />;
       case 'dataTable':
         return <DataTableContent content={activeContent} />;
-      case 'selection':
-        return <SelectionContent content={activeContent} />;
+      case 'pipeline':
+        return <PipelineContent content={activeContent} />;
       case 'workflow':
         return <WorkflowContent content={activeContent} />;
       case 'questionList':
@@ -109,12 +109,12 @@ export function CanvasPanel() {
       {contents.length > 1 && <CanvasTabs />}
 
       {/* 内容区 */}
-      {/* selection 类型：不在此层滚动，让 SelectionContent 自控滚动与固定底栏 */}
+      {/* pipeline 类型：不在此层滚动，让 PipelineContent 自控滚动与固定底栏 */}
       {/* 其他类型：在此层滚动（原有行为不变） */}
       <div
         className={cn(
           'flex-1 overflow-x-hidden',
-          activeContent?.type === 'selection'
+          activeContent?.type === 'pipeline'
             ? 'overflow-hidden'
             : 'overflow-y-auto'
         )}
@@ -123,7 +123,7 @@ export function CanvasPanel() {
           <motion.div
             key={`${activeContent?.id || 'empty'}_v${rawContent?.currentVersionIndex ?? -1}`}
             className={cn(
-              activeContent?.type === 'selection' ? 'h-full' : ''
+              activeContent?.type === 'pipeline' ? 'h-full' : ''
             )}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}

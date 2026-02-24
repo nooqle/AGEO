@@ -240,6 +240,14 @@ class KimiHandler(BaseBrowserHandler):
             prev_len = 0
             stable_count = 0
 
+            # Login check JS — reused during polling to detect late login modals
+            _LOGIN_CHECK_JS = """() => {
+                const sels = ['.login-modal-content', '.wechat-login',
+                              '[class*="login-modal"]', '[class*="login-dialog"]'];
+                for (const s of sels) { if (document.querySelector(s)) return true; }
+                return false;
+            }"""
+
             while waited < max_wait:
                 await asyncio.sleep(3)
                 waited += 3
@@ -249,6 +257,55 @@ class KimiHandler(BaseBrowserHandler):
                 cur_len = int(result.get("output", "0") or "0")
                 logger.info("[Kimi] Poll %ds: content_len=%d (prev=%d, stable=%d)",
                             waited, cur_len, prev_len, stable_count)
+
+                # Detect late login modal: if no content after 12s, check for login popup
+                if cur_len == 0 and waited >= 12 and self.client.page is not None:
+                    try:
+                        has_login = await self.client.page.evaluate(_LOGIN_CHECK_JS)
+                        if has_login:
+                            logger.warning("[Kimi] Late login modal detected at %ds — switching to headed mode", waited)
+                            INPUT_READY_SELECTOR = ".chat-input-editor, [class*='chat-input']"
+                            yield self._create_event(
+                                BrowserState.WAITING_FOR_LOGIN,
+                                "检测到需要登录，请在浏览器窗口中完成登录",
+                                progress=0.35,
+                                requires_action=True,
+                                action_hint="请在弹出的浏览器窗口中完成 Kimi 登录",
+                            )
+                            await self.client.close()
+                            await self.client.open(self.URL, headed=True)
+                            login_success = await self._wait_for_login(INPUT_READY_SELECTOR, timeout=300)
+                            if not login_success:
+                                yield self._create_event(
+                                    BrowserState.ERROR, "登录超时，请重试",
+                                    progress=0, requires_action=False,
+                                )
+                                return
+                            # After login, close headed and reopen headless
+                            await self.client.close()
+                            await self.client.open(self.URL, headed=False)
+                            await asyncio.sleep(4)
+                            # Re-submit the question
+                            if self.client.page is not None:
+                                editor = self.client.page.locator(self.INPUT_SELECTOR).first
+                                if await editor.count() > 0:
+                                    await editor.click()
+                                    await asyncio.sleep(0.2)
+                                    await self.client.page.keyboard.press("Control+a")
+                                    await self.client.page.keyboard.type(question)
+                                    await asyncio.sleep(0.3)
+                                    await self.client.page.keyboard.press("Enter")
+                                    logger.info("[Kimi] Re-submitted question after login")
+                            # Reset polling state
+                            waited = 0
+                            prev_len = 0
+                            stable_count = 0
+                            await asyncio.sleep(3)
+                            waited += 3
+                            continue
+                    except Exception as e:
+                        logger.debug("[Kimi] Late login check failed: %s", e)
+
                 if cur_len > 0 and cur_len == prev_len:
                     stable_count += 1
                     if stable_count >= 2:
@@ -265,7 +322,6 @@ class KimiHandler(BaseBrowserHandler):
                         const bodyText = (document.body?.innerText || '').slice(0, 500);
                         const allCls = new Set();
                         document.querySelectorAll('*').forEach(el => {
-                            // SVG elements have className as SVGAnimatedString, not string
                             const cn = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '');
                             cn.split(' ').forEach(c => { if (c.trim()) allCls.add(c.trim()); });
                         });

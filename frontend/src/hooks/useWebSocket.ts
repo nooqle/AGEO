@@ -10,7 +10,7 @@ import { toast } from '@/components/ui/toast';
 import { LLMDecision, ExecutionPlanStep } from '@/types/orchestration';
 import { WebSocketEventData } from '@/types/websocket';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
 
 /** Map backend step status to frontend ProgressStep status */
 function _mapStepStatus(status: string | undefined): ProgressStep['status'] {
@@ -173,11 +173,11 @@ const normalizeCanvasData = <T extends CanvasContentType>(
     } as CanvasContentDataMap[T];
   }
 
-  if (type === 'selection') {
+  if (type === 'pipeline') {
     return {
       ...preview,
-      personas: Array.isArray(data.personas)
-        ? (data.personas as CanvasContentDataMap['selection']['personas'])
+      pipeline: data.pipeline && typeof data.pipeline === 'object'
+        ? data.pipeline as CanvasContentDataMap['pipeline']['pipeline']
         : undefined,
       maxSelection: typeof data.maxSelection === 'number'
         ? data.maxSelection
@@ -188,11 +188,6 @@ const normalizeCanvasData = <T extends CanvasContentType>(
         ? data.minSelection
         : typeof data.min_selection === 'number'
         ? data.min_selection
-        : undefined,
-      estimatedTime: typeof data.estimatedTime === 'string'
-        ? data.estimatedTime
-        : typeof data.estimated_time === 'string'
-        ? data.estimated_time
         : undefined,
     } as CanvasContentDataMap[T];
   }
@@ -702,7 +697,7 @@ export function useWebSocket(sessionId: string | null) {
 
       case 'output_ready': {
         const outputTypeStr = typeof data.type === 'string' ? data.type : 'report';
-        const validTypes: CanvasContentType[] = ['report', 'chart', 'dataTable', 'selection', 'workflow', 'questionList', 'fetchResults'];
+        const validTypes: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
         // Map report_baseline/report_persona to 'report' Canvas type
         const canvasTypeStr = outputTypeStr.startsWith('report') ? 'report' : outputTypeStr;
         const outputType: CanvasContentType = validTypes.includes(canvasTypeStr as CanvasContentType)
@@ -781,7 +776,7 @@ export function useWebSocket(sessionId: string | null) {
           const id = typeof content.id === 'string' ? content.id : `canvas_${Date.now()}`;
           const type: CanvasContentType =
             typeof content.type === 'string' &&
-            ['report', 'chart', 'dataTable', 'selection', 'workflow', 'questionList', 'fetchResults'].includes(content.type)
+            ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'].includes(content.type)
               ? (content.type as CanvasContentType)
               : 'report';
           const title = typeof content.title === 'string' ? content.title : '分析结果';

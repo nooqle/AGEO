@@ -101,7 +101,7 @@ export function AlertCard({
         className
       )}
       style={{
-        borderLeft: `4px solid ${config.color}`,
+        borderLeft: `2px solid ${config.color}`,
         backgroundColor: isUnread ? 'var(--bg-tertiary)' : 'transparent',
       }}
     >

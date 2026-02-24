@@ -50,20 +50,20 @@ export function DataTableContent({ content }: DataTableContentProps) {
     <div className="p-4">
       {/* 表格描述 */}
       {data.description && (
-        <p className="text-sm text-gray-600 mb-4">{data.description}</p>
+        <p className="text-sm text-[--text-secondary] mb-4">{data.description}</p>
       )}
 
       {/* 表格 */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b">
+            <tr className="border-b border-[--border-default]">
               {columns.map((col) => (
                 <th
                   key={col.key}
                   className={cn(
-                    'px-4 py-3 text-left font-medium text-gray-700',
-                    col.sortable && 'cursor-pointer hover:bg-gray-50'
+                    'px-4 py-3 text-left font-medium text-[--text-secondary]',
+                    col.sortable && 'cursor-pointer hover:bg-[--bg-tertiary]'
                   )}
                   onClick={() => col.sortable && handleSort(col.key)}
                 >
@@ -83,9 +83,9 @@ export function DataTableContent({ content }: DataTableContentProps) {
           </thead>
           <tbody>
             {sortedRows.map((row, index) => (
-              <tr key={index} className="border-b hover:bg-gray-50">
+              <tr key={index} className="border-b border-[--border-default] hover:bg-[--bg-tertiary]">
                 {columns.map((col) => (
-                  <td key={col.key} className="px-4 py-3 text-gray-900">
+                  <td key={col.key} className="px-4 py-3 text-[--text-primary]">
                     {col.format ? col.format(row[col.key], row) as React.ReactNode : (row[col.key] as React.ReactNode)}
                   </td>
                 ))}
@@ -96,7 +96,7 @@ export function DataTableContent({ content }: DataTableContentProps) {
       </div>
 
       {/* 分页信息 */}
-      <div className="mt-4 text-sm text-gray-500">
+      <div className="mt-4 text-sm text-[--text-tertiary]">
         共 {rows.length} 条数据
       </div>
     </div>

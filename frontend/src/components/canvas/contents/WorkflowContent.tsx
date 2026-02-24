@@ -4,7 +4,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { RiCheckLine } from '@remixicon/react';
 import { BrandCompetitionGraph } from '@/components/graph/BrandCompetitionGraph';
-import { PersonaGraph } from '@/components/graph/PersonaGraph';
+
 import { cn } from '@/lib/cn';
 import { useConversationStore } from '@/stores/conversationStore';
 import type {
@@ -567,19 +567,6 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
             竞品列表（{competitors.length}）
           </h4>
           <CompetitorList competitors={competitors} />
-        </div>
-      )}
-
-      {/* Persona Mind Map */}
-      {personas.length > 0 && (
-        <div>
-          {showSectionTitles && (
-            <h4 className="text-sm font-medium text-[--text-primary] mb-3">用户画像图谱</h4>
-          )}
-          <PersonaGraph
-            personas={personas}
-            brandName={brandProfile?.brand_name}
-          />
         </div>
       )}
 

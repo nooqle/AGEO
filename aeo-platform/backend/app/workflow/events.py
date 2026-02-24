@@ -7,6 +7,7 @@ Legacy events (send_output_ready, send_execution_complete, send_error_event) are
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -14,6 +15,68 @@ from uuid import UUID
 from app.core.websocket_server import manager
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Session-level Layer Accumulator
+# =============================================================================
+# WARNING: _session_layers is an in-memory dict that requires single-process deployment.
+# For multi-worker deployment (e.g. gunicorn --workers N), migrate to Redis or similar.
+# Lifecycle: reset (on message start) -> accumulate (during workflow) -> pop (on message save)
+# TTL cleanup handles orphaned entries from crashed sessions.
+
+_session_layers: dict[str, dict[str, Any]] = {}
+
+_SESSION_LAYER_TTL_SECONDS = 1800  # 30 minutes
+
+
+def _get_layers(session_id: str) -> dict[str, Any]:
+    """Get or create the layer accumulator for a session.
+
+    Also performs TTL cleanup: purges entries older than 30 minutes on each call.
+    """
+    now = time.monotonic()
+
+    # TTL cleanup: purge entries older than 30 minutes
+    stale = [
+        sid
+        for sid, data in _session_layers.items()
+        if now - data.get("_created_at", 0) > _SESSION_LAYER_TTL_SECONDS
+    ]
+    for sid in stale:
+        logger.info("[Layers] TTL expired, purging orphaned session %s", sid[:8])
+        _session_layers.pop(sid, None)
+
+    if session_id not in _session_layers:
+        _session_layers[session_id] = {
+            "_created_at": now,
+            "thought": "",
+            "planText": "",
+            "actionLogs": [],
+            "stageResults": [],
+        }
+    return _session_layers[session_id]
+
+
+def reset_session_layers(session_id: str) -> None:
+    """Reset accumulated layers for a new execution round."""
+    _session_layers.pop(session_id, None)
+
+
+def pop_accumulated_layers(session_id: str) -> dict[str, Any]:
+    """Pop and return accumulated layers for persistence, then clear."""
+    data = _session_layers.pop(session_id, {})
+    data.pop("_created_at", None)  # Do not expose internal bookkeeping field
+    if data:
+        logger.info(
+            "[Layers] Popped layers for session %s: thought=%d, plans=%d, logs=%d, results=%d",
+            session_id[:8],
+            len(data.get("thought", "")),
+            len(data.get("planText", "")),
+            len(data.get("actionLogs", [])),
+            len(data.get("stageResults", [])),
+        )
+    return data
 
 
 # =============================================================================
@@ -57,8 +120,14 @@ async def send_plan_event(
     steps: list[dict[str, Any]] | None = None,
 ) -> None:
     """Layer 2: Send plan update."""
+    # Headless sessions: skip both accumulation and WS send
     if _is_headless(session_id):
         return
+
+    # Accumulate for persistence (plan is replaced, not appended)
+    layers = _get_layers(session_id)
+    layers["planText"] = plan_text
+
     await manager.emit_to_session(session_id, "plan_update", {
         "text": plan_text,
         "steps": steps,
@@ -73,14 +142,27 @@ async def send_action_log_event(
     is_complete: bool = False,
 ) -> None:
     """Layer 3: Send action log entry."""
+    # Headless sessions: skip both accumulation and WS send
     if _is_headless(session_id):
         return
+
+    ts = datetime.now(timezone.utc).isoformat()
+    # Accumulate for persistence
+    layers = _get_layers(session_id)
+    layers["actionLogs"].append({
+        "action_type": action_type,
+        "message": message,
+        "step": step,
+        "is_complete": is_complete,
+        "timestamp": ts,
+    })
+
     await manager.emit_to_session(session_id, "action_log", {
         "action_type": action_type,
         "message": message,
         "step": step,
         "is_complete": is_complete,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": ts,
     })
 
 
@@ -91,8 +173,17 @@ async def send_thought_event(
     is_complete: bool = False,
 ) -> None:
     """Send thinking/reasoning content (collapsible)."""
+    # Headless sessions: skip both accumulation and WS send
     if _is_headless(session_id):
         return
+
+    # Accumulate for persistence
+    layers = _get_layers(session_id)
+    if is_delta:
+        layers["thought"] += content
+    else:
+        layers["thought"] = content
+
     await manager.emit_to_session(session_id, "thought_delta", {
         "content": content,
         "is_delta": is_delta,
@@ -372,8 +463,21 @@ async def send_stage_result(
                      "platform_status" | "metrics_preview").
         data: 阶段性结果数据。
     """
+    # Headless sessions: skip both accumulation and WS send
     if _is_headless(session_id):
         return
+
+    ts = datetime.now(timezone.utc).isoformat()
+    # Accumulate for persistence
+    layers = _get_layers(session_id)
+    layers["stageResults"].append({
+        "stage": stage,
+        "stage_name": stage_name,
+        "result_type": result_type,
+        "data": data,
+        "timestamp": ts,
+    })
+
     await manager.emit_to_session(
         session_id,
         "stage_result",
@@ -382,7 +486,7 @@ async def send_stage_result(
             "stage_name": stage_name,
             "result_type": result_type,
             "data": data,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": ts,
         },
     )
 

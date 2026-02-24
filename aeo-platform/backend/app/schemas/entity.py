@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 class EntityBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     aliases: list[str] = Field(default_factory=list)
-    domain: str = ""
-    industry: str = ""
+    domain: str = Field(..., min_length=1, max_length=500)
+    industry: str = Field(..., min_length=1, max_length=200)
     description: str = ""
 
 

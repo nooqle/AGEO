@@ -11,7 +11,7 @@ interface PlanCardProps {
 }
 
 export function PlanCard({ planText, isActive }: PlanCardProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   return (
     <motion.div

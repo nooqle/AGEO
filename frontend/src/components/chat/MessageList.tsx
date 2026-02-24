@@ -40,7 +40,7 @@ export function MessageList({
   }
 
   return (
-    <div className={cn('space-y-6', className)}>
+    <div className={cn('space-y-2', className)}>
       {messages.map((message, index) => (
         <Message
           key={message.id}

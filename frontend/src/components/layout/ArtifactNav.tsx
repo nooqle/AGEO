@@ -13,6 +13,7 @@ import {
   RiSearchLine,
   RiFileTextLine,
   RiTableLine,
+  RiGitBranchLine,
 } from '@remixicon/react';
 
 const TYPE_ICONS: Record<CanvasContentType, typeof RiFileChartLine> = {
@@ -22,7 +23,7 @@ const TYPE_ICONS: Record<CanvasContentType, typeof RiFileChartLine> = {
   questionList: RiQuestionLine,
   fetchResults: RiSearchLine,
   dataTable: RiTableLine,
-  selection: RiFileTextLine,
+  pipeline: RiGitBranchLine,
 };
 
 const TYPE_LABELS: Record<CanvasContentType, string> = {
@@ -32,7 +33,7 @@ const TYPE_LABELS: Record<CanvasContentType, string> = {
   questionList: '问题',
   fetchResults: '抓取',
   dataTable: '数据',
-  selection: '选择',
+  pipeline: '画像',
 };
 
 interface ArtifactNavProps {
