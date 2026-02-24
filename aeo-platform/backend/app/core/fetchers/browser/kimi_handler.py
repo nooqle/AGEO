@@ -32,9 +32,9 @@ class KimiHandler(BaseBrowserHandler):
     URL = "https://kimi.moonshot.cn/"
     PLATFORM = Platform.KIMI
 
-    # Stable CSS selectors for Kimi Web UI
-    INPUT_SELECTOR = ".chat-input-editor"   # contenteditable input area
-    NEW_CHAT_SELECTOR = ".new-chat-btn"     # new chat button
+    # CSS selectors for Kimi Web UI (with fallbacks for UI updates)
+    INPUT_SELECTOR = ".chat-input-editor, [class*='chat-input'], [contenteditable='true']"
+    NEW_CHAT_SELECTOR = ".new-chat-btn, [class*='new-chat']"
 
     # Content detection: tried in priority order each poll cycle.
     # Multiple fallbacks in case Kimi renames classes across versions.
@@ -142,9 +142,34 @@ class KimiHandler(BaseBrowserHandler):
                     if result_str == '__input_ready__':
                         logger.info("[Kimi] Input ready, no login required")
                     elif result_str == '__no_input__':
-                        # No input and no login modal — might still need login
-                        login_detected = True
-                        logger.info("[Kimi] No input found, assuming login required")
+                        # SPA may still be loading — wait up to 8s more before assuming login needed
+                        logger.info("[Kimi] No input found yet, waiting for SPA to finish loading...")
+                        for _wait_round in range(4):
+                            await asyncio.sleep(2)
+                            retry_check = await self.client.page.evaluate("""() => {
+                                const input = document.querySelector('.chat-input-editor')
+                                    || document.querySelector('[class*="chat-input"]')
+                                    || document.querySelector('[contenteditable="true"]');
+                                if (input) return '__input_ready__';
+                                const loginSels = ['.login-modal-content', '.wechat-login',
+                                    '[class*="login-modal"]', '[class*="login-dialog"]'];
+                                for (const sel of loginSels) {
+                                    if (document.querySelector(sel)) return sel;
+                                }
+                                return '__no_input__';
+                            }""")
+                            retry_str = retry_check if isinstance(retry_check, str) else str(retry_check)
+                            if retry_str == '__input_ready__':
+                                logger.info("[Kimi] Input became ready after extra wait")
+                                break
+                            if retry_str != '__no_input__':
+                                login_detected = True
+                                logger.info("[Kimi] Login modal appeared after wait: %s", retry_str)
+                                break
+                        else:
+                            # After all retries still no input and no login modal
+                            login_detected = True
+                            logger.warning("[Kimi] Input still unavailable after extended wait, assuming login required")
                     else:
                         login_detected = True
                         logger.info("[Kimi] Login modal detected via: %s", result_str)

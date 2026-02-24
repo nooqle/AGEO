@@ -92,9 +92,7 @@ export function TPAORBlock({
       className={cn(
         'rounded-xl border overflow-hidden transition-all',
         config.colors.bg,
-        config.colors.border,
-        isActive && 'ring-2 ring-offset-1 ring-offset-[--bg-primary]',
-        isActive && config.colors.ring
+        isActive ? config.colors.border : 'border-transparent',
       )}
     >
       {/* 标题栏 */}

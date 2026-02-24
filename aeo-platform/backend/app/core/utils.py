@@ -5,6 +5,82 @@ import re
 from typing import Any
 
 
+def repair_truncated_json(text: str) -> str | None:
+    """Attempt to repair JSON that was truncated mid-output (e.g. by max_tokens).
+
+    Strategy: find the last valid structure point and close all open brackets.
+    Returns repaired JSON string or None if repair is not feasible.
+    """
+    text = text.strip()
+    if not text or text[0] != '{':
+        return None
+
+    # Remove trailing incomplete string values (cut mid-string)
+    # e.g. '..."some text that was cu'  →  '..."some text that was cu"'
+    # Find position of last complete JSON token
+    in_string = False
+    escape_next = False
+    last_good = 0
+
+    for i, ch in enumerate(text):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+        if not in_string and ch in ('}', ']', '"', '0', '1', '2', '3', '4', '5',
+                                     '6', '7', '8', '9', 'e', 'l', 'u', 'r', 's'):
+            # Could be end of a value
+            last_good = i
+
+    # If we're in a string, close it
+    repaired = text[:last_good + 1]
+    if in_string:
+        repaired += '"'
+
+    # Count open brackets
+    open_braces = 0
+    open_brackets = 0
+    in_str = False
+    esc = False
+    for ch in repaired:
+        if esc:
+            esc = False
+            continue
+        if ch == '\\' and in_str:
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+        if not in_str:
+            if ch == '{':
+                open_braces += 1
+            elif ch == '}':
+                open_braces -= 1
+            elif ch == '[':
+                open_brackets += 1
+            elif ch == ']':
+                open_brackets -= 1
+
+    # Remove trailing comma before closing
+    repaired = repaired.rstrip()
+    if repaired.endswith(','):
+        repaired = repaired[:-1]
+
+    # Close all open structures
+    repaired += ']' * open_brackets
+    repaired += '}' * open_braces
+
+    try:
+        json.loads(repaired)
+        return repaired
+    except json.JSONDecodeError:
+        return None
+
+
 def extract_json_from_content(content: str) -> dict | None:
     """Extract JSON object from text content.
 
@@ -75,6 +151,16 @@ def extract_json_from_content(content: str) -> dict | None:
         return json.loads(content)
     except json.JSONDecodeError:
         pass
+
+    # Last resort: attempt truncated JSON repair (e.g. max_tokens cutoff)
+    repaired = repair_truncated_json(content)
+    if repaired:
+        try:
+            parsed = json.loads(repaired)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
 
     return None
 

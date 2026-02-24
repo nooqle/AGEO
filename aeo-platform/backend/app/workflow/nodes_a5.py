@@ -196,11 +196,13 @@ async def a5_analytics_node(state: AgentState) -> Command:
             except Exception as snap_err:
                 logger.warning("[A5] Failed to query previous snapshot: %s", snap_err)
 
-        # Generate report using LLM -- wrapped in inner try so LLM failure
-        # triggers fallback instead of aborting the entire A5 node.
+        # Generate report using LLM -- split into 2 calls to stay within
+        # token limits and avoid JSON truncation.
+        # Call 1 (core): executive_summary, platform_analysis, competitor_deep_analysis,
+        #                 actionable_recommendations, key_findings
+        # Call 2 (supplementary): industry_insights, SWOT, risk_alerts, action_plan
         report_data = None
         try:
-            system_prompt = _get_a5_system_prompt(report_type=analysis_mode)
             user_content = _build_a5_user_content(
                 brand_profile, metrics, fetch_results, competitors,
                 marketing_personas=marketing_personas,
@@ -210,50 +212,98 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 baseline_metrics=state.get("baseline_metrics"),
                 baseline_report=state.get("baseline_report"),
             )
-
             model = get_llm_model_compat()
-            response = await call_llm_streaming(
+
+            # --- Call 1: Core report sections ---
+            core_prompt = _get_a5_core_prompt(report_type=analysis_mode)
+            response1 = await call_llm_streaming(
                 session_id=session_id,
                 model=model,
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": core_prompt},
                     {"role": "user", "content": user_content},
                 ],
                 step="A5",
-                step_name="数据分析报告",
-                progress_start=0.85,
-                progress_end=0.95,
-                max_tokens=12288,
+                step_name="数据分析报告（核心章节）",
+                progress_start=0.82,
+                progress_end=0.90,
+                max_tokens=8192,
             )
-            report_data = parse_llm_response(response)
+            core_data = parse_llm_response(response1)
 
-            # 输出校验：关键字段为空时视为 LLM 输出无效，触发 fallback
+            if core_data:
+                report_data = core_data
+                logger.info(
+                    "[A5] Core report generated: summary=%d chars, platforms=%d, recs=%d",
+                    len(core_data.get("executive_summary", "")),
+                    len(core_data.get("platform_analysis", [])),
+                    len(core_data.get("actionable_recommendations", [])),
+                )
+
+                # --- Call 2: Supplementary sections ---
+                try:
+                    supp_prompt = _get_a5_supplementary_prompt(report_type=analysis_mode)
+                    # Include core results summary so LLM can reference them
+                    supp_context = (
+                        f"{user_content}\n\n"
+                        f"## 已完成的核心分析结果\n"
+                        f"- 执行摘要: {core_data.get('executive_summary', '')[:200]}\n"
+                        f"- 核心发现: {json.dumps(core_data.get('key_findings', [])[:3], ensure_ascii=False)}\n"
+                        f"- 平台数量: {len(core_data.get('platform_analysis', []))}\n"
+                        f"- 建议数量: {len(core_data.get('actionable_recommendations', []))}\n"
+                    )
+                    response2 = await call_llm_streaming(
+                        session_id=session_id,
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": supp_prompt},
+                            {"role": "user", "content": supp_context},
+                        ],
+                        step="A5",
+                        step_name="数据分析报告（补充章节）",
+                        progress_start=0.90,
+                        progress_end=0.95,
+                        max_tokens=6144,
+                    )
+                    supp_data = parse_llm_response(response2)
+
+                    if supp_data:
+                        # Merge supplementary into core report
+                        for key in ("industry_insights", "strengths", "weaknesses",
+                                    "opportunities", "threats", "risk_alerts",
+                                    "action_plan", "recommendations"):
+                            if supp_data.get(key):
+                                report_data[key] = supp_data[key]
+                        logger.info("[A5] Supplementary sections merged successfully")
+                    else:
+                        logger.warning("[A5] Supplementary LLM call returned no valid JSON, core report still usable")
+                except Exception as supp_err:
+                    logger.warning("[A5] Supplementary report call failed (core report still usable): %s", supp_err)
+
+            # Partial degradation validation: only reject if executive_summary is missing
             if report_data:
                 executive_summary = report_data.get("executive_summary", "")
-                actionable_recs = report_data.get("actionable_recommendations", [])
-                platform_analysis = report_data.get("platform_analysis", [])
-                competitor_analysis = report_data.get("competitor_deep_analysis")
-
-                validation_failures = []
-                if len(executive_summary) < 80:
-                    validation_failures.append(
-                        f"executive_summary too short ({len(executive_summary)} chars < 80)"
-                    )
-                if not actionable_recs:
-                    validation_failures.append("actionable_recommendations is empty")
-                if not platform_analysis:
-                    validation_failures.append("platform_analysis is empty")
-                if competitors and not competitor_analysis:
-                    validation_failures.append(
-                        "competitor_deep_analysis is empty (competitors data available)"
-                    )
-
-                if validation_failures:
+                if len(executive_summary) < 30:
                     logger.warning(
-                        "[A5] LLM output validation failed: %s",
-                        "; ".join(validation_failures),
+                        "[A5] executive_summary too short (%d chars), triggering fallback",
+                        len(executive_summary),
                     )
-                    report_data = None  # 触发下方 fallback 分支
+                    report_data = None
+                else:
+                    # Log missing optional sections as warnings, don't invalidate
+                    missing = []
+                    if not report_data.get("platform_analysis"):
+                        missing.append("platform_analysis")
+                    if not report_data.get("actionable_recommendations"):
+                        missing.append("actionable_recommendations")
+                    if competitors and not report_data.get("competitor_deep_analysis"):
+                        missing.append("competitor_deep_analysis")
+                    if not report_data.get("industry_insights"):
+                        missing.append("industry_insights")
+                    if not report_data.get("risk_alerts"):
+                        missing.append("risk_alerts")
+                    if missing:
+                        logger.warning("[A5] Report partial: missing sections: %s", ", ".join(missing))
 
         except Exception as llm_err:
             logger.warning(
@@ -811,164 +861,111 @@ def _calculate_competitor_metrics(
     return competitor_metrics
 
 
-def _get_a5_system_prompt(report_type: str = "persona") -> str:
-    """Get A5 system prompt for enhanced 7-section report generation.
-
-    Args:
-        report_type: 'baseline' for industry panorama report,
-                     'persona' for scenario-specific report.
-
-    v2: Strong data-grounding constraints — every insight must cite actual
-    fetch_results content. EEAT framework for recommendations.
-    """
+def _get_a5_report_context_intro(report_type: str) -> str:
+    """Get context intro section based on report type."""
     if report_type == "baseline":
-        context_intro = """## 报告类型：行业全景基线分析
+        return """## 报告类型：行业全景基线分析
 本次分析是品牌的行业全景基线分析。问题来源是行业通用的用户搜索问题（非特定画像）。
-请从行业全景视角分析品牌的 AI 搜索可见性：
-- 品牌在整个行业 AI 搜索生态中的位置
-- 哪些竞品在行业通用问题中更常被提及
-- 行业级别的内容优化建议
-- 所有指标和建议以"行业基线"为参照系
+请从行业全景视角分析品牌的 AI 搜索可见性。
 
 """
-    else:
-        context_intro = """## 报告类型：场景分析报告
+    return """## 报告类型：场景分析报告
 本次分析基于特定用户画像/场景。请从目标用户群体视角分析品牌表现。
 如果提供了基线参考数据，请在报告中对比场景表现与行业基线的差异。
 
 """
-    return context_intro + """你是 Specta AI 平台的数据分析专家和战略顾问，擅长基于品牌AI可见性数据，生成深度洞察和可执行的战略建议。
 
-## 任务
-基于提供的品牌档案、竞品信息、抓取结果（fetch_results）和核心指标，生成一份专业的品牌AI可见性分析报告。
 
-## 核心约束（违反则报告无效）
+def _get_a5_core_prompt(report_type: str = "persona") -> str:
+    """A5 system prompt for CORE report sections (Call 1 of 2).
 
-### 数据引用要求
-- 所有洞察必须引用 fetch_results 中的具体内容，例如："豆包在回答中多次提到X特征"、"DeepSeek 的3条样本中有2条未提及品牌"
-- 明确区分两类来源：「实际数据」（来自 fetch_results 样本）和「行业经验」（来自你的知识库）
-- 禁止使用"该平台表现良好"、"总体来看不错"等空洞描述，必须用具体数字支撑
+    Generates: executive_summary, key_findings, platform_analysis,
+    competitor_deep_analysis, actionable_recommendations.
+    """
+    return _get_a5_report_context_intro(report_type) + """你是 Specta AI 的数据分析专家。基于品牌档案、抓取结果和指标，生成核心分析章节。
 
-### 平台差异分析必须包含量化指标
-每个平台必须给出：
-- 实际提及次数（从 platform_breakdown 中读取）
-- 引用数量（从样本的 citations_count 读取）
-- 回答字数范围（从样本的 answer_excerpt 估算）
-- 品牌被提及时的具体表述片段（直接引用 answer_excerpt 中的文字）
+## 核心约束
+- 所有洞察必须引用 fetch_results 中的具体内容，用具体数字支撑
+- 禁止空洞描述如"表现良好"、"总体不错"
+- 竞品数据必须从 fetch_results 样本统计，不得凭空生成
 
-### 竞品对比必须有量化对照表
-comparison_matrix 中每个竞品必须包含实际计算的 mention_rate（从 fetch_results 中出现的竞品名称统计），不得凭空生成数字。
-如果某竞品在 fetch_results 样本中完全未出现，明确标注"样本中未出现"，mention_rate 填 0。
-
-## 报告结构要求（7 章节）
-
-### 1. 执行摘要 (executive_summary)
-- 一句话核心结论，必须引用实际 BWVS 数值（如"该品牌 BWVS 指数为 35.4，低于行业均值约 20 点，主要短板在 DeepSeek 平台覆盖率仅 33%"）
-- BWVS 综合评分及评级
-- 3 个最关键发现（每条必须有数字依据）
-- 字数不少于 80 字
-
-### 2. 行业洞察 (industry_insights)
-- background（行业背景）：必须说明该行业在 AI 搜索中的整体格局，标注「基于行业经验」
-- typical_performance（典型表现）：引用 fetch_results 中的具体内容说明本品牌与典型表现的差距，标注哪些来自「实际数据」
-- trends（行业趋势）：列出 2-3 条，每条区分是「实际数据支撑」还是「行业经验推断」
-- opportunities（机会点）：结合本次 fetch_results 的发现，指出具体机会
-
-### 3. 平台差异分析 (platform_analysis)
-对每个在 platform_breakdown 中有数据的平台，逐一分析，每个平台必须包含：
-- mention_count（提及次数，从 platform_breakdown 读取）
-- avg_citations（平均引用数，从样本 citations_count 计算均值）
-- answer_length_range（回答字数范围，从 answer_excerpt 估算，格式如"200-400字"）
-- actual_quotes（实际引用片段，从 answer_excerpt 中摘录 1-2 句品牌相关文字，若无提及则填"样本中未提及品牌"）
-- content_preference（该平台内容偏好，说明依据）
-- strengths（品牌在该平台的优势，必须结合 actual_quotes 说明）
-- weaknesses（品牌短板，必须结合数据说明）
-- optimization_tips（优化建议，具体到内容类型/关键词/结构）
-
-### 4. 竞品深度对比 (competitor_deep_analysis)
-如果有竞品数据，必须包含：
-- overview（整体对比总结，引用实际 mention_rate 数字）
-- comparison_matrix（量化对照表，每个竞品必须有字段）：
-  - competitor（竞品名）
-  - brand_mention_rate（本品牌提及率，来自 metrics）
-  - competitor_mention_rate（竞品提及率，从 fetch_results 样本统计；若样本中未出现则为 0 并标注"样本未出现"）
-  - vs_brand（高于/低于/持平，基于上述数字判断）
-  - advantage_reasons（竞品优势原因，若有数据支撑则引用；若无则标注"推断"）
-  - learnings（本品牌可借鉴之处，具体化）
-- differentiation_strategy（差异化建议，结合实际数据）
-
-### 5. 可执行优化建议 (actionable_recommendations)，遵循 EEAT 框架
-EEAT = Experience（经验）/ Expertise（专业性）/ Authoritativeness（权威性）/ Trustworthiness（可信度）
-每条建议必须：
-- 对应一个 EEAT 维度（eeat_dimension: "E1"/"E2"/"A"/"T"）
-- 明确区分：①当前做得好的具体特征（current_strength，结合 fetch_results 数据）②需要增强的具体场景/内容/数据方向（improvement_area）
-- expected_impact 必须引用具体指标变化（如"预计将 DeepSeek 提及率从当前 33% 提升至 50%+"）
-- 至少生成 3 条建议，覆盖不同 EEAT 维度
-
-### 6. SWOT 分析 (strengths, weaknesses, opportunities, threats)
-每项 2-4 条，每条必须附带具体数据支撑（引用 metrics 或 fetch_results 中的数字）
-
-### 7. 风险提示 (risk_alerts)
-品牌当前面临的 AI 可见性风险，每条必须说明具体触发条件和数据依据
-
-## 输出格式
-请严格按照以下 JSON 格式输出：
+## 输出 JSON（5 个核心章节）
 
 {
-  "executive_summary": "执行摘要文本（必须引用具体BWVS数值，不少于80字）...",
-  "key_findings": ["发现1（含数字）", "发现2（含数字）", "发现3（含数字）"],
-  "industry_insights": {
-    "background": "行业背景（标注：基于行业经验）",
-    "typical_performance": "同行业典型表现（区分：实际数据/行业经验）",
-    "trends": [{"trend": "趋势描述", "source": "实际数据/行业经验"}],
-    "opportunities": ["机会1（结合本次fetch_results发现）"]
-  },
+  "executive_summary": "执行摘要（引用BWVS数值，不少于80字）",
+  "key_findings": ["发现1（含数字）", "发现2", "发现3"],
   "platform_analysis": [{
     "platform": "deepseek",
     "platform_name": "DeepSeek",
     "mention_count": 2,
     "avg_citations": 1.5,
     "answer_length_range": "200-400字",
-    "actual_quotes": ["实际引用片段1"],
-    "performance_summary": "基于数据的表现概述",
-    "content_preference": "内容偏好（说明依据）",
-    "strengths": ["优势1（引用actual_quotes）"],
-    "weaknesses": ["短板1（引用数字）"],
-    "optimization_tips": ["具体建议1（内容类型/关键词/结构）"]
+    "actual_quotes": ["实际引用片段"],
+    "performance_summary": "表现概述",
+    "content_preference": "内容偏好",
+    "strengths": ["优势"],
+    "weaknesses": ["短板"],
+    "optimization_tips": ["具体建议"]
   }],
   "competitor_deep_analysis": {
-    "overview": "整体对比总结（引用mention_rate数字）",
+    "overview": "对比总结（引用数字）",
     "comparison_matrix": [{
       "competitor": "竞品名",
       "brand_mention_rate": 0.45,
       "competitor_mention_rate": 0.30,
       "vs_brand": "低于",
-      "advantage_reasons": ["原因1（标注：数据支撑/推断）"],
-      "learnings": ["具体可借鉴之处"]
+      "advantage_reasons": ["原因"],
+      "learnings": ["可借鉴之处"]
     }],
-    "differentiation_strategy": "差异化建议（结合实际数据）"
+    "differentiation_strategy": "差异化建议"
   },
   "actionable_recommendations": [{
     "priority": "P0",
     "title": "建议标题",
     "eeat_dimension": "E1",
-    "current_strength": "当前做得好的地方（引用fetch_results具体数据）",
-    "improvement_area": "需要增强的具体场景/内容/数据方向",
-    "action": "具体行动步骤",
-    "expected_impact": "预期效果（引用具体指标变化，如：将X平台提及率从N%提升至M%）",
+    "current_strength": "当前优势（引用数据）",
+    "improvement_area": "改进方向",
+    "action": "具体行动",
+    "expected_impact": "预期效果（含指标变化）",
     "difficulty": "低/中/高",
-    "timeline": "预计时间"
-  }],
-  "strengths": ["优势1（含数字依据）", "优势2（含数字依据）"],
-  "weaknesses": ["劣势1（含数字依据）", "劣势2（含数字依据）"],
-  "opportunities": ["机会1（结合fetch_results）", "机会2"],
-  "threats": ["威胁1（含触发条件）", "威胁2"],
-  "risk_alerts": [{"level": "high/medium/low", "title": "风险标题", "description": "描述（含数据依据）", "trigger_condition": "触发条件", "mitigation": "应对措施"}],
-  "recommendations": [{"title": "标题", "description": "描述", "expected_impact": "预期效果", "difficulty": "高/中/低", "priority": "P0/P1/P2"}],
-  "action_plan": {"short_term": ["行动1"], "medium_term": ["行动1"], "long_term": ["行动1"]}
+    "timeline": "时间"
+  }]
 }
 
-⚠️ 重要：直接以 { 开头输出 JSON，不要有任何解释或 Markdown 标记。"""
+⚠️ 直接以 { 开头输出 JSON，不要有任何解释或 Markdown 标记。"""
+
+
+def _get_a5_supplementary_prompt(report_type: str = "persona") -> str:
+    """A5 system prompt for SUPPLEMENTARY sections (Call 2 of 2).
+
+    Generates: industry_insights, SWOT, risk_alerts, recommendations, action_plan.
+    """
+    return _get_a5_report_context_intro(report_type) + """你是 Specta AI 的数据分析专家。核心报告已完成，现在生成补充分析章节。
+
+## 输出 JSON（补充章节）
+
+{
+  "industry_insights": {
+    "background": "行业背景（标注：基于行业经验）",
+    "typical_performance": "典型表现（区分数据来源）",
+    "trends": [{"trend": "趋势", "source": "实际数据/行业经验"}],
+    "opportunities": ["机会点"]
+  },
+  "strengths": ["优势1（含数据）", "优势2"],
+  "weaknesses": ["劣势1（含数据）", "劣势2"],
+  "opportunities": ["机会1", "机会2"],
+  "threats": ["威胁1", "威胁2"],
+  "risk_alerts": [{"level": "high/medium/low", "title": "风险标题", "description": "描述", "trigger_condition": "触发条件", "mitigation": "应对措施"}],
+  "recommendations": [{"title": "标题", "description": "描述", "expected_impact": "预期效果", "difficulty": "高/中/低", "priority": "P0/P1/P2"}],
+  "action_plan": {"short_term": ["行动"], "medium_term": ["行动"], "long_term": ["行动"]}
+}
+
+⚠️ 直接以 { 开头输出 JSON，不要有任何解释或 Markdown 标记。"""
+
+
+def _get_a5_system_prompt(report_type: str = "persona") -> str:
+    """Legacy single-call prompt — kept for reference but no longer used by default."""
+    return _get_a5_core_prompt(report_type)
 
 
 def _build_a5_user_content(

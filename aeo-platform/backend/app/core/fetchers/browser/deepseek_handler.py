@@ -313,6 +313,8 @@ class DeepSeekHandler(BaseBrowserHandler):
             if not toolbar:
                 if not all_toggles:
                     logger.warning("[DeepSeek] No toolbar or toggle elements found near textarea")
+                # Fallback: try direct text-based click via Playwright
+                await self._try_text_based_search_toggle()
                 return
 
             # Find the WebSearch toggle specifically.
@@ -321,7 +323,8 @@ class DeepSeekHandler(BaseBrowserHandler):
             # toggle-button at index 1 (when DeepThink is at index 0).
             search_idx = self._find_web_search_index(toolbar)
             if search_idx is None:
-                logger.warning("[DeepSeek] Could not identify WebSearch toggle in toolbar")
+                logger.warning("[DeepSeek] Could not identify WebSearch toggle in toolbar, trying text fallback")
+                await self._try_text_based_search_toggle()
                 return
 
             btn = toolbar[search_idx]
@@ -345,28 +348,42 @@ class DeepSeekHandler(BaseBrowserHandler):
                 logger.info("[DeepSeek] Enabled web search toolbar[%d] (was OFF, cls=%s)", search_idx, cls[:60])
 
         except Exception as e:
-            logger.debug("[DeepSeek] _ensure_web_search_on failed: %s", e)
+            logger.warning("[DeepSeek] _ensure_web_search_on failed: %s", e)
 
     def _find_web_search_index(self, toolbar: list[dict]) -> int | None:
         """Find the index of the WebSearch toggle button in the toolbar."""
-        # Pass 1: Look for a toggle-button with Search/联网 text
+        # Pass 1: Look for any button with Search/联网 text (text match is most reliable)
         for i, btn in enumerate(toolbar):
-            cls = btn.get("cls", "")
-            if "toggle-button" not in cls:
-                continue
             txt = btn.get("txt", "").lower()
             if "search" in txt or "联网" in txt:
                 return i
 
-        # Pass 2: If there are exactly 2 toggle-buttons, the second is likely Search
-        toggle_indices = [i for i, b in enumerate(toolbar) if "toggle-button" in b.get("cls", "")]
+        # Pass 2: Look for toggle-button class (may have changed to toggle, switch, etc.)
+        toggle_keywords = ("toggle", "switch", "ds-toggle")
+        toggle_indices = []
+        for i, btn in enumerate(toolbar):
+            cls = btn.get("cls", "").lower()
+            if any(kw in cls for kw in toggle_keywords):
+                toggle_indices.append(i)
+
+        # If 2+ toggle buttons found, second is typically Search (first is DeepThink)
         if len(toggle_indices) >= 2:
-            return toggle_indices[1]  # [DeepThink, Search]
+            return toggle_indices[1]
 
-        # Pass 3: Fallback to index 1 if it exists and is a toggle
-        if len(toolbar) > 1 and "toggle-button" in toolbar[1].get("cls", ""):
-            return 1
+        # Pass 3: Look for aria-pressed or role="switch" buttons
+        for i, btn in enumerate(toolbar):
+            if btn.get("pressed") in ("true", "false"):
+                txt = btn.get("txt", "").lower()
+                # Skip DeepThink
+                if "think" in txt or "深度" in txt or "思考" in txt:
+                    continue
+                return i
 
+        if toggle_indices:
+            # Only one toggle found — could be Search if DeepThink is hidden
+            return toggle_indices[0]
+
+        logger.warning("[DeepSeek] _find_web_search_index: no toggle found in toolbar with %d items", len(toolbar))
         return None
 
     async def _click_toolbar_button(self, index: int) -> None:
@@ -386,6 +403,29 @@ class DeepSeekHandler(BaseBrowserHandler):
             return 'not found';
         }}""")
         await asyncio.sleep(0.5)
+
+    async def _try_text_based_search_toggle(self) -> None:
+        """Fallback: try to enable web search by clicking element containing '联网' text."""
+        if not self.client.page:
+            return
+        try:
+            # Try Playwright's text locator — more resilient to DOM changes
+            locator = self.client.page.get_by_text("联网搜索", exact=False).first
+            if await locator.count() > 0:
+                await locator.click()
+                await asyncio.sleep(0.5)
+                logger.info("[DeepSeek] Enabled web search via text-based fallback ('联网搜索')")
+                return
+            # Try shorter text
+            locator2 = self.client.page.get_by_text("联网", exact=False).first
+            if await locator2.count() > 0:
+                await locator2.click()
+                await asyncio.sleep(0.5)
+                logger.info("[DeepSeek] Enabled web search via text-based fallback ('联网')")
+                return
+            logger.warning("[DeepSeek] Text-based search toggle fallback: no matching element found")
+        except Exception as e:
+            logger.warning("[DeepSeek] Text-based search toggle fallback failed: %s", e)
 
     def _find_textarea_ref(self, snapshot: dict) -> str | None:
         """Find textarea reference from snapshot."""

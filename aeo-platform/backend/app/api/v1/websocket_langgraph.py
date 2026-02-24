@@ -675,6 +675,29 @@ async def handle_confirmation_langgraph(
             user_content = "用户选择跳过画像聚焦，使用品牌全景模式生成问题"
             user_decisions["a3_mode"] = "brand"
             logger.info("[LangGraph] User skipped persona selection, using brand mode")
+        elif isinstance(selection, dict) and selection.get("optionId"):
+            # Inline confirmation sends { optionId: "persona_focused" } or { optionId: "brand_panorama" }
+            opt_id = selection["optionId"]
+            if opt_id == "persona_focused":
+                user_content = "用户选择聚焦画像分析"
+                user_decisions["a3_mode"] = "persona"
+                logger.info("[LangGraph] Inline confirmation: persona_focused mode")
+            elif opt_id == "brand_panorama":
+                user_content = "用户选择品牌全景分析"
+                user_decisions["a3_mode"] = "brand"
+                logger.info("[LangGraph] Inline confirmation: brand_panorama mode")
+            else:
+                user_content = selection.get("label", opt_id)
+                logger.info(f"[LangGraph] Inline confirmation: optionId={opt_id}")
+        elif isinstance(selection, str) and selection in ("聚焦画像分析", "开始场景细化分析"):
+            # Plain text label from inline confirmation button click
+            user_decisions["a3_mode"] = "persona"
+            user_content = selection
+            logger.info(f"[LangGraph] Text confirmation mapped to persona mode: {selection}")
+        elif isinstance(selection, str) and selection in ("品牌全景分析",):
+            user_decisions["a3_mode"] = "brand"
+            user_content = selection
+            logger.info(f"[LangGraph] Text confirmation mapped to brand mode: {selection}")
 
         history.append({
             "role": "user",

@@ -348,9 +348,7 @@ export function StageResultCard({ result, isLatest, isReplay, className }: Stage
       style={{
         backgroundColor: 'var(--bg-secondary)',
         borderLeftColor: accentColor,
-        borderTop: '1px solid var(--border-default)',
-        borderRight: '1px solid var(--border-default)',
-        borderBottom: '1px solid var(--border-default)',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
       }}
     >
       {/* Header */}

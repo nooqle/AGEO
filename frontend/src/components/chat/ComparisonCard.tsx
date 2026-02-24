@@ -46,8 +46,8 @@ export function ComparisonCard({
       )}
       style={{
         background: 'var(--bg-secondary)',
-        border: '1px solid var(--border-default)',
         borderLeft: '2px solid var(--phase-plan, #3B82F6)',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
         padding: '16px 20px',
       }}
     >

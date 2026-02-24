@@ -52,9 +52,9 @@
   --error: #EF4444;
   --info: #3B82F6;
 
-  /* 边框 */
-  --border-default: #484848;
-  --border-hover: #5a5a5a;
+  /* 边框 — subtle, ~8-12% brightness diff from bg */
+  --border-default: #2a2a2a;
+  --border-hover: #3a3a3a;
   --border-focus: #6366F1;
 
   /* TPAOR 阶段色 */
@@ -96,7 +96,7 @@
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.3);
   --glass-bg: rgba(17, 17, 17, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.05);
 }
 
 /* 全局样式 */

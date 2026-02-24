@@ -368,7 +368,13 @@ DIRECTIVE_A1_HAS_BASELINE = (
 
 DIRECTIVE_A1_NO_BASELINE = (
     "【强制操作】该品牌尚无基线分析，你必须先用一句话向用户汇报品牌分析结果，"
-    "然后立即调用 ask_user 工具展示品牌信息让用户确认。"
+    "然后立即调用 ask_user 工具向用户说明并请求确认。"
+    "ask_user 的 message 必须包含以下要点（用自然的语言组织，不要照搬原文）："
+    "1) 基线分析的目的：了解各大AI搜索引擎（如DeepSeek、Kimi、豆包等）目前对该品牌的真实认知水平；"
+    "2) 分析内容：系统将自动生成一批覆盖品牌核心场景的行业问题，向多个AI平台提问并采集回答，最终生成品牌可见度基线报告；"
+    "3) 预期产出：一份品牌AI可见度基线报告（BWVS指数）、各平台表现对比、竞品提及分析；"
+    "4) 预计耗时：答案采集环节约8-12分钟，全程自动运行。"
+    "选项：确认，开始基线分析（推荐）/ 暂不分析"
     "用户确认后，必须执行基线分析流程："
     "question_simulation(mode='baseline_dynamic') → answer_fetch → "
     "data_analytics(report_type='baseline')。"
@@ -376,18 +382,28 @@ DIRECTIVE_A1_NO_BASELINE = (
 )
 
 DIRECTIVE_A2_ASK_PATH = (
-    "【强制操作】你必须立即调用 ask_user 工具，让用户选择问题模拟路径。"
-    "选项必须包含：1) id='persona_focused' label='聚焦画像分析' "
-    "description='从已生成画像中选择重点分析'，"
-    "2) id='brand_panorama' label='品牌全景分析' "
+    "【强制操作】画像已生成并展示在右侧画布（Canvas）的管道图中。"
+    "你必须立即调用 ask_user 工具，引导用户在画布中选择要重点分析的画像。"
+    "ask_user 的 message 应告知用户：'用户画像已生成，请在右侧画布的管道图中勾选您希望重点分析的画像（可多选），然后点击确认选择按钮。"
+    "如果您希望不针对特定画像，进行品牌全景分析，可以点击跳过此步。'"
+    "选项：1) id='persona_focused' label='我已在画布中选好画像' "
+    "description='请先在右侧画布中勾选画像，再点此确认'，"
+    "2) id='brand_panorama' label='跳过，品牌全景分析' "
     "description='覆盖所有用户群体，不针对特定画像'。"
-    "不要调用 question_simulation，不要自行决定模式，必须等用户选择后再继续。"
+    "不要调用 question_simulation，不要自行决定模式，必须等用户操作后再继续。"
 )
 
 DIRECTIVE_A3_NEXT_FETCH = (
     "【强制操作】用 2-3 句话友好地向用户说明问题已生成（可提及问题数量、覆盖的主题方向），"
-    "然后直接调用 answer_fetch 工具执行下一步，不要询问用户。"
-    "不要逐条列出问题内容（UI 已经展示了），重点说明接下来 answer_fetch 的意义。"
+    "然后调用 ask_user 工具让用户确认是否开始答案抓取。"
+    "ask_user 的 message 应说明：问题列表已在右侧画布中展示，用户可以查看。"
+    "接下来将向各大AI搜索引擎提交这些问题并采集回答，预计耗时约8-12分钟。"
+    "选项：1) id='start_fetch' label='确认，开始采集回答（推荐）' "
+    "description='向DeepSeek、Kimi等平台提交问题并采集AI回答'，"
+    "2) id='regenerate' label='重新生成问题' "
+    "description='如果对当前问题不满意，重新生成一批模拟问题'。"
+    "不要逐条列出问题内容（UI 已经展示了）。"
+    "用户确认后才能调用 answer_fetch，不要自行直接调用。"
 )
 
 
@@ -417,7 +433,9 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
     if state.get("baseline_metrics"):
         bwvs = state["baseline_metrics"].get("bwvs_index", 0)
         data_status.append(f"✓ 基线分析已完成，基线BWVS={bwvs:.1f}")
-    elif state.get("brand_profile") and not state.get("baseline_questions"):
+    elif state.get("brand_profile") and not state.get("baseline_questions") and not state.get("marketing_personas"):
+        # Only warn about pending baseline if personas haven't been generated yet.
+        # Once A2 has produced personas, the user has moved past the baseline stage.
         data_status.append("⚠ 基线分析待执行 — 必须先执行基线分析流程（question_simulation mode=baseline_dynamic → answer_fetch → data_analytics report_type=baseline）")
     if state.get("metrics"):
         bwvs = state["metrics"].get("bwvs_index", 0)
@@ -473,8 +491,8 @@ A1 完成后的流程（最高优先级）：
 - 不要一次调用多个工具，每轮只执行一个步骤
 - 执行完一个步骤后，根据步骤特性决定下一步：
   - 品牌分析（A1）完成后：见上方"A1 完成后的流程"
-  - 用户画像（A2）完成后：必须调用 ask_user 让用户选择分析路径（聚焦画像 or 品牌全景），不可自行决定，不可直接调用 question_simulation
-  - 问题模拟（A3）完成后：直接建议执行 answer_fetch
+  - 用户画像（A2）完成后：必须调用 ask_user 引导用户在画布管道图中选择画像，不可自行决定，不可直接调用 question_simulation
+  - 问题模拟（A3）完成后：必须调用 ask_user 让用户确认问题列表后才能执行 answer_fetch，不可直接调用
   - 其他步骤：直接建议或执行下一步
 - 如果用户的请求不明确，先询问再行动
 - 回复风格要求（重要）：

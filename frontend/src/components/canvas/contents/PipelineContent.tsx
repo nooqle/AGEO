@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { RiCheckLine, RiErrorWarningLine } from '@remixicon/react';
+import { RiCheckLine } from '@remixicon/react';
 import type { PipelineCanvasContent } from '@/types/canvas';
 import type { PipelineData } from '@/types/touchpoint';
 import { PersonaPipeline } from '@/components/touchpoints/PersonaPipeline';
@@ -21,8 +21,11 @@ export function PipelineContent({ content }: PipelineContentProps) {
   const maxSelection = content.data.maxSelection ?? 3;
   const minSelection = content.data.minSelection ?? 1;
 
-  // Detect expired state: no pending confirmation and not yet confirmed (e.g. after page refresh)
-  const isExpired = !pendingConfirmation && !isConfirmed;
+  // Pipeline is actionable as long as it hasn't been confirmed yet.
+  // Don't gate on pendingConfirmation — it may be cleared by an unrelated
+  // inline confirmation in the chat panel. Use a fallback requestId when
+  // the store-level pendingConfirmation is absent.
+  const canAct = !isConfirmed;
 
   const handleCheckChange = useCallback((nodeId: string, checked: boolean) => {
     if (isConfirmed) return;
@@ -38,8 +41,11 @@ export function PipelineContent({ content }: PipelineContentProps) {
   }, [isConfirmed, maxSelection]);
 
   const handleConfirm = () => {
-    if (!pendingConfirmation || !sendConfirmation || checkedIds.size < minSelection) return;
+    if (!sendConfirmation || checkedIds.size < minSelection) return;
     if (!pipeline) return;
+
+    // Use pendingConfirmation.requestId if available, otherwise use a stable fallback
+    const requestId = pendingConfirmation?.requestId || `pipeline_${content.id}`;
 
     // Find selected profile node labels for downstream matching
     const profileCol = pipeline.columns.find((c) => c.key === 'profile');
@@ -47,7 +53,7 @@ export function PipelineContent({ content }: PipelineContentProps) {
       ? profileCol.nodes.filter((n) => checkedIds.has(n.id)).map((n) => n.label)
       : [];
 
-    sendConfirmation(pendingConfirmation.requestId, {
+    sendConfirmation(requestId, {
       type: 'persona_path_selection',
       selectedPersonaIds: Array.from(checkedIds),
       selectedPersonaNames: selectedNames,
@@ -56,8 +62,9 @@ export function PipelineContent({ content }: PipelineContentProps) {
   };
 
   const handleSkip = () => {
-    if (!pendingConfirmation || !sendConfirmation) return;
-    sendConfirmation(pendingConfirmation.requestId, {
+    if (!sendConfirmation) return;
+    const requestId = pendingConfirmation?.requestId || `pipeline_${content.id}`;
+    sendConfirmation(requestId, {
       type: 'skip',
     });
     setIsConfirmed(true);
@@ -94,11 +101,6 @@ export function PipelineContent({ content }: PipelineContentProps) {
               <RiCheckLine className="w-4 h-4 text-green-500" />
               已确认 {checkedIds.size} 个画像，正在生成模拟问题...
             </span>
-          ) : isExpired ? (
-            <span className="flex items-center gap-1.5 text-amber-500">
-              <RiErrorWarningLine className="w-4 h-4" />
-              确认已过期，请重新发起分析
-            </span>
           ) : (
             <>
               {checkedIds.size === 0
@@ -108,7 +110,7 @@ export function PipelineContent({ content }: PipelineContentProps) {
           )}
         </div>
 
-        {!isConfirmed && !isExpired && (
+        {canAct && (
           <div className="flex gap-3">
             <button
               className={cn(

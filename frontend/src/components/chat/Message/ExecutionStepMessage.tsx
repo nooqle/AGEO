@@ -25,26 +25,26 @@ const statusConfig: Record<ExecutionStepStatus, { icon: React.ReactNode; label: 
   running: {
     icon: <RiLoader4Line className="w-4 h-4 animate-spin" />,
     label: '执行中',
-    color: 'text-indigo-600',
-    bgColor: 'bg-indigo-50',
+    color: 'text-indigo-400',
+    bgColor: 'bg-indigo-500/10',
   },
   completed: {
     icon: <RiCheckLine className="w-4 h-4" />,
     label: '已完成',
-    color: 'text-green-600',
-    bgColor: 'bg-green-50',
+    color: 'text-green-400',
+    bgColor: 'bg-green-500/10',
   },
   failed: {
     icon: <RiCloseLine className="w-4 h-4" />,
     label: '失败',
-    color: 'text-red-600',
-    bgColor: 'bg-red-50',
+    color: 'text-red-400',
+    bgColor: 'bg-red-500/10',
   },
   waiting_confirmation: {
     icon: <RiTimeLine className="w-4 h-4" />,
     label: '等待确认',
-    color: 'text-amber-600',
-    bgColor: 'bg-amber-50',
+    color: 'text-amber-400',
+    bgColor: 'bg-amber-500/10',
   },
 };
 
@@ -89,10 +89,10 @@ export function ExecutionStepMessage({
         <motion.div
           className={cn(
             'rounded-xl border overflow-hidden transition-all',
-            step.status === 'running' && 'border-indigo-200/50 shadow-sm',
-            step.status === 'waiting_confirmation' && 'border-amber-200/50 shadow-sm',
-            step.status === 'completed' && 'border-green-200/50',
-            step.status === 'failed' && 'border-red-200/50',
+            step.status === 'running' && 'border-indigo-500/30 shadow-sm',
+            step.status === 'waiting_confirmation' && 'border-amber-500/30 shadow-sm',
+            step.status === 'completed' && 'border-green-500/30',
+            step.status === 'failed' && 'border-red-500/30',
             'bg-[--bg-secondary]'
           )}
           initial={{ opacity: 0, y: 5 }}
