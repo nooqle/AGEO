@@ -300,7 +300,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                         # Merge supplementary into core report
                         for key in ("industry_insights", "strengths", "weaknesses",
                                     "opportunities", "threats", "risk_alerts",
-                                    "action_plan", "recommendations"):
+                                    "action_plan"):
                             if supp_data.get(key):
                                 report_data[key] = supp_data[key]
                         logger.info("[A5] Supplementary sections merged successfully")
@@ -467,10 +467,18 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     "总提及数": metrics.get("total_mentions", 0),
                 },
                 "insights": [
-                    {"type": "strength", "title": s, "description": s}
+                    {
+                        "type": "strength",
+                        "title": (s.get("title", str(s)) if isinstance(s, dict) else str(s)),
+                        "description": (s.get("evidence", s.get("title", str(s))) if isinstance(s, dict) else str(s)),
+                    }
                     for s in report_data.get("strengths", [])
                 ] + [
-                    {"type": "weakness", "title": w, "description": w}
+                    {
+                        "type": "weakness",
+                        "title": (w.get("title", str(w)) if isinstance(w, dict) else str(w)),
+                        "description": (w.get("evidence", w.get("title", str(w))) if isinstance(w, dict) else str(w)),
+                    }
                     for w in report_data.get("weaknesses", [])
                 ] + [
                     {"type": "opportunity", "title": o, "description": o}
@@ -480,9 +488,14 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     {
                         "priority": idx + 1,
                         "title": r.get("title", ""),
-                        "rationale": r.get("description", ""),
+                        "rationale": r.get("action", r.get("improvement_area", "")),
+                        "eeat_dimension": r.get("eeat_dimension", ""),
+                        "current_strength": r.get("current_strength", ""),
+                        "expected_impact": r.get("expected_impact", ""),
+                        "difficulty": r.get("difficulty", ""),
+                        "timeline": r.get("timeline", ""),
                     }
-                    for idx, r in enumerate(report_data.get("recommendations", []))
+                    for idx, r in enumerate(report_data.get("actionable_recommendations", []))
                 ],
                 "content": report_data.get("executive_summary", ""),
                 # Raw data for enhanced rendering
@@ -983,12 +996,11 @@ def _get_a5_supplementary_prompt(report_type: str = "persona") -> str:
     "trends": [{"trend": "趋势", "source": "实际数据/行业经验"}],
     "opportunities": ["机会点"]
   },
-  "strengths": ["优势1（含数据）", "优势2"],
-  "weaknesses": ["劣势1（含数据）", "劣势2"],
+  "strengths": [{"title": "优势标题", "scenario": "适用场景（如：送礼推荐、香氛科普）", "platforms": ["表现好的平台"], "evidence": "具体数据支撑（引用 fetch_results）", "eeat_factor": "E-E-A-T 中的哪个维度"}],
+  "weaknesses": [{"title": "劣势标题", "scenario": "薄弱场景（如：性价比对比、成分分析）", "platforms": ["表现差的平台"], "evidence": "具体数据支撑", "improvement_hint": "改进方向"}],
   "opportunities": ["机会1", "机会2"],
   "threats": ["威胁1", "威胁2"],
   "risk_alerts": [{"level": "high/medium/low", "title": "风险标题", "description": "描述", "trigger_condition": "触发条件", "mitigation": "应对措施"}],
-  "recommendations": [{"title": "标题", "description": "描述", "expected_impact": "预期效果", "difficulty": "高/中/低", "priority": "P0/P1/P2"}],
   "action_plan": {"short_term": ["行动"], "medium_term": ["行动"], "long_term": ["行动"]}
 }
 

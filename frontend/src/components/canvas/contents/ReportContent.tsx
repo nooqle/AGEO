@@ -47,8 +47,16 @@ export function ReportContent({ content }: ReportContentProps) {
   // Extended data from A5 artifact
   const ext = data as Record<string, unknown>;
   const keyFindings = Array.isArray(ext.key_findings) ? ext.key_findings as string[] : [];
-  const strengths = Array.isArray(ext.strengths) ? ext.strengths as string[] : [];
-  const weaknesses = Array.isArray(ext.weaknesses) ? ext.weaknesses as string[] : [];
+  // Structured strength/weakness items (new format) or plain strings (legacy)
+  interface StrengthItem { title: string; scenario?: string; platforms?: string[]; evidence?: string; eeat_factor?: string }
+  interface WeaknessItem { title: string; scenario?: string; platforms?: string[]; evidence?: string; improvement_hint?: string }
+  const strengths: (string | StrengthItem)[] = Array.isArray(ext.strengths) ? ext.strengths : [];
+  const weaknesses: (string | WeaknessItem)[] = Array.isArray(ext.weaknesses) ? ext.weaknesses : [];
+
+  // Actionable recommendations from core prompt (richer than supplementary)
+  const actionableRecs = Array.isArray(ext.actionable_recommendations)
+    ? ext.actionable_recommendations as Array<Record<string, unknown>>
+    : [];
   const opportunities = Array.isArray(ext.opportunities) ? ext.opportunities as string[] : [];
   const threats = Array.isArray(ext.threats) ? ext.threats as string[] : [];
   const actionPlan = (ext.action_plan || {}) as Record<string, string[]>;
@@ -136,13 +144,13 @@ export function ReportContent({ content }: ReportContentProps) {
           <div className="flex items-center gap-2 mb-1">
             <h1 className="text-xl font-bold text-[--text-primary]">{data.headline}</h1>
             {isBaseline && (
-              <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-500/15 text-violet-300 border border-violet-500/30">
+              <span className="px-1.5 py-0.5 text-xs font-medium rounded bg-violet-500/15 text-violet-300 border border-violet-500/30">
                 基线
               </span>
             )}
           </div>
           {data.subtitle && (
-            <p className="text-sm text-[--text-secondary]">{data.subtitle}</p>
+            <p className="text-[15px] text-[--text-secondary]">{data.subtitle}</p>
           )}
         </div>
       )}
@@ -188,12 +196,12 @@ export function ReportContent({ content }: ReportContentProps) {
                 )}>
                   {typeof data.overallScore === 'number' ? data.overallScore.toFixed(1) : data.overallScore}
                 </div>
-                <div className="text-xs text-[--text-secondary] mt-1">BWVS 指数</div>
+                <div className="text-[13px] text-[--text-secondary] mt-1">BWVS 指数</div>
 
                 {/* Delta vs previous (Step 9) */}
                 {deltaPrev?.bwvs_index ? (
                   <div className={cn(
-                    'text-xs mt-1 font-medium',
+                    'text-[13px] mt-1 font-medium',
                     deltaPrev.bwvs_index.direction === 'up' ? 'text-[#22C55E]' :
                     deltaPrev.bwvs_index.direction === 'down' ? 'text-[#EF4444]' :
                     'text-[--text-tertiary]'
@@ -202,11 +210,11 @@ export function ReportContent({ content }: ReportContentProps) {
                     {(deltaPrev.bwvs_index.value ?? 0).toFixed(1)} vs 上次
                   </div>
                 ) : data.overallScore !== undefined && !deltaPrev && (
-                  <div className="text-[10px] text-[--text-disabled] mt-1 italic">首次分析</div>
+                  <div className="text-xs text-[--text-disabled] mt-1 italic">首次分析</div>
                 )}
               </div>
               <div className="flex-1">
-                <div className="text-sm font-medium text-[--text-primary] mb-1">{data.scoreBand}</div>
+                <div className="text-[15px] font-medium text-[--text-primary] mb-1">{data.scoreBand}</div>
                 <div className="w-full h-2 bg-[--bg-tertiary] rounded-full overflow-hidden">
                   <div
                     className={cn(
@@ -224,7 +232,7 @@ export function ReportContent({ content }: ReportContentProps) {
           {/* Degradation notice */}
           {degradationNote && (
             <div
-              className="flex items-start gap-2 p-3 rounded-lg text-xs"
+              className="flex items-start gap-2 p-3 rounded-lg text-[13px]"
               style={{
                 background: 'rgba(245, 158, 11, 0.08)',
                 border: '1px solid rgba(245, 158, 11, 0.2)',
@@ -251,7 +259,7 @@ export function ReportContent({ content }: ReportContentProps) {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {Object.entries(data.metrics).map(([key, value]) => (
                 <div key={key} className="p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-                  <div className="text-xs text-[--text-secondary]">
+                  <div className="text-[13px] text-[--text-secondary]">
                     {typeof value === 'object' && value !== null && 'label' in value
                       ? (value as { label?: string }).label || key : key}
                   </div>
@@ -266,7 +274,7 @@ export function ReportContent({ content }: ReportContentProps) {
           {/* Sentiment Distribution */}
           {Object.keys(sentimentDist).length > 0 && (
             <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-              <h4 className="text-sm font-medium text-[--text-primary] mb-3">情感分布</h4>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">情感分布</h4>
               <div className="flex gap-4">
                 {Object.entries(sentimentDist).map(([key, val]) => (
                   <div key={key} className="flex items-center gap-2">
@@ -275,7 +283,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       key === 'positive' ? 'bg-emerald-500' :
                       key === 'negative' ? 'bg-red-500' : 'bg-[--text-tertiary]'
                     )} />
-                    <span className="text-xs text-[--text-secondary]">
+                    <span className="text-[13px] text-[--text-secondary]">
                       {key === 'positive' ? '正面' : key === 'negative' ? '负面' : '中性'}: {val}
                     </span>
                   </div>
@@ -287,12 +295,12 @@ export function ReportContent({ content }: ReportContentProps) {
           {/* Key Findings */}
           {keyFindings.length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-[--text-primary] mb-3">关键发现</h4>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">关键发现</h4>
               <div className="space-y-2">
                 {keyFindings.map((finding, i) => (
                   <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-                    <span className="text-[#6366F1] text-sm mt-0.5">&bull;</span>
-                    <span className="text-sm text-[--text-primary]">{finding}</span>
+                    <span className="text-[#6366F1] text-[15px] mt-0.5">&bull;</span>
+                    <span className="text-[15px] text-[--text-primary]">{finding}</span>
                   </div>
                 ))}
               </div>
@@ -302,25 +310,25 @@ export function ReportContent({ content }: ReportContentProps) {
           {/* Executive Summary */}
           {data.content && (
             <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-              <h4 className="text-sm font-medium text-[--text-primary] mb-2">执行摘要</h4>
-              <p className="text-sm text-[--text-primary] leading-relaxed whitespace-pre-wrap">{data.content}</p>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">执行摘要</h4>
+              <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{data.content}</p>
             </div>
           )}
 
           {/* Legacy: insights from old format */}
           {data.insights && data.insights.length > 0 && keyFindings.length === 0 && (
             <div>
-              <h4 className="text-sm font-medium text-[--text-primary] mb-3">关键发现</h4>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">关键发现</h4>
               <div className="space-y-2">
                 {data.insights.map((insight, index) => (
                   <div key={index} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-                    <span className="text-sm">
+                    <span className="text-[15px]">
                       {insight.type === 'strength' ? '  ' : insight.type === 'weakness' ? '! ' : '* '}
                     </span>
                     <div>
-                      <div className="text-sm font-medium text-[--text-primary]">{insight.title}</div>
+                      <div className="text-[15px] font-medium text-[--text-primary]">{insight.title}</div>
                       {insight.description && insight.description !== insight.title && (
-                        <div className="text-xs text-[--text-secondary] mt-0.5">{insight.description}</div>
+                        <div className="text-[13px] text-[--text-secondary] mt-0.5">{insight.description}</div>
                       )}
                     </div>
                   </div>
@@ -337,13 +345,13 @@ export function ReportContent({ content }: ReportContentProps) {
           {industryBackground ? (
             <>
               <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-                <h4 className="text-sm font-medium text-[--text-primary] mb-2">行业背景</h4>
-                <p className="text-sm text-[--text-primary] leading-relaxed whitespace-pre-wrap">{industryBackground}</p>
+                <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">行业背景</h4>
+                <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{industryBackground}</p>
               </div>
 
               {industryTrends.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-[--text-primary] mb-3">行业趋势</h4>
+                  <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">行业趋势</h4>
                   <div className="space-y-2">
                     {industryTrends.map((item, i) => {
                       const trendText = typeof item === 'string' ? item
@@ -352,11 +360,11 @@ export function ReportContent({ content }: ReportContentProps) {
                         ? String((item as Record<string, unknown>).source) : null;
                       return (
                         <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-                          <span className="text-[#3B82F6] text-sm mt-0.5">&bull;</span>
+                          <span className="text-[#3B82F6] text-[15px] mt-0.5">&bull;</span>
                           <div className="flex-1 min-w-0">
-                            <span className="text-sm text-[--text-primary]">{trendText}</span>
+                            <span className="text-[15px] text-[--text-primary]">{trendText}</span>
                             {sourceText && (
-                              <span className="text-xs text-[--text-tertiary] ml-2">— {sourceText}</span>
+                              <span className="text-[13px] text-[--text-tertiary] ml-2">— {sourceText}</span>
                             )}
                           </div>
                         </div>
@@ -368,15 +376,15 @@ export function ReportContent({ content }: ReportContentProps) {
 
               {industryOpportunities.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-[--text-primary] mb-3">机会点</h4>
+                  <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">机会点</h4>
                   <div className="space-y-2">
                     {industryOpportunities.map((item, i) => {
                       const oppText = typeof item === 'string' ? item
                         : (item && typeof item === 'object') ? String((item as Record<string, unknown>).opportunity || (item as Record<string, unknown>).text || JSON.stringify(item)) : String(item);
                       return (
                         <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-                          <span className="text-[#22C55E] text-sm mt-0.5">&bull;</span>
-                          <span className="text-sm text-[--text-primary]">{oppText}</span>
+                          <span className="text-[#22C55E] text-[15px] mt-0.5">&bull;</span>
+                          <span className="text-[15px] text-[--text-primary]">{oppText}</span>
                         </div>
                       );
                     })}
@@ -385,7 +393,7 @@ export function ReportContent({ content }: ReportContentProps) {
               )}
 
               <div
-                className="p-3 rounded-lg text-xs"
+                className="p-3 rounded-lg text-[13px]"
                 style={{
                   background: 'rgba(99, 102, 241, 0.06)',
                   border: '1px solid rgba(99, 102, 241, 0.15)',
@@ -419,9 +427,9 @@ export function ReportContent({ content }: ReportContentProps) {
                 return (
                   <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
                     <div className="flex items-center justify-between mb-3">
-                      <span className="text-sm font-medium text-[--text-primary] capitalize">{name}</span>
+                      <span className="text-[15px] font-medium text-[--text-primary] capitalize">{name}</span>
                       <span className={cn(
-                        'text-[10px] px-2 py-0.5 rounded-full',
+                        'text-xs px-2 py-0.5 rounded-full',
                         status === 'success' ? 'bg-emerald-500/10 text-emerald-400' :
                         status === 'failed' ? 'bg-red-500/10 text-red-400' :
                         'bg-[--text-tertiary]/10 text-[--text-tertiary]'
@@ -431,34 +439,34 @@ export function ReportContent({ content }: ReportContentProps) {
                     </div>
                     <div className="grid grid-cols-3 gap-3 mb-3">
                       <div>
-                        <div className="text-[10px] text-[--text-tertiary]">提及率</div>
+                        <div className="text-xs text-[--text-tertiary]">提及率</div>
                         <div className="text-sm font-semibold text-[--text-primary]">
                           {mentionRate !== null ? `${(mentionRate * 100).toFixed(0)}%` : '--'}
                         </div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-[--text-tertiary]">情感得分</div>
+                        <div className="text-xs text-[--text-tertiary]">情感得分</div>
                         <div className="text-sm font-semibold text-[--text-primary]">
                           {sentiment !== null ? sentiment.toFixed(1) : '--'}
                         </div>
                       </div>
                       <div>
-                        <div className="text-[10px] text-[--text-tertiary]">提及/总数</div>
+                        <div className="text-xs text-[--text-tertiary]">提及/总数</div>
                         <div className="text-sm font-semibold text-[--text-primary]">
                           {mentions}/{totalQ}
                         </div>
                       </div>
                     </div>
                     {summary && (
-                      <p className="text-xs text-[--text-secondary] leading-relaxed">{summary}</p>
+                      <p className="text-[13px] text-[--text-secondary] leading-relaxed">{summary}</p>
                     )}
                     {/* LLM descriptive content: optimization tips */}
                     {Array.isArray(pa.optimization_tips) && pa.optimization_tips.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-[--border-default]">
-                        <div className="text-[10px] font-medium text-violet-400 mb-1.5">优化建议</div>
+                        <div className="text-xs font-medium text-violet-400 mb-1.5">优化建议</div>
                         <ul className="space-y-1">
                           {(pa.optimization_tips as string[]).map((tip, ti) => (
-                            <li key={ti} className="text-xs text-[--text-secondary] flex items-start gap-1.5">
+                            <li key={ti} className="text-[13px] text-[--text-secondary] flex items-start gap-1.5">
                               <span className="mt-1.5 w-1 h-1 rounded-full bg-violet-400 flex-shrink-0" />
                               {tip}
                             </li>
@@ -470,10 +478,10 @@ export function ReportContent({ content }: ReportContentProps) {
                     {(Array.isArray(pa.strengths) && pa.strengths.length > 0 || Array.isArray(pa.weaknesses) && (pa.weaknesses as unknown[]).length > 0) && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {Array.isArray(pa.strengths) && (pa.strengths as string[]).map((s, si) => (
-                          <span key={`s-${si}`} className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400">{s}</span>
+                          <span key={`s-${si}`} className="text-xs px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400">{s}</span>
                         ))}
                         {Array.isArray(pa.weaknesses) && (pa.weaknesses as string[]).map((w, wi) => (
-                          <span key={`w-${wi}`} className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400">{w}</span>
+                          <span key={`w-${wi}`} className="text-xs px-1.5 py-0.5 rounded bg-red-500/10 text-red-400">{w}</span>
                         ))}
                       </div>
                     )}
@@ -492,8 +500,8 @@ export function ReportContent({ content }: ReportContentProps) {
                 return (
                   <div key={platform} className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-[--text-primary] capitalize">{platform}</span>
-                      <span className="text-xs text-[--text-secondary]">{success}/{total} 成功</span>
+                      <span className="text-[15px] font-medium text-[--text-primary] capitalize">{platform}</span>
+                      <span className="text-[13px] text-[--text-secondary]">{success}/{total} 成功</span>
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="flex-1">
@@ -504,7 +512,7 @@ export function ReportContent({ content }: ReportContentProps) {
                           />
                         </div>
                       </div>
-                      <span className="text-sm font-medium text-[--text-secondary] w-16 text-right">
+                      <span className="text-[15px] font-medium text-[--text-secondary] w-16 text-right">
                         {mentionRate.toFixed(0)}%
                       </span>
                     </div>
@@ -524,8 +532,8 @@ export function ReportContent({ content }: ReportContentProps) {
           {/* Competitor overview */}
           {competitorOverview && (
             <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-              <h4 className="text-sm font-medium text-[--text-primary] mb-2">竞品概览</h4>
-              <p className="text-sm text-[--text-primary] leading-relaxed whitespace-pre-wrap">{competitorOverview}</p>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">竞品概览</h4>
+              <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{competitorOverview}</p>
             </div>
           )}
 
@@ -533,7 +541,7 @@ export function ReportContent({ content }: ReportContentProps) {
           {competitorMatrix.length > 0 ? (
             <>
             <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse">
+              <table className="w-full text-[13px] border-collapse">
                 <thead>
                   <tr className="border-b border-[--border-default]">
                     <th className="text-left py-2 px-3 text-[--text-secondary] font-medium">品牌</th>
@@ -556,7 +564,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       >
                         <td className={cn('py-2 px-3 font-medium', isSelf ? 'text-[#6366F1]' : 'text-[--text-primary]')}>
                           {String(row.name || row.brand || '')}
-                          {isSelf && <span className="ml-1 text-[10px] text-[#6366F1]">(你)</span>}
+                          {isSelf && <span className="ml-1 text-xs text-[#6366F1]">(你)</span>}
                         </td>
                         <td className="text-right py-2 px-3 text-[--text-primary]">
                           {typeof row.bwvs === 'number' ? row.bwvs.toFixed(1) : '--'}
@@ -579,24 +587,24 @@ export function ReportContent({ content }: ReportContentProps) {
           {/* Competitor detail cards */}
           {competitorMatrix.filter(r => !r.is_self).some(r => r.vs_brand || r.advantage_reasons || r.learnings) && (
             <div className="space-y-3 mt-4">
-              <h4 className="text-sm font-medium text-[--text-primary]">竞品详情</h4>
+              <h4 className="text-[15px] font-medium text-[--text-primary]">竞品详情</h4>
               {competitorMatrix.filter(r => !r.is_self).map((row, i) => {
                 const hasDetail = row.vs_brand || Array.isArray(row.advantage_reasons) || Array.isArray(row.learnings);
                 if (!hasDetail) return null;
                 return (
                   <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="text-sm font-medium text-[--text-primary]">{String(row.name || row.brand || '')}</span>
+                      <span className="text-[15px] font-medium text-[--text-primary]">{String(row.name || row.brand || '')}</span>
                       {typeof row.vs_brand === 'string' && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400">{row.vs_brand}</span>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400">{row.vs_brand}</span>
                       )}
                     </div>
                     {Array.isArray(row.advantage_reasons) && (row.advantage_reasons as string[]).length > 0 && (
                       <div className="mb-2">
-                        <div className="text-[10px] text-[--text-tertiary] mb-1">竞争优势</div>
+                        <div className="text-xs text-[--text-tertiary] mb-1">竞争优势</div>
                         <ul className="space-y-0.5">
                           {(row.advantage_reasons as string[]).map((r, ri) => (
-                            <li key={ri} className="text-xs text-[--text-secondary] flex items-start gap-1.5">
+                            <li key={ri} className="text-[13px] text-[--text-secondary] flex items-start gap-1.5">
                               <span className="mt-1.5 w-1 h-1 rounded-full bg-amber-400 flex-shrink-0" />
                               {r}
                             </li>
@@ -606,10 +614,10 @@ export function ReportContent({ content }: ReportContentProps) {
                     )}
                     {Array.isArray(row.learnings) && (row.learnings as string[]).length > 0 && (
                       <div>
-                        <div className="text-[10px] text-[--text-tertiary] mb-1">可借鉴</div>
+                        <div className="text-xs text-[--text-tertiary] mb-1">可借鉴</div>
                         <ul className="space-y-0.5">
                           {(row.learnings as string[]).map((l, li) => (
-                            <li key={li} className="text-xs text-[--text-secondary] flex items-start gap-1.5">
+                            <li key={li} className="text-[13px] text-[--text-secondary] flex items-start gap-1.5">
                               <span className="mt-1.5 w-1 h-1 rounded-full bg-blue-400 flex-shrink-0" />
                               {l}
                             </li>
@@ -626,8 +634,8 @@ export function ReportContent({ content }: ReportContentProps) {
           ) : (strengths.length > 0 || weaknesses.length > 0 || opportunities.length > 0 || threats.length > 0) ? (
             /* Fallback: SWOT Analysis */
             <div className="grid grid-cols-2 gap-3">
-              <SwotCard title="优势" items={strengths} color="emerald" icon="S" />
-              <SwotCard title="劣势" items={weaknesses} color="red" icon="W" />
+              <SwotCard title="优势" items={strengths.map(s => typeof s === 'string' ? s : s.title)} color="emerald" icon="S" />
+              <SwotCard title="劣势" items={weaknesses.map(w => typeof w === 'string' ? w : w.title)} color="red" icon="W" />
               <SwotCard title="机会" items={opportunities} color="blue" icon="O" />
               <SwotCard title="威胁" items={threats} color="amber" icon="T" />
             </div>
@@ -638,8 +646,8 @@ export function ReportContent({ content }: ReportContentProps) {
           {/* Differentiation strategy */}
           {differentiationStrategy && (
             <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-              <h4 className="text-sm font-medium text-[--text-primary] mb-2">差异化策略</h4>
-              <p className="text-sm text-[--text-primary] leading-relaxed whitespace-pre-wrap">{differentiationStrategy}</p>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">差异化策略</h4>
+              <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{differentiationStrategy}</p>
             </div>
           )}
         </div>
@@ -647,52 +655,208 @@ export function ReportContent({ content }: ReportContentProps) {
 
       {/* ====== RECOMMENDATIONS TAB ====== */}
       {activeTab === 'recommendations' && (
-        <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-4">
-          {data.recommendations && data.recommendations.length > 0 ? (
-            <div className="space-y-3">
-              {data.recommendations.map((rec, index) => {
-                const priorityColor = rec.priority === 1
-                  ? '#EF4444'
-                  : rec.priority === 2
-                  ? '#F59E0B'
-                  : '#22C55E';
-                return (
-                  <div
-                    key={index}
-                    className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
-                    style={{
-                      borderLeftColor: priorityColor,
-                      borderTop: '1px solid var(--border-default)',
-                      borderRight: '1px solid var(--border-default)',
-                      borderBottom: '1px solid var(--border-default)',
-                    }}
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={cn(
-                        'text-xs font-bold px-2 py-0.5 rounded',
-                        rec.priority === 1 ? 'bg-red-500/20 text-red-400' :
-                        rec.priority === 2 ? 'bg-amber-500/20 text-amber-400' :
-                        'bg-emerald-500/20 text-emerald-400'
-                      )}>
-                        P{rec.priority}
-                      </span>
-                      <span className="text-sm font-medium text-[--text-primary]">{rec.title}</span>
+        <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-6">
+
+          {/* Section 1: Brand Strengths */}
+          {strengths.length > 0 && (
+            <div>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">品牌优势</h4>
+              <div className="space-y-3">
+                {strengths.map((s, i) => {
+                  const isStructured = typeof s === 'object' && s !== null;
+                  const item = isStructured ? s as StrengthItem : null;
+                  return (
+                    <div
+                      key={i}
+                      className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
+                      style={{
+                        borderLeftColor: '#22C55E',
+                        borderTop: '1px solid var(--border-default)',
+                        borderRight: '1px solid var(--border-default)',
+                        borderBottom: '1px solid var(--border-default)',
+                      }}
+                    >
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className="text-[15px] font-medium text-[--text-primary]">
+                          {item ? item.title : String(s)}
+                        </span>
+                        {item?.eeat_factor && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium">
+                            {item.eeat_factor}
+                          </span>
+                        )}
+                      </div>
+                      {item && (
+                        <>
+                          {item.scenario && (
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <span className="text-[13px] text-[--text-tertiary]">场景:</span>
+                              <span className="text-[13px] text-[--text-secondary]">{item.scenario}</span>
+                            </div>
+                          )}
+                          {item.platforms && item.platforms.length > 0 && (
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <span className="text-[13px] text-[--text-tertiary]">平台:</span>
+                              <div className="flex gap-1 flex-wrap">
+                                {item.platforms.map((p, pi) => (
+                                  <span key={pi} className="text-xs px-1.5 py-0.5 rounded bg-[--bg-tertiary] text-[--text-secondary]">{p}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {item.evidence && (
+                            <p className="text-[13px] text-[--text-secondary] leading-relaxed mt-1">{item.evidence}</p>
+                          )}
+                        </>
+                      )}
                     </div>
-                    {rec.rationale && (
-                      <p className="text-xs text-[--text-primary] leading-relaxed">{rec.rationale}</p>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          ) : (
-            <EmptyState text="暂无优化建议" />
           )}
+
+          {/* Section 2: Weaknesses / Areas to Improve */}
+          {weaknesses.length > 0 && (
+            <div>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">待改进项</h4>
+              <div className="space-y-3">
+                {weaknesses.map((w, i) => {
+                  const isStructured = typeof w === 'object' && w !== null;
+                  const item = isStructured ? w as WeaknessItem : null;
+                  return (
+                    <div
+                      key={i}
+                      className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
+                      style={{
+                        borderLeftColor: '#F59E0B',
+                        borderTop: '1px solid var(--border-default)',
+                        borderRight: '1px solid var(--border-default)',
+                        borderBottom: '1px solid var(--border-default)',
+                      }}
+                    >
+                      <span className="text-[15px] font-medium text-[--text-primary]">
+                        {item ? item.title : String(w)}
+                      </span>
+                      {item && (
+                        <>
+                          {item.scenario && (
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              <span className="text-[13px] text-[--text-tertiary]">场景:</span>
+                              <span className="text-[13px] text-[--text-secondary]">{item.scenario}</span>
+                            </div>
+                          )}
+                          {item.platforms && item.platforms.length > 0 && (
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              <span className="text-[13px] text-[--text-tertiary]">平台:</span>
+                              <div className="flex gap-1 flex-wrap">
+                                {item.platforms.map((p, pi) => (
+                                  <span key={pi} className="text-xs px-1.5 py-0.5 rounded bg-[--bg-tertiary] text-[--text-secondary]">{p}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {item.evidence && (
+                            <p className="text-[13px] text-[--text-secondary] leading-relaxed mt-1.5">{item.evidence}</p>
+                          )}
+                          {item.improvement_hint && (
+                            <div className="mt-2 pt-2 border-t border-[--border-default]">
+                              <span className="text-[13px] text-[#6366F1] font-medium">改进方向: </span>
+                              <span className="text-[13px] text-[--text-secondary]">{item.improvement_hint}</span>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Section 3: EEAT Action Plan */}
+          {data.recommendations && data.recommendations.length > 0 ? (
+            <div>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">EEAT 行动方案</h4>
+              <div className="space-y-3">
+                {data.recommendations.map((rec, index) => {
+                  const priorityColor = rec.priority === 1
+                    ? '#EF4444'
+                    : rec.priority === 2
+                    ? '#F59E0B'
+                    : '#22C55E';
+                  return (
+                    <div
+                      key={index}
+                      className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
+                      style={{
+                        borderLeftColor: priorityColor,
+                        borderTop: '1px solid var(--border-default)',
+                        borderRight: '1px solid var(--border-default)',
+                        borderBottom: '1px solid var(--border-default)',
+                      }}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={cn(
+                          'text-xs font-bold px-2 py-0.5 rounded',
+                          rec.priority === 1 ? 'bg-red-500/20 text-red-400' :
+                          rec.priority === 2 ? 'bg-amber-500/20 text-amber-400' :
+                          'bg-emerald-500/20 text-emerald-400'
+                        )}>
+                          P{rec.priority}
+                        </span>
+                        <span className="text-[15px] font-medium text-[--text-primary]">{rec.title}</span>
+                        {rec.eeat_dimension && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium">
+                            {rec.eeat_dimension}
+                          </span>
+                        )}
+                      </div>
+                      {rec.rationale && (
+                        <p className="text-[13px] text-[--text-primary] leading-relaxed mb-2">{rec.rationale}</p>
+                      )}
+                      {/* EEAT detail fields */}
+                      {(rec.current_strength || rec.expected_impact || rec.difficulty || rec.timeline) && (
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-2 pt-2 border-t border-[--border-default]">
+                          {rec.current_strength && (
+                            <div>
+                              <span className="text-xs text-[--text-tertiary]">当前优势</span>
+                              <p className="text-[13px] text-[--text-secondary]">{rec.current_strength}</p>
+                            </div>
+                          )}
+                          {rec.expected_impact && (
+                            <div>
+                              <span className="text-xs text-[--text-tertiary]">预期效果</span>
+                              <p className="text-[13px] text-[--text-secondary]">{rec.expected_impact}</p>
+                            </div>
+                          )}
+                          {rec.difficulty && (
+                            <div>
+                              <span className="text-xs text-[--text-tertiary]">难度</span>
+                              <p className="text-[13px] text-[--text-secondary]">{rec.difficulty}</p>
+                            </div>
+                          )}
+                          {rec.timeline && (
+                            <div>
+                              <span className="text-xs text-[--text-tertiary]">时间线</span>
+                              <p className="text-[13px] text-[--text-secondary]">{rec.timeline}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : strengths.length === 0 && weaknesses.length === 0 ? (
+            <EmptyState text="暂无优化建议" />
+          ) : null}
 
           {/* Action Plan */}
           {Object.keys(actionPlan).length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-[--text-primary] mb-3">行动计划</h4>
+              <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">行动计划</h4>
               <div className="space-y-3">
                 {actionPlan.short_term && actionPlan.short_term.length > 0 && (
                   <ActionPlanSection title="短期 (1-3个月)" items={actionPlan.short_term} color="emerald" />
@@ -731,7 +895,7 @@ export function ReportContent({ content }: ReportContentProps) {
                   >
                     <div className="flex items-center gap-2 mb-2">
                       <span
-                        className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                        className="text-xs font-bold px-1.5 py-0.5 rounded"
                         style={{
                           backgroundColor: `${levelColor}20`,
                           color: levelColor,
@@ -739,15 +903,15 @@ export function ReportContent({ content }: ReportContentProps) {
                       >
                         {levelLabel}
                       </span>
-                      <span className="text-sm font-medium text-[--text-primary]">
+                      <span className="text-[15px] font-medium text-[--text-primary]">
                         {String(risk.title || risk.name || `风险 ${i + 1}`)}
                       </span>
                     </div>
                     {typeof risk.description === 'string' && (
-                      <p className="text-xs text-[--text-primary] leading-relaxed mb-2">{risk.description}</p>
+                      <p className="text-[13px] text-[--text-primary] leading-relaxed mb-2">{risk.description}</p>
                     )}
                     {typeof risk.mitigation === 'string' && (
-                      <div className="text-xs text-[--text-secondary]">
+                      <div className="text-[13px] text-[--text-secondary]">
                         <span className="text-[#6366F1] font-medium">应对策略: </span>
                         {risk.mitigation}
                       </div>
@@ -778,11 +942,11 @@ function SwotCard({ title, items, color, icon }: { title: string; items: string[
     <div className={cn('p-3 rounded-lg border border-[--border-default]', c.bg)}>
       <div className="flex items-center gap-2 mb-2">
         <span className={cn('text-xs font-bold px-1.5 py-0.5 rounded', c.badge, c.text)}>{icon}</span>
-        <span className={cn('text-sm font-medium', c.text)}>{title}</span>
+        <span className={cn('text-[15px] font-medium', c.text)}>{title}</span>
       </div>
       <ul className="space-y-1">
         {items.map((item, i) => (
-          <li key={i} className="text-xs text-[--text-secondary] flex items-start gap-1.5">
+          <li key={i} className="text-[13px] text-[--text-secondary] flex items-start gap-1.5">
             <span className={cn('mt-1.5 w-1 h-1 rounded-full flex-shrink-0', c.text.replace('text-', 'bg-'))} />
             {item}
           </li>
@@ -800,10 +964,10 @@ function ActionPlanSection({ title, items, color }: { title: string; items: stri
   };
   return (
     <div className={cn('pl-3 border-l-2', colorMap[color] || 'border-l-gray-500')}>
-      <div className="text-xs font-medium text-[--text-secondary] mb-1.5">{title}</div>
+      <div className="text-[13px] font-medium text-[--text-secondary] mb-1.5">{title}</div>
       <ul className="space-y-1">
         {items.map((item, i) => (
-          <li key={i} className="text-xs text-[--text-secondary]">&bull; {item}</li>
+          <li key={i} className="text-[13px] text-[--text-secondary]">&bull; {item}</li>
         ))}
       </ul>
     </div>
@@ -812,7 +976,7 @@ function ActionPlanSection({ title, items, color }: { title: string; items: stri
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="flex items-center justify-center py-12 text-sm text-[--text-tertiary]">
+    <div className="flex items-center justify-center py-12 text-[15px] text-[--text-tertiary]">
       {text}
     </div>
   );

@@ -86,13 +86,13 @@ export function BwvsBreakdownSection({
     >
       {/* Section title */}
       <h4
-        className="text-sm font-semibold mb-1"
+        className="text-[15px] font-semibold mb-1"
         style={{ color: 'var(--text-primary, #E5E5E5)' }}
       >
         BWVS 指数构成
       </h4>
       <p
-        className="text-xs mb-4"
+        className="text-[13px] mb-4"
         style={{ color: 'var(--text-muted, #6B6B6B)' }}
       >
         {breakdown.formula}
@@ -117,7 +117,7 @@ export function BwvsBreakdownSection({
             {overallScore.toFixed(1)}
           </div>
           <div
-            className="text-xs mt-1"
+            className="text-[13px] mt-1"
             style={{ color: 'var(--text-secondary, #A3A3A3)' }}
           >
             {scoreBand || (overallScore >= 70 ? '优秀' : overallScore >= 40 ? '良好' : '需改进')}
@@ -147,7 +147,7 @@ export function BwvsBreakdownSection({
                 {competitor.total.toFixed(1)}
               </div>
               <div
-                className="text-xs mt-1"
+                className="text-[13px] mt-1"
                 style={{ color: 'var(--text-tertiary, #8A8A8A)' }}
               >
                 竞品均值
@@ -201,7 +201,7 @@ export function BwvsBreakdownSection({
       {/* Citation note */}
       {breakdown.citation_note && (
         <p
-          className="text-[10px] mt-3 ml-0"
+          className="text-xs mt-3 ml-0"
           style={{ color: 'var(--text-muted, #6B6B6B)' }}
         >
           * {breakdown.citation_note}

@@ -27,6 +27,11 @@ export type ReportRecommendation = {
   priority?: number;
   title?: string;
   rationale?: string;
+  eeat_dimension?: string;
+  current_strength?: string;
+  expected_impact?: string;
+  difficulty?: string;
+  timeline?: string;
 };
 
 export type ReportCanvasData = CanvasPreviewData & {
