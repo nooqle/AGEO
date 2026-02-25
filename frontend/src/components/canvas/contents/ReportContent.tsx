@@ -61,9 +61,9 @@ export function ReportContent({ content }: ReportContentProps) {
   const industryBackground = industryInsights && typeof industryInsights.background === 'string'
     ? industryInsights.background as string : null;
   const industryTrends = industryInsights && Array.isArray(industryInsights.trends)
-    ? industryInsights.trends as string[] : [];
+    ? industryInsights.trends as unknown[] : [];
   const industryOpportunities = industryInsights && Array.isArray(industryInsights.opportunities)
-    ? industryInsights.opportunities as string[] : [];
+    ? industryInsights.opportunities as unknown[] : [];
 
   // Platform analysis details (new in Cycle 2)
   const platformAnalysis = Array.isArray(ext.platform_analysis)
@@ -345,12 +345,23 @@ export function ReportContent({ content }: ReportContentProps) {
                 <div>
                   <h4 className="text-sm font-medium text-[--text-primary] mb-3">行业趋势</h4>
                   <div className="space-y-2">
-                    {industryTrends.map((trend, i) => (
-                      <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-                        <span className="text-[#3B82F6] text-sm mt-0.5">&bull;</span>
-                        <span className="text-sm text-[--text-primary]">{trend}</span>
-                      </div>
-                    ))}
+                    {industryTrends.map((item, i) => {
+                      const trendText = typeof item === 'string' ? item
+                        : (item && typeof item === 'object' && 'trend' in item) ? String((item as Record<string, unknown>).trend) : String(item);
+                      const sourceText = (item && typeof item === 'object' && 'source' in item)
+                        ? String((item as Record<string, unknown>).source) : null;
+                      return (
+                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                          <span className="text-[#3B82F6] text-sm mt-0.5">&bull;</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm text-[--text-primary]">{trendText}</span>
+                            {sourceText && (
+                              <span className="text-xs text-[--text-tertiary] ml-2">— {sourceText}</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -359,12 +370,16 @@ export function ReportContent({ content }: ReportContentProps) {
                 <div>
                   <h4 className="text-sm font-medium text-[--text-primary] mb-3">机会点</h4>
                   <div className="space-y-2">
-                    {industryOpportunities.map((opp, i) => (
-                      <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
-                        <span className="text-[#22C55E] text-sm mt-0.5">&bull;</span>
-                        <span className="text-sm text-[--text-primary]">{opp}</span>
-                      </div>
-                    ))}
+                    {industryOpportunities.map((item, i) => {
+                      const oppText = typeof item === 'string' ? item
+                        : (item && typeof item === 'object') ? String((item as Record<string, unknown>).opportunity || (item as Record<string, unknown>).text || JSON.stringify(item)) : String(item);
+                      return (
+                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                          <span className="text-[#22C55E] text-sm mt-0.5">&bull;</span>
+                          <span className="text-sm text-[--text-primary]">{oppText}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -437,6 +452,31 @@ export function ReportContent({ content }: ReportContentProps) {
                     {summary && (
                       <p className="text-xs text-[--text-secondary] leading-relaxed">{summary}</p>
                     )}
+                    {/* LLM descriptive content: optimization tips */}
+                    {Array.isArray(pa.optimization_tips) && pa.optimization_tips.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-[--border-default]">
+                        <div className="text-[10px] font-medium text-violet-400 mb-1.5">优化建议</div>
+                        <ul className="space-y-1">
+                          {(pa.optimization_tips as string[]).map((tip, ti) => (
+                            <li key={ti} className="text-xs text-[--text-secondary] flex items-start gap-1.5">
+                              <span className="mt-1.5 w-1 h-1 rounded-full bg-violet-400 flex-shrink-0" />
+                              {tip}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {/* LLM descriptive content: strengths & weaknesses */}
+                    {(Array.isArray(pa.strengths) && pa.strengths.length > 0 || Array.isArray(pa.weaknesses) && (pa.weaknesses as unknown[]).length > 0) && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {Array.isArray(pa.strengths) && (pa.strengths as string[]).map((s, si) => (
+                          <span key={`s-${si}`} className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400">{s}</span>
+                        ))}
+                        {Array.isArray(pa.weaknesses) && (pa.weaknesses as string[]).map((w, wi) => (
+                          <span key={`w-${wi}`} className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400">{w}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -491,6 +531,7 @@ export function ReportContent({ content }: ReportContentProps) {
 
           {/* Competitor comparison matrix */}
           {competitorMatrix.length > 0 ? (
+            <>
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
                 <thead>
@@ -535,6 +576,53 @@ export function ReportContent({ content }: ReportContentProps) {
                 </tbody>
               </table>
             </div>
+          {/* Competitor detail cards */}
+          {competitorMatrix.filter(r => !r.is_self).some(r => r.vs_brand || r.advantage_reasons || r.learnings) && (
+            <div className="space-y-3 mt-4">
+              <h4 className="text-sm font-medium text-[--text-primary]">竞品详情</h4>
+              {competitorMatrix.filter(r => !r.is_self).map((row, i) => {
+                const hasDetail = row.vs_brand || Array.isArray(row.advantage_reasons) || Array.isArray(row.learnings);
+                if (!hasDetail) return null;
+                return (
+                  <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-sm font-medium text-[--text-primary]">{String(row.name || row.brand || '')}</span>
+                      {typeof row.vs_brand === 'string' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400">{row.vs_brand}</span>
+                      )}
+                    </div>
+                    {Array.isArray(row.advantage_reasons) && (row.advantage_reasons as string[]).length > 0 && (
+                      <div className="mb-2">
+                        <div className="text-[10px] text-[--text-tertiary] mb-1">竞争优势</div>
+                        <ul className="space-y-0.5">
+                          {(row.advantage_reasons as string[]).map((r, ri) => (
+                            <li key={ri} className="text-xs text-[--text-secondary] flex items-start gap-1.5">
+                              <span className="mt-1.5 w-1 h-1 rounded-full bg-amber-400 flex-shrink-0" />
+                              {r}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {Array.isArray(row.learnings) && (row.learnings as string[]).length > 0 && (
+                      <div>
+                        <div className="text-[10px] text-[--text-tertiary] mb-1">可借鉴</div>
+                        <ul className="space-y-0.5">
+                          {(row.learnings as string[]).map((l, li) => (
+                            <li key={li} className="text-xs text-[--text-secondary] flex items-start gap-1.5">
+                              <span className="mt-1.5 w-1 h-1 rounded-full bg-blue-400 flex-shrink-0" />
+                              {l}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          </>
           ) : (strengths.length > 0 || weaknesses.length > 0 || opportunities.length > 0 || threats.length > 0) ? (
             /* Fallback: SWOT Analysis */
             <div className="grid grid-cols-2 gap-3">

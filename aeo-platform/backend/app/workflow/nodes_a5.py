@@ -84,6 +84,35 @@ def _analyze_sentiment(text: str) -> str:
     else:
         return "neutral"
 
+
+def _compute_platform_sentiment(fetch_results: list, platform_key: str) -> float:
+    """计算指定平台的情感得分 (0-100)。
+
+    遍历 fetch_results，对匹配平台的成功回答进行情感分析，
+    将 -1~1 的原始得分映射到 0~100 区间。
+    """
+    scores: list[float] = []
+    for result in fetch_results:
+        for pr in result.get("platform_results", []):
+            if pr.get("platform", "").lower() != platform_key.lower():
+                continue
+            if not pr.get("success"):
+                continue
+            answer = pr.get("answer", {})
+            content = (
+                answer.get("content", "")
+                if isinstance(answer, dict)
+                else str(answer)
+            )
+            s = _analyze_sentiment(content)
+            scores.append(
+                {"positive": 1.0, "neutral": 0.0, "negative": -1.0}.get(s, 0.0)
+            )
+    if not scores:
+        return 50.0
+    return round(max(0.0, min(100.0, (sum(scores) / len(scores) + 1) * 50)), 1)
+
+
 from app.workflow.state import AgentState
 from app.workflow.events import (
     send_progress_event,
@@ -325,6 +354,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
         # Normalize report data: ensure all new fields have safe defaults
         report_data = _normalize_report_data(report_data)
+        report_data = _enrich_report_data(
+            report_data, metrics, competitor_metrics, fetch_results, brand_profile
+        )
 
         await send_progress_event(
             session_id=session_id,
@@ -1202,6 +1234,136 @@ def _normalize_report_data(report_data: dict[str, Any]) -> dict[str, Any]:
     report_data.setdefault("competitor_deep_analysis", None)
     report_data.setdefault("actionable_recommendations", [])
     report_data.setdefault("risk_alerts", [])
+
+    return report_data
+
+
+def _enrich_report_data(
+    report_data: dict[str, Any],
+    metrics: dict[str, Any],
+    competitor_metrics: list[dict[str, Any]],
+    fetch_results: list,
+    brand_profile: dict,
+) -> dict[str, Any]:
+    """用已计算的量化指标充实 LLM 的描述性报告。
+
+    解决前端期望字段名与 LLM 输出字段名不匹配的问题。
+    使用 setdefault 保持 LLM 已有值不被覆盖。
+    """
+    platform_breakdown = metrics.get("platform_breakdown", {})
+
+    # --- 平台分析: 注入计算指标 ---
+    platform_analysis = report_data.get("platform_analysis", [])
+    for pa in platform_analysis:
+        platform_key = str(pa.get("platform") or pa.get("name") or "")
+
+        # Step 1: Map LLM field names → frontend expected names (before setdefault)
+        if "performance_summary" in pa and "summary" not in pa:
+            pa["summary"] = pa["performance_summary"]
+        if "mention_count" in pa and "mentions" not in pa:
+            pa["mentions"] = pa["mention_count"]
+
+        # Step 2: Match platform_breakdown keys (case-insensitive)
+        pb = None
+        for key, val in platform_breakdown.items():
+            if key.lower() == platform_key.lower():
+                pb = val
+                break
+
+        # Step 3: Fill missing fields with calculated values (setdefault preserves LLM/renamed values)
+        if pb:
+            total = pb.get("total", 0)
+            mentions_val = pb.get("mentions", 0)
+            pa.setdefault("mentions", mentions_val)
+            pa.setdefault("total_questions", total)
+            pa.setdefault(
+                "mention_rate",
+                round(mentions_val / total, 4) if total > 0 else 0.0,
+            )
+            pa.setdefault(
+                "sentiment",
+                _compute_platform_sentiment(fetch_results, platform_key),
+            )
+            pa.setdefault(
+                "status",
+                "success" if pb.get("success", 0) > 0 else "failed",
+            )
+
+    # --- 竞品矩阵: 注入计算指标 ---
+    comp_deep = report_data.get("competitor_deep_analysis")
+    if isinstance(comp_deep, dict):
+        matrix = comp_deep.get("comparison_matrix", [])
+
+        # Build lookup from competitor_metrics
+        cm_lookup = {
+            cm["name"].lower(): cm
+            for cm in competitor_metrics
+            if cm.get("name")
+        }
+
+        for row in matrix:
+            # Map LLM field name → frontend expected name
+            if "competitor" in row and "name" not in row:
+                row["name"] = row["competitor"]
+            if "competitor_mention_rate" in row and "mention_rate" not in row:
+                row["mention_rate"] = row["competitor_mention_rate"]
+
+            name_lower = str(
+                row.get("name") or row.get("competitor") or ""
+            ).lower()
+            cm = cm_lookup.get(name_lower)
+
+            if cm:
+                row.setdefault("mention_rate", cm.get("mention_rate", 0))
+                # Convert sentiment from -1~1 to 0~100
+                raw_sentiment = cm.get("sentiment", 0)
+                row.setdefault(
+                    "sentiment",
+                    round(max(0, min(100, (raw_sentiment + 1) * 50)), 1),
+                )
+                # Coverage: unique platforms / total platforms
+                appeared_in = cm.get("appeared_in", [])
+                unique_platforms = len(
+                    set(
+                        a.get("platform", "")
+                        for a in appeared_in
+                        if a.get("platform")
+                    )
+                )
+                total_platforms = len(PLATFORMS) if PLATFORMS else 4
+                coverage = (
+                    unique_platforms / total_platforms
+                    if total_platforms > 0
+                    else 0
+                )
+                row.setdefault("coverage", round(coverage, 4))
+
+                # Simplified BWVS: same formula as main but citation=50
+                mr_score = min(100.0, row.get("mention_rate", 0) * 120)
+                sent_score = row.get("sentiment", 50)
+                cov_score = row.get("coverage", 0) * 100
+                bwvs = (
+                    40 * mr_score + 25 * sent_score + 20 * cov_score + 15 * 50
+                ) / 100
+                row.setdefault("bwvs", round(min(100, bwvs), 1))
+
+        # Insert brand self row at top if not present
+        has_self = any(r.get("is_self") for r in matrix)
+        if not has_self and brand_profile.get("brand_name"):
+            breakdown = metrics.get("bwvs_breakdown", {})
+            self_row = {
+                "name": brand_profile["brand_name"],
+                "is_self": True,
+                "bwvs": round(metrics.get("bwvs_index", 0), 1),
+                "mention_rate": round(metrics.get("mention_rate", 0), 4),
+                "sentiment": round(breakdown.get("sentiment_score", 50), 1),
+                "coverage": round(
+                    breakdown.get("coverage_score", 0) / 100, 4
+                ),
+            }
+            matrix.insert(0, self_row)
+
+        comp_deep["comparison_matrix"] = matrix
 
     return report_data
 
