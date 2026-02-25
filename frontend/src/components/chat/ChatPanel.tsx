@@ -312,7 +312,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   // Auto-send brand name when navigating from Dashboard with ?brand= param
   useEffect(() => {
     const brand = searchParams.get('brand');
-    if (brand && !autoSentRef.current && messages.length === 0 && isConnected) {
+    if (brand && !autoSentRef.current && messages.length === 0 && isConnected && !isLoadingHistory) {
       autoSentRef.current = true;
       // Small delay to ensure WebSocket is fully ready
       const timer = setTimeout(() => {
@@ -320,7 +320,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [searchParams, messages.length, isConnected, handleSendMessage]);
+  }, [searchParams, messages.length, isConnected, isLoadingHistory, handleSendMessage]);
 
   // Handle stopping execution
   const handleStopExecution = useCallback(() => {

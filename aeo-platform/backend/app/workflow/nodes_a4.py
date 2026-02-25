@@ -837,6 +837,17 @@ async def _fetch_from_hunyuan(
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         answer_text = response.answer_text
 
+        if not answer_text or not answer_text.strip():
+            logger.warning("[A4] hunyuan returned empty answer for question: %s", question[:60])
+            return {
+                "platform": "hunyuan",
+                "platform_name": "混元",
+                "fetch_method": "api",
+                "success": False,
+                "error": "empty answer from API",
+                "duration": duration,
+            }
+
         return {
             "platform": "hunyuan",
             "platform_name": "混元",
@@ -904,7 +915,7 @@ async def _fetch_from_browser(
             "success": True,
             "answer": {
                 "content": answer_text,
-                "word_count": len(answer_text),
+                "word_count": len(answer_text.split()),
                 "has_brand_mention": _check_brand_mention(
                     answer_text, brand_profile.get("brand_name", "")
                 ),

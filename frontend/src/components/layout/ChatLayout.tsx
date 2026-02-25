@@ -26,16 +26,19 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
   // Resizable canvas width
-  const defaultW = isDesktop ? CANVAS_DEFAULT_DESKTOP : CANVAS_DEFAULT_TABLET;
-  const [canvasWidth, setCanvasWidth] = useState(defaultW);
+  const [canvasWidth, setCanvasWidth] = useState(
+    () => isDesktop ? CANVAS_DEFAULT_DESKTOP : CANVAS_DEFAULT_TABLET
+  );
+  const [prevIsDesktop, setPrevIsDesktop] = useState(isDesktop);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
 
-  // Reset width when switching between desktop/tablet
-  useEffect(() => {
+  // Reset width when switching between desktop/tablet (derived state during render)
+  if (prevIsDesktop !== isDesktop) {
+    setPrevIsDesktop(isDesktop);
     setCanvasWidth(isDesktop ? CANVAS_DEFAULT_DESKTOP : CANVAS_DEFAULT_TABLET);
-  }, [isDesktop]);
+  }
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

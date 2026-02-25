@@ -72,17 +72,18 @@ export function NotificationPanel({ align = 'right', className }: NotificationPa
   const [isClosing, setIsClosing] = useState(false);
   // Keep panel mounted while the close animation plays
   const [shouldRender, setShouldRender] = useState(isPanelOpen);
+  const [prevIsPanelOpen, setPrevIsPanelOpen] = useState(isPanelOpen);
 
-  useEffect(() => {
+  // Sync animation state with open/close transitions (derived state during render)
+  if (prevIsPanelOpen !== isPanelOpen) {
+    setPrevIsPanelOpen(isPanelOpen);
     if (isPanelOpen) {
-      // Opening: render immediately
       setIsClosing(false);
       setShouldRender(true);
     } else if (shouldRender) {
-      // Closing: start animation, defer unmount
       setIsClosing(true);
     }
-  }, [isPanelOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   const handleAnimationEnd = useCallback(() => {
     if (isClosing) {

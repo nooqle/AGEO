@@ -72,7 +72,7 @@ class PlatformConstants:
     PLATFORM_TIMEOUTS: Final[dict[str, int]] = {
         "doubao": 30,
         "hunyuan": 30,
-        "kimi": 90,
+        "kimi": 400,
         "deepseek": 90,
     }
 

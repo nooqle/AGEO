@@ -38,6 +38,23 @@ export type ReportCanvasData = CanvasPreviewData & {
   insights?: ReportInsight[];
   recommendations?: ReportRecommendation[];
   content?: string;
+  bwvs_breakdown?: import('@/types/dashboard').BwvsBreakdown;
+  // A5 extended fields (passed through from backend, consumed by ReportContent ext)
+  key_findings?: unknown;
+  strengths?: unknown;
+  weaknesses?: unknown;
+  opportunities?: unknown;
+  threats?: unknown;
+  action_plan?: unknown;
+  platform_breakdown?: unknown;
+  sentiment_distribution?: unknown;
+  industry_insights?: unknown;
+  platform_analysis?: unknown;
+  competitor_deep_analysis?: unknown;
+  risk_alerts?: unknown;
+  delta_vs_previous?: unknown;
+  competitor_bwvs?: unknown;
+  _degradation_note?: string;
 };
 
 export type ChartSeries = { key: string; name: string };

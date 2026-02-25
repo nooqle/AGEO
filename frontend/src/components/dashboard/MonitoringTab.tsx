@@ -111,11 +111,12 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
     []
   );
 
+  const scheduleId = schedule?.id;
   const handleClearBaseline = useCallback(async () => {
-    if (schedule?.id) {
-      await clearBaseline(schedule.id);
+    if (scheduleId) {
+      await clearBaseline(scheduleId);
     }
-  }, [schedule?.id, clearBaseline]);
+  }, [scheduleId, clearBaseline]);
 
   const handleStartChat = useCallback(() => {
     router.push('/dashboard');

@@ -110,6 +110,9 @@ async def rebuild_state_from_db(
         "tool_call_args": None,
         "tool_call_id": None,
         "agent_retry_counts": {},
+        # Execution control flags
+        "auto_trigger_a5": False,
+        "headless_mode": False,
         # Cycle 3 fields
         "task_id": None,
         "platform_filter": None,
@@ -497,6 +500,10 @@ async def handle_user_message_langgraph(
                 "baseline_fetch_results": None,
                 "baseline_metrics": None,
                 "baseline_report": None,
+                # Execution control flags
+                "auto_trigger_a5": False,
+                "headless_mode": False,
+                "agent_retry_counts": {},
             }
 
             # Stream workflow execution

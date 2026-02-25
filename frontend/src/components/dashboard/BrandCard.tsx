@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { RiAddLine } from '@remixicon/react';
 import type { Entity } from '@/types/entity';
@@ -16,6 +17,17 @@ interface AddBrandCardProps {
 
 export function BrandCard({ entity, isSelected, onClick }: BrandCardProps) {
   const initial = entity.name.charAt(0).toUpperCase();
+
+  const lastAnalyzedLabel = useMemo(() => {
+    if (!entity.lastAnalyzed) return '未分析';
+    // eslint-disable-next-line react-hooks/purity -- Date.now() is intentional for "time ago" display
+    const diff = Date.now() - new Date(entity.lastAnalyzed).getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days === 0) return '今天分析';
+    if (days === 1) return '昨天分析';
+    if (days < 7) return `${days} 天前分析`;
+    return new Date(entity.lastAnalyzed).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) + ' 分析';
+  }, [entity.lastAnalyzed]);
 
   return (
     <motion.div
@@ -55,16 +67,7 @@ export function BrandCard({ entity, isSelected, onClick }: BrandCardProps) {
         )}
       </div>
       <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-        {entity.lastAnalyzed
-          ? (() => {
-              const diff = Date.now() - new Date(entity.lastAnalyzed).getTime();
-              const days = Math.floor(diff / 86400000);
-              if (days === 0) return '今天分析';
-              if (days === 1) return '昨天分析';
-              if (days < 7) return `${days} 天前分析`;
-              return new Date(entity.lastAnalyzed).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) + ' 分析';
-            })()
-          : '未分析'}
+        {lastAnalyzedLabel}
       </div>
     </motion.div>
   );

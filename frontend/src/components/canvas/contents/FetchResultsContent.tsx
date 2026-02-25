@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import type { FetchResultsCanvasContent, FetchResultItem, FetchPlatformResult, FetchCitation } from '@/types/canvas';
 
 // ---------------------------------------------------------------------------
@@ -366,15 +366,11 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
     [platforms, resultsByPlatform]
   );
 
-  const [activeTab, setActiveTab] = useState<string>(availablePlatforms[0] ?? '');
+  const [selectedTab, setActiveTab] = useState<string>('');
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
-  // 当可用平台列表变化且当前选中平台不再可用时，重置到第一个平台
-  useEffect(() => {
-    if (availablePlatforms.length > 0 && !availablePlatforms.includes(activeTab)) {
-      setActiveTab(availablePlatforms[0]);
-    }
-  }, [availablePlatforms, activeTab]);
+  // 当前选中的平台：优先使用用户选择的，若不在可用列表则回退到第一个
+  const activeTab = availablePlatforms.includes(selectedTab) ? selectedTab : (availablePlatforms[0] ?? '');
 
   const toggleExpand = useCallback(() => setIsExpanded((v) => !v), []);
 

@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 
     # Development mode settings
-    DEV_MODE_ENABLED: bool = True  # Enable development mode features
+    DEV_MODE_ENABLED: bool = False  # Enable development mode features (set True in .env.local)
     DEV_TOKEN: str = "dev-token"  # Default token for development
     DEV_USER_EMAIL: str = "dev@test.com"  # Default test user email
     DEV_USER_NAME: str = "Development User"  # Default test user name

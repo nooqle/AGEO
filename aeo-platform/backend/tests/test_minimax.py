@@ -22,10 +22,7 @@ from app.core.llm.glm5 import GLM5Config, GLM5Model
 
 
 # Test configuration
-TEST_MINIMAX_API_KEY = os.getenv(
-    "MINIMAX_API_KEY",
-    "sk-api-5cJeRJuKbXPyAmE0DY8OFcQdT0rhWiaLr0LfTM76BrKOmpaRLW4P56lyxlKOv676iO2aVazmH-rocz2S-ZqTa-CAxOXrojPmodmLpshuvvsYNc6-BZL8_1Y",
-)
+TEST_MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
 TEST_GLM5_API_KEY = os.getenv("GLM5_API_KEY", "")
 
 
@@ -86,7 +83,8 @@ class TestMiniMaxConfig:
         assert config.temperature == 0.5
 
     def test_config_validation_missing_api_key(self):
-        config = MiniMaxConfig(api_key=None)
+        # Use empty string to bypass __post_init__ settings fallback (None triggers auto-fill)
+        config = MiniMaxConfig(api_key="")
         with pytest.raises(ValueError, match="API key is required"):
             config.validate()
 
@@ -130,7 +128,8 @@ class TestGLM5Config:
         assert config.api_key == "test-key"
 
     def test_config_validation_missing_api_key(self):
-        config = GLM5Config(api_key=None)
+        # Use empty string to bypass __post_init__ settings fallback (None triggers auto-fill)
+        config = GLM5Config(api_key="")
         with pytest.raises(ValueError, match="GLM5 API key is required"):
             config.validate()
 

@@ -105,6 +105,17 @@ const normalizeCanvasData = <T extends CanvasContentType>(
       ? (data.recommendations as CanvasContentDataMap['report']['recommendations'])
       : undefined;
 
+    // Validate and pass through bwvs_breakdown only if all four scores are numbers
+    const rawBreakdown = isRecord(data.bwvs_breakdown) ? data.bwvs_breakdown : undefined;
+    const bwvs_breakdown = rawBreakdown &&
+      typeof rawBreakdown.mention_score === 'number' &&
+      typeof rawBreakdown.sentiment_score === 'number' &&
+      typeof rawBreakdown.coverage_score === 'number' &&
+      typeof rawBreakdown.citation_score === 'number' &&
+      isRecord(rawBreakdown.weights)
+      ? (rawBreakdown as unknown as CanvasContentDataMap['report']['bwvs_breakdown'])
+      : undefined;
+
     return {
       ...preview,
       headline: typeof data.headline === 'string' ? data.headline : undefined,
@@ -125,6 +136,23 @@ const normalizeCanvasData = <T extends CanvasContentType>(
       insights,
       recommendations,
       content: typeof data.content === 'string' ? data.content : undefined,
+      bwvs_breakdown,
+      // A5 extended fields passthrough (consumed by ReportContent via ext = data as Record<string, unknown>)
+      key_findings: data.key_findings,
+      strengths: data.strengths,
+      weaknesses: data.weaknesses,
+      opportunities: data.opportunities,
+      threats: data.threats,
+      action_plan: data.action_plan,
+      platform_breakdown: data.platform_breakdown,
+      sentiment_distribution: data.sentiment_distribution,
+      industry_insights: data.industry_insights,
+      platform_analysis: data.platform_analysis,
+      competitor_deep_analysis: data.competitor_deep_analysis,
+      risk_alerts: data.risk_alerts,
+      delta_vs_previous: data.delta_vs_previous,
+      competitor_bwvs: data.competitor_bwvs,
+      _degradation_note: typeof data._degradation_note === 'string' ? data._degradation_note : undefined,
     } as CanvasContentDataMap[T];
   }
 

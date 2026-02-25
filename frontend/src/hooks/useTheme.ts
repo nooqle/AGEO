@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 const STORAGE_KEY = 'specta-theme';
 type Theme = 'dark' | 'light';
@@ -13,15 +13,13 @@ function applyTheme(theme: Theme) {
 }
 
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>('dark');
-
-  useEffect(() => {
-    // 读取当前 html 的 data-theme（由 FOUC 脚本已设置）
+  // 读取 html data-theme（由 FOUC 脚本已设置），懒初始化避免 useEffect+setState
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof document === 'undefined') return 'dark';
     const current = document.documentElement.getAttribute('data-theme');
-    if (current === 'light' || current === 'dark') {
-      setTheme(current);
-    }
-  }, []);
+    if (current === 'light' || current === 'dark') return current;
+    return 'dark';
+  });
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
