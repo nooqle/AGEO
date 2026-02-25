@@ -1,5 +1,6 @@
 """Kimi (Moonshot) API client."""
 
+import json
 import logging
 import time
 from typing import Any
@@ -8,22 +9,44 @@ import httpx
 
 from app.core.config import settings
 from app.core.fetchers.api.base_client import BaseAPIClient
-from app.schemas.fetch import LLMResponse
+from app.schemas.fetch import LLMResponse, SearchReference
 
 logger = logging.getLogger(__name__)
 
 # Maximum tool_calls rounds to prevent infinite loops
 MAX_TOOL_ROUNDS = 3
 
+# System prompt requesting JSON output with answer + citations
+_SYSTEM_PROMPT = """\
+你是一个专业的信息助手。请基于搜索结果回答问题。
+
+请使用如下 JSON 格式输出你的回复：
+
+{
+  "answer": "你的完整回答内容",
+  "citations": [
+    {"index": 1, "title": "来源标题", "url": "来源URL", "snippet": "相关摘要"}
+  ]
+}
+
+要求：
+- answer 字段包含完整的回答文本
+- citations 数组列出你引用的所有来源，每个来源包含 index（序号）、title（标题）、url（链接）、snippet（摘要）
+- 如果没有引用来源，citations 为空数组 []
+"""
+
 
 class KimiClient(BaseAPIClient):
     """Moonshot Kimi API client.
 
     Uses the OpenAI-compatible chat completions API with built-in web search.
-    The $web_search tool is invoked via the standard tool_calls flow:
-      1. Send messages + tools definition
-      2. If finish_reason == "tool_calls", append assistant + tool result, call again
-      3. If finish_reason == "stop", extract content as answer
+    Combines $web_search (builtin_function) with JSON Mode to get structured
+    output including answer text and citations.
+
+    Flow:
+      1. Send messages + $web_search tool definition
+      2. If finish_reason == "tool_calls", echo arguments back as tool result
+      3. Second call with response_format=json_object returns structured answer
     """
 
     DEFAULT_ENDPOINT = "https://api.moonshot.cn/v1/chat/completions"
@@ -51,7 +74,7 @@ class KimiClient(BaseAPIClient):
         start_time = time.time()
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self._build_system_prompt()},
+            {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": question},
         ]
 
@@ -73,6 +96,7 @@ class KimiClient(BaseAPIClient):
                     "model": self.model,
                     "messages": messages,
                     "tools": tools,
+                    "response_format": {"type": "json_object"},
                 }
 
                 response = await client.post(
@@ -89,10 +113,8 @@ class KimiClient(BaseAPIClient):
                 assistant_msg = choice.get("message", {})
 
                 if finish_reason == "tool_calls":
-                    # Append the assistant message (with tool_calls) to history
                     messages.append(assistant_msg)
 
-                    # Append tool result for each tool call
                     tool_calls = assistant_msg.get("tool_calls", [])
                     for tc in tool_calls:
                         messages.append({
@@ -103,18 +125,20 @@ class KimiClient(BaseAPIClient):
                         })
                     continue
 
-                # finish_reason == "stop" or other terminal state
-                answer_text = assistant_msg.get("content", "") or ""
+                # finish_reason == "stop" — parse JSON response
+                raw_content = assistant_msg.get("content", "") or ""
                 duration = time.time() - start_time
+
+                answer_text, search_refs = self._parse_json_response(raw_content)
 
                 return LLMResponse(
                     answer_text=answer_text,
-                    search_references=[],
+                    search_references=search_refs,
                     raw_response=data,
                     duration=duration,
                 )
 
-        # Exhausted tool rounds — return whatever we have
+        # Exhausted tool rounds
         duration = time.time() - start_time
         logger.warning("[KimiClient] Exhausted %d tool rounds", MAX_TOOL_ROUNDS)
         return LLMResponse(
@@ -123,3 +147,27 @@ class KimiClient(BaseAPIClient):
             raw_response={},
             duration=duration,
         )
+
+    @staticmethod
+    def _parse_json_response(content: str) -> tuple[str, list[SearchReference]]:
+        """Parse JSON Mode response into answer text and search references."""
+        try:
+            obj = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            # Fallback: treat entire content as plain text answer
+            return content, []
+
+        answer_text = obj.get("answer", content)
+
+        refs: list[SearchReference] = []
+        for idx, cite in enumerate(obj.get("citations", []), 1):
+            refs.append(SearchReference(
+                index=cite.get("index", idx),
+                title=cite.get("title", ""),
+                url=cite.get("url", ""),
+                snippet=cite.get("snippet"),
+                site_name=cite.get("site_name"),
+                is_official=False,
+            ))
+
+        return answer_text, refs

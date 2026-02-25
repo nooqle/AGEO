@@ -908,7 +908,7 @@ async def _fetch_from_kimi(
                     answer_text, brand_profile.get("brand_name", "")
                 ),
             },
-            "citations": [],
+            "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
         }
     except Exception as e:
