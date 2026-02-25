@@ -65,14 +65,14 @@ class PlatformConstants:
         "deepseek",
     ]
 
-    API_PLATFORMS: Final[list[str]] = ["doubao", "hunyuan"]
-    BROWSER_PLATFORMS: Final[list[str]] = ["kimi", "deepseek"]
+    API_PLATFORMS: Final[list[str]] = ["doubao", "hunyuan", "kimi"]
+    BROWSER_PLATFORMS: Final[list[str]] = ["deepseek"]
 
     # Platform-specific timeouts (per-question, seconds)
     PLATFORM_TIMEOUTS: Final[dict[str, int]] = {
         "doubao": 30,
         "hunyuan": 30,
-        "kimi": 400,
+        "kimi": 30,
         "deepseek": 90,
     }
 

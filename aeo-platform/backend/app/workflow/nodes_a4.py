@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 PLATFORMS = {
     "doubao": {"name": "豆包", "method": "api"},
     "hunyuan": {"name": "混元", "method": "api"},
-    "kimi": {"name": "Kimi", "method": "browser"},
+    "kimi": {"name": "Kimi", "method": "api"},
     "deepseek": {"name": "DeepSeek", "method": "browser"},
 }
 
@@ -188,9 +188,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
     # Send user-visible reply with expected duration
     duration_msg = (
         f"开始向豆包、混元、Kimi、DeepSeek 四个平台提问，共 {len(questions)} 个问题。\n\n"
-        "- API 平台（豆包/混元）：并行抓取，约 30 秒\n"
-        "- 浏览器平台（Kimi/DeepSeek）：各需 3-5 分钟\n"
-        "- 预计总耗时约 8-12 分钟\n\n"
+        "- API 平台（豆包/混元/Kimi）：并行抓取，约 30 秒\n"
+        "- 浏览器平台（DeepSeek）：约 3-5 分钟\n"
+        "- 预计总耗时约 5-8 分钟\n\n"
         "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
     )
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
@@ -211,7 +211,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
         from app.core.fetchers.api.doubao_client import DoubaoClient
         from app.core.fetchers.api.hunyuan_client import HunyuanClient
         from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
-        from app.core.fetchers.browser.kimi_handler import KimiHandler
         from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
         from app.schemas.fetch import BrowserState
 
@@ -239,15 +238,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         try:
             if _pf is None or "kimi" in _pf:
-                kimi_browser_client = PlaywrightBrowserClient(session_name="kimi")
-                kimi_handler = KimiHandler(kimi_browser_client)
+                from app.core.fetchers.api.kimi_client import KimiClient
+                kimi_client = KimiClient()
             else:
-                kimi_browser_client = None
-                kimi_handler = None
+                kimi_client = None
         except Exception as e:
-            logger.warning(f"[A4] Kimi browser init failed: {e}")
-            kimi_browser_client = None
-            kimi_handler = None
+            logger.warning(f"[A4] KimiClient init failed: {e}")
+            kimi_client = None
 
         try:
             if _pf is None or "deepseek" in _pf:
@@ -298,6 +295,15 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         )
                     )
                     api_task_map.append((idx, "hunyuan"))
+                if kimi_client is not None:
+                    api_tasks.append(
+                        _throttled_retry_fetch(
+                            _fetch_from_kimi,
+                            kimi_client, q_text, brand_profile,
+                            platform="kimi", method="api",
+                        )
+                    )
+                    api_task_map.append((idx, "kimi"))
 
             api_all_results = await asyncio.gather(*api_tasks, return_exceptions=True)
 
@@ -423,11 +429,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             browser_tasks = []
             browser_task_platforms = []
-            if kimi_handler is not None and kimi_browser_client is not None:
-                browser_tasks.append(
-                    _pipeline_with_global_timeout(kimi_handler, kimi_browser_client, "kimi", "Kimi")
-                )
-                browser_task_platforms.append("kimi")
             if deepseek_handler is not None and deepseek_browser_client is not None:
                 browser_tasks.append(
                     _pipeline_with_global_timeout(deepseek_handler, deepseek_browser_client, "deepseek", "DeepSeek")
@@ -473,8 +474,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 })
 
         finally:
-            if kimi_browser_client is not None:
-                await kimi_browser_client.close()
             if deepseek_browser_client is not None:
                 await deepseek_browser_client.close()
 
@@ -871,6 +870,57 @@ async def _fetch_from_hunyuan(
             "fetch_method": "api",
             "success": False,
             "error": str(e),
+            "duration": duration,
+        }
+
+
+async def _fetch_from_kimi(
+    client, question: str, brand_profile: dict
+) -> dict[str, Any]:
+    """Fetch answer from Kimi (Moonshot API)."""
+    start_time = datetime.now(timezone.utc)
+
+    try:
+        response = await client.ask_with_search(question)
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        answer_text = response.answer_text
+
+        if not answer_text or not answer_text.strip():
+            logger.warning("[A4] kimi returned empty answer for question: %s", question[:60])
+            return {
+                "platform": "kimi",
+                "platform_name": "Kimi",
+                "fetch_method": "api",
+                "success": False,
+                "error": "empty answer from API",
+                "duration": duration,
+            }
+
+        return {
+            "platform": "kimi",
+            "platform_name": "Kimi",
+            "fetch_method": "api",
+            "success": True,
+            "answer": {
+                "content": answer_text,
+                "word_count": len(answer_text.split()),
+                "has_brand_mention": _check_brand_mention(
+                    answer_text, brand_profile.get("brand_name", "")
+                ),
+            },
+            "citations": [],
+            "duration": duration,
+        }
+    except Exception as e:
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        logger.warning("[A4] kimi exception: %s(%s) for question: %s",
+                       type(e).__name__, e, question[:60])
+        return {
+            "platform": "kimi",
+            "platform_name": "Kimi",
+            "fetch_method": "api",
+            "success": False,
+            "error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__,
             "duration": duration,
         }
 
