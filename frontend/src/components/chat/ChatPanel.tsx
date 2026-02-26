@@ -33,6 +33,7 @@ interface ChatPanelProps {
 
 export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const recalledContentRef = useRef<string | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const searchParams = useSearchParams();
@@ -62,6 +63,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     clearFollowUpSuggestions,
     addStageResult,
     setExecutionProgress,
+    clearMessagesAfter,
+    removeMessage,
+    clearStageResults,
   } = useConversationStore();
 
   // Initialize WebSocket connection
@@ -69,6 +73,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     sendMessage,
     sendConfirmation,
     stopExecution: sendStopExecution,
+    sendRecall,
     isConnected,
   } = useWebSocket(sessionId);
 
@@ -108,6 +113,54 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     window.addEventListener('scroll-to-message', handler);
     return () => window.removeEventListener('scroll-to-message', handler);
   }, []);
+
+  // Listen for recall-fill-input events from useWebSocket recall_complete handler
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const content = recalledContentRef.current;
+      if (content) {
+        setInputValue(content);
+        recalledContentRef.current = null;
+      }
+    };
+    window.addEventListener('recall-fill-input', handler);
+    return () => window.removeEventListener('recall-fill-input', handler);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Listen for recall-reload-artifacts: reload surviving artifacts from DB after recall
+  useEffect(() => {
+    let cancelled = false;
+    const handler = async () => {
+      try {
+        const outputs = await api.getOutputs(sessionId);
+        if (cancelled || !outputs || outputs.length === 0) return;
+        const store = useCanvasStore.getState();
+        for (const output of outputs) {
+          const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(output.type as CanvasContentType)
+            ? (output.type as CanvasContentType)
+            : 'report';
+          store.addContent({
+            id: output.id,
+            type: outputType,
+            title: output.title || output.type || '分析结果',
+            data: (output.data || {}) as CanvasContent['data'],
+            createdAt: new Date(output.created_at),
+            relatedMessageId: '',
+            versions: [],
+            currentVersionIndex: -1,
+          } as CanvasContent);
+        }
+        useCanvasStore.getState().setOpen(true);
+      } catch {
+        // Silently ignore — Canvas stays empty, user can refresh to recover
+      }
+    };
+    window.addEventListener('recall-reload-artifacts', handler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('recall-reload-artifacts', handler);
+    };
+  }, [sessionId]);
 
   // Load persisted messages on mount
   useEffect(() => {
@@ -163,6 +216,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           }
 
           addMessage({
+            id: msg.id || undefined,
             type: role,
             content: msg.content || '',
             ...(outputCards ? { outputCards } : {}),
@@ -381,6 +435,21 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     handleSendMessage(userContent);
   }, [messages, handleSendMessage]);
 
+  // Handle recall: send recall to backend, wait for recall_complete to clean UI
+  const handleRecall = useCallback((messageId: string) => {
+    if (!isConnected) {
+      alert('与服务器的连接已断开，请刷新页面后重试。');
+      return;
+    }
+    // Stash the message content so we can fill the input box after recall_complete
+    const msg = messages.find(m => m.id === messageId);
+    if (msg) {
+      recalledContentRef.current = msg.content;
+    }
+    // Send recall command — UI cleanup happens in recall_complete handler
+    sendRecall(messageId);
+  }, [messages, sendRecall, isConnected]);
+
   // Handle brand button click — directly send to start analysis
   const handleBrandClick = useCallback((brandName: string) => {
     handleSendMessage(brandName);
@@ -501,6 +570,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             messages={messages}
             onConfirmation={handleConfirmation}
             onRetry={handleRetry}
+            onRecall={handleRecall}
             isAgentExecuting={isAgentExecuting}
             exampleBrands={showExampleBrands ? (exampleBrands || DEFAULT_EXAMPLE_BRANDS) : undefined}
             onBrandClick={handleBrandClick}

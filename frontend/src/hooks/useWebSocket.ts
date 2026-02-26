@@ -346,6 +346,11 @@ export function useWebSocket(sessionId: string | null) {
     updateActiveTaskProgress,
     setFollowUpSuggestions,
     setWsConfirmation,
+    // Recall support
+    clearMessagesAfter,
+    removeMessage,
+    clearStageResults,
+    replaceMessageId,
   } = useConversationStore();
 
   const { addContent } = useCanvasStore();
@@ -431,6 +436,24 @@ export function useWebSocket(sessionId: string | null) {
       }
 
       // ========== 新编排器事件 ==========
+
+      case 'user_message_ack': {
+        // Backend saved the user message and returned its DB UUID.
+        // Replace the local random ID with the real UUID so recall can work.
+        const dbId = data.message_id as string;
+        const ackContent = data.content as string;
+        if (dbId && ackContent) {
+          const { messages } = useConversationStore.getState();
+          // Find the most recent user message with matching content
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].type === 'user' && messages[i].content === ackContent) {
+              replaceMessageId(messages[i].id, dbId);
+              break;
+            }
+          }
+        }
+        break;
+      }
 
       case 'reply_delta': {
         const content = typeof data.content === 'string' ? data.content : '';
@@ -998,6 +1021,38 @@ export function useWebSocket(sessionId: string | null) {
         }
         break;
 
+      case 'recall_complete': {
+        // Backend has deleted DB messages. Now clean up frontend state.
+        const recallMessageId = data.message_id as string;
+        console.log('[WebSocket] Recall complete:', recallMessageId, 'deleted:', data.deleted_count);
+
+        // 1. Clear messages from store (target + everything after)
+        clearMessagesAfter(recallMessageId);
+        removeMessage(recallMessageId);
+
+        // 2. Clear stage results and execution progress
+        clearStageResults();
+        setExecutionProgress(null);
+        setBrowserState(null);
+
+        // 3. Reset execution / stop / task / confirmation state (BUG-RECALL-01/03/06)
+        stopExecution();
+        setStopState(null);
+        setActiveTask(null);
+        setFollowUpSuggestions([]);
+        setPendingConfirmation(null);
+
+        // 4. Clear Canvas, then trigger reload of surviving artifacts from DB
+        useCanvasStore.getState().clearContents();
+        window.dispatchEvent(new CustomEvent('recall-reload-artifacts'));
+
+        // 5. Notify ChatPanel to fill input box with recalled message content
+        window.dispatchEvent(new CustomEvent('recall-fill-input', {
+          detail: { messageId: recallMessageId },
+        }));
+        break;
+      }
+
       case 'error': {
         // Guard: require non-empty string in message or error field.
         // Empty/missing fields come from ASGI lifecycle events during
@@ -1206,6 +1261,7 @@ export function useWebSocket(sessionId: string | null) {
     setActiveTask,
     updateActiveTaskProgress,
     setFollowUpSuggestions,
+    replaceMessageId,
   ]);
 
   useEffect(() => {
@@ -1321,10 +1377,27 @@ export function useWebSocket(sessionId: string | null) {
       }
     }, 30000);
 
+    // Reconnect when the page becomes visible again (e.g. after tab switch or backend restart)
+    const handleVisibilityChange = () => {
+      if (
+        document.visibilityState === 'visible' &&
+        isActive &&
+        (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN)
+      ) {
+        console.log('[WebSocket] Page became visible, reconnecting...');
+        reconnectCountRef.current = 0;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        connect();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       isActive = false;
       clearTimeout(initialTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (heartbeatRef.current) {
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
@@ -1436,6 +1509,22 @@ export function useWebSocket(sessionId: string | null) {
     }));
   }, []);
 
+  // Recall (rollback + re-execute)
+  const sendRecall = useCallback((messageId: string) => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      console.warn('[WebSocket] Cannot send recall: connection not open (readyState:', wsRef.current?.readyState, ')');
+      window.dispatchEvent(new CustomEvent('websocket-send-failed', {
+        detail: { action: 'recall' },
+      }));
+      return;
+    }
+
+    wsRef.current.send(JSON.stringify({
+      event: 'recall',
+      data: { message_id: messageId },
+    }));
+  }, []);
+
   return {
     sendMessage,
     sendConfirmation,
@@ -1443,6 +1532,7 @@ export function useWebSocket(sessionId: string | null) {
     stopExecution: sendStop,
     resumeExecution,
     rollback,
+    sendRecall,
     isConnected,
   };
 }

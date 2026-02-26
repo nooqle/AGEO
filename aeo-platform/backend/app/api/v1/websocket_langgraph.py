@@ -25,6 +25,12 @@ from sqlalchemy import select
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Sessions that have been recalled — forces next handle_user_message to
+# bypass stale checkpointer state and rebuild from DB instead.
+# NOTE: Module-level set — NOT shared across workers in multi-process deployments
+# (e.g. gunicorn with multiple workers). For production, consider Redis or shared cache.
+_recalled_sessions: set[str] = set()
+
 
 # ---------------------------------------------------------------------------
 # Confirmation Protocol Types
@@ -212,6 +218,9 @@ async def rebuild_state_from_db(
                 q = output_data.get("questions")
                 if q:
                     state["questions"] = q
+                # Baseline mode questions
+                if state.get("analysis_mode") == "baseline":
+                    state["baseline_questions"] = q or sq
                 if "A3" > highest_step:
                     highest_step = "A3"
 
@@ -237,6 +246,20 @@ async def rebuild_state_from_db(
                     "threats": output_data.get("threats", []),
                     "recommendations": output_data.get("recommendations", []),
                     "action_plan": output_data.get("action_plan", {}),
+                }
+                if "A5" > highest_step:
+                    highest_step = "A5"
+
+            elif output_type == "report_baseline":
+                state["analysis_mode"] = "baseline"
+                state["baseline_metrics"] = output_data.get("metrics_raw") or {
+                    "bwvs_index": output_data.get("overallScore", 0),
+                }
+                state["baseline_report"] = {
+                    "executive_summary": output_data.get("executive_summary", ""),
+                    "key_findings": output_data.get("key_findings", []),
+                    "strengths": output_data.get("strengths", []),
+                    "weaknesses": output_data.get("weaknesses", []),
                 }
                 if "A5" > highest_step:
                     highest_step = "A5"
@@ -299,10 +322,15 @@ async def handle_user_message_langgraph(
     async with AsyncSessionLocal() as db:
         message_service = MessageService(db)
         try:
-            await message_service.save_message(
+            saved = await message_service.save_message(
                 session_id=UUID(session_id),
                 role="user",
                 content=content,
+            )
+            # Send DB UUID back so frontend can sync its local message ID
+            await ws_session_manager.emit_to_session(
+                session_id, "user_message_ack",
+                {"message_id": str(saved["id"]), "content": content},
             )
         except Exception as e:
             logger.error(f"[LangGraph] Error saving user message: {e}")
@@ -351,11 +379,17 @@ async def handle_user_message_langgraph(
         }
 
         # Check if there's an existing state (continued conversation)
+        # If this session was just recalled, bypass stale checkpointer state
+        # and force rebuild from DB (which reflects the post-recall reality).
         existing_state = None
-        try:
-            existing_state = workflow.get_state(config)
-        except Exception:
-            pass
+        if session_id in _recalled_sessions:
+            _recalled_sessions.discard(session_id)
+            logger.info(f"[LangGraph] Session {session_id} was recalled, bypassing checkpointer")
+        else:
+            try:
+                existing_state = workflow.get_state(config)
+            except Exception:
+                pass
 
         if (
             existing_state
@@ -750,8 +784,53 @@ async def handle_confirmation_langgraph(
                 logger.error(f"[LangGraph] Error saving final message after confirmation: {save_err}")
 
 
+async def handle_recall_langgraph(
+    websocket: WebSocket, session_id: str, data: dict
+) -> None:
+    """Handle recall: delete target message and everything after it.
+
+    Pure DB deletion — no automatic re-execution. The user will edit
+    the message content in the input box and manually re-send, which
+    goes through the normal handle_user_message path.
+    """
+    message_id = data.get("message_id")
+    if not message_id:
+        await ws_session_manager.emit_to_websocket(
+            websocket, "error", {"message": "缺少 message_id"}
+        )
+        return
+
+    # 1. Delete target message and everything after in DB
+    async with AsyncSessionLocal() as db:
+        svc = MessageService(db)
+        result = await svc.rollback_from(UUID(session_id), UUID(message_id))
+
+    if result.get("status") == "not_found":
+        await ws_session_manager.emit_to_websocket(
+            websocket, "error", {
+                "message": "回退失败：消息不存在或无权限",
+                "recoverable": True,
+            }
+        )
+        return
+
+    deleted = result.get("deleted_count", 0)
+    logger.info(f"[Recall] Deleted {deleted} messages from session {session_id}")
+
+    # 2. Mark session so next handle_user_message bypasses stale checkpointer
+    _recalled_sessions.add(session_id)
+
+    # 3. Notify frontend
+    await ws_session_manager.emit_to_websocket(
+        websocket,
+        "recall_complete",
+        {"message_id": message_id, "deleted_count": deleted},
+    )
+
+
 # Export for use in main websocket server
 __all__ = [
     "handle_user_message_langgraph",
     "handle_confirmation_langgraph",
+    "handle_recall_langgraph",
 ]

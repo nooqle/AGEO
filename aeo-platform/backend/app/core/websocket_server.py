@@ -129,3 +129,12 @@ async def handle_stop(websocket: WebSocket, session_id: str):
         },
     )
 
+
+async def handle_recall(websocket: WebSocket, session_id: str, data: dict):
+    """Handle recall (rollback + re-execute) using LangGraph workflow."""
+    logger.info(f"[WebSocket] recall event from session: {session_id}")
+
+    from app.api.v1.websocket_langgraph import handle_recall_langgraph
+
+    await handle_recall_langgraph(websocket, session_id, data)
+

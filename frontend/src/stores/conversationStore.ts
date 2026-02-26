@@ -73,8 +73,9 @@ interface ConversationState {
   currentAgentMessageId: string | null;
 
   // Actions
-  addMessage: (message: Omit<Message, 'id' | 'timestamp' | 'metadata'> & Partial<Pick<Message, 'metadata'>>) => string;
+  addMessage: (message: Omit<Message, 'id' | 'timestamp' | 'metadata'> & Partial<Pick<Message, 'id' | 'metadata'>>) => string;
   updateMessage: (id: string, updates: Partial<Message>) => void;
+  replaceMessageId: (oldId: string, newId: string) => void;
   removeMessage: (id: string) => void;
 
   updateTPAOR: (update: TPAORUpdate) => void;
@@ -166,7 +167,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   currentAgentMessageId: null,
 
   addMessage: (messageData) => {
-    const id = generateId();
+    const id = messageData.id || generateId();
     const message: Message = {
       id,
       timestamp: new Date(),
@@ -189,6 +190,14 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     set((state) => ({
       messages: state.messages.map((m) =>
         m.id === id ? { ...m, ...updates } : m
+      ),
+    }));
+  },
+
+  replaceMessageId: (oldId, newId) => {
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === oldId ? { ...m, id: newId } : m
       ),
     }));
   },

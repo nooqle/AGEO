@@ -9,6 +9,7 @@ interface MessageListProps {
   messages: MessageType[];
   onConfirmation?: (optionId: string) => void;
   onRetry?: (messageId: string) => void;
+  onRecall?: (messageId: string) => void;
   isAgentExecuting?: boolean;
   className?: string;
   exampleBrands?: ExampleBrand[];
@@ -22,6 +23,7 @@ export function MessageList({
   messages,
   onConfirmation,
   onRetry,
+  onRecall,
   isAgentExecuting = false,
   className,
   exampleBrands,
@@ -48,6 +50,9 @@ export function MessageList({
           isStreaming={isAgentExecuting && index === messages.length - 1 && message.type === 'agent'}
           onConfirmation={onConfirmation}
           onRetry={onRetry}
+          onRecall={onRecall}
+          recallDisabled={isAgentExecuting}
+          messagesAfterCount={messages.slice(index + 1).filter(m => m.type === 'user' || m.type === 'agent').length}
           onStepContinue={onStepContinue}
           onStepSkip={onStepSkip}
           onStepRetry={onStepRetry}

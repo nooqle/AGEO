@@ -25,6 +25,7 @@ from app.core.websocket_server import (
     handle_user_message,
     handle_confirmation,
     handle_stop,
+    handle_recall,
 )
 import app.models as models
 from app.models.session import Session
@@ -317,6 +318,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 agent_task.add_done_callback(_on_agent_done)
             elif event == "stop":
                 await handle_stop(websocket, session_id)
+            elif event == "recall":
+                if agent_task and not agent_task.done():
+                    await manager.emit_to_websocket(websocket, "error", {
+                        "message": "正在执行中，请等待当前任务完成后再回退",
+                        "recoverable": True,
+                    })
+                else:
+                    agent_task = asyncio.create_task(
+                        handle_recall(websocket, session_id, data)
+                    )
+                    agent_task.add_done_callback(_on_agent_done)
             elif event == "ping":
                 await manager.emit_to_websocket(websocket, "pong", {})
             else:

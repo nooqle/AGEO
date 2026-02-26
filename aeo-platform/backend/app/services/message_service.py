@@ -179,3 +179,37 @@ class MessageService:
             "status": "success",
             "deleted_count": deleted_count,
         }
+
+    async def rollback_from(
+        self,
+        session_id: UUID,
+        message_id: UUID,
+    ) -> dict[str, Any]:
+        """Rollback: delete target message AND all messages after it.
+
+        Args:
+            session_id: Session ID
+            message_id: Target message ID (will also be deleted)
+
+        Returns:
+            Result with status and deleted_count
+        """
+        message = await self.db.get(Message, message_id)
+        if not message or message.session_id != session_id:
+            return {
+                "status": "not_found",
+                "deleted_count": 0,
+            }
+
+        delete_stmt = delete(Message).where(
+            Message.session_id == session_id,
+            Message.sequence >= message.sequence,
+        )
+        result = await self.db.execute(delete_stmt)
+        await self.db.commit()
+        deleted_count = result.rowcount or 0
+
+        return {
+            "status": "success",
+            "deleted_count": deleted_count,
+        }
