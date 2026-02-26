@@ -348,7 +348,12 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   // Handle sending message
   const handleSendMessage = useCallback((content: string, _attachments?: unknown[], context?: ContextTag[]) => {
     if (!content.trim() || isAgentExecuting) return;
-    if (pendingConfirmation && !pendingConfirmation.allowTextInput) return;
+
+    // If user types while there's a pending confirmation, clear it
+    // (user chose to type freely instead of clicking an option)
+    if (pendingConfirmation) {
+      setPendingConfirmation(null);
+    }
 
     // Add user message to local state
     addMessage({
@@ -361,7 +366,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     // Send message via WebSocket (with optional context)
     sendMessage(content.trim(), context);
-  }, [addMessage, startExecution, sendMessage, isAgentExecuting, pendingConfirmation]);
+  }, [addMessage, startExecution, sendMessage, isAgentExecuting, pendingConfirmation, setPendingConfirmation]);
 
   // Auto-send brand name when navigating from Dashboard with ?brand= param
   useEffect(() => {
