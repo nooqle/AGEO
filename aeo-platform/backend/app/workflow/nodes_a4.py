@@ -54,9 +54,16 @@ def _get_browser_timeout(platform: str) -> float:
 # Minimum number of platforms with successful data to proceed
 MIN_PLATFORMS_REQUIRED = 2
 
-# Concurrency limiter for API calls
-API_CONCURRENCY_LIMIT = 5
-_api_semaphore = asyncio.Semaphore(API_CONCURRENCY_LIMIT)
+# Per-platform rate limiting: serial execution with inter-request delay
+INTER_REQUEST_DELAY = 5.0  # seconds between requests to each platform
+_platform_semaphores: dict[str, asyncio.Semaphore] = {}
+
+
+def _get_platform_semaphore(platform: str) -> asyncio.Semaphore:
+    """Get or create a per-platform semaphore (concurrency=1 for serial execution)."""
+    if platform not in _platform_semaphores:
+        _platform_semaphores[platform] = asyncio.Semaphore(1)
+    return _platform_semaphores[platform]
 
 
 async def _throttled_retry_fetch(
@@ -66,9 +73,14 @@ async def _throttled_retry_fetch(
     method: str,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Semaphore-wrapped version of _retry_fetch for concurrency control."""
-    async with _api_semaphore:
-        return await _retry_fetch(fetch_fn, *args, platform=platform, method=method, **kwargs)
+    """Per-platform serial execution with inter-request delay to avoid 429."""
+    sem = _get_platform_semaphore(platform)
+    async with sem:
+        result = await _retry_fetch(fetch_fn, *args, platform=platform, method=method, **kwargs)
+        # Delay before releasing semaphore so the next request to the same
+        # platform doesn't fire immediately (prevents 429 rate limiting).
+        await asyncio.sleep(INTER_REQUEST_DELAY)
+        return result
 
 
 async def _retry_fetch(
@@ -80,6 +92,7 @@ async def _retry_fetch(
 ) -> dict[str, Any]:
     """Retry a fetch function up to MAX_RETRIES times with exponential backoff.
 
+    Handles HTTP 429 specially with longer backoff (reads Retry-After header).
     Returns the first successful result, or the last failure dict.
     """
     last_result: dict[str, Any] = {
@@ -104,6 +117,26 @@ async def _retry_fetch(
                 "success": False,
                 "error": str(e),
             }
+
+            # Handle 429 rate limit with longer backoff
+            is_429 = "429" in str(e)
+            if is_429 and attempt < MAX_RETRIES:
+                # Try to extract Retry-After from httpx.HTTPStatusError
+                retry_after = 30.0  # default 30s for 429
+                try:
+                    import httpx
+                    if isinstance(e, httpx.HTTPStatusError):
+                        ra = e.response.headers.get("Retry-After")
+                        if ra and ra.isdigit():
+                            retry_after = max(float(ra), 10.0)
+                except Exception:
+                    pass
+                logger.warning(
+                    "[A4] %s got 429 rate-limited, waiting %.0fs before retry",
+                    platform, retry_after,
+                )
+                await asyncio.sleep(retry_after)
+                continue
 
         if attempt < MAX_RETRIES:
             wait = RETRY_BACKOFF_BASE ** attempt  # 1s, 2s
@@ -188,9 +221,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
     # Send user-visible reply with expected duration
     duration_msg = (
         f"开始向豆包、混元、Kimi、DeepSeek 四个平台提问，共 {len(questions)} 个问题。\n\n"
-        "- API 平台（豆包/混元/Kimi）：并行抓取，约 30 秒\n"
+        "- API 平台（豆包/混元/Kimi）：各平台串行抓取（5秒间隔防限流），约 2-3 分钟\n"
         "- 浏览器平台（DeepSeek）：约 3-5 分钟\n"
-        "- 预计总耗时约 5-8 分钟\n\n"
+        "- 预计总耗时约 5-10 分钟\n\n"
         "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
     )
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
@@ -262,8 +295,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         try:
             # =============================================================
-            # Phase 1: Batch ALL API calls in parallel (Doubao + Hunyuan)
-            # 12 questions × 2 platforms = 24 concurrent API calls
+            # Phase 1: API calls with per-platform serial execution
+            # Each platform processes questions one at a time with 5s gap;
+            # different platforms run in parallel with each other.
             # =============================================================
             await send_progress_event(
                 session_id=session_id,
@@ -350,6 +384,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 from app.workflow.resilience import get_circuit_breaker
 
                 breaker = get_circuit_breaker(platform)
+                logger.info("[A4] %s browser pipeline started (breaker state: %s)", platform_name, breaker.state.value)
                 results = []
                 for idx, question in enumerate(questions):
                     q_text = question.get("text", "")
@@ -388,6 +423,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         breaker.record_failure()
 
                     results.append((idx, r))
+
+                    # Delay between browser questions to avoid rate limiting
+                    if idx < len(questions) - 1:
+                        await asyncio.sleep(INTER_REQUEST_DELAY)
 
                     if (idx + 1) % 4 == 0 or idx == total - 1:
                         browser_done = idx + 1
@@ -430,14 +469,20 @@ async def a4_fetch_node(state: AgentState) -> Command:
             browser_tasks = []
             browser_task_platforms = []
             if deepseek_handler is not None and deepseek_browser_client is not None:
+                logger.info("[A4] Phase 2: DeepSeek browser pipeline queued (handler=%s)", type(deepseek_handler).__name__)
                 browser_tasks.append(
                     _pipeline_with_global_timeout(deepseek_handler, deepseek_browser_client, "deepseek", "DeepSeek")
                 )
                 browser_task_platforms.append("deepseek")
+            else:
+                logger.warning("[A4] Phase 2: DeepSeek skipped (handler=%s, client=%s)",
+                               deepseek_handler, deepseek_browser_client)
 
             if browser_tasks:
+                logger.info("[A4] Phase 2: Starting %d browser pipeline(s)...", len(browser_tasks))
                 browser_all_results = await asyncio.gather(*browser_tasks, return_exceptions=True)
             else:
+                logger.warning("[A4] Phase 2: No browser tasks to run")
                 browser_all_results = []
 
             # Merge browser results into question_results

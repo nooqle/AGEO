@@ -158,8 +158,8 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                       disabled={!!message.inlineConfirmation?.selectedOptionId}
                       className={cn(
                         'px-4 py-1.5 rounded-full text-sm font-medium transition-all border',
-                        // Primary style: first option or recommended
-                        i === 0 && !message.inlineConfirmation?.selectedOptionId
+                        // Only highlight explicitly recommended options
+                        option.recommended && !message.inlineConfirmation?.selectedOptionId
                           ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
                           : 'bg-transparent border-[--border-hover] text-[--text-primary] hover:bg-[--bg-tertiary]',
                         message.inlineConfirmation?.selectedOptionId === option.id && 'ring-2 ring-indigo-500 ring-offset-1 ring-offset-[--bg-primary]',
