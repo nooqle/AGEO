@@ -55,7 +55,8 @@ def _get_browser_timeout(platform: str) -> float:
 MIN_PLATFORMS_REQUIRED = 2
 
 # Per-platform rate limiting: serial execution with inter-request delay
-INTER_REQUEST_DELAY = 5.0  # seconds between requests to each platform
+# Doubao: 5 QPS limit + search plugin overhead → needs longer delay
+INTER_REQUEST_DELAY = 8.0  # seconds between requests to each platform
 _platform_semaphores: dict[str, asyncio.Semaphore] = {}
 
 

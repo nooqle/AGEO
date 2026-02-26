@@ -67,7 +67,11 @@ class DoubaoClient(BaseAPIClient):
                     "type": "web_search",
                     "max_keyword": 5,
                     "limit": 20,
-                    "sources": ["douyin", "toutiao"],
+                    "sources": ["douyin", "toutiao", "moji"],
+                    "user_location": {
+                        "type": "approximate",
+                        "country": "中国",
+                    },
                 }
             ],
             "input": [
@@ -103,7 +107,7 @@ class DoubaoClient(BaseAPIClient):
                 self.endpoint,
                 headers=headers,
                 json=payload,
-                timeout=60.0,
+                timeout=90.0,
             )
             response.raise_for_status()
             data = response.json()

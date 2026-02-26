@@ -1255,8 +1255,6 @@ async def _handle_tool_call(
                 user_decisions["a3_mode"] = "baseline_dynamic"
                 extra_updates["user_decisions"] = user_decisions
                 extra_updates["analysis_mode"] = "baseline"
-            elif "a3_mode" in user_decisions:
-                pass  # User already chose via confirmation — never override
             elif mode:
                 user_decisions["a3_mode"] = (
                     "brand" if mode == "brand_panorama" else "persona"

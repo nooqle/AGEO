@@ -889,10 +889,10 @@ export function ReportContent({ content }: ReportContentProps) {
                   <div className="text-center min-w-[100px]">
                     <div className={cn(
                       'text-4xl font-bold',
-                      citationAnalysis.official_share >= 30 ? 'text-emerald-400' :
-                      citationAnalysis.official_share >= 10 ? 'text-amber-400' : 'text-red-400'
+                      (citationAnalysis.official_share ?? 0) >= 30 ? 'text-emerald-400' :
+                      (citationAnalysis.official_share ?? 0) >= 10 ? 'text-amber-400' : 'text-red-400'
                     )}>
-                      {citationAnalysis.official_share.toFixed(1)}%
+                      {(citationAnalysis.official_share ?? 0).toFixed(1)}%
                     </div>
                     <div className="text-[13px] text-[--text-secondary] mt-1">官网引用占比</div>
                   </div>
@@ -967,7 +967,7 @@ export function ReportContent({ content }: ReportContentProps) {
                               />
                             </div>
                             <span className="text-[11px] text-[--text-tertiary] w-20 text-right flex-shrink-0">
-                              {item.count}次 ({item.share.toFixed(1)}%)
+                              {item.count}次 ({(item.share ?? 0).toFixed(1)}%)
                             </span>
                           </div>
                         </div>
@@ -1006,7 +1006,7 @@ export function ReportContent({ content }: ReportContentProps) {
                               </div>
                               <div className="flex justify-between text-[11px]">
                                 <span className="text-[--text-tertiary]">官网引用</span>
-                                <span className="text-[--text-primary] font-medium">{stats.official_count} ({stats.official_share.toFixed(1)}%)</span>
+                                <span className="text-[--text-primary] font-medium">{stats.official_count ?? 0} ({(stats.official_share ?? 0).toFixed(1)}%)</span>
                               </div>
                               {stats.top_domains && stats.top_domains.length > 0 && (
                                 <div className="mt-1.5 pt-1.5" style={{ borderTop: '1px solid var(--border-subtle)' }}>

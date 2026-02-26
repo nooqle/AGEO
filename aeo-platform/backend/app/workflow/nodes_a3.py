@@ -1,15 +1,14 @@
 """A3 Node: Simulated Question Generation.
 
 This module contains the A3 node implementation for generating simulated user questions.
-Supports two modes:
-  - "brand" (default): Template-based question generation from YAML config
-  - "persona": LLM-driven question generation focused on selected user personas
+All modes use LLM-driven generation:
+  - "brand" (default): LLM generates brand panorama questions
+  - "persona": LLM generates questions focused on selected user personas
+  - "baseline_dynamic": LLM generates industry baseline panorama questions
 """
 
 import logging
 from datetime import datetime
-from pathlib import Path
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +30,9 @@ from app.core.utils import extract_json_from_content
 # Platforms to distribute questions across
 _PLATFORMS = ["kimi", "deepseek"]
 # Hard limit on total questions
-_MAX_QUESTIONS = 40
+_MAX_QUESTIONS = 80
 # Questions per persona in persona mode
-_QUESTIONS_PER_PERSONA = 4
+_QUESTIONS_PER_PERSONA = 10
 
 
 async def a3_question_node(state: AgentState) -> Command:
@@ -57,76 +56,94 @@ async def a3_question_node(state: AgentState) -> Command:
 
 
 # ============================================================================
-# Brand Panorama Mode (Template-based, existing logic)
+# Brand Panorama Mode (LLM-driven)
 # ============================================================================
 
 
 async def _a3_brand_panorama_mode(state: AgentState) -> Command:
-    """A3 brand panorama mode: Load simulated questions from YAML config."""
+    """A3 brand panorama mode: LLM generates brand panorama questions."""
     session_id = state["session_id"]
     brand_profile = state.get("brand_profile") or {}
-    brand_name = brand_profile.get("brand_name", "") or brand_profile.get("name", "")
-    if not brand_name:
-        brand_name = state.get("brand_name", "")
-    if not brand_name:
-        brand_name = "品牌"
-        logger.warning(f"[A3] brand_name is empty, falling back to '品牌'. brand_profile keys: {list(brand_profile.keys())}")
+    competitors = state.get("competitors") or []
+    brand_name = _extract_brand_name(brand_profile, state)
 
     await send_progress_event(
         session_id=session_id,
         step="A3",
         step_name="问题模拟生成",
         progress=0.45,
-        message=f"开始加载预设问题模板",
+        message="品牌全景模式：正在通过 LLM 生成问题",
+    )
+
+    await send_tpaor_event(
+        session_id, "thought",
+        f"正在为「{brand_name}」生成品牌全景问题，覆盖品牌认知、产品特性、竞品对比等维度...",
     )
 
     try:
-        # Load question templates from YAML config
-        config_path = Path(__file__).parent.parent.parent / "prompts" / "question_templates.yaml"
+        system_prompt = _build_baseline_system_prompt()
+        user_content = _build_baseline_user_content(brand_profile, competitors)
 
-        if not config_path.exists():
-            raise FileNotFoundError(f"Question template file not found: {config_path}")
-
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-
-        templates = config.get("questions", [])
-        if not templates:
-            raise ValueError("No question templates found in configuration")
-
-        await send_progress_event(
+        model = _get_fast_model()
+        response = await call_llm_streaming(
             session_id=session_id,
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
             step="A3",
             step_name="问题模拟生成",
-            progress=0.60,
-            message=f"已加载 {len(templates)} 个问题模板，开始替换品牌变量",
+            progress_start=0.5,
+            progress_end=0.85,
         )
 
-        # Replace {brand_name} placeholder in all questions
+        content = response.content if hasattr(response, "content") else str(response)
+        data = extract_json_from_content(content)
+
+        if not data or "questions" not in data:
+            raise ValueError(
+                f"LLM returned invalid JSON for brand panorama. "
+                f"Keys: {list(data.keys()) if data else 'None'}"
+            )
+
+        raw_questions = data["questions"]
+        if not isinstance(raw_questions, list) or not raw_questions:
+            raise ValueError("LLM returned empty questions for brand panorama")
+
+        raw_questions = raw_questions[:_MAX_QUESTIONS]
+
+        # Build simulated_questions and flattened_questions
         simulated_questions = []
         flattened_questions = []
+        platform_idx = 0
 
-        for template in templates:
-            # Replace brand_name variable
-            core_question = template["core_question"].replace("{brand_name}", brand_name)
+        for i, q in enumerate(raw_questions):
+            q_id = q.get("question_id", f"bp_{i+1:03d}")
+            core_question = q.get("core_question", q.get("question", ""))
+            if not core_question:
+                continue
 
-            # Build question object (compatible with original format)
+            platform = q.get("platform", _PLATFORMS[platform_idx % len(_PLATFORMS)])
+            platform_idx += 1
+
             question_obj = {
-                "question_id": template["question_id"],
-                "category": template["category"],
+                "question_id": q_id,
+                "category": q.get("category", "品牌全景"),
                 "core_question": core_question,
-                "user_intent": template["user_intent"],
-                "decision_stage": template["decision_stage"],
+                "user_intent": q.get("user_intent", ""),
+                "decision_stage": q.get("decision_stage", ""),
+                "platform": platform,
             }
             simulated_questions.append(question_obj)
 
-            # Add to flattened list for A4
             flattened_questions.append({
-                "id": template["question_id"],
+                "id": q_id,
                 "text": core_question,
-                "category": template["category"],
-                "intent": template["user_intent"],
-                "stage": template["decision_stage"],
+                "category": q.get("category", "品牌全景"),
+                "intent": q.get("user_intent", ""),
+                "stage": q.get("decision_stage", ""),
+                "platform": platform,
             })
 
         question_count = len(simulated_questions)
@@ -136,7 +153,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             step="A3",
             step_name="问题模拟生成",
             progress=1.0,
-            message=f"成功加载 {question_count} 个核心问题（覆盖 4 个 AI 平台）",
+            message=f"品牌全景模式：生成 {question_count} 个问题",
             status="completed",
         )
 
@@ -146,7 +163,6 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             session_id, "agent_summary", detailed_response, step="A3", is_complete=True
         )
 
-        # Save and send artifact to Canvas
         await save_and_send_artifact(
             session_id=session_id,
             output_type="questionList",
@@ -154,11 +170,10 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             data={
                 "simulatedQuestions": {"simulated_questions": simulated_questions},
                 "questions": flattened_questions,
-                "generationMode": "品牌全景模式（预设模板）",
+                "generationMode": "品牌全景模式（LLM生成）",
             },
         )
 
-        # Stage result: 让用户在等待期间看到问题生成阶段性产出
         categories = list(set(q.get("category", "") for q in simulated_questions if q.get("category")))
         stage_result_data = {
             "count": question_count,
@@ -171,7 +186,6 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             data=stage_result_data,
         )
 
-        # Persist stage result for reconnection replay
         task_id = state.get("task_id")
         if task_id:
             try:
@@ -199,7 +213,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
         )
 
     except Exception as e:
-        logger.error(f"[A3] Exception: {e}", exc_info=True)
+        logger.error(f"[A3] Brand panorama LLM failed: {e}", exc_info=True)
         await send_error_event(session_id, "A3", str(e), recoverable=True)
         await send_progress_event(
             session_id=session_id,
@@ -210,7 +224,6 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             status="error",
         )
 
-        # Task milestone: A3 failed
         task_id = state.get("task_id")
         if task_id:
             try:
@@ -496,7 +509,7 @@ def _build_persona_system_prompt() -> str:
 }
 
 ## 生成规则
-1. 每个画像生成 4-6 个问题
+1. 每个画像生成 10-15 个问题
 2. 问题必须覆盖决策全路径：认知 → 兴趣 → 评估 → 决策 → 验证
 3. 平台在 kimi 和 deepseek 之间交替分配
 4. 问题要贴合该画像人群的真实表达方式和关注点
@@ -586,7 +599,7 @@ def _build_persona_user_content(
 - 品牌描述: {description}
 - 核心产品: {products}
 
-## 选中画像（为每个画像生成 4-6 个问题）
+## 选中画像（为每个画像生成 10-15 个问题）
 
 {chr(10).join(persona_blocks)}
 
