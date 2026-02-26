@@ -7,7 +7,6 @@ import { useCanvasStore } from '@/stores/canvasStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { MessageList } from './MessageList';
 import { ConfirmationCard } from './ConfirmationCard';
-import { StageResultCard } from './StageResultCard';
 import { TaskStatusBadge } from './TaskStatusBadge';
 import { ReconnectionBanner } from './ReconnectionBanner';
 import { FollowUpChips } from './FollowUpChips';
@@ -580,21 +579,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             exampleBrands={showExampleBrands ? (exampleBrands || DEFAULT_EXAMPLE_BRANDS) : undefined}
             onBrandClick={handleBrandClick}
           />
-
-          {/* Stage Result Cards (progressive wait experience) */}
-          {stageResults.length > 0 && (
-            <div className="mt-4 space-y-2">
-              {stageResults.map((result, index) => (
-                <StageResultCard
-                  key={`${result.stage}-${result.resultType}-${index}`}
-                  result={result}
-                  isLatest={index === stageResults.length - 1 && isAgentExecuting}
-                  isReplay={Boolean((result.data as Record<string, unknown>)?._isReplay)}
-                />
-              ))}
-            </div>
-          )}
-
 
           {/* Cycle 3: Safe-to-leave signal */}
           {showSafeToLeave && isAgentExecuting && (
