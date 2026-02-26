@@ -104,7 +104,7 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
             <button
               key={brand.name}
               onClick={() => handleBrandClick(brand.name)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-[--border-default] bg-[--bg-secondary] text-sm text-[--text-primary] hover:border-[#6366F1] hover:bg-[--bg-tertiary] transition-all"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-[--border-subtle] bg-[--bg-secondary] text-sm text-[--text-primary] hover:border-[#6366F1] hover:bg-[--bg-tertiary] transition-all"
             >
               <span>{brand.emoji}</span>
               <span>{brand.name}</span>

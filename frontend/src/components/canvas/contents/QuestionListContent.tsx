@@ -33,7 +33,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="border-b border-[--border-default] pb-4">
+      <div className="border-b border-[--border-subtle] pb-4">
         <h2 className="text-xl font-semibold text-[--text-primary]">模拟问题列表</h2>
         <p className="text-sm text-[--text-secondary] mt-1">
           生成模式: <span className="font-medium text-blue-300">{mode}</span>
@@ -50,7 +50,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
           {simulatedQs.map((sq, index) => (
             <div
               key={sq.question_id || index}
-              className="bg-[--bg-secondary] rounded-lg border border-[--border-default] p-4 transition-colors hover:border-[--border-hover] hover:bg-[--bg-tertiary]"
+              className="bg-[--bg-secondary] rounded-lg border border-[--border-subtle] p-4 transition-colors hover:border-[--border-hover] hover:bg-[--bg-tertiary]"
             >
               <div className="flex items-start justify-between mb-3">
                 <div>
@@ -58,7 +58,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
                     {sq.category}
                   </span>
                   {sq.subcategory && (
-                    <span className="inline-block px-2 py-1 text-xs font-medium bg-[--bg-tertiary] text-[--text-secondary] rounded mb-2 ml-2 border border-[--border-default]">
+                    <span className="inline-block px-2 py-1 text-xs font-medium bg-[--bg-tertiary] text-[--text-secondary] rounded mb-2 ml-2 border border-[--border-subtle]">
                       {sq.subcategory}
                     </span>
                   )}
@@ -77,7 +77,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
 
               {/* Variants */}
               {sq.question_variants && (
-                <div className="mt-3 pt-3 border-t border-[--border-default] space-y-2">
+                <div className="mt-3 pt-3 border-t border-[--border-subtle] space-y-2">
                   {sq.question_variants.variant_a && (
                     <div className="flex items-start gap-2">
                       <span className="text-xs font-medium text-purple-300 whitespace-nowrap">
@@ -120,7 +120,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
         <div className="space-y-4">
           <h3 className="text-lg font-medium text-[--text-primary]">问题分类统计</h3>
           {Object.entries(groupedQuestions).map(([category, qs]) => (
-            <div key={category} className="bg-[--bg-secondary] border border-[--border-default] rounded-lg p-4">
+            <div key={category} className="bg-[--bg-secondary] border border-[--border-subtle] rounded-lg p-4">
               <h4 className="font-medium text-[--text-primary] mb-2">
                 {category} <span className="text-sm text-[--text-secondary]">({qs.length})</span>
               </h4>

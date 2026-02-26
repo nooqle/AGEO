@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { RiAddLine } from '@remixicon/react';
 import type { Entity } from '@/types/entity';
+import { BrandAvatar } from './BrandAvatar';
 
 interface BrandCardProps {
   entity: Entity;
@@ -16,8 +17,6 @@ interface AddBrandCardProps {
 }
 
 export function BrandCard({ entity, isSelected, onClick }: BrandCardProps) {
-  const initial = entity.name.charAt(0).toUpperCase();
-
   const lastAnalyzedLabel = useMemo(() => {
     if (!entity.lastAnalyzed) return '未分析';
     // eslint-disable-next-line react-hooks/purity -- Date.now() is intentional for "time ago" display
@@ -38,13 +37,8 @@ export function BrandCard({ entity, isSelected, onClick }: BrandCardProps) {
       }}
       onClick={onClick}
     >
-      {/* Avatar */}
-      <div
-        className="w-10 h-10 rounded-full flex items-center justify-center mb-3"
-        style={{ background: 'var(--gradient-primary)' }}
-      >
-        <span className="text-lg font-bold text-white">{initial}</span>
-      </div>
+      {/* Avatar / Logo */}
+      <BrandAvatar name={entity.name} domain={entity.domain} size={40} className="mb-3" />
 
       {/* Brand name */}
       <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
@@ -79,7 +73,7 @@ export function AddBrandCard({ onClick }: AddBrandCardProps) {
       className="w-[200px] flex-shrink-0 rounded-xl cursor-pointer snap-start flex flex-col items-center justify-center"
       style={{
         padding: 'var(--space-lg)',
-        border: '1px dashed var(--border-default)',
+        border: '1px dashed var(--border-subtle)',
         minHeight: '140px',
       }}
       onClick={onClick}

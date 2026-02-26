@@ -223,7 +223,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
                   className="rounded-xl p-5 text-center"
                   style={{
                     background: 'var(--bg-tertiary)',
-                    border: '1px dashed var(--border-default)',
+                    border: '1px dashed var(--border-subtle)',
                     opacity: 0.7,
                   }}
                 >
@@ -264,14 +264,14 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           <div
             className="rounded-xl overflow-hidden"
             style={{
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
               background: 'var(--bg-card)',
             }}
           >
             {/* Tab bar with filters */}
             <div
               className="px-6 pt-4 pb-0"
-              style={{ borderBottom: '1px solid var(--border-default)' }}
+              style={{ borderBottom: '1px solid var(--border-subtle)' }}
             >
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">

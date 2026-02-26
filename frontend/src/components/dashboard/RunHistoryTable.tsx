@@ -60,7 +60,7 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
         className="rounded-xl p-6"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <div className="space-y-3">
@@ -81,7 +81,7 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
         className="rounded-xl p-8 text-center"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>
@@ -96,7 +96,7 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
       className="rounded-xl overflow-hidden"
       style={{
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       {/* Header */}
@@ -110,7 +110,7 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr style={{ borderTop: '1px solid var(--border-default)' }}>
+            <tr style={{ borderTop: '1px solid var(--border-subtle)' }}>
               <th
                 className="text-left px-4 py-2 text-xs font-medium"
                 style={{ color: 'var(--text-tertiary)' }}
@@ -146,7 +146,7 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
                 <tr
                   key={entry.id}
                   className="transition-colors"
-                  style={{ borderTop: '1px solid var(--border-default)' }}
+                  style={{ borderTop: '1px solid var(--border-subtle)' }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.backgroundColor = 'var(--bg-elevated)';
                   }}

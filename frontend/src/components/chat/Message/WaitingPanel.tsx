@@ -11,7 +11,7 @@ export function WaitingPanel({ tips, estimatedTime }: WaitingPanelProps) {
   if (!tips || tips.length === 0) return null;
 
   return (
-    <div className="bg-[--bg-secondary] border border-[--border-default] rounded-xl p-4 mt-3">
+    <div className="bg-[--bg-secondary] border border-[--border-subtle] rounded-xl p-4 mt-3">
       <div className="flex items-center gap-2 mb-3">
         <RiTimeLine className="w-4 h-4 text-[#F59E0B]" />
         <span className="text-xs font-medium text-[#F59E0B]">

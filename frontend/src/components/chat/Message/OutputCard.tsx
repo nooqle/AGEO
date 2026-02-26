@@ -16,7 +16,7 @@ const typeConfig = {
     label: '流程可视化',
     colors: {
       bg: 'bg-[--bg-secondary]',
-      border: 'border-[--border-default]',
+      border: 'border-[--border-subtle]',
       hoverBorder: 'hover:border-violet-500/60',
       icon: 'text-violet-300',
       title: 'text-[--text-primary]',
@@ -29,7 +29,7 @@ const typeConfig = {
     label: '问题列表',
     colors: {
       bg: 'bg-[--bg-secondary]',
-      border: 'border-[--border-default]',
+      border: 'border-[--border-subtle]',
       hoverBorder: 'hover:border-sky-500/60',
       icon: 'text-sky-300',
       title: 'text-[--text-primary]',
@@ -42,7 +42,7 @@ const typeConfig = {
     label: '抓取结果',
     colors: {
       bg: 'bg-[--bg-secondary]',
-      border: 'border-[--border-default]',
+      border: 'border-[--border-subtle]',
       hoverBorder: 'hover:border-teal-500/60',
       icon: 'text-teal-300',
       title: 'text-[--text-primary]',
@@ -55,7 +55,7 @@ const typeConfig = {
     label: '分析报告',
     colors: {
       bg: 'bg-[--bg-secondary]',
-      border: 'border-[--border-default]',
+      border: 'border-[--border-subtle]',
       hoverBorder: 'hover:border-indigo-500/60',
       icon: 'text-indigo-300',
       title: 'text-[--text-primary]',
@@ -68,7 +68,7 @@ const typeConfig = {
     label: '数据图表',
     colors: {
       bg: 'bg-[--bg-secondary]',
-      border: 'border-[--border-default]',
+      border: 'border-[--border-subtle]',
       hoverBorder: 'hover:border-emerald-500/60',
       icon: 'text-emerald-300',
       title: 'text-[--text-primary]',
@@ -81,7 +81,7 @@ const typeConfig = {
     label: '数据表格',
     colors: {
       bg: 'bg-[--bg-secondary]',
-      border: 'border-[--border-default]',
+      border: 'border-[--border-subtle]',
       hoverBorder: 'hover:border-blue-500/60',
       icon: 'text-blue-300',
       title: 'text-[--text-primary]',
@@ -94,7 +94,7 @@ const typeConfig = {
     label: '选择确认',
     colors: {
       bg: 'bg-[--bg-secondary]',
-      border: 'border-[--border-default]',
+      border: 'border-[--border-subtle]',
       hoverBorder: 'hover:border-purple-500/60',
       icon: 'text-purple-300',
       title: 'text-[--text-primary]',
@@ -144,7 +144,7 @@ export function OutputCard({ card }: OutputCardProps) {
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">
-          <div className={cn('p-1.5 rounded-lg bg-[--bg-tertiary] border border-[--border-default]', config.colors.icon)}>
+          <div className={cn('p-1.5 rounded-lg bg-[--bg-tertiary] border border-[--border-subtle]', config.colors.icon)}>
             <Icon className="w-4 h-4" />
           </div>
           <div>
@@ -161,7 +161,7 @@ export function OutputCard({ card }: OutputCardProps) {
       {card.preview?.metrics && (
         <div className="grid grid-cols-3 gap-2">
           {Object.entries(card.preview.metrics).slice(0, 3).map(([key, value]) => (
-            <div key={key} className="bg-[--bg-secondary] border border-[--border-default] rounded-lg px-2 py-1.5">
+            <div key={key} className="bg-[--bg-secondary] border border-[--border-subtle] rounded-lg px-2 py-1.5">
               <div className="text-xs text-[--text-secondary]">{key}</div>
               <div className="font-medium text-[--text-primary] truncate">{String(value)}</div>
             </div>

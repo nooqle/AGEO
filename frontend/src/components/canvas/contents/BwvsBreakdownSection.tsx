@@ -81,7 +81,7 @@ export function BwvsBreakdownSection({
       className="p-5 rounded-xl"
       style={{
         background: 'var(--bg-secondary, #1A1A1A)',
-        border: '1px solid var(--border-default, #262626)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       {/* Section title */}
@@ -101,7 +101,7 @@ export function BwvsBreakdownSection({
       {/* Overall score header */}
       <div
         className="flex items-center gap-4 pb-4 mb-4"
-        style={{ borderBottom: '1px solid var(--border-default, #262626)' }}
+        style={{ borderBottom: '1px solid var(--border-subtle)' }}
       >
         <div className="text-center">
           <div
@@ -212,7 +212,7 @@ export function BwvsBreakdownSection({
       <div
         className="mt-4 pt-3"
         style={{
-          borderTop: '1px solid var(--border-default, #262626)',
+          borderTop: '1px solid var(--border-subtle)',
           fontFamily: 'monospace',
           fontSize: '11px',
           color: 'var(--text-disabled, #525252)',

@@ -86,7 +86,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
               key={content.id}
               onClick={() => handleClick(content.id)}
               className={cn(
-                'w-10 h-10 flex flex-col items-center justify-center rounded-lg cursor-pointer transition-colors',
+                'relative w-10 h-10 flex flex-col items-center justify-center rounded-lg cursor-pointer transition-colors',
                 hasGlow && 'glow-border'
               )}
               style={{
@@ -105,6 +105,12 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
               >
                 {TYPE_LABELS[content.type] || ''}
               </span>
+              {content.hasNewVersion && !isActive && (
+                <span
+                  className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full"
+                  style={{ backgroundColor: 'var(--error)' }}
+                />
+              )}
             </button>
           );
         })}
@@ -114,7 +120,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
 
   // Full mode (legacy sidebar bottom)
   return (
-    <div style={{ borderTop: '1px solid var(--border-default)' }}>
+    <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
       <div className="px-3 py-2">
         <span
           className="text-xs font-medium uppercase tracking-wider"

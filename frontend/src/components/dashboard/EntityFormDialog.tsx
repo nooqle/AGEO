@@ -73,13 +73,13 @@ function EntityFormDialogInner({
         onClick={(e) => e.stopPropagation()}
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         {/* Header */}
         <div
           className="flex items-center justify-between px-6 py-4"
-          style={{ borderBottom: '1px solid var(--border-default)' }}
+          style={{ borderBottom: '1px solid var(--border-subtle)' }}
         >
           <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
             {isEdit ? '编辑品牌' : '新建品牌'}
@@ -107,7 +107,7 @@ function EntityFormDialogInner({
               className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-colors"
               style={{
                 background: 'var(--bg-primary)',
-                border: '1px solid var(--border-default)',
+                border: '1px solid var(--border-subtle)',
                 color: 'var(--text-primary)',
               }}
               placeholder="例如：华为"
@@ -137,7 +137,7 @@ function EntityFormDialogInner({
               className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-colors"
               style={{
                 background: 'var(--bg-primary)',
-                border: '1px solid var(--border-default)',
+                border: '1px solid var(--border-subtle)',
                 color: 'var(--text-primary)',
               }}
               placeholder="例如：huawei.com"
@@ -156,7 +156,7 @@ function EntityFormDialogInner({
               className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-colors"
               style={{
                 background: 'var(--bg-primary)',
-                border: '1px solid var(--border-default)',
+                border: '1px solid var(--border-subtle)',
                 color: 'var(--text-primary)',
               }}
               placeholder="例如：护肤品"
@@ -174,7 +174,7 @@ function EntityFormDialogInner({
               className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-colors resize-none"
               style={{
                 background: 'var(--bg-primary)',
-                border: '1px solid var(--border-default)',
+                border: '1px solid var(--border-subtle)',
                 color: 'var(--text-primary)',
               }}
               placeholder="简要描述品牌信息..."

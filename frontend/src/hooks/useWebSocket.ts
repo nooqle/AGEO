@@ -153,6 +153,7 @@ const normalizeCanvasData = <T extends CanvasContentType>(
       delta_vs_previous: data.delta_vs_previous,
       competitor_bwvs: data.competitor_bwvs,
       _degradation_note: typeof data._degradation_note === 'string' ? data._degradation_note : undefined,
+      citation_analysis: data.citation_analysis,
     } as CanvasContentDataMap[T];
   }
 

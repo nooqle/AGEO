@@ -22,7 +22,7 @@ export function EmptyState({ icon: Icon, title, description, action, className }
           className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4"
           style={{
             background: 'var(--bg-tertiary)',
-            border: '1px solid var(--border-default)',
+            border: '1px solid var(--border-subtle)',
           }}
         >
           <Icon className="w-7 h-7" style={{ color: 'var(--border-hover)' }} />

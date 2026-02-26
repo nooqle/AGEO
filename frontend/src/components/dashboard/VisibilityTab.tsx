@@ -86,7 +86,7 @@ function SnapshotTooltip({ active, payload, dimension }: SnapshotTooltipProps) {
           </div>
         )}
       </div>
-      <div className="mt-1.5 pt-1.5 border-t border-[--border-default] text-[10px] text-[--text-tertiary]">
+      <div className="mt-1.5 pt-1.5 border-t border-[--border-subtle] text-[10px] text-[--text-tertiary]">
         快照 ID: {point.snapshot_id?.slice(0, 8)}
       </div>
     </div>
@@ -162,7 +162,7 @@ export function VisibilityTab({ data, entityId }: VisibilityTabProps) {
         className="rounded-xl p-4"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <div className="flex items-center justify-between mb-4">
@@ -218,7 +218,7 @@ export function VisibilityTab({ data, entityId }: VisibilityTabProps) {
               <ReferenceLine
                 key={i}
                 x={point.date}
-                stroke="var(--border-default)"
+                stroke="var(--border-subtle)"
                 strokeDasharray="2 4"
               />
             ))}

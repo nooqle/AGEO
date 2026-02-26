@@ -102,7 +102,7 @@ function PersonasContent({ data }: { data: Record<string, unknown> }) {
           {(personas as Array<Record<string, unknown>>).slice(0, 4).map((p, i) => (
             <span
               key={i}
-              className="text-[10px] px-2 py-0.5 rounded-full bg-[--bg-tertiary] text-[--text-secondary] border border-[--border-default]"
+              className="text-[10px] px-2 py-0.5 rounded-full bg-[--bg-tertiary] text-[--text-secondary] border border-[--border-subtle]"
             >
               {String(p.name || p.label || `P${i + 1}`)}
             </span>
@@ -168,7 +168,7 @@ function PlatformStatusContent({ data }: { data: Record<string, unknown> }) {
             key={i}
             className={cn(
               'flex items-center gap-1.5 px-2 py-1 rounded text-xs',
-              'bg-[--bg-tertiary] border border-[--border-default]',
+              'bg-[--bg-tertiary] border border-[--border-subtle]',
               p.status === 'success' && 'border-[#22C55E]/30',
               p.status === 'failed' && 'border-[#EF4444]/30',
               p.status === 'fetching' && 'border-[#F59E0B]/30',

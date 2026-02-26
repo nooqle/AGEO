@@ -72,7 +72,7 @@ class Settings(BaseSettings):
 
     # Doubao API
     DOUBAO_API_KEY: str | None = None
-    DOUBAO_MODEL: str = "doubao-seed-2-0-lite-260215"
+    DOUBAO_MODEL: str = "doubao-seed-1-8-251228"
 
     # Hunyuan API
     HUNYUAN_API_KEY: str | None = None

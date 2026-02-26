@@ -18,7 +18,7 @@ export function SystemMessage({ message }: SystemMessageProps) {
     ? 'bg-red-500/10 border border-red-500/20 text-[--error]'
     : isSuccess
     ? 'bg-green-500/10 border border-green-500/20 text-[--success]'
-    : 'bg-[--bg-secondary] border border-[--border-default] text-[--text-secondary]';
+    : 'bg-[--bg-secondary] border border-[--border-subtle] text-[--text-secondary]';
 
   return (
     <div className="flex justify-center my-4">

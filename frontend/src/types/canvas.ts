@@ -307,6 +307,7 @@ export type CanvasContent =
       linkedMessageId?: string;
       category?: 'baseline' | 'scenario';
       scenarioLabel?: string;
+      hasNewVersion?: boolean;
     }
   | {
       id: string;
@@ -320,6 +321,7 @@ export type CanvasContent =
       linkedMessageId?: string;
       category?: 'baseline' | 'scenario';
       scenarioLabel?: string;
+      hasNewVersion?: boolean;
     }
   | {
       id: string;
@@ -333,6 +335,7 @@ export type CanvasContent =
       linkedMessageId?: string;
       category?: 'baseline' | 'scenario';
       scenarioLabel?: string;
+      hasNewVersion?: boolean;
     }
   | {
       id: string;
@@ -346,6 +349,7 @@ export type CanvasContent =
       linkedMessageId?: string;
       category?: 'baseline' | 'scenario';
       scenarioLabel?: string;
+      hasNewVersion?: boolean;
     }
   | {
       id: string;
@@ -359,6 +363,7 @@ export type CanvasContent =
       linkedMessageId?: string;
       category?: 'baseline' | 'scenario';
       scenarioLabel?: string;
+      hasNewVersion?: boolean;
     }
   | {
       id: string;
@@ -372,6 +377,7 @@ export type CanvasContent =
       linkedMessageId?: string;
       category?: 'baseline' | 'scenario';
       scenarioLabel?: string;
+      hasNewVersion?: boolean;
     }
   | {
       id: string;
@@ -385,6 +391,7 @@ export type CanvasContent =
       linkedMessageId?: string;
       category?: 'baseline' | 'scenario';
       scenarioLabel?: string;
+      hasNewVersion?: boolean;
     }
 ;
 

@@ -65,11 +65,14 @@ export const useCanvasStore = create<CanvasState>((set) => ({
       // Prepend old version (newest-first order), cap at MAX_VERSIONS
       const updatedVersions = [oldVersion, ...(existing.versions || [])].slice(0, MAX_VERSIONS);
       const newContents = [...state.contents];
+      // If user is currently viewing this tab, no need to show NEW badge
+      const isCurrentlyViewing = existingIndex === state.activeContentIndex;
       newContents[existingIndex] = {
         ...existing,
         ...content,
         versions: updatedVersions,
         currentVersionIndex: -1, // -1 = show latest
+        hasNewVersion: !isCurrentlyViewing,
       } as CanvasContent;
       return {
         contents: newContents,
@@ -92,7 +95,13 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     };
   }),
 
-  setActiveContent: (index) => set({ activeContentIndex: index }),
+  setActiveContent: (index) => set((state) => {
+    const newContents = [...state.contents];
+    if (newContents[index]) {
+      newContents[index] = { ...newContents[index], hasNewVersion: false } as CanvasContent;
+    }
+    return { activeContentIndex: index, contents: newContents };
+  }),
 
   setActiveContentById: (id) => set((state) => {
     const index = state.contents.findIndex((c) => c.id === id);

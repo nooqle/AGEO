@@ -35,7 +35,7 @@ function formatTimestamp(ts: string): string {
 }
 
 export function CanvasHeader({ content }: CanvasHeaderProps) {
-  const { mode, setMode, closeCanvas, setContentVersion } = useCanvasStore();
+  const { mode, setMode, closeCanvas, setContentVersion, contents, activeContentIndex } = useCanvasStore();
   const [copied, setCopied] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
@@ -59,6 +59,22 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const handleVersionSelect = (index: number) => {
     setContentVersion(content.id, index);
     setVersionMenuOpen(false);
+  };
+
+  // Clear hasNewVersion when opening version menu
+  const handleVersionMenuToggle = () => {
+    if (!versionMenuOpen && content.hasNewVersion) {
+      // Clear the NEW badge when user opens version selector
+      const idx = contents.findIndex(c => c.id === content.id);
+      if (idx !== -1) {
+        useCanvasStore.setState((state) => {
+          const newContents = [...state.contents];
+          newContents[idx] = { ...newContents[idx], hasNewVersion: false } as CanvasContent;
+          return { contents: newContents };
+        });
+      }
+    }
+    setVersionMenuOpen(!versionMenuOpen);
   };
 
   const handleJumpToConversation = () => {
@@ -171,7 +187,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const dropdownClass = 'absolute right-0 top-full mt-1 rounded-lg shadow-lg py-1 z-20 min-w-[140px]';
   const dropdownStyle = {
     backgroundColor: 'var(--bg-secondary)',
-    border: '1px solid var(--border-default)',
+    border: '1px solid var(--border-subtle)',
   };
   const menuItemClass = 'w-full px-3 py-2 text-left text-sm flex items-center gap-2 transition-colors';
 
@@ -179,7 +195,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
     <div
       className="transition-colors"
       style={{
-        borderBottom: '1px solid var(--border-default)',
+        borderBottom: '1px solid var(--border-subtle)',
         backgroundColor: 'var(--bg-primary)',
       }}
     >
@@ -191,7 +207,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
             className="p-1.5 rounded-lg"
             style={{
               backgroundColor: 'var(--bg-elevated)',
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
             }}
           >
             {getTypeIcon()}
@@ -318,7 +334,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
           )}
 
           {/* Divider */}
-          <div className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border-default)' }} />
+          <div className="w-px h-4 mx-1" style={{ backgroundColor: 'var(--border-subtle)' }} />
 
           {/* Expand/Collapse button */}
           <button
@@ -365,14 +381,14 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
       {(hasVersions || activeLinkedMessageId) && (
         <div
           className="flex items-center justify-between px-4 py-2"
-          style={{ borderTop: '1px solid var(--border-default)', backgroundColor: 'var(--bg-secondary)' }}
+          style={{ borderTop: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}
         >
           <div className="flex items-center gap-3">
             {/* Version selector */}
             {hasVersions && (
               <div className="relative">
                 <button
-                  onClick={() => setVersionMenuOpen(!versionMenuOpen)}
+                  onClick={handleVersionMenuToggle}
                   className={cn(
                     'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors cursor-pointer',
                     isViewingHistory
@@ -386,6 +402,12 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                     : `v${versions.length + 1} (最新)`
                   }
                   <RiArrowDownSLine className="w-3.5 h-3.5" />
+                  {content.hasNewVersion && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full"
+                      style={{ backgroundColor: 'var(--error)' }}
+                    />
+                  )}
                 </button>
 
                 <AnimatePresence>

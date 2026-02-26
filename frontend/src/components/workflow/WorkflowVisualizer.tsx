@@ -45,7 +45,7 @@ const WorkflowNode = ({ data, selected }: { data: WorkflowNodeData; selected?: b
   const status = data.status;
   
   const statusStyles = {
-    idle: 'bg-[--bg-secondary] border-[--border-default] text-[--text-tertiary]',
+    idle: 'bg-[--bg-secondary] border-[--border-subtle] text-[--text-tertiary]',
     running: 'bg-[--bg-secondary] border-[#6366F1] text-[#6366F1] shadow-[0_0_20px_rgba(99,102,241,0.3)]',
     completed: 'bg-[--bg-secondary] border-[#10B981] text-[#10B981]',
     error: 'bg-[--bg-secondary] border-[#EF4444] text-[#EF4444]',
@@ -133,12 +133,12 @@ export function WorkflowVisualizer({
         type: 'smoothstep',
         animated: isCurrent && executionStatus === 'running',
         style: {
-          stroke: isActive ? '#10B981' : isCurrent ? '#6366F1' : 'var(--border-default)',
+          stroke: isActive ? '#10B981' : isCurrent ? '#6366F1' : 'var(--border-subtle)',
           strokeWidth: 2,
         },
         markerEnd: {
           type: 'arrowclosed',
-          color: isActive ? '#10B981' : isCurrent ? '#6366F1' : 'var(--border-default)',
+          color: isActive ? '#10B981' : isCurrent ? '#6366F1' : 'var(--border-subtle)',
         },
       };
     });
@@ -154,7 +154,7 @@ export function WorkflowVisualizer({
   }, [initialNodes, initialEdges, setNodes, setEdges]);
 
   return (
-    <div className={`w-full h-[300px] bg-[--bg-primary] rounded-xl border border-[--border-default] overflow-hidden ${className}`}>
+    <div className={`w-full h-[300px] bg-[--bg-primary] rounded-xl border border-[--border-subtle] overflow-hidden ${className}`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -172,10 +172,10 @@ export function WorkflowVisualizer({
         }}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="var(--border-default)" gap={20} size={1} />
-        <Controls className="bg-[--bg-secondary] border-[--border-default] text-[--text-secondary]" />
+        <Background color="var(--border-subtle)" gap={20} size={1} />
+        <Controls className="bg-[--bg-secondary] border-[--border-subtle] text-[--text-secondary]" />
         <MiniMap
-          className="bg-[--bg-secondary] border-[--border-default]"
+          className="bg-[--bg-secondary] border-[--border-subtle]"
           nodeColor={(node) => {
             switch (node.data?.status) {
               case 'completed':
@@ -187,7 +187,7 @@ export function WorkflowVisualizer({
               case 'waiting':
                 return '#F59E0B';
               default:
-                return 'var(--border-default)';
+                return 'var(--border-subtle)';
             }
           }}
           maskColor="rgba(13, 13, 13, 0.8)"

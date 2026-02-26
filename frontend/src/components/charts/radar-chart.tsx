@@ -28,7 +28,7 @@ export function BrandRadarChart({ data, brands, colors = defaultColors }: RadarC
     <div className="w-full h-[400px]">
       <ResponsiveContainer width="100%" height="100%">
         <RadarChart cx="50%" cy="50%" outerRadius="80%" data={data}>
-          <PolarGrid stroke="var(--border-default)" />
+          <PolarGrid stroke="var(--border-subtle)" />
           <PolarAngleAxis
             dataKey="subject"
             tick={{ fill: "var(--text-secondary)", fontSize: 12 }}
@@ -37,7 +37,7 @@ export function BrandRadarChart({ data, brands, colors = defaultColors }: RadarC
             angle={90}
             domain={[0, 100]}
             tick={{ fill: "var(--text-tertiary)", fontSize: 10 }}
-            stroke="var(--border-default)"
+            stroke="var(--border-subtle)"
           />
           {brands.map((brand, index) => (
             <Radar
@@ -59,7 +59,7 @@ export function BrandRadarChart({ data, brands, colors = defaultColors }: RadarC
           <Tooltip
             contentStyle={{
               backgroundColor: "var(--bg-secondary)",
-              border: "1px solid var(--border-default)",
+              border: "1px solid var(--border-subtle)",
               borderRadius: "8px",
               color: "var(--text-primary)",
             }}

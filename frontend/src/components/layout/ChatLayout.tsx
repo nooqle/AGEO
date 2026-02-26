@@ -89,7 +89,7 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
             )}
             style={{
               backgroundColor: 'var(--bg-primary)',
-              borderRight: '1px solid var(--border-default)',
+              borderRight: '1px solid var(--border-subtle)',
             }}
             initial={{ x: -20, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
@@ -105,7 +105,7 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
             className="flex-shrink-0 h-full overflow-y-auto py-2"
             style={{
               width: '48px',
-              borderRight: '1px solid var(--border-default)',
+              borderRight: '1px solid var(--border-subtle)',
               backgroundColor: 'var(--bg-primary)',
             }}
           >
@@ -125,7 +125,7 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
           {isMobile && hasSidebar && (
             <div
               className="flex items-center px-3 py-2 flex-shrink-0"
-              style={{ borderBottom: '1px solid var(--border-default)' }}
+              style={{ borderBottom: '1px solid var(--border-subtle)' }}
             >
               <button
                 onClick={() => setMobileDrawerOpen(true)}
@@ -154,7 +154,7 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
               <div
                 className="w-1 h-full flex-shrink-0 cursor-col-resize group relative"
                 onMouseDown={onDragStart}
-                style={{ backgroundColor: 'var(--border-default)' }}
+                style={{ backgroundColor: 'var(--border-subtle)' }}
               >
                 <div
                   className="absolute inset-y-0 -left-1 -right-1 z-10"
@@ -194,8 +194,8 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
               )}
               style={{
                 backgroundColor: 'var(--bg-primary)',
-                borderLeft: isMobile ? undefined : '1px solid var(--border-default)',
-                borderTop: isMobile ? '1px solid var(--border-default)' : undefined,
+                borderLeft: isMobile ? undefined : '1px solid var(--border-subtle)',
+                borderTop: isMobile ? '1px solid var(--border-subtle)' : undefined,
               }}
               initial={isMobile ? { y: '100%' } : { x: '100%' }}
               animate={isMobile ? { y: 0 } : { x: 0 }}

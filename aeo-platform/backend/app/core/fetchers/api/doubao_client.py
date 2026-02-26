@@ -61,11 +61,13 @@ class DoubaoClient(BaseAPIClient):
         payload = {
             "model": self.model,
             "stream": False,
+            "max_tool_calls": 5,
             "tools": [
                 {
                     "type": "web_search",
-                    "max_keyword": 3,
+                    "max_keyword": 5,
                     "limit": 20,
+                    "sources": ["douyin", "toutiao"],
                 }
             ],
             "input": [

@@ -71,7 +71,7 @@ function CitationList({ citations }: CitationListProps) {
       style={{
         marginTop: '0.75rem',
         paddingTop: '0.75rem',
-        borderTop: '1px solid var(--border-default)',
+        borderTop: '1px solid var(--border-subtle)',
       }}
     >
       <p
@@ -100,7 +100,7 @@ function CitationList({ citations }: CitationListProps) {
               padding: '0.375rem 0.5rem',
               borderRadius: 'var(--radius-sm)',
               backgroundColor: 'var(--bg-elevated)',
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
               textDecoration: 'none',
               transition: 'border-color var(--transition-fast)',
             }}
@@ -108,7 +108,7 @@ function CitationList({ citations }: CitationListProps) {
               (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--border-hover)';
             }}
             onMouseLeave={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--border-default)';
+              (e.currentTarget as HTMLAnchorElement).style.borderColor = 'var(--border-subtle)';
             }}
           >
             {/* Citation index badge */}
@@ -239,7 +239,7 @@ function PlatformPane({ platformResult: pr }: PlatformPaneProps) {
               backgroundColor: 'var(--bg-elevated)',
               padding: '0.125rem 0.5rem',
               borderRadius: 'var(--radius-full)',
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
             }}
           >
             {pr.answer.word_count} 词
@@ -267,7 +267,7 @@ function PlatformPane({ platformResult: pr }: PlatformPaneProps) {
               backgroundColor: 'var(--bg-elevated)',
               padding: '0.125rem 0.5rem',
               borderRadius: 'var(--radius-full)',
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
             }}
           >
             未提及品牌
@@ -383,7 +383,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
   return (
     <div
       style={{
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
         borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
         backgroundColor: 'var(--bg-secondary)',
@@ -421,7 +421,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
             height: '1.375rem',
             borderRadius: '50%',
             backgroundColor: 'var(--bg-elevated)',
-            border: '1px solid var(--border-default)',
+            border: '1px solid var(--border-subtle)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -498,7 +498,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
 
       {/* Expanded content */}
       {isExpanded && (
-        <div id={`question-body-${item.question_id}`} style={{ borderTop: '1px solid var(--border-default)' }}>
+        <div id={`question-body-${item.question_id}`} style={{ borderTop: '1px solid var(--border-subtle)' }}>
           {/* Platform tab bar */}
           {availablePlatforms.length > 1 && (
             <div
@@ -508,7 +508,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
                 display: 'flex',
                 gap: '0',
                 padding: '0.5rem 1rem 0',
-                borderBottom: '1px solid var(--border-default)',
+                borderBottom: '1px solid var(--border-subtle)',
                 backgroundColor: 'var(--bg-tertiary)',
                 overflowX: 'auto',
               }}
@@ -581,7 +581,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
                 alignItems: 'center',
                 gap: '0.375rem',
                 padding: '0.5rem 1rem',
-                borderBottom: '1px solid var(--border-default)',
+                borderBottom: '1px solid var(--border-subtle)',
                 backgroundColor: 'var(--bg-tertiary)',
               }}
             >
@@ -674,7 +674,7 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
   return (
     <div
       style={{
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
         borderRadius: 'var(--radius-lg)',
         overflow: 'hidden',
         backgroundColor: 'var(--bg-secondary)',
@@ -727,7 +727,7 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
               backgroundColor: 'var(--bg-elevated)',
               padding: '0.125rem 0.5rem',
               borderRadius: 'var(--radius-full)',
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
             }}
           >
             {stats.total} 次抓取
@@ -759,7 +759,7 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
         <div
           id="stats-panel-body"
           style={{
-            borderTop: '1px solid var(--border-default)',
+            borderTop: '1px solid var(--border-subtle)',
             padding: '1rem',
             display: 'flex',
             flexDirection: 'column',
@@ -786,7 +786,7 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
                   padding: '0.625rem 0.75rem',
                   borderRadius: 'var(--radius-md)',
                   backgroundColor: 'var(--bg-tertiary)',
-                  border: '1px solid var(--border-default)',
+                  border: '1px solid var(--border-subtle)',
                   textAlign: 'center',
                 }}
               >
@@ -835,7 +835,7 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
                         padding: '0.625rem 0.75rem',
                         borderRadius: 'var(--radius-md)',
                         backgroundColor: 'var(--bg-elevated)',
-                        border: '1px solid var(--border-default)',
+                        border: '1px solid var(--border-subtle)',
                       }}
                     >
                       <div
@@ -964,7 +964,7 @@ export function FetchResultsContent({ content }: FetchResultsContentProps) {
         {/* Divider */}
         <div
           style={{
-            borderBottom: '1px solid var(--border-default)',
+            borderBottom: '1px solid var(--border-subtle)',
           }}
         />
 

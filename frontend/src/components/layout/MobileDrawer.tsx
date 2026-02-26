@@ -30,7 +30,7 @@ export function MobileDrawer({ open, onClose, children }: MobileDrawerProps) {
             className="fixed top-0 left-0 bottom-0 w-[280px] z-50 flex flex-col overflow-hidden"
             style={{
               backgroundColor: 'var(--bg-primary)',
-              borderRight: '1px solid var(--border-default)',
+              borderRight: '1px solid var(--border-subtle)',
             }}
             initial={{ x: '-100%' }}
             animate={{ x: 0 }}

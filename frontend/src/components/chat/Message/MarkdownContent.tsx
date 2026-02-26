@@ -60,7 +60,7 @@ const MARKDOWN_COMPONENTS = {
   pre: ({ children }: { children: React.ReactNode }) => (
     <pre className="rounded-lg p-3 my-3 overflow-x-auto" style={{
       background: 'var(--bg-tertiary)',
-      border: '1px solid var(--border-default)',
+      border: '1px solid var(--border-subtle)',
     }}>
       {children}
     </pre>
@@ -100,17 +100,17 @@ const MARKDOWN_COMPONENTS = {
     </a>
   ),
   hr: () => (
-    <hr className="my-4" style={{ borderColor: 'var(--border-default)' }} />
+    <hr className="my-4" style={{ borderColor: 'var(--border-subtle)' }} />
   ),
   table: ({ children }: { children: React.ReactNode }) => (
-    <div className="overflow-x-auto my-3 rounded-lg" style={{ border: '1px solid var(--border-default)' }}>
+    <div className="overflow-x-auto my-3 rounded-lg" style={{ border: '1px solid var(--border-subtle)' }}>
       <table className="w-full text-[15px] border-collapse min-w-[400px]" style={{ color: 'var(--text-primary)' }}>
         {children}
       </table>
     </div>
   ),
   thead: ({ children }: { children: React.ReactNode }) => (
-    <thead style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-default)' }}>
+    <thead style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)' }}>
       {children}
     </thead>
   ),
@@ -120,14 +120,14 @@ const MARKDOWN_COMPONENTS = {
     </tbody>
   ),
   tr: ({ children }: { children: React.ReactNode }) => (
-    <tr className="hover-bg-elevated transition-colors" style={{ borderBottom: '1px solid var(--border-default)' }}>
+    <tr className="hover-bg-elevated transition-colors" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
       {children}
     </tr>
   ),
   th: ({ children }: { children: React.ReactNode }) => (
     <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider" style={{
       color: 'var(--text-tertiary)',
-      borderRight: '1px solid var(--border-default)',
+      borderRight: '1px solid var(--border-subtle)',
     }}>
       {children}
     </th>
@@ -135,7 +135,7 @@ const MARKDOWN_COMPONENTS = {
   td: ({ children }: { children: React.ReactNode }) => (
     <td className="px-3 py-2 text-[15px]" style={{
       color: 'var(--text-primary)',
-      borderRight: '1px solid var(--border-default)',
+      borderRight: '1px solid var(--border-subtle)',
     }}>
       {children}
     </td>

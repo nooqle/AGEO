@@ -26,7 +26,7 @@ export function CanvasPanel() {
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
           {isAgentExecuting ? (
             <>
-              <div className="w-16 h-16 rounded-2xl bg-[--bg-secondary] border border-[--border-default] flex items-center justify-center mb-4">
+              <div className="w-16 h-16 rounded-2xl bg-[--bg-secondary] border border-[--border-subtle] flex items-center justify-center mb-4">
                 <RiLoader4Line className="w-8 h-8 text-[#F59E0B] animate-spin" />
               </div>
               <h3 className="text-lg font-medium text-[--text-secondary] mb-2">
@@ -38,7 +38,7 @@ export function CanvasPanel() {
             </>
           ) : (
             <>
-              <div className="w-16 h-16 rounded-2xl bg-[--bg-secondary] border border-[--border-default] flex items-center justify-center mb-4">
+              <div className="w-16 h-16 rounded-2xl bg-[--bg-secondary] border border-[--border-subtle] flex items-center justify-center mb-4">
                 <RiFileTextLine className="w-8 h-8 text-[--text-disabled]" />
               </div>
               <h3 className="text-lg font-medium text-[--text-secondary] mb-2">
@@ -161,7 +161,7 @@ export function CanvasToggle({ onClick, hasContent = false }: CanvasToggleProps)
       className={cn(
         'fixed right-4 top-1/2 -translate-y-1/2 z-40',
         'w-10 h-10 rounded-full flex items-center justify-center',
-        'bg-[--bg-secondary] border border-[--border-default] shadow-lg',
+        'bg-[--bg-secondary] border border-[--border-subtle] shadow-lg',
         'hover:bg-[--bg-tertiary] hover:border-[--border-hover] transition-all duration-200',
         hasContent && 'ring-2 ring-[#6366F1] ring-offset-2 ring-offset-[--bg-primary]'
       )}

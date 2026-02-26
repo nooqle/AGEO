@@ -37,7 +37,7 @@ export function OptimizationTab({ data }: OptimizationTabProps) {
       className="rounded-xl overflow-hidden"
       style={{
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       <table className="w-full">
@@ -55,7 +55,7 @@ export function OptimizationTab({ data }: OptimizationTabProps) {
             <tr
               key={unit.id}
               className="hover-bg-elevated transition-colors"
-              style={{ borderBottom: '1px solid var(--border-default)' }}
+              style={{ borderBottom: '1px solid var(--border-subtle)' }}
             >
               <td className="px-4 py-3">{statusIcons[unit.status]}</td>
               <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-primary)' }}>{unit.query}</td>

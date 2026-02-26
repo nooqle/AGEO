@@ -37,7 +37,7 @@ export function RecallConfirmation({ messageCount, onConfirm, onCancel }: Recall
       className="mt-2 rounded-xl px-4 py-3 shadow-sm"
       style={{
         background: 'var(--bg-secondary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       <div className="flex items-center gap-2 mb-1.5">
@@ -63,7 +63,7 @@ export function RecallConfirmation({ messageCount, onConfirm, onCancel }: Recall
             className="px-3 py-1.5 text-sm rounded-lg transition-colors cursor-pointer"
             style={{
               color: 'var(--text-secondary)',
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
               background: 'transparent',
             }}
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; }}

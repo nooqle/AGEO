@@ -79,7 +79,7 @@ export function ActionLog({ logs, isExpanded: defaultExpanded = false }: ActionL
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="ml-[22px] pl-3 border-l-2 border-[--border-default] space-y-1.5 py-1">
+            <div className="ml-[22px] pl-3 border-l-2 border-[--border-subtle] space-y-1.5 py-1">
               {logs.map((log, index) => (
                 <motion.div
                   key={log.id}

@@ -18,7 +18,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
       className="h-14 sticky top-0 z-30 flex items-center justify-between px-6"
       style={{
         backgroundColor: 'var(--bg-primary)',
-        borderBottom: '1px solid var(--border-default)',
+        borderBottom: '1px solid var(--border-subtle)',
       }}
     >
       {/* Left: Logo + Brand */}

@@ -6,6 +6,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { RiCloseLine, RiSearchLine, RiAddLine, RiCheckLine } from '@remixicon/react';
 import { motion } from 'framer-motion';
 import { EntityFormDialog } from './EntityFormDialog';
+import { BrandAvatar } from './BrandAvatar';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
@@ -94,7 +95,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
               className="w-full max-w-2xl flex flex-col rounded-2xl overflow-hidden max-h-[80vh]"
               style={{
                 background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-default)',
+                border: '1px solid var(--border-subtle)',
               }}
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -104,7 +105,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
               {/* Header */}
               <div
                 className="px-6 py-4"
-                style={{ borderBottom: '1px solid var(--border-default)' }}
+                style={{ borderBottom: '1px solid var(--border-subtle)' }}
               >
                 <div className="flex items-center justify-between">
                   <div>
@@ -131,7 +132,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
                     className="flex items-center gap-2 px-3 py-2 rounded-lg mt-3"
                     style={{
                       background: 'var(--bg-tertiary)',
-                      border: '1px solid var(--border-default)',
+                      border: '1px solid var(--border-subtle)',
                     }}
                   >
                     <RiSearchLine className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
@@ -168,14 +169,13 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                     {filtered.map((entity) => {
                       const isSelected = selectedId === entity.id;
-                      const initial = entity.name.charAt(0).toUpperCase();
                       return (
                         <motion.button
                           key={entity.id}
                           className="text-left p-4 rounded-xl cursor-pointer transition-all relative"
                           style={{
                             background: 'var(--bg-tertiary)',
-                            border: isSelected ? '1px solid var(--color-primary)' : '1px solid var(--border-default)',
+                            border: isSelected ? '1px solid var(--color-primary)' : '1px solid var(--border-subtle)',
                             boxShadow: isSelected ? '0 0 0 1px var(--color-primary), 0 0 20px var(--color-primary-glow)' : 'none',
                           }}
                           onClick={() => setSelectedId(isSelected ? null : entity.id)}
@@ -193,12 +193,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
                           )}
 
                           {/* Avatar */}
-                          <div
-                            className="w-10 h-10 rounded-full flex items-center justify-center mb-3"
-                            style={{ background: 'var(--gradient-primary)' }}
-                          >
-                            <span className="text-lg font-bold text-white">{initial}</span>
-                          </div>
+                          <BrandAvatar name={entity.name} domain={entity.domain} size={40} className="mb-3" />
 
                           <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
                             {entity.name}
@@ -219,7 +214,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
                     <motion.button
                       className="flex flex-col items-center justify-center p-4 rounded-xl cursor-pointer"
                       style={{
-                        border: '1px dashed var(--border-default)',
+                        border: '1px dashed var(--border-subtle)',
                         minHeight: '140px',
                       }}
                       onClick={() => setFormOpen(true)}
@@ -244,7 +239,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
               {entities.length > 0 && (
                 <div
                   className="flex items-center justify-end px-6 py-4"
-                  style={{ borderTop: '1px solid var(--border-default)' }}
+                  style={{ borderTop: '1px solid var(--border-subtle)' }}
                 >
                   <button
                     className="btn-primary px-5 py-2 text-sm cursor-pointer"

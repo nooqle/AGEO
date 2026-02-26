@@ -45,12 +45,12 @@ export function AEOTab({ data }: AEOTabProps) {
         className="rounded-xl overflow-hidden"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <div
           className="px-4 py-3"
-          style={{ borderBottom: '1px solid var(--border-default)' }}
+          style={{ borderBottom: '1px solid var(--border-subtle)' }}
         >
           <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
             AEO 性能指标
@@ -61,7 +61,7 @@ export function AEOTab({ data }: AEOTabProps) {
             <div
               key={metric.metric}
               className="px-4 py-4 flex items-center gap-4"
-              style={{ borderBottom: '1px solid var(--border-default)' }}
+              style={{ borderBottom: '1px solid var(--border-subtle)' }}
             >
               <div className="flex-1">
                 <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
@@ -79,7 +79,7 @@ export function AEOTab({ data }: AEOTabProps) {
               <div className="w-32">
                 <div
                   className="h-2 rounded-full overflow-hidden"
-                  style={{ background: 'var(--border-default)' }}
+                  style={{ background: 'var(--border-subtle)' }}
                 >
                   <div
                     className="h-full rounded-full transition-all"

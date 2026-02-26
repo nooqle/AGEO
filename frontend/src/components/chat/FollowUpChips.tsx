@@ -68,7 +68,7 @@ export function FollowUpChips({ suggestions, onSelect, className }: FollowUpChip
         'flex flex-wrap gap-2 mt-3 pt-3',
         className
       )}
-      style={{ borderTop: '1px solid var(--border-default)' }}
+      style={{ borderTop: '1px solid var(--border-subtle)' }}
     >
       {visibleSuggestions.map((suggestion, index) => {
         const Icon = ICON_MAP[suggestion.type] || RiQuestionLine;
@@ -88,7 +88,7 @@ export function FollowUpChips({ suggestions, onSelect, className }: FollowUpChip
             )}
             style={{
               background: 'var(--bg-tertiary)',
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
               color: 'var(--text-secondary)',
               opacity: 0,
               animationFillMode: 'forwards',
@@ -100,7 +100,7 @@ export function FollowUpChips({ suggestions, onSelect, className }: FollowUpChip
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.background = 'var(--bg-tertiary)';
-              e.currentTarget.style.borderColor = 'var(--border-default)';
+              e.currentTarget.style.borderColor = 'var(--border-subtle)';
               e.currentTarget.style.color = 'var(--text-secondary)';
             }}
           >

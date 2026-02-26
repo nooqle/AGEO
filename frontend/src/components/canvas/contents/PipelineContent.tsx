@@ -93,7 +93,7 @@ export function PipelineContent({ content }: PipelineContentProps) {
       {/* Bottom action bar */}
       <div
         className="flex-shrink-0 px-4 pb-4 pt-3"
-        style={{ borderTop: '1px solid var(--border-default)' }}
+        style={{ borderTop: '1px solid var(--border-subtle)' }}
       >
         <div className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
           {isConfirmed ? (
@@ -127,7 +127,7 @@ export function PipelineContent({ content }: PipelineContentProps) {
                 : '确认选择'}
             </button>
             <button
-              className="py-2.5 px-4 rounded-lg text-sm font-medium bg-[--bg-secondary] border border-[--border-default] text-[--text-primary] hover:bg-[--bg-tertiary] transition-colors"
+              className="py-2.5 px-4 rounded-lg text-sm font-medium bg-[--bg-secondary] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] transition-colors"
               onClick={handleSkip}
             >
               跳过此步

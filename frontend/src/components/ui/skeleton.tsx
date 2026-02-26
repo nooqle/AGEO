@@ -68,7 +68,7 @@ export function TextSkeleton({ lines = 3, className }: { lines?: number; classNa
 
 export function CardSkeleton({ className }: { className?: string }) {
   return (
-    <div className={cn("bg-[var(--bg-secondary)] rounded-xl p-4 border border-[var(--border-default)]", className)}>
+    <div className={cn("bg-[var(--bg-secondary)] rounded-xl p-4 border border-[var(--border-subtle)]", className)}>
       <div className="flex items-center gap-4">
         <Skeleton variant="circular" width={48} height={48} />
         <div className="flex-1 space-y-2">
@@ -87,7 +87,7 @@ export function CardSkeleton({ className }: { className?: string }) {
 
 export function MetricCardSkeleton({ className }: { className?: string }) {
   return (
-    <div className={cn("bg-[var(--bg-secondary)] rounded-xl p-6 border border-[var(--border-default)]", className)}>
+    <div className={cn("bg-[var(--bg-secondary)] rounded-xl p-6 border border-[var(--border-subtle)]", className)}>
       <div className="flex items-start justify-between">
         <div>
           <Skeleton width={80} height={14} className="mb-2" />
@@ -104,7 +104,7 @@ export function MetricCardSkeleton({ className }: { className?: string }) {
 
 export function ChartSkeleton({ className }: { className?: string }) {
   return (
-    <div className={cn("bg-[var(--bg-secondary)] rounded-xl p-4 border border-[var(--border-default)]", className)}>
+    <div className={cn("bg-[var(--bg-secondary)] rounded-xl p-4 border border-[var(--border-subtle)]", className)}>
       <Skeleton width={150} height={20} className="mb-4" />
       <Skeleton width="100%" height={300} variant="rounded" />
     </div>
@@ -117,7 +117,7 @@ export function MessageSkeleton({ className }: { className?: string }) {
       <Skeleton variant="circular" width={32} height={32} />
       <div className="flex-1 space-y-2">
         <Skeleton width={60} height={14} />
-        <div className="bg-[var(--bg-secondary)] rounded-lg p-3 border border-[var(--border-default)]">
+        <div className="bg-[var(--bg-secondary)] rounded-lg p-3 border border-[var(--border-subtle)]">
           <TextSkeleton lines={3} />
         </div>
       </div>
@@ -127,8 +127,8 @@ export function MessageSkeleton({ className }: { className?: string }) {
 
 export function ProcessTimelineSkeleton({ className }: { className?: string }) {
   return (
-    <div className={cn("bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-default)] overflow-hidden", className)}>
-      <div className="px-4 py-3 border-b border-[var(--border-default)]">
+    <div className={cn("bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-subtle)] overflow-hidden", className)}>
+      <div className="px-4 py-3 border-b border-[var(--border-subtle)]">
         <Skeleton width={100} height={16} />
       </div>
       <div className="p-4 space-y-3">

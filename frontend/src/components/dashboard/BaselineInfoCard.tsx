@@ -35,7 +35,7 @@ export function BaselineInfoCard({
         className="rounded-xl p-4 flex items-start gap-3"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <div
@@ -73,7 +73,7 @@ export function BaselineInfoCard({
       className="rounded-xl p-4 flex items-start gap-3"
       style={{
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       <div
@@ -113,7 +113,7 @@ export function BaselineInfoCard({
           </span>
           {savedAt && (
             <>
-              <span className="text-xs" style={{ color: 'var(--border-default)' }}>|</span>
+              <span className="text-xs" style={{ color: 'var(--border-subtle)' }}>|</span>
               <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
                 建立于 {savedAt}
               </span>

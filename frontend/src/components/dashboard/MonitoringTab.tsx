@@ -204,7 +204,7 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
           className="rounded-xl overflow-hidden"
           style={{
             background: 'var(--bg-tertiary)',
-            border: '1px solid var(--border-default)',
+            border: '1px solid var(--border-subtle)',
           }}
         >
           <div className="px-4 py-3">

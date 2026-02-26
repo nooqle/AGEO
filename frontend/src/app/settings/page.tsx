@@ -65,14 +65,14 @@ export default function Settings() {
                 className="flex items-start gap-4 p-5 rounded-xl opacity-60 cursor-not-allowed"
                 style={{
                   backgroundColor: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-default)',
+                  border: '1px solid var(--border-subtle)',
                 }}
               >
                 <div
                   className="p-2.5 rounded-lg flex-shrink-0"
                   style={{
                     backgroundColor: 'var(--bg-elevated)',
-                    border: '1px solid var(--border-default)',
+                    border: '1px solid var(--border-subtle)',
                   }}
                 >
                   <item.icon className="w-5 h-5" style={{ color: 'var(--text-tertiary)' }} />
@@ -87,7 +87,7 @@ export default function Settings() {
                       style={{
                         backgroundColor: 'var(--bg-elevated)',
                         color: 'var(--text-tertiary)',
-                        border: '1px solid var(--border-default)',
+                        border: '1px solid var(--border-subtle)',
                       }}
                     >
                       即将推出

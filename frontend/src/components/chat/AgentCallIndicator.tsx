@@ -150,7 +150,7 @@ export function AgentCallIndicator({
 
       {/* 输入参数 */}
       {showInput && Object.keys(call.input).length > 0 && (
-        <div className="px-4 py-2 bg-[--bg-primary] border-t border-[--border-default]">
+        <div className="px-4 py-2 bg-[--bg-primary] border-t border-[--border-subtle]">
           <div className="text-xs text-[--text-tertiary]">
             <span className="text-[--text-disabled]">输入: </span>
             <code className="text-[--text-secondary] font-mono">
@@ -188,9 +188,9 @@ export function AgentCallList({
   const completedCount = calls.filter(c => c.status === 'completed').length;
 
   return (
-    <div className={cn('bg-[--bg-primary] rounded-lg border border-[--border-default] overflow-hidden', className)}>
+    <div className={cn('bg-[--bg-primary] rounded-lg border border-[--border-subtle] overflow-hidden', className)}>
       {/* 头部 */}
-      <div className="px-4 py-3 border-b border-[--border-default]">
+      <div className="px-4 py-3 border-b border-[--border-subtle]">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-[--text-primary]">{title}</span>
           <div className="flex items-center gap-3 text-xs">

@@ -52,10 +52,11 @@
   --error: #EF4444;
   --info: #3B82F6;
 
-  /* 边框 — subtle, ~8-12% brightness diff from bg */
-  --border-default: #2a2a2a;
-  --border-hover: #3a3a3a;
-  --border-focus: #6366F1;
+  /* 边框 — rgba 透明混合，随背景自动融合 */
+  --border-default: rgba(255, 255, 255, 0.05);
+  --border-hover:   rgba(255, 255, 255, 0.10);
+  --border-focus:   #6366F1;
+  --border-subtle:  rgba(255, 255, 255, 0.025);
 
   /* TPAOR 阶段色 */
   --phase-thought: #8B5CF6;
@@ -523,7 +524,7 @@ body {
 
 .prose-chat th,
 .prose-chat td {
-  border: 1px solid var(--border-default);
+  border: 1px solid var(--border-subtle);
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
 }
@@ -620,10 +621,11 @@ html[data-theme="light"] {
   --text-disabled:  #CBD5E1;
   --text-muted:     #B0BEC5;
 
-  /* 边框 — 轻量化 */
-  --border-default: #E2E8F0;
-  --border-hover:   #CBD5E1;
+  /* 边框 — rgba 透明混合，随背景自动融合 */
+  --border-default: rgba(0, 0, 0, 0.06);
+  --border-hover:   rgba(0, 0, 0, 0.10);
   --border-focus:   #6366F1;
+  --border-subtle:  rgba(0, 0, 0, 0.03);
 
   /* 品牌色 — Indigo 系列 */
   --brand-primary:  #6366F1;

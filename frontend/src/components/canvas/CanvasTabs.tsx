@@ -8,7 +8,7 @@ export function CanvasTabs() {
   const { contents, activeContentIndex, setActiveContent, removeContent } = useCanvasStore();
 
   return (
-    <div className="flex items-center gap-1 px-2 py-2 border-b border-[--border-default] bg-[--bg-primary] overflow-x-auto">
+    <div className="flex items-center gap-1 px-2 py-2 border-b border-[--border-subtle] bg-[--bg-primary] overflow-x-auto">
       {contents.map((content, index) => (
         <div
           key={content.id}
@@ -21,6 +21,17 @@ export function CanvasTabs() {
           onClick={() => setActiveContent(index)}
         >
           <span className="truncate max-w-[120px]">{content.title}</span>
+          {content.hasNewVersion && index !== activeContentIndex && (
+            <span
+              className="px-1 py-0.5 rounded text-[9px] font-bold leading-none"
+              style={{
+                backgroundColor: 'var(--status-error-bg)',
+                color: 'var(--error)',
+              }}
+            >
+              NEW
+            </span>
+          )}
           <button
             className="p-0.5 hover:bg-[--bg-tertiary] rounded transition-colors"
             onClick={(e) => {

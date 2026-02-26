@@ -120,7 +120,7 @@ export function ComparisonCard({
           className="rounded-lg overflow-hidden mt-3"
           style={{
             background: 'var(--bg-primary)',
-            border: '1px solid var(--border-default)',
+            border: '1px solid var(--border-subtle)',
           }}
         >
           {/* Table header */}
@@ -148,7 +148,7 @@ export function ComparisonCard({
                 role="row"
                 className="grid grid-cols-4 gap-2 px-3 py-2 text-xs"
                 style={{
-                  borderTop: '1px solid var(--border-default)',
+                  borderTop: '1px solid var(--border-subtle)',
                   color: 'var(--text-secondary)',
                 }}
               >
@@ -176,7 +176,7 @@ export function ComparisonCard({
         <div
           className="mt-3 pt-3 text-xs leading-relaxed prose-chat"
           style={{
-            borderTop: '1px solid var(--border-default)',
+            borderTop: '1px solid var(--border-subtle)',
             color: 'var(--text-secondary)',
           }}
         >

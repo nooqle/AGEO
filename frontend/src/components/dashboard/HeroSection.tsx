@@ -117,7 +117,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
   return (
     <motion.div
       className="flex items-center justify-between py-3"
-      style={{ borderBottom: '1px solid var(--border-default)' }}
+      style={{ borderBottom: '1px solid var(--border-subtle)' }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3 }}

@@ -45,13 +45,13 @@ export function ResponsiveChatLayout({
           width: isMobile ? (isSidebarOpen ? 280 : 0) : 280,
         }}
         transition={{ type: "spring", damping: 25, stiffness: 200 }}
-        className={`fixed lg:relative z-50 h-full bg-[var(--bg-secondary)] border-r border-[var(--border-default)] overflow-hidden ${
+        className={`fixed lg:relative z-50 h-full bg-[var(--bg-secondary)] border-r border-[var(--border-subtle)] overflow-hidden ${
           isMobile ? "left-0 top-0" : ""
         }`}
       >
         <div className="w-[280px] h-full flex flex-col">
           {/* Sidebar Header */}
-          <div className="p-4 border-b border-[var(--border-default)]">
+          <div className="p-4 border-b border-[var(--border-subtle)]">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-[var(--text-primary)]">历史会话</h2>
               {isMobile && (
@@ -77,7 +77,7 @@ export function ResponsiveChatLayout({
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <header className="h-14 border-b border-[var(--border-default)] flex items-center px-4 bg-[var(--bg-secondary)]">
+        <header className="h-14 border-b border-[var(--border-subtle)] flex items-center px-4 bg-[var(--bg-secondary)]">
           {isMobile && (
             <Button
               variant="ghost"
@@ -99,7 +99,7 @@ export function ResponsiveChatLayout({
         </div>
 
         {/* Input Area */}
-        <div className="border-t border-[var(--border-default)] bg-[var(--bg-secondary)]">
+        <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
           {inputArea}
         </div>
       </div>

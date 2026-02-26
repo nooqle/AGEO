@@ -178,7 +178,7 @@ export function PersonaPipeline({
   const renderTags = (tags: Record<string, string | string[]> | undefined) => {
     if (!tags) return null;
     return (
-      <div className="flex flex-col gap-1.5 mt-3" style={{ borderTop: '1px solid var(--border-default)', paddingTop: '10px' }}>
+      <div className="flex flex-col gap-1.5 mt-3" style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
         {Object.entries(tags).map(([key, value]) => {
           if (!value || (Array.isArray(value) && value.length === 0)) return null;
           return (
@@ -244,7 +244,7 @@ export function PersonaPipeline({
                     background: 'var(--bg-primary)',
                     border: isActive
                       ? `2px solid ${colors.accent}`
-                      : `1px solid var(--border-default)`,
+                      : `1px solid var(--border-subtle)`,
                     boxShadow: isActive
                       ? `0 0 0 3px ${colors.border}`
                       : '0 2px 6px rgba(0,0,0,0.06)',
@@ -287,36 +287,41 @@ export function PersonaPipeline({
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                      <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
                         {node.label}
                       </h4>
                       {node.subtitle && (
-                        <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                        <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                           {node.subtitle}
                         </p>
                       )}
                     </div>
-                    {node.priority && (
-                      <span
-                        className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
-                        style={{
-                          backgroundColor: colors.bg,
-                          color: colors.text,
-                        }}
-                      >
-                        {node.priority}
-                      </span>
-                    )}
                   </div>
 
                   {/* Tags */}
                   {renderTags(node.tags)}
+
+                  {/* Priority tag — separate row at bottom */}
+                  {node.priority && (
+                    <div className="mt-2 flex">
+                      <span
+                        className="text-[10px] px-2 py-0.5 rounded-full"
+                        style={{
+                          backgroundColor: colors.bg,
+                          color: colors.text,
+                          border: `1px solid ${colors.border}`,
+                        }}
+                      >
+                        {node.priority}
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}
 
             {col.nodes.length === 0 && (
-              <div className="flex items-center justify-center py-8 rounded-xl" style={{ border: '1px dashed var(--border-default)' }}>
+              <div className="flex items-center justify-center py-8 rounded-xl" style={{ border: '1px dashed var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无数据</span>
               </div>
             )}

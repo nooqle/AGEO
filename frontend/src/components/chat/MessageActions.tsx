@@ -116,7 +116,7 @@ export function MessageActions({ message, onRetry, className }: MessageActionsPr
             top: menuPos.top,
             left: menuPos.left,
             background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-default)',
+            border: '1px solid var(--border-subtle)',
           }}
         >
           <button
@@ -132,7 +132,7 @@ export function MessageActions({ message, onRetry, className }: MessageActionsPr
 
           {onRetry && (
             <>
-              <div className="my-1" style={{ borderTop: '1px solid var(--border-default)' }} />
+              <div className="my-1" style={{ borderTop: '1px solid var(--border-subtle)' }} />
               <button
                 onClick={handleRetry}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors cursor-pointer"
@@ -146,7 +146,7 @@ export function MessageActions({ message, onRetry, className }: MessageActionsPr
             </>
           )}
 
-          <div className="my-1" style={{ borderTop: '1px solid var(--border-default)' }} />
+          <div className="my-1" style={{ borderTop: '1px solid var(--border-subtle)' }} />
 
           <button
             onClick={handleDelete}

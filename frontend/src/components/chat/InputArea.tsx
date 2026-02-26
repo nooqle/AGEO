@@ -102,7 +102,7 @@ export function InputArea({
     : INPUT_PLACEHOLDERS.default);
 
   return (
-    <div className="border-t" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-primary)' }}>
+    <div className="border-t" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)' }}>
       {/* Hidden file input */}
       <input
         ref={inputRef}
@@ -115,7 +115,7 @@ export function InputArea({
 
       {/* 快捷确认按钮 */}
       {pendingConfirmation && !isExecuting && (
-        <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-primary)' }}>
+        <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)' }}>
           <div className="max-w-3xl mx-auto flex items-center gap-2">
             <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>快捷回复：</span>
             {pendingConfirmation.options.slice(0, 3).map((option) => (
@@ -137,7 +137,7 @@ export function InputArea({
 
       {/* Attachment preview strip */}
       {attachments.length > 0 && (
-        <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-default)' }}>
+        <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="max-w-3xl mx-auto flex items-center gap-2 flex-wrap">
             {attachments.map((att) => (
               <div
@@ -145,7 +145,7 @@ export function InputArea({
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs"
                 style={{
                   backgroundColor: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-default)',
+                  border: '1px solid var(--border-subtle)',
                   color: 'var(--text-secondary)',
                 }}
               >
@@ -170,7 +170,7 @@ export function InputArea({
 
       {/* Context tags strip */}
       {contextTags.length > 0 && (
-        <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-default)' }}>
+        <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="max-w-3xl mx-auto flex flex-wrap gap-1.5">
             {contextTags.map((tag) => {
               const typeLabels: Record<string, string> = {
@@ -256,7 +256,7 @@ export function InputArea({
               style={{
                 color: 'var(--text-primary)',
                 backgroundColor: 'var(--bg-secondary)',
-                borderColor: 'var(--border-default)',
+                borderColor: 'var(--border-subtle)',
                 scrollbarWidth: 'none',
                 msOverflowStyle: 'none',
               }}

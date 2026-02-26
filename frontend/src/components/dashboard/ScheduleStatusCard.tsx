@@ -119,7 +119,7 @@ export function ScheduleStatusCard({
       className="rounded-xl p-5"
       style={{
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       {/* Main status row */}
@@ -172,14 +172,14 @@ export function ScheduleStatusCard({
               style={{
                 backgroundColor: 'var(--bg-elevated)',
                 color: 'var(--text-secondary)',
-                border: '1px solid var(--border-default)',
+                border: '1px solid var(--border-subtle)',
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.borderColor = 'var(--border-hover)';
                 e.currentTarget.style.color = 'var(--text-primary)';
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border-default)';
+                e.currentTarget.style.borderColor = 'var(--border-subtle)';
                 e.currentTarget.style.color = 'var(--text-secondary)';
               }}
             >
@@ -202,14 +202,14 @@ export function ScheduleStatusCard({
             style={{
               backgroundColor: 'var(--bg-elevated)',
               color: 'var(--text-secondary)',
-              border: '1px solid var(--border-default)',
+              border: '1px solid var(--border-subtle)',
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.borderColor = 'var(--border-hover)';
               e.currentTarget.style.color = 'var(--text-primary)';
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = 'var(--border-default)';
+              e.currentTarget.style.borderColor = 'var(--border-subtle)';
               e.currentTarget.style.color = 'var(--text-secondary)';
             }}
           >
@@ -238,7 +238,7 @@ export function ScheduleStatusCard({
       {isEditing && (
         <div
           className="mt-4 pt-4 animate-fade-in"
-          style={{ borderTop: '1px solid var(--border-default)' }}
+          style={{ borderTop: '1px solid var(--border-subtle)' }}
         >
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {/* Frequency selector (pill) */}
@@ -284,7 +284,7 @@ export function ScheduleStatusCard({
                 style={{
                   backgroundColor: 'var(--bg-elevated)',
                   color: 'var(--text-primary)',
-                  border: '1px solid var(--border-default)',
+                  border: '1px solid var(--border-subtle)',
                 }}
               >
                 {HOUR_OPTIONS.map((opt) => (
@@ -313,7 +313,7 @@ export function ScheduleStatusCard({
                 style={{
                   backgroundColor: 'var(--bg-elevated)',
                   color: 'var(--text-primary)',
-                  border: '1px solid var(--border-default)',
+                  border: '1px solid var(--border-subtle)',
                 }}
               />
             </div>
@@ -342,7 +342,7 @@ export function ScheduleStatusCard({
                 className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
                 style={{
                   color: 'var(--text-tertiary)',
-                  border: '1px solid var(--border-default)',
+                  border: '1px solid var(--border-subtle)',
                 }}
               >
                 取消
@@ -394,7 +394,7 @@ export function ScheduleStatusCard({
                   className="px-3 py-1 text-xs font-medium rounded-md"
                   style={{
                     color: 'var(--text-tertiary)',
-                    border: '1px solid var(--border-default)',
+                    border: '1px solid var(--border-subtle)',
                   }}
                 >
                   取消

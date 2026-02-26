@@ -145,6 +145,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             data: (output.data || {}) as CanvasContent['data'],
             createdAt: new Date(output.created_at),
             relatedMessageId: '',
+            linkedMessageId: output.message_id,
             versions: [],
             currentVersionIndex: -1,
           } as CanvasContent);
@@ -171,12 +172,14 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         // Convert API messages to store format, reconstructing outputCards and layers from metadata
         for (const msg of msgs) {
           const role = msg.role === 'agent' || msg.role === 'assistant' ? 'agent' : 'user';
-          const outputType = msg.output_type && VALID_OUTPUT_TYPES.includes(msg.output_type as CanvasContentType)
-            ? (msg.output_type as CanvasContentType)
+          const rawOutputType = msg.output_type || '';
+          const mappedOutputType = rawOutputType.startsWith('report') ? 'report' : rawOutputType;
+          const outputType = mappedOutputType && VALID_OUTPUT_TYPES.includes(mappedOutputType as CanvasContentType)
+            ? (mappedOutputType as CanvasContentType)
             : null;
           const parsed = msg.output_data ?? null;
           const outputCards = outputType && parsed ? [{
-            id: msg.id || `output_${Date.now()}`,
+            id: `${sessionId}_${msg.output_type}`,
             type: outputType,
             title: (parsed as Record<string, unknown>)?.headline as string || (parsed as Record<string, unknown>)?.title as string || msg.content || '分析结果',
             preview: { description: (parsed as Record<string, unknown>)?.executive_summary as string || (parsed as Record<string, unknown>)?.description as string },
@@ -254,6 +257,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             data: (output.data || {}) as CanvasContentDataMap['report'],
             createdAt: new Date(output.created_at),
             relatedMessageId: '',
+            linkedMessageId: output.message_id,
             versions: [],
             currentVersionIndex: -1,
           } as CanvasContent);
@@ -396,6 +400,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       }
       sendConfirmation(pendingConfirmation.requestId, { optionId });
       setPendingConfirmation(null);
+      startExecution();
       return;
     }
 
@@ -489,7 +494,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const hasBrandParam = !!searchParams.get('brand');
   const showExampleBrands = messages.length === 0 && !isAgentExecuting && !isLoadingHistory && !hasBrandParam;
 
-  const inputDisabled = Boolean(!isConnected || (pendingConfirmation && !pendingConfirmation.allowTextInput));
+  const inputDisabled = Boolean(!isConnected);
 
   // Determine follow-up suggestions to show (backend-provided or defaults)
   const suggestionsToShow = followUpSuggestions.length > 0 ? followUpSuggestions : (
@@ -511,7 +516,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       {activeTask && (
         <div
           className="flex items-center justify-between px-4 py-1.5 flex-shrink-0"
-          style={{ borderBottom: '1px solid var(--border-default)' }}
+          style={{ borderBottom: '1px solid var(--border-subtle)' }}
         >
           <div className="flex-1" />
           <TaskStatusBadge
@@ -562,7 +567,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             <div className="flex flex-col items-center justify-center py-20">
               <div
                 className="animate-spin rounded-full h-8 w-8 border-2 mb-4"
-                style={{ borderColor: 'var(--border-default)', borderTopColor: 'var(--color-primary)' }}
+                style={{ borderColor: 'var(--border-subtle)', borderTopColor: 'var(--color-primary)' }}
               />
               <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                 {hasBrandParam ? `正在为「${searchParams.get('brand')}」启动分析...` : '加载对话历史...'}

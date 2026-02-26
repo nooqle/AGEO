@@ -57,7 +57,7 @@ export function DataTableContent({ content }: DataTableContentProps) {
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-[--border-default]">
+            <tr className="border-b border-[--border-subtle]">
               {columns.map((col) => (
                 <th
                   key={col.key}
@@ -83,7 +83,7 @@ export function DataTableContent({ content }: DataTableContentProps) {
           </thead>
           <tbody>
             {sortedRows.map((row, index) => (
-              <tr key={index} className="border-b border-[--border-default] hover:bg-[--bg-tertiary]">
+              <tr key={index} className="border-b border-[--border-subtle] hover:bg-[--bg-tertiary]">
                 {columns.map((col) => (
                   <td key={col.key} className="px-4 py-3 text-[--text-primary]">
                     {col.format ? col.format(row[col.key], row) as React.ReactNode : (row[col.key] as React.ReactNode)}

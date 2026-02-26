@@ -121,8 +121,12 @@ class OutputService:
                 data = json.loads(message.output_data)
             except Exception:
                 data = message.output_data
+        # Use same artifact_id format as WebSocket output_ready event
+        # so loadArtifacts() and WS events merge into one Tab instead of duplicating
+        artifact_id = f"{message.session_id}_{message.output_type}"
         return {
-            "id": str(message.id),
+            "id": artifact_id,
+            "message_id": str(message.id),
             "session_id": str(message.session_id),
             "type": message.output_type,
             "title": message.content or "分析结果",

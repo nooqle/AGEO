@@ -49,7 +49,7 @@ export function FocusCard({ title, stats, content, className }: FocusCardProps) 
                 </span>
               </div>
               {typeof stat.value === 'number' && (
-                <div className="mt-0.5 h-[3px] rounded-full w-16" style={{ background: 'var(--border-default)' }}>
+                <div className="mt-0.5 h-[3px] rounded-full w-16" style={{ background: 'var(--border-subtle)' }}>
                   <div
                     className="h-full rounded-full transition-all duration-500"
                     style={{

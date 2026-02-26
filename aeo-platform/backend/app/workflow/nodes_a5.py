@@ -522,6 +522,11 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 "citation_analysis": metrics.get("citation_analysis", {}),
             },
         )
+        _ca = metrics.get("citation_analysis", {})
+        logger.info(
+            "[A5][Artifact] citation_analysis in artifact: total=%s, domains=%s",
+            _ca.get("total_citations", "MISSING"), _ca.get("unique_domains", "MISSING"),
+        )
 
         # touchpointMap removed — metrics data is included in the report artifact
 
@@ -836,6 +841,10 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
         breakdown["citation_note"] = citation_note
 
     # ---- Citation analysis aggregation ----
+    logger.info(
+        "[A5][Citations] TOTAL: citations=%d, official=%d, unique_domains=%d, brand_domain='%s'",
+        total_citations, official_citations, len(domain_stats), brand_domain,
+    )
     sorted_domains = sorted(
         domain_stats.items(), key=lambda x: x[1]["count"], reverse=True
     )[:10]

@@ -47,7 +47,7 @@ function ChatPageContent() {
         <div className="text-center">
           <div
             className="animate-spin rounded-full h-10 w-10 border-2 mx-auto mb-4"
-            style={{ borderColor: 'var(--border-default)', borderTopColor: 'var(--color-primary)' }}
+            style={{ borderColor: 'var(--border-subtle)', borderTopColor: 'var(--color-primary)' }}
           />
           <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>创建新会话...</p>
         </div>

@@ -22,12 +22,12 @@ export function CompetitorTable({ data }: CompetitorTableProps) {
       className="rounded-xl overflow-hidden"
       style={{
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       <div
         className="px-4 py-3"
-        style={{ borderBottom: '1px solid var(--border-default)' }}
+        style={{ borderBottom: '1px solid var(--border-subtle)' }}
       >
         <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
           竞品对比
@@ -48,7 +48,7 @@ export function CompetitorTable({ data }: CompetitorTableProps) {
             <tr
               key={competitor.name}
               className="hover-bg-elevated transition-colors"
-              style={{ borderBottom: '1px solid var(--border-default)' }}
+              style={{ borderBottom: '1px solid var(--border-subtle)' }}
             >
               <td className="px-4 py-3 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{competitor.name}</td>
               <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-secondary)' }}>{competitor.visibility.toFixed(1)}</td>
@@ -58,7 +58,7 @@ export function CompetitorTable({ data }: CompetitorTableProps) {
                 <div className="flex items-center gap-2">
                   <div
                     className="w-16 h-1.5 rounded-full overflow-hidden"
-                    style={{ background: 'var(--border-default)' }}
+                    style={{ background: 'var(--border-subtle)' }}
                   >
                     <div
                       className="h-full rounded-full"

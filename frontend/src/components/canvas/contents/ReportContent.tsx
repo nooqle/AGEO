@@ -164,7 +164,7 @@ export function ReportContent({ content }: ReportContentProps) {
       <div
         role="tablist"
         onKeyDown={handleTabKeyDown}
-        className="flex gap-1 border-b border-[--border-default] pb-0 overflow-x-auto"
+        className="flex gap-1 border-b border-[--border-subtle] pb-0 overflow-x-auto"
       >
         {TABS.map((tab) => (
           <button
@@ -192,7 +192,7 @@ export function ReportContent({ content }: ReportContentProps) {
         <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-6">
           {/* Score Card */}
           {data.overallScore !== undefined && (
-            <div className="flex items-center gap-6 p-5 bg-[--bg-secondary] border border-[--border-default] rounded-xl">
+            <div className="flex items-center gap-6 p-5 bg-[--bg-secondary] border border-[--border-subtle] rounded-xl">
               <div className="text-center">
                 <div className={cn(
                   'text-4xl font-bold',
@@ -263,7 +263,7 @@ export function ReportContent({ content }: ReportContentProps) {
           {data.metrics && (
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {Object.entries(data.metrics).map(([key, value]) => (
-                <div key={key} className="p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                <div key={key} className="p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                   <div className="text-[13px] text-[--text-secondary]">
                     {typeof value === 'object' && value !== null && 'label' in value
                       ? (value as { label?: string }).label || key : key}
@@ -278,7 +278,7 @@ export function ReportContent({ content }: ReportContentProps) {
 
           {/* Sentiment Distribution */}
           {Object.keys(sentimentDist).length > 0 && (
-            <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+            <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">情感分布</h4>
               <div className="flex gap-4">
                 {Object.entries(sentimentDist).map(([key, val]) => (
@@ -303,7 +303,7 @@ export function ReportContent({ content }: ReportContentProps) {
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">关键发现</h4>
               <div className="space-y-2">
                 {keyFindings.map((finding, i) => (
-                  <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                  <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                     <span className="text-[#6366F1] text-[15px] mt-0.5">&bull;</span>
                     <span className="text-[15px] text-[--text-primary]">{finding}</span>
                   </div>
@@ -314,7 +314,7 @@ export function ReportContent({ content }: ReportContentProps) {
 
           {/* Executive Summary */}
           {data.content && (
-            <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+            <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">执行摘要</h4>
               <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{data.content}</p>
             </div>
@@ -326,7 +326,7 @@ export function ReportContent({ content }: ReportContentProps) {
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">关键发现</h4>
               <div className="space-y-2">
                 {data.insights.map((insight, index) => (
-                  <div key={index} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                  <div key={index} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                     <span className="text-[15px]">
                       {insight.type === 'strength' ? '  ' : insight.type === 'weakness' ? '! ' : '* '}
                     </span>
@@ -349,7 +349,7 @@ export function ReportContent({ content }: ReportContentProps) {
         <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-4">
           {industryBackground ? (
             <>
-              <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+              <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                 <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">行业背景</h4>
                 <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{industryBackground}</p>
               </div>
@@ -364,7 +364,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       const sourceText = (item && typeof item === 'object' && 'source' in item)
                         ? String((item as Record<string, unknown>).source) : null;
                       return (
-                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                           <span className="text-[#3B82F6] text-[15px] mt-0.5">&bull;</span>
                           <div className="flex-1 min-w-0">
                             <span className="text-[15px] text-[--text-primary]">{trendText}</span>
@@ -387,7 +387,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       const oppText = typeof item === 'string' ? item
                         : (item && typeof item === 'object') ? String((item as Record<string, unknown>).opportunity || (item as Record<string, unknown>).text || JSON.stringify(item)) : String(item);
                       return (
-                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                           <span className="text-[#22C55E] text-[15px] mt-0.5">&bull;</span>
                           <span className="text-[15px] text-[--text-primary]">{oppText}</span>
                         </div>
@@ -430,7 +430,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 const status = typeof pa.status === 'string' ? pa.status : 'success';
 
                 return (
-                  <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                  <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-[15px] font-medium text-[--text-primary] capitalize">{name}</span>
                       <span className={cn(
@@ -467,7 +467,7 @@ export function ReportContent({ content }: ReportContentProps) {
                     )}
                     {/* LLM descriptive content: optimization tips */}
                     {Array.isArray(pa.optimization_tips) && pa.optimization_tips.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-[--border-default]">
+                      <div className="mt-3 pt-3 border-t border-[--border-subtle]">
                         <div className="text-xs font-medium text-violet-400 mb-1.5">优化建议</div>
                         <ul className="space-y-1">
                           {(pa.optimization_tips as string[]).map((tip, ti) => (
@@ -503,7 +503,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 const success = stats.success || 0;
                 const mentionRate = total > 0 ? (mentions / total * 100) : 0;
                 return (
-                  <div key={platform} className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                  <div key={platform} className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-[15px] font-medium text-[--text-primary] capitalize">{platform}</span>
                       <span className="text-[13px] text-[--text-secondary]">{success}/{total} 成功</span>
@@ -536,7 +536,7 @@ export function ReportContent({ content }: ReportContentProps) {
         <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-4">
           {/* Competitor overview */}
           {competitorOverview && (
-            <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+            <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">竞品概览</h4>
               <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{competitorOverview}</p>
             </div>
@@ -548,7 +548,7 @@ export function ReportContent({ content }: ReportContentProps) {
             <div className="overflow-x-auto">
               <table className="w-full text-[13px] border-collapse">
                 <thead>
-                  <tr className="border-b border-[--border-default]">
+                  <tr className="border-b border-[--border-subtle]">
                     <th className="text-left py-2 px-3 text-[--text-secondary] font-medium">品牌</th>
                     <th className="text-right py-2 px-3 text-[--text-secondary] font-medium">BWVS</th>
                     <th className="text-right py-2 px-3 text-[--text-secondary] font-medium">提及率</th>
@@ -563,7 +563,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       <tr
                         key={i}
                         className={cn(
-                          'border-b border-[--border-default]',
+                          'border-b border-[--border-subtle]',
                           isSelf && 'bg-[#6366F1]/5'
                         )}
                       >
@@ -597,7 +597,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 const hasDetail = row.vs_brand || Array.isArray(row.advantage_reasons) || Array.isArray(row.learnings);
                 if (!hasDetail) return null;
                 return (
-                  <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+                  <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-[15px] font-medium text-[--text-primary]">{String(row.name || row.brand || '')}</span>
                       {typeof row.vs_brand === 'string' && (
@@ -650,7 +650,7 @@ export function ReportContent({ content }: ReportContentProps) {
 
           {/* Differentiation strategy */}
           {differentiationStrategy && (
-            <div className="p-4 bg-[--bg-secondary] border border-[--border-default] rounded-lg">
+            <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">差异化策略</h4>
               <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{differentiationStrategy}</p>
             </div>
@@ -676,9 +676,9 @@ export function ReportContent({ content }: ReportContentProps) {
                       className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
                       style={{
                         borderLeftColor: '#22C55E',
-                        borderTop: '1px solid var(--border-default)',
-                        borderRight: '1px solid var(--border-default)',
-                        borderBottom: '1px solid var(--border-default)',
+                        borderTop: '1px solid var(--border-subtle)',
+                        borderRight: '1px solid var(--border-subtle)',
+                        borderBottom: '1px solid var(--border-subtle)',
                       }}
                     >
                       <div className="flex items-center gap-2 mb-1.5">
@@ -735,9 +735,9 @@ export function ReportContent({ content }: ReportContentProps) {
                       className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
                       style={{
                         borderLeftColor: '#F59E0B',
-                        borderTop: '1px solid var(--border-default)',
-                        borderRight: '1px solid var(--border-default)',
-                        borderBottom: '1px solid var(--border-default)',
+                        borderTop: '1px solid var(--border-subtle)',
+                        borderRight: '1px solid var(--border-subtle)',
+                        borderBottom: '1px solid var(--border-subtle)',
                       }}
                     >
                       <span className="text-[15px] font-medium text-[--text-primary]">
@@ -765,7 +765,7 @@ export function ReportContent({ content }: ReportContentProps) {
                             <p className="text-[13px] text-[--text-secondary] leading-relaxed mt-1.5">{item.evidence}</p>
                           )}
                           {item.improvement_hint && (
-                            <div className="mt-2 pt-2 border-t border-[--border-default]">
+                            <div className="mt-2 pt-2 border-t border-[--border-subtle]">
                               <span className="text-[13px] text-[#6366F1] font-medium">改进方向: </span>
                               <span className="text-[13px] text-[--text-secondary]">{item.improvement_hint}</span>
                             </div>
@@ -796,9 +796,9 @@ export function ReportContent({ content }: ReportContentProps) {
                       className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
                       style={{
                         borderLeftColor: priorityColor,
-                        borderTop: '1px solid var(--border-default)',
-                        borderRight: '1px solid var(--border-default)',
-                        borderBottom: '1px solid var(--border-default)',
+                        borderTop: '1px solid var(--border-subtle)',
+                        borderRight: '1px solid var(--border-subtle)',
+                        borderBottom: '1px solid var(--border-subtle)',
                       }}
                     >
                       <div className="flex items-center gap-2 mb-2">
@@ -822,7 +822,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       )}
                       {/* EEAT detail fields */}
                       {(rec.current_strength || rec.expected_impact || rec.difficulty || rec.timeline) && (
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-2 pt-2 border-t border-[--border-default]">
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-2 pt-2 border-t border-[--border-subtle]">
                           {rec.current_strength && (
                             <div>
                               <span className="text-xs text-[--text-tertiary]">当前优势</span>
@@ -884,7 +884,7 @@ export function ReportContent({ content }: ReportContentProps) {
           {citationAnalysis && citationAnalysis.total_citations > 0 ? (
             <>
               {/* A. Hero Card: Official citation rate */}
-              <div className="p-5 bg-[--bg-secondary] border border-[--border-default] rounded-xl">
+              <div className="p-5 bg-[--bg-secondary] border border-[--border-subtle] rounded-xl">
                 <div className="flex items-center gap-6">
                   <div className="text-center min-w-[100px]">
                     <div className={cn(
@@ -942,7 +942,7 @@ export function ReportContent({ content }: ReportContentProps) {
                     {citationAnalysis.top_domains.map((item, i) => (
                       <div
                         key={item.domain}
-                        className="flex items-center gap-3 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg"
+                        className="flex items-center gap-3 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg"
                       >
                         <span className={cn(
                           'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0',
@@ -988,7 +988,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       return (
                         <div
                           key={platform}
-                          className="p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg"
+                          className="p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg"
                         >
                           <div className="flex items-center gap-2 mb-2">
                             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: dotColors[platform] || '#6366F1' }} />
@@ -1009,7 +1009,7 @@ export function ReportContent({ content }: ReportContentProps) {
                                 <span className="text-[--text-primary] font-medium">{stats.official_count} ({stats.official_share.toFixed(1)}%)</span>
                               </div>
                               {stats.top_domains && stats.top_domains.length > 0 && (
-                                <div className="mt-1.5 pt-1.5" style={{ borderTop: '1px solid var(--border-default)' }}>
+                                <div className="mt-1.5 pt-1.5" style={{ borderTop: '1px solid var(--border-subtle)' }}>
                                   <div className="text-[10px] text-[--text-tertiary] mb-1">Top 引用源</div>
                                   {stats.top_domains.slice(0, 3).map((d) => (
                                     <div key={d.domain} className="flex justify-between text-[10px] text-[--text-secondary]">
@@ -1059,9 +1059,9 @@ export function ReportContent({ content }: ReportContentProps) {
                     className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
                     style={{
                       borderLeftColor: levelColor,
-                      borderTop: '1px solid var(--border-default)',
-                      borderRight: '1px solid var(--border-default)',
-                      borderBottom: '1px solid var(--border-default)',
+                      borderTop: '1px solid var(--border-subtle)',
+                      borderRight: '1px solid var(--border-subtle)',
+                      borderBottom: '1px solid var(--border-subtle)',
                     }}
                   >
                     <div className="flex items-center gap-2 mb-2">
@@ -1110,7 +1110,7 @@ function SwotCard({ title, items, color, icon }: { title: string; items: string[
   };
   const c = colorMap[color] || colorMap.blue;
   return (
-    <div className={cn('p-3 rounded-lg border border-[--border-default]', c.bg)}>
+    <div className={cn('p-3 rounded-lg border border-[--border-subtle]', c.bg)}>
       <div className="flex items-center gap-2 mb-2">
         <span className={cn('text-xs font-bold px-1.5 py-0.5 rounded', c.badge, c.text)}>{icon}</span>
         <span className={cn('text-[15px] font-medium', c.text)}>{title}</span>

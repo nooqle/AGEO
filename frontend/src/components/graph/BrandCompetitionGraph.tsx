@@ -144,7 +144,7 @@ export const BrandCompetitionGraph = React.memo(function BrandCompetitionGraph({
   if (!brandProfile) {
     return (
       <div className={cn('rounded-xl p-8', className)}
-        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-default)' }}
+        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
       >
         <div className="flex flex-col items-center justify-center h-[340px] text-center">
           <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
@@ -177,10 +177,10 @@ export const BrandCompetitionGraph = React.memo(function BrandCompetitionGraph({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       className={cn('rounded-xl overflow-hidden relative', className)}
-      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-default)' }}
+      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
     >
       {/* Header */}
-      <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border-default)' }}>
+      <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>品牌竞品关系图谱</h3>
@@ -217,7 +217,7 @@ export const BrandCompetitionGraph = React.memo(function BrandCompetitionGraph({
           <circle
             cx={cx} cy={cy} r={orbitR}
             fill="none"
-            stroke="var(--border-default)"
+            stroke="var(--border-subtle)"
             strokeWidth={1}
             strokeDasharray="4 4"
             opacity={0.5}

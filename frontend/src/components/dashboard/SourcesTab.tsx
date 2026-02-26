@@ -34,7 +34,7 @@ export function SourcesTab({ data }: SourcesTabProps) {
         className="rounded-xl p-4"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <h3 className="text-sm font-medium mb-4" style={{ color: 'var(--text-primary)' }}>
@@ -66,7 +66,7 @@ export function SourcesTab({ data }: SourcesTabProps) {
         className="rounded-xl p-4"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <h3 className="text-sm font-medium mb-4" style={{ color: 'var(--text-primary)' }}>
@@ -90,7 +90,7 @@ export function SourcesTab({ data }: SourcesTabProps) {
                 </div>
                 <div
                   className="mt-1 h-1.5 rounded-full overflow-hidden"
-                  style={{ background: 'var(--border-default)' }}
+                  style={{ background: 'var(--border-subtle)' }}
                 >
                   <div
                     className="h-full rounded-full transition-all"

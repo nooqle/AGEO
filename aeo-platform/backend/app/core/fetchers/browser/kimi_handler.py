@@ -29,7 +29,7 @@ class KimiHandler(BaseBrowserHandler):
     Uses Playwright to interact with Kimi Web UI.
     """
 
-    URL = "https://kimi.moonshot.cn/"
+    URL = "https://kimi.com/"
     PLATFORM = Platform.KIMI
 
     # CSS selectors for Kimi Web UI (with fallbacks for UI updates)
@@ -133,6 +133,12 @@ class KimiHandler(BaseBrowserHandler):
                         for (const sel of selectors) {
                             if (document.querySelector(sel)) return sel;
                         }
+                        // Check "not logged in" indicator: sidebar shows "登录" button
+                        // when user is not authenticated (input field exists either way)
+                        const notLogin = document.querySelector('.not-login-container');
+                        if (notLogin && (notLogin.textContent || '').includes('登录')) {
+                            return '__need_login__';
+                        }
                         // Also check if input is available (no login needed)
                         const input = document.querySelector('.chat-input-editor');
                         if (input) return '__input_ready__';
@@ -141,6 +147,9 @@ class KimiHandler(BaseBrowserHandler):
                     result_str = login_check if isinstance(login_check, str) else str(login_check)
                     if result_str == '__input_ready__':
                         logger.info("[Kimi] Input ready, no login required")
+                    elif result_str == '__need_login__':
+                        login_detected = True
+                        logger.info("[Kimi] Not logged in (.not-login-container detected)")
                     elif result_str == '__no_input__':
                         # SPA may still be loading — wait up to 8s more before assuming login needed
                         logger.info("[Kimi] No input found yet, waiting for SPA to finish loading...")

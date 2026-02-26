@@ -35,8 +35,8 @@ export function GuidedOptions({ message, options, onSelect, selectedId }: Guided
                 isSelected
                   ? 'bg-[#6366F1]/10 border-[#6366F1]/40 text-[--text-primary]'
                   : selectedId
-                  ? 'bg-[--bg-secondary] border-[--border-default] text-[--text-tertiary] opacity-50'
-                  : 'bg-[--bg-secondary] border-[--border-default] text-[--text-primary] hover:border-[#6366F1]/30 hover:bg-[#6366F1]/5'
+                  ? 'bg-[--bg-secondary] border-[--border-subtle] text-[--text-tertiary] opacity-50'
+                  : 'bg-[--bg-secondary] border-[--border-subtle] text-[--text-primary] hover:border-[#6366F1]/30 hover:bg-[#6366F1]/5'
               }`}
             >
               <span

@@ -25,6 +25,7 @@ export interface Message {
 
 export interface Output {
   id: string;
+  message_id?: string;
   session_id: string;
   type: string;
   title: string;

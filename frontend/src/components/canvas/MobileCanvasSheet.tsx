@@ -36,7 +36,7 @@ export function MobileCanvasSheet({ isOpen, children }: MobileCanvasSheetProps) 
 
           {/* Canvas panel */}
           <motion.div
-            className="fixed inset-x-0 bottom-0 top-16 bg-[--bg-primary] rounded-t-2xl z-50 flex flex-col border-t border-[--border-default]"
+            className="fixed inset-x-0 bottom-0 top-16 bg-[--bg-primary] rounded-t-2xl z-50 flex flex-col border-t border-[--border-subtle]"
             variants={mobileCanvasVariants}
             initial="hidden"
             animate="visible"

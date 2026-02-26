@@ -38,7 +38,7 @@ export function AliasTagInput({
       className="flex flex-wrap gap-1.5 px-3 py-2 rounded-lg min-h-[38px] transition-colors"
       style={{
         background: 'var(--bg-primary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       {aliases.map((alias, index) => (

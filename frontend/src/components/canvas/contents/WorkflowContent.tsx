@@ -51,7 +51,7 @@ const typeLabels: Record<string, string> = {
 
 function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
   return (
-    <div className="bg-[--bg-secondary] border border-[--border-default] rounded-lg p-4 space-y-3">
+    <div className="bg-[--bg-secondary] border border-[--border-subtle] rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h5 className="text-sm font-medium text-[--text-primary]">
           {profile.brand_name}
@@ -116,10 +116,10 @@ function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
 
 function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-[--border-default]">
+    <div className="overflow-x-auto rounded-lg border border-[--border-subtle]">
       <table className="w-full text-sm min-w-[600px]">
         <thead>
-          <tr className="bg-[--bg-secondary] border-b border-[--border-default]">
+          <tr className="bg-[--bg-secondary] border-b border-[--border-subtle]">
             <th className="text-left py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[160px]">品牌</th>
             <th className="text-left py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[80px]">类型</th>
             <th className="text-center py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[60px]">相关度</th>
@@ -134,7 +134,7 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: i * 0.03 }}
-              className="border-b border-[--border-default] last:border-b-0 hover:bg-[--bg-secondary]/60 transition-colors"
+              className="border-b border-[--border-subtle] last:border-b-0 hover:bg-[--bg-secondary]/60 transition-colors"
             >
               <td className="py-3 px-4">
                 <div className="flex flex-col gap-0.5">
@@ -306,10 +306,10 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
         selectable && disabled && 'opacity-40 cursor-not-allowed',
         selected
           ? 'border-indigo-500 bg-indigo-500/10'
-          : 'border-[--border-default]',
+          : 'border-[--border-subtle]',
       )}
     >
-      {/* Header: checkbox (if selectable) + name + priority tag */}
+      {/* Header: checkbox (if selectable) + name */}
       <div className="flex items-center gap-3">
         {selectable && (
           <div className={cn(
@@ -321,12 +321,12 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
             {selected && <RiCheckLine className="w-3 h-3 text-white" />}
           </div>
         )}
-        <div className="flex items-center justify-between flex-1 min-w-0">
+        <div className="flex-1 min-w-0">
           <span className="text-sm font-semibold text-[--text-primary]">
             {persona.persona_name}
           </span>
-          <PriorityTag priority={persona.persona_priority} />
         </div>
+        <PriorityTag priority={persona.persona_priority} />
       </div>
 
       {/* Demographics grid */}
@@ -433,7 +433,7 @@ interface SelectionBarProps {
 function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, onConfirm, onSkip }: SelectionBarProps) {
   if (isConfirmed) {
     return (
-      <div className="sticky bottom-0 bg-[--bg-primary]/95 backdrop-blur border-t border-[--border-default] px-5 py-3">
+      <div className="sticky bottom-0 bg-[--bg-primary]/95 backdrop-blur border-t border-[--border-subtle] px-5 py-3">
         <p className="text-sm text-[--text-secondary] text-center">
           已确认 {selectedCount} 个画像，正在生成模拟问题...
         </p>
@@ -442,7 +442,7 @@ function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, 
   }
 
   return (
-    <div className="sticky bottom-0 bg-[--bg-primary]/95 backdrop-blur border-t border-[--border-default] px-5 py-3">
+    <div className="sticky bottom-0 bg-[--bg-primary]/95 backdrop-blur border-t border-[--border-subtle] px-5 py-3">
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-[--text-secondary]">
           已选择 {selectedCount}/{maxSelection} 个画像
@@ -462,7 +462,7 @@ function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, 
           确认选择
         </button>
         <button
-          className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-[--bg-secondary] border border-[--border-default] text-[--text-primary] hover:bg-[--bg-tertiary] transition-colors"
+          className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-[--bg-secondary] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] transition-colors"
           onClick={onSkip}
         >
           全景分析所有画像

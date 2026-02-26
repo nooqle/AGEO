@@ -38,7 +38,7 @@ export function MobileInput({
   };
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-[var(--bg-secondary)] border-t border-[var(--border-default)] p-3 safe-area-bottom">
+    <div className="fixed bottom-0 left-0 right-0 bg-[var(--bg-secondary)] border-t border-[var(--border-subtle)] p-3 safe-area-bottom">
       <div className="flex items-end gap-2 max-w-3xl mx-auto">
         {/* Additional Actions */}
         <div className="flex items-center gap-1">
@@ -68,7 +68,7 @@ export function MobileInput({
             placeholder={placeholder}
             disabled={isLoading}
             rows={1}
-            className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded-xl px-4 py-3 pr-12 text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] resize-none focus:outline-none focus:border-[var(--brand-primary)] transition-colors max-h-[120px]"
+            className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-xl px-4 py-3 pr-12 text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] resize-none focus:outline-none focus:border-[var(--brand-primary)] transition-colors max-h-[120px]"
           />
           {/* Character Count */}
           {value.length > 0 && (

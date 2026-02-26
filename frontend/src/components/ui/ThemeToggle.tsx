@@ -20,7 +20,7 @@ export function ThemeToggle() {
         justifyContent: 'center',
         color: theme === 'light' ? '#D97706' : 'var(--text-secondary)',
         backgroundColor: 'transparent',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
         cursor: 'pointer',
         flexShrink: 0,
       }}

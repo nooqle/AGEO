@@ -114,7 +114,7 @@ export function WebSocketMessageInspector() {
   }, []);
 
   return (
-    <div className="p-4 bg-[--bg-primary] rounded-lg border border-[--border-default] mt-4">
+    <div className="p-4 bg-[--bg-primary] rounded-lg border border-[--border-subtle] mt-4">
       <h3 className="text-lg font-semibold mb-4 text-[--text-primary]">WebSocket 消息检查器</h3>
 
       {messages.length === 0 ? (
@@ -125,7 +125,7 @@ export function WebSocketMessageInspector() {
             <div
               key={msg.id}
               className={`p-3 rounded border ${
-                msg.hasChinese ? 'bg-green-500/10 border-green-500/20' : 'bg-[--bg-secondary] border-[--border-default]'
+                msg.hasChinese ? 'bg-green-500/10 border-green-500/20' : 'bg-[--bg-secondary] border-[--border-subtle]'
               }`}
             >
               <div className="flex justify-between text-xs text-[--text-tertiary] mb-1">

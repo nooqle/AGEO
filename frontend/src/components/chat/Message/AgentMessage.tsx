@@ -139,7 +139,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           >
             {message.inlineConfirmation.type === 'guided' ? (
               /* Guided options keep a light container for structure */
-              <div className="rounded-xl border border-[--border-default] bg-[--bg-secondary] p-4">
+              <div className="rounded-xl border border-[--border-subtle] bg-[--bg-secondary] p-4">
                 <GuidedOptions
                   message={message.inlineConfirmation.message}
                   options={message.inlineConfirmation.options}
@@ -244,7 +244,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                   transition={{ duration: 0.25 }}
                   className="overflow-hidden"
                 >
-                  <div className="ml-4 pl-3 border-l-2 border-[--border-default]">
+                  <div className="ml-4 pl-3 border-l-2 border-[--border-subtle]">
                     <p className="text-[11px] text-[--text-tertiary] whitespace-pre-wrap leading-relaxed">
                       {layers?.thought}
                     </p>

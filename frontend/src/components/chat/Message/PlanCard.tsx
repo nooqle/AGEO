@@ -61,7 +61,7 @@ export function PlanCard({ planText, isActive }: PlanCardProps) {
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="ml-[22px] pl-3 border-l-2 border-[--border-default]">
+            <div className="ml-[22px] pl-3 border-l-2 border-[--border-subtle]">
               <p className="text-xs text-[--text-secondary] leading-relaxed whitespace-pre-wrap py-0.5">
                 {planText}
               </p>

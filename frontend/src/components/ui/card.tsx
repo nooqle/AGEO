@@ -16,13 +16,13 @@ export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
 export const Card = React.forwardRef<HTMLDivElement, CardProps>(
   ({ className, variant = "default", padding = "md", children, ...props }, ref) => {
     const variants = {
-      default: "bg-[var(--bg-secondary)] border border-[var(--border-default)]",
+      default: "bg-[var(--bg-secondary)] border border-[var(--border-subtle)]",
       hover:
-        "bg-[var(--bg-secondary)] border border-[var(--border-default)] hover:border-[var(--border-hover)] hover:bg-[var(--bg-tertiary)] transition-all duration-200",
+        "bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--border-hover)] hover:bg-[var(--bg-tertiary)] transition-all duration-200",
       interactive:
-        "bg-[var(--bg-secondary)] border border-[var(--border-default)] hover:border-[var(--brand-primary)] hover:shadow-lg hover:shadow-indigo-500/10 cursor-pointer transition-all duration-200",
+        "bg-[var(--bg-secondary)] border border-[var(--border-subtle)] hover:border-[var(--brand-primary)] hover:shadow-lg hover:shadow-indigo-500/10 cursor-pointer transition-all duration-200",
       elevated:
-        "bg-[var(--bg-secondary)] border border-[var(--border-default)] shadow-xl shadow-black/20",
+        "bg-[var(--bg-secondary)] border border-[var(--border-subtle)] shadow-xl shadow-black/20",
     };
 
     const paddings = {

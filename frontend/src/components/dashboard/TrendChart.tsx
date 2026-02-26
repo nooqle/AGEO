@@ -119,7 +119,7 @@ function TrendTooltip({ active, payload, dimension }: TrendTooltipProps) {
         <div
           className="mt-1.5 pt-1.5 text-[10px] font-medium"
           style={{
-            borderTop: '1px solid var(--border-default)',
+            borderTop: '1px solid var(--border-subtle)',
             color: chart.colors.yellow,
           }}
         >
@@ -213,7 +213,7 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
       className="rounded-xl p-4"
       style={{
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       {/* Header */}
@@ -313,7 +313,7 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
       {summary && (
         <div
           className="mt-3 pt-3 flex items-center gap-4 text-xs flex-wrap"
-          style={{ borderTop: '1px solid var(--border-default)' }}
+          style={{ borderTop: '1px solid var(--border-subtle)' }}
         >
           <span style={{ color: 'var(--text-muted)' }}>
             {summary.period_label}

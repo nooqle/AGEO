@@ -6,6 +6,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { RiCloseLine, RiEditLine, RiTimeLine, RiArrowRightSLine } from '@remixicon/react';
 import { motion } from 'framer-motion';
 import { EntityFormDialog } from './EntityFormDialog';
+import { BrandAvatar } from './BrandAvatar';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
@@ -93,8 +94,6 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
 
   if (!entity) return null;
 
-  const initial = entity.name.charAt(0).toUpperCase();
-
   return (
     <>
       <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -108,7 +107,7 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
               className="w-full max-w-lg flex flex-col rounded-2xl overflow-hidden max-h-[80vh]"
               style={{
                 background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-default)',
+                border: '1px solid var(--border-subtle)',
               }}
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -118,7 +117,7 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
               {/* Header */}
               <div
                 className="flex items-center justify-between px-6 py-4"
-                style={{ borderBottom: '1px solid var(--border-default)' }}
+                style={{ borderBottom: '1px solid var(--border-subtle)' }}
               >
                 <Dialog.Title className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
                   品牌详情
@@ -135,12 +134,7 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
 
               {/* Brand Info */}
               <div className="px-6 py-5 flex items-start gap-4">
-                <div
-                  className="w-[60px] h-[60px] rounded-2xl flex items-center justify-center flex-shrink-0"
-                  style={{ background: 'var(--gradient-primary)' }}
-                >
-                  <span className="text-2xl font-bold text-white">{initial}</span>
-                </div>
+                <BrandAvatar name={entity.name} domain={entity.domain} size={60} className="flex-shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
                     {entity.name}
@@ -183,7 +177,7 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
               {/* Session List */}
               <div
                 className="flex-1 overflow-auto px-6 pb-4"
-                style={{ borderTop: '1px solid var(--border-default)' }}
+                style={{ borderTop: '1px solid var(--border-subtle)' }}
               >
                 <div className="text-sm font-medium py-3" style={{ color: 'var(--text-secondary)' }}>
                   分析记录 ({entitySessions.length})
@@ -205,7 +199,7 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
                         className="w-full text-left p-3 rounded-xl transition-colors cursor-pointer flex items-center gap-3"
                         style={{
                           background: 'var(--bg-tertiary)',
-                          border: '1px solid var(--border-default)',
+                          border: '1px solid var(--border-subtle)',
                         }}
                         onClick={() => {
                           onClose();
@@ -215,7 +209,7 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
                           e.currentTarget.style.borderColor = 'var(--border-hover)';
                         }}
                         onMouseLeave={(e) => {
-                          e.currentTarget.style.borderColor = 'var(--border-default)';
+                          e.currentTarget.style.borderColor = 'var(--border-subtle)';
                         }}
                       >
                         <div className="flex-1 min-w-0">
@@ -245,13 +239,13 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
               {/* Footer Actions */}
               <div
                 className="flex items-center justify-between px-6 py-4"
-                style={{ borderTop: '1px solid var(--border-default)' }}
+                style={{ borderTop: '1px solid var(--border-subtle)' }}
               >
                 <button
                   className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg transition-colors cursor-pointer"
                   style={{
                     color: 'var(--text-secondary)',
-                    border: '1px solid var(--border-default)',
+                    border: '1px solid var(--border-subtle)',
                   }}
                   onClick={() => setEditOpen(true)}
                 >

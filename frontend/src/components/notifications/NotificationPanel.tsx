@@ -129,7 +129,7 @@ export function NotificationPanel({ align = 'right', className }: NotificationPa
         marginTop: '8px',
         [align === 'right' ? 'right' : 'left']: 0,
         backgroundColor: 'var(--bg-secondary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
         borderRadius: '12px',
         boxShadow: '0 12px 40px rgba(0, 0, 0, 0.4)',
         display: 'flex',
@@ -139,7 +139,7 @@ export function NotificationPanel({ align = 'right', className }: NotificationPa
       {/* Header */}
       <div
         className="flex items-center justify-between px-4 py-3 flex-shrink-0"
-        style={{ borderBottom: '1px solid var(--border-default)' }}
+        style={{ borderBottom: '1px solid var(--border-subtle)' }}
       >
         <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
           通知
@@ -206,7 +206,7 @@ export function NotificationPanel({ align = 'right', className }: NotificationPa
       {alerts.length > 0 && (
         <div
           className="flex-shrink-0 px-4 py-2.5 text-center"
-          style={{ borderTop: '1px solid var(--border-default)' }}
+          style={{ borderTop: '1px solid var(--border-subtle)' }}
         >
           <button
             onClick={handleViewAll}

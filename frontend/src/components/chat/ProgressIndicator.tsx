@@ -52,9 +52,9 @@ export function ProgressIndicator({
   const progress = steps.length > 0 ? completedCount / steps.length : 0;
 
   return (
-    <div className={cn('bg-[--bg-primary] rounded-lg border border-[--border-default] overflow-hidden', className)}>
+    <div className={cn('bg-[--bg-primary] rounded-lg border border-[--border-subtle] overflow-hidden', className)}>
       {/* 头部 */}
-      <div className="px-4 py-3 border-b border-[--border-default]">
+      <div className="px-4 py-3 border-b border-[--border-subtle]">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-[--text-primary]">{title}</span>
           <span className="text-xs text-[--text-tertiary]">

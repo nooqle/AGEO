@@ -36,7 +36,7 @@ export function PlatformTab({ data }: PlatformTabProps) {
         className="rounded-xl p-4"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <h3 className="text-sm font-medium mb-4" style={{ color: 'var(--text-primary)' }}>
@@ -59,7 +59,7 @@ export function PlatformTab({ data }: PlatformTabProps) {
         className="rounded-xl overflow-hidden"
         style={{
           background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-default)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         <table className="w-full">
@@ -77,7 +77,7 @@ export function PlatformTab({ data }: PlatformTabProps) {
               <tr
                 key={p.platform}
                 className="hover-bg-elevated transition-colors"
-                style={{ borderBottom: '1px solid var(--border-default)' }}
+                style={{ borderBottom: '1px solid var(--border-subtle)' }}
               >
                 <td className="px-4 py-3 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{p.platform}</td>
                 <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-secondary)' }}>{(p.mentionRate * 100).toFixed(1)}%</td>

@@ -158,7 +158,7 @@ export function ChatSidebar({
       {/* Header: Logo + New button */}
       <div
         className="flex items-center justify-between p-3"
-        style={{ borderBottom: '1px solid var(--border-default)' }}
+        style={{ borderBottom: '1px solid var(--border-subtle)' }}
       >
         <button
           onClick={() => router.push('/dashboard')}

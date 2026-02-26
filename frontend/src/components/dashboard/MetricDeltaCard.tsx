@@ -106,7 +106,7 @@ export function MetricDeltaCard({ metric, className }: MetricDeltaCardProps) {
       className={`rounded-xl p-4 ${className ?? ''}`}
       style={{
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       {/* Title */}

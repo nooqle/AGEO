@@ -109,7 +109,7 @@ export function ProcessTimeline({ steps, isExpanded = false, onToggle }: Process
   if (steps.length === 0) return null;
 
   return (
-    <div className="bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-lg overflow-hidden">
+    <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg overflow-hidden">
       {/* Header */}
       <button
         onClick={onToggle}
@@ -154,7 +154,7 @@ export function ProcessTimeline({ steps, isExpanded = false, onToggle }: Process
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="border-t border-[var(--border-default)]"
+            className="border-t border-[var(--border-subtle)]"
           >
             <div className="p-4 max-h-96 overflow-y-auto">
               <div className="space-y-4">

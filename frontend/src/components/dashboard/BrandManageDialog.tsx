@@ -5,6 +5,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { RiCloseLine, RiSearchLine, RiEditLine, RiDeleteBinLine, RiAddLine } from '@remixicon/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EntityFormDialog } from './EntityFormDialog';
+import { BrandAvatar } from './BrandAvatar';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import type { Entity, CreateEntityInput } from '@/types/entity';
@@ -79,7 +80,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
               className="w-full max-w-4xl max-h-[80vh] flex flex-col rounded-2xl overflow-hidden"
               style={{
                 background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-default)',
+                border: '1px solid var(--border-subtle)',
               }}
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -89,7 +90,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
               {/* Header */}
               <div
                 className="flex items-center justify-between px-6 py-4"
-                style={{ borderBottom: '1px solid var(--border-default)' }}
+                style={{ borderBottom: '1px solid var(--border-subtle)' }}
               >
                 <Dialog.Title className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
                   品牌管理
@@ -110,7 +111,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                   className="flex items-center gap-2 flex-1 px-3 py-2 rounded-lg"
                   style={{
                     background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-default)',
+                    border: '1px solid var(--border-subtle)',
                   }}
                 >
                   <RiSearchLine className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
@@ -142,7 +143,6 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                     <AnimatePresence>
                       {filtered.map((entity) => {
-                        const initial = entity.name.charAt(0).toUpperCase();
                         return (
                           <motion.div
                             key={entity.id}
@@ -155,12 +155,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                             transition={{ duration: 0.2 }}
                           >
                             <div className="flex items-start gap-3 mb-3">
-                              <div
-                                className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
-                                style={{ background: 'var(--gradient-primary)' }}
-                              >
-                                <span className="text-lg font-bold text-white">{initial}</span>
-                              </div>
+                              <BrandAvatar name={entity.name} domain={entity.domain} size={40} className="flex-shrink-0" />
                               <div className="min-w-0 flex-1">
                                 <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
                                   {entity.name}
@@ -180,7 +175,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                             )}
 
                             {/* Action buttons */}
-                            <div className="flex gap-2 mt-auto pt-2" style={{ borderTop: '1px solid var(--border-default)' }}>
+                            <div className="flex gap-2 mt-auto pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
                               <button
                                 className="p-1.5 rounded-md transition-colors cursor-pointer"
                                 style={{ color: 'var(--text-tertiary)' }}

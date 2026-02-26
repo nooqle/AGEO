@@ -140,7 +140,7 @@ export function ExecutionStepMessage({
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
                 transition={{ duration: 0.25, ease: 'easeInOut' }}
-                className="border-t border-[--border-default]"
+                className="border-t border-[--border-subtle]"
               >
                 <div className="p-4 space-y-3">
                   {/* 描述 */}
@@ -185,7 +185,7 @@ export function ExecutionStepMessage({
                   {/* 执行结果摘要 */}
                   {step.result && (
                     <motion.div 
-                      className="bg-[--bg-tertiary] rounded-lg p-3 border border-[--border-default]"
+                      className="bg-[--bg-tertiary] rounded-lg p-3 border border-[--border-subtle]"
                       initial={{ opacity: 0, y: 5 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}

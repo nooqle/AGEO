@@ -19,7 +19,7 @@ export function KPICard({ title, value, subtitle, trend, tooltip }: KPICardProps
       className="rounded-xl p-4"
       style={{
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-default)',
+        border: '1px solid var(--border-subtle)',
       }}
     >
       <div
