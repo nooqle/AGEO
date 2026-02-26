@@ -34,6 +34,34 @@ export type ReportRecommendation = {
   timeline?: string;
 };
 
+export type CitationDomainItem = {
+  domain: string;
+  count: number;
+  share: number;
+  is_official: boolean;
+  sample_titles?: string[];
+};
+
+export type PlatformCitationStats = {
+  total_citations: number;
+  unique_domains: number;
+  official_count: number;
+  official_share: number;
+  avg_citations_per_answer: number;
+  top_domains: Array<{ domain: string; count: number }>;
+};
+
+export type CitationAnalysis = {
+  total_citations: number;
+  unique_domains: number;
+  official_citations: number;
+  official_share: number;
+  brand_domain: string;
+  top_domains: CitationDomainItem[];
+  platform_citation_stats: Record<string, PlatformCitationStats>;
+  note?: string;
+};
+
 export type ReportCanvasData = CanvasPreviewData & {
   headline?: string;
   subtitle?: string;
@@ -60,6 +88,7 @@ export type ReportCanvasData = CanvasPreviewData & {
   delta_vs_previous?: unknown;
   competitor_bwvs?: unknown;
   _degradation_note?: string;
+  citation_analysis?: CitationAnalysis;
 };
 
 export type ChartSeries = { key: string; name: string };

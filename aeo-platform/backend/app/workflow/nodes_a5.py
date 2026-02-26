@@ -519,6 +519,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 "competitor_deep_analysis": report_data.get("competitor_deep_analysis"),
                 "actionable_recommendations": report_data.get("actionable_recommendations", []),
                 "risk_alerts": report_data.get("risk_alerts", []),
+                "citation_analysis": metrics.get("citation_analysis", {}),
             },
         )
 
@@ -653,6 +654,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                 "negative": 0,
             },
             "platform_breakdown": {},
+            "citation_analysis": {},
         }
 
     total_questions = len(fetch_results)
@@ -667,6 +669,8 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
     total_citations = 0
     official_citations = 0
     brand_domain = extract_domain(brand_profile.get("official_website", ""))
+    domain_stats: dict[str, dict] = {}  # domain -> {count, is_official, sample_titles}
+    platform_citation_stats: dict[str, dict] = {}  # platform -> citation stats
 
     for result in fetch_results:
         for platform_result in result.get("platform_results", []):
@@ -679,7 +683,17 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                     "success": 0,
                 }
 
+            # Initialize platform citation stats on first encounter
+            if platform not in platform_citation_stats:
+                platform_citation_stats[platform] = {
+                    "total_citations": 0,
+                    "official_count": 0,
+                    "total_answers": 0,
+                    "answers_with_citations": 0,
+                }
+
             platform_stats[platform]["total"] += 1
+            platform_citation_stats[platform]["total_answers"] += 1
 
             if platform_result.get("success"):
                 platform_stats[platform]["success"] += 1
@@ -708,19 +722,59 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
 
                 # Citation tracking
                 citations = platform_result.get("citations", [])
+                answer_citation_count = 0
+                answer_official_count = 0
                 for citation in citations:
                     total_citations += 1
+                    answer_citation_count += 1
                     citation_url = (
                         citation.get("url", "")
                         if isinstance(citation, dict)
                         else ""
                     )
+                    citation_title = (
+                        citation.get("title", "")
+                        if isinstance(citation, dict)
+                        else ""
+                    )
                     citation_domain = extract_domain(citation_url)
-                    if brand_domain and citation_domain and (
-                        citation_domain.endswith(brand_domain)
-                        or brand_domain in citation_domain
-                    ):
+
+                    # Strict official domain matching (fixes ke.com matching nike.com)
+                    is_official = bool(
+                        brand_domain
+                        and citation_domain
+                        and (
+                            citation_domain == brand_domain
+                            or citation_domain.endswith("." + brand_domain)
+                        )
+                    )
+
+                    # Collect domain stats
+                    if citation_domain:
+                        if citation_domain not in domain_stats:
+                            domain_stats[citation_domain] = {
+                                "count": 0,
+                                "is_official": is_official,
+                                "sample_titles": [],
+                            }
+                        domain_stats[citation_domain]["count"] += 1
+                        if (
+                            citation_title
+                            and len(domain_stats[citation_domain]["sample_titles"]) < 3
+                        ):
+                            domain_stats[citation_domain]["sample_titles"].append(
+                                citation_title
+                            )
+
+                    if is_official:
                         official_citations += 1
+                        answer_official_count += 1
+
+                # Update platform citation stats
+                platform_citation_stats[platform]["total_citations"] += answer_citation_count
+                platform_citation_stats[platform]["official_count"] += answer_official_count
+                if answer_citation_count > 0:
+                    platform_citation_stats[platform]["answers_with_citations"] += 1
 
     # ---- Dimension 1: Mention score ----
     total_platform_results = sum(p["total"] for p in platform_stats.values())
@@ -781,6 +835,36 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
     if citation_note:
         breakdown["citation_note"] = citation_note
 
+    # ---- Citation analysis aggregation ----
+    sorted_domains = sorted(
+        domain_stats.items(), key=lambda x: x[1]["count"], reverse=True
+    )[:10]
+    total_cit = max(total_citations, 1)  # avoid division by zero
+
+    citation_analysis: dict[str, Any] = {
+        "total_citations": total_citations,
+        "unique_domains": len(domain_stats),
+        "official_citations": official_citations,
+        "official_share": (
+            round(official_citations / total_cit * 100, 1)
+            if total_citations > 0
+            else 0.0
+        ),
+        "brand_domain": brand_domain or "",
+        "top_domains": [
+            {
+                "domain": domain,
+                "count": stats["count"],
+                "share": round(stats["count"] / total_cit * 100, 1),
+                "is_official": stats["is_official"],
+                "sample_titles": stats["sample_titles"][:2],
+            }
+            for domain, stats in sorted_domains
+        ],
+        "platform_citation_stats": platform_citation_stats,
+        "note": "引用数据基于各 AI 平台回答中的参考来源提取",
+    }
+
     return {
         "total_questions": total_questions,
         "total_mentions": total_mentions,
@@ -789,6 +873,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
         "bwvs_breakdown": breakdown,
         "sentiment_distribution": sentiment_counts,
         "platform_breakdown": platform_stats,
+        "citation_analysis": citation_analysis,
     }
 
 

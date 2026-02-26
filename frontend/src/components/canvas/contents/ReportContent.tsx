@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { cn } from '@/lib/cn';
-import type { ReportCanvasContent } from '@/types/canvas';
+import type { ReportCanvasContent, CitationAnalysis } from '@/types/canvas';
 import type { BwvsBreakdown } from '@/types/dashboard';
 import { BwvsBreakdownSection } from './BwvsBreakdownSection';
 import type { CompetitorBreakdown } from './BwvsBreakdownSection';
@@ -11,13 +11,14 @@ interface ReportContentProps {
   content: ReportCanvasContent;
 }
 
-type TabId = 'overview' | 'industry' | 'platforms' | 'competitors' | 'recommendations' | 'risks';
+type TabId = 'overview' | 'industry' | 'platforms' | 'competitors' | 'citations' | 'recommendations' | 'risks';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: '总览' },
   { id: 'industry', label: '行业洞察' },
   { id: 'platforms', label: '平台分析' },
   { id: 'competitors', label: '竞品对比' },
+  { id: 'citations', label: '信息源分析' },
   { id: 'recommendations', label: '优化建议' },
   { id: 'risks', label: '风险提示' },
 ];
@@ -113,6 +114,10 @@ export function ReportContent({ content }: ReportContentProps) {
 
   // Degradation note (if A5 used fallback report)
   const degradationNote = typeof ext._degradation_note === 'string' ? ext._degradation_note : null;
+
+  // Citation analysis data (new Tab)
+  const citationAnalysis = (ext.citation_analysis && typeof ext.citation_analysis === 'object')
+    ? ext.citation_analysis as CitationAnalysis : null;
 
   const handleTabKeyDown = (e: React.KeyboardEvent) => {
     const tabIds = TABS.map(t => t.id);
@@ -869,6 +874,172 @@ export function ReportContent({ content }: ReportContentProps) {
                 )}
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* ====== CITATIONS TAB ====== */}
+      {activeTab === 'citations' && (
+        <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-6">
+          {citationAnalysis && citationAnalysis.total_citations > 0 ? (
+            <>
+              {/* A. Hero Card: Official citation rate */}
+              <div className="p-5 bg-[--bg-secondary] border border-[--border-default] rounded-xl">
+                <div className="flex items-center gap-6">
+                  <div className="text-center min-w-[100px]">
+                    <div className={cn(
+                      'text-4xl font-bold',
+                      citationAnalysis.official_share >= 30 ? 'text-emerald-400' :
+                      citationAnalysis.official_share >= 10 ? 'text-amber-400' : 'text-red-400'
+                    )}>
+                      {citationAnalysis.official_share.toFixed(1)}%
+                    </div>
+                    <div className="text-[13px] text-[--text-secondary] mt-1">官网引用占比</div>
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="text-center p-2 rounded-lg" style={{ backgroundColor: 'rgba(99,102,241,0.06)' }}>
+                        <div className="text-lg font-bold text-[--text-primary]">{citationAnalysis.total_citations}</div>
+                        <div className="text-[11px] text-[--text-tertiary]">总引用数</div>
+                      </div>
+                      <div className="text-center p-2 rounded-lg" style={{ backgroundColor: 'rgba(99,102,241,0.06)' }}>
+                        <div className="text-lg font-bold text-[--text-primary]">{citationAnalysis.unique_domains}</div>
+                        <div className="text-[11px] text-[--text-tertiary]">独立域名</div>
+                      </div>
+                      <div className="text-center p-2 rounded-lg" style={{ backgroundColor: 'rgba(99,102,241,0.06)' }}>
+                        <div className="text-lg font-bold text-[--text-primary]">{citationAnalysis.official_citations}</div>
+                        <div className="text-[11px] text-[--text-tertiary]">官网引用</div>
+                      </div>
+                    </div>
+                    {/* Progress bar */}
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-2 rounded-full bg-[--bg-tertiary] overflow-hidden">
+                        <div
+                          className={cn(
+                            'h-full rounded-full transition-all',
+                            citationAnalysis.official_share >= 30 ? 'bg-emerald-400' :
+                            citationAnalysis.official_share >= 10 ? 'bg-amber-400' : 'bg-red-400'
+                          )}
+                          style={{ width: `${Math.min(citationAnalysis.official_share, 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-[11px] text-[--text-tertiary] w-16 text-right">
+                        {citationAnalysis.brand_domain || '未配置'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-[11px] text-[--text-tertiary] mt-3 leading-relaxed">
+                  AI 平台在回答用户问题时，引用您官网内容的比例。比例越高，说明您的官方内容被 AI 认可为权威来源的程度越高。
+                </p>
+              </div>
+
+              {/* B. Top 10 Domain Ranking */}
+              {citationAnalysis.top_domains.length > 0 && (
+                <div>
+                  <h3 className="text-[15px] font-medium text-[--text-primary] mb-3">引用来源排行</h3>
+                  <div className="space-y-2">
+                    {citationAnalysis.top_domains.map((item, i) => (
+                      <div
+                        key={item.domain}
+                        className="flex items-center gap-3 p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg"
+                      >
+                        <span className={cn(
+                          'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0',
+                          i < 3 ? 'bg-[#6366F1]/20 text-[#6366F1]' : 'bg-[--bg-tertiary] text-[--text-tertiary]'
+                        )}>
+                          {i + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[13px] font-medium text-[--text-primary] truncate">{item.domain}</span>
+                            {item.is_official && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 flex-shrink-0">
+                                官方
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="flex-1 h-1.5 rounded-full bg-[--bg-tertiary] overflow-hidden">
+                              <div
+                                className={cn('h-full rounded-full', item.is_official ? 'bg-emerald-400' : 'bg-[#6366F1]')}
+                                style={{ width: `${Math.min(item.share, 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-[11px] text-[--text-tertiary] w-20 text-right flex-shrink-0">
+                              {item.count}次 ({item.share.toFixed(1)}%)
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* C. Per-platform citation stats */}
+              {Object.keys(citationAnalysis.platform_citation_stats).length > 0 && (
+                <div>
+                  <h3 className="text-[15px] font-medium text-[--text-primary] mb-3">各平台引用能力</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    {Object.entries(citationAnalysis.platform_citation_stats).map(([platform, stats]) => {
+                      const platformNames: Record<string, string> = { kimi: 'Kimi', doubao: '豆包', hunyuan: '混元', deepseek: 'DeepSeek' };
+                      const dotColors: Record<string, string> = { kimi: '#22C55E', doubao: '#06B6D4', hunyuan: '#A855F7', deepseek: '#6366F1' };
+                      return (
+                        <div
+                          key={platform}
+                          className="p-3 bg-[--bg-secondary] border border-[--border-default] rounded-lg"
+                        >
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: dotColors[platform] || '#6366F1' }} />
+                            <span className="text-[13px] font-medium text-[--text-primary]">{platformNames[platform] || platform}</span>
+                          </div>
+                          {stats.total_citations > 0 ? (
+                            <div className="space-y-1.5">
+                              <div className="flex justify-between text-[11px]">
+                                <span className="text-[--text-tertiary]">引用总数</span>
+                                <span className="text-[--text-primary] font-medium">{stats.total_citations}</span>
+                              </div>
+                              <div className="flex justify-between text-[11px]">
+                                <span className="text-[--text-tertiary]">独立域名</span>
+                                <span className="text-[--text-primary] font-medium">{stats.unique_domains}</span>
+                              </div>
+                              <div className="flex justify-between text-[11px]">
+                                <span className="text-[--text-tertiary]">官网引用</span>
+                                <span className="text-[--text-primary] font-medium">{stats.official_count} ({stats.official_share.toFixed(1)}%)</span>
+                              </div>
+                              {stats.top_domains && stats.top_domains.length > 0 && (
+                                <div className="mt-1.5 pt-1.5" style={{ borderTop: '1px solid var(--border-default)' }}>
+                                  <div className="text-[10px] text-[--text-tertiary] mb-1">Top 引用源</div>
+                                  {stats.top_domains.slice(0, 3).map((d) => (
+                                    <div key={d.domain} className="flex justify-between text-[10px] text-[--text-secondary]">
+                                      <span className="truncate">{d.domain}</span>
+                                      <span className="flex-shrink-0 ml-2">{d.count}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-[--text-tertiary]">该平台未返回引用信息</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* D. Data note */}
+              <div
+                className="p-3 rounded-lg text-[11px] text-[--text-tertiary] leading-relaxed"
+                style={{ backgroundColor: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}
+              >
+                {citationAnalysis.note || '引用数据基于各 AI 平台回答中的参考来源提取。不同平台的引用能力差异较大：Kimi 和豆包通过 API 获取结构化引用，数据较完整；DeepSeek 通过浏览器抓取，覆盖率可能较低。'}
+              </div>
+            </>
+          ) : (
+            <EmptyState text={citationAnalysis ? '本次分析未检测到引用来源数据' : '暂无引用来源数据，完成分析后将自动生成'} />
           )}
         </div>
       )}
