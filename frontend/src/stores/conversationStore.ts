@@ -709,8 +709,8 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       // Cycle 3
       activeTask: null,
       followUpSuggestions: [],
-      // WebSocket confirmation function
-      wsConfirmation: null,
+      // NOTE: wsConfirmation is NOT reset here — it's a connection-level
+      // function registered by useWebSocket, not session state.
       // Streaming state
       streamingReply: '',
       streamingThought: '',
