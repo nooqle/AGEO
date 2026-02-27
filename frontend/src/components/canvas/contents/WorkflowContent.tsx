@@ -51,7 +51,7 @@ const typeLabels: Record<string, string> = {
 
 function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
   return (
-    <div className="bg-[--bg-secondary] border border-[--border-subtle] rounded-lg p-4 space-y-3">
+    <div className="bg-[--bg-elevated] border border-[--border-subtle] rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h5 className="text-sm font-medium text-[--text-primary]">
           {profile.brand_name}
@@ -119,7 +119,7 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
     <div className="overflow-x-auto rounded-lg border border-[--border-subtle]">
       <table className="w-full text-sm min-w-[600px]">
         <thead>
-          <tr className="bg-[--bg-secondary] border-b border-[--border-subtle]">
+          <tr className="bg-[--bg-elevated] border-b border-[--border-subtle]">
             <th className="text-left py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[160px]">品牌</th>
             <th className="text-left py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[80px]">类型</th>
             <th className="text-center py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[60px]">相关度</th>
@@ -134,7 +134,7 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: i * 0.03 }}
-              className="border-b border-[--border-subtle] last:border-b-0 hover:bg-[--bg-secondary]/60 transition-colors"
+              className="border-b border-[--border-subtle] last:border-b-0 hover:bg-[--bg-elevated]/60 transition-colors"
             >
               <td className="py-3 px-4">
                 <div className="flex flex-col gap-0.5">
@@ -301,7 +301,7 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle?.(); }
       } : undefined}
       className={cn(
-        'bg-[--bg-secondary] border rounded-lg p-4 space-y-3 transition-all',
+        'bg-[--bg-elevated] border rounded-lg p-4 space-y-3 transition-all',
         selectable && !disabled && 'cursor-pointer hover:border-[--border-hover]',
         selectable && disabled && 'opacity-40 cursor-not-allowed',
         selected
@@ -462,7 +462,7 @@ function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, 
           确认选择
         </button>
         <button
-          className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-[--bg-secondary] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] transition-colors"
+          className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-[--bg-elevated] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] transition-colors"
           onClick={onSkip}
         >
           全景分析所有画像

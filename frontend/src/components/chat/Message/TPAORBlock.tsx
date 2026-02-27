@@ -19,7 +19,7 @@ const phaseConfig = {
     label: '思考',
     activeLabel: '正在思考...',
     colors: {
-      bg: 'bg-[--bg-secondary]',
+      bg: 'bg-[--bg-elevated]',
       border: 'border-[#8B5CF6]/30',
       text: 'text-[--text-primary]',
       icon: 'text-[#8B5CF6]',
@@ -31,7 +31,7 @@ const phaseConfig = {
     label: '规划',
     activeLabel: '正在规划...',
     colors: {
-      bg: 'bg-[--bg-secondary]',
+      bg: 'bg-[--bg-elevated]',
       border: 'border-[#3B82F6]/30',
       text: 'text-[--text-primary]',
       icon: 'text-[#3B82F6]',
@@ -43,7 +43,7 @@ const phaseConfig = {
     label: '执行',
     activeLabel: '正在执行...',
     colors: {
-      bg: 'bg-[--bg-secondary]',
+      bg: 'bg-[--bg-elevated]',
       border: 'border-[#F59E0B]/30',
       text: 'text-[--text-primary]',
       icon: 'text-[#F59E0B]',
@@ -55,7 +55,7 @@ const phaseConfig = {
     label: '观察',
     activeLabel: '正在观察...',
     colors: {
-      bg: 'bg-[--bg-secondary]',
+      bg: 'bg-[--bg-elevated]',
       border: 'border-[#22C55E]/30',
       text: 'text-[--text-primary]',
       icon: 'text-[#22C55E]',
@@ -67,7 +67,7 @@ const phaseConfig = {
     label: '回复',
     activeLabel: '正在生成回复...',
     colors: {
-      bg: 'bg-[--bg-secondary]',
+      bg: 'bg-[--bg-elevated]',
       border: 'border-[#6366F1]/30',
       text: 'text-[--text-primary]',
       icon: 'text-[#6366F1]',

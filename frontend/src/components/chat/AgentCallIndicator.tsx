@@ -102,7 +102,7 @@ export function AgentCallIndicator({
     <div
       className={cn(
         'rounded-lg overflow-hidden border',
-        'bg-[--bg-secondary]',
+        'bg-[--bg-elevated]',
         config.borderClass,
         className
       )}

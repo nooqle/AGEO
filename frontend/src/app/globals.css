@@ -101,8 +101,11 @@
 }
 
 /* 全局样式 */
-* {
+*,
+::after,
+::before {
   box-sizing: border-box;
+  border-color: var(--border-subtle);
 }
 
 html {

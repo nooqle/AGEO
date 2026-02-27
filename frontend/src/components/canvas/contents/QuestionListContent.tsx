@@ -50,7 +50,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
           {simulatedQs.map((sq, index) => (
             <div
               key={sq.question_id || index}
-              className="bg-[--bg-secondary] rounded-lg border border-[--border-subtle] p-4 transition-colors hover:border-[--border-hover] hover:bg-[--bg-tertiary]"
+              className="bg-[--bg-elevated] rounded-lg border border-[--border-subtle] p-4 transition-colors hover:border-[--border-hover] hover:bg-[--bg-tertiary]"
             >
               <div className="flex items-start justify-between mb-3">
                 <div>
@@ -120,7 +120,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
         <div className="space-y-4">
           <h3 className="text-lg font-medium text-[--text-primary]">问题分类统计</h3>
           {Object.entries(groupedQuestions).map(([category, qs]) => (
-            <div key={category} className="bg-[--bg-secondary] border border-[--border-subtle] rounded-lg p-4">
+            <div key={category} className="bg-[--bg-elevated] border border-[--border-subtle] rounded-lg p-4">
               <h4 className="font-medium text-[--text-primary] mb-2">
                 {category} <span className="text-sm text-[--text-secondary]">({qs.length})</span>
               </h4>

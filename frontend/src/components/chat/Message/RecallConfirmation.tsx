@@ -36,7 +36,7 @@ export function RecallConfirmation({ messageCount, onConfirm, onCancel }: Recall
     <div
       className="mt-2 rounded-xl px-4 py-3 shadow-sm"
       style={{
-        background: 'var(--bg-secondary)',
+        background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
       }}
     >

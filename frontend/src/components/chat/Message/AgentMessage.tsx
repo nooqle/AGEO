@@ -139,7 +139,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           >
             {message.inlineConfirmation.type === 'guided' ? (
               /* Guided options keep a light container for structure */
-              <div className="rounded-xl border border-[--border-subtle] bg-[--bg-secondary] p-4">
+              <div className="rounded-xl border border-[--border-subtle] bg-[--bg-elevated] p-4">
                 <GuidedOptions
                   message={message.inlineConfirmation.message}
                   options={message.inlineConfirmation.options}

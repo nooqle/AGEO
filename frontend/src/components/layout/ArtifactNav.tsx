@@ -14,7 +14,9 @@ import {
   RiFileTextLine,
   RiTableLine,
   RiGitBranchLine,
+  RiPieChartLine,
 } from '@remixicon/react';
+import type { CanvasContent } from '@/types/canvas';
 
 const TYPE_ICONS: Record<CanvasContentType, typeof RiFileChartLine> = {
   report: RiFileChartLine,
@@ -35,6 +37,17 @@ const TYPE_LABELS: Record<CanvasContentType, string> = {
   dataTable: '数据',
   pipeline: '画像',
 };
+
+/** Report subtypes: baseline vs scenario get different icon & label */
+function getReportMeta(content: CanvasContent) {
+  if (content.type !== 'report') {
+    return { icon: TYPE_ICONS[content.type] || RiFileTextLine, label: TYPE_LABELS[content.type] || '' };
+  }
+  if (content.category === 'baseline') {
+    return { icon: RiFileChartLine, label: '基准' };
+  }
+  return { icon: RiPieChartLine, label: '分析' };
+}
 
 interface ArtifactNavProps {
   compact?: boolean;
@@ -77,7 +90,8 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
     return (
       <div className="flex flex-col items-center gap-2 px-1.5">
         {contents.map((content, index) => {
-          const Icon = TYPE_ICONS[content.type] || RiFileTextLine;
+          const meta = getReportMeta(content);
+          const Icon = meta.icon;
           const isActive = index === activeContentIndex;
           const hasGlow = glowIds.has(content.id);
 
@@ -103,7 +117,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
                 className="text-[12px] mt-0.5 leading-none"
                 style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)' }}
               >
-                {TYPE_LABELS[content.type] || ''}
+                {meta.label}
               </span>
               {content.hasNewVersion && !isActive && (
                 <span
@@ -132,7 +146,8 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
       <motion.div className="py-1">
         <AnimatePresence mode="popLayout">
           {contents.map((content, index) => {
-            const Icon = TYPE_ICONS[content.type] || RiFileTextLine;
+            const meta = getReportMeta(content);
+            const Icon = meta.icon;
             const isActive = index === activeContentIndex;
             const hasGlow = glowIds.has(content.id);
 
@@ -168,7 +183,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
                     className="text-xs truncate"
                     style={{ color: 'var(--text-secondary)' }}
                   >
-                    {TYPE_LABELS[content.type] || content.type}
+                    {meta.label}
                   </p>
                 </div>
               </motion.button>

@@ -89,7 +89,7 @@ export function BrandCards() {
             />
             <button
               className="w-[200px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}
+              style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}
               onClick={() => handleBrandClick(entity)}
             >
               <RiChat1Line className="w-3.5 h-3.5" />

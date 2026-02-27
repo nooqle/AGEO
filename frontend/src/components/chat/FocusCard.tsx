@@ -23,7 +23,7 @@ export function FocusCard({ title, stats, content, className }: FocusCardProps) 
         className
       )}
       style={{
-        background: 'var(--bg-secondary)',
+        background: 'var(--bg-elevated)',
         borderLeft: '2px solid var(--info, #3B82F6)',
         boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
         padding: '14px 18px',

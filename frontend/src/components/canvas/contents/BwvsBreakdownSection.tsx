@@ -80,7 +80,7 @@ export function BwvsBreakdownSection({
     <div
       className="p-5 rounded-xl"
       style={{
-        background: 'var(--bg-secondary, #1A1A1A)',
+        background: 'var(--bg-elevated, #2D2D2D)',
         border: '1px solid var(--border-subtle)',
       }}
     >

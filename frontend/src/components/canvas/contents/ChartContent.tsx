@@ -132,7 +132,7 @@ export function ChartContent({ content }: ChartContentProps) {
       )}
 
       {/* 图表 */}
-      <div className="bg-[--bg-secondary] rounded-lg">
+      <div className="bg-[--bg-elevated] rounded-lg">
         {renderChart()}
       </div>
 

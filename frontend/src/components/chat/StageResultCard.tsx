@@ -346,7 +346,7 @@ export function StageResultCard({ result, isLatest, isReplay, className }: Stage
         className,
       )}
       style={{
-        backgroundColor: 'var(--bg-secondary)',
+        backgroundColor: 'var(--bg-elevated)',
         borderLeftColor: accentColor,
         boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
       }}

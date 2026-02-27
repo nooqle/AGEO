@@ -28,8 +28,8 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
         return {
           icon: <RiErrorWarningLine className="w-4 h-4" />,
           label: '步骤确认',
-          color: 'border-[--border-subtle] bg-[--bg-secondary]',
-          iconBg: 'bg-[--bg-secondary] border border-[--border-subtle]',
+          color: 'border-[--border-subtle] bg-[--bg-elevated]',
+          iconBg: 'bg-[--bg-elevated] border border-[--border-subtle]',
           iconColor: 'text-indigo-300',
           titleColor: 'text-[--text-primary]',
           labelColor: 'text-indigo-300',
@@ -38,8 +38,8 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
         return {
           icon: <RiMessage3Line className="w-4 h-4" />,
           label: '品牌信息确认',
-          color: 'border-[--border-subtle] bg-[--bg-secondary]',
-          iconBg: 'bg-[--bg-secondary] border border-[--border-subtle]',
+          color: 'border-[--border-subtle] bg-[--bg-elevated]',
+          iconBg: 'bg-[--bg-elevated] border border-[--border-subtle]',
           iconColor: 'text-amber-300',
           titleColor: 'text-[--text-primary]',
           labelColor: 'text-amber-300',
@@ -48,8 +48,8 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
         return {
           icon: <RiTimeLine className="w-4 h-4" />,
           label: '操作选择',
-          color: 'border-[--border-subtle] bg-[--bg-secondary]',
-          iconBg: 'bg-[--bg-secondary] border border-[--border-subtle]',
+          color: 'border-[--border-subtle] bg-[--bg-elevated]',
+          iconBg: 'bg-[--bg-elevated] border border-[--border-subtle]',
           iconColor: 'text-purple-300',
           titleColor: 'text-[--text-primary]',
           labelColor: 'text-purple-300',
@@ -58,8 +58,8 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
         return {
           icon: <RiTimeLine className="w-4 h-4" />,
           label: '等待确认',
-          color: 'border-[--border-subtle] bg-[--bg-secondary]',
-          iconBg: 'bg-[--bg-secondary] border border-[--border-subtle]',
+          color: 'border-[--border-subtle] bg-[--bg-elevated]',
+          iconBg: 'bg-[--bg-elevated] border border-[--border-subtle]',
           iconColor: 'text-amber-300',
           titleColor: 'text-[--text-primary]',
           labelColor: 'text-amber-300',
@@ -93,7 +93,7 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
       </div>
 
       {/* 消息 */}
-      <div className="bg-[--bg-secondary] border border-[--border-subtle] rounded-lg p-4 mb-4 max-h-80 overflow-y-auto">
+      <div className="bg-[--bg-elevated] border border-[--border-subtle] rounded-lg p-4 mb-4 max-h-80 overflow-y-auto">
         <MarkdownContent content={request.message} />
       </div>
 
@@ -108,7 +108,7 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
               'inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all',
               option.recommended
                 ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
-                : 'bg-[--bg-secondary] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] hover:border-[--border-hover]',
+                : 'bg-[--bg-elevated] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] hover:border-[--border-hover]',
               selectedOption === option.id && 'ring-2 ring-indigo-500 ring-offset-0',
               selectedOption !== null && selectedOption !== option.id && 'opacity-50'
             )}

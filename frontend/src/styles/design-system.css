@@ -51,8 +51,11 @@
 /* ============================================
    Base Styles
    ============================================ */
-* {
+*,
+::after,
+::before {
   box-sizing: border-box;
+  border-color: var(--border-subtle);
 }
 
 body {

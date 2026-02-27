@@ -28,7 +28,7 @@ export function CompletionChecklist({ title, items }: CompletionChecklistProps) 
   const completedCount = items.filter((i) => i.status === 'completed').length;
 
   return (
-    <div className="bg-[--bg-secondary] border border-[--border-subtle] rounded-xl p-4 mt-3">
+    <div className="bg-[--bg-elevated] border border-[--border-subtle] rounded-xl p-4 mt-3">
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs font-medium text-[--text-primary]">
           {title || 'Analysis Progress'}

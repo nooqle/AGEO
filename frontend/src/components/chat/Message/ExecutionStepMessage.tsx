@@ -93,7 +93,7 @@ export function ExecutionStepMessage({
             step.status === 'waiting_confirmation' && 'border-amber-500/30 shadow-sm',
             step.status === 'completed' && 'border-green-500/30',
             step.status === 'failed' && 'border-red-500/30',
-            'bg-[--bg-secondary]'
+            'bg-[--bg-elevated]'
           )}
           initial={{ opacity: 0, y: 5 }}
           animate={{ opacity: 1, y: 0 }}
