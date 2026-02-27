@@ -62,6 +62,24 @@ export type CitationAnalysis = {
   note?: string;
 };
 
+export type KeywordContext = {
+  text: string;
+  platform: string;
+};
+
+export type KeywordItem = {
+  word: string;
+  value: number;
+  platforms: string[];
+  contexts: KeywordContext[];
+};
+
+export type KeywordAnalysis = {
+  total_keywords: number;
+  platforms: string[];
+  keywords: KeywordItem[];
+};
+
 export type ReportCanvasData = CanvasPreviewData & {
   headline?: string;
   subtitle?: string;
@@ -89,6 +107,7 @@ export type ReportCanvasData = CanvasPreviewData & {
   competitor_bwvs?: unknown;
   _degradation_note?: string;
   citation_analysis?: CitationAnalysis;
+  keyword_analysis?: KeywordAnalysis;
 };
 
 export type ChartSeries = { key: string; name: string };

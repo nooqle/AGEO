@@ -247,9 +247,13 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         if (cancelled || !outputs || outputs.length === 0) return;
         const validTypes: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
         for (const output of outputs) {
-          const outputType: CanvasContentType = validTypes.includes(output.type as CanvasContentType)
-            ? (output.type as CanvasContentType)
+          // Map report_baseline/report_persona to 'report' Canvas type (same as useWebSocket)
+          const rawType = typeof output.type === 'string' ? output.type : 'report';
+          const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
+          const outputType: CanvasContentType = validTypes.includes(canvasTypeStr as CanvasContentType)
+            ? (canvasTypeStr as CanvasContentType)
             : 'report';
+          const category = typeof output.category === 'string' ? output.category as 'baseline' | 'scenario' : undefined;
           addContent({
             id: output.id,
             type: outputType,
@@ -260,6 +264,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             linkedMessageId: output.message_id,
             versions: [],
             currentVersionIndex: -1,
+            category,
           } as CanvasContent);
         }
       } catch {

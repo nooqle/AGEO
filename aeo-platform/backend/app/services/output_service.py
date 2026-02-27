@@ -124,6 +124,10 @@ class OutputService:
         # Use same artifact_id format as WebSocket output_ready event
         # so loadArtifacts() and WS events merge into one Tab instead of duplicating
         artifact_id = f"{message.session_id}_{message.output_type}"
+        # Derive category from output_type (report_baseline → baseline, report → scenario)
+        category = None
+        if message.output_type and message.output_type.startswith("report"):
+            category = "baseline" if message.output_type == "report_baseline" else "scenario"
         return {
             "id": artifact_id,
             "message_id": str(message.id),
@@ -131,5 +135,6 @@ class OutputService:
             "type": message.output_type,
             "title": message.content or "分析结果",
             "data": data,
+            "category": category,
             "created_at": message.created_at.isoformat(),
         }

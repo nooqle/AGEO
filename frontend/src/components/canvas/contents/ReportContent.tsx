@@ -2,16 +2,17 @@
 
 import { useState } from 'react';
 import { cn } from '@/lib/cn';
-import type { ReportCanvasContent, CitationAnalysis } from '@/types/canvas';
+import type { ReportCanvasContent, CitationAnalysis, KeywordAnalysis } from '@/types/canvas';
 import type { BwvsBreakdown } from '@/types/dashboard';
 import { BwvsBreakdownSection } from './BwvsBreakdownSection';
 import type { CompetitorBreakdown } from './BwvsBreakdownSection';
+import { WordCloudSection } from './WordCloudSection';
 
 interface ReportContentProps {
   content: ReportCanvasContent;
 }
 
-type TabId = 'overview' | 'industry' | 'platforms' | 'competitors' | 'citations' | 'recommendations' | 'risks';
+type TabId = 'overview' | 'industry' | 'platforms' | 'competitors' | 'citations' | 'semantics' | 'recommendations' | 'risks';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: '总览' },
@@ -19,6 +20,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'platforms', label: '平台分析' },
   { id: 'competitors', label: '竞品对比' },
   { id: 'citations', label: '信息源分析' },
+  { id: 'semantics', label: '语义词云' },
   { id: 'recommendations', label: '优化建议' },
   { id: 'risks', label: '风险提示' },
 ];
@@ -119,6 +121,11 @@ export function ReportContent({ content }: ReportContentProps) {
   const citationAnalysis = (ext.citation_analysis && typeof ext.citation_analysis === 'object')
     ? ext.citation_analysis as CitationAnalysis : null;
 
+  // Keyword analysis data (semantics Tab)
+  const keywordAnalysis = (ext.keyword_analysis && typeof ext.keyword_analysis === 'object'
+    && (ext.keyword_analysis as KeywordAnalysis).total_keywords > 0)
+    ? ext.keyword_analysis as KeywordAnalysis : null;
+
   const handleTabKeyDown = (e: React.KeyboardEvent) => {
     const tabIds = TABS.map(t => t.id);
     const currentIndex = tabIds.indexOf(activeTab);
@@ -192,7 +199,7 @@ export function ReportContent({ content }: ReportContentProps) {
         <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-6">
           {/* Score Card */}
           {data.overallScore !== undefined && (
-            <div className="flex items-center gap-6 p-5 bg-[--bg-secondary] border border-[--border-subtle] rounded-xl">
+            <div className="flex items-center gap-6 p-5 bg-[--bg-elevated] border border-[--border-subtle] rounded-xl">
               <div className="text-center">
                 <div className={cn(
                   'text-4xl font-bold',
@@ -263,7 +270,7 @@ export function ReportContent({ content }: ReportContentProps) {
           {data.metrics && (
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {Object.entries(data.metrics).map(([key, value]) => (
-                <div key={key} className="p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+                <div key={key} className="p-3 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                   <div className="text-[13px] text-[--text-secondary]">
                     {typeof value === 'object' && value !== null && 'label' in value
                       ? (value as { label?: string }).label || key : key}
@@ -278,7 +285,7 @@ export function ReportContent({ content }: ReportContentProps) {
 
           {/* Sentiment Distribution */}
           {Object.keys(sentimentDist).length > 0 && (
-            <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+            <div className="p-4 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">情感分布</h4>
               <div className="flex gap-4">
                 {Object.entries(sentimentDist).map(([key, val]) => (
@@ -303,7 +310,7 @@ export function ReportContent({ content }: ReportContentProps) {
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">关键发现</h4>
               <div className="space-y-2">
                 {keyFindings.map((finding, i) => (
-                  <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+                  <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                     <span className="text-[#6366F1] text-[15px] mt-0.5">&bull;</span>
                     <span className="text-[15px] text-[--text-primary]">{finding}</span>
                   </div>
@@ -314,7 +321,7 @@ export function ReportContent({ content }: ReportContentProps) {
 
           {/* Executive Summary */}
           {data.content && (
-            <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+            <div className="p-4 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">执行摘要</h4>
               <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{data.content}</p>
             </div>
@@ -326,7 +333,7 @@ export function ReportContent({ content }: ReportContentProps) {
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-3">关键发现</h4>
               <div className="space-y-2">
                 {data.insights.map((insight, index) => (
-                  <div key={index} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+                  <div key={index} className="flex items-start gap-2 p-3 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                     <span className="text-[15px]">
                       {insight.type === 'strength' ? '  ' : insight.type === 'weakness' ? '! ' : '* '}
                     </span>
@@ -349,7 +356,7 @@ export function ReportContent({ content }: ReportContentProps) {
         <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-4">
           {industryBackground ? (
             <>
-              <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+              <div className="p-4 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                 <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">行业背景</h4>
                 <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{industryBackground}</p>
               </div>
@@ -364,7 +371,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       const sourceText = (item && typeof item === 'object' && 'source' in item)
                         ? String((item as Record<string, unknown>).source) : null;
                       return (
-                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                           <span className="text-[#3B82F6] text-[15px] mt-0.5">&bull;</span>
                           <div className="flex-1 min-w-0">
                             <span className="text-[15px] text-[--text-primary]">{trendText}</span>
@@ -387,7 +394,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       const oppText = typeof item === 'string' ? item
                         : (item && typeof item === 'object') ? String((item as Record<string, unknown>).opportunity || (item as Record<string, unknown>).text || JSON.stringify(item)) : String(item);
                       return (
-                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+                        <div key={i} className="flex items-start gap-2 p-3 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                           <span className="text-[#22C55E] text-[15px] mt-0.5">&bull;</span>
                           <span className="text-[15px] text-[--text-primary]">{oppText}</span>
                         </div>
@@ -430,7 +437,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 const status = typeof pa.status === 'string' ? pa.status : 'success';
 
                 return (
-                  <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+                  <div key={i} className="p-4 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-[15px] font-medium text-[--text-primary] capitalize">{name}</span>
                       <span className={cn(
@@ -503,7 +510,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 const success = stats.success || 0;
                 const mentionRate = total > 0 ? (mentions / total * 100) : 0;
                 return (
-                  <div key={platform} className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+                  <div key={platform} className="p-4 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-[15px] font-medium text-[--text-primary] capitalize">{platform}</span>
                       <span className="text-[13px] text-[--text-secondary]">{success}/{total} 成功</span>
@@ -536,7 +543,7 @@ export function ReportContent({ content }: ReportContentProps) {
         <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-4">
           {/* Competitor overview */}
           {competitorOverview && (
-            <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+            <div className="p-4 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">竞品概览</h4>
               <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{competitorOverview}</p>
             </div>
@@ -597,7 +604,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 const hasDetail = row.vs_brand || Array.isArray(row.advantage_reasons) || Array.isArray(row.learnings);
                 if (!hasDetail) return null;
                 return (
-                  <div key={i} className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+                  <div key={i} className="p-4 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-[15px] font-medium text-[--text-primary]">{String(row.name || row.brand || '')}</span>
                       {typeof row.vs_brand === 'string' && (
@@ -650,7 +657,7 @@ export function ReportContent({ content }: ReportContentProps) {
 
           {/* Differentiation strategy */}
           {differentiationStrategy && (
-            <div className="p-4 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg">
+            <div className="p-4 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg">
               <h4 className="text-[15px] font-medium text-[--text-primary] mb-2">差异化策略</h4>
               <p className="text-[15px] text-[--text-primary] leading-relaxed whitespace-pre-wrap">{differentiationStrategy}</p>
             </div>
@@ -673,7 +680,7 @@ export function ReportContent({ content }: ReportContentProps) {
                   return (
                     <div
                       key={i}
-                      className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
+                      className="p-4 bg-[--bg-elevated] rounded-lg border-l-2"
                       style={{
                         borderLeftColor: '#22C55E',
                         borderTop: '1px solid var(--border-subtle)',
@@ -732,7 +739,7 @@ export function ReportContent({ content }: ReportContentProps) {
                   return (
                     <div
                       key={i}
-                      className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
+                      className="p-4 bg-[--bg-elevated] rounded-lg border-l-2"
                       style={{
                         borderLeftColor: '#F59E0B',
                         borderTop: '1px solid var(--border-subtle)',
@@ -793,7 +800,7 @@ export function ReportContent({ content }: ReportContentProps) {
                   return (
                     <div
                       key={index}
-                      className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
+                      className="p-4 bg-[--bg-elevated] rounded-lg border-l-2"
                       style={{
                         borderLeftColor: priorityColor,
                         borderTop: '1px solid var(--border-subtle)',
@@ -884,7 +891,7 @@ export function ReportContent({ content }: ReportContentProps) {
           {citationAnalysis && citationAnalysis.total_citations > 0 ? (
             <>
               {/* A. Hero Card: Official citation rate */}
-              <div className="p-5 bg-[--bg-secondary] border border-[--border-subtle] rounded-xl">
+              <div className="p-5 bg-[--bg-elevated] border border-[--border-subtle] rounded-xl">
                 <div className="flex items-center gap-6">
                   <div className="text-center min-w-[100px]">
                     <div className={cn(
@@ -942,7 +949,7 @@ export function ReportContent({ content }: ReportContentProps) {
                     {citationAnalysis.top_domains.map((item, i) => (
                       <div
                         key={item.domain}
-                        className="flex items-center gap-3 p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg"
+                        className="flex items-center gap-3 p-3 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg"
                       >
                         <span className={cn(
                           'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0',
@@ -988,7 +995,7 @@ export function ReportContent({ content }: ReportContentProps) {
                       return (
                         <div
                           key={platform}
-                          className="p-3 bg-[--bg-secondary] border border-[--border-subtle] rounded-lg"
+                          className="p-3 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg"
                         >
                           <div className="flex items-center gap-2 mb-2">
                             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: dotColors[platform] || '#6366F1' }} />
@@ -1044,6 +1051,17 @@ export function ReportContent({ content }: ReportContentProps) {
         </div>
       )}
 
+      {/* ====== SEMANTICS TAB ====== */}
+      {activeTab === 'semantics' && (
+        <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-6">
+          {keywordAnalysis ? (
+            <WordCloudSection analysis={keywordAnalysis} />
+          ) : (
+            <EmptyState text="暂无语义分析数据，完成分析后将自动生成" />
+          )}
+        </div>
+      )}
+
       {/* ====== RISKS TAB ====== */}
       {activeTab === 'risks' && (
         <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="space-y-4">
@@ -1056,7 +1074,7 @@ export function ReportContent({ content }: ReportContentProps) {
                 return (
                   <div
                     key={i}
-                    className="p-4 bg-[--bg-secondary] rounded-lg border-l-2"
+                    className="p-4 bg-[--bg-elevated] rounded-lg border-l-2"
                     style={{
                       borderLeftColor: levelColor,
                       borderTop: '1px solid var(--border-subtle)',
