@@ -130,7 +130,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
         )}
 
         {/* Layer 4: Inline confirmation */}
-        {message.inlineConfirmation && onConfirmation && (
+        {message.inlineConfirmation && onConfirmation && message.inlineConfirmation.options.length > 0 && (
           <motion.div
             className="space-y-3"
             initial={{ opacity: 0, y: 8 }}
