@@ -518,17 +518,17 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   return (
     <div className={cn('relative flex flex-col h-full bg-[var(--bg-primary)]', className)}>
       {/* Cycle 3: Task status badge in header area */}
-      {activeTask && (
+      {(activeTask || (isAgentExecuting && executionProgress)) && (
         <div
           className="flex items-center justify-between px-4 py-1.5 flex-shrink-0"
           style={{ borderBottom: '1px solid var(--border-subtle)' }}
         >
           <div className="flex-1" />
           <TaskStatusBadge
-            status={activeTask.status}
-            currentStage={activeTask.current_stage}
-            progress={activeTask.progress}
-            progressMessage={activeTask.progress_message}
+            status={activeTask?.status ?? 'running'}
+            currentStage={activeTask?.current_stage ?? executionProgress?.stage}
+            progress={activeTask?.progress ?? executionProgress?.progress}
+            progressMessage={activeTask?.progress_message ?? executionProgress?.details}
             lightweightLabel={getLightweightLabel()}
           />
         </div>
