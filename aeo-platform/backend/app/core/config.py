@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     MINIMAX_BASE_URL: str = "https://api.minimaxi.com/v1"
     MINIMAX_MODEL: str = "MiniMax-M2.1"
     DOUBAO_API_KEY: str | None = None
-    DOUBAO_MODEL: str = "doubao-seed-1-8-251228"
+    DOUBAO_MODEL: str = "doubao-seed-2-0-lite-260215"
     HUNYUAN_API_KEY: str | None = None
     HUNYUAN_MODEL: str = "hunyuan-2.0-instruct-20251111"
     HUNYUAN_BASE_URL: str = "https://api.hunyuan.cloud.tencent.com/v1"
