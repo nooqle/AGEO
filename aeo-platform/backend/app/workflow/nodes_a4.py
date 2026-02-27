@@ -13,6 +13,8 @@ Optimizations:
 
 import asyncio
 import logging
+import random
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
 
@@ -48,6 +50,66 @@ BROWSER_MAX_RETRIES = WorkflowConstants.BROWSER_MAX_RETRIES
 MIN_PLATFORMS_REQUIRED = WorkflowConstants.MIN_PLATFORMS_REQUIRED
 
 
+class _ProgressTracker:
+    """Track per-platform completion during Phase 1 API fetch and emit progress."""
+
+    def __init__(
+        self,
+        total_questions: int,
+        active_platforms: list[str],
+        session_id: str,
+    ):
+        self.total_questions = total_questions
+        self.active_platforms = active_platforms
+        self.session_id = session_id
+        self.total_tasks = total_questions * len(active_platforms)
+        self.completed = 0
+        # Per-platform counters
+        self._platform_done: dict[str, int] = {p: 0 for p in active_platforms}
+
+    async def record_completion(self, platform: str) -> None:
+        """Record one API task completion and emit progress event."""
+        self.completed += 1
+        logger.info("[A4] ProgressTracker: %s completed (%d/%d)", platform, self.completed, self.total_tasks)
+        self._platform_done[platform] = self._platform_done.get(platform, 0) + 1
+
+        # Progress: linear interpolation 0.57 → 0.72
+        ratio = self.completed / self.total_tasks if self.total_tasks > 0 else 1.0
+        progress = 0.57 + ratio * 0.15
+
+        # Build per-platform summary
+        parts = []
+        for p in self.active_platforms:
+            name = PLATFORMS.get(p, {}).get("name", p)
+            done = self._platform_done.get(p, 0)
+            parts.append(f"{name} {done}/{self.total_questions}")
+
+        # Count questions with ALL platforms done
+        message = f"API抓取进度: {self.completed}/{self.total_tasks} 完成（{' | '.join(parts)}）"
+
+        await send_progress_event(
+            session_id=self.session_id,
+            step="A4",
+            step_name="AI答案抓取",
+            progress=progress,
+            message=message,
+        )
+
+
+async def _tracked_api_fetch(
+    coro: Coroutine[Any, Any, dict[str, Any]],
+    platform: str,
+    tracker: _ProgressTracker,
+) -> dict[str, Any]:
+    """Wrap an API fetch coroutine to report completion via tracker."""
+    logger.info("[A4] _tracked_api_fetch started for %s", platform)
+    try:
+        result = await coro
+        return result
+    finally:
+        await tracker.record_completion(platform)
+
+
 def _get_browser_timeout(platform: str) -> float:
     """Get per-platform browser timeout from constants."""
     return float(PlatformConstants.PLATFORM_TIMEOUTS.get(platform, 200))
@@ -77,6 +139,61 @@ async def _throttled_retry_fetch(
         return result
 
 
+# Kimi (OpenAI-compatible): error.type → internal category
+_429_ERROR_TYPE_MAP = {
+    "rate_limit_reached_error": "rate_limit",
+    "engine_overloaded_error": "engine_overloaded",
+    "exceeded_current_quota_error": "quota_exceeded",
+}
+
+# Doubao / Volcengine: error.code → internal category
+# Ref: https://www.volcengine.com/docs/82379/1848593
+_429_ERROR_CODE_MAP = {
+    "RequestBurstTooFast": "burst",
+    "ServerOverloaded": "engine_overloaded",
+    "SetLimitExceeded": "quota_exceeded",
+}
+
+_RETRY_SECONDS_RE = re.compile(r"try again after (\d+) seconds", re.IGNORECASE)
+
+
+def _parse_429_error(response: httpx.Response) -> tuple[str, float | None]:
+    """Parse 429 response body to extract error type and retry hint.
+
+    Supports two response formats:
+      - Kimi (OpenAI-compatible): identifier in error.type
+      - Doubao (Volcengine):      identifier in error.code, error.type is generic "TooManyRequests"
+
+    Returns (error_type, retry_seconds):
+      error_type: "rate_limit" | "engine_overloaded" | "quota_exceeded" | "burst" | "unknown"
+      retry_seconds: extracted from message "try again after N seconds", or None
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return "unknown", None
+
+    error_obj = body.get("error", {})
+    logger.debug("[A4] 429 response body: %s", body)
+
+    # Try Kimi-style error.type first
+    raw_type = error_obj.get("type", "")
+    error_type = _429_ERROR_TYPE_MAP.get(raw_type)
+
+    # Then try Doubao-style error.code
+    if error_type is None:
+        raw_code = error_obj.get("code", "")
+        error_type = _429_ERROR_CODE_MAP.get(raw_code, "unknown")
+
+    retry_seconds: float | None = None
+    message = error_obj.get("message", "")
+    match = _RETRY_SECONDS_RE.search(message)
+    if match:
+        retry_seconds = float(match.group(1))
+
+    return error_type, retry_seconds
+
+
 async def _retry_fetch(
     fetch_fn: Callable[..., Coroutine[Any, Any, dict[str, Any]]],
     *args: Any,
@@ -86,7 +203,11 @@ async def _retry_fetch(
 ) -> dict[str, Any]:
     """Retry a fetch function up to MAX_RETRIES times with exponential backoff.
 
-    Handles HTTP 429 specially with longer backoff (reads Retry-After header).
+    Handles HTTP 429 with classified retry strategies:
+      - quota_exceeded: immediately break, no retry
+      - engine_overloaded: short backoff + jitter, separate retry budget (does NOT consume main attempt)
+      - burst: RequestBurstTooFast — short backoff, consumes main attempt
+      - rate_limit / unknown: honour message hint → Retry-After header → default 30s
     Returns the first successful result, or the last failure dict.
     """
     last_result: dict[str, Any] = {
@@ -96,7 +217,10 @@ async def _retry_fetch(
         "error": "no attempt made",
     }
 
-    for attempt in range(MAX_RETRIES + 1):
+    attempt = 0
+    overload_retries = 0
+
+    while attempt <= MAX_RETRIES:
         try:
             result = await fetch_fn(*args, **kwargs)
             if result.get("success"):
@@ -112,20 +236,74 @@ async def _retry_fetch(
                 "error": str(e),
             }
 
-            # Handle 429 rate limit with longer backoff
+            # --- Classified 429 handling ---
             is_429 = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
-            if is_429 and attempt < MAX_RETRIES:
-                # Try to extract Retry-After from httpx.HTTPStatusError
-                retry_after = WorkflowConstants.DEFAULT_429_RETRY_SECONDS
-                ra = e.response.headers.get("Retry-After")
-                if ra and ra.isdigit():
-                    retry_after = max(float(ra), 10.0)
-                logger.warning(
-                    "[A4] %s got 429 rate-limited, waiting %.0fs before retry",
-                    platform, retry_after,
-                )
-                await asyncio.sleep(retry_after)
-                continue
+            if is_429:
+                error_type, hint_seconds = _parse_429_error(e.response)
+
+                if error_type == "quota_exceeded":
+                    logger.error(
+                        "[A4] %s 429 (quota_exceeded) — skipping retries",
+                        platform,
+                    )
+                    break
+
+                if error_type == "engine_overloaded":
+                    overload_retries += 1
+                    if overload_retries > WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES:
+                        logger.warning(
+                            "[A4] %s 429 (engine_overloaded) — exhausted %d overload retries",
+                            platform, WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES,
+                        )
+                        break
+                    wait = (
+                        WorkflowConstants.ENGINE_OVERLOADED_BASE_WAIT
+                        + overload_retries * 5.0
+                        + random.uniform(0, 3)
+                    )
+                    logger.warning(
+                        "[A4] %s 429 (engine_overloaded), waiting %.1fs (overload retry %d/%d)",
+                        platform, wait, overload_retries,
+                        WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES,
+                    )
+                    await asyncio.sleep(wait)
+                    # Don't consume the main attempt budget
+                    continue
+
+                if error_type == "burst":
+                    # RequestBurstTooFast: slope too steep, pause briefly then retry
+                    if attempt < MAX_RETRIES:
+                        wait = (
+                            WorkflowConstants.BURST_BACKOFF_BASE
+                            + attempt * 3.0
+                            + random.uniform(0, 2)
+                        )
+                        logger.warning(
+                            "[A4] %s 429 (burst), slowing down — waiting %.1fs before retry %d/%d",
+                            platform, wait, attempt + 1, MAX_RETRIES,
+                        )
+                        await asyncio.sleep(wait)
+                        attempt += 1
+                        continue
+
+                # rate_limit or unknown
+                if attempt < MAX_RETRIES:
+                    try:
+                        header_val = float(e.response.headers.get("Retry-After", 0))
+                    except (ValueError, TypeError):
+                        header_val = 0
+                    retry_after = (
+                        hint_seconds
+                        or (header_val or None)
+                        or WorkflowConstants.DEFAULT_429_RETRY_SECONDS
+                    )
+                    logger.warning(
+                        "[A4] %s 429 (%s), waiting %.0fs before retry",
+                        platform, error_type, retry_after,
+                    )
+                    await asyncio.sleep(retry_after)
+                    attempt += 1
+                    continue
 
         if attempt < MAX_RETRIES:
             wait = RETRY_BACKOFF_BASE ** attempt  # 1s, 2s
@@ -134,6 +312,8 @@ async def _retry_fetch(
                 platform, attempt + 1, last_result.get("error", "unknown"), wait,
             )
             await asyncio.sleep(wait)
+
+        attempt += 1
 
     logger.warning("[A4] %s failed after %d attempts: %s", platform, MAX_RETRIES + 1, last_result.get("error"))
     return last_result
@@ -336,7 +516,27 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     )
                     api_task_map.append((idx, "kimi"))
 
-            api_all_results = await asyncio.gather(*api_tasks, return_exceptions=True)
+            # Build active API platforms list and create progress tracker
+            active_api_platforms = []
+            if doubao_client is not None:
+                active_api_platforms.append("doubao")
+            if hunyuan_client is not None:
+                active_api_platforms.append("hunyuan")
+            if kimi_client is not None:
+                active_api_platforms.append("kimi")
+
+            tracker = _ProgressTracker(
+                total_questions=total,
+                active_platforms=active_api_platforms,
+                session_id=session_id,
+            )
+
+            # Wrap each task to report progress on completion
+            tracked_tasks = [
+                _tracked_api_fetch(task, platform, tracker)
+                for task, (_q_idx, platform) in zip(api_tasks, api_task_map)
+            ]
+            api_all_results = await asyncio.gather(*tracked_tasks, return_exceptions=True)
 
             # Organize API results by question index
             question_results: dict[int, list[dict[str, Any]]] = {i: [] for i in range(total)}
@@ -426,15 +626,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         browser_delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
                         await asyncio.sleep(browser_delay)
 
-                    if (idx + 1) % 4 == 0 or idx == total - 1:
-                        browser_done = idx + 1
-                        await send_progress_event(
-                            session_id=session_id,
-                            step="A4",
-                            step_name="AI答案抓取",
-                            progress=0.72 + (browser_done / total) * 0.23,
-                            message=f"Phase 2: {platform_name} {browser_done}/{total} 完成",
-                        )
+                    browser_done = idx + 1
+                    await send_progress_event(
+                        session_id=session_id,
+                        step="A4",
+                        step_name="AI答案抓取",
+                        progress=0.72 + (browser_done / total) * 0.23,
+                        message=f"Phase 2: {platform_name} {browser_done}/{total} 完成",
+                    )
                 return results
 
             # Only run browser pipelines for successfully initialized handlers

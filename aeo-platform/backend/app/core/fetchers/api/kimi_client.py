@@ -1,5 +1,6 @@
 """Kimi (Moonshot) API client."""
 
+import asyncio
 import json
 import logging
 import time
@@ -125,6 +126,7 @@ class KimiClient(BaseAPIClient):
                             "name": tc.get("function", {}).get("name", ""),
                             "content": tc.get("function", {}).get("arguments", "{}"),
                         })
+                    await asyncio.sleep(1.0)  # Ease pressure between consecutive tool_calls requests
                     continue
 
                 # finish_reason == "stop" — parse JSON response

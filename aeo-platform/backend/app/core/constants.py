@@ -47,6 +47,9 @@ class WorkflowConstants:
     BROWSER_MAX_RETRIES: Final[int] = 1
     MIN_PLATFORMS_REQUIRED: Final[int] = 2
     DEFAULT_429_RETRY_SECONDS: Final[float] = 30.0
+    ENGINE_OVERLOADED_BASE_WAIT: Final[float] = 5.0
+    ENGINE_OVERLOADED_MAX_RETRIES: Final[int] = 3
+    BURST_BACKOFF_BASE: Final[float] = 5.0
 
 
 class LLMConstants:
