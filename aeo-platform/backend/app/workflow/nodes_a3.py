@@ -345,6 +345,9 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
         # Enforce hard limit
         raw_questions = raw_questions[:_MAX_QUESTIONS]
 
+        # Validate and fix categories + brand ratio
+        raw_questions = _fix_persona_categories(raw_questions, brand_name)
+
         # Build simulated_questions and flattened_questions
         simulated_questions = []
         flattened_questions = []
@@ -359,9 +362,11 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
             platform_idx += 1
 
+            category = q.get("category", "画像痛点场景")
+
             question_obj = {
                 "question_id": q_id,
-                "category": q.get("category", "画像聚焦"),
+                "category": category,
                 "core_question": core_question,
                 "user_intent": q.get("user_intent", ""),
                 "decision_stage": q.get("decision_stage", ""),
@@ -373,7 +378,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             flattened_questions.append({
                 "id": q_id,
                 "text": core_question,
-                "category": q.get("category", "画像聚焦"),
+                "category": category,
                 "intent": q.get("user_intent", ""),
                 "stage": q.get("decision_stage", ""),
                 "platform": platform,
@@ -486,6 +491,99 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 # ============================================================================
 # Shared Helpers
 # ============================================================================
+
+# --- Category validation & ratio enforcement for persona mode ---
+
+_VALID_CATEGORIES = {"画像痛点场景", "品牌直接问题", "品类选购对比", "行业趋势认知"}
+
+_CATEGORY_ALIAS_MAP: dict[str, str] = {
+    "画像聚焦": "画像痛点场景",
+    "画像痛点": "画像痛点场景",
+    "痛点场景": "画像痛点场景",
+    "场景问题": "画像痛点场景",
+    "画像场景": "画像痛点场景",
+    "品牌问题": "品牌直接问题",
+    "品牌相关": "品牌直接问题",
+    "品牌认知": "品牌直接问题",
+    "品牌对比": "品牌直接问题",
+    "品牌评价": "品牌直接问题",
+    "品类对比": "品类选购对比",
+    "品类问题": "品类选购对比",
+    "选购对比": "品类选购对比",
+    "选购推荐": "品类选购对比",
+    "行业趋势": "行业趋势认知",
+    "行业认知": "行业趋势认知",
+    "趋势认知": "行业趋势认知",
+    "行业问题": "行业趋势认知",
+}
+
+
+def _normalize_category(raw: str) -> str:
+    """Map LLM-returned category to one of the 4 valid values."""
+    raw = raw.strip()
+    if raw in _VALID_CATEGORIES:
+        return raw
+    if raw in _CATEGORY_ALIAS_MAP:
+        return _CATEGORY_ALIAS_MAP[raw]
+    # Substring match: check if any valid category is contained
+    for valid in _VALID_CATEGORIES:
+        if valid in raw or raw in valid:
+            return valid
+    return "画像痛点场景"
+
+
+def _fix_persona_categories(
+    questions: list[dict],
+    brand_name: str,
+    min_brand_ratio: float = 0.25,
+) -> list[dict]:
+    """Normalize categories and enforce brand-direct question ratio (≥25%).
+
+    Steps:
+    1. Normalize every category to one of the 4 valid values.
+    2. If a question contains brand_name but is NOT categorized as 品牌直接问题,
+       and brand ratio is below target, re-label it.
+    3. Log the final distribution.
+    """
+    if not questions or not brand_name:
+        return questions
+
+    brand_lower = brand_name.lower()
+
+    # Step 1: normalize categories
+    for q in questions:
+        raw_cat = q.get("category", "")
+        q["category"] = _normalize_category(raw_cat)
+
+    # Step 2: count current brand-direct questions
+    total = len(questions)
+    brand_count = sum(1 for q in questions if q["category"] == "品牌直接问题")
+    target_count = max(1, int(total * min_brand_ratio + 0.5))
+
+    if brand_count < target_count:
+        # Find questions that mention brand_name but are mis-categorized
+        for q in questions:
+            if brand_count >= target_count:
+                break
+            core = q.get("core_question", q.get("question", "")).lower()
+            if brand_lower in core and q["category"] != "品牌直接问题":
+                logger.info(
+                    f"[A3] Re-labeling question to 品牌直接问题: "
+                    f"{q.get('core_question', '')[:40]}… "
+                    f"(was: {q['category']})"
+                )
+                q["category"] = "品牌直接问题"
+                brand_count += 1
+
+    # Step 3: log distribution
+    from collections import Counter
+    dist = Counter(q["category"] for q in questions)
+    logger.info(
+        f"[A3] Persona category distribution (total={total}): "
+        + ", ".join(f"{k}={v}" for k, v in sorted(dist.items()))
+    )
+
+    return questions
 
 
 def _build_persona_system_prompt() -> str:
