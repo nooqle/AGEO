@@ -45,11 +45,11 @@ const WorkflowNode = ({ data, selected }: { data: WorkflowNodeData; selected?: b
   const status = data.status;
   
   const statusStyles = {
-    idle: 'bg-[--bg-secondary] border-[--border-subtle] text-[--text-tertiary]',
-    running: 'bg-[--bg-secondary] border-[#6366F1] text-[#6366F1] shadow-[0_0_20px_rgba(99,102,241,0.3)]',
-    completed: 'bg-[--bg-secondary] border-[#10B981] text-[#10B981]',
-    error: 'bg-[--bg-secondary] border-[#EF4444] text-[#EF4444]',
-    waiting: 'bg-[--bg-secondary] border-[#F59E0B] text-[#F59E0B]',
+    idle: 'bg-[var(--bg-secondary)] border-[var(--border-subtle)] text-[var(--text-tertiary)]',
+    running: 'bg-[var(--bg-secondary)] border-[#6366F1] text-[#6366F1] shadow-[0_0_20px_rgba(99,102,241,0.3)]',
+    completed: 'bg-[var(--bg-secondary)] border-[#10B981] text-[#10B981]',
+    error: 'bg-[var(--bg-secondary)] border-[#EF4444] text-[#EF4444]',
+    waiting: 'bg-[var(--bg-secondary)] border-[#F59E0B] text-[#F59E0B]',
   };
 
   return (
@@ -60,7 +60,7 @@ const WorkflowNode = ({ data, selected }: { data: WorkflowNodeData; selected?: b
         px-4 py-3 rounded-xl border-2 min-w-[160px]
         transition-all duration-300
         ${statusStyles[status as keyof typeof statusStyles] || statusStyles.idle}
-        ${selected ? 'ring-2 ring-[#6366F1] ring-offset-2 ring-offset-[--bg-primary]' : ''}
+        ${selected ? 'ring-2 ring-[#6366F1] ring-offset-2 ring-offset-[var(--bg-primary)]' : ''}
       `}
     >
       <div className="flex items-center gap-2 mb-1">
@@ -154,7 +154,7 @@ export function WorkflowVisualizer({
   }, [initialNodes, initialEdges, setNodes, setEdges]);
 
   return (
-    <div className={`w-full h-[300px] bg-[--bg-primary] rounded-xl border border-[--border-subtle] overflow-hidden ${className}`}>
+    <div className={`w-full h-[300px] bg-[var(--bg-primary)] rounded-xl border border-[var(--border-subtle)] overflow-hidden ${className}`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -173,9 +173,9 @@ export function WorkflowVisualizer({
         proOptions={{ hideAttribution: true }}
       >
         <Background color="var(--border-subtle)" gap={20} size={1} />
-        <Controls className="bg-[--bg-secondary] border-[--border-subtle] text-[--text-secondary]" />
+        <Controls className="bg-[var(--bg-secondary)] border-[var(--border-subtle)] text-[var(--text-secondary)]" />
         <MiniMap
-          className="bg-[--bg-secondary] border-[--border-subtle]"
+          className="bg-[var(--bg-secondary)] border-[var(--border-subtle)]"
           nodeColor={(node) => {
             switch (node.data?.status) {
               case 'completed':

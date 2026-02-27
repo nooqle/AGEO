@@ -392,8 +392,8 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                   className={cn(
                     'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors cursor-pointer',
                     isViewingHistory
-                      ? 'bg-[--brand-bg] text-[--brand-primary] border border-[--brand-border]'
-                      : 'text-[--text-secondary] hover:bg-[--bg-tertiary] border border-transparent'
+                      ? 'bg-[var(--brand-bg)] text-[var(--brand-primary)] border border-[var(--brand-border)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] border border-transparent'
                   )}
                 >
                   <RiHistoryLine className="w-3.5 h-3.5" />

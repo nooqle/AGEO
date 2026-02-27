@@ -77,5 +77,9 @@ alembic/versions/*.py
 # Playwright browsers
 aeo-platform/backend/playwright-browsers/
 
+# Prevent .claude copies in subdirectories
+**/.claude/
+!/.claude/
+
 # OS files
 Thumbs.db

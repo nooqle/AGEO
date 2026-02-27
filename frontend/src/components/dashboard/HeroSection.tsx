@@ -46,7 +46,6 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
   if (isLoading) return null;
 
   const isEmpty = totalBrands === 0;
-  const isReturningUser = totalBrands === 0 && totalSessions > 0;
 
   if (isEmpty) {
     return (
@@ -66,12 +65,10 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
 
         <div className="relative z-10">
           <h1 className="gradient-text text-3xl lg:text-4xl font-bold mb-3">
-            {isReturningUser ? '品牌列表为空' : 'Specta AI 品牌洞察平台'}
+            Specta AI 品牌洞察平台
           </h1>
           <p className="text-base mb-8" style={{ color: 'var(--text-secondary)' }}>
-            {isReturningUser
-              ? '您之前的分析记录仍然保留。添加品牌即可开始新的分析。'
-              : '智能分析品牌在 AI 搜索引擎中的可见度，发现优化机会'}
+            智能分析品牌在 AI 搜索引擎中的可见度，发现优化机会
           </p>
 
           <button

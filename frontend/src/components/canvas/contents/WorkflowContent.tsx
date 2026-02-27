@@ -51,12 +51,12 @@ const typeLabels: Record<string, string> = {
 
 function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
   return (
-    <div className="bg-[--bg-elevated] border border-[--border-subtle] rounded-lg p-4 space-y-3">
+    <div className="bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h5 className="text-sm font-medium text-[--text-primary]">
+        <h5 className="text-sm font-medium text-[var(--text-primary)]">
           {profile.brand_name}
           {profile.brand_name_en && (
-            <span className="text-[--text-secondary] ml-2 font-normal">
+            <span className="text-[var(--text-secondary)] ml-2 font-normal">
               {profile.brand_name_en}
             </span>
           )}
@@ -68,33 +68,33 @@ function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
         )}
       </div>
       {profile.description && (
-        <p className="text-sm text-[--text-primary] leading-relaxed">
+        <p className="text-sm text-[var(--text-primary)] leading-relaxed">
           {safeString(profile.description)}
         </p>
       )}
       <div className="grid grid-cols-2 gap-2 text-sm">
         {profile.brand_positioning && (
           <div>
-            <span className="text-[--text-tertiary]">定位：</span>
-            <span className="text-[--text-primary]">{safeString(profile.brand_positioning)}</span>
+            <span className="text-[var(--text-tertiary)]">定位：</span>
+            <span className="text-[var(--text-primary)]">{safeString(profile.brand_positioning)}</span>
           </div>
         )}
         {profile.target_audience && (
           <div>
-            <span className="text-[--text-tertiary]">受众：</span>
-            <span className="text-[--text-primary]">{safeString(profile.target_audience)}</span>
+            <span className="text-[var(--text-tertiary)]">受众：</span>
+            <span className="text-[var(--text-primary)]">{safeString(profile.target_audience)}</span>
           </div>
         )}
         {profile.price_positioning && (
           <div>
-            <span className="text-[--text-tertiary]">价格：</span>
-            <span className="text-[--text-primary]">{safeString(profile.price_positioning)}</span>
+            <span className="text-[var(--text-tertiary)]">价格：</span>
+            <span className="text-[var(--text-primary)]">{safeString(profile.price_positioning)}</span>
           </div>
         )}
         {profile.founded_year && (
           <div>
-            <span className="text-[--text-tertiary]">成立：</span>
-            <span className="text-[--text-primary]">{safeString(profile.founded_year)}</span>
+            <span className="text-[var(--text-tertiary)]">成立：</span>
+            <span className="text-[var(--text-primary)]">{safeString(profile.founded_year)}</span>
           </div>
         )}
       </div>
@@ -103,7 +103,7 @@ function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
           {profile.core_products.map((p, i) => (
             <span
               key={i}
-              className="text-sm px-2 py-0.5 rounded bg-[--bg-tertiary] text-[--text-primary]"
+              className="text-sm px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
             >
               {p}
             </span>
@@ -116,15 +116,15 @@ function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
 
 function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-[--border-subtle]">
+    <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
       <table className="w-full text-sm min-w-[600px]">
         <thead>
-          <tr className="bg-[--bg-elevated] border-b border-[--border-subtle]">
-            <th className="text-left py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[160px]">品牌</th>
-            <th className="text-left py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[80px]">类型</th>
-            <th className="text-center py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide w-[60px]">相关度</th>
-            <th className="text-left py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide">核心产品</th>
-            <th className="text-left py-3 px-4 text-[--text-secondary] font-medium text-xs uppercase tracking-wide">竞争优势</th>
+          <tr className="bg-[var(--bg-elevated)] border-b border-[var(--border-subtle)]">
+            <th className="text-left py-3 px-4 text-[var(--text-secondary)] font-medium text-xs uppercase tracking-wide w-[160px]">品牌</th>
+            <th className="text-left py-3 px-4 text-[var(--text-secondary)] font-medium text-xs uppercase tracking-wide w-[80px]">类型</th>
+            <th className="text-center py-3 px-4 text-[var(--text-secondary)] font-medium text-xs uppercase tracking-wide w-[60px]">相关度</th>
+            <th className="text-left py-3 px-4 text-[var(--text-secondary)] font-medium text-xs uppercase tracking-wide">核心产品</th>
+            <th className="text-left py-3 px-4 text-[var(--text-secondary)] font-medium text-xs uppercase tracking-wide">竞争优势</th>
           </tr>
         </thead>
         <tbody>
@@ -134,13 +134,13 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: i * 0.03 }}
-              className="border-b border-[--border-subtle] last:border-b-0 hover:bg-[--bg-elevated]/60 transition-colors"
+              className="border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--bg-elevated)]/60 transition-colors"
             >
               <td className="py-3 px-4">
                 <div className="flex flex-col gap-0.5">
-                  <span className="text-[--text-primary] font-semibold">{c.name}</span>
+                  <span className="text-[var(--text-primary)] font-semibold">{c.name}</span>
                   {c.name_en && (
-                    <span className="text-[--text-secondary] text-xs">{c.name_en}</span>
+                    <span className="text-[var(--text-secondary)] text-xs">{c.name_en}</span>
                   )}
                   {c.website && /[.]/.test(c.website) ? (
                     <a
@@ -152,7 +152,7 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
                       {c.website.replace(/^https?:\/\/(www\.)?/, '')}
                     </a>
                   ) : c.website ? (
-                    <span className="text-[--text-tertiary] text-xs">{c.website}</span>
+                    <span className="text-[var(--text-tertiary)] text-xs">{c.website}</span>
                   ) : null}
                 </div>
               </td>
@@ -167,7 +167,7 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
                 </span>
               </td>
               <td className="py-3 px-4 text-center">
-                <div className="inline-flex items-center justify-center w-8 h-8 rounded bg-[--bg-tertiary]">
+                <div className="inline-flex items-center justify-center w-8 h-8 rounded bg-[var(--bg-tertiary)]">
                   <span className="text-sm font-semibold" style={{ color: getScoreColor(c.relevance_score ?? 0) }}>{c.relevance_score}</span>
                 </div>
               </td>
@@ -175,23 +175,23 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
                 {c.core_products && c.core_products.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
                     {c.core_products.slice(0, 3).map((p, j) => (
-                      <span key={j} className="px-2 py-0.5 rounded bg-[--bg-tertiary] text-[--text-primary] text-xs">
+                      <span key={j} className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs">
                         {p}
                       </span>
                     ))}
                     {c.core_products.length > 3 && (
-                      <span className="text-[--text-secondary] text-xs self-center">+{c.core_products.length - 3}</span>
+                      <span className="text-[var(--text-secondary)] text-xs self-center">+{c.core_products.length - 3}</span>
                     )}
                   </div>
                 ) : (
-                  <span className="text-[--text-disabled]">-</span>
+                  <span className="text-[var(--text-disabled)]">-</span>
                 )}
               </td>
               <td className="py-3 px-4">
                 {c.competitive_advantage ? (
-                  <p className="text-[--text-primary] max-w-[240px]">{safeString(c.competitive_advantage)}</p>
+                  <p className="text-[var(--text-primary)] max-w-[240px]">{safeString(c.competitive_advantage)}</p>
                 ) : (
-                  <span className="text-[--text-disabled]">-</span>
+                  <span className="text-[var(--text-disabled)]">-</span>
                 )}
               </td>
             </motion.tr>
@@ -231,7 +231,7 @@ function CompetitorList({ competitors }: { competitors: WorkflowCompetitor[] }) 
               'px-2 py-1 rounded text-xs transition-colors',
               filterType === type
                 ? 'bg-[#7C3AED] text-white'
-                : 'bg-[--bg-tertiary] text-[--text-secondary] hover:bg-[--bg-elevated]'
+                : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)]'
             )}
           >
             {typeLabels[type]}
@@ -301,12 +301,12 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle?.(); }
       } : undefined}
       className={cn(
-        'bg-[--bg-elevated] border rounded-lg p-4 space-y-3 transition-all',
-        selectable && !disabled && 'cursor-pointer hover:border-[--border-hover]',
+        'bg-[var(--bg-elevated)] border rounded-lg p-4 space-y-3 transition-all',
+        selectable && !disabled && 'cursor-pointer hover:border-[var(--border-hover)]',
         selectable && disabled && 'opacity-40 cursor-not-allowed',
         selected
           ? 'border-indigo-500 bg-indigo-500/10'
-          : 'border-[--border-subtle]',
+          : 'border-[var(--border-subtle)]',
       )}
     >
       {/* Header: checkbox (if selectable) + name */}
@@ -316,13 +316,13 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
             'w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0',
             selected
               ? 'border-indigo-500 bg-indigo-500'
-              : 'border-[--border-hover]'
+              : 'border-[var(--border-hover)]'
           )}>
             {selected && <RiCheckLine className="w-3 h-3 text-white" />}
           </div>
         )}
         <div className="flex-1 min-w-0">
-          <span className="text-sm font-semibold text-[--text-primary]">
+          <span className="text-sm font-semibold text-[var(--text-primary)]">
             {persona.persona_name}
           </span>
         </div>
@@ -334,26 +334,26 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
           {demo.age_range && (
             <div>
-              <span className="text-[--text-tertiary]">年龄：</span>
-              <span className="text-[--text-primary]">{demo.age_range}</span>
+              <span className="text-[var(--text-tertiary)]">年龄：</span>
+              <span className="text-[var(--text-primary)]">{demo.age_range}</span>
             </div>
           )}
           {demo.gender && (
             <div>
-              <span className="text-[--text-tertiary]">性别：</span>
-              <span className="text-[--text-primary]">{demo.gender}</span>
+              <span className="text-[var(--text-tertiary)]">性别：</span>
+              <span className="text-[var(--text-primary)]">{demo.gender}</span>
             </div>
           )}
           {demo.city_tier && (
             <div>
-              <span className="text-[--text-tertiary]">城市：</span>
-              <span className="text-[--text-primary]">{demo.city_tier}</span>
+              <span className="text-[var(--text-tertiary)]">城市：</span>
+              <span className="text-[var(--text-primary)]">{demo.city_tier}</span>
             </div>
           )}
           {demo.occupation && (
             <div>
-              <span className="text-[--text-tertiary]">职业：</span>
-              <span className="text-[--text-primary]">{demo.occupation}</span>
+              <span className="text-[var(--text-tertiary)]">职业：</span>
+              <span className="text-[var(--text-primary)]">{demo.occupation}</span>
             </div>
           )}
         </div>
@@ -361,7 +361,7 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
 
       {/* Description */}
       {persona.persona_description && (
-        <p className="text-sm text-[--text-primary] leading-relaxed">
+        <p className="text-sm text-[var(--text-primary)] leading-relaxed">
           {safeString(persona.persona_description)}
         </p>
       )}
@@ -372,13 +372,13 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
           {/* Usage scenarios */}
           {hasScenarios && (
             <div className="space-y-1.5">
-              <h6 className="text-xs font-medium text-[--text-secondary] uppercase tracking-wide">使用场景</h6>
+              <h6 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">使用场景</h6>
               <div className="space-y-1.5">
                 {scenarios.map((s, i) => (
-                  <div key={i} className="bg-[--bg-tertiary] rounded px-2.5 py-1.5">
-                    <div className="text-xs font-medium text-[--text-primary]">{s.scenario_name}</div>
+                  <div key={i} className="bg-[var(--bg-tertiary)] rounded px-2.5 py-1.5">
+                    <div className="text-xs font-medium text-[var(--text-primary)]">{s.scenario_name}</div>
                     {s.scenario_description && (
-                      <div className="text-xs text-[--text-secondary] mt-0.5">{s.scenario_description}</div>
+                      <div className="text-xs text-[var(--text-secondary)] mt-0.5">{s.scenario_description}</div>
                     )}
                   </div>
                 ))}
@@ -389,13 +389,13 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
           {/* Marketing pain points — description shown directly */}
           {hasPainPoints && (
             <div className="space-y-1.5">
-              <h6 className="text-xs font-medium text-[--text-secondary] uppercase tracking-wide">营销痛点</h6>
+              <h6 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">营销痛点</h6>
               <div className="space-y-1.5">
                 {painPoints.map((pp, i) => (
-                  <div key={i} className="bg-[--bg-tertiary] rounded px-2.5 py-1.5">
+                  <div key={i} className="bg-[var(--bg-tertiary)] rounded px-2.5 py-1.5">
                     <div className="text-xs font-medium text-[#F9A8D4]">{pp.pain_point_category}</div>
                     {pp.pain_point_description && (
-                      <div className="text-xs text-[--text-secondary] mt-0.5">{pp.pain_point_description}</div>
+                      <div className="text-xs text-[var(--text-secondary)] mt-0.5">{pp.pain_point_description}</div>
                     )}
                   </div>
                 ))}
@@ -406,9 +406,9 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
           {/* Key questions — renamed */}
           {hasKeyQuestions && (
             <div className="space-y-1.5">
-              <h6 className="text-xs font-medium text-[--text-secondary] uppercase tracking-wide">AI搜索中的典型提问</h6>
-              <p className="text-xs text-[--text-disabled] -mt-0.5">用户在AI搜索引擎中可能提出的问题</p>
-              <ol className="list-decimal list-inside space-y-0.5 text-xs text-[--text-primary]">
+              <h6 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">AI搜索中的典型提问</h6>
+              <p className="text-xs text-[var(--text-disabled)] -mt-0.5">用户在AI搜索引擎中可能提出的问题</p>
+              <ol className="list-decimal list-inside space-y-0.5 text-xs text-[var(--text-primary)]">
                 {keyQuestions.map((q, i) => (
                   <li key={i}>{q}</li>
                 ))}
@@ -433,8 +433,8 @@ interface SelectionBarProps {
 function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, onConfirm, onSkip }: SelectionBarProps) {
   if (isConfirmed) {
     return (
-      <div className="sticky bottom-0 bg-[--bg-primary]/95 backdrop-blur border-t border-[--border-subtle] px-5 py-3">
-        <p className="text-sm text-[--text-secondary] text-center">
+      <div className="sticky bottom-0 bg-[var(--bg-primary)]/95 backdrop-blur border-t border-[var(--border-subtle)] px-5 py-3">
+        <p className="text-sm text-[var(--text-secondary)] text-center">
           已确认 {selectedCount} 个画像，正在生成模拟问题...
         </p>
       </div>
@@ -442,9 +442,9 @@ function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, 
   }
 
   return (
-    <div className="sticky bottom-0 bg-[--bg-primary]/95 backdrop-blur border-t border-[--border-subtle] px-5 py-3">
+    <div className="sticky bottom-0 bg-[var(--bg-primary)]/95 backdrop-blur border-t border-[var(--border-subtle)] px-5 py-3">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm text-[--text-secondary]">
+        <span className="text-sm text-[var(--text-secondary)]">
           已选择 {selectedCount}/{maxSelection} 个画像
         </span>
       </div>
@@ -454,7 +454,7 @@ function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, 
             'flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors',
             selectedCount >= minSelection
               ? 'bg-indigo-600 text-white hover:bg-indigo-500'
-              : 'bg-[--bg-tertiary] text-[--text-disabled] cursor-not-allowed'
+              : 'bg-[var(--bg-tertiary)] text-[var(--text-disabled)] cursor-not-allowed'
           )}
           onClick={onConfirm}
           disabled={selectedCount < minSelection}
@@ -462,7 +462,7 @@ function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, 
           确认选择
         </button>
         <button
-          className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-[--bg-elevated] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] transition-colors"
+          className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
           onClick={onSkip}
         >
           全景分析所有画像
@@ -541,7 +541,7 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
       {brandProfile && (
         <div>
           {showSectionTitles && (
-            <h4 className="text-sm font-medium text-[--text-primary] mb-3">品牌档案</h4>
+            <h4 className="text-sm font-medium text-[var(--text-primary)] mb-3">品牌档案</h4>
           )}
           <BrandProfileCard profile={brandProfile} />
         </div>
@@ -551,7 +551,7 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
       {brandProfile && competitors.length > 0 && (
         <div>
           {showSectionTitles && (
-            <h4 className="text-sm font-medium text-[--text-primary] mb-3">品牌竞品图谱</h4>
+            <h4 className="text-sm font-medium text-[var(--text-primary)] mb-3">品牌竞品图谱</h4>
           )}
           <BrandCompetitionGraph
             brandProfile={brandProfile}
@@ -563,7 +563,7 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
       {/* Competitor List */}
       {competitors.length > 0 && (
         <div>
-          <h4 className="text-sm font-medium text-[--text-primary] mb-3">
+          <h4 className="text-sm font-medium text-[var(--text-primary)] mb-3">
             竞品列表（{competitors.length}）
           </h4>
           <CompetitorList competitors={competitors} />
@@ -573,11 +573,11 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
       {/* Persona Cards (with optional inline selection) */}
       {personas.length > 0 && (
         <div>
-          <h4 className="text-sm font-medium text-[--text-primary] mb-1">
+          <h4 className="text-sm font-medium text-[var(--text-primary)] mb-1">
             用户画像（{personas.length}）
           </h4>
           {hasSelection && (
-            <p className="text-xs text-[--text-tertiary] mb-3">
+            <p className="text-xs text-[var(--text-tertiary)] mb-3">
               {selection.description || '请选择您希望重点分析的用户画像（可多选）'}
             </p>
           )}

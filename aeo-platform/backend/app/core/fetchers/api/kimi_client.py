@@ -13,8 +13,10 @@ from app.schemas.fetch import LLMResponse, SearchReference
 
 logger = logging.getLogger(__name__)
 
+from app.core.constants import LLMConstants, PlatformConstants
+
 # Maximum tool_calls rounds to prevent infinite loops
-MAX_TOOL_ROUNDS = 3
+MAX_TOOL_ROUNDS = LLMConstants.MAX_TOOL_ROUNDS
 
 # System prompt requesting JSON output with answer + citations
 _SYSTEM_PROMPT = """\
@@ -49,7 +51,7 @@ class KimiClient(BaseAPIClient):
       3. Second call with response_format=json_object returns structured answer
     """
 
-    DEFAULT_ENDPOINT = "https://api.moonshot.cn/v1/chat/completions"
+    DEFAULT_ENDPOINT = settings.MOONSHOT_BASE_URL
 
     def __init__(
         self,
@@ -103,7 +105,7 @@ class KimiClient(BaseAPIClient):
                     self.endpoint,
                     headers=headers,
                     json=payload,
-                    timeout=60.0,
+                    timeout=PlatformConstants.PLATFORM_API_TIMEOUTS["kimi"],
                 )
                 response.raise_for_status()
                 data = response.json()

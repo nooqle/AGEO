@@ -26,25 +26,25 @@ export function CanvasPanel() {
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
           {isAgentExecuting ? (
             <>
-              <div className="w-16 h-16 rounded-2xl bg-[--bg-secondary] border border-[--border-subtle] flex items-center justify-center mb-4">
+              <div className="w-16 h-16 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] flex items-center justify-center mb-4">
                 <RiLoader4Line className="w-8 h-8 text-[#F59E0B] animate-spin" />
               </div>
-              <h3 className="text-lg font-medium text-[--text-secondary] mb-2">
+              <h3 className="text-lg font-medium text-[var(--text-secondary)] mb-2">
                 分析进行中
               </h3>
-              <p className="text-sm text-[--text-tertiary] max-w-[280px]">
+              <p className="text-sm text-[var(--text-tertiary)] max-w-[280px]">
                 报告即将生成，请稍候...
               </p>
             </>
           ) : (
             <>
-              <div className="w-16 h-16 rounded-2xl bg-[--bg-secondary] border border-[--border-subtle] flex items-center justify-center mb-4">
-                <RiFileTextLine className="w-8 h-8 text-[--text-disabled]" />
+              <div className="w-16 h-16 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] flex items-center justify-center mb-4">
+                <RiFileTextLine className="w-8 h-8 text-[var(--text-disabled)]" />
               </div>
-              <h3 className="text-lg font-medium text-[--text-secondary] mb-2">
+              <h3 className="text-lg font-medium text-[var(--text-secondary)] mb-2">
                 暂无分析报告
               </h3>
-              <p className="text-sm text-[--text-tertiary] max-w-[280px]">
+              <p className="text-sm text-[var(--text-tertiary)] max-w-[280px]">
                 开始与 Agent 对话，分析完成后可在此处查看详细报告
               </p>
             </>
@@ -161,9 +161,9 @@ export function CanvasToggle({ onClick, hasContent = false }: CanvasToggleProps)
       className={cn(
         'fixed right-4 top-1/2 -translate-y-1/2 z-40',
         'w-10 h-10 rounded-full flex items-center justify-center',
-        'bg-[--bg-secondary] border border-[--border-subtle] shadow-lg',
-        'hover:bg-[--bg-tertiary] hover:border-[--border-hover] transition-all duration-200',
-        hasContent && 'ring-2 ring-[#6366F1] ring-offset-2 ring-offset-[--bg-primary]'
+        'bg-[var(--bg-secondary)] border border-[var(--border-subtle)] shadow-lg',
+        'hover:bg-[var(--bg-tertiary)] hover:border-[var(--border-hover)] transition-all duration-200',
+        hasContent && 'ring-2 ring-[#6366F1] ring-offset-2 ring-offset-[var(--bg-primary)]'
       )}
       initial={{ x: 20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
@@ -171,7 +171,7 @@ export function CanvasToggle({ onClick, hasContent = false }: CanvasToggleProps)
       whileTap={{ scale: 0.95 }}
       title="打开分析报告"
     >
-      <RiLayoutRightLine className="w-5 h-5 text-[--text-secondary]" />
+      <RiLayoutRightLine className="w-5 h-5 text-[var(--text-secondary)]" />
       {hasContent && (
         <span className="absolute -top-1 -right-1 w-3 h-3 bg-[#6366F1] rounded-full" />
       )}

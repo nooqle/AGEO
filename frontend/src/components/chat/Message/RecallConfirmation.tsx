@@ -60,27 +60,13 @@ export function RecallConfirmation({ messageCount, onConfirm, onCancel }: Recall
         <div className="flex gap-2">
           <button
             onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-lg transition-colors cursor-pointer"
-            style={{
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border-subtle)',
-              background: 'transparent',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            className="px-3 py-1.5 text-sm rounded-lg transition-colors cursor-pointer text-[var(--text-secondary)] border border-[var(--border-subtle)] bg-transparent hover:bg-[var(--bg-elevated)]"
           >
             取消
           </button>
           <button
             onClick={onConfirm}
-            className="px-3 py-1.5 text-sm rounded-lg transition-colors cursor-pointer flex items-center gap-1"
-            style={{
-              color: '#fff',
-              background: '#d97706',
-              border: 'none',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = '#b45309'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = '#d97706'; }}
+            className="px-3 py-1.5 text-sm rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-white bg-[var(--warning)] border-none hover:brightness-90"
           >
             确认回退
             <RiArrowGoBackLine className="w-3.5 h-3.5" />

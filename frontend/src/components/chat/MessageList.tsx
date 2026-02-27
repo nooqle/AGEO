@@ -90,11 +90,11 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
         <span className="text-4xl">🔍</span>
       </div>
 
-      <h2 className="text-2xl font-bold text-[--text-primary] mb-2 text-center">
+      <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2 text-center">
         欢迎使用 Specta AI 智能分析
       </h2>
 
-      <p className="text-[--text-secondary] text-center mb-8 max-w-md">
+      <p className="text-[var(--text-secondary)] text-center mb-8 max-w-md">
         输入品牌名称，AI 将自动分析该品牌在主流 AI 平台的声量表现，并生成优化建议
       </p>
 
@@ -104,7 +104,7 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
             <button
               key={brand.name}
               onClick={() => handleBrandClick(brand.name)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-[--border-subtle] bg-[--bg-elevated] text-sm text-[--text-primary] hover:border-[#6366F1] hover:bg-[--bg-tertiary] transition-all"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-sm text-[var(--text-primary)] hover:border-[#6366F1] hover:bg-[var(--bg-tertiary)] transition-all"
             >
               <span>{brand.emoji}</span>
               <span>{brand.name}</span>
@@ -115,9 +115,9 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
 
       <div className="mt-12 grid grid-cols-3 gap-8 text-center">
         {FEATURE_HIGHLIGHTS.map((feature) => (
-          <div key={feature.title} className="text-[--text-tertiary]">
+          <div key={feature.title} className="text-[var(--text-tertiary)]">
             <div className="text-2xl mb-2">{feature.icon}</div>
-            <div className="font-medium text-[--text-secondary]">{feature.title}</div>
+            <div className="font-medium text-[var(--text-secondary)]">{feature.title}</div>
             <div className="text-xs">{feature.desc}</div>
           </div>
         ))}

@@ -676,6 +676,22 @@ async def handle_confirmation_langgraph(
         f"user_content={user_content!r}, selection={selection!r}"
     )
 
+    # Persist the user's confirmation as a chat message so it survives page refresh
+    async with AsyncSessionLocal() as db:
+        message_service = MessageService(db)
+        try:
+            saved = await message_service.save_message(
+                session_id=UUID(session_id),
+                role="user",
+                content=user_content,
+            )
+            await ws_session_manager.emit_to_session(
+                session_id, "user_message_ack",
+                {"message_id": str(saved["id"]), "content": user_content},
+            )
+        except Exception as e:
+            logger.error(f"[LangGraph] Error saving confirmation message: {e}")
+
     workflow = None
     config = None
     try:

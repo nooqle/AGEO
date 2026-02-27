@@ -2,12 +2,12 @@ import Link from 'next/link';
 
 export function HeroSection() {
   return (
-    <section className="py-20 bg-[--bg-primary]">
+    <section className="py-20 bg-[var(--bg-primary)]">
       <div className="max-w-6xl mx-auto px-4 text-center">
-        <h1 className="text-5xl font-bold text-[--text-primary] mb-6">
+        <h1 className="text-5xl font-bold text-[var(--text-primary)] mb-6">
           Specta AI
         </h1>
-        <p className="text-xl text-[--text-secondary] mb-8 max-w-2xl mx-auto">
+        <p className="text-xl text-[var(--text-secondary)] mb-8 max-w-2xl mx-auto">
           品牌声量智能分析平台 - 洞察品牌在AI搜索中的可见性
         </p>
         <Link

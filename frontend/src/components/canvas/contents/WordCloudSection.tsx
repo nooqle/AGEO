@@ -8,36 +8,26 @@ interface WordCloudSectionProps {
   analysis: KeywordAnalysis;
 }
 
-const PLATFORM_NAMES: Record<string, string> = {
-  kimi: 'Kimi',
-  deepseek: 'DeepSeek',
-  zhipu: '智谱',
-  doubao: '豆包',
-};
+import { PLATFORM_NAMES, PLATFORM_COLORS } from '@/config/platforms';
 
-const PLATFORM_COLORS: Record<string, string> = {
-  deepseek: '#4F8EF7',
-  kimi: '#7C3AED',
-  zhipu: '#10B981',
-  doubao: '#F59E0B',
-};
+const TOP_N = 15;
+const MIN_FONT_SIZE = 14;
+const MAX_FONT_SIZE = 48;
+const BRAND_INDIGO = '99, 102, 241';
 
 /** Map normalized value (10-100) to font size (14-48px) */
 function valueToFontSize(value: number): number {
-  const minSize = 14;
-  const maxSize = 48;
-  // value range is 10-100
   const ratio = (value - 10) / 90;
-  return Math.round(minSize + ratio * (maxSize - minSize));
+  return Math.round(MIN_FONT_SIZE + ratio * (MAX_FONT_SIZE - MIN_FONT_SIZE));
 }
 
 /** Map normalized value (10-100) to Indigo opacity tier */
 function valueToColor(value: number): string {
-  if (value >= 80) return 'rgba(99, 102, 241, 1)';
-  if (value >= 60) return 'rgba(99, 102, 241, 0.85)';
-  if (value >= 40) return 'rgba(99, 102, 241, 0.65)';
-  if (value >= 25) return 'rgba(99, 102, 241, 0.45)';
-  return 'rgba(99, 102, 241, 0.3)';
+  if (value >= 80) return `rgba(${BRAND_INDIGO}, 1)`;
+  if (value >= 60) return `rgba(${BRAND_INDIGO}, 0.85)`;
+  if (value >= 40) return `rgba(${BRAND_INDIGO}, 0.65)`;
+  if (value >= 25) return `rgba(${BRAND_INDIGO}, 0.45)`;
+  return `rgba(${BRAND_INDIGO}, 0.3)`;
 }
 
 export function WordCloudSection({ analysis }: WordCloudSectionProps) {
@@ -54,12 +44,12 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
 
   // Top 15 for ranking list
   const rankingKeywords = useMemo(() => {
-    return filteredKeywords.slice(0, 15);
+    return filteredKeywords.slice(0, TOP_N);
   }, [filteredKeywords]);
 
   if (!keywords || keywords.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12 text-[15px] text-[--text-tertiary]">
+      <div className="flex items-center justify-center py-12 text-[15px] text-[var(--text-tertiary)]">
         暂无语义分析数据，完成分析后将自动生成
       </div>
     );
@@ -68,32 +58,32 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
   return (
     <div className="space-y-6">
       {/* A. Summary stats */}
-      <div className="p-5 bg-[--bg-elevated] border border-[--border-subtle] rounded-xl">
+      <div className="p-5 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-xl">
         <div className="flex items-center gap-6">
           <div className="text-center min-w-[100px]">
             <div className="text-4xl font-bold text-[#6366F1]">
               {total_keywords}
             </div>
-            <div className="text-[13px] text-[--text-secondary] mt-1">核心关键词</div>
+            <div className="text-[13px] text-[var(--text-secondary)] mt-1">核心关键词</div>
           </div>
           <div className="flex-1">
             <div className="grid grid-cols-2 gap-3">
               <div className="text-center p-2 rounded-lg" style={{ backgroundColor: 'rgba(99,102,241,0.06)' }}>
-                <div className="text-lg font-bold text-[--text-primary]">{platforms.length}</div>
-                <div className="text-[11px] text-[--text-tertiary]">覆盖平台</div>
+                <div className="text-lg font-bold text-[var(--text-primary)]">{platforms.length}</div>
+                <div className="text-[11px] text-[var(--text-tertiary)]">覆盖平台</div>
               </div>
               <div className="text-center p-2 rounded-lg" style={{ backgroundColor: 'rgba(99,102,241,0.06)' }}>
-                <div className="text-lg font-bold text-[--text-primary]">
+                <div className="text-lg font-bold text-[var(--text-primary)]">
                   {keywords.length > 0
                     ? Math.round(keywords.reduce((sum, kw) => sum + kw.platforms.length, 0) / keywords.length * 10) / 10
                     : 0}
                 </div>
-                <div className="text-[11px] text-[--text-tertiary]">平均平台覆盖</div>
+                <div className="text-[11px] text-[var(--text-tertiary)]">平均平台覆盖</div>
               </div>
             </div>
           </div>
         </div>
-        <p className="text-[11px] text-[--text-tertiary] mt-3 leading-relaxed">
+        <p className="text-[11px] text-[var(--text-tertiary)] mt-3 leading-relaxed">
           基于 TF-IDF 算法从 AI 平台回答中提取的高频语义关键词。词越大表示在回答中出现频率越高、权重越大。
         </p>
       </div>
@@ -101,14 +91,14 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
       {/* B. Platform filter */}
       {platforms.length > 1 && (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[13px] text-[--text-secondary] mr-1">筛选平台:</span>
+          <span className="text-[13px] text-[var(--text-secondary)] mr-1">筛选平台:</span>
           <button
             onClick={() => setSelectedPlatform(null)}
             className={cn(
               'px-3 py-1.5 text-[12px] font-medium rounded-full border transition-colors',
               selectedPlatform === null
                 ? 'bg-[#6366F1]/15 text-[#6366F1] border-[#6366F1]/30'
-                : 'bg-[--bg-elevated] text-[--text-secondary] border-[--border-subtle] hover:text-[--text-primary]'
+                : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
             )}
           >
             全部
@@ -120,8 +110,8 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
               className={cn(
                 'px-3 py-1.5 text-[12px] font-medium rounded-full border transition-colors flex items-center gap-1.5',
                 selectedPlatform === plat
-                  ? 'border-[--border-subtle]'
-                  : 'bg-[--bg-elevated] text-[--text-secondary] border-[--border-subtle] hover:text-[--text-primary]'
+                  ? 'border-[var(--border-subtle)]'
+                  : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
               )}
               style={selectedPlatform === plat ? {
                 backgroundColor: `${PLATFORM_COLORS[plat] || '#6366F1'}15`,
@@ -140,8 +130,8 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
       )}
 
       {/* C. Word Cloud visualization (flex-wrap) */}
-      <div className="p-5 bg-[--bg-elevated] border border-[--border-subtle] rounded-xl">
-        <h3 className="text-[15px] font-medium text-[--text-primary] mb-4">语义词云</h3>
+      <div className="p-5 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-xl">
+        <h3 className="text-[15px] font-medium text-[var(--text-primary)] mb-4">语义词云</h3>
         {filteredKeywords.length > 0 ? (
           <div className="flex flex-wrap items-baseline justify-center gap-x-3 gap-y-2 py-4">
             {filteredKeywords.map((kw) => (
@@ -164,7 +154,7 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
             ))}
           </div>
         ) : (
-          <div className="flex items-center justify-center py-8 text-[13px] text-[--text-tertiary]">
+          <div className="flex items-center justify-center py-8 text-[13px] text-[var(--text-tertiary)]">
             该平台暂无关键词数据
           </div>
         )}
@@ -181,23 +171,23 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
       {/* D. Ranking list (top 15) */}
       {rankingKeywords.length > 0 && (
         <div>
-          <h3 className="text-[15px] font-medium text-[--text-primary] mb-3">关键词排行 Top {Math.min(15, rankingKeywords.length)}</h3>
+          <h3 className="text-[15px] font-medium text-[var(--text-primary)] mb-3">关键词排行 Top {Math.min(TOP_N, rankingKeywords.length)}</h3>
           <div className="space-y-2">
             {rankingKeywords.map((kw, i) => (
               <div key={kw.word}>
                 <button
                   onClick={() => setExpandedKeyword(expandedKeyword === kw.word ? null : kw.word)}
-                  className="w-full flex items-center gap-3 p-3 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg hover:border-[#6366F1]/30 transition-colors text-left"
+                  className="w-full flex items-center gap-3 p-3 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg hover:border-[#6366F1]/30 transition-colors text-left"
                 >
                   <span className={cn(
                     'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0',
-                    i < 3 ? 'bg-[#6366F1]/20 text-[#6366F1]' : 'bg-[--bg-tertiary] text-[--text-tertiary]'
+                    i < 3 ? 'bg-[#6366F1]/20 text-[#6366F1]' : 'bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]'
                   )}>
                     {i + 1}
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-medium text-[--text-primary]">{kw.word}</span>
+                      <span className="text-[13px] font-medium text-[var(--text-primary)]">{kw.word}</span>
                       <div className="flex items-center gap-1">
                         {kw.platforms.map((plat) => (
                           <span
@@ -210,13 +200,13 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 mt-1">
-                      <div className="flex-1 h-1.5 rounded-full bg-[--bg-tertiary] overflow-hidden">
+                      <div className="flex-1 h-1.5 rounded-full bg-[var(--bg-tertiary)] overflow-hidden">
                         <div
                           className="h-full rounded-full bg-[#6366F1]"
                           style={{ width: `${kw.value}%` }}
                         />
                       </div>
-                      <span className="text-[11px] text-[--text-tertiary] w-10 text-right flex-shrink-0">
+                      <span className="text-[11px] text-[var(--text-tertiary)] w-10 text-right flex-shrink-0">
                         {kw.value.toFixed(0)}
                       </span>
                     </div>
@@ -226,8 +216,8 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
                 {/* Inline expanded context */}
                 {expandedKeyword === kw.word && kw.contexts.length > 0 && (
                   <div className="mt-1 ml-9 mr-3 mb-1">
-                    <div className="p-3 rounded-lg border border-[--border-subtle]" style={{ backgroundColor: 'rgba(99,102,241,0.04)' }}>
-                      <div className="text-[11px] text-[--text-tertiary] mb-2">上下文引用</div>
+                    <div className="p-3 rounded-lg border border-[var(--border-subtle)]" style={{ backgroundColor: 'rgba(99,102,241,0.04)' }}>
+                      <div className="text-[11px] text-[var(--text-tertiary)] mb-2">上下文引用</div>
                       <div className="space-y-2">
                         {kw.contexts.map((ctx, ci) => (
                           <div key={ci} className="flex items-start gap-2">
@@ -239,7 +229,7 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
                               <span className="text-[10px] font-medium" style={{ color: PLATFORM_COLORS[ctx.platform] || '#6366F1' }}>
                                 {PLATFORM_NAMES[ctx.platform] || ctx.platform}
                               </span>
-                              <p className="text-[12px] text-[--text-secondary] leading-relaxed mt-0.5 break-all">
+                              <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed mt-0.5 break-all">
                                 {highlightWord(ctx.text, kw.word)}
                               </p>
                             </div>
@@ -257,7 +247,7 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
 
       {/* E. Data note */}
       <div
-        className="p-3 rounded-lg text-[11px] text-[--text-tertiary] leading-relaxed"
+        className="p-3 rounded-lg text-[11px] text-[var(--text-tertiary)] leading-relaxed"
         style={{ backgroundColor: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.15)' }}
       >
         语义词云基于 TF-IDF 算法从各 AI 平台回答中提取关键词。权重值越高，表示该词在所有回答中的区分度和重要性越大。点击关键词可查看原文上下文。
@@ -281,11 +271,11 @@ function ExpandedKeywordDetail({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-[15px] font-bold text-[#6366F1]">{keyword.word}</span>
-          <span className="text-[11px] text-[--text-tertiary]">权重 {keyword.value.toFixed(0)}</span>
+          <span className="text-[11px] text-[var(--text-tertiary)]">权重 {keyword.value.toFixed(0)}</span>
         </div>
         <button
           onClick={onClose}
-          className="text-[--text-tertiary] hover:text-[--text-primary] transition-colors text-sm px-1"
+          className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors text-sm px-1"
           aria-label="关闭"
         >
           x
@@ -317,7 +307,7 @@ function ExpandedKeywordDetail({
                 className="mt-1 w-2 h-2 rounded-full flex-shrink-0"
                 style={{ backgroundColor: PLATFORM_COLORS[ctx.platform] || '#6366F1' }}
               />
-              <p className="text-[12px] text-[--text-secondary] leading-relaxed break-all">
+              <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed break-all">
                 {highlightWord(ctx.text, keyword.word)}
               </p>
             </div>

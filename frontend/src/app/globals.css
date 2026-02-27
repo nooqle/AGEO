@@ -252,7 +252,7 @@ body {
   animation: scale-in 0.2s ease-out forwards;
 }
 
-/* Slide Up 动画 (StageResultCard 入场) */
+/* Slide Up 动画 */
 @keyframes slideUp {
   from {
     opacity: 0;
@@ -268,7 +268,7 @@ body {
   animation: slideUp 200ms ease-out;
 }
 
-/* Fade to Muted 动画 (StageResultCard 完成后淡化) */
+/* Fade to Muted 动画 */
 @keyframes fadeToMuted {
   from {
     opacity: 1;

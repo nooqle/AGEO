@@ -37,34 +37,26 @@ PLATFORMS = {
     "deepseek": {"name": "DeepSeek", "method": "browser"},
 }
 
-# API platforms: full retry support
-MAX_RETRIES = 2
-RETRY_BACKOFF_BASE = 2.0  # seconds
+import httpx
 
-# Browser platforms: per-platform timeout from constants, 1 retry
-BROWSER_MAX_RETRIES = 1
+from app.core.constants import PlatformConstants, WorkflowConstants
 
-from app.core.constants import PlatformConstants
+# Aliases from centralized constants
+MAX_RETRIES = WorkflowConstants.API_MAX_RETRIES
+RETRY_BACKOFF_BASE = WorkflowConstants.API_RETRY_BACKOFF_BASE
+BROWSER_MAX_RETRIES = WorkflowConstants.BROWSER_MAX_RETRIES
+MIN_PLATFORMS_REQUIRED = WorkflowConstants.MIN_PLATFORMS_REQUIRED
 
 
 def _get_browser_timeout(platform: str) -> float:
     """Get per-platform browser timeout from constants."""
     return float(PlatformConstants.PLATFORM_TIMEOUTS.get(platform, 200))
-
-# Minimum number of platforms with successful data to proceed
-MIN_PLATFORMS_REQUIRED = 2
-
-# Per-platform rate limiting: serial execution with inter-request delay
-# Doubao: 5 QPS limit + search plugin overhead → needs longer delay
-INTER_REQUEST_DELAY = 8.0  # seconds between requests to each platform
 _platform_semaphores: dict[str, asyncio.Semaphore] = {}
 
 
 def _get_platform_semaphore(platform: str) -> asyncio.Semaphore:
     """Get or create a per-platform semaphore (concurrency=1 for serial execution)."""
-    if platform not in _platform_semaphores:
-        _platform_semaphores[platform] = asyncio.Semaphore(1)
-    return _platform_semaphores[platform]
+    return _platform_semaphores.setdefault(platform, asyncio.Semaphore(1))
 
 
 async def _throttled_retry_fetch(
@@ -80,7 +72,8 @@ async def _throttled_retry_fetch(
         result = await _retry_fetch(fetch_fn, *args, platform=platform, method=method, **kwargs)
         # Delay before releasing semaphore so the next request to the same
         # platform doesn't fire immediately (prevents 429 rate limiting).
-        await asyncio.sleep(INTER_REQUEST_DELAY)
+        delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
+        await asyncio.sleep(delay)
         return result
 
 
@@ -120,18 +113,13 @@ async def _retry_fetch(
             }
 
             # Handle 429 rate limit with longer backoff
-            is_429 = "429" in str(e)
+            is_429 = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
             if is_429 and attempt < MAX_RETRIES:
                 # Try to extract Retry-After from httpx.HTTPStatusError
-                retry_after = 30.0  # default 30s for 429
-                try:
-                    import httpx
-                    if isinstance(e, httpx.HTTPStatusError):
-                        ra = e.response.headers.get("Retry-After")
-                        if ra and ra.isdigit():
-                            retry_after = max(float(ra), 10.0)
-                except Exception:
-                    pass
+                retry_after = WorkflowConstants.DEFAULT_429_RETRY_SECONDS
+                ra = e.response.headers.get("Retry-After")
+                if ra and ra.isdigit():
+                    retry_after = max(float(ra), 10.0)
                 logger.warning(
                     "[A4] %s got 429 rate-limited, waiting %.0fs before retry",
                     platform, retry_after,
@@ -282,8 +270,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         try:
             if _pf is None or "deepseek" in _pf:
-                deepseek_browser_client = PlaywrightBrowserClient(session_name="deepseek")
-                deepseek_handler = DeepSeekHandler(deepseek_browser_client)
+                from app.core.playwright_installer import ensure_playwright_ready
+                playwright_ok = await ensure_playwright_ready()
+                if playwright_ok:
+                    deepseek_browser_client = PlaywrightBrowserClient(session_name="deepseek")
+                    deepseek_handler = DeepSeekHandler(deepseek_browser_client)
+                    logger.info("[A4] DeepSeek browser handler initialized (Playwright ready)")
+                else:
+                    logger.warning("[A4] Playwright not ready, DeepSeek browser skipped")
+                    deepseek_browser_client = None
+                    deepseek_handler = None
             else:
                 deepseek_browser_client = None
                 deepseek_handler = None
@@ -427,7 +423,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                     # Delay between browser questions to avoid rate limiting
                     if idx < len(questions) - 1:
-                        await asyncio.sleep(INTER_REQUEST_DELAY)
+                        browser_delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
+                        await asyncio.sleep(browser_delay)
 
                     if (idx + 1) % 4 == 0 or idx == total - 1:
                         browser_done = idx + 1
@@ -857,6 +854,20 @@ async def _fetch_from_doubao(
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
         }
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise  # Let _retry_fetch handle 429 with proper backoff
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        logger.warning("[A4] doubao exception: %s(%s) for question: %s",
+                       type(e).__name__, e, question[:60])
+        return {
+            "platform": "doubao",
+            "platform_name": "豆包",
+            "fetch_method": "api",
+            "success": False,
+            "error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__,
+            "duration": duration,
+        }
     except Exception as e:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         logger.warning("[A4] doubao exception: %s(%s) for question: %s",
@@ -908,6 +919,18 @@ async def _fetch_from_hunyuan(
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
         }
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        return {
+            "platform": "hunyuan",
+            "platform_name": "混元",
+            "fetch_method": "api",
+            "success": False,
+            "error": str(e),
+            "duration": duration,
+        }
     except Exception as e:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         return {
@@ -955,6 +978,20 @@ async def _fetch_from_kimi(
                 ),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
+            "duration": duration,
+        }
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        logger.warning("[A4] kimi exception: %s(%s) for question: %s",
+                       type(e).__name__, e, question[:60])
+        return {
+            "platform": "kimi",
+            "platform_name": "Kimi",
+            "fetch_method": "api",
+            "success": False,
+            "error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__,
             "duration": duration,
         }
     except Exception as e:

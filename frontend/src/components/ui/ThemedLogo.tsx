@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import { useTheme } from '@/hooks/useTheme';
 
 interface ThemedLogoProps {
@@ -13,7 +12,7 @@ export function ThemedLogo({ size = 28, className }: ThemedLogoProps) {
   const src = theme === 'light' ? '/logo-light.png' : '/logo-dark.png';
 
   return (
-    <Image
+    <img
       src={src}
       alt="Specta AI"
       width={size}

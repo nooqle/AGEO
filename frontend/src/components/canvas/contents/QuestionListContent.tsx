@@ -33,12 +33,12 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="border-b border-[--border-subtle] pb-4">
-        <h2 className="text-xl font-semibold text-[--text-primary]">模拟问题列表</h2>
-        <p className="text-sm text-[--text-secondary] mt-1">
+      <div className="border-b border-[var(--border-subtle)] pb-4">
+        <h2 className="text-xl font-semibold text-[var(--text-primary)]">模拟问题列表</h2>
+        <p className="text-sm text-[var(--text-secondary)] mt-1">
           生成模式: <span className="font-medium text-blue-300">{mode}</span>
         </p>
-        <p className="text-sm text-[--text-secondary]">
+        <p className="text-sm text-[var(--text-secondary)]">
           共 {questions?.length || 0} 个问题
         </p>
       </div>
@@ -46,11 +46,11 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
       {/* Detailed Simulated Questions */}
       {simulatedQs.length > 0 && (
         <div className="space-y-4">
-          <h3 className="text-lg font-medium text-[--text-primary]">详细问题列表</h3>
+          <h3 className="text-lg font-medium text-[var(--text-primary)]">详细问题列表</h3>
           {simulatedQs.map((sq, index) => (
             <div
               key={sq.question_id || index}
-              className="bg-[--bg-elevated] rounded-lg border border-[--border-subtle] p-4 transition-colors hover:border-[--border-hover] hover:bg-[--bg-tertiary]"
+              className="bg-[var(--bg-elevated)] rounded-lg border border-[var(--border-subtle)] p-4 transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--bg-tertiary)]"
             >
               <div className="flex items-start justify-between mb-3">
                 <div>
@@ -58,18 +58,18 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
                     {sq.category}
                   </span>
                   {sq.subcategory && (
-                    <span className="inline-block px-2 py-1 text-xs font-medium bg-[--bg-tertiary] text-[--text-secondary] rounded mb-2 ml-2 border border-[--border-subtle]">
+                    <span className="inline-block px-2 py-1 text-xs font-medium bg-[var(--bg-tertiary)] text-[var(--text-secondary)] rounded mb-2 ml-2 border border-[var(--border-subtle)]">
                       {sq.subcategory}
                     </span>
                   )}
                 </div>
-                <span className="text-xs text-[--text-secondary]">#{index + 1}</span>
+                <span className="text-xs text-[var(--text-secondary)]">#{index + 1}</span>
               </div>
 
-              <h4 className="font-medium text-[--text-primary] mb-2">{sq.core_question}</h4>
+              <h4 className="font-medium text-[var(--text-primary)] mb-2">{sq.core_question}</h4>
 
               {(sq.user_intent || sq.decision_stage) && (
-                <div className="flex gap-4 text-xs text-[--text-secondary] mb-3">
+                <div className="flex gap-4 text-xs text-[var(--text-secondary)] mb-3">
                   {sq.user_intent && <span>意图: {sq.user_intent}</span>}
                   {sq.decision_stage && <span>决策阶段: {sq.decision_stage}</span>}
                 </div>
@@ -77,13 +77,13 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
 
               {/* Variants */}
               {sq.question_variants && (
-                <div className="mt-3 pt-3 border-t border-[--border-subtle] space-y-2">
+                <div className="mt-3 pt-3 border-t border-[var(--border-subtle)] space-y-2">
                   {sq.question_variants.variant_a && (
                     <div className="flex items-start gap-2">
                       <span className="text-xs font-medium text-purple-300 whitespace-nowrap">
                         {sq.question_variants.variant_a.type}
                       </span>
-                      <p className="text-sm text-[--text-secondary]">
+                      <p className="text-sm text-[var(--text-secondary)]">
                         {sq.question_variants.variant_a.question}
                       </p>
                     </div>
@@ -93,7 +93,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
                       <span className="text-xs font-medium text-emerald-300 whitespace-nowrap">
                         {sq.question_variants.variant_b.type}
                       </span>
-                      <p className="text-sm text-[--text-secondary]">
+                      <p className="text-sm text-[var(--text-secondary)]">
                         {sq.question_variants.variant_b.question}
                       </p>
                     </div>
@@ -103,7 +103,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
                       <span className="text-xs font-medium text-orange-300 whitespace-nowrap">
                         {sq.question_variants.variant_c.type}
                       </span>
-                      <p className="text-sm text-[--text-secondary]">
+                      <p className="text-sm text-[var(--text-secondary)]">
                         {sq.question_variants.variant_c.question}
                       </p>
                     </div>
@@ -118,20 +118,20 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
       {/* Grouped Questions Summary */}
       {Object.keys(groupedQuestions).length > 0 && (
         <div className="space-y-4">
-          <h3 className="text-lg font-medium text-[--text-primary]">问题分类统计</h3>
+          <h3 className="text-lg font-medium text-[var(--text-primary)]">问题分类统计</h3>
           {Object.entries(groupedQuestions).map(([category, qs]) => (
-            <div key={category} className="bg-[--bg-elevated] border border-[--border-subtle] rounded-lg p-4">
-              <h4 className="font-medium text-[--text-primary] mb-2">
-                {category} <span className="text-sm text-[--text-secondary]">({qs.length})</span>
+            <div key={category} className="bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg p-4">
+              <h4 className="font-medium text-[var(--text-primary)] mb-2">
+                {category} <span className="text-sm text-[var(--text-secondary)]">({qs.length})</span>
               </h4>
               <ul className="space-y-1">
                 {qs.slice(0, 5).map((q, idx) => (
-                  <li key={q.id || idx} className="text-sm text-[--text-secondary] truncate">
+                  <li key={q.id || idx} className="text-sm text-[var(--text-secondary)] truncate">
                     • {q.text}
                   </li>
                 ))}
                 {qs.length > 5 && (
-                  <li className="text-sm text-[--text-secondary]">
+                  <li className="text-sm text-[var(--text-secondary)]">
                     ... 还有 {qs.length - 5} 个问题
                   </li>
                 )}
@@ -143,7 +143,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
 
       {/* Empty State */}
       {(!questions || questions.length === 0) && (!simulatedQs || simulatedQs.length === 0) && (
-        <div className="text-center py-8 text-[--text-secondary]">
+        <div className="text-center py-8 text-[var(--text-secondary)]">
           <p>暂无问题数据</p>
         </div>
       )}

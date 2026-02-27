@@ -19,9 +19,9 @@ const phaseConfig = {
     label: '思考',
     activeLabel: '正在思考...',
     colors: {
-      bg: 'bg-[--bg-elevated]',
+      bg: 'bg-[var(--bg-elevated)]',
       border: 'border-[#8B5CF6]/30',
-      text: 'text-[--text-primary]',
+      text: 'text-[var(--text-primary)]',
       icon: 'text-[#8B5CF6]',
       ring: 'ring-[#8B5CF6]/50',
     },
@@ -31,9 +31,9 @@ const phaseConfig = {
     label: '规划',
     activeLabel: '正在规划...',
     colors: {
-      bg: 'bg-[--bg-elevated]',
+      bg: 'bg-[var(--bg-elevated)]',
       border: 'border-[#3B82F6]/30',
-      text: 'text-[--text-primary]',
+      text: 'text-[var(--text-primary)]',
       icon: 'text-[#3B82F6]',
       ring: 'ring-[#3B82F6]/50',
     },
@@ -43,9 +43,9 @@ const phaseConfig = {
     label: '执行',
     activeLabel: '正在执行...',
     colors: {
-      bg: 'bg-[--bg-elevated]',
+      bg: 'bg-[var(--bg-elevated)]',
       border: 'border-[#F59E0B]/30',
-      text: 'text-[--text-primary]',
+      text: 'text-[var(--text-primary)]',
       icon: 'text-[#F59E0B]',
       ring: 'ring-[#F59E0B]/50',
     },
@@ -55,9 +55,9 @@ const phaseConfig = {
     label: '观察',
     activeLabel: '正在观察...',
     colors: {
-      bg: 'bg-[--bg-elevated]',
+      bg: 'bg-[var(--bg-elevated)]',
       border: 'border-[#22C55E]/30',
-      text: 'text-[--text-primary]',
+      text: 'text-[var(--text-primary)]',
       icon: 'text-[#22C55E]',
       ring: 'ring-[#22C55E]/50',
     },
@@ -67,9 +67,9 @@ const phaseConfig = {
     label: '回复',
     activeLabel: '正在生成回复...',
     colors: {
-      bg: 'bg-[--bg-elevated]',
+      bg: 'bg-[var(--bg-elevated)]',
       border: 'border-[#6366F1]/30',
-      text: 'text-[--text-primary]',
+      text: 'text-[var(--text-primary)]',
       icon: 'text-[#6366F1]',
       ring: 'ring-[#6366F1]/50',
     },
@@ -112,7 +112,7 @@ export function TPAORBlock({
         </div>
         <RiArrowDownSLine
           className={cn(
-            'w-4 h-4 text-[--text-tertiary] transition-transform duration-200',
+            'w-4 h-4 text-[var(--text-tertiary)] transition-transform duration-200',
             isExpanded && 'rotate-180'
           )}
         />
@@ -126,14 +126,14 @@ export function TPAORBlock({
         )}
       >
         <div className="px-3 pb-3">
-          <div className={cn('text-sm whitespace-pre-wrap text-[--text-secondary]')}>
+          <div className={cn('text-sm whitespace-pre-wrap text-[var(--text-secondary)]')}>
             {content}
           </div>
 
           {/* 进度条 */}
           {typeof progress === 'number' && (
             <div className="mt-3">
-              <div className="h-1.5 bg-[--bg-tertiary] rounded-full overflow-hidden">
+              <div className="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
                 <div
                   className={cn(
                     'h-full rounded-full transition-all duration-300',
@@ -142,7 +142,7 @@ export function TPAORBlock({
                   style={{ width: `${progress * 100}%` }}
                 />
               </div>
-              <div className="text-xs text-[--text-tertiary] mt-1 text-right">
+              <div className="text-xs text-[var(--text-tertiary)] mt-1 text-right">
                 {Math.round(progress * 100)}%
               </div>
             </div>

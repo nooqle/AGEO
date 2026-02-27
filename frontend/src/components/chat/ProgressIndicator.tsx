@@ -36,9 +36,9 @@ const statusConfig = {
   },
   pending: {
     icon: RiCheckboxBlankCircleLine,
-    iconClass: 'text-[--text-disabled]',
+    iconClass: 'text-[var(--text-disabled)]',
     bgClass: 'bg-transparent',
-    textClass: 'text-[--text-tertiary]',
+    textClass: 'text-[var(--text-tertiary)]',
     label: '等待中',
   },
 };
@@ -52,18 +52,18 @@ export function ProgressIndicator({
   const progress = steps.length > 0 ? completedCount / steps.length : 0;
 
   return (
-    <div className={cn('bg-[--bg-primary] rounded-lg border border-[--border-subtle] overflow-hidden', className)}>
+    <div className={cn('bg-[var(--bg-primary)] rounded-lg border border-[var(--border-subtle)] overflow-hidden', className)}>
       {/* 头部 */}
-      <div className="px-4 py-3 border-b border-[--border-subtle]">
+      <div className="px-4 py-3 border-b border-[var(--border-subtle)]">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-[--text-primary]">{title}</span>
-          <span className="text-xs text-[--text-tertiary]">
+          <span className="text-sm font-medium text-[var(--text-primary)]">{title}</span>
+          <span className="text-xs text-[var(--text-tertiary)]">
             {completedCount}/{steps.length}
           </span>
         </div>
         
         {/* 总进度条 */}
-        <div className="mt-2 h-1 bg-[--bg-tertiary] rounded-full overflow-hidden">
+        <div className="mt-2 h-1 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
           <div
             className="h-full bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] rounded-full transition-all duration-500 ease-out"
             style={{ width: `${progress * 100}%` }}
@@ -82,7 +82,7 @@ export function ProgressIndicator({
               key={step.id}
               className={cn(
                 'flex items-start gap-3 p-2 rounded-md transition-colors',
-                step.status === 'in_progress' && 'bg-[--bg-tertiary]'
+                step.status === 'in_progress' && 'bg-[var(--bg-tertiary)]'
               )}
             >
               {/* 图标 */}
@@ -107,7 +107,7 @@ export function ProgressIndicator({
                 </div>
                 
                 {step.description && (
-                  <p className="text-xs text-[--text-tertiary] mt-0.5 truncate">
+                  <p className="text-xs text-[var(--text-tertiary)] mt-0.5 truncate">
                     {step.description}
                   </p>
                 )}

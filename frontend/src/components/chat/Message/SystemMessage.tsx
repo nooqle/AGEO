@@ -15,10 +15,10 @@ export function SystemMessage({ message }: SystemMessageProps) {
 
   const Icon = isError ? RiErrorWarningLine : isSuccess ? RiCheckboxCircleLine : RiInformationLine;
   const colors = isError
-    ? 'bg-red-500/10 border border-red-500/20 text-[--error]'
+    ? 'bg-red-500/10 border border-red-500/20 text-[var(--error)]'
     : isSuccess
-    ? 'bg-green-500/10 border border-green-500/20 text-[--success]'
-    : 'bg-[--bg-elevated] border border-[--border-subtle] text-[--text-secondary]';
+    ? 'bg-green-500/10 border border-green-500/20 text-[var(--success)]'
+    : 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)]';
 
   return (
     <div className="flex justify-center my-4">

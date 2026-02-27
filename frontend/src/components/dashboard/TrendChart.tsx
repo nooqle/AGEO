@@ -109,7 +109,7 @@ function TrendTooltip({ active, payload, dimension }: TrendTooltipProps) {
       <div className="font-medium mb-1.5">{point.date}</div>
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-4">
-          <span className="text-[--text-secondary]">{dimension.label}:</span>
+          <span className="text-[var(--text-secondary)]">{dimension.label}:</span>
           <span className="font-semibold" style={{ color: dimension.color }}>
             {dimension.formatValue(point.value)}
           </span>
@@ -250,7 +250,7 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
               'px-2.5 py-1 rounded-full text-[11px] font-medium transition-all cursor-pointer',
               activeDimension === dim.key
                 ? 'text-white'
-                : 'text-[--text-secondary] bg-[--bg-tertiary] hover:bg-[--bg-elevated]'
+                : 'text-[var(--text-secondary)] bg-[var(--bg-tertiary)] hover:bg-[var(--bg-elevated)]'
             )}
             style={
               activeDimension === dim.key

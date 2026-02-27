@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     HUNYUAN_BASE_URL: str = "https://api.hunyuan.cloud.tencent.com/v1"
     MOONSHOT_API_KEY: str | None = None
     MOONSHOT_MODEL: str = "kimi-k2-turbo-preview"
+    MOONSHOT_BASE_URL: str = "https://api.moonshot.cn/v1/chat/completions"
     BOCHA_API_KEY: str | None = None
 
     # CORS

@@ -247,7 +247,7 @@ export function InputArea({
               className={cn(
                 'flex-1 resize-none rounded-2xl px-4 py-3 text-sm leading-6',
                 'border',
-                'focus:outline-none focus:ring-2 focus:ring-[--color-primary]/20',
+                'focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20',
                 'min-h-[48px] max-h-[200px]',
                 'disabled:cursor-not-allowed disabled:opacity-50',
                 disabled && 'opacity-50',

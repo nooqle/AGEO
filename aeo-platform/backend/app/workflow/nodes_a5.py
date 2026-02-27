@@ -105,9 +105,8 @@ def _compute_platform_sentiment(fetch_results: list, platform_key: str) -> float
                 else str(answer)
             )
             s = _analyze_sentiment(content)
-            scores.append(
-                {"positive": 1.0, "neutral": 0.0, "negative": -1.0}.get(s, 0.0)
-            )
+            from app.core.constants import SENTIMENT_SCORES
+            scores.append(SENTIMENT_SCORES.get(s, 0.0))
     if not scores:
         return 50.0
     return round(max(0.0, min(100.0, (sum(scores) / len(scores) + 1) * 50)), 1)
@@ -1587,7 +1586,7 @@ def _enrich_report_data(
                         if a.get("platform")
                     )
                 )
-                total_platforms = len(PLATFORMS) if PLATFORMS else 4
+                total_platforms = len(PLATFORMS)
                 coverage = (
                     unique_platforms / total_platforms
                     if total_platforms > 0
@@ -1595,12 +1594,16 @@ def _enrich_report_data(
                 )
                 row.setdefault("coverage", round(coverage, 4))
 
-                # Simplified BWVS: same formula as main but citation=50
-                mr_score = min(100.0, row.get("mention_rate", 0) * 120)
-                sent_score = row.get("sentiment", 50)
+                # Simplified BWVS: same formula as main but citation=default
+                from app.core.constants import BWVSConstants
+                mr_score = min(100.0, row.get("mention_rate", 0) * BWVSConstants.MENTION_RATE_MULTIPLIER)
+                sent_score = row.get("sentiment", BWVSConstants.DEFAULT_SENTIMENT_SCORE)
                 cov_score = row.get("coverage", 0) * 100
                 bwvs = (
-                    40 * mr_score + 25 * sent_score + 20 * cov_score + 15 * 50
+                    BWVS_WEIGHTS["mention"] * mr_score
+                    + BWVS_WEIGHTS["sentiment"] * sent_score
+                    + BWVS_WEIGHTS["coverage"] * cov_score
+                    + BWVS_WEIGHTS["citation"] * BWVSConstants.DEFAULT_CITATION_SCORE
                 ) / 100
                 row.setdefault("bwvs", round(min(100, bwvs), 1))
 

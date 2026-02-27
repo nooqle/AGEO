@@ -37,6 +37,17 @@ class WorkflowConstants:
     MIN_PERSONAS: Final[int] = 6
     MAX_PERSONAS: Final[int] = 8
 
+    # A3 question generation
+    MAX_QUESTIONS: Final[int] = 80
+    QUESTIONS_PER_PERSONA: Final[int] = 10
+
+    # A4 fetching
+    API_MAX_RETRIES: Final[int] = 2
+    API_RETRY_BACKOFF_BASE: Final[float] = 2.0
+    BROWSER_MAX_RETRIES: Final[int] = 1
+    MIN_PLATFORMS_REQUIRED: Final[int] = 2
+    DEFAULT_429_RETRY_SECONDS: Final[float] = 30.0
+
 
 class LLMConstants:
     """LLM model constants."""
@@ -54,6 +65,9 @@ class LLMConstants:
     DEFAULT_MODEL: Final[str] = "MiniMax-M2.1"
     FALLBACK_MODEL: Final[str] = "gpt-4"
 
+    # Tool rounds
+    MAX_TOOL_ROUNDS: Final[int] = 3
+
 
 class PlatformConstants:
     """AI platform constants."""
@@ -68,6 +82,13 @@ class PlatformConstants:
     API_PLATFORMS: Final[list[str]] = ["doubao", "hunyuan", "kimi"]
     BROWSER_PLATFORMS: Final[list[str]] = ["deepseek"]
 
+    PLATFORM_DISPLAY_NAMES: Final[dict[str, str]] = {
+        "doubao": "豆包",
+        "hunyuan": "混元",
+        "kimi": "Kimi",
+        "deepseek": "DeepSeek",
+    }
+
     # Platform-specific timeouts (per-question, seconds)
     PLATFORM_TIMEOUTS: Final[dict[str, int]] = {
         "doubao": 30,
@@ -78,6 +99,36 @@ class PlatformConstants:
 
     # Global per-pipeline timeout (seconds): caps entire browser platform regardless of question count
     BROWSER_PIPELINE_TIMEOUT: Final[int] = 600  # 10 minutes max per browser platform (12 questions × ~45s)
+
+    # Per-platform inter-request delay (seconds) for rate limiting
+    PLATFORM_REQUEST_DELAYS: Final[dict[str, float]] = {
+        "doubao": 15.0,   # Responses API with web_search has strict rate limits
+        "hunyuan": 3.0,
+        "kimi": 3.0,
+        "deepseek": 2.0,
+    }
+
+    # Per-platform HTTP timeouts for API clients (seconds)
+    PLATFORM_API_TIMEOUTS: Final[dict[str, float]] = {
+        "doubao": 90.0,
+        "hunyuan": 60.0,
+        "kimi": 60.0,
+    }
+
+
+class BWVSConstants:
+    """BWVS computation constants."""
+
+    DEFAULT_CITATION_SCORE: Final[float] = 50.0
+    DEFAULT_SENTIMENT_SCORE: Final[float] = 50.0
+    MENTION_RATE_MULTIPLIER: Final[float] = 120.0
+
+
+SENTIMENT_SCORES: Final[dict[str, float]] = {
+    "positive": 1.0,
+    "neutral": 0.0,
+    "negative": -1.0,
+}
 
 
 class CacheConstants:

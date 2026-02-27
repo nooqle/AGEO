@@ -114,25 +114,25 @@ export function WebSocketMessageInspector() {
   }, []);
 
   return (
-    <div className="p-4 bg-[--bg-primary] rounded-lg border border-[--border-subtle] mt-4">
-      <h3 className="text-lg font-semibold mb-4 text-[--text-primary]">WebSocket 消息检查器</h3>
+    <div className="p-4 bg-[var(--bg-primary)] rounded-lg border border-[var(--border-subtle)] mt-4">
+      <h3 className="text-lg font-semibold mb-4 text-[var(--text-primary)]">WebSocket 消息检查器</h3>
 
       {messages.length === 0 ? (
-        <p className="text-[--text-tertiary]">等待 WebSocket 消息...</p>
+        <p className="text-[var(--text-tertiary)]">等待 WebSocket 消息...</p>
       ) : (
         <div className="space-y-2 max-h-96 overflow-y-auto">
           {messages.map((msg) => (
             <div
               key={msg.id}
               className={`p-3 rounded border ${
-                msg.hasChinese ? 'bg-green-500/10 border-green-500/20' : 'bg-[--bg-secondary] border-[--border-subtle]'
+                msg.hasChinese ? 'bg-green-500/10 border-green-500/20' : 'bg-[var(--bg-secondary)] border-[var(--border-subtle)]'
               }`}
             >
-              <div className="flex justify-between text-xs text-[--text-tertiary] mb-1">
+              <div className="flex justify-between text-xs text-[var(--text-tertiary)] mb-1">
                 <span>{msg.timestamp}</span>
-                <span className="font-medium text-[--text-primary]">{msg.event}</span>
+                <span className="font-medium text-[var(--text-primary)]">{msg.event}</span>
               </div>
-              <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-all text-[--text-primary]">
+              <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-all text-[var(--text-primary)]">
                 {msg.rawData}
               </pre>
               {msg.hasChinese && (

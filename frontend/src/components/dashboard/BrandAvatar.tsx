@@ -46,11 +46,7 @@ export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAv
           background: 'var(--bg-tertiary)',
         }}
         onError={() => {
-          if (srcIndex < logoSources.length - 1) {
-            setSrcIndex(srcIndex + 1);
-          } else {
-            setSrcIndex(-1); // all sources failed → fallback
-          }
+          setSrcIndex(prev => prev < logoSources.length - 1 ? prev + 1 : -1);
         }}
       />
     );

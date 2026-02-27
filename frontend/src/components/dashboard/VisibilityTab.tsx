@@ -72,7 +72,7 @@ function SnapshotTooltip({ active, payload, dimension }: SnapshotTooltipProps) {
       <div className="font-medium mb-1.5">{point.date}</div>
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-4">
-          <span className="text-[--text-secondary]">{dimConfig?.label || dimension}:</span>
+          <span className="text-[var(--text-secondary)]">{dimConfig?.label || dimension}:</span>
           <span className="font-semibold" style={{ color: dimConfig?.color }}>
             {dimension === 'mention_rate'
               ? `${(point[dimension] * 100).toFixed(1)}%`
@@ -81,12 +81,12 @@ function SnapshotTooltip({ active, payload, dimension }: SnapshotTooltipProps) {
         </div>
         {dimension !== 'bwvs_index' && (
           <div className="flex items-center justify-between gap-4">
-            <span className="text-[--text-secondary]">BWVS:</span>
-            <span className="text-[--text-primary]">{point.bwvs_index?.toFixed(1) ?? '--'}</span>
+            <span className="text-[var(--text-secondary)]">BWVS:</span>
+            <span className="text-[var(--text-primary)]">{point.bwvs_index?.toFixed(1) ?? '--'}</span>
           </div>
         )}
       </div>
-      <div className="mt-1.5 pt-1.5 border-t border-[--border-subtle] text-[10px] text-[--text-tertiary]">
+      <div className="mt-1.5 pt-1.5 border-t border-[var(--border-subtle)] text-[10px] text-[var(--text-tertiary)]">
         快照 ID: {point.snapshot_id?.slice(0, 8)}
       </div>
     </div>
@@ -170,7 +170,7 @@ export function VisibilityTab({ data, entityId }: VisibilityTabProps) {
             {hasSnapshotData ? 'BWVS 趋势' : '可见度得分趋势'}
           </h3>
           {isLoadingTrend && (
-            <span className="text-[10px] text-[--text-tertiary]">加载趋势数据...</span>
+            <span className="text-[10px] text-[var(--text-tertiary)]">加载趋势数据...</span>
           )}
         </div>
 
@@ -185,7 +185,7 @@ export function VisibilityTab({ data, entityId }: VisibilityTabProps) {
                   'px-2.5 py-1 rounded-full text-[11px] font-medium transition-all',
                   activeDimension === dim.key
                     ? 'text-white'
-                    : 'text-[--text-secondary] bg-[--bg-tertiary] hover:bg-[--bg-elevated]'
+                    : 'text-[var(--text-secondary)] bg-[var(--bg-tertiary)] hover:bg-[var(--bg-elevated)]'
                 )}
                 style={
                   activeDimension === dim.key

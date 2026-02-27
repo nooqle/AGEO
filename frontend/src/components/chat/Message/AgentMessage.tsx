@@ -72,7 +72,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
       {/* Message content */}
       <div className="flex-1 min-w-0 space-y-3 pt-0.5">
         {/* Timestamp */}
-        <div className="text-[10px] text-[--text-tertiary] leading-none">
+        <div className="text-[10px] text-[var(--text-tertiary)] leading-none">
           {formatTime(message.timestamp)}
         </div>
 
@@ -139,7 +139,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           >
             {message.inlineConfirmation.type === 'guided' ? (
               /* Guided options keep a light container for structure */
-              <div className="rounded-xl border border-[--border-subtle] bg-[--bg-elevated] p-4">
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">
                 <GuidedOptions
                   message={message.inlineConfirmation.message}
                   options={message.inlineConfirmation.options}
@@ -161,8 +161,8 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                         // Only highlight explicitly recommended options
                         option.recommended && !message.inlineConfirmation?.selectedOptionId
                           ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
-                          : 'bg-transparent border-[--border-hover] text-[--text-primary] hover:bg-[--bg-tertiary]',
-                        message.inlineConfirmation?.selectedOptionId === option.id && 'ring-2 ring-indigo-500 ring-offset-1 ring-offset-[--bg-primary]',
+                          : 'bg-transparent border-[var(--border-hover)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]',
+                        message.inlineConfirmation?.selectedOptionId === option.id && 'ring-2 ring-indigo-500 ring-offset-1 ring-offset-[var(--bg-primary)]',
                         message.inlineConfirmation?.selectedOptionId && message.inlineConfirmation.selectedOptionId !== option.id && 'opacity-40 cursor-not-allowed'
                       )}
                     >
@@ -171,7 +171,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                   ))}
                 </div>
                 {!message.inlineConfirmation.selectedOptionId && (
-                  <p className="text-[11px] text-[--text-tertiary] flex items-center gap-1.5">
+                  <p className="text-[11px] text-[var(--text-tertiary)] flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />
                     Specta AI 将在你回复后继续工作
                   </p>
@@ -222,7 +222,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
               onClick={() => setShowThought(!showThought)}
               className={cn(
                 'flex items-center gap-1.5 text-[11px] transition-colors cursor-pointer',
-                'text-[--text-tertiary] hover:text-[--text-secondary]'
+                'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
               )}
             >
               <RiBrainLine className="w-3 h-3" />
@@ -244,8 +244,8 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                   transition={{ duration: 0.25 }}
                   className="overflow-hidden"
                 >
-                  <div className="ml-4 pl-3 border-l-2 border-[--border-subtle]">
-                    <p className="text-[11px] text-[--text-tertiary] whitespace-pre-wrap leading-relaxed">
+                  <div className="ml-4 pl-3 border-l-2 border-[var(--border-subtle)]">
+                    <p className="text-[11px] text-[var(--text-tertiary)] whitespace-pre-wrap leading-relaxed">
                       {layers?.thought}
                     </p>
                   </div>

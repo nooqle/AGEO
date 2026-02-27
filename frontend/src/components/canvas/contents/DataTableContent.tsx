@@ -50,20 +50,20 @@ export function DataTableContent({ content }: DataTableContentProps) {
     <div className="p-4">
       {/* 表格描述 */}
       {data.description && (
-        <p className="text-sm text-[--text-secondary] mb-4">{data.description}</p>
+        <p className="text-sm text-[var(--text-secondary)] mb-4">{data.description}</p>
       )}
 
       {/* 表格 */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-[--border-subtle]">
+            <tr className="border-b border-[var(--border-subtle)]">
               {columns.map((col) => (
                 <th
                   key={col.key}
                   className={cn(
-                    'px-4 py-3 text-left font-medium text-[--text-secondary]',
-                    col.sortable && 'cursor-pointer hover:bg-[--bg-tertiary]'
+                    'px-4 py-3 text-left font-medium text-[var(--text-secondary)]',
+                    col.sortable && 'cursor-pointer hover:bg-[var(--bg-tertiary)]'
                   )}
                   onClick={() => col.sortable && handleSort(col.key)}
                 >
@@ -83,9 +83,9 @@ export function DataTableContent({ content }: DataTableContentProps) {
           </thead>
           <tbody>
             {sortedRows.map((row, index) => (
-              <tr key={index} className="border-b border-[--border-subtle] hover:bg-[--bg-tertiary]">
+              <tr key={index} className="border-b border-[var(--border-subtle)] hover:bg-[var(--bg-tertiary)]">
                 {columns.map((col) => (
-                  <td key={col.key} className="px-4 py-3 text-[--text-primary]">
+                  <td key={col.key} className="px-4 py-3 text-[var(--text-primary)]">
                     {col.format ? col.format(row[col.key], row) as React.ReactNode : (row[col.key] as React.ReactNode)}
                   </td>
                 ))}
@@ -96,7 +96,7 @@ export function DataTableContent({ content }: DataTableContentProps) {
       </div>
 
       {/* 分页信息 */}
-      <div className="mt-4 text-sm text-[--text-tertiary]">
+      <div className="mt-4 text-sm text-[var(--text-tertiary)]">
         共 {rows.length} 条数据
       </div>
     </div>

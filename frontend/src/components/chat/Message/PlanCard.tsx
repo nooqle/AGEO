@@ -31,8 +31,8 @@ export function PlanCard({ planText, isActive }: PlanCardProps) {
         )}
         <span className={cn(
           'text-xs font-medium transition-colors',
-          isActive ? 'text-indigo-300' : 'text-[--text-tertiary]',
-          'group-hover:text-[--text-secondary]'
+          isActive ? 'text-indigo-300' : 'text-[var(--text-tertiary)]',
+          'group-hover:text-[var(--text-secondary)]'
         )}>
           {isActive ? '正在制定计划...' : '执行计划'}
         </span>
@@ -45,7 +45,7 @@ export function PlanCard({ planText, isActive }: PlanCardProps) {
         <motion.div
           animate={{ rotate: isExpanded ? 180 : 0 }}
           transition={{ duration: 0.2 }}
-          className="text-[--text-tertiary] opacity-0 group-hover:opacity-100 transition-opacity"
+          className="text-[var(--text-tertiary)] opacity-0 group-hover:opacity-100 transition-opacity"
         >
           <RiArrowDownSLine className="w-3 h-3" />
         </motion.div>
@@ -61,8 +61,8 @@ export function PlanCard({ planText, isActive }: PlanCardProps) {
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="ml-[22px] pl-3 border-l-2 border-[--border-subtle]">
-              <p className="text-xs text-[--text-secondary] leading-relaxed whitespace-pre-wrap py-0.5">
+            <div className="ml-[22px] pl-3 border-l-2 border-[var(--border-subtle)]">
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap py-0.5">
                 {planText}
               </p>
             </div>

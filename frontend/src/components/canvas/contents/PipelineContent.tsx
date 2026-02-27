@@ -117,7 +117,7 @@ export function PipelineContent({ content }: PipelineContentProps) {
                 'flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors',
                 checkedIds.size >= minSelection
                   ? 'bg-indigo-600 text-white hover:bg-indigo-500'
-                  : 'bg-[--bg-tertiary] text-[--text-secondary] cursor-not-allowed'
+                  : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] cursor-not-allowed'
               )}
               onClick={handleConfirm}
               disabled={checkedIds.size < minSelection}
@@ -127,7 +127,7 @@ export function PipelineContent({ content }: PipelineContentProps) {
                 : '确认选择'}
             </button>
             <button
-              className="py-2.5 px-4 rounded-lg text-sm font-medium bg-[--bg-secondary] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] transition-colors"
+              className="py-2.5 px-4 rounded-lg text-sm font-medium bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
               onClick={handleSkip}
             >
               跳过此步

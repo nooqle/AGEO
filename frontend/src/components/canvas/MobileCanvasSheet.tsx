@@ -36,7 +36,7 @@ export function MobileCanvasSheet({ isOpen, children }: MobileCanvasSheetProps) 
 
           {/* Canvas panel */}
           <motion.div
-            className="fixed inset-x-0 bottom-0 top-16 bg-[--bg-primary] rounded-t-2xl z-50 flex flex-col border-t border-[--border-subtle]"
+            className="fixed inset-x-0 bottom-0 top-16 bg-[var(--bg-primary)] rounded-t-2xl z-50 flex flex-col border-t border-[var(--border-subtle)]"
             variants={mobileCanvasVariants}
             initial="hidden"
             animate="visible"
@@ -48,7 +48,7 @@ export function MobileCanvasSheet({ isOpen, children }: MobileCanvasSheetProps) 
           >
             {/* Drag handle */}
             <div className="flex justify-center py-3">
-              <div className="w-10 h-1 bg-[--bg-tertiary] rounded-full" />
+              <div className="w-10 h-1 bg-[var(--bg-tertiary)] rounded-full" />
             </div>
 
             {/* Content */}

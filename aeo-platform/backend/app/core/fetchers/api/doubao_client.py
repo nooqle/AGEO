@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.constants import PlatformConstants
 from app.core.fetchers.api.base_client import BaseAPIClient
 from app.schemas.fetch import LLMResponse, SearchReference
 
@@ -107,7 +108,7 @@ class DoubaoClient(BaseAPIClient):
                 self.endpoint,
                 headers=headers,
                 json=payload,
-                timeout=90.0,
+                timeout=PlatformConstants.PLATFORM_API_TIMEOUTS["doubao"],
             )
             response.raise_for_status()
             data = response.json()

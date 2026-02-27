@@ -80,7 +80,15 @@ class DeepSeekHandler(BaseBrowserHandler):
                     logger.debug("[DeepSeek] 新对话 click failed (%s), falling back to navigate", e)
 
             if not fast_path_ok:
-                await self.client.open(self.URL, headed=False)
+                open_result = await self.client.open(self.URL, headed=False)
+                if not open_result.get("success"):
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        f"浏览器打开失败: {open_result.get('error', '未知错误')}",
+                        progress=0,
+                        requires_action=False,
+                    )
+                    return
                 await asyncio.sleep(3)  # Wait for SPA to render
 
             if self.client.page:
@@ -104,8 +112,16 @@ class DeepSeekHandler(BaseBrowserHandler):
                     action_hint="请在弹出的浏览器窗口中完成 DeepSeek 登录",
                 )
                 await self.client.close()
-                await self.client.open(self.URL, headed=True)
-                login_success = await self._wait_for_login(INPUT_READY_SELECTOR, timeout=300)
+                open_headed = await self.client.open(self.URL, headed=True)
+                if not open_headed.get("success"):
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        f"无法打开登录浏览器: {open_headed.get('error', '未知错误')}",
+                        progress=0,
+                        requires_action=False,
+                    )
+                    return
+                login_success = await self._wait_for_login(INPUT_READY_SELECTOR, timeout=120)
                 if not login_success:
                     yield self._create_event(
                         BrowserState.ERROR,

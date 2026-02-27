@@ -516,7 +516,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   };
 
   return (
-    <div className={cn('relative flex flex-col h-full bg-[--bg-primary]', className)}>
+    <div className={cn('relative flex flex-col h-full bg-[var(--bg-primary)]', className)}>
       {/* Cycle 3: Task status badge in header area */}
       {activeTask && (
         <div

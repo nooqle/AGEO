@@ -28,40 +28,40 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
         return {
           icon: <RiErrorWarningLine className="w-4 h-4" />,
           label: '步骤确认',
-          color: 'border-[--border-subtle] bg-[--bg-elevated]',
-          iconBg: 'bg-[--bg-elevated] border border-[--border-subtle]',
+          color: 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
+          iconBg: 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)]',
           iconColor: 'text-indigo-300',
-          titleColor: 'text-[--text-primary]',
+          titleColor: 'text-[var(--text-primary)]',
           labelColor: 'text-indigo-300',
         };
       case 'brand_info':
         return {
           icon: <RiMessage3Line className="w-4 h-4" />,
           label: '品牌信息确认',
-          color: 'border-[--border-subtle] bg-[--bg-elevated]',
-          iconBg: 'bg-[--bg-elevated] border border-[--border-subtle]',
+          color: 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
+          iconBg: 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)]',
           iconColor: 'text-amber-300',
-          titleColor: 'text-[--text-primary]',
+          titleColor: 'text-[var(--text-primary)]',
           labelColor: 'text-amber-300',
         };
       case 'action_choice':
         return {
           icon: <RiTimeLine className="w-4 h-4" />,
           label: '操作选择',
-          color: 'border-[--border-subtle] bg-[--bg-elevated]',
-          iconBg: 'bg-[--bg-elevated] border border-[--border-subtle]',
+          color: 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
+          iconBg: 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)]',
           iconColor: 'text-purple-300',
-          titleColor: 'text-[--text-primary]',
+          titleColor: 'text-[var(--text-primary)]',
           labelColor: 'text-purple-300',
         };
       default:
         return {
           icon: <RiTimeLine className="w-4 h-4" />,
           label: '等待确认',
-          color: 'border-[--border-subtle] bg-[--bg-elevated]',
-          iconBg: 'bg-[--bg-elevated] border border-[--border-subtle]',
+          color: 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
+          iconBg: 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)]',
           iconColor: 'text-amber-300',
-          titleColor: 'text-[--text-primary]',
+          titleColor: 'text-[var(--text-primary)]',
           labelColor: 'text-amber-300',
         };
     }
@@ -85,7 +85,7 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
             {config.label}
           </span>
           {request.stepName && (
-            <span className="text-xs text-[--text-tertiary] ml-2">
+            <span className="text-xs text-[var(--text-tertiary)] ml-2">
               · {request.stepName}
             </span>
           )}
@@ -93,7 +93,7 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
       </div>
 
       {/* 消息 */}
-      <div className="bg-[--bg-elevated] border border-[--border-subtle] rounded-lg p-4 mb-4 max-h-80 overflow-y-auto">
+      <div className="bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg p-4 mb-4 max-h-80 overflow-y-auto">
         <MarkdownContent content={request.message} />
       </div>
 
@@ -108,7 +108,7 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
               'inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all',
               option.recommended
                 ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
-                : 'bg-[--bg-elevated] border border-[--border-subtle] text-[--text-primary] hover:bg-[--bg-tertiary] hover:border-[--border-hover]',
+                : 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] hover:border-[var(--border-hover)]',
               selectedOption === option.id && 'ring-2 ring-indigo-500 ring-offset-0',
               selectedOption !== null && selectedOption !== option.id && 'opacity-50'
             )}
@@ -127,7 +127,7 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
 
       {/* 提示 */}
       {request.allowTextInput && (
-        <p className="text-xs text-[--text-tertiary] mt-3 flex items-center gap-1">
+        <p className="text-xs text-[var(--text-tertiary)] mt-3 flex items-center gap-1">
           <span>💡</span>
           您也可以在输入框中直接输入回复
         </p>

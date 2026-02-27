@@ -64,16 +64,16 @@ export function ConfirmationCard({
       id="confirmation-card"
       className={cn(
         'rounded-lg overflow-hidden',
-        'bg-[--brand-bg] border border-[--brand-border]',
+        'bg-[var(--brand-bg)] border border-[var(--brand-border)]',
         className
       )}
     >
       {/* 头部 */}
-      <div className="px-4 py-3 border-b border-[--brand-border] flex items-center gap-2">
-        <div className="w-6 h-6 rounded-md bg-[--brand-bg] flex items-center justify-center">
-          <RiErrorWarningLine className="w-4 h-4 text-[--brand-primary]" />
+      <div className="px-4 py-3 border-b border-[var(--brand-border)] flex items-center gap-2">
+        <div className="w-6 h-6 rounded-md bg-[var(--brand-bg)] flex items-center justify-center">
+          <RiErrorWarningLine className="w-4 h-4 text-[var(--brand-primary)]" />
         </div>
-        <span className="text-sm font-medium text-[--text-primary]">{title}</span>
+        <span className="text-sm font-medium text-[var(--text-primary)]">{title}</span>
       </div>
 
       {/* 内容 */}
@@ -92,21 +92,21 @@ export function ConfirmationCard({
                 'flex items-center gap-2',
                 'disabled:opacity-50 disabled:cursor-not-allowed',
                 option.variant === 'primary' && [
-                  'bg-[--brand-primary] text-white',
-                  'hover:bg-[--brand-hover]',
-                  'active:bg-[--brand-active]',
+                  'bg-[var(--brand-primary)] text-white',
+                  'hover:bg-[var(--brand-hover)]',
+                  'active:bg-[var(--brand-active)]',
                 ],
                 option.variant === 'secondary' && [
-                  'bg-[--bg-tertiary] text-[--text-primary] border border-[--border-hover]',
-                  'hover:bg-[--bg-elevated] hover:border-[--border-hover]',
+                  'bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-hover)]',
+                  'hover:bg-[var(--bg-elevated)] hover:border-[var(--border-hover)]',
                 ],
                 option.variant === 'danger' && [
-                  'bg-[--status-error-bg] text-[--error] border border-[--error]',
+                  'bg-[var(--status-error-bg)] text-[var(--error)] border border-[var(--error)]',
                   'hover:opacity-80',
                 ],
                 !option.variant && [
-                  'bg-[--bg-tertiary] text-[--text-primary] border border-[--border-hover]',
-                  'hover:bg-[--bg-elevated]',
+                  'bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-hover)]',
+                  'hover:bg-[var(--bg-elevated)]',
                 ]
               )}
             >
@@ -121,7 +121,7 @@ export function ConfirmationCard({
               className={cn(
                 'px-4 py-2 rounded-md text-sm font-medium transition-all duration-150',
                 'flex items-center gap-2',
-                'text-[--text-tertiary] hover:text-[--text-secondary]',
+                'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
                 'disabled:opacity-50 disabled:cursor-not-allowed'
               )}
             >
@@ -133,15 +133,15 @@ export function ConfirmationCard({
       </div>
 
       {/* 快捷键提示 */}
-      <div className="px-4 py-2 bg-[--bg-primary] border-t border-[--brand-border]">
-        <div className="flex items-center gap-4 text-xs text-[--text-disabled]">
+      <div className="px-4 py-2 bg-[var(--bg-primary)] border-t border-[var(--brand-border)]">
+        <div className="flex items-center gap-4 text-xs text-[var(--text-disabled)]">
           <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 bg-[--bg-tertiary] rounded text-[--text-tertiary]">Enter</kbd>
+            <kbd className="px-1.5 py-0.5 bg-[var(--bg-tertiary)] rounded text-[var(--text-tertiary)]">Enter</kbd>
             确认
           </span>
           {onCancel && (
             <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-[--bg-tertiary] rounded text-[--text-tertiary]">Esc</kbd>
+              <kbd className="px-1.5 py-0.5 bg-[var(--bg-tertiary)] rounded text-[var(--text-tertiary)]">Esc</kbd>
               取消
             </span>
           )}
@@ -176,16 +176,16 @@ export function ConfirmButtons({
             'px-3 py-1.5 rounded text-xs font-medium transition-all duration-150',
             'disabled:opacity-50 disabled:cursor-not-allowed',
             option.variant === 'primary' && [
-              'bg-[--brand-primary] text-white',
-              'hover:bg-[--brand-hover]',
+              'bg-[var(--brand-primary)] text-white',
+              'hover:bg-[var(--brand-hover)]',
             ],
             option.variant === 'secondary' && [
-              'bg-[--bg-tertiary] text-[--text-primary] border border-[--border-hover]',
-              'hover:bg-[--bg-elevated]',
+              'bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-hover)]',
+              'hover:bg-[var(--bg-elevated)]',
             ],
             !option.variant && [
-              'bg-[--bg-tertiary] text-[--text-primary] border border-[--border-hover]',
-              'hover:bg-[--bg-elevated]',
+              'bg-[var(--bg-tertiary)] text-[var(--text-primary)] border border-[var(--border-hover)]',
+              'hover:bg-[var(--bg-elevated)]',
             ]
           )}
         >

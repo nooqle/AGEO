@@ -19,16 +19,16 @@ export function FeaturesSection() {
   ];
 
   return (
-    <section className="py-20 bg-[--bg-primary]">
+    <section className="py-20 bg-[var(--bg-primary)]">
       <div className="max-w-6xl mx-auto px-4">
-        <h2 className="text-3xl font-bold text-center text-[--text-primary] mb-12">
+        <h2 className="text-3xl font-bold text-center text-[var(--text-primary)] mb-12">
           核心功能
         </h2>
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
           {features.map((feature, index) => (
-            <div key={index} className="p-6 bg-[--bg-secondary] rounded-xl border border-[--border-subtle]">
-              <h3 className="text-lg font-semibold text-[--text-primary] mb-2">{feature.title}</h3>
-              <p className="text-[--text-secondary] text-sm">{feature.description}</p>
+            <div key={index} className="p-6 bg-[var(--bg-secondary)] rounded-xl border border-[var(--border-subtle)]">
+              <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-2">{feature.title}</h3>
+              <p className="text-[var(--text-secondary)] text-sm">{feature.description}</p>
             </div>
           ))}
         </div>

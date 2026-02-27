@@ -19,8 +19,8 @@ const statusConfig: Record<ExecutionStepStatus, { icon: React.ReactNode; label: 
   pending: {
     icon: <RiTimeLine className="w-4 h-4" />,
     label: '等待中',
-    color: 'text-[--text-disabled]',
-    bgColor: 'bg-[--bg-tertiary]',
+    color: 'text-[var(--text-disabled)]',
+    bgColor: 'bg-[var(--bg-tertiary)]',
   },
   running: {
     icon: <RiLoader4Line className="w-4 h-4 animate-spin" />,
@@ -93,7 +93,7 @@ export function ExecutionStepMessage({
             step.status === 'waiting_confirmation' && 'border-amber-500/30 shadow-sm',
             step.status === 'completed' && 'border-green-500/30',
             step.status === 'failed' && 'border-red-500/30',
-            'bg-[--bg-elevated]'
+            'bg-[var(--bg-elevated)]'
           )}
           initial={{ opacity: 0, y: 5 }}
           animate={{ opacity: 1, y: 0 }}
@@ -104,7 +104,7 @@ export function ExecutionStepMessage({
             onClick={toggleExpand}
             className={cn(
               'w-full px-4 py-3 flex items-center justify-between transition-colors',
-              'hover:bg-[--bg-tertiary]'
+              'hover:bg-[var(--bg-tertiary)]'
             )}
           >
             <div className="flex items-center gap-3">
@@ -112,14 +112,14 @@ export function ExecutionStepMessage({
                 {status.icon}
                 <span>{status.label}</span>
               </span>
-              <span className="text-sm font-medium text-[--text-primary]">{step.stepName}</span>
-              <span className="text-xs text-[--text-disabled]">
+              <span className="text-sm font-medium text-[var(--text-primary)]">{step.stepName}</span>
+              <span className="text-xs text-[var(--text-disabled)]">
                 ({step.stepIndex}/{step.totalSteps})
               </span>
             </div>
             <div className="flex items-center gap-2">
               {step.startTime && (
-                <span className="text-xs text-[--text-disabled]">
+                <span className="text-xs text-[var(--text-disabled)]">
                   {formatTime(step.startTime)}
                 </span>
               )}
@@ -127,7 +127,7 @@ export function ExecutionStepMessage({
                 animate={{ rotate: isExpanded ? 180 : 0 }}
                 transition={{ duration: 0.2 }}
               >
-                <RiArrowDownSLine className="w-4 h-4 text-[--text-disabled]" />
+                <RiArrowDownSLine className="w-4 h-4 text-[var(--text-disabled)]" />
               </motion.div>
             </div>
           </button>
@@ -140,13 +140,13 @@ export function ExecutionStepMessage({
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
                 transition={{ duration: 0.25, ease: 'easeInOut' }}
-                className="border-t border-[--border-subtle]"
+                className="border-t border-[var(--border-subtle)]"
               >
                 <div className="p-4 space-y-3">
                   {/* 描述 */}
                   {step.description && (
                     <motion.p
-                      className="text-sm text-[--text-secondary]"
+                      className="text-sm text-[var(--text-secondary)]"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ delay: 0.1 }}
@@ -185,13 +185,13 @@ export function ExecutionStepMessage({
                   {/* 执行结果摘要 */}
                   {step.result && (
                     <motion.div 
-                      className="bg-[--bg-tertiary] rounded-lg p-3 border border-[--border-subtle]"
+                      className="bg-[var(--bg-tertiary)] rounded-lg p-3 border border-[var(--border-subtle)]"
                       initial={{ opacity: 0, y: 5 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
                     >
-                      <div className="text-xs font-medium text-[--text-tertiary] mb-1">执行结果</div>
-                      <div className="text-sm text-[--text-primary]">
+                      <div className="text-xs font-medium text-[var(--text-tertiary)] mb-1">执行结果</div>
+                      <div className="text-sm text-[var(--text-primary)]">
                         {typeof step.result === 'string'
                           ? step.result
                           : JSON.stringify(step.result, null, 2)}
@@ -218,7 +218,7 @@ export function ExecutionStepMessage({
                       </motion.button>
                       <motion.button
                         onClick={onSkip}
-                        className="px-4 py-2 text-[--text-secondary] text-sm font-medium hover:text-[--text-primary] transition-colors"
+                        className="px-4 py-2 text-[var(--text-secondary)] text-sm font-medium hover:text-[var(--text-primary)] transition-colors"
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                       >

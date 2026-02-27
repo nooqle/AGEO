@@ -64,7 +64,7 @@ export function UserMessage({ message, onRecall, recallDisabled, messagesAfterCo
         </div>
       </div>
 
-      <div className="text-xs text-[--text-tertiary] mt-1 text-right">
+      <div className="text-xs text-[var(--text-tertiary)] mt-1 text-right">
         {formatTime(message.timestamp)}
       </div>
 

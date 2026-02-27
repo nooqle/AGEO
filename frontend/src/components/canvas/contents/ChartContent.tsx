@@ -120,7 +120,7 @@ export function ChartContent({ content }: ChartContentProps) {
         );
 
       default:
-        return <div className="text-center text-[--text-tertiary] py-8">不支持的图表类型</div>;
+        return <div className="text-center text-[var(--text-tertiary)] py-8">不支持的图表类型</div>;
     }
   };
 
@@ -128,19 +128,19 @@ export function ChartContent({ content }: ChartContentProps) {
     <div className="p-6">
       {/* 图表描述 */}
       {data.description && (
-        <p className="text-sm text-[--text-secondary] mb-4">{data.description}</p>
+        <p className="text-sm text-[var(--text-secondary)] mb-4">{data.description}</p>
       )}
 
       {/* 图表 */}
-      <div className="bg-[--bg-elevated] rounded-lg">
+      <div className="bg-[var(--bg-elevated)] rounded-lg">
         {renderChart()}
       </div>
 
       {/* 数据摘要 */}
       {data.summary && (
-        <div className="mt-4 p-4 bg-[--bg-tertiary] rounded-lg">
-          <h4 className="font-medium text-[--text-primary] mb-2">数据摘要</h4>
-          <div className="text-sm text-[--text-secondary]">{data.summary}</div>
+        <div className="mt-4 p-4 bg-[var(--bg-tertiary)] rounded-lg">
+          <h4 className="font-medium text-[var(--text-primary)] mb-2">数据摘要</h4>
+          <div className="text-sm text-[var(--text-secondary)]">{data.summary}</div>
         </div>
       )}
     </div>

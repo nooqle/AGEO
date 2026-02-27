@@ -1025,8 +1025,6 @@ export function useWebSocket(sessionId: string | null) {
       case 'recall_complete': {
         // Backend has deleted DB messages. Now clean up frontend state.
         const recallMessageId = data.message_id as string;
-        console.log('[WebSocket] Recall complete:', recallMessageId, 'deleted:', data.deleted_count);
-
         // 1. Clear messages from store (target + everything after)
         clearMessagesAfter(recallMessageId);
         removeMessage(recallMessageId);

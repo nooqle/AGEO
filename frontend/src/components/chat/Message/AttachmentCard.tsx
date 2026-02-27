@@ -40,26 +40,26 @@ function formatSize(bytes: number): string {
 
 export function AttachmentCard({ attachment, removable, onRemove }: AttachmentCardProps) {
   return (
-    <div className="flex items-center gap-2 px-3 py-2 bg-[--bg-elevated] border border-[--border-subtle] rounded-lg hover:border-[--border-hover] transition-colors group min-w-[180px] max-w-[240px]">
+    <div className="flex items-center gap-2 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg hover:border-[var(--border-hover)] transition-colors group min-w-[180px] max-w-[240px]">
       <FileIcon type={attachment.type} className="w-5 h-5 text-[#6366F1] flex-shrink-0" />
       <div className="flex-1 min-w-0">
-        <p className="text-xs text-[--text-primary] truncate">{attachment.name}</p>
-        <p className="text-[10px] text-[--text-tertiary]">{formatSize(attachment.size)}</p>
+        <p className="text-xs text-[var(--text-primary)] truncate">{attachment.name}</p>
+        <p className="text-[10px] text-[var(--text-tertiary)]">{formatSize(attachment.size)}</p>
       </div>
       {removable && onRemove ? (
         <button
           onClick={onRemove}
-          className="p-0.5 hover:bg-[--bg-tertiary] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+          className="p-0.5 hover:bg-[var(--bg-tertiary)] rounded opacity-0 group-hover:opacity-100 transition-opacity"
         >
-          <RiCloseLine className="w-3.5 h-3.5 text-[--text-tertiary]" />
+          <RiCloseLine className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
         </button>
       ) : attachment.url ? (
         <a
           href={attachment.url}
           download={attachment.name}
-          className="p-0.5 hover:bg-[--bg-tertiary] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+          className="p-0.5 hover:bg-[var(--bg-tertiary)] rounded opacity-0 group-hover:opacity-100 transition-opacity"
         >
-          <RiDownloadLine className="w-3.5 h-3.5 text-[--text-tertiary]" />
+          <RiDownloadLine className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
         </a>
       ) : null}
     </div>

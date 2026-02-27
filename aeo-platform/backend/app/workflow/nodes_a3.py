@@ -27,12 +27,14 @@ from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.nodes import _get_fast_model
 from app.core.utils import extract_json_from_content
 
+from app.core.constants import PlatformConstants, WorkflowConstants
+
 # Platforms to distribute questions across
-_PLATFORMS = ["kimi", "deepseek"]
+_PLATFORMS = PlatformConstants.SUPPORTED_PLATFORMS
 # Hard limit on total questions
-_MAX_QUESTIONS = 80
+_MAX_QUESTIONS = WorkflowConstants.MAX_QUESTIONS
 # Questions per persona in persona mode
-_QUESTIONS_PER_PERSONA = 10
+_QUESTIONS_PER_PERSONA = WorkflowConstants.QUESTIONS_PER_PERSONA
 
 
 async def a3_question_node(state: AgentState) -> Command:
@@ -124,7 +126,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             if not core_question:
                 continue
 
-            platform = q.get("platform", _PLATFORMS[platform_idx % len(_PLATFORMS)])
+            platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
             platform_idx += 1
 
             question_obj = {
@@ -354,8 +356,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             if not core_question:
                 continue
 
-            # Alternate platforms if not specified
-            platform = q.get("platform", _PLATFORMS[platform_idx % len(_PLATFORMS)])
+            platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
             platform_idx += 1
 
             question_obj = {
@@ -489,29 +490,31 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 
 def _build_persona_system_prompt() -> str:
     """System prompt for persona-focused question generation."""
-    return """你是一个资深的AI搜索行为分析专家。你的任务是根据品牌信息和用户画像，生成这些用户可能在AI搜索引擎（如Kimi、DeepSeek）中提出的真实问题。
+    platform_list = "、".join(
+        PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in _PLATFORMS
+    )
+    return f"""你是一个资深的AI搜索行为分析专家。你的任务是根据品牌信息和用户画像，生成这些用户可能在AI搜索引擎（如{platform_list}）中提出的真实问题。
 
 ## 输出格式
 请严格输出以下 JSON 格式，不要有其他文字：
 
-{
+{{
   "questions": [
-    {
+    {{
       "question_id": "pq_001",
       "core_question": "用户会在AI搜索中问的完整问题",
       "category": "问题分类（品牌认知/产品特性/竞品对比/购买决策/用户评价/行业地位）",
       "user_intent": "用户提问的潜在意图",
       "decision_stage": "认知/兴趣/评估/决策/验证",
-      "platform": "kimi 或 deepseek",
       "source_persona": "对应画像名称"
-    }
+    }}
   ]
-}
+}}
 
 ## 生成规则
 1. 每个画像生成 10-15 个问题
 2. 问题必须覆盖决策全路径：认知 → 兴趣 → 评估 → 决策 → 验证
-3. 平台在 kimi 和 deepseek 之间交替分配
+3. 不需要指定平台，系统会自动在 {platform_list} 之间轮转分配
 4. 问题要贴合该画像人群的真实表达方式和关注点
 5. 避免重复或过于笼统的问题
 6. 总问题数不超过 40 个"""
@@ -697,7 +700,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             if not core_question:
                 continue
 
-            platform = q.get("platform", _PLATFORMS[platform_idx % len(_PLATFORMS)])
+            platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
             platform_idx += 1
 
             question_obj = {
@@ -828,7 +831,10 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
 
 def _build_baseline_system_prompt() -> str:
     """System prompt for baseline dynamic question generation."""
-    return """你是一个消费者行为研究专家。请基于以下品牌信息和竞品列表，生成模拟用户在 AI 搜索引擎（如 Kimi、DeepSeek）中会提问的**行业全景问题**。
+    platform_list = "、".join(
+        PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in _PLATFORMS
+    )
+    return f"""你是一个消费者行为研究专家。请基于以下品牌信息和竞品列表，生成模拟用户在 AI 搜索引擎（如 {platform_list}）中会提问的**行业全景问题**。
 
 ## 核心规则
 1. 问题必须是**用户视角**，模拟真实消费者的搜索行为
@@ -847,23 +853,22 @@ def _build_baseline_system_prompt() -> str:
 ## 输出格式 (JSON)
 请严格输出以下 JSON 格式，不要有其他文字：
 
-{
+{{
   "questions": [
-    {
+    {{
       "question_id": "bl_001",
       "core_question": "问题文本",
       "category": "品类需求咨询|场景化选购|品类对比排名|行业趋势探索|品牌直接问题",
       "user_intent": "用户意图",
       "decision_stage": "认知|兴趣|评估|决策",
-      "platform": "kimi 或 deepseek",
       "covers_product": "对应的产品线(可选)"
-    }
+    }}
   ]
-}
+}}
 
 ## 生成规则
 1. 总问题数：10-15 个
-2. 平台在 kimi 和 deepseek 之间交替分配
+2. 不需要指定平台，系统会自动在 {platform_list} 之间轮转分配
 3. 问题要覆盖品牌的核心产品线
 4. 避免重复或过于笼统的问题
 5. 竞品名称可以出现在对比类问题中"""

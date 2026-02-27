@@ -19,7 +19,7 @@ export function GuidedOptions({ message, options, onSelect, selectedId }: Guided
   return (
     <div className="space-y-3">
       {message && (
-        <p className="text-sm text-[--text-primary]">{message}</p>
+        <p className="text-sm text-[var(--text-primary)]">{message}</p>
       )}
       <div className="grid gap-2">
         {options.map((option, index) => {
@@ -33,17 +33,17 @@ export function GuidedOptions({ message, options, onSelect, selectedId }: Guided
               disabled={!!selectedId}
               className={`flex items-start gap-3 px-4 py-3 rounded-xl border text-left transition-all ${
                 isSelected
-                  ? 'bg-[#6366F1]/10 border-[#6366F1]/40 text-[--text-primary]'
+                  ? 'bg-[#6366F1]/10 border-[#6366F1]/40 text-[var(--text-primary)]'
                   : selectedId
-                  ? 'bg-[--bg-elevated] border-[--border-subtle] text-[--text-tertiary] opacity-50'
-                  : 'bg-[--bg-elevated] border-[--border-subtle] text-[--text-primary] hover:border-[#6366F1]/30 hover:bg-[#6366F1]/5'
+                  ? 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-tertiary)] opacity-50'
+                  : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[#6366F1]/30 hover:bg-[#6366F1]/5'
               }`}
             >
               <span
                 className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
                   isSelected
                     ? 'bg-[#6366F1] text-white'
-                    : 'bg-[--bg-tertiary] text-[--text-secondary]'
+                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
                 }`}
               >
                 {letter}
@@ -51,7 +51,7 @@ export function GuidedOptions({ message, options, onSelect, selectedId }: Guided
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium">{option.label}</div>
                 {option.description && (
-                  <div className="text-xs text-[--text-tertiary] mt-0.5">
+                  <div className="text-xs text-[var(--text-tertiary)] mt-0.5">
                     {option.description}
                   </div>
                 )}

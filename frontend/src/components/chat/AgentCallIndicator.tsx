@@ -102,7 +102,7 @@ export function AgentCallIndicator({
     <div
       className={cn(
         'rounded-lg overflow-hidden border',
-        'bg-[--bg-elevated]',
+        'bg-[var(--bg-elevated)]',
         config.borderClass,
         className
       )}
@@ -126,11 +126,11 @@ export function AgentCallIndicator({
 
           {/* Agent 名称 */}
           <div>
-            <span className="text-sm font-medium text-[--text-primary]">
+            <span className="text-sm font-medium text-[var(--text-primary)]">
               {displayName}
             </span>
             {call.agentCode && (
-              <span className="ml-2 text-xs text-[--text-tertiary]">
+              <span className="ml-2 text-xs text-[var(--text-tertiary)]">
                 {call.agentCode}
               </span>
             )}
@@ -150,10 +150,10 @@ export function AgentCallIndicator({
 
       {/* 输入参数 */}
       {showInput && Object.keys(call.input).length > 0 && (
-        <div className="px-4 py-2 bg-[--bg-primary] border-t border-[--border-subtle]">
-          <div className="text-xs text-[--text-tertiary]">
-            <span className="text-[--text-disabled]">输入: </span>
-            <code className="text-[--text-secondary] font-mono">
+        <div className="px-4 py-2 bg-[var(--bg-primary)] border-t border-[var(--border-subtle)]">
+          <div className="text-xs text-[var(--text-tertiary)]">
+            <span className="text-[var(--text-disabled)]">输入: </span>
+            <code className="text-[var(--text-secondary)] font-mono">
               {formatInput(call.input)}
             </code>
           </div>
@@ -188,11 +188,11 @@ export function AgentCallList({
   const completedCount = calls.filter(c => c.status === 'completed').length;
 
   return (
-    <div className={cn('bg-[--bg-primary] rounded-lg border border-[--border-subtle] overflow-hidden', className)}>
+    <div className={cn('bg-[var(--bg-primary)] rounded-lg border border-[var(--border-subtle)] overflow-hidden', className)}>
       {/* 头部 */}
-      <div className="px-4 py-3 border-b border-[--border-subtle]">
+      <div className="px-4 py-3 border-b border-[var(--border-subtle)]">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-[--text-primary]">{title}</span>
+          <span className="text-sm font-medium text-[var(--text-primary)]">{title}</span>
           <div className="flex items-center gap-3 text-xs">
             {runningCount > 0 && (
               <span className="text-[#F59E0B]">

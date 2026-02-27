@@ -52,7 +52,7 @@ export function MetricCard({
 
   const TrendIcon = trend === "up" ? RiArrowUpLine : trend === "down" ? RiArrowDownLine : RiSubtractLine;
   const trendColor =
-    trend === "up" ? "text-emerald-400" : trend === "down" ? "text-red-400" : "text-[--text-tertiary]";
+    trend === "up" ? "text-emerald-400" : trend === "down" ? "text-red-400" : "text-[var(--text-tertiary)]";
 
   return (
     <motion.div
