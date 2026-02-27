@@ -209,6 +209,12 @@ async def rebuild_state_from_db(
                 if current_step and current_step > highest_step:
                     highest_step = current_step
 
+            elif output_type == "pipeline":
+                # A2 pipeline artifact — restore marketing_personas if present
+                mp = output_data.get("marketing_personas")
+                if mp:
+                    state["marketing_personas"] = mp
+
             elif output_type == "questionList":
                 sq = output_data.get("simulatedQuestions") or output_data.get(
                     "simulated_questions"

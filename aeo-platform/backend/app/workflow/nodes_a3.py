@@ -277,6 +277,16 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 
     all_personas = marketing_personas.get("user_personas", [])
 
+    # Debug: log what we're matching against
+    persona_keys = [
+        {"name": p.get("name"), "persona_name": p.get("persona_name")}
+        for p in all_personas
+    ]
+    logger.info(
+        f"[A3] Persona matching: selected_ids={selected_ids}, "
+        f"available personas={persona_keys}"
+    )
+
     # Match selected personas by name/persona_name
     if selected_ids:
         selected_personas = [

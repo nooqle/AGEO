@@ -823,6 +823,7 @@ async def a2_persona_node(state: AgentState) -> Command:
             title="营销触点地图",
             data={
                 "pipeline": pipeline_data,
+                "marketing_personas": data,  # Persist for state rebuild after restart
                 "maxSelection": 3,
                 "minSelection": 1,
                 "description": "请在管道图中选择您希望重点分析的用户画像（可多选）",
