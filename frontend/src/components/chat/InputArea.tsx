@@ -113,8 +113,8 @@ export function InputArea({
         className="hidden"
       />
 
-      {/* 快捷确认按钮 */}
-      {pendingConfirmation && !isExecuting && (
+      {/* 快捷确认按钮 — 空 options 时不渲染（自然语言模式） */}
+      {pendingConfirmation && !isExecuting && pendingConfirmation.options.length > 0 && (
         <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)' }}>
           <div className="max-w-3xl mx-auto flex items-center gap-2">
             <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>快捷回复：</span>
