@@ -235,6 +235,7 @@ class AgentState(TypedDict):
     tool_call_args: dict | None  # Arguments passed to Agent from tool call
     tool_call_id: str | None  # ID of the current tool call (for tool result)
     agent_retry_counts: dict  # {tool_name: int} — tracks how many times each tool was called
+    fetch_mode: str | None  # "fast" (API+DeepSeek browser) or "full" (4 platforms all browser)
 
     # =========================================================================
     # Task Persistence (Cycle 3, Module 1)

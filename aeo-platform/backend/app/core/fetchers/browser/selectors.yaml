@@ -1,0 +1,221 @@
+# Browser Handler 选择器配置
+# 当平台 UI 更新时，修改此文件即可，无需改动 Python 代码。
+# 修改后自动生效（基于文件修改时间的热加载）。
+#
+# 格式说明:
+#   - 单选择器: 字符串（多个用逗号分隔表示 CSS fallback）
+#   - 多选择器: 列表（按优先级排序，代码依次尝试）
+#   - 文本匹配: 列表（用于按钮文字、弹窗文案等）
+
+kimi:
+  url: "https://kimi.com/"
+
+  # --- 网络拦截配置 ---
+  intercept:
+    url_pattern: "kimi\\.gateway\\.chat.*ChatService/Chat"
+    method: "POST"
+    content_type_contains: "connect+json"
+    timeout: 65
+
+  # --- CSS 选择器 ---
+  input: ".chat-input-editor, [class*='chat-input'], [contenteditable='true']"
+  new_chat: ".new-chat-btn, [class*='new-chat']"
+  not_logged_in: ".not-login-container"
+
+  # 回答内容容器（按优先级排序，第一个匹配即使用）
+  content:
+    - ".chat-content-item-assistant .markdown"
+    - ".segment-assistant .markdown"
+    - ".segment-assistant .segment-content"
+    - ".markdown-container"
+    - ".message-list .markdown-body"
+    - "[class*='message'] .markdown-body"
+    - "[class*='markdown-body']"
+
+  # 登录弹窗检测
+  login_modal:
+    - ".login-modal-content"
+    - ".wechat-login"
+    - ".phone-login-mobile-number"
+    - "[placeholder=\"请输入手机号\"]"
+    - "[class*='login-modal']"
+    - "[class*='login-dialog']"
+    - "[class*='auth-modal']"
+
+  # 引用标记（提取答案文本时需要移除的内联元素）
+  citation_strip: "[class*='cite'], [class*='citation'], [class*='ref-num'], sup, a[data-index]"
+
+  # 搜索引用链接选择器（按优先级排序）
+  reference_links:
+    - ".source-item a"
+    - "[class*='source'] a[href^='http']"
+    - "[class*='reference'] a[href^='http']"
+    - "[data-testid*='source'] a"
+    - ".message-content a[href^='http']"
+
+  # 弹窗关闭图标
+  popup_close_icons: "[class*='activity'] img[class*='close'], [class*='banner'] img[class*='close']"
+
+  # --- 文本匹配 ---
+  dismiss_texts:
+    - "稍后再说"
+    - "关闭"
+    - "取消"
+    - "暂不升级"
+    - "我知道了"
+
+  new_chat_text: "新建对话"
+
+  reference_expand_texts:
+    - "来源"
+    - "Sources"
+    - "References"
+    - "引用来源"
+
+
+deepseek:
+  url: "https://chat.deepseek.com/"
+
+  # --- 网络拦截配置 ---
+  # 已禁用: DeepSeek SSE 流不关闭连接(心跳保活)，response.body() 会阻塞至超时。
+  # DOM fallback 稳定可靠(~1000字)，直接使用 DOM 提取。
+  # intercept:
+  #   url_pattern: "/api/v0/chat/completion"
+  #   method: "POST"
+  #   content_type_contains: "event-stream"
+  #   timeout: 90
+
+  # --- CSS 选择器 ---
+  input: "textarea"
+  input_ready: "textarea, [contenteditable='true']"
+  answer: "div.ds-markdown"
+
+  reference_links:
+    - "[class*='reference'] a[href^='http']"
+    - ".search-result a[href^='http']"
+
+  citation_strip: "[class*='cite'], [class*='citation'], [class*='ref-num'], sup, a.ds-markdown-cite, a[data-index]"
+
+  # --- 文本匹配 ---
+  new_chat_text: "新对话"
+
+  web_search_texts:
+    - "联网搜索"
+    - "联网"
+
+  reference_expand_texts:
+    - "引用"
+    - "来源"
+    - "References"
+    - "Sources"
+
+
+yuanbao:
+  url: "https://yuanbao.tencent.com/"
+
+  # --- 网络拦截配置 ---
+  intercept:
+    url_pattern: "/api/chat/"
+    method: "POST"
+    content_type_contains: "event-stream"
+    timeout: 65
+
+  # --- CSS 选择器 ---
+  # Quill 富文本编辑器
+  input: ".ql-editor"
+  input_ready: ".ql-editor"
+  new_chat: ".icon-yb-ic_newchat_20"
+  send_btn: "a[class*='send-btn']:not([class*='disabled'])"
+
+  # 模型选择（确保使用 Hunyuan 而非 DeepSeek）
+  model_selector: ".ybc-model-select-button"
+  target_model: "Hunyuan"
+
+  # 登录检测
+  not_logged_in: ".nologin"
+  login_btn: "button.agent-dialogue__tool__login"
+
+  # 回答内容容器（DOM fallback，网络拦截为主要路径）
+  # 注: Yuanbao 不使用标准 .markdown-body 类名
+  content:
+    - ".agent-dialogue__content--common__content"
+    - "[class*='hyc-content-markdown']"
+    - "[class*='hyc-markdown']"
+    - "[class*='agent-dialogue'] [class*='content']"
+    - "[class*='markdown-body']"
+    - "[class*='markdown']"
+
+  # 联网搜索
+  web_search_btn: ".yb-internet-search-btn"
+
+  # 引用标记（提取答案文本时移除）
+  citation_strip: "[class*='cite'], [class*='citation'], [class*='ref-num'], sup, a[data-index]"
+
+  # 搜索引用链接
+  reference_links:
+    - "[class*='source'] a[href^='http']"
+    - "[class*='reference'] a[href^='http']"
+    - "[class*='search-result'] a[href^='http']"
+    - "a[href^='http'][class*='link']"
+
+  # 弹窗关闭
+  popup_close_icons: "[class*='close-icon'], [class*='banner'] [class*='close']"
+  dismiss_texts:
+    - "关闭"
+    - "稍后再说"
+    - "我知道了"
+
+  reference_expand_texts:
+    - "来源"
+    - "引用"
+    - "Sources"
+    - "References"
+
+
+doubao:
+  url: "https://www.doubao.com/chat/"
+
+  # --- 网络拦截配置 ---
+  intercept:
+    url_pattern: "/chat/completion"
+    method: "POST"
+    content_type_contains: "event-stream"
+    timeout: 90
+
+  # --- CSS 选择器 ---
+  # Semi Design textarea 组件
+  input: "textarea.semi-input-textarea, textarea"
+  input_ready: "textarea.semi-input-textarea, textarea"
+
+  # 登录检测（Semi Design button）
+  login_btn: "[class*='login-btn'], button.semi-button"
+
+  # 回答内容容器（2026-03-01 实测确认）
+  content:
+    - ".flow-markdown-body"
+    - "[data-testid='message_text_content']"
+    - "[class*='markdown-body']"
+
+  # 引用标记
+  citation_strip: "[class*='cite'], [class*='citation'], [class*='ref-num'], sup, a[data-index]"
+
+  # 搜索引用链接
+  reference_links:
+    - "[class*='source'] a[href^='http']"
+    - "[class*='reference'] a[href^='http']"
+    - "[class*='search-result'] a[href^='http']"
+
+  # --- 文本匹配 ---
+  new_chat_text: "新对话"
+  web_search_text: "深入研究"
+
+  dismiss_texts:
+    - "关闭"
+    - "稍后再说"
+    - "我知道了"
+
+  reference_expand_texts:
+    - "来源"
+    - "引用"
+    - "Sources"
+    - "References"

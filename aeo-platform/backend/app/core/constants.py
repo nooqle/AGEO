@@ -92,11 +92,12 @@ class PlatformConstants:
         "deepseek": "DeepSeek",
     }
 
-    # Platform-specific timeouts (per-question, seconds)
+    # Platform-specific browser timeouts (per-question, seconds)
+    # Used by _get_browser_timeout() in nodes_a4.py for browser pipelines only.
     PLATFORM_TIMEOUTS: Final[dict[str, int]] = {
-        "doubao": 30,
-        "hunyuan": 30,
-        "kimi": 30,
+        "doubao": 90,
+        "hunyuan": 90,
+        "kimi": 90,
         "deepseek": 90,
     }
 

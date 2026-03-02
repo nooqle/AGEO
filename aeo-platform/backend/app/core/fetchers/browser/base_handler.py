@@ -1,11 +1,75 @@
-"""Base browser handler for LLM platforms."""
+"""Base browser handler for LLM platforms.
 
+Provides Template Method pattern with shared logic extracted from
+DeepSeek/Kimi/Yuanbao/Doubao handlers (Phase 0 refactor).
+
+NOTE: The eval() calls in this module are Playwright's page.evaluate() which
+executes JavaScript in the browser context for DOM scraping. This is the
+standard Playwright API pattern - not Python's eval().
+"""
+
+import asyncio
+import json
+import logging
+import re
 from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Union
+from urllib.parse import urlparse
+
+# CP1252 byte-to-Unicode mappings for the 0x80-0x9F range (where CP1252 differs
+# from ISO-8859-1).  Used by _undo_double_utf8() to reverse double encoding.
+_CP1252_EXTRA: dict[int, int] = {
+    0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84,
+    0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x02C6: 0x88,
+    0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C,
+    0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93,
+    0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+    0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B,
+    0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F,
+}
+
+
+def _undo_double_utf8(text: str) -> str:
+    """Reverse double UTF-8 encoding (UTF-8 bytes → CP1252 chars → UTF-8).
+
+    Some servers (e.g. Doubao) double-encode: original UTF-8 bytes are
+    misinterpreted as CP1252 codepoints, then re-encoded as UTF-8.
+    This function reverses that by mapping each char back to its byte value,
+    then decoding the resulting bytes as UTF-8.
+    """
+    out = bytearray()
+    for ch in text:
+        cp = ord(ch)
+        if cp < 0x100:
+            out.append(cp)
+        elif cp in _CP1252_EXTRA:
+            out.append(_CP1252_EXTRA[cp])
+        else:
+            out.extend(ch.encode("utf-8"))
+    return bytes(out).decode("utf-8", errors="replace")
+
 
 from app.core.fetchers.browser.agent_browser import AgentBrowserClient
+from app.core.fetchers.browser.parsers.base import (
+    BaseResponseParser,
+    InterceptConfig,
+    ParsedResponse,
+)
 from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
-from app.schemas.fetch import BrowserEvent, BrowserState, FetchResult
+from app.schemas.fetch import (
+    BrowserEvent,
+    BrowserState,
+    FetchResult,
+    Platform,
+    SearchReference,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _is_junk_title(title: str) -> bool:
+    """Return True if the title is just numbers, dashes, or punctuation."""
+    return bool(re.fullmatch(r'[-\d\s.\[\]()]+', title))
 
 
 class BaseBrowserHandler(ABC):
@@ -15,54 +79,320 @@ class BaseBrowserHandler(ABC):
     the fetch method.
 
     Supports both AgentBrowserClient (CLI-based) and PlaywrightBrowserClient (native).
+
+    Subclasses MUST define:
+        URL: str          — platform URL
+        PLATFORM: Platform — enum value
+        PLATFORM_KEY: str  — key in selectors.yaml
+        _DEFAULTS: dict    — fallback selectors
     """
 
-    URL: str = ""  # Platform URL to be overridden by subclasses
+    URL: str = ""
+    PLATFORM: Platform  # subclass must define
+    PLATFORM_KEY: str = ""  # key in selectors.yaml
+    _DEFAULTS: dict = {}
+    DOUBLE_UTF8_FIX: bool = False  # Doubao needs double UTF-8 decoding
 
-    def __init__(self, client: Union[AgentBrowserClient, PlaywrightBrowserClient]):
-        """Initialize the browser handler.
-
-        Args:
-            client: Browser client instance (AgentBrowserClient or PlaywrightBrowserClient)
-        """
+    def __init__(self, client: Union[AgentBrowserClient, PlaywrightBrowserClient], headed: bool = False):
         self.client = client
+        self.headed = headed
         self._is_playwright = isinstance(client, PlaywrightBrowserClient)
+        self._sel_cache: dict = {}
 
-    @abstractmethod
-    async def fetch(self, question: str) -> AsyncGenerator[BrowserEvent, None]:
-        """Fetch answer for a question.
+    # ------------------------------------------------------------------ selectors
 
-        This method should yield BrowserEvent objects to provide
-        progress updates and eventually return the result.
+    def _sel(self, key: str):
+        """Get selector from YAML config with fallback to _DEFAULTS."""
+        return self._sel_cache.get(key, self._DEFAULTS.get(key))
 
-        Args:
-            question: The question to ask
+    def _refresh_selectors(self):
+        """Reload selectors from YAML (called at the start of each fetch)."""
+        from app.core.fetchers.browser.selector_config import get_platform_config
+        self._sel_cache = get_platform_config(self.PLATFORM_KEY)
 
-        Yields:
-            BrowserEvent objects representing the current state
+    # ------------------------------------------------------------------ JS builders
+
+    def _content_check_js(self) -> str:
+        """Build content length check JS from current selectors.
+
+        Handles both single-selector (DeepSeek) and multi-selector (others) formats.
         """
-        pass
-        # Make this a generator
-        yield  # type: ignore
+        content_sel = self._sel("content") or self._sel("answer")
+        if isinstance(content_sel, list):
+            sels = json.dumps(content_sel, ensure_ascii=False)
+            return f"""() => {{
+            const selectors = {sels};
+            let maxLen = 0;
+            for (const sel of selectors) {{
+                const nodes = document.querySelectorAll(sel);
+                if (nodes.length > 0) {{
+                    const last = nodes[nodes.length - 1];
+                    maxLen = Math.max(maxLen, (last.textContent || '').length);
+                }}
+            }}
+            return String(maxLen);
+        }}"""
+        else:
+            answer_sel = json.dumps(content_sel, ensure_ascii=False)
+            return f"""() => {{
+            const msgs = document.querySelectorAll({answer_sel});
+            const last = msgs[msgs.length - 1];
+            return last ? String(last.textContent.length) : '0';
+        }}"""
 
-    async def _check_login_status(self, check_selector: str) -> bool:
-        """Check if user is logged in.
+    def _dismiss_popups_js(self) -> str:
+        """Build popup dismissal JS from current selectors.
 
-        Args:
-            check_selector: CSS selector that indicates logged-in state
+        Override in subclasses that need popup dismissal (Kimi, Yuanbao).
+        Returns no-op JS by default.
+        """
+        return "() => 0"
+
+    # ------------------------------------------------------------------ DOM extraction
+
+    async def _extract_answer_dom(self) -> str:
+        """Extract answer text from DOM.
+
+        Handles both single-selector (DeepSeek) and multi-selector (others) formats.
+        Clones DOM node and strips citation markers before extracting text.
+
+        Uses Playwright's page.evaluate() to run JS in the browser context.
+        """
+        tag = self.PLATFORM_KEY.capitalize()
+        try:
+            content_sel = self._sel("content") or self._sel("answer")
+            cite_strip_sel = json.dumps(
+                self._sel("citation_strip") or "", ensure_ascii=False
+            )
+
+            if isinstance(content_sel, list):
+                sels = json.dumps(content_sel, ensure_ascii=False)
+                # Multi-selector: try each in priority order
+                result = await self.client.eval(f"""() => {{
+                    const selectors = {sels};
+                    for (const sel of selectors) {{
+                        const nodes = document.querySelectorAll(sel);
+                        if (nodes.length > 0) {{
+                            const clone = nodes[nodes.length - 1].cloneNode(true);
+                            clone.querySelectorAll({cite_strip_sel}).forEach(el => el.remove());
+                            return clone.textContent || '';
+                        }}
+                    }}
+                    return '';
+                }}""")
+            else:
+                sel = json.dumps(content_sel, ensure_ascii=False)
+                # Single selector (e.g. DeepSeek's "div.ds-markdown")
+                result = await self.client.eval(f"""() => {{
+                    const messages = document.querySelectorAll({sel});
+                    const lastMessage = messages[messages.length - 1];
+                    if (!lastMessage) return '';
+                    const clone = lastMessage.cloneNode(true);
+                    clone.querySelectorAll({cite_strip_sel}).forEach(el => el.remove());
+                    return clone.innerText;
+                }}""")
+
+            text = result.get("output", "")
+            if text:
+                logger.info("[%s] Extracted answer (%d chars)", tag, len(text))
+            else:
+                logger.warning("[%s] Answer extraction returned empty string", tag)
+            return text
+        except Exception as e:
+            logger.debug("[%s] _extract_answer_dom failed: %s", tag, e)
+            return ""
+
+    async def _try_ref_selector(self, selector: str) -> list[SearchReference]:
+        """Try a single CSS selector to extract references.
+
+        If the extracted title looks like a bare number or dash-number,
+        falls back to using the URL domain as the title.
+
+        Uses Playwright's page.evaluate() to run JS in the browser context.
+        """
+        tag = self.PLATFORM_KEY.capitalize()
+        try:
+            js_selector = json.dumps(selector)
+            result = await self.client.eval(
+                f"""() => {{
+                    const items = document.querySelectorAll({js_selector});
+                    return JSON.stringify([...items].map((el, idx) => ({{
+                        index: idx + 1,
+                        title: (el.getAttribute('title') || el.textContent || '').trim().slice(0, 200),
+                        url: el.href || el.getAttribute('href') || '',
+                    }})));
+                }}"""
+            )
+            data = json.loads(result.get("output", "[]") or "[]")
+            if not data:
+                return []
+            cleaned = []
+            for item in data:
+                url = item.get("url", "")
+                if url and not url.startswith(("javascript:", "#", "/")):
+                    title = item.get("title", "")
+                    if not title or _is_junk_title(title):
+                        try:
+                            title = urlparse(url).hostname or url[:60]
+                            title = title.removeprefix("www.")
+                        except Exception:
+                            title = url[:60]
+                    cleaned.append(SearchReference(
+                        index=len(cleaned) + 1,
+                        title=title,
+                        url=url,
+                        snippet=None,
+                        site_name=None,
+                        is_official=False,
+                    ))
+            return cleaned
+        except Exception as e:
+            logger.debug("[%s] Selector '%s' failed: %s", tag, selector, e)
+            return []
+
+    async def _extract_references_dom(self) -> list[SearchReference]:
+        """Extract search references from page using 3-phase strategy.
+
+        Phase 1: Try CSS selectors directly
+        Phase 2: Expand reference panel, re-try selectors
+        Phase 3: Diagnostic logging
+        """
+        tag = self.PLATFORM_KEY.capitalize()
+        refs: list[SearchReference] = []
+        selectors_to_try = self._sel("reference_links") or []
+
+        # Phase 1: Try selectors without clicking anything
+        for selector in selectors_to_try:
+            refs = await self._try_ref_selector(selector)
+            if refs:
+                logger.info("[%s] Extracted %d references via selector: %s", tag, len(refs), selector)
+                return refs
+
+        # Phase 2: Try to expand the reference panel, then re-check
+        expand_texts = self._sel("reference_expand_texts") or []
+        for btn_text in expand_texts:
+            try:
+                result = await self.client.find_and_click(btn_text)
+                if result.get("success"):
+                    await asyncio.sleep(1.5)
+                    break
+            except Exception:
+                continue
+
+        for selector in selectors_to_try:
+            refs = await self._try_ref_selector(selector)
+            if refs:
+                logger.info("[%s] Extracted %d references (after expand) via: %s", tag, len(refs), selector)
+                return refs
+
+        # Phase 3: Diagnostic
+        try:
+            diag = await self.client.eval("""() => {
+                const links = Array.from(document.querySelectorAll('a[href^="http"]'));
+                return JSON.stringify(links.slice(0, 10).map(a => ({
+                    url: a.href.slice(0, 80),
+                    txt: (a.textContent || '').trim().slice(0, 40),
+                    cls: (a.className || '').slice(0, 60),
+                })));
+            }""")
+            link_data = json.loads(diag.get("output", "[]") or "[]")
+            logger.warning("[%s] No references found. Sample http links (%d): %s",
+                           tag, len(link_data), link_data[:5])
+        except Exception:
+            logger.warning("[%s] No references found after trying all selectors", tag)
+
+        return refs
+
+    # ------------------------------------------------------------------ polling helpers
+
+    async def _wait_for_content_stable(
+        self,
+        max_wait: float = 50,
+        poll_interval: float = 3,
+        min_content_len: int = 0,
+        stable_rounds: int = 2,
+    ) -> tuple[int, float]:
+        """Poll DOM content length until stable.
 
         Returns:
-            True if logged in
+            (final_content_len, waited_seconds)
         """
+        tag = self.PLATFORM_KEY.capitalize()
+        await asyncio.sleep(poll_interval)
+        waited = poll_interval
+        prev_len = 0
+        stable_count = 0
+
+        while waited < max_wait:
+            await asyncio.sleep(poll_interval)
+            waited += poll_interval
+            result = await self.client.eval(self._content_check_js())
+            if "error" in result:
+                logger.warning("[%s] eval error at %ds: %s", tag, waited, result["error"])
+            cur_len = int(result.get("output", "0") or "0")
+            logger.info("[%s] Poll %ds: content_len=%d (prev=%d, stable=%d)",
+                        tag, waited, cur_len, prev_len, stable_count)
+
+            if cur_len > 0 and cur_len == prev_len:
+                stable_count += 1
+                if stable_count >= stable_rounds and cur_len >= min_content_len:
+                    logger.info("[%s] Content stable at %d chars after %ds", tag, cur_len, waited)
+                    break
+            else:
+                stable_count = 0
+            prev_len = cur_len
+
+        return prev_len, waited
+
+    async def _dump_page_debug(self, waited: float, extra_keywords: list[str] | None = None) -> None:
+        """Dump page structure for diagnostics when no content is found.
+
+        Uses Playwright's page.evaluate() for browser-context DOM inspection.
+        """
+        tag = self.PLATFORM_KEY.capitalize()
+        logger.warning("[%s] No content detected after %ds — dumping page structure", tag, waited)
+        try:
+            keywords = [
+                'markdown', 'message', 'chat', 'answer', 'content', 'reply',
+            ] + (extra_keywords or [])
+            kw_filter = " || ".join(f"c.includes('{kw}')" for kw in keywords)
+            dump = await self.client.page.evaluate(f"""() => {{
+                const bodyText = (document.body?.innerText || '').slice(0, 500);
+                const allCls = new Set();
+                document.querySelectorAll('*').forEach(el => {{
+                    const cn = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '');
+                    cn.split(' ').forEach(c => {{ if (c.trim()) allCls.add(c.trim()); }});
+                }});
+                const mdLike = [...allCls].filter(c => {kw_filter}).slice(0, 40);
+                return {{ bodyText, mdLike }};
+            }}""")
+            logger.warning("[%s] Page text: %s", tag, str(dump.get("bodyText", ""))[:300])
+            logger.warning("[%s] Relevant classes: %s", tag, dump.get("mdLike", []))
+        except Exception as e:
+            logger.warning("[%s] Could not dump page: %s", tag, e)
+
+    # ------------------------------------------------------------------ textarea helper
+
+    def _find_textarea_ref(self, snapshot: dict) -> str | None:
+        """Find textarea/textbox reference from accessibility snapshot."""
+        try:
+            refs = snapshot.get("refs", {})
+            for ref_id, info in refs.items():
+                if info.get("role") in ("textbox", "textfield", "input"):
+                    return f"@{ref_id}"
+            return None
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------ login
+
+    async def _check_login_status(self, check_selector: str) -> bool:
+        """Check if user is logged in."""
         try:
             if self._is_playwright:
-                # Use a short 4-second timeout: we just need to detect presence/absence
-                # of the element, not wait for a full page load.  The old 15-second
-                # default wasted ~180 s per pipeline (12 questions × 15 s each).
                 result = await self.client.wait(selector=check_selector, timeout=4000)
                 return result.get("success", False)
             else:
-                # AgentBrowser: use CLI command
                 from app.core.fetchers.browser.agent_browser import AgentBrowserClient
                 if isinstance(self.client, AgentBrowserClient):
                     result = await self.client.run_command(
@@ -79,18 +409,7 @@ class BaseBrowserHandler(ABC):
         timeout: int = 300,
         poll_interval: float = 2.0,
     ) -> bool:
-        """Wait for user to complete login.
-
-        Args:
-            check_selector: Selector to check for login
-            timeout: Maximum wait time in seconds
-            poll_interval: Polling interval in seconds
-
-        Returns:
-            True if login completed
-        """
-        import asyncio
-
+        """Wait for user to complete login."""
         elapsed = 0.0
         while elapsed < timeout:
             if await self._check_login_status(check_selector):
@@ -98,6 +417,135 @@ class BaseBrowserHandler(ABC):
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval
         return False
+
+    # ------------------------------------------------------------------ network interception
+
+    def _get_intercept_config(self) -> InterceptConfig | None:
+        """Load intercept config from selectors.yaml for this platform.
+
+        Returns None if no intercept config is defined (fall back to DOM only).
+        """
+        intercept = self._sel("intercept")
+        if not intercept or not isinstance(intercept, dict):
+            return None
+        url_pattern = intercept.get("url_pattern")
+        if not url_pattern:
+            return None
+        return InterceptConfig(
+            url_pattern=url_pattern,
+            method=intercept.get("method", "POST"),
+            content_type_contains=intercept.get("content_type_contains", ""),
+            timeout=float(intercept.get("timeout", 60)),
+        )
+
+    def _get_response_parser(self) -> BaseResponseParser | None:
+        """Return the appropriate response parser for this platform.
+
+        Override in subclasses to provide platform-specific parsers.
+        Returns None to skip network interception.
+        """
+        return None
+
+    async def _intercept_and_wait(
+        self,
+        config: InterceptConfig,
+        parser: BaseResponseParser,
+    ) -> ParsedResponse | None:
+        """Register a response listener, wait for a matching response, and parse it.
+
+        Must be started as an asyncio.Task BEFORE the question is submitted,
+        so the listener is active when the HTTP request fires.
+
+        Returns ParsedResponse on success, None on timeout or error.
+        """
+        tag = self.PLATFORM_KEY.capitalize()
+        page = self.client.page
+        if page is None:
+            return None
+
+        result_future: asyncio.Future[ParsedResponse | None] = asyncio.get_event_loop().create_future()
+        url_re = re.compile(config.url_pattern)
+
+        async def on_response(response):
+            try:
+                if result_future.done():
+                    return
+                req = response.request
+                if req.method.upper() != config.method.upper():
+                    return
+                if not url_re.search(response.url):
+                    return
+                ct = response.headers.get("content-type", "")
+                if config.content_type_contains and config.content_type_contains not in ct:
+                    return
+
+                logger.info("[%s] Intercepted response: %s (%s)", tag, response.url[:80], ct)
+
+                # Binary Connect protocol needs frame decoding
+                if "connect" in ct or "grpc" in ct:
+                    from app.core.fetchers.browser.parsers.connect import decode_binary_frames
+                    body_bytes = await response.body()
+                    frames = decode_binary_frames(body_bytes)
+                    body = "\n".join(frames)
+                    logger.info("[%s] Decoded %d binary frames", tag, len(frames))
+                else:
+                    raw = await response.body()
+                    body = raw.decode("utf-8", errors="replace")
+                    # Fix double UTF-8 encoding (Doubao's SSE is double-encoded)
+                    if self.DOUBLE_UTF8_FIX:
+                        try:
+                            fixed = _undo_double_utf8(body)
+                            if fixed != body:
+                                body = fixed
+                                logger.info("[%s] Fixed double UTF-8 encoding", tag)
+                        except Exception:
+                            pass
+
+                # Diagnostic: dump body for debugging new/unstable parsers
+                logger.debug("[%s] SSE body (%d chars), first 500: %s",
+                             tag, len(body), body[:500])
+                # Save full body to file for offline analysis
+                try:
+                    from pathlib import Path
+                    dump_dir = Path(__file__).parent / "debug_dumps"
+                    dump_dir.mkdir(exist_ok=True)
+                    dump_file = dump_dir / f"{tag.lower()}_sse_body.txt"
+                    dump_file.write_text(body, encoding="utf-8")
+                    logger.debug("[%s] SSE body saved to %s", tag, dump_file)
+                except Exception:
+                    pass
+
+                parsed = parser.parse(body, url=response.url)
+                parsed = parser.validate(parsed)
+
+                if not result_future.done():
+                    result_future.set_result(parsed)
+            except Exception as e:
+                logger.warning("[%s] Intercept handler error: %s", tag, e)
+                if not result_future.done():
+                    result_future.set_result(None)
+
+        page.on("response", on_response)
+        try:
+            result = await asyncio.wait_for(result_future, timeout=config.timeout)
+            if result and result.parse_ok:
+                logger.info("[%s] Network interception success: %d chars, %d refs",
+                            tag, len(result.answer_text), len(result.references))
+            else:
+                logger.info("[%s] Network interception: parse_ok=%s, error=%s",
+                            tag, result.parse_ok if result else "None",
+                            result.error if result else "timeout")
+            return result
+        except asyncio.TimeoutError:
+            logger.info("[%s] Network interception timed out after %ds", tag, config.timeout)
+            return None
+        except Exception as e:
+            logger.warning("[%s] Network interception failed: %s", tag, e)
+            return None
+        finally:
+            page.remove_listener("response", on_response)
+
+    # ------------------------------------------------------------------ event helper
 
     def _create_event(
         self,
@@ -108,19 +556,7 @@ class BaseBrowserHandler(ABC):
         action_hint: str | None = None,
         data: FetchResult | None = None,
     ) -> BrowserEvent:
-        """Create a browser event.
-
-        Args:
-            state: Current state
-            message: Human-readable message
-            progress: Progress (0-1)
-            requires_action: Whether user action is required
-            action_hint: Hint for user action
-            data: Result data (when completed)
-
-        Returns:
-            BrowserEvent
-        """
+        """Create a browser event."""
         return BrowserEvent(
             state=state,
             message=message,
@@ -132,3 +568,14 @@ class BaseBrowserHandler(ABC):
             recoverable=True,
             data=data,
         )
+
+    # ------------------------------------------------------------------ abstract
+
+    @abstractmethod
+    async def fetch(self, question: str) -> AsyncGenerator[BrowserEvent, None]:
+        """Fetch answer for a question.
+
+        Yields BrowserEvent objects for progress updates.
+        """
+        pass
+        yield  # type: ignore

@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from playwright.async_api import async_playwright, Page, BrowserContext
+from patchright.async_api import async_playwright, Page, BrowserContext
 
 from app.core.playwright_installer import ensure_playwright_ready
 
@@ -51,7 +51,7 @@ class PlaywrightBrowserClient:
             # 首先确保浏览器已安装
             if not await ensure_playwright_ready():
                 raise RuntimeError(
-                    "Playwright 浏览器未安装。请运行: python -m playwright install chromium"
+                    "Patchright 浏览器未安装。请运行: python -m patchright install chromium"
                 )
 
             self.playwright = await async_playwright().start()
@@ -80,7 +80,11 @@ class PlaywrightBrowserClient:
                     headless=not headed,
                     args=["--disable-blink-features=AutomationControlled"],
                     viewport={"width": 1280, "height": 720},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
                 )
                 logger.info(
                     "[Browser] Launched persistent context for '%s' (headless=%s, dir=%s)",

@@ -364,19 +364,21 @@ async def _browser_fetch_with_timeout(
 async def a4_fetch_node(state: AgentState) -> Command:
     """A4: Fetch answers from AI platforms for all questions.
 
-    Uses API-first strategy:
-    - Phase 1: Doubao + Hunyuan (API, fast, with retries) in parallel
-    - Phase 2: Kimi + DeepSeek (Browser, 90s per-question timeout, no retries) in parallel
-    Browser failures do not block the overall flow.
+    Supports two modes (controlled by state['fetch_mode']):
+    - fast: API (Doubao/Hunyuan/Kimi) + DeepSeek Browser  (~5-10 min)
+    - full: All 4 platforms via Browser only, no API       (~10-20 min)
     """
     session_id = state["session_id"]
     questions = state.get("questions", [])
     brand_profile = state.get("brand_profile") or {}
+    fetch_mode = state.get("fetch_mode") or "fast"
 
     # Cycle 3, Module 2: Check for platform_filter (selective_refetch)
     platform_filter = state.get("platform_filter")
     if platform_filter:
         logger.info("[A4] Platform filter active: %s", platform_filter)
+
+    logger.info("[A4] fetch_mode=%s, questions=%d", fetch_mode, len(questions))
 
     if not questions:
         return Command(
@@ -388,182 +390,245 @@ async def a4_fetch_node(state: AgentState) -> Command:
         )
 
     # Send user-visible reply with expected duration
-    duration_msg = (
-        f"开始向豆包、混元、Kimi、DeepSeek 四个平台提问，共 {len(questions)} 个问题。\n\n"
-        "- API 平台（豆包/混元/Kimi）：各平台串行抓取（5秒间隔防限流），约 2-3 分钟\n"
-        "- 浏览器平台（DeepSeek）：约 3-5 分钟\n"
-        "- 预计总耗时约 5-10 分钟\n\n"
-        "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
-    )
+    if fetch_mode == "full":
+        duration_msg = (
+            f"开始向豆包、混元、Kimi、DeepSeek 四个平台提问，共 {len(questions)} 个问题。\n\n"
+            "- 采集模式：**完整采集**（4 平台全浏览器）\n"
+            "- 豆包 / 混元 / Kimi / DeepSeek 各平台串行采集，4 条流水线并行\n"
+            "- 预计总耗时约 10-20 分钟\n\n"
+            "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
+        )
+    else:
+        duration_msg = (
+            f"开始向豆包、混元、Kimi、DeepSeek 四个平台提问，共 {len(questions)} 个问题。\n\n"
+            "- 采集模式：**快速采集**（API + DeepSeek 浏览器）\n"
+            "- API 平台（豆包/混元/Kimi）：各平台串行抓取，约 2-3 分钟\n"
+            "- 浏览器平台（DeepSeek）：约 3-5 分钟\n"
+            "- 预计总耗时约 5-10 分钟\n\n"
+            "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
+        )
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
     await send_reply_event(session_id, "", is_complete=True)
 
+    mode_label = "完整采集（全浏览器）" if fetch_mode == "full" else "快速采集（API优先）"
     await send_progress_event(
         session_id=session_id,
         step="A4",
         step_name="AI答案抓取",
         progress=0.55,
-        message=f"开始抓取 {len(questions)} 个问题的答案（API优先策略）",
+        message=f"开始抓取 {len(questions)} 个问题的答案（{mode_label}）",
     )
 
     fetch_results: list[dict[str, Any]] = []
 
     try:
-        # Initialize fetchers
-        from app.core.fetchers.api.doubao_client import DoubaoClient
-        from app.core.fetchers.api.hunyuan_client import HunyuanClient
-        from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
+        # Initialize fetchers based on fetch_mode
         from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
         from app.schemas.fetch import BrowserState
 
-        # Each client initialized independently — failure of one does not block others
         # Cycle 3: If platform_filter is set, only initialize requested platforms
         _pf = set(platform_filter) if platform_filter else None
 
-        try:
-            if _pf is None or "doubao" in _pf:
-                doubao_client = DoubaoClient()
-            else:
-                doubao_client = None
-        except Exception as e:
-            logger.warning(f"[A4] DoubaoClient init failed: {e}")
-            doubao_client = None
+        # ── API clients (fast mode only) ──
+        doubao_client = None
+        hunyuan_client = None
+        kimi_client = None
 
-        try:
-            if _pf is None or "hunyuan" in _pf:
-                hunyuan_client = HunyuanClient()
-            else:
-                hunyuan_client = None
-        except Exception as e:
-            logger.warning(f"[A4] HunyuanClient init failed: {e}")
-            hunyuan_client = None
+        if fetch_mode == "fast":
+            from app.core.fetchers.api.doubao_client import DoubaoClient
+            from app.core.fetchers.api.hunyuan_client import HunyuanClient
 
-        try:
-            if _pf is None or "kimi" in _pf:
-                from app.core.fetchers.api.kimi_client import KimiClient
-                kimi_client = KimiClient()
-            else:
-                kimi_client = None
-        except Exception as e:
-            logger.warning(f"[A4] KimiClient init failed: {e}")
-            kimi_client = None
+            try:
+                if _pf is None or "doubao" in _pf:
+                    doubao_client = DoubaoClient()
+            except Exception as e:
+                logger.warning("[A4] DoubaoClient init failed: %s", e)
 
-        try:
-            if _pf is None or "deepseek" in _pf:
-                from app.core.playwright_installer import ensure_playwright_ready
-                playwright_ok = await ensure_playwright_ready()
-                if playwright_ok:
+            try:
+                if _pf is None or "hunyuan" in _pf:
+                    hunyuan_client = HunyuanClient()
+            except Exception as e:
+                logger.warning("[A4] HunyuanClient init failed: %s", e)
+
+            try:
+                if _pf is None or "kimi" in _pf:
+                    from app.core.fetchers.api.kimi_client import KimiClient
+                    kimi_client = KimiClient()
+            except Exception as e:
+                logger.warning("[A4] KimiClient init failed: %s", e)
+
+        # ── Browser handlers ──
+        # fast mode: DeepSeek only
+        # full mode: all 4 platforms
+        from app.core.playwright_installer import ensure_playwright_ready
+        playwright_ok = await ensure_playwright_ready()
+
+        # Track all browser clients for cleanup
+        browser_clients: list[PlaywrightBrowserClient] = []
+
+        deepseek_handler = None
+        deepseek_browser_client = None
+        kimi_browser_handler = None
+        kimi_browser_client = None
+        yuanbao_handler = None
+        yuanbao_browser_client = None
+        doubao_browser_handler = None
+        doubao_browser_client = None
+
+        if playwright_ok:
+            # DeepSeek browser: always initialized (both modes)
+            try:
+                if _pf is None or "deepseek" in _pf:
+                    from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
                     deepseek_browser_client = PlaywrightBrowserClient(session_name="deepseek")
                     deepseek_handler = DeepSeekHandler(deepseek_browser_client)
-                    logger.info("[A4] DeepSeek browser handler initialized (Playwright ready)")
-                else:
-                    logger.warning("[A4] Playwright not ready, DeepSeek browser skipped")
-                    deepseek_browser_client = None
-                    deepseek_handler = None
-            else:
-                deepseek_browser_client = None
-                deepseek_handler = None
-        except Exception as e:
-            logger.warning(f"[A4] DeepSeek browser init failed: {e}")
-            deepseek_browser_client = None
-            deepseek_handler = None
+                    browser_clients.append(deepseek_browser_client)
+                    logger.info("[A4] DeepSeek browser handler initialized")
+            except Exception as e:
+                logger.warning("[A4] DeepSeek browser init failed: %s", e)
+
+            # Additional browser handlers (full mode only)
+            if fetch_mode == "full":
+                try:
+                    if _pf is None or "kimi" in _pf:
+                        from app.core.fetchers.browser.kimi_handler import KimiHandler
+                        kimi_browser_client = PlaywrightBrowserClient(session_name="kimi")
+                        kimi_browser_handler = KimiHandler(kimi_browser_client)
+                        browser_clients.append(kimi_browser_client)
+                        logger.info("[A4] Kimi browser handler initialized")
+                except Exception as e:
+                    logger.warning("[A4] Kimi browser init failed: %s", e)
+
+                try:
+                    if _pf is None or "hunyuan" in _pf:
+                        from app.core.fetchers.browser.yuanbao_handler import YuanbaoHandler
+                        yuanbao_browser_client = PlaywrightBrowserClient(session_name="yuanbao")
+                        yuanbao_handler = YuanbaoHandler(yuanbao_browser_client)
+                        browser_clients.append(yuanbao_browser_client)
+                        logger.info("[A4] Yuanbao (Hunyuan) browser handler initialized")
+                except Exception as e:
+                    logger.warning("[A4] Yuanbao browser init failed: %s", e)
+
+                try:
+                    if _pf is None or "doubao" in _pf:
+                        from app.core.fetchers.browser.doubao_handler import DoubaoHandler as DoubaoWebHandler
+                        doubao_browser_client = PlaywrightBrowserClient(session_name="doubao")
+                        doubao_browser_handler = DoubaoWebHandler(doubao_browser_client)
+                        browser_clients.append(doubao_browser_client)
+                        logger.info("[A4] Doubao browser handler initialized")
+                except Exception as e:
+                    logger.warning("[A4] Doubao browser init failed: %s", e)
+        else:
+            logger.warning("[A4] Playwright not ready, all browser handlers skipped")
 
         total = len(questions)
 
         try:
+            question_results: dict[int, list[dict[str, Any]]] = {i: [] for i in range(total)}
+
             # =============================================================
-            # Phase 1: API calls with per-platform serial execution
-            # Each platform processes questions one at a time with 5s gap;
+            # Phase 1: API calls (fast mode only)
+            # Each platform processes questions one at a time with delay;
             # different platforms run in parallel with each other.
             # =============================================================
-            await send_progress_event(
-                session_id=session_id,
-                step="A4",
-                step_name="AI答案抓取",
-                progress=0.57,
-                message=f"Phase 1: {total} 个问题 × API平台，批量并行抓取中...",
-            )
+            if fetch_mode == "fast":
+                await send_progress_event(
+                    session_id=session_id,
+                    step="A4",
+                    step_name="AI答案抓取",
+                    progress=0.57,
+                    message=f"Phase 1: {total} 个问题 × API平台，批量并行抓取中...",
+                )
 
-            api_tasks = []
-            api_task_map: list[tuple[int, str]] = []  # (question_idx, platform)
-            for idx, question in enumerate(questions):
-                q_text = question.get("text", "")
+                api_tasks = []
+                api_task_map: list[tuple[int, str]] = []  # (question_idx, platform)
+                for idx, question in enumerate(questions):
+                    q_text = question.get("text", "")
+                    if doubao_client is not None:
+                        api_tasks.append(
+                            _throttled_retry_fetch(
+                                _fetch_from_doubao,
+                                doubao_client, q_text, brand_profile,
+                                platform="doubao", method="api",
+                            )
+                        )
+                        api_task_map.append((idx, "doubao"))
+                    if hunyuan_client is not None:
+                        api_tasks.append(
+                            _throttled_retry_fetch(
+                                _fetch_from_hunyuan,
+                                hunyuan_client, q_text, brand_profile,
+                                platform="hunyuan", method="api",
+                            )
+                        )
+                        api_task_map.append((idx, "hunyuan"))
+                    if kimi_client is not None:
+                        api_tasks.append(
+                            _throttled_retry_fetch(
+                                _fetch_from_kimi,
+                                kimi_client, q_text, brand_profile,
+                                platform="kimi", method="api",
+                            )
+                        )
+                        api_task_map.append((idx, "kimi"))
+
+                # Build active API platforms list and create progress tracker
+                active_api_platforms = []
                 if doubao_client is not None:
-                    api_tasks.append(
-                        _throttled_retry_fetch(
-                            _fetch_from_doubao,
-                            doubao_client, q_text, brand_profile,
-                            platform="doubao", method="api",
-                        )
-                    )
-                    api_task_map.append((idx, "doubao"))
+                    active_api_platforms.append("doubao")
                 if hunyuan_client is not None:
-                    api_tasks.append(
-                        _throttled_retry_fetch(
-                            _fetch_from_hunyuan,
-                            hunyuan_client, q_text, brand_profile,
-                            platform="hunyuan", method="api",
-                        )
-                    )
-                    api_task_map.append((idx, "hunyuan"))
+                    active_api_platforms.append("hunyuan")
                 if kimi_client is not None:
-                    api_tasks.append(
-                        _throttled_retry_fetch(
-                            _fetch_from_kimi,
-                            kimi_client, q_text, brand_profile,
-                            platform="kimi", method="api",
-                        )
-                    )
-                    api_task_map.append((idx, "kimi"))
+                    active_api_platforms.append("kimi")
 
-            # Build active API platforms list and create progress tracker
-            active_api_platforms = []
-            if doubao_client is not None:
-                active_api_platforms.append("doubao")
-            if hunyuan_client is not None:
-                active_api_platforms.append("hunyuan")
-            if kimi_client is not None:
-                active_api_platforms.append("kimi")
+                tracker = _ProgressTracker(
+                    total_questions=total,
+                    active_platforms=active_api_platforms,
+                    session_id=session_id,
+                )
 
-            tracker = _ProgressTracker(
-                total_questions=total,
-                active_platforms=active_api_platforms,
-                session_id=session_id,
-            )
+                # Wrap each task to report progress on completion
+                tracked_tasks = [
+                    _tracked_api_fetch(task, platform, tracker)
+                    for task, (_q_idx, platform) in zip(api_tasks, api_task_map)
+                ]
+                api_all_results = await asyncio.gather(*tracked_tasks, return_exceptions=True)
 
-            # Wrap each task to report progress on completion
-            tracked_tasks = [
-                _tracked_api_fetch(task, platform, tracker)
-                for task, (_q_idx, platform) in zip(api_tasks, api_task_map)
-            ]
-            api_all_results = await asyncio.gather(*tracked_tasks, return_exceptions=True)
+                # Organize API results by question index
+                api_success_total = 0
+                for (q_idx, platform), result in zip(api_task_map, api_all_results):
+                    if isinstance(result, BaseException):
+                        logger.error("[A4] API %s Q%d exception: %s", platform, q_idx + 1, result)
+                        question_results[q_idx].append({
+                            "platform": platform,
+                            "fetch_method": "api",
+                            "success": False,
+                            "error": str(result),
+                        })
+                    else:
+                        question_results[q_idx].append(result)
+                        if result.get("success"):
+                            api_success_total += 1
 
-            # Organize API results by question index
-            question_results: dict[int, list[dict[str, Any]]] = {i: [] for i in range(total)}
-            api_success_total = 0
-            for (q_idx, platform), result in zip(api_task_map, api_all_results):
-                if isinstance(result, BaseException):
-                    logger.error("[A4] API %s Q%d exception: %s", platform, q_idx + 1, result)
-                    question_results[q_idx].append({
-                        "platform": platform,
-                        "fetch_method": "api",
-                        "success": False,
-                        "error": str(result),
-                    })
-                else:
-                    question_results[q_idx].append(result)
-                    if result.get("success"):
-                        api_success_total += 1
+                logger.info("[A4] Phase 1 (API) done: %d/%d succeeded", api_success_total, len(api_tasks))
 
-            logger.info("[A4] Phase 1 (API) done: %d/%d succeeded", api_success_total, len(api_tasks))
-
-            await send_progress_event(
-                session_id=session_id,
-                step="A4",
-                step_name="AI答案抓取",
-                progress=0.72,
-                message=f"Phase 1 完成: API平台 {api_success_total}/{len(api_tasks)} 成功。开始Browser平台...",
-            )
+                await send_progress_event(
+                    session_id=session_id,
+                    step="A4",
+                    step_name="AI答案抓取",
+                    progress=0.72,
+                    message=f"Phase 1 完成: API平台 {api_success_total}/{len(api_tasks)} 成功。开始Browser平台...",
+                )
+            else:
+                # full mode: skip API entirely
+                logger.info("[A4] Full mode — skipping Phase 1 (API)")
+                await send_progress_event(
+                    session_id=session_id,
+                    step="A4",
+                    step_name="AI答案抓取",
+                    progress=0.57,
+                    message="完整采集模式：跳过API，直接启动4平台浏览器采集...",
+                )
 
             # =============================================================
             # Phase 2: Browser platforms with per-browser semaphore
@@ -665,8 +730,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             browser_tasks = []
             browser_task_platforms = []
+
+            # DeepSeek browser: always (both modes)
             if deepseek_handler is not None and deepseek_browser_client is not None:
-                logger.info("[A4] Phase 2: DeepSeek browser pipeline queued (handler=%s)", type(deepseek_handler).__name__)
+                logger.info("[A4] Phase 2: DeepSeek browser pipeline queued")
                 browser_tasks.append(
                     _pipeline_with_global_timeout(deepseek_handler, deepseek_browser_client, "deepseek", "DeepSeek")
                 )
@@ -674,6 +741,29 @@ async def a4_fetch_node(state: AgentState) -> Command:
             else:
                 logger.warning("[A4] Phase 2: DeepSeek skipped (handler=%s, client=%s)",
                                deepseek_handler, deepseek_browser_client)
+
+            # Additional browsers (full mode only)
+            if fetch_mode == "full":
+                if kimi_browser_handler is not None and kimi_browser_client is not None:
+                    logger.info("[A4] Phase 2: Kimi browser pipeline queued")
+                    browser_tasks.append(
+                        _pipeline_with_global_timeout(kimi_browser_handler, kimi_browser_client, "kimi", "Kimi")
+                    )
+                    browser_task_platforms.append("kimi")
+
+                if yuanbao_handler is not None and yuanbao_browser_client is not None:
+                    logger.info("[A4] Phase 2: Yuanbao (Hunyuan) browser pipeline queued")
+                    browser_tasks.append(
+                        _pipeline_with_global_timeout(yuanbao_handler, yuanbao_browser_client, "hunyuan", "混元")
+                    )
+                    browser_task_platforms.append("hunyuan")
+
+                if doubao_browser_handler is not None and doubao_browser_client is not None:
+                    logger.info("[A4] Phase 2: Doubao browser pipeline queued")
+                    browser_tasks.append(
+                        _pipeline_with_global_timeout(doubao_browser_handler, doubao_browser_client, "doubao", "豆包")
+                    )
+                    browser_task_platforms.append("doubao")
 
             if browser_tasks:
                 logger.info("[A4] Phase 2: Starting %d browser pipeline(s)...", len(browser_tasks))
@@ -716,8 +806,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 })
 
         finally:
-            if deepseek_browser_client is not None:
-                await deepseek_browser_client.close()
+            for bc in browser_clients:
+                try:
+                    await bc.close()
+                except Exception as e:
+                    logger.debug("[A4] Browser client close failed: %s", e)
 
         # Calculate success rate
         total_fetches = sum(len(r["platform_results"]) for r in fetch_results)

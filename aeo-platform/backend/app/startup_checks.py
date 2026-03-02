@@ -51,7 +51,7 @@ def startup_checks() -> bool:
     try:
         if not PlaywrightInstaller.install_browser_sync():
             logger.error("❌ Playwright 浏览器安装失败")
-            logger.error("请手动运行: python -m playwright install chromium")
+            logger.error("请手动运行: python -m patchright install chromium")
             return False
 
         logger.info("✅ Playwright 浏览器已就绪")

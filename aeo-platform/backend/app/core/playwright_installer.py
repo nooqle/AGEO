@@ -62,7 +62,7 @@ class PlaywrightInstaller:
         """检查浏览器是否已安装"""
         try:
             # 尝试导入 playwright 并检查浏览器
-            from playwright.async_api import async_playwright
+            from patchright.async_api import async_playwright
 
             async with async_playwright() as p:
                 # 尝试获取浏览器路径
@@ -85,7 +85,7 @@ class PlaywrightInstaller:
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
-                "playwright",
+                "patchright",
                 "install",
                 "chromium",
                 stdout=asyncio.subprocess.PIPE,
@@ -115,7 +115,7 @@ class PlaywrightInstaller:
 
             # 运行 playwright install chromium
             result = subprocess.run(
-                [sys.executable, "-m", "playwright", "install", "chromium"],
+                [sys.executable, "-m", "patchright", "install", "chromium"],
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 分钟超时
@@ -154,7 +154,7 @@ async def ensure_playwright_ready() -> bool:
                 raise RuntimeError("Playwright 浏览器未安装")
 
             # 使用 Playwright
-            from playwright.async_api import async_playwright
+            from patchright.async_api import async_playwright
             async with async_playwright() as p:
                 browser = await p.chromium.launch()
                 # ...
