@@ -463,7 +463,7 @@ class BaseBrowserHandler(ABC):
         if page is None:
             return None
 
-        result_future: asyncio.Future[ParsedResponse | None] = asyncio.get_event_loop().create_future()
+        result_future: asyncio.Future[ParsedResponse | None] = asyncio.get_running_loop().create_future()
         url_re = re.compile(config.url_pattern)
 
         async def on_response(response):
@@ -504,16 +504,17 @@ class BaseBrowserHandler(ABC):
                 # Diagnostic: dump body for debugging new/unstable parsers
                 logger.debug("[%s] SSE body (%d chars), first 500: %s",
                              tag, len(body), body[:500])
-                # Save full body to file for offline analysis
-                try:
-                    from pathlib import Path
-                    dump_dir = Path(__file__).parent / "debug_dumps"
-                    dump_dir.mkdir(exist_ok=True)
-                    dump_file = dump_dir / f"{tag.lower()}_sse_body.txt"
-                    dump_file.write_text(body, encoding="utf-8")
-                    logger.debug("[%s] SSE body saved to %s", tag, dump_file)
-                except Exception:
-                    pass
+                # Save full body to file for offline analysis (only when DEBUG)
+                if logger.isEnabledFor(logging.DEBUG):
+                    try:
+                        from pathlib import Path
+                        dump_dir = Path(__file__).parent / "debug_dumps"
+                        dump_dir.mkdir(exist_ok=True)
+                        dump_file = dump_dir / f"{tag.lower()}_sse_body.txt"
+                        dump_file.write_text(body, encoding="utf-8")
+                        logger.debug("[%s] SSE body saved to %s", tag, dump_file)
+                    except Exception:
+                        pass
 
                 parsed = parser.parse(body, url=response.url)
                 parsed = parser.validate(parsed)
