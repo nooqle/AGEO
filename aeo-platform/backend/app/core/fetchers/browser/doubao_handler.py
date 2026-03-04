@@ -80,7 +80,14 @@ class DoubaoHandler(BaseBrowserHandler):
                     logger.debug("[Doubao] Fast path click failed: %s", e)
 
             if not fast_path_ok:
-                await self.client.open(self.URL, headed=self.headed)
+                open_result = await self.client.open(self.URL, headed=self.headed)
+                if not open_result.get("success"):
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        f"浏览器打开失败: {open_result.get('error', '未知错误')}",
+                        progress=0,
+                    )
+                    return
                 await asyncio.sleep(3)
 
             if self.client.page:

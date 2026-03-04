@@ -106,7 +106,18 @@ class PlaywrightBrowserClient:
 
             return {"success": True, "url": url}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            err_detail = f"{type(e).__name__}: {e}" if str(e) else f"{type(e).__name__} (no message)"
+            logger.error("[Browser:%s] open() failed: %s", self.session_name, err_detail)
+            # Clean up partial state so next open() call retries from scratch
+            self.page = None
+            self.context = None
+            if self.playwright:
+                try:
+                    await self.playwright.stop()
+                except Exception:
+                    pass
+                self.playwright = None
+            return {"success": False, "error": err_detail}
 
     async def snapshot(self, interactive_only: bool = True) -> dict[str, Any]:
         """Get a snapshot of the current page.

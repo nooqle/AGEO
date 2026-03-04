@@ -119,7 +119,14 @@ class YuanbaoHandler(BaseBrowserHandler):
                     logger.debug("[Yuanbao] Fast path click failed: %s", e)
 
             if not fast_path_ok:
-                await self.client.open(self.URL, headed=self.headed)
+                open_result = await self.client.open(self.URL, headed=self.headed)
+                if not open_result.get("success"):
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        f"浏览器打开失败: {open_result.get('error', '未知错误')}",
+                        progress=0,
+                    )
+                    return
                 await asyncio.sleep(4)
 
             if self.client.page:
