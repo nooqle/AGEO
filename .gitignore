@@ -99,6 +99,7 @@ aeo-platform/backend/scripts/browser_login.py
 aeo-platform/backend/scripts/baseline_experiment.py
 aeo-platform/backend/scripts/compare_v1v2v3.py
 aeo-platform/backend/scripts/api_vs_browser_test.py
+aeo-platform/backend/scripts/questions_*.txt
 
 # Playwright MCP artifacts
 .playwright-mcp/
