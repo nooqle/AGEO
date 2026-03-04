@@ -4,7 +4,7 @@ description: >
   MUST BE USED for testing strategy, test case design, bug analysis, quality assessment,
   code review for quality, exploratory testing, edge case identification, and any discussion
   about software quality or reliability. Also invoke to review PRDs for testability.
-tools: Read, Bash, Glob, Grep
+tools: Read, Bash, Glob, Grep, SendMessage, TaskList, TaskGet, TaskUpdate
 model: inherit
 color: red
 ---

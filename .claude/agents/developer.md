@@ -4,7 +4,7 @@ description: >
   MUST BE USED for writing code, implementing features, fixing bugs, performance optimization,
   debugging, code review for implementation quality, and any hands-on coding task. Also use for
   evaluating technical complexity of proposed features.
-tools: Read, Write, Edit, Bash, Glob, Grep
+tools: Read, Write, Edit, Bash, Glob, Grep, SendMessage, TaskList, TaskGet, TaskUpdate
 model: inherit
 color: green
 ---

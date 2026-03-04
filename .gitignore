@@ -83,3 +83,29 @@ aeo-platform/backend/playwright-browsers/
 
 # OS files
 Thumbs.db
+
+# Screenshots and temp files (root level)
+/*.png
+/snapshot-*.md
+
+# Temp scripts and test files
+/kimi_check.py
+aeo-platform/backend/NUL
+aeo-platform/backend/test_*.py
+aeo-platform/backend/kimi_login.py
+aeo-platform/backend/scripts/results/
+aeo-platform/backend/scripts/sniff_*.py
+aeo-platform/backend/scripts/browser_login.py
+aeo-platform/backend/scripts/baseline_experiment.py
+aeo-platform/backend/scripts/compare_v1v2v3.py
+aeo-platform/backend/scripts/api_vs_browser_test.py
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Debug logs
+a4_debug.log
+aeo-platform/backend/a4_debug.log
+
+# Questions list (temp)
+Questions\ List.txt

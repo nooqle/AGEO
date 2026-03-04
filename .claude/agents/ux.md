@@ -4,7 +4,7 @@ description: >
   MUST BE USED for UI/UX design, user flow design, interaction design, accessibility,
   design system decisions, visual hierarchy, information architecture, usability evaluation,
   error message design, onboarding flow, and any user experience discussion.
-tools: Read, Write, Edit, Glob, Grep, WebFetch, WebSearch
+tools: Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, SendMessage, TaskList, TaskGet, TaskUpdate
 model: inherit
 color: orange
 ---

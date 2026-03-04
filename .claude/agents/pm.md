@@ -4,7 +4,7 @@ description: >
   MUST BE USED for product requirements, user stories, feature prioritization, PRD writing,
   product strategy, user research, competitive analysis, roadmap planning, and evaluating
   whether a feature is worth building.
-tools: Read, Write, Edit, Glob, Grep, WebFetch, WebSearch
+tools: Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, SendMessage, TaskList, TaskGet, TaskUpdate
 model: inherit
 color: purple
 ---

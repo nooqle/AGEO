@@ -4,7 +4,7 @@ description: >
   MUST BE USED for architecture decisions, system design, API design, database schema design,
   technology selection, refactoring strategy, code structure, patterns, and technical trade-offs.
   Also invoke for reviewing PRDs from a technical feasibility perspective.
-tools: Read, Grep, Glob, WebFetch, WebSearch
+tools: Read, Grep, Glob, WebFetch, WebSearch, SendMessage, TaskList, TaskGet, TaskUpdate
 model: inherit
 color: blue
 ---
