@@ -49,7 +49,7 @@ const BROWSER_STATES: BrowserState['state'][] = [
   'completed',
   'error',
 ];
-const BROWSER_PLATFORMS: BrowserState['platform'][] = ['kimi', 'deepseek'];
+const BROWSER_PLATFORMS: BrowserState['platform'][] = ['kimi', 'deepseek', 'doubao', 'hunyuan'];
 
 // WebSocket message validation
 interface WebSocketMessage {
@@ -635,12 +635,18 @@ export function useWebSocket(sessionId: string | null) {
           return newStep;
         });
 
+        // Guard: progress must never go backwards (multiple parallel pipelines
+        // in Full mode can emit out-of-order progress values)
+        const oldProgress = useConversationStore.getState().executionProgress?.progress ?? 0;
+        const newProgress = data.progress ?? 0;
+        const safeProgress = Math.max(oldProgress, newProgress);
+
         setExecutionProgress({
           stage: data.stage || '',
           stageName: data.stage_name || '',
           stageIndex: data.current_step_index ?? 0,
           totalStages: data.total_steps ?? 5,
-          progress: data.progress ?? 0,
+          progress: safeProgress,
           status: EXECUTION_STATUSES.includes((data.status || 'running') as ExecutionProgress['status'])
             ? ((data.status || 'running') as ExecutionProgress['status'])
             : 'running',

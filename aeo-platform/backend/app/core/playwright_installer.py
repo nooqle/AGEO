@@ -59,18 +59,37 @@ class PlaywrightInstaller:
 
     @classmethod
     async def _check_browser_installed(cls) -> bool:
-        """检查浏览器是否已安装"""
+        """检查浏览器是否已安装。
+
+        Uses file-system check instead of starting a playwright server,
+        which can fail inside uvicorn's event loop.
+        """
         try:
-            # 尝试导入 playwright 并检查浏览器
-            from patchright.async_api import async_playwright
+            # Method 1: Check the well-known install location directly
+            import platform as _platform
+            ms_pw = Path.home() / "AppData" / "Local" / "ms-playwright"
+            if _platform.system() != "Windows":
+                ms_pw = Path.home() / ".cache" / "ms-playwright"
 
-            async with async_playwright() as p:
-                # 尝试获取浏览器路径
-                browser_type = p.chromium
-                executable_path = browser_type.executable_path
+            if ms_pw.exists():
+                # Look for any chromium-* directory with a chrome executable
+                for d in ms_pw.iterdir():
+                    if d.is_dir() and d.name.startswith("chromium"):
+                        # Windows: chrome-win64/chrome.exe; Linux: chrome-linux/chrome
+                        for exe in d.rglob("chrome.exe" if _platform.system() == "Windows" else "chrome"):
+                            if exe.is_file():
+                                logger.debug("[Playwright] Found browser at %s", exe)
+                                return True
 
-                if executable_path and Path(executable_path).exists():
-                    return True
+            # Method 2: Fallback to patchright's executable_path (sync, no server)
+            try:
+                from patchright.sync_api import sync_playwright
+                with sync_playwright() as p:
+                    exe = p.chromium.executable_path
+                    if exe and Path(exe).exists():
+                        return True
+            except Exception as e2:
+                logger.debug("[Playwright] sync_playwright fallback failed: %s", e2)
 
             return False
         except Exception as e:

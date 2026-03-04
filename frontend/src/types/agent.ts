@@ -60,7 +60,7 @@ export type BrowserStateType =
 
 export interface BrowserState {
   state: BrowserStateType;
-  platform: 'kimi' | 'deepseek';
+  platform: 'kimi' | 'deepseek' | 'doubao' | 'hunyuan';
   message: string;
   requiresAction: boolean;
   actionHint?: string;

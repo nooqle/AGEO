@@ -469,10 +469,16 @@ async def selective_refetch_node(state: AgentState) -> Command:
 
     # Precondition check (Review T5)
     simulated_questions = state.get("simulated_questions")
+    logger.info(
+        "[selective_refetch] precondition check: simulated_questions=%s, questions=%s",
+        "yes" if simulated_questions else "NO",
+        "yes" if state.get("questions") else "NO",
+    )
     if not simulated_questions:
         error_msg = (
             "当前会话中没有分析数据，请先完成一次完整的品牌分析后再进行选择性重新抓取。"
         )
+        logger.warning("[selective_refetch] PRECONDITION FAILED — returning early")
         await send_reply_event(
             session_id, error_msg, is_delta=False, is_complete=True
         )
@@ -512,10 +518,18 @@ async def selective_refetch_node(state: AgentState) -> Command:
         is_complete=True,
     )
 
+    # Pass fetch_mode if provided (default: inherit from state, fallback "fast")
+    fetch_mode = tool_args.get("fetch_mode") or state.get("fetch_mode") or "fast"
+    logger.info(
+        "[selective_refetch] routing to a4_fetch: platforms=%s, fetch_mode=%s",
+        platforms_lower, fetch_mode,
+    )
+
     return Command(
         update={
             "platform_filter": platforms_lower,
             "preserved_fetch_results": unselected_results,
+            "fetch_mode": fetch_mode,
             "execution_status": "running",
         },
         goto="a4_fetch",

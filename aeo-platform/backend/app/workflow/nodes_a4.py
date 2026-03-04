@@ -342,6 +342,7 @@ async def _browser_fetch_with_timeout(
         return result
     except asyncio.TimeoutError:
         logger.warning("[A4] Browser %s timed out after %.0fs", platform, timeout)
+
         return {
             "platform": platform,
             "platform_name": platform_name,
@@ -352,6 +353,7 @@ async def _browser_fetch_with_timeout(
         }
     except Exception as e:
         logger.warning("[A4] Browser %s failed: %s", platform, e)
+
         return {
             "platform": platform,
             "platform_name": platform_name,
@@ -359,6 +361,45 @@ async def _browser_fetch_with_timeout(
             "success": False,
             "error": str(e),
         }
+
+
+def _build_duration_msg(fetch_mode: str, question_count: int) -> str:
+    """Build user-visible duration message dynamically from PlatformConstants."""
+    all_names = "、".join(
+        PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+        for p in PlatformConstants.SUPPORTED_PLATFORMS
+    )
+    platform_count = len(PlatformConstants.SUPPORTED_PLATFORMS)
+
+    if fetch_mode == "full":
+        pipelines = " / ".join(
+            PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+            for p in PlatformConstants.SUPPORTED_PLATFORMS
+        )
+        return (
+            f"开始向{all_names} {platform_count} 个平台提问，共 {question_count} 个问题。\n\n"
+            f"- 采集模式：**完整采集**（{platform_count} 平台全浏览器）\n"
+            f"- {pipelines} 各平台串行采集，{platform_count} 条流水线并行\n"
+            f"- 预计总耗时约 10-20 分钟\n\n"
+            "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
+        )
+    else:
+        api_str = "/".join(
+            PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+            for p in PlatformConstants.API_PLATFORMS
+        )
+        browser_str = "/".join(
+            PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+            for p in PlatformConstants.BROWSER_PLATFORMS
+        )
+        return (
+            f"开始向{all_names} {platform_count} 个平台提问，共 {question_count} 个问题。\n\n"
+            f"- 采集模式：**快速采集**（API + {browser_str} 浏览器）\n"
+            f"- API 平台（{api_str}）：各平台串行抓取，约 2-3 分钟\n"
+            f"- 浏览器平台（{browser_str}）：约 3-5 分钟\n"
+            f"- 预计总耗时约 5-10 分钟\n\n"
+            "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
+        )
 
 
 async def a4_fetch_node(state: AgentState) -> Command:
@@ -380,6 +421,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
     logger.info("[A4] fetch_mode=%s, questions=%d", fetch_mode, len(questions))
 
+
     if not questions:
         return Command(
             update={
@@ -389,24 +431,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
             },
         )
 
-    # Send user-visible reply with expected duration
-    if fetch_mode == "full":
-        duration_msg = (
-            f"开始向豆包、混元、Kimi、DeepSeek 四个平台提问，共 {len(questions)} 个问题。\n\n"
-            "- 采集模式：**完整采集**（4 平台全浏览器）\n"
-            "- 豆包 / 混元 / Kimi / DeepSeek 各平台串行采集，4 条流水线并行\n"
-            "- 预计总耗时约 10-20 分钟\n\n"
-            "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
-        )
-    else:
-        duration_msg = (
-            f"开始向豆包、混元、Kimi、DeepSeek 四个平台提问，共 {len(questions)} 个问题。\n\n"
-            "- 采集模式：**快速采集**（API + DeepSeek 浏览器）\n"
-            "- API 平台（豆包/混元/Kimi）：各平台串行抓取，约 2-3 分钟\n"
-            "- 浏览器平台（DeepSeek）：约 3-5 分钟\n"
-            "- 预计总耗时约 5-10 分钟\n\n"
-            "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
-        )
+    # Send user-visible reply with expected duration (dynamic from PlatformConstants)
+    duration_msg = _build_duration_msg(fetch_mode, len(questions))
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
     await send_reply_event(session_id, "", is_complete=True)
 
@@ -463,6 +489,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
         from app.core.playwright_installer import ensure_playwright_ready
         playwright_ok = await ensure_playwright_ready()
 
+
+        # Reset circuit breakers at start of each A4 run so stale OPEN
+        # state from a previous execution doesn't block new requests.
+        from app.workflow.resilience import get_circuit_breaker as _get_cb
+        for _p in ["deepseek", "kimi", "hunyuan", "doubao"]:
+            _get_cb(_p).reset()
+
+
         # Track all browser clients for cleanup
         browser_clients: list[PlaywrightBrowserClient] = []
 
@@ -484,8 +518,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     deepseek_handler = DeepSeekHandler(deepseek_browser_client)
                     browser_clients.append(deepseek_browser_client)
                     logger.info("[A4] DeepSeek browser handler initialized")
+
             except Exception as e:
                 logger.warning("[A4] DeepSeek browser init failed: %s", e)
+
 
             # Additional browser handlers (full mode only)
             if fetch_mode == "full":
@@ -496,8 +532,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         kimi_browser_handler = KimiHandler(kimi_browser_client)
                         browser_clients.append(kimi_browser_client)
                         logger.info("[A4] Kimi browser handler initialized")
+
                 except Exception as e:
                     logger.warning("[A4] Kimi browser init failed: %s", e)
+
 
                 try:
                     if _pf is None or "hunyuan" in _pf:
@@ -506,8 +544,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         yuanbao_handler = YuanbaoHandler(yuanbao_browser_client)
                         browser_clients.append(yuanbao_browser_client)
                         logger.info("[A4] Yuanbao (Hunyuan) browser handler initialized")
+
                 except Exception as e:
                     logger.warning("[A4] Yuanbao browser init failed: %s", e)
+
 
                 try:
                     if _pf is None or "doubao" in _pf:
@@ -516,10 +556,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         doubao_browser_handler = DoubaoWebHandler(doubao_browser_client)
                         browser_clients.append(doubao_browser_client)
                         logger.info("[A4] Doubao browser handler initialized")
+
                 except Exception as e:
                     logger.warning("[A4] Doubao browser init failed: %s", e)
+
         else:
             logger.warning("[A4] Playwright not ready, all browser handlers skipped")
+
 
         total = len(questions)
 
@@ -631,9 +674,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 )
 
             # =============================================================
-            # Phase 2: Browser platforms with per-browser semaphore
+            # Phase 2: Browser platforms
             # Each browser processes questions sequentially (can't parallelize)
-            # but Kimi and DeepSeek run in parallel with each other
+            # but different platforms run in parallel with each other.
+            #
+            # Progress calculation:
+            # - Fast mode: browser phase = 0.72..0.95 (API already filled 0.57..0.72)
+            # - Full mode: browser phase = 0.57..0.95 (no API phase)
+            # A shared counter prevents parallel pipelines from overwriting each other.
+            # =============================================================
+            _browser_progress_base = 0.57 if fetch_mode == "full" else 0.72
+            _browser_progress_range = 0.95 - _browser_progress_base
+            _browser_shared_done: dict[str, int] = {}  # platform -> questions done
             # =============================================================
             async def _browser_pipeline(
                 handler, browser_client, platform: str, platform_name: str,
@@ -678,6 +730,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         session_id=session_id,
                     )
 
+
                     # Update circuit breaker state
                     if r.get("success"):
                         breaker.record_success()
@@ -691,13 +744,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         browser_delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
                         await asyncio.sleep(browser_delay)
 
-                    browser_done = idx + 1
+                    # Update shared progress counter across all pipelines
+                    _browser_shared_done[platform] = idx + 1
+                    total_browser_done = sum(_browser_shared_done.values())
+                    # Total work = questions × number of active browser pipelines
+                    total_browser_work = total * max(len(_browser_shared_done), 1)
+                    combined_progress = _browser_progress_base + (total_browser_done / total_browser_work) * _browser_progress_range
                     await send_progress_event(
                         session_id=session_id,
                         step="A4",
                         step_name="AI答案抓取",
-                        progress=0.72 + (browser_done / total) * 0.23,
-                        message=f"Phase 2: {platform_name} {browser_done}/{total} 完成",
+                        progress=combined_progress,
+                        message=f"{platform_name} {idx + 1}/{total} 完成",
                     )
                 return results
 
@@ -765,11 +823,21 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     )
                     browser_task_platforms.append("doubao")
 
+
             if browser_tasks:
                 logger.info("[A4] Phase 2: Starting %d browser pipeline(s)...", len(browser_tasks))
+
                 browser_all_results = await asyncio.gather(*browser_tasks, return_exceptions=True)
+
+                for i, br in enumerate(browser_all_results):
+                    if isinstance(br, BaseException):
+                        logger.error("[A4] Pipeline[%d] %s: %s: %s", i, browser_task_platforms[i], type(br).__name__, br)
+                    else:
+                        ok = sum(1 for _, r in br if r.get("success"))
+                        logger.info("[A4] Pipeline[%d] %s: %d/%d success", i, browser_task_platforms[i], ok, len(br))
             else:
                 logger.warning("[A4] Phase 2: No browser tasks to run")
+
                 browser_all_results = []
 
             # Merge browser results into question_results
@@ -880,6 +948,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # threshold to the number of requested platforms (min 1), so that a
         # single-platform refetch doesn't trigger a spurious degradation notice.
         effective_min = min(MIN_PLATFORMS_REQUIRED, len(platform_filter)) if platform_filter else MIN_PLATFORMS_REQUIRED
+
 
         if len(successful_platforms) < effective_min:
             logger.warning(
@@ -1077,6 +1146,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         return Command(update=update_dict)
 
     except Exception as e:
+        logger.exception("[A4] Top-level exception: %s", e)
         await send_error_event(session_id, "A4", str(e), recoverable=True)
 
         # Task milestone: A4 failed
@@ -1313,23 +1383,33 @@ async def _fetch_from_browser(
     result_data = None
     error_message = None
 
-    async for event in handler.fetch(question):
-        if event.state == browser_state.WAITING_FOR_LOGIN and session_id:
-            await send_browser_state_event(
-                session_id=session_id,
-                platform=platform,
-                state=event.state.value,
-                message=event.message,
-                progress=event.progress,
-                requires_action=event.requires_action,
-                action_hint=event.action_hint,
-            )
-        if event.state == browser_state.ERROR:
-            error_message = event.message or event.error or "抓取失败"
-        if event.state == browser_state.COMPLETED and event.data:
-            result_data = event.data
+
+    try:
+        async for event in handler.fetch(question):
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+
+            if event.state == browser_state.WAITING_FOR_LOGIN and session_id:
+                await send_browser_state_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state=event.state.value,
+                    message=event.message,
+                    progress=event.progress,
+                    requires_action=event.requires_action,
+                    action_hint=event.action_hint,
+                )
+            if event.state == browser_state.ERROR:
+                error_message = event.message or event.error or "抓取失败"
+
+            if event.state == browser_state.COMPLETED and event.data:
+                result_data = event.data
+
+    except Exception as gen_err:
+
+        raise
 
     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+
 
     if result_data and result_data.answer_text and len(result_data.answer_text.strip()) >= 10:
         answer_text = result_data.answer_text

@@ -23,6 +23,7 @@ from app.workflow.events import (
     send_confirmation_request,
 )
 from app.workflow.nodes_streaming import async_wrap_sync_gen
+from app.core.constants import PlatformConstants
 
 logger = logging.getLogger(__name__)
 
@@ -95,17 +96,33 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
         "name": "answer_fetch",
         "description": (
             "从多个AI平台（豆包、混元、Kimi、DeepSeek）抓取对模拟问题的回答。"
-            "API平台（豆包/混元）并行抓取约30秒，浏览器平台（Kimi/DeepSeek）各需3-5分钟串行处理，总计约8-12分钟。需要先完成问题模拟。"
+            "前置条件：1) 问题模拟已完成（或提供了 custom_questions）；2) 用户已明确选择 fetch_mode（fast 或 full）。"
+            "如果用户尚未选择采集模式，此工具无法执行。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "fetch_mode": {
+                    "type": "string",
+                    "enum": ["fast", "full"],
+                    "description": (
+                        "采集模式（必须由用户选择）：\n"
+                        "fast=通过API调用豆包和混元+DeepSeek浏览器采集，约3-5分钟，快速建立品牌AI表现的初步观感，但API返回内容与真实用户网页端体验可能存在差异；\n"
+                        "full=4平台全部通过浏览器模拟真实用户访问，约8-15分钟，完全还原用户真实体验，数据最准确，是深度AEO分析的最佳选择"
+                    ),
+                },
                 "platforms": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "要抓取的平台列表（可选，默认全部）",
                 },
+                "custom_questions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "用户自定义问题文本列表（可选）。当用户直接提供问题时使用，将覆盖 A3 生成的问题。",
+                },
             },
+            "required": ["fetch_mode"],
         },
     },
     {
@@ -219,6 +236,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
             "前置条件：当前会话中必须已有模拟问题（simulated_questions）。"
             "如果没有先前分析数据，不要调用此工具，提示用户先运行完整分析。"
             "会运行 A4(仅指定平台) → A5(重新生成报告)。"
+            "注意：如果用户要求用 Full 模式重跑全部平台，应使用 answer_fetch(fetch_mode='full')，而非此工具。"
         ),
         "parameters": {
             "type": "object",
@@ -227,6 +245,11 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "要重新抓取的平台列表: 'kimi', 'deepseek', 'doubao', 'hunyuan'",
+                },
+                "fetch_mode": {
+                    "type": "string",
+                    "enum": ["fast", "full"],
+                    "description": "采集模式（可选，默认fast）。full=全浏览器模式",
                 },
             },
             "required": ["platforms"],
@@ -404,14 +427,16 @@ DIRECTIVE_A2_ASK_PATH = (
 
 DIRECTIVE_A3_NEXT_FETCH = (
     "【强制操作】用 2-3 句话友好地向用户说明问题已生成（可提及问题数量、覆盖的主题方向），"
-    "在消息中说明问题列表已在右侧画布中展示，接下来将向各大AI搜索引擎提交问题并采集回答，预计耗时约8-12分钟。"
-    "然后在消息末尾用自然语言列出选项：\n"
-    "1. 确认，开始采集回答（推荐）— 向DeepSeek、Kimi等平台提交问题并采集AI回答\n"
-    "2. 重新生成问题 — 如果对当前问题不满意\n"
+    "在消息中说明问题列表已在右侧画布中展示。然后在消息末尾用自然语言列出以下选项，每个选项必须包含说明文字：\n"
+    "1. 快速采集（推荐）— 通过 API 调用豆包和混元 + DeepSeek 浏览器采集，约 3-5 分钟。"
+    "能快速建立品牌在 AI 搜索中的初步观感，但 API 返回的内容与真实用户在网页端看到的可能存在差异\n"
+    "2. 完整采集 — 4 个平台全部通过浏览器模拟真实用户访问，约 8-15 分钟。"
+    "完全还原用户在网页端的真实体验，采集到的回答、引用来源和品牌提及最为准确，是深度 AEO 分析的最佳选择\n"
+    "3. 重新生成问题 — 如果对当前问题不满意\n"
     "您可以回复序号，或者直接说您的想法。\n"
     "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
     "不要逐条列出问题内容（UI 已经展示了）。"
-    "用户确认后才能调用 answer_fetch，不要自行直接调用。"
+    "用户选择 1 后调用 answer_fetch(fetch_mode='fast')，选择 2 后调用 answer_fetch(fetch_mode='full')。"
 )
 
 
@@ -503,7 +528,7 @@ A1 完成后的流程（最高优先级）：
 - 执行完一个步骤后，根据步骤特性决定下一步：
   - 品牌分析（A1）完成后：见上方"A1 完成后的流程"
   - 用户画像（A2）完成后：必须调用 ask_user 引导用户在画布管道图中选择画像，不可自行决定，不可直接调用 question_simulation
-  - 问题模拟（A3）完成后：必须调用 ask_user 让用户确认问题列表后才能执行 answer_fetch，不可直接调用
+  - 问题模拟（A3）完成后：必须调用 ask_user 让用户选择采集模式（快速/完整/重新生成），用户选择后根据其选择调用 answer_fetch(fetch_mode=对应模式)，不可直接调用
   - 其他步骤：直接建议或执行下一步
 - 如果用户的请求不明确，用自然语言追问，不要调用 ask_user
 
@@ -512,7 +537,7 @@ ask_user 只允许在以下场景使用，其他任何场景都【禁止】调�
   1. A1 完成后 → 确认开始基线分析
   2. 基线分析完成后 / 已有基线 → 选择下一步路径（场景细化/重跑基线/直接提问）
   3. A2 完成后 → 引导用户选择画像
-  4. A3 完成后 → 确认问题列表后才能执行 answer_fetch
+  4. A3 完成后 → 让用户选择采集模式（快速采集/完整采集/重新生成问题），用户选择后才能调用 answer_fetch(fetch_mode=对应模式)
   5. 步骤执行失败 → 提供恢复选项（重试/跳过/手动输入）
 除以上 5 种场景外，所有其他情况（包括闲聊、查询结果、用户提问、不确定时）都必须直接用自然语言回复，绝不调用 ask_user。用户随时可以在输入框中自由打字与你对话，不需要通过选项按钮。
 - 回复风格要求（非常重要，你的回复代表品牌的专业形象）：
@@ -530,6 +555,7 @@ ask_user 只允许在以下场景使用，其他任何场景都【禁止】调�
   - 调用 ask_user 时不传 options 参数，只传 message='请回复序号或输入您的想法'
   - 不要给出用户无法理解的选项（如"自定义参数"但不说明有哪些参数可以自定义）
   - 如果选项涉及配置（如定期监测），必须在消息中先说明默认配置是什么、有哪些可调参数、推荐配置是什么
+- 如果用户直接提供了问题文本并要求抓取答案，可通过 answer_fetch 的 custom_questions 参数传入，无需先调用 question_simulation。仍需确认 fetch_mode。
 - 即使已有模拟问题，如果用户要求以不同画像或模式重新生成，仍然应该再次调用 question_simulation
 - 如果某个Agent执行后返回"未获取到有效数据"，友好地告知用户该步骤未成功，说明可能原因，并提供建设性的替代选项。如果用户要求重试，可以再次调用同一个Agent。
 
@@ -589,7 +615,9 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         sq = state.get("simulated_questions")
         if sq:
             qs = sq.get("simulated_questions", [])
-            return f"问题模拟完成。共生成 {len(qs)} 组模拟问题。{DIRECTIVE_A3_NEXT_FETCH}"
+            summary = f"问题模拟完成。共生成 {len(qs)} 组模拟问题。{DIRECTIVE_A3_NEXT_FETCH}"
+            logger.info("[Orchestrator] A3 tool_result directive (first 300 chars): %s", summary[:300])
+            return summary
         return (
             "问题模拟未获取到有效数据，流程中止。"
             "【强制操作】直接告知用户问题模拟失败、未能生成有效问题，"
@@ -1209,11 +1237,37 @@ async def _handle_tool_call(
         # Fallback: if LLM produced no reply text, emit a short status line
         # so the user sees something before the long-running agent starts.
         if not reply_text.strip():
+            _all_names = "、".join(
+                PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+                for p in PlatformConstants.SUPPORTED_PLATFORMS
+            )
+            _current_fetch_mode = tool_args.get("fetch_mode", "fast") if tool_name == "answer_fetch" else state.get("fetch_mode", "fast")
+            if _current_fetch_mode == "full":
+                _fetch_fallback = (
+                    f"正在向{_all_names}平台提问（完整采集模式，全浏览器），抓取各平台对品牌的真实回答。"
+                    f"4 条浏览器流水线并行，预计总耗时约 10-20 分钟。"
+                    "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
+                )
+            else:
+                _api_names = "/".join(
+                    PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+                    for p in PlatformConstants.API_PLATFORMS
+                )
+                _browser_names = "/".join(
+                    PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+                    for p in PlatformConstants.BROWSER_PLATFORMS
+                )
+                _fetch_fallback = (
+                    f"正在向{_all_names}平台提问，抓取各平台对品牌的真实回答。"
+                    f"API 平台（{_api_names}）并行抓取约 30 秒，"
+                    f"浏览器平台（{_browser_names}）各需 3-5 分钟，总计约 8-12 分钟。"
+                    "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
+                )
             FALLBACK_TEXTS = {
                 "brand_analysis": "正在收集品牌基本信息和竞品格局，请稍候...",
                 "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
                 "question_simulation": "正在模拟真实用户可能在 AI 搜索中提出的问题，请稍候...",
-                "answer_fetch": "正在向豆包、混元、Kimi、DeepSeek 四个平台提问，抓取各平台对品牌的真实回答。API 平台（豆包/混元）并行抓取约 30 秒，浏览器平台（Kimi/DeepSeek）各需 3-5 分钟，总计约 8-12 分钟。请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。",
+                "answer_fetch": _fetch_fallback,
                 "data_analytics": "正在分析各平台回答数据，计算品牌曝光率、情感分布和 BWVS 指数，请稍候...",
             }
             fallback_text = FALLBACK_TEXTS.get(tool_name, f"正在执行：{display_name}，请稍候...")
@@ -1245,6 +1299,9 @@ async def _handle_tool_call(
         # Store user_decisions for a3 mode
         if tool_name == "question_simulation":
             user_decisions = dict(state.get("user_decisions", {}))
+            # Reset fetch_mode guard flags when re-running A3
+            user_decisions.pop("fetch_mode_confirmed", None)
+            user_decisions.pop("fetch_mode_pending", None)
             mode = tool_args.get("mode", "")
 
             if mode == "baseline_dynamic":
@@ -1323,6 +1380,118 @@ async def _handle_tool_call(
             if tool_args.get("persona_id"):
                 user_decisions["selected_persona_ids"] = [tool_args["persona_id"]]
             extra_updates["user_decisions"] = user_decisions
+
+        # Pass fetch_mode for A4 + custom_questions + ask_user guard
+        if tool_name == "answer_fetch":
+            extra_updates["fetch_mode"] = tool_args.get("fetch_mode", "fast")
+
+            # Fix 2B: Inject custom_questions into state as questions
+            custom_qs = tool_args.get("custom_questions")
+            if custom_qs and isinstance(custom_qs, list):
+                formatted = [
+                    {"id": f"custom_{i+1}", "text": q, "category": "用户自定义"}
+                    for i, q in enumerate(custom_qs)
+                    if isinstance(q, str) and q.strip()
+                ]
+                if formatted:
+                    extra_updates["questions"] = formatted
+
+            # Fix 3: Code-level guard — force fetch_mode confirmation
+            # Skip guard when:
+            #   - LLM explicitly passed fetch_mode (user intent is clear)
+            #   - custom_questions provided
+            #   - headless mode
+            #   - already confirmed/pending
+            user_decisions = dict(state.get("user_decisions", {}))
+            has_questions = bool(state.get("questions")) or bool(custom_qs)
+            is_headless = state.get("headless", False)
+            already_confirmed = user_decisions.get("fetch_mode_confirmed", False)
+            already_pending = user_decisions.get("fetch_mode_pending", False)
+            is_custom = bool(custom_qs and isinstance(custom_qs, list) and any(
+                isinstance(q, str) and q.strip() for q in custom_qs
+            ))
+            # If LLM explicitly set fetch_mode in tool args, the user's intent
+            # has already been captured — no need to re-ask.
+            explicit_mode = bool(tool_args.get("fetch_mode"))
+
+            if (
+                has_questions
+                and not is_headless
+                and not already_confirmed
+                and not already_pending
+                and not is_custom
+                and not explicit_mode
+            ):
+                # LLM called answer_fetch without specifying fetch_mode — force selection
+                logger.warning(
+                    "[Orchestrator] answer_fetch called without explicit fetch_mode. "
+                    "Forcing user selection."
+                )
+                defense_options = [
+                    {
+                        "id": "fast",
+                        "label": "快速采集（推荐）",
+                        "description": "API + 浏览器混合，约 5-10 分钟",
+                    },
+                    {
+                        "id": "full",
+                        "label": "完整采集",
+                        "description": "全浏览器模拟真实用户，约 10-20 分钟，数据最准",
+                    },
+                    {
+                        "id": "regenerate",
+                        "label": "重新生成问题",
+                        "description": "对模拟问题不满意，返回重新生成",
+                    },
+                ]
+                defense_request_id = tool_call.id or f"defense_fetch_{id(tool_call)}"
+                defense_msg = "问题模拟已完成，请选择采集模式："
+                await manager.emit_to_session(
+                    session_id,
+                    "inline_confirmation",
+                    {
+                        "message": defense_msg,
+                        "options": defense_options,
+                        "type": "simple",
+                    },
+                )
+                await manager.emit_to_session(session_id, "confirmation_request", {
+                    "request_id": defense_request_id,
+                    "type": "step_confirmation",
+                    "message": defense_msg,
+                    "options": defense_options,
+                    "allow_text_input": True,
+                    "step_id": "orchestrator",
+                    "step_name": "选择采集模式",
+                })
+                # Mark pending so next call passes through
+                user_decisions["fetch_mode_pending"] = True
+                # Inject tool_result placeholder for MiniMax history consistency
+                new_history.append({
+                    "role": "tool",
+                    "content": "等待用户选择采集模式...",
+                    "tool_call_id": tool_call.id or "call_1",
+                })
+                return Command(
+                    goto="wait_for_user",
+                    update={
+                        "awaiting_user": True,
+                        "orchestrator_reply": reply_text,
+                        "orchestrator_history": new_history,
+                        "user_decisions": user_decisions,
+                        "pending_confirmation": {
+                            "step_id": "orchestrator",
+                            "step_name": "选择采集模式",
+                            "message": defense_msg,
+                            "options": defense_options,
+                        },
+                    },
+                )
+
+            # If pending (guard fired once), mark as confirmed and proceed
+            if already_pending and not already_confirmed:
+                user_decisions["fetch_mode_confirmed"] = True
+                extra_updates["user_decisions"] = user_decisions
 
         # Pass report_type as analysis_mode for A5
         if tool_name == "data_analytics":

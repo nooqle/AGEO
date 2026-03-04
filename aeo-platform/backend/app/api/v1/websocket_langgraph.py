@@ -404,6 +404,13 @@ async def handle_user_message_langgraph(
         ):
             # Continued conversation: add user message to orchestrator history
             state_values = dict(existing_state.values)
+            logger.info(
+                "[LangGraph] EXISTING state path: has_sq=%s, has_q=%s, has_fr=%s, history_len=%d",
+                "yes" if state_values.get("simulated_questions") else "NO",
+                "yes" if state_values.get("questions") else "NO",
+                "yes" if state_values.get("fetch_results") else "NO",
+                len(state_values.get("orchestrator_history", [])),
+            )
             history = list(state_values.get("orchestrator_history", []))
             history.append({
                 "role": "user",
@@ -435,6 +442,13 @@ async def handle_user_message_langgraph(
             # MemorySaver has no state — try restoring from DB
             try:
                 restored = await rebuild_state_from_db(session_id, entity_id)
+                logger.info(
+                    "[LangGraph] REBUILD path: has_sq=%s, has_q=%s, has_fr=%s, history_len=%d",
+                    "yes" if restored.get("simulated_questions") else "NO",
+                    "yes" if restored.get("questions") else "NO",
+                    "yes" if restored.get("fetch_results") else "NO",
+                    len(restored.get("orchestrator_history", [])),
+                )
                 if restored.get("orchestrator_history"):
                     logger.info(
                         f"[LangGraph] Restored state from DB for session {session_id}"
