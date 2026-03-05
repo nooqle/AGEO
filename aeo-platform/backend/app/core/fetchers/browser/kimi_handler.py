@@ -117,11 +117,16 @@ class KimiHandler(BaseBrowserHandler):
                 try:
                     new_chat = page.locator(self._sel("new_chat")).first
                     if await new_chat.count() > 0:
+                        old_url = page.url
                         await new_chat.scroll_into_view_if_needed()
                         await new_chat.click(timeout=5000)
-                        await asyncio.sleep(1.0)
+                        # Verify URL change instead of blind sleep
+                        for _ in range(4):
+                            await asyncio.sleep(0.5)
+                            if page.url != old_url:
+                                break
                         fast_path_ok = True
-                        logger.info("[Kimi] Fast path: clicked 新建对话")
+                        logger.info("[Kimi] Fast path: clicked 新建对话 (url_changed=%s)", page.url != old_url)
                 except Exception as e:
                     logger.debug("[Kimi] Fast path CSS click failed: %s", e)
 
@@ -254,6 +259,15 @@ class KimiHandler(BaseBrowserHandler):
                     source = "network"
                     logger.info("[Kimi] Using network-intercepted data (%d chars, %d refs)",
                                 len(answer_text), len(search_refs))
+                elif parsed and parsed.error_type:
+                    logger.warning("[Kimi] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        f"Kimi 返回错误: {parsed.error}",
+                        progress=0,
+                        error_type=parsed.error_type,
+                    )
+                    return
 
             # DOM fallback (with Kimi's late login detection)
             if not answer_text:
@@ -313,7 +327,9 @@ class KimiHandler(BaseBrowserHandler):
                     '[class*="login-modal"]', '[class*="login-dialog"]', '[class*="auth-modal"]',
                 ];
                 for (const sel of selectors) {
-                    if (document.querySelector(sel)) return sel;
+                    const el = document.querySelector(sel);
+                    // Must check visibility — hidden login DOM shouldn't trigger login flow
+                    if (el && el.offsetParent !== null) return sel;
                 }
                 const notLogin = document.querySelector('.not-login-container');
                 if (notLogin && (notLogin.textContent || '').includes('登录')) {
@@ -339,11 +355,12 @@ class KimiHandler(BaseBrowserHandler):
                         const input = document.querySelector('.chat-input-editor')
                             || document.querySelector('[class*="chat-input"]')
                             || document.querySelector('[contenteditable="true"]');
-                        if (input) return '__input_ready__';
+                        if (input && input.offsetParent !== null) return '__input_ready__';
                         const loginSels = ['.login-modal-content', '.wechat-login',
                             '[class*="login-modal"]', '[class*="login-dialog"]'];
                         for (const sel of loginSels) {
-                            if (document.querySelector(sel)) return sel;
+                            const el = document.querySelector(sel);
+                            if (el && el.offsetParent !== null) return sel;
                         }
                         return '__no_input__';
                     }""")
@@ -378,7 +395,10 @@ class KimiHandler(BaseBrowserHandler):
         _LOGIN_CHECK_JS = """() => {
             const sels = ['.login-modal-content', '.wechat-login',
                           '[class*="login-modal"]', '[class*="login-dialog"]'];
-            for (const s of sels) { if (document.querySelector(s)) return true; }
+            for (const s of sels) {
+                const el = document.querySelector(s);
+                if (el && el.offsetParent !== null) return true;
+            }
             return false;
         }"""
 

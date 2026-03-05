@@ -15,6 +15,7 @@ class ParsedResponse:
     raw_body: str = ""  # First 2000 chars for debugging
     parse_ok: bool = False
     error: str = ""
+    error_type: str = ""  # "rate_limit" | "verify" | "server_error" | ""
 
 
 @dataclass
@@ -30,10 +31,25 @@ class InterceptConfig:
 class BaseResponseParser(ABC):
     """Base class for HTTP response body parsers."""
 
+    # Event types that indicate errors in SSE streams
+    ERROR_EVENT_TYPES = ("error", "ERROR", "STREAM_ERROR")
+
     @abstractmethod
     def parse(self, body: str, url: str = "") -> ParsedResponse:
         """Parse the full response body into structured data."""
         ...
+
+    def classify_error(self, event_type: str, data: dict) -> tuple[str, str]:
+        """Classify an SSE error event into (error_info, error_type).
+
+        Returns ("", "") if the event is not an error.
+        Override in subclasses for platform-specific error classification
+        (e.g. Doubao rate_limit code 710022004).
+        """
+        if event_type not in self.ERROR_EVENT_TYPES:
+            return "", ""
+        error_info = f"{event_type}: {data}"
+        return error_info, "server_error"
 
     def validate(self, result: ParsedResponse) -> ParsedResponse:
         """Post-parse validation. Override for platform-specific checks."""

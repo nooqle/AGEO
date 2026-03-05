@@ -41,6 +41,7 @@ const BROWSER_STATES: BrowserState['state'][] = [
   'navigating',
   'checking_login',
   'waiting_for_login',
+  'waiting_for_modal',
   'logged_in',
   'enabling_search',
   'submitting',

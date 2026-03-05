@@ -384,6 +384,21 @@ class BaseBrowserHandler(ABC):
         except Exception:
             return None
 
+    # ------------------------------------------------------------------ visibility helper
+
+    async def _is_visible(self, selector: str) -> bool:
+        """Check if element exists AND is visible (offsetParent not null)."""
+        page = self.client.page
+        if page is None:
+            return False
+        try:
+            return await page.evaluate(f"""() => {{
+                const el = document.querySelector('{selector}');
+                return el !== null && el.offsetParent !== null;
+            }}""")
+        except Exception:
+            return False
+
     # ------------------------------------------------------------------ login
 
     async def _check_login_status(self, check_selector: str) -> bool:
@@ -417,6 +432,117 @@ class BaseBrowserHandler(ABC):
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval
         return False
+
+    # ------------------------------------------------------------------ modal/popup detection
+
+    # Common modal indicators across all platforms.  Subclasses can override
+    # ``_DEFAULTS["modal_selectors"]`` or ``_DEFAULTS["modal_texts"]`` to
+    # add platform-specific patterns.
+    _COMMON_MODAL_SELECTORS = [
+        "[role='dialog']",
+        "[role='alertdialog']",
+        "[class*='modal']",
+        # NOTE: [class*='dialog'] removed — too broad (Yuanbao false positive)
+    ]
+    _COMMON_MODAL_TEXTS = [
+        "已阅读并同意",
+        "用户协议",
+        "隐私政策",
+        "服务条款",
+        "Terms of Service",
+        "Privacy Policy",
+    ]
+
+    async def _detect_blocking_modal(self) -> str:
+        """Detect blocking modals/agreements on the page.
+
+        Returns a description string if a modal is found, empty string otherwise.
+        Checks for visible modal elements, then searches for agreement text
+        INSIDE those modals (not the full page body — avoids footer false positives).
+        """
+        page = self.client.page
+        if page is None:
+            return ""
+
+        extra_sels = self._DEFAULTS.get("modal_selectors", [])
+        extra_texts = self._DEFAULTS.get("modal_texts", [])
+        all_sels = json.dumps(self._COMMON_MODAL_SELECTORS + (extra_sels if isinstance(extra_sels, list) else []))
+        all_texts = json.dumps(self._COMMON_MODAL_TEXTS + (extra_texts if isinstance(extra_texts, list) else []), ensure_ascii=False)
+
+        try:
+            result = await page.evaluate(f"""() => {{
+                const sels = {all_sels};
+                const texts = {all_texts};
+                for (const sel of sels) {{
+                    const el = document.querySelector(sel);
+                    if (!el || el.offsetParent === null || el.offsetHeight < 50) continue;
+                    // Check if this modal contains agreement/policy text
+                    const modalText = el.innerText || '';
+                    for (const txt of texts) {{
+                        if (modalText.includes(txt)) return 'modal_text: ' + txt;
+                    }}
+                    // Visible modal without agreement text — might be a normal UI element
+                    // Only flag it if it has typical blocking-modal traits
+                    const hasOverlay = !!el.closest('[class*="overlay"], [class*="mask"]');
+                    const hasCloseBtn = !!el.querySelector('[class*="close"], [aria-label*="close"], [aria-label*="关闭"]');
+                    if (hasOverlay || hasCloseBtn) return 'modal: ' + sel;
+                }}
+                return '';
+            }}""")
+            return result or ""
+        except Exception as e:
+            logger.debug("[%s] Modal detection failed: %s", self.PLATFORM_KEY, e)
+            return ""
+
+    async def _wait_for_modal_clear(self, timeout: int = 300) -> bool:
+        """Wait until blocking modals are gone (user dismissed them)."""
+        elapsed = 0.0
+        while elapsed < timeout:
+            detected = await self._detect_blocking_modal()
+            if not detected:
+                return True
+            await asyncio.sleep(2)
+            elapsed += 2
+        return False
+
+    async def _check_and_handle_modal(self) -> "BrowserEvent | None":
+        """Generic modal/popup check.  Call once after navigation, not per question.
+
+        If a blocking modal is detected:
+        1. Yields WAITING_FOR_MODAL event (distinct from WAITING_FOR_LOGIN)
+        2. Opens headed browser for user to handle the modal
+        3. Waits up to 300s for modal to clear
+
+        Returns None if no modal, or a BrowserEvent (WAITING_FOR_MODAL or ERROR).
+        """
+        detected = await self._detect_blocking_modal()
+        if not detected:
+            return None
+
+        platform_name = getattr(self, 'PLATFORM', self.PLATFORM_KEY)
+        display_name = str(platform_name.value) if hasattr(platform_name, 'value') else str(platform_name)
+        logger.info("[%s] Blocking modal detected: %s", self.PLATFORM_KEY, detected)
+
+        event = self._create_event(
+            BrowserState.WAITING_FOR_MODAL,
+            f"检测到 {display_name} 页面弹窗需要确认，请在浏览器窗口中操作",
+            progress=0.35,
+            requires_action=True,
+            action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议（{display_name}）",
+        )
+
+        # Reopen as headed browser for user to interact
+        await self.client.close()
+        await self.client.open(self.URL, headed=True)
+        await asyncio.sleep(3)  # Wait for page to load after reopen
+
+        # Wait for user to dismiss the modal
+        modal_cleared = await self._wait_for_modal_clear(timeout=300)
+        if not modal_cleared:
+            return self._create_event(BrowserState.ERROR, "弹窗处理超时，请重试", progress=0)
+
+        logger.info("[%s] Modal cleared by user, continuing", self.PLATFORM_KEY)
+        return event
 
     # ------------------------------------------------------------------ network interception
 
@@ -556,6 +682,7 @@ class BaseBrowserHandler(ABC):
         requires_action: bool = False,
         action_hint: str | None = None,
         data: FetchResult | None = None,
+        error_type: str | None = None,
     ) -> BrowserEvent:
         """Create a browser event."""
         return BrowserEvent(
@@ -566,6 +693,7 @@ class BaseBrowserHandler(ABC):
             action_type=None,
             action_hint=action_hint,
             error=None,
+            error_type=error_type,
             recoverable=True,
             data=data,
         )

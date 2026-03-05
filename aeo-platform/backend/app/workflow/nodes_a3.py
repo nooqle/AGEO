@@ -69,6 +69,18 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
     competitors = state.get("competitors") or []
     brand_name = _extract_brand_name(brand_profile, state)
 
+    # Defensive check: refuse to generate if industry is unknown
+    industry = brand_profile.get("industry", "")
+    if not industry or not industry.strip():
+        industry = state.get("industry_hint", "")
+    if not industry or not industry.strip():
+        logger.error("[A3] brand_profile.industry is empty, cannot generate relevant questions")
+        return Command(update={
+            "error_info": {"step": "A3", "error": "品牌行业信息缺失，无法生成相关问题。请先完成品牌分析(A1)。"},
+            "current_step": "A3",
+            "simulated_questions": None,
+        })
+
     await send_progress_event(
         session_id=session_id,
         step="A3",
@@ -252,6 +264,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
                 "execution_status": "error",
                 "questions": [],
                 "current_step": "A3",
+                "simulated_questions": None,
             },
         )
 
@@ -494,6 +507,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
                     "execution_status": "error",
                     "questions": [],
                     "current_step": "A3",
+                    "simulated_questions": None,
                 },
             )
 
@@ -764,6 +778,18 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
     competitors = state.get("competitors") or []
     brand_name = _extract_brand_name(brand_profile, state)
 
+    # Defensive check: refuse to generate if industry is unknown
+    industry = brand_profile.get("industry", "")
+    if not industry or not industry.strip():
+        industry = state.get("industry_hint", "")
+    if not industry or not industry.strip():
+        logger.error("[A3] brand_profile.industry is empty, cannot generate relevant questions")
+        return Command(update={
+            "error_info": {"step": "A3", "error": "品牌行业信息缺失，无法生成相关问题。请先完成品牌分析(A1)。"},
+            "current_step": "A3",
+            "simulated_questions": None,
+        })
+
     await send_progress_event(
         session_id=session_id,
         step="A3",
@@ -954,6 +980,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
                     "execution_status": "error",
                     "questions": [],
                     "current_step": "A3",
+                    "simulated_questions": None,
                 },
             )
 
@@ -1036,6 +1063,7 @@ def _build_baseline_user_content(
 
 ## 要求
 - 生成 10-15 个行业全景问题
+- 【强制约束】所有问题必须严格围绕「{industry}」行业，禁止生成其他行业的问题
 - 直接提及「{brand_name}」的问题不超过总数的 10%
 - 覆盖核心产品线: {products}
 - 问题要口语化，像真实用户会搜索的

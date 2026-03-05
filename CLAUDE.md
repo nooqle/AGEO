@@ -144,3 +144,20 @@ Required API keys: MiniMax API key, optionally DashScope for backup LLM.
 
 **语言要求**：
 - 使用中文与用户沟通
+
+## 多智能体协作规范
+
+**禁止使用 Agent Teams / SendMessage**（Windows 通信 bug 未修复）
+
+### 并行任务标准流程
+1. 通过 Task 工具并行启动多个 Subagent
+2. 每个 Subagent 完成后将结果写入 `.claude/outputs/{角色}_result.md`
+3. 所有角色必须有 Write 权限（在 agent 定义中明确包含 Write 工具）
+4. 全部完成后 Lead 读取所有文件汇总
+
+### 输出文件格式
+\`\`\`
+### RESULT ###
+（结果正文）
+### END ###
+\`\`\`

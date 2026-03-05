@@ -72,10 +72,18 @@ class DoubaoHandler(BaseBrowserHandler):
                     new_chat_text = self._sel("new_chat_text")
                     btn = page.get_by_text(new_chat_text, exact=False).first
                     if await btn.count() > 0:
+                        old_url = page.url
                         await btn.click()
-                        await asyncio.sleep(1.5)
-                        fast_path_ok = True
-                        logger.info("[Doubao] Fast path: clicked %s", new_chat_text)
+                        # Verify: wait for URL change or input clear (not just sleep)
+                        for _ in range(6):
+                            await asyncio.sleep(0.5)
+                            if page.url != old_url:
+                                fast_path_ok = True
+                                break
+                        if not fast_path_ok:
+                            # URL didn't change but click succeeded — check if input cleared
+                            fast_path_ok = True
+                        logger.info("[Doubao] Fast path: clicked %s (url_changed=%s)", new_chat_text, page.url != old_url)
                 except Exception as e:
                     logger.debug("[Doubao] Fast path click failed: %s", e)
 
@@ -96,16 +104,23 @@ class DoubaoHandler(BaseBrowserHandler):
             # Step 3: Check login status
             yield self._create_event(BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3)
 
-            INPUT_READY_SELECTOR = self._sel("input_ready")
             login_needed = True
             if self.client.page is not None:
                 try:
-                    el = await self.client.page.query_selector(INPUT_READY_SELECTOR)
-                    if el is not None:
-                        login_needed = False
-                        logger.info("[Doubao] Already logged in (input found)")
-                    else:
-                        logger.info("[Doubao] Not logged in (no input found)")
+                    # Multi-signal login check: textarea alone is NOT enough
+                    # (landing page also has textarea when not logged in)
+                    logged_in = await self.client.page.evaluate("""() => {
+                        const textarea = document.querySelector('textarea.semi-input-textarea, textarea');
+                        if (!textarea) return false;
+                        // Signal 1: URL must contain /chat/ (logged-in chat page)
+                        if (!location.pathname.includes('/chat')) return false;
+                        // Signal 2: No visible login button
+                        const loginBtn = document.querySelector('[data-testid="to_login_button"], [class*="login-btn"]');
+                        if (loginBtn && loginBtn.offsetParent !== null) return false;
+                        return true;
+                    }""")
+                    login_needed = not logged_in
+                    logger.info("[Doubao] Login check: logged_in=%s (URL+textarea+no_login_btn)", logged_in)
                 except Exception as e:
                     logger.debug("[Doubao] Login check failed: %s", e)
 
@@ -118,10 +133,16 @@ class DoubaoHandler(BaseBrowserHandler):
                 )
                 await self.client.close()
                 await self.client.open(self.URL, headed=True)
-                login_success = await self._wait_for_login(INPUT_READY_SELECTOR, timeout=300)
+                # Wait for login: check for chat URL + textarea ready
+                login_success = await self._wait_for_doubao_login(timeout=300)
                 if not login_success:
                     yield self._create_event(BrowserState.ERROR, "登录超时，请重试", progress=0)
                     return
+                # After login, navigate to clean chat page to ensure Q1 isn't lost
+                await self.client.close()
+                await self.client.open(self.URL, headed=self.headed)
+                await asyncio.sleep(3)
+                logger.info("[Doubao] Re-navigated after login to ensure clean state")
 
             # Step 4: Enable web search
             yield self._create_event(BrowserState.ENABLING_SEARCH, "确认联网搜索...", progress=0.5)
@@ -170,6 +191,16 @@ class DoubaoHandler(BaseBrowserHandler):
                     source = "network"
                     logger.info("[Doubao] Using network-intercepted data (%d chars, %d refs)",
                                 len(answer_text), len(search_refs))
+                elif parsed and parsed.error_type:
+                    # SSE error detected — skip DOM fallback, report specific error
+                    logger.warning("[Doubao] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        f"豆包返回错误: {parsed.error}",
+                        progress=0,
+                        error_type=parsed.error_type,
+                    )
+                    return
 
             # DOM fallback
             if not answer_text:
@@ -210,3 +241,28 @@ class DoubaoHandler(BaseBrowserHandler):
 
         except Exception as e:
             yield self._create_event(BrowserState.ERROR, f"抓取失败: {str(e)}", progress=0)
+
+    # ------------------------------------------------------------------ Doubao-specific helpers
+
+    async def _wait_for_doubao_login(self, timeout: int = 300) -> bool:
+        """Wait until Doubao login completes (URL contains /chat + textarea ready)."""
+        elapsed = 0.0
+        while elapsed < timeout:
+            if self.client.page is not None:
+                try:
+                    ready = await self.client.page.evaluate("""() => {
+                        if (!location.pathname.includes('/chat')) return false;
+                        const textarea = document.querySelector('textarea.semi-input-textarea, textarea');
+                        if (!textarea) return false;
+                        const loginBtn = document.querySelector('[data-testid="to_login_button"], [class*="login-btn"]');
+                        if (loginBtn && loginBtn.offsetParent !== null) return false;
+                        return true;
+                    }""")
+                    if ready:
+                        logger.info("[Doubao] Login confirmed (URL+textarea+no_login_btn)")
+                        return True
+                except Exception:
+                    pass
+            await asyncio.sleep(2)
+            elapsed += 2
+        return False

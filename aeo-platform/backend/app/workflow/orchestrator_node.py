@@ -557,6 +557,7 @@ ask_user 只允许在以下场景使用，其他任何场景都【禁止】调�
   - 如果选项涉及配置（如定期监测），必须在消息中先说明默认配置是什么、有哪些可调参数、推荐配置是什么
 - 如果用户直接提供了问题文本并要求抓取答案，可通过 answer_fetch 的 custom_questions 参数传入，无需先调用 question_simulation。仍需确认 fetch_mode。
 - 即使已有模拟问题，如果用户要求以不同画像或模式重新生成，仍然应该再次调用 question_simulation
+- 【重要】"完整模式"/"full模式"/"完整采集" 指 answer_fetch(fetch_mode="full") 的参数，不是重新生成问题。question_simulation 成功后，绝不再次调用 question_simulation，必须先调用 answer_fetch 或 ask_user。
 - 如果某个Agent执行后返回"未获取到有效数据"，友好地告知用户该步骤未成功，说明可能原因，并提供建设性的替代选项。如果用户要求重试，可以再次调用同一个Agent。
 
 绝对禁止（违反这些规则会导致严重错误）：
@@ -574,6 +575,7 @@ ask_user 只允许在以下场景使用，其他任何场景都【禁止】调�
   3. 手动提供数据（引导用户描述所需信息，如"请描述您的目标用户群体"）
 - 举例：画像生成失败时，选项应为："重新尝试生成" / "跳过，使用品牌全景模式" / "手动描述目标用户"
 - 永远保持积极的态度，帮助用户找到可行方案
+- 【A4 失败特别规则】answer_fetch 失败后，绝对禁止自动调用 question_simulation 重新生成问题。问题已在之前步骤生成且仍然有效，只需重试 answer_fetch 即可。必须使用 ask_user 让用户选择：重试抓取/换模式重试/仅重试部分平台。
 
 {_build_context_summary(state)}"""
 
@@ -629,7 +631,15 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         fr = state.get("fetch_results")
         if fr:
             return f"AI答案抓取完成。共抓取 {len(fr)} 条结果。"
-        return "AI答案抓取完成，但未获取到有效数据。"
+        return (
+            "AI答案抓取完成，但未获取到有效数据。"
+            "【强制操作】你必须使用 ask_user 向用户说明抓取失败，并提供以下选项："
+            "1) 重新尝试抓取（可换模式，如 fast→full）；"
+            "2) 仅重试部分平台（selective_refetch）；"
+            "3) 手动提供问题重新抓取。"
+            "【绝对禁止】不要调用 question_simulation 重新生成问题。"
+            "问题已经在之前的步骤中生成，无需重新生成。"
+        )
 
     if tool_name == "data_analytics":
         current_mode = state.get("analysis_mode", "persona")
@@ -685,9 +695,16 @@ def build_orchestrator_messages(state: AgentState) -> list[dict[str, Any]]:
     """
     history = state.get("orchestrator_history", [])
     if not history:
-        # First call: use the user's original message
+        # First call: use the user's original message with full brand context
         brand_name = state.get("brand_name", "")
-        return [{"role": "user", "content": f"请帮我分析品牌：{brand_name}"}]
+        industry = state.get("industry_hint", "")
+        website = state.get("official_website", "")
+        context_parts = [f"请帮我分析品牌：{brand_name}"]
+        if industry:
+            context_parts.append(f"（行业：{industry}）")
+        if website:
+            context_parts.append(f"（官网：{website}）")
+        return [{"role": "user", "content": "".join(context_parts)}]
 
     # Limit history to last 20 messages to prevent context growth
     MAX_HISTORY = 20
@@ -1076,6 +1093,9 @@ async def _handle_tool_call(
     tool_name = tool_call.name
     tool_args = tool_call.arguments or {}
 
+    # F8: Extract retry counts once; propagate through all return paths
+    current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
+
     logger.info(f"[Orchestrator] Tool call: {tool_name}, args: {tool_args}")
 
     if tool_name == "ask_user":
@@ -1115,6 +1135,7 @@ async def _handle_tool_call(
                     "orchestrator_reply": reply_text,
                     "orchestrator_history": new_history,
                     "pending_confirmation": None,
+                    "agent_retry_counts": current_retry_counts,
                 },
             )
 
@@ -1169,6 +1190,7 @@ async def _handle_tool_call(
                     "message": msg,
                     "options": options,
                 },
+                "agent_retry_counts": current_retry_counts,
             },
         )
 
@@ -1176,10 +1198,38 @@ async def _handle_tool_call(
     if node_name:
         display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
 
+        # Hard block: when simulated_questions already exist, block re-invocation
+        # unless the user just triggered a retry (retry_counts reset to 0).
+        if tool_name == "question_simulation" and state.get("simulated_questions"):
+            is_fresh_retry = current_retry_counts.get("question_simulation", 0) == 0
+            if not is_fresh_retry:
+                logger.warning(
+                    "[Orchestrator] BLOCKED: question_simulation called again. "
+                    "Questions already exist, redirecting."
+                )
+                block_msg = (
+                    "问题已成功生成，无需重新生成。"
+                    "请直接调用 answer_fetch 进行数据抓取，或调用 ask_user 询问用户下一步操作。"
+                )
+                new_history.append({
+                    "role": "tool",
+                    "content": block_msg,
+                    "tool_call_id": tool_call.id or "call_1",
+                    "name": tool_name,
+                })
+                return Command(
+                    goto="orchestrator",
+                    update={
+                        "orchestrator_reply": reply_text,
+                        "orchestrator_history": new_history,
+                        "agent_retry_counts": current_retry_counts,
+                    },
+                )
+
         # Check retry count — block if same tool called >= 2 times
         retry_counts = dict(state.get("agent_retry_counts", {}) or {})
         current_count = retry_counts.get(tool_name, 0)
-        if current_count >= 3:
+        if current_count >= 2:
             logger.warning(
                 f"[Orchestrator] Tool {tool_name} already called {current_count} times, blocking retry"
             )
@@ -1202,6 +1252,7 @@ async def _handle_tool_call(
                 update={
                     "orchestrator_reply": reply_text,
                     "orchestrator_history": new_history,
+                    "agent_retry_counts": current_retry_counts,
                 },
             )
 
@@ -1375,6 +1426,7 @@ async def _handle_tool_call(
                             "message": defense_msg,
                             "options": ask_options,
                         },
+                        "agent_retry_counts": current_retry_counts,
                     },
                 )
             if tool_args.get("persona_id"):
@@ -1485,6 +1537,7 @@ async def _handle_tool_call(
                             "message": defense_msg,
                             "options": defense_options,
                         },
+                        "agent_retry_counts": current_retry_counts,
                     },
                 )
 
@@ -1507,6 +1560,7 @@ async def _handle_tool_call(
                 "tool_call_args": tool_args,
                 "tool_call_id": tool_call.id or "call_1",
                 "agent_retry_counts": retry_counts,
+                "error_info": None,
                 **extra_updates,
             },
         )
@@ -1518,6 +1572,7 @@ async def _handle_tool_call(
         update={
             "execution_status": "completed",
             "orchestrator_history": new_history,
+            "agent_retry_counts": current_retry_counts,
         },
     )
 

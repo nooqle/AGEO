@@ -155,6 +155,7 @@ class BrowserState(str, Enum):
     NAVIGATING = "navigating"
     CHECKING_LOGIN = "checking_login"
     WAITING_FOR_LOGIN = "waiting_for_login"
+    WAITING_FOR_MODAL = "waiting_for_modal"
     LOGGED_IN = "logged_in"
     ENABLING_SEARCH = "enabling_search"
     SUBMITTING = "submitting"
@@ -181,6 +182,7 @@ class BrowserEvent(BaseModel):
 
     # Error
     error: Optional[str] = Field(None, description="错误信息")
+    error_type: Optional[str] = Field(None, description="错误类型: rate_limit | verify | server_error")
     recoverable: bool = Field(True, description="是否可恢复")
 
     # Result

@@ -13,6 +13,7 @@ Optimizations:
 
 import asyncio
 import logging
+import os
 import random
 import re
 from datetime import datetime, timezone
@@ -30,6 +31,35 @@ from app.workflow.events import (
 )
 
 logger = logging.getLogger(__name__)
+
+# File-based logging — survives uvicorn --reload
+# Also capture handler-level logs (browser handlers, parsers, etc.)
+_log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+os.makedirs(_log_dir, exist_ok=True)
+_a4_fh = logging.FileHandler(os.path.join(_log_dir, "a4.log"), encoding="utf-8")
+_a4_fh.setLevel(logging.DEBUG)
+_a4_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s — %(message)s"))
+
+# Add to nodes_a4 logger
+if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
+    logger.addHandler(_a4_fh)
+
+# Add to browser handler loggers so we see [Doubao]/[Kimi]/etc. in a4.log
+for _handler_mod in [
+    "app.core.fetchers.browser.base_handler",
+    "app.core.fetchers.browser.doubao_handler",
+    "app.core.fetchers.browser.kimi_handler",
+    "app.core.fetchers.browser.deepseek_handler",
+    "app.core.fetchers.browser.yuanbao_handler",
+    "app.core.fetchers.browser.parsers.sse",
+    "app.core.fetchers.browser.parsers.connect",
+    "app.core.fetchers.browser.playwright_client",
+    "app.core.playwright_installer",
+]:
+    _hl = logging.getLogger(_handler_mod)
+    if not any(isinstance(h, logging.FileHandler) for h in _hl.handlers):
+        _hl.addHandler(_a4_fh)
+        _hl.setLevel(logging.DEBUG)
 
 # Platform configurations
 PLATFORMS = {
@@ -432,7 +462,19 @@ async def a4_fetch_node(state: AgentState) -> Command:
         )
 
     # Send user-visible reply with expected duration (dynamic from PlatformConstants)
-    duration_msg = _build_duration_msg(fetch_mode, len(questions))
+    # BUG-FIX: When platform_filter is active, show only filtered platforms
+    if platform_filter:
+        filtered_names = "、".join(
+            PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in platform_filter
+        )
+        duration_msg = (
+            f"开始重新抓取 **{filtered_names}** 平台，共 {len(questions)} 个问题。\n\n"
+            f"- 采集模式：浏览器采集\n"
+            f"- 预计耗时约 3-10 分钟\n\n"
+            "请保持页面打开，完成后将自动继续。"
+        )
+    else:
+        duration_msg = _build_duration_msg(fetch_mode, len(questions))
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
     await send_reply_event(session_id, "", is_complete=True)
 
@@ -686,6 +728,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
             _browser_progress_base = 0.57 if fetch_mode == "full" else 0.72
             _browser_progress_range = 0.95 - _browser_progress_base
             _browser_shared_done: dict[str, int] = {}  # platform -> questions done
+            # Shared partial results so global timeout can preserve completed work
+            _pipeline_partial_results: dict[str, list[tuple[int, dict[str, Any]]]] = {}
             # =============================================================
             async def _browser_pipeline(
                 handler, browser_client, platform: str, platform_name: str,
@@ -699,7 +743,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                 breaker = get_circuit_breaker(platform)
                 logger.info("[A4] %s browser pipeline started (breaker state: %s)", platform_name, breaker.state.value)
-                results = []
+                results: list[tuple[int, dict[str, Any]]] = []
+                _pipeline_partial_results[platform] = results  # share reference for timeout recovery
                 for idx, question in enumerate(questions):
                     q_text = question.get("text", "")
 
@@ -722,18 +767,31 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         }))
                         continue
 
+                    # First question uses extended timeout to allow for login flow
+                    question_timeout = 300.0 if idx == 0 else _get_browser_timeout(platform)
                     r = await _browser_fetch_with_timeout(
                         _fetch_from_browser,
                         handler, q_text, brand_profile,
                         platform, platform_name, BrowserState,
-                        timeout=_get_browser_timeout(platform),
+                        timeout=question_timeout,
                         session_id=session_id,
                     )
 
 
-                    # Update circuit breaker state
+                    # Update circuit breaker state — distinguish failure types
+                    error_type = r.get("error_type", "")
                     if r.get("success"):
                         breaker.record_success()
+                    elif error_type == "rate_limit":
+                        # Rate limit is not a platform fault — don't trip breaker
+                        logger.warning("[A4] %s rate limited on Q%d, adding 30s cooldown", platform_name, idx + 1)
+                        await asyncio.sleep(30)
+                    elif error_type == "verify":
+                        # CAPTCHA/verify challenge — stop this platform entirely
+                        logger.warning("[A4] %s verify challenge on Q%d, stopping platform", platform_name, idx + 1)
+                        breaker.record_failure()
+                        breaker.record_failure()
+                        breaker.record_failure()  # Force OPEN
                     else:
                         breaker.record_failure()
 
@@ -773,18 +831,25 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         timeout=pipeline_timeout,
                     )
                 except asyncio.TimeoutError:
+                    # Preserve partial results that completed before timeout
+                    partial = _pipeline_partial_results.get(platform, [])
+                    completed_indices = {idx for idx, _ in partial}
+                    completed_ok = sum(1 for _, r in partial if r.get("success"))
                     logger.warning(
-                        "[A4] %s pipeline hit global timeout (%.0fs), returning partial results",
-                        platform_name, pipeline_timeout,
+                        "[A4] %s pipeline hit global timeout (%.0fs), preserving %d/%d completed (%d success)",
+                        platform_name, pipeline_timeout, len(partial), total, completed_ok,
                     )
-                    # Return timeout failure for all questions not yet processed
-                    return [(i, {
-                        "platform": platform,
-                        "platform_name": platform_name,
-                        "fetch_method": "browser",
-                        "success": False,
-                        "error": f"平台整体超时（{pipeline_timeout:.0f}s），跳过剩余问题",
-                    }) for i in range(total)]
+                    # Add failures only for questions not yet processed
+                    for i in range(total):
+                        if i not in completed_indices:
+                            partial.append((i, {
+                                "platform": platform,
+                                "platform_name": platform_name,
+                                "fetch_method": "browser",
+                                "success": False,
+                                "error": f"平台整体超时（{pipeline_timeout:.0f}s），跳过剩余问题",
+                            }))
+                    return partial
 
             browser_tasks = []
             browser_task_platforms = []
@@ -877,7 +942,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             for bc in browser_clients:
                 try:
                     await bc.close()
-                except Exception as e:
+                except BaseException as e:
                     logger.debug("[A4] Browser client close failed: %s", e)
 
         # Calculate success rate
@@ -1141,7 +1206,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
             update_dict["auto_trigger_a5"] = True
 
         if len(successful_platforms) == 0:
-            update_dict["error_info"] = "所有平台数据获取均失败"
+            update_dict["error_info"] = {
+                "step": "A4",
+                "error": "所有平台数据获取均失败",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
 
         return Command(update=update_dict)
 
@@ -1378,16 +1447,15 @@ async def _fetch_from_browser(
     platform_name: str,
     browser_state,
     session_id: str = "",
+    _is_retry: bool = False,
 ) -> dict[str, Any]:
     start_time = datetime.now(timezone.utc)
     result_data = None
     error_message = None
-
+    error_type = ""
 
     try:
         async for event in handler.fetch(question):
-            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
-
             if event.state == browser_state.WAITING_FOR_LOGIN and session_id:
                 await send_browser_state_event(
                     session_id=session_id,
@@ -1398,18 +1466,43 @@ async def _fetch_from_browser(
                     requires_action=event.requires_action,
                     action_hint=event.action_hint,
                 )
+                login_msg = (
+                    f"**{platform_name}** 需要登录\n\n"
+                    f"已打开浏览器窗口，请在浏览器中完成登录。"
+                    f"登录后将自动继续抓取。"
+                )
+                await send_reply_event(session_id, login_msg, is_delta=True, is_new_round=True)
+                await send_reply_event(session_id, "", is_complete=True)
+
+            if event.state == browser_state.WAITING_FOR_MODAL and session_id:
+                await send_browser_state_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state=event.state.value,
+                    message=event.message,
+                    progress=event.progress,
+                    requires_action=event.requires_action,
+                    action_hint=event.action_hint,
+                )
+                modal_msg = (
+                    f"**{platform_name}** 页面弹窗需要确认\n\n"
+                    f"已打开浏览器窗口，请在浏览器中关闭弹窗或同意协议。"
+                )
+                await send_reply_event(session_id, modal_msg, is_delta=True, is_new_round=True)
+                await send_reply_event(session_id, "", is_complete=True)
+
             if event.state == browser_state.ERROR:
                 error_message = event.message or event.error or "抓取失败"
+                if event.error_type:
+                    error_type = event.error_type
 
             if event.state == browser_state.COMPLETED and event.data:
                 result_data = event.data
 
     except Exception as gen_err:
-
         raise
 
     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-
 
     if result_data and result_data.answer_text and len(result_data.answer_text.strip()) >= 10:
         answer_text = result_data.answer_text
@@ -1429,12 +1522,60 @@ async def _fetch_from_browser(
             "duration": duration,
         }
 
+    # -- Failure path: diagnose if a blocking modal caused the failure --
+    if not _is_retry:
+        try:
+            detected = await handler._detect_blocking_modal()
+        except Exception:
+            detected = ""
+
+        if detected:
+            logger.info("[A4] %s fetch failed, modal detected: %s — alerting user",
+                        platform_name, detected)
+            if session_id:
+                await send_browser_state_event(
+                    session_id=session_id, platform=platform,
+                    state="waiting_for_modal",
+                    message=f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
+                    progress=0.35, requires_action=True,
+                    action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议（{platform_name}）",
+                )
+                modal_msg = (
+                    f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
+                    f"已打开浏览器窗口，请在浏览器中关闭弹窗或同意协议。"
+                )
+                await send_reply_event(session_id, modal_msg, is_delta=True, is_new_round=True)
+                await send_reply_event(session_id, "", is_complete=True)
+
+            # Open headed browser for user to handle the modal
+            await handler.client.close()
+            await handler.client.open(handler.URL, headed=True)
+            await asyncio.sleep(3)
+
+            modal_cleared = await handler._wait_for_modal_clear(timeout=300)
+            if modal_cleared:
+                logger.info("[A4] %s modal cleared by user, retrying fetch", platform_name)
+                return await _fetch_from_browser(
+                    handler, question, brand_profile,
+                    platform, platform_name, browser_state,
+                    session_id=session_id, _is_retry=True,
+                )
+            else:
+                return {
+                    "platform": platform, "platform_name": platform_name,
+                    "fetch_method": "browser", "success": False,
+                    "error": "弹窗处理超时",
+                    "error_type": "modal_timeout",
+                    "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
+                }
+
     return {
         "platform": platform,
         "platform_name": platform_name,
         "fetch_method": "browser",
         "success": False,
         "error": error_message or "抓取失败",
+        "error_type": error_type,
         "duration": duration,
     }
 

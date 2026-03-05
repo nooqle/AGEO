@@ -646,6 +646,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         value={inputValue}
         onChange={handleInputChange}
         placeholder={!isConnected ? '正在重新连接...' : undefined}
+        progressMessage={activeTask?.progress_message ?? executionProgress?.details}
       />
     </div>
   );

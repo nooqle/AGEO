@@ -56,6 +56,7 @@ Phase 1 的核心目标是将 Specta AI 从"技术原型"升级为"可交付的�
 | P2-1 | Browser-Browser 基线实验 | 5 题×5 次×3 平台（Kimi+DeepSeek+元宝），建立 intra-Browser Jaccard | 3 天 |
 | P2-2 | 三通道偏差矩阵 | API-API / Browser-Browser / API-Browser 统一实验 | 4 天 |
 | P2-3 | 品牌提取 LLM 升级 | 正则词典→LLM 提取，F1 目标 ≥ 0.80 | 3 天 |
+| P2-4 | **连接用户 Chrome + Tab Group** | 用 `connect_over_cdp()` 连接用户已有 Chrome，通过 Chrome Extension 创建彩色标签页分组，替代独立 Patchright 窗口。共享登录态、视觉区分自动化标签页。参考 Anygen 实现。 | 5 天 |
 
 ### P3：打磨（Week 9-12）
 

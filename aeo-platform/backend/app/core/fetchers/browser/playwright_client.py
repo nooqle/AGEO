@@ -6,6 +6,7 @@ Supports Windows, Linux, and macOS.
 
 import asyncio
 import logging
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +55,23 @@ class PlaywrightBrowserClient:
                     "Patchright 浏览器未安装。请运行: python -m patchright install chromium"
                 )
 
-            self.playwright = await async_playwright().start()
+            loop = asyncio.get_running_loop()
+            logger.info(
+                "[Browser:%s] Starting async_playwright (loop=%s, policy=%s)",
+                self.session_name, type(loop).__name__,
+                type(asyncio.get_event_loop_policy()).__name__,
+            )
+            try:
+                self.playwright = await async_playwright().start()
+            except Exception as e:
+                logger.error(
+                    "[Browser:%s] async_playwright().start() failed: %s\n%s",
+                    self.session_name, e, traceback.format_exc(),
+                )
+                # Retry once after short delay
+                await asyncio.sleep(1)
+                logger.info("[Browser:%s] Retrying async_playwright().start()...", self.session_name)
+                self.playwright = await async_playwright().start()
 
     async def open(self, url: str, headed: bool = False) -> dict[str, Any]:
         """Open a URL in the browser.
@@ -107,7 +124,7 @@ class PlaywrightBrowserClient:
             return {"success": True, "url": url}
         except Exception as e:
             err_detail = f"{type(e).__name__}: {e}" if str(e) else f"{type(e).__name__} (no message)"
-            logger.error("[Browser:%s] open() failed: %s", self.session_name, err_detail)
+            logger.error("[Browser:%s] open() failed: %s\n%s", self.session_name, err_detail, traceback.format_exc())
             # Clean up partial state so next open() call retries from scratch
             self.page = None
             self.context = None

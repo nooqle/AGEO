@@ -10,6 +10,18 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
+# Fix: uvicorn --reload sets WindowsSelectorEventLoopPolicy on Windows,
+# but SelectorEventLoop does NOT support asyncio.create_subprocess_exec().
+# Patchright/Playwright needs subprocess to launch the browser driver process.
+# We monkey-patch uvicorn's asyncio_setup to prevent it from overriding our policy.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    try:
+        import uvicorn.loops.asyncio as _uv_asyncio
+        _uv_asyncio.asyncio_setup = lambda use_subprocess=False: None
+    except ImportError:
+        pass
+
 import logging
 from uuid import UUID
 
@@ -71,7 +83,9 @@ async def on_startup():
         from app.services.task_service import TaskService
         async with AsyncSessionLocal() as db:
             service = TaskService(db)
-            recovered = await service.recover_orphan_tasks(timeout_minutes=30)
+            # timeout_minutes=0: on process restart ALL running tasks are
+            # orphaned — no task from the old process can still be alive.
+            recovered = await service.recover_orphan_tasks(timeout_minutes=0)
             if recovered > 0:
                 logger.warning(f"启动恢复: 标记 {recovered} 个孤儿任务为失败")
     except Exception as recovery_err:
@@ -317,6 +331,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 )
                 agent_task.add_done_callback(_on_agent_done)
             elif event == "stop":
+                if agent_task and not agent_task.done():
+                    agent_task.cancel()
+                    logger.info(f"[WebSocket] Cancelled agent task for session {session_id}")
                 await handle_stop(websocket, session_id)
             elif event == "recall":
                 if agent_task and not agent_task.done():

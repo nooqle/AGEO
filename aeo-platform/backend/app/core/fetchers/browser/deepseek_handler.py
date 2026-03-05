@@ -77,10 +77,15 @@ class DeepSeekHandler(BaseBrowserHandler):
                     new_chat_text = self._sel("new_chat_text")
                     new_chat = page.get_by_text(new_chat_text, exact=False).first
                     if await new_chat.count() > 0:
+                        old_url = page.url
                         await new_chat.click()
-                        await asyncio.sleep(1.5)
+                        # Verify URL change instead of blind sleep
+                        for _ in range(4):
+                            await asyncio.sleep(0.5)
+                            if page.url != old_url:
+                                break
                         fast_path_ok = True
-                        logger.info("[DeepSeek] Fast path: clicked %s", new_chat_text)
+                        logger.info("[DeepSeek] Fast path: clicked %s (url_changed=%s)", new_chat_text, page.url != old_url)
                 except Exception as e:
                     logger.debug("[DeepSeek] %s click failed (%s), falling back to navigate",
                                  self._sel("new_chat_text"), e)
@@ -170,6 +175,15 @@ class DeepSeekHandler(BaseBrowserHandler):
                     source = "network"
                     logger.info("[DeepSeek] Using network-intercepted data (%d chars, %d refs)",
                                 len(answer_text), len(search_refs))
+                elif parsed and parsed.error_type:
+                    logger.warning("[DeepSeek] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        f"DeepSeek 返回错误: {parsed.error}",
+                        progress=0,
+                        error_type=parsed.error_type,
+                    )
+                    return
 
             # DOM fallback
             if not answer_text:

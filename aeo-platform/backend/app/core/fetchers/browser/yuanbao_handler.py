@@ -139,7 +139,7 @@ class YuanbaoHandler(BaseBrowserHandler):
                 try:
                     login_needed = await self.client.page.evaluate(f"""() => {{
                         const nologin = document.querySelector('{self._sel("not_logged_in")}');
-                        if (nologin) return true;
+                        if (nologin && nologin.offsetParent !== null) return true;
                         const loginBtn = document.querySelector('{self._sel("login_btn")}');
                         if (loginBtn && loginBtn.offsetParent !== null) return true;
                         const editor = document.querySelector('{self._sel("input")}');
@@ -235,6 +235,15 @@ class YuanbaoHandler(BaseBrowserHandler):
                     source = "network"
                     logger.info("[Yuanbao] Using network-intercepted data (%d chars, %d refs)",
                                 len(answer_text), len(search_refs))
+                elif parsed and parsed.error_type:
+                    logger.warning("[Yuanbao] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
+                    yield self._create_event(
+                        BrowserState.ERROR,
+                        f"元宝返回错误: {parsed.error}",
+                        progress=0,
+                        error_type=parsed.error_type,
+                    )
+                    return
 
             # DOM fallback
             if not answer_text:

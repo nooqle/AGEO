@@ -18,6 +18,7 @@ interface InputAreaProps {
   value?: string;
   onChange?: (value: string) => void;
   placeholder?: string;
+  progressMessage?: string;
 }
 
 export function InputArea({
@@ -30,6 +31,7 @@ export function InputArea({
   value: controlledValue,
   onChange,
   placeholder: customPlaceholder,
+  progressMessage,
 }: InputAreaProps) {
   const [internalContent, setInternalContent] = useState('');
   const content = controlledValue !== undefined ? controlledValue : internalContent;
@@ -301,9 +303,9 @@ export function InputArea({
                 </span>
               </>
             ) : (
-              <span className="flex items-center gap-2" style={{ color: 'var(--warning)' }}>
-                <RiLoader4Line className="w-3 h-3 animate-spin" />
-                Agent 正在执行分析任务，请稍候...
+              <span className="flex items-center gap-2 truncate max-w-full" style={{ color: 'var(--warning)' }}>
+                <RiLoader4Line className="w-3 h-3 animate-spin flex-shrink-0" />
+                {progressMessage || 'Agent 正在执行分析任务，请稍候...'}
               </span>
             )}
           </div>

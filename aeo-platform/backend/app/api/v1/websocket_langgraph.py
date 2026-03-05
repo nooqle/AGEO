@@ -4,6 +4,7 @@ This module provides WebSocket endpoints that integrate with the LangGraph workf
 Adapted for orchestrator-based dynamic routing (no hardcoded EXECUTION_STEPS).
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Literal, TypedDict
@@ -276,11 +277,20 @@ async def rebuild_state_from_db(
         state["progress"] = _STEP_PROGRESS.get(highest_step, 0.0)
         state["progress_message"] = f"已完成 {highest_step} 阶段"
 
+    # Backfill brand_name from brand_profile if entity lookup didn't provide it
+    # This prevents LLM hallucination when brand_name is empty but brand_profile exists
+    if not state["brand_name"] and state.get("brand_profile"):
+        bp_name = state["brand_profile"].get("brand_name", "")
+        if bp_name:
+            state["brand_name"] = bp_name
+            logger.info(f"[Restore] Backfilled brand_name from brand_profile: {bp_name}")
+
     logger.info(
         f"[Restore] Rebuilt state for session {session_id}: "
         f"step={highest_step}, history_len={len(state['orchestrator_history'])}, "
         f"has_brand={state['brand_profile'] is not None}, "
-        f"has_competitors={state['competitors'] is not None}"
+        f"has_competitors={state['competitors'] is not None}, "
+        f"brand_name={state['brand_name']!r}"
     )
 
     return state
@@ -563,6 +573,10 @@ async def handle_user_message_langgraph(
             # Stream workflow execution
             async for event in workflow.astream(initial_state, config=config):
                 await _process_langgraph_event(session_id, event)
+
+    except asyncio.CancelledError:
+        logger.info(f"[LangGraph] Workflow cancelled for session {session_id}")
+        raise  # Let finally block and _on_agent_done handle cleanup
 
     except Exception as e:
         import traceback

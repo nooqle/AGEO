@@ -50,6 +50,7 @@ export type BrowserStateType =
   | 'navigating'
   | 'checking_login'
   | 'waiting_for_login'
+  | 'waiting_for_modal'
   | 'logged_in'
   | 'enabling_search'
   | 'submitting'

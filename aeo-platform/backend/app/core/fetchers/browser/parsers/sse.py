@@ -16,24 +16,41 @@ from app.schemas.fetch import SearchReference
 logger = logging.getLogger(__name__)
 
 
-def _iter_sse_data(body: str):
-    """Yield parsed JSON objects from SSE `data:` lines.
+def _iter_sse_events(body: str):
+    """Yield (event_type, data_dict) tuples from SSE body.
 
-    Skips blank lines, `event:` lines, and `id:` lines.
-    Non-JSON data lines are silently skipped.
+    event_type is "" for default events, or the value from the preceding
+    'event:' line (e.g. "STREAM_ERROR", "SSE_HEARTBEAT").
+    This preserves error/rate_limit events that were previously invisible.
     """
+    current_event = ""
     for line in body.split("\n"):
         line = line.strip()
-        if not line or line.startswith("event:") or line.startswith("id:"):
+        if not line:
+            current_event = ""  # blank line resets SSE event type
+            continue
+        if line.startswith("event:"):
+            current_event = line[6:].strip()
+            continue
+        if line.startswith("id:"):
             continue
         if line.startswith("data:"):
             payload = line[5:].strip()
             if not payload or payload == "{}":
                 continue
             try:
-                yield json.loads(payload)
+                yield current_event, json.loads(payload)
             except (json.JSONDecodeError, ValueError):
                 continue
+
+
+def _iter_sse_data(body: str):
+    """Yield parsed JSON objects from SSE data: lines (legacy compat).
+
+    Wraps _iter_sse_events, discarding event type.
+    """
+    for _event_type, data in _iter_sse_events(body):
+        yield data
 
 
 def _domain_from_url(url: str) -> str:
@@ -62,32 +79,37 @@ class DeepSeekSSEParser(BaseResponseParser):
         text_parts: list[str] = []
         references: list[SearchReference] = []
         seen_urls: set[str] = set()
+        error_info = ""
+        error_type = ""
 
-        for data in _iter_sse_data(body):
+        for event_type, data in _iter_sse_events(body):
+            # Detect error events (uses base class classify_error)
+            err_info, err_type = self.classify_error(event_type, data)
+            if err_type:
+                error_info, error_type = err_info, err_type
+                logger.warning("[DeepSeekSSE] Error event: %s", error_info)
+                continue
+
             path = data.get("p", "")
             op = data.get("o", "")
             val = data.get("v")
 
             # --- Extract references ---
-            # From initial full response: v.response.fragments[].results[]
             if not path and isinstance(val, dict):
                 resp = val.get("response", {})
                 for frag in resp.get("fragments", []):
                     for result in frag.get("results", []):
                         self._add_ref(result, references, seen_urls)
 
-            # From patch: p ends with /results, v is array of result objects
             if path.endswith("/results") and isinstance(val, list):
                 for result in val:
                     if isinstance(result, dict) and result.get("url"):
                         self._add_ref(result, references, seen_urls)
 
             # --- Extract text content ---
-            # Patch appending text to fragment content
             if "content" in path and isinstance(val, str):
                 text_parts.append(val)
 
-            # APPEND new fragments — check if TEXT type with content
             if op == "APPEND" and isinstance(val, list):
                 for item in val:
                     if isinstance(item, dict):
@@ -99,6 +121,8 @@ class DeepSeekSSEParser(BaseResponseParser):
             answer_text="".join(text_parts),
             references=references,
             raw_body=body[:2000],
+            error=error_info,
+            error_type=error_type,
         )
         return self.validate(result)
 
@@ -147,10 +171,26 @@ class YuanbaoSSEParser(BaseResponseParser):
         references: list[SearchReference] = []
         seen_urls: set[str] = set()
         seen_types: set[str] = set()
+        error_info = ""
+        error_type = ""
 
-        for data in _iter_sse_data(body):
+        for event_type, data in _iter_sse_events(body):
+            # Detect error events (uses base class classify_error)
+            err_info, err_type = self.classify_error(event_type, data)
+            if err_type:
+                error_info, error_type = err_info, err_type
+                logger.warning("[YuanbaoSSE] Error event: %s", error_info)
+                continue
+
             msg_type = data.get("type", "")
             seen_types.add(msg_type or "(empty)")
+
+            # Check for error in data-level type field
+            if msg_type in ("error", "ERROR"):
+                error_info = f"data_error: {data}"
+                error_type = "server_error"
+                logger.warning("[YuanbaoSSE] Data-level error: %s", data)
+                continue
 
             # References from searchGuid events
             if msg_type == "searchGuid":
@@ -181,6 +221,8 @@ class YuanbaoSSEParser(BaseResponseParser):
             answer_text="".join(text_parts),
             references=references,
             raw_body=body[:2000],
+            error=error_info,
+            error_type=error_type,
         )
         return self.validate(result)
 
@@ -204,6 +246,20 @@ class DoubaoSSEParser(BaseResponseParser):
     - patch_op[] arrays carry incremental updates (CHUNK_DELTA events)
     """
 
+    def classify_error(self, event_type: str, data: dict) -> tuple[str, str]:
+        """Doubao-specific error classification with rate_limit/verify detection."""
+        if event_type not in self.ERROR_EVENT_TYPES:
+            return "", ""
+        error_code = data.get("error_code", "")
+        error_msg = data.get("error_message", "") or data.get("msg", "")
+        err_type_field = data.get("type", "")
+        error_info = f"{event_type}: code={error_code} msg={error_msg}"
+        if "rate_limit" in str(error_code) or "rate_limit" in error_msg.lower() or error_code == 710022004:
+            return error_info, "rate_limit"
+        if err_type_field == "verify" or "verify" in error_msg.lower():
+            return error_info, "verify"
+        return error_info, "server_error"
+
     def parse(self, body: str, url: str = "") -> ParsedResponse:
         # Primary: CHUNK_DELTA text tokens — the AI's streaming answer
         delta_parts: list[str] = []
@@ -212,8 +268,17 @@ class DoubaoSSEParser(BaseResponseParser):
         references: list[SearchReference] = []
         seen_urls: set[str] = set()
         seen_block_ids: set[str] = set()
+        error_info = ""
+        error_type = ""
 
-        for data in _iter_sse_data(body):
+        for event_type, data in _iter_sse_events(body):
+            # Detect error events (uses Doubao-specific classify_error override)
+            err_info, err_type = self.classify_error(event_type, data)
+            if err_type:
+                error_info, error_type = err_info, err_type
+                logger.warning("[DoubaoSSE] Error event: %s (type=%s)", error_info, error_type)
+                continue
+
             # CHUNK_DELTA events: simple {"text": "..."} tokens
             chunk_text = data.get("text")
             if isinstance(chunk_text, str) and chunk_text:
@@ -234,6 +299,8 @@ class DoubaoSSEParser(BaseResponseParser):
             answer_text=answer,
             references=references,
             raw_body=body[:2000],
+            error=error_info,
+            error_type=error_type,
         )
         return self.validate(result)
 
