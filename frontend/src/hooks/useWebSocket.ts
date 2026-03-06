@@ -1267,6 +1267,9 @@ export function useWebSocket(sessionId: string | null) {
     setActiveTask,
     updateActiveTaskProgress,
     setFollowUpSuggestions,
+    clearMessagesAfter,
+    removeMessage,
+    clearStageResults,
     replaceMessageId,
   ]);
 
@@ -1542,3 +1545,4 @@ export function useWebSocket(sessionId: string | null) {
     isConnected,
   };
 }
+

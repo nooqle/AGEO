@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 const STORAGE_KEY = 'specta-theme';
 type Theme = 'dark' | 'light';
@@ -12,17 +12,16 @@ function applyTheme(theme: Theme) {
   setTimeout(() => html.classList.remove('theme-transitioning'), 220);
 }
 
-export function useTheme() {
-  // Always start with 'dark' for SSR/hydration consistency.
-  // After mount, sync with the actual data-theme set by the FOUC prevention script.
-  const [theme, setTheme] = useState<Theme>('dark');
+function getInitialTheme(): Theme {
+  if (typeof document === 'undefined') {
+    return 'dark';
+  }
+  const current = document.documentElement.getAttribute('data-theme');
+  return current === 'light' || current === 'dark' ? current : 'dark';
+}
 
-  useEffect(() => {
-    const current = document.documentElement.getAttribute('data-theme');
-    if (current === 'light' || current === 'dark') {
-      setTheme(current);
-    }
-  }, []);
+export function useTheme() {
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
