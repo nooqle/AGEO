@@ -154,15 +154,19 @@ def generate_a5_summary(
     if not metrics and not report:
         return "分析报告生成完成，但未获取到分析数据。"
 
-    # Get BWVS index
-    bwvs_index = 0.0
-    if metrics:
-        bwvs_index = metrics.get("bwvs_index", 0)
+    summary_metrics = (report.get("summary_metrics", {}) if report else {}) or (metrics.get("summary_metrics", {}) if metrics else {})
 
     # Get mention rate
     mention_rate = 0.0
-    if metrics:
-        mention_rate = metrics.get("mention_rate", 0) * 100
+    if summary_metrics:
+        mention_rate = float(summary_metrics.get("brand_mention_rate", 0) or 0) * 100
+    elif metrics:
+        mention_rate = float(metrics.get("mention_rate", 0) or 0) * 100
+
+    official_citation_rate = float(summary_metrics.get("official_citation_rate", 0) or 0) * 100
+    scenario_hit_count = summary_metrics.get("scenario_hit_count")
+    scenario_total = summary_metrics.get("scenario_total")
+    missing_high_value = summary_metrics.get("missing_high_value_scenario_count")
 
     # Get key findings count
     key_findings_count = 0
@@ -170,11 +174,20 @@ def generate_a5_summary(
         key_findings = report.get("key_findings", [])
         key_findings_count = len(key_findings)
 
-    summary = f"分析报告已生成，BWVS指数: {bwvs_index:.1f}"
+    summary = "分析报告已生成"
+    details = []
     if mention_rate > 0:
-        summary += f"，提及率: {mention_rate:.1f}%"
+        details.append(f"品牌提及率 {mention_rate:.1f}%")
+    if official_citation_rate > 0:
+        details.append(f"官网引用率 {official_citation_rate:.1f}%")
+    if scenario_hit_count is not None and scenario_total is not None:
+        details.append(f"已覆盖 {scenario_hit_count}/{scenario_total} 个场景")
+    if missing_high_value is not None:
+        details.append(f"缺席高价值场景 {missing_high_value} 个")
     if key_findings_count > 0:
-        summary += f"，{key_findings_count}项发现"
+        details.append(f"{key_findings_count}项发现")
+    if details:
+        summary += "，" + "，".join(details)
     summary += "。完整报告见右侧。"
 
     return summary

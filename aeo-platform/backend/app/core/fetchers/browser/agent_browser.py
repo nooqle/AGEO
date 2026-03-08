@@ -181,6 +181,10 @@ class AgentBrowserClient:
         """
         return await self.run_command("eval", script)
 
+    async def bring_to_front(self) -> dict[str, Any]:
+        """Best-effort no-op for CLI browser client."""
+        return {"success": True}
+
     async def close(self) -> dict[str, Any]:
         """Close the browser.
 

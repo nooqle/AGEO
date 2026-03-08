@@ -478,7 +478,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
     await send_reply_event(session_id, "", is_complete=True)
 
-    mode_label = "完整采集（全浏览器）" if fetch_mode == "full" else "快速采集（API优先）"
+    mode_label = "完整采集（4平台全浏览器）" if fetch_mode == "full" else "快速采集（豆包、混元、Kimi API + DeepSeek 浏览器）"
     await send_progress_event(
         session_id=session_id,
         step="A4",
@@ -622,7 +622,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     step="A4",
                     step_name="AI答案抓取",
                     progress=0.57,
-                    message=f"Phase 1: {total} 个问题 × API平台，批量并行抓取中...",
+                    message=f"Phase 1: {total} 个问题 × 豆包、混元、Kimi API，批量并行抓取中...",
                 )
 
                 api_tasks = []
@@ -702,7 +702,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     step="A4",
                     step_name="AI答案抓取",
                     progress=0.72,
-                    message=f"Phase 1 完成: API平台 {api_success_total}/{len(api_tasks)} 成功。开始Browser平台...",
+                    message=f"Phase 1 完成: 豆包、混元、Kimi API {api_success_total}/{len(api_tasks)} 成功。开始 DeepSeek 浏览器采集...",
                 )
             else:
                 # full mode: skip API entirely
@@ -712,7 +712,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     step="A4",
                     step_name="AI答案抓取",
                     progress=0.57,
-                    message="完整采集模式：跳过API，直接启动4平台浏览器采集...",
+                    message="完整采集模式：跳过 API，直接启动豆包、混元、Kimi、DeepSeek 4 平台浏览器采集...",
                 )
 
             # =============================================================
@@ -1522,6 +1522,53 @@ async def _fetch_from_browser(
             "duration": duration,
         }
 
+    # -- Failure path: try platform-specific recovery first --
+    if not _is_retry and error_type in {"rate_limit", "verify"}:
+        if error_type == "rate_limit" and platform == "doubao" and hasattr(handler, "recover_after_rate_limit"):
+            logger.info("[A4] %s rate limited, attempting one automatic recovery", platform_name)
+            if session_id:
+                await send_browser_state_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state="waiting_response",
+                    message=f"{platform_name} 触发限流，正在冷却后自动重试",
+                    progress=0.7,
+                    requires_action=False,
+                )
+            recovered = await handler.recover_after_rate_limit()
+            if recovered:
+                return await _fetch_from_browser(
+                    handler, question, brand_profile,
+                    platform, platform_name, browser_state,
+                    session_id=session_id, _is_retry=True,
+                )
+
+        if error_type == "verify" and platform == "doubao" and hasattr(handler, "recover_after_verify"):
+            logger.info("[A4] %s verify challenge detected, waiting for user to clear it", platform_name)
+            if session_id:
+                await send_browser_state_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state="waiting_for_login",
+                    message=f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
+                    progress=0.35,
+                    requires_action=True,
+                    action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证",
+                )
+                verify_msg = (
+                    f"**{platform_name}** 触发了安全验证\n\n"
+                    f"请在浏览器窗口中完成验证，完成后系统会自动重试当前问题。"
+                )
+                await send_reply_event(session_id, verify_msg, is_delta=True, is_new_round=True)
+                await send_reply_event(session_id, "", is_complete=True)
+            recovered = await handler.recover_after_verify()
+            if recovered:
+                return await _fetch_from_browser(
+                    handler, question, brand_profile,
+                    platform, platform_name, browser_state,
+                    session_id=session_id, _is_retry=True,
+                )
+
     # -- Failure path: diagnose if a blocking modal caused the failure --
     if not _is_retry:
         try:
@@ -1548,9 +1595,15 @@ async def _fetch_from_browser(
                 await send_reply_event(session_id, "", is_complete=True)
 
             # Open headed browser for user to handle the modal
-            await handler.client.close()
-            await handler.client.open(handler.URL, headed=True)
-            await asyncio.sleep(3)
+            opened = await handler._open_headed_for_user_action(handler.URL)
+            if not opened:
+                return {
+                    "platform": platform, "platform_name": platform_name,
+                    "fetch_method": "browser", "success": False,
+                    "error": "?????????????",
+                    "error_type": "modal_reopen_failed",
+                    "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
+                }
 
             modal_cleared = await handler._wait_for_modal_clear(timeout=300)
             if modal_cleared:

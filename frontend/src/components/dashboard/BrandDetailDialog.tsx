@@ -71,9 +71,9 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
     if (!entity || isCreating) return;
     setIsCreating(true);
     try {
-      const session = await api.createSession(entity.id);
+      const session = await api.getSessionByEntity(entity.id).catch(() => api.createSession(entity.id));
       onClose();
-      router.push(`/chat/${session.id}`);
+      router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity.name)}`);
     } catch {
       // silently handle
     } finally {

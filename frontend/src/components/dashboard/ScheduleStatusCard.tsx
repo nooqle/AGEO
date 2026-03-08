@@ -298,7 +298,7 @@ export function ScheduleStatusCard({
             {/* Alert threshold */}
             <div>
               <label className="text-xs font-medium mb-2 block" style={{ color: 'var(--text-tertiary)' }}>
-                告警阈值 (BWVS 变化点数)
+                告警阈值（监测变化）
               </label>
               <input
                 type="number"
@@ -407,3 +407,4 @@ export function ScheduleStatusCard({
     </div>
   );
 }
+

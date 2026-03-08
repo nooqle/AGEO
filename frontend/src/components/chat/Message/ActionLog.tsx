@@ -36,6 +36,7 @@ export function ActionLog({ logs, isExpanded: defaultExpanded = false }: ActionL
   const completedCount = logs.filter((l) => l.isComplete).length;
   const isAllComplete = completedCount === logs.length;
   const latestLog = logs[logs.length - 1];
+  const latestPendingLog = [...logs].reverse().find((log) => !log.isComplete);
 
   return (
     <motion.div
@@ -57,7 +58,7 @@ export function ActionLog({ logs, isExpanded: defaultExpanded = false }: ActionL
         <span className="text-xs text-[var(--text-tertiary)] flex-1 truncate max-w-xs group-hover:text-[var(--text-secondary)] transition-colors">
           {isAllComplete
             ? `执行了 ${logs.length} 个步骤`
-            : (latestLog?.message || '执行中...')}
+            : (latestPendingLog?.message || latestLog?.message || '执行中...')}
         </span>
 
         <motion.div
@@ -112,3 +113,4 @@ export function ActionLog({ logs, isExpanded: defaultExpanded = false }: ActionL
     </motion.div>
   );
 }
+

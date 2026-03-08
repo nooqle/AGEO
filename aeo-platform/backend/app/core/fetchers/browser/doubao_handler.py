@@ -131,8 +131,10 @@ class DoubaoHandler(BaseBrowserHandler):
                     progress=0.35, requires_action=True,
                     action_hint="请在弹出的浏览器窗口中完成豆包登录",
                 )
-                await self.client.close()
-                await self.client.open(self.URL, headed=True)
+                opened = await self._open_headed_for_user_action(self.URL)
+                if not opened:
+                    yield self._create_event(BrowserState.ERROR, "???????????????", progress=0)
+                    return
                 # Wait for login: check for chat URL + textarea ready
                 login_success = await self._wait_for_doubao_login(timeout=300)
                 if not login_success:
@@ -194,9 +196,15 @@ class DoubaoHandler(BaseBrowserHandler):
                 elif parsed and parsed.error_type:
                     # SSE error detected — skip DOM fallback, report specific error
                     logger.warning("[Doubao] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
+                    if parsed.error_type == "rate_limit":
+                        message = "豆包触发平台限流，请稍后重试，或降低并发后再采集。"
+                    elif parsed.error_type == "verify":
+                        message = "豆包触发安全验证，请在浏览器窗口完成验证后重新采集。"
+                    else:
+                        message = f"豆包返回错误: {parsed.error}"
                     yield self._create_event(
                         BrowserState.ERROR,
-                        f"豆包返回错误: {parsed.error}",
+                        message,
                         progress=0,
                         error_type=parsed.error_type,
                     )
@@ -244,8 +252,29 @@ class DoubaoHandler(BaseBrowserHandler):
 
     # ------------------------------------------------------------------ Doubao-specific helpers
 
-    async def _wait_for_doubao_login(self, timeout: int = 300) -> bool:
-        """Wait until Doubao login completes (URL contains /chat + textarea ready)."""
+    async def recover_after_rate_limit(self, cooldown_seconds: int = 35) -> bool:
+        """Cooldown and reopen chat page after Doubao rate limiting."""
+        logger.info("[Doubao] Cooling down for %ss before retry", cooldown_seconds)
+        await asyncio.sleep(cooldown_seconds)
+        await self.client.close()
+        open_result = await self.client.open(self.URL, headed=self.headed)
+        if not open_result.get("success"):
+            logger.warning("[Doubao] Failed to reopen after rate limit: %s", open_result.get("error"))
+            return False
+        await asyncio.sleep(3)
+        return await self._wait_for_doubao_chat_ready(timeout=45)
+
+    async def recover_after_verify(self, timeout: int = 300) -> bool:
+        """Open headed browser and wait for user to clear Doubao verify challenge."""
+        logger.info("[Doubao] Opening headed browser for verify recovery")
+        opened = await self._open_headed_for_user_action(self.URL)
+        if not opened:
+            logger.warning("[Doubao] Failed to open headed browser for verify")
+            return False
+        return await self._wait_for_doubao_chat_ready(timeout=timeout)
+
+    async def _wait_for_doubao_chat_ready(self, timeout: int = 300) -> bool:
+        """Wait until Doubao returns to a usable chat state."""
         elapsed = 0.0
         while elapsed < timeout:
             if self.client.page is not None:
@@ -256,13 +285,20 @@ class DoubaoHandler(BaseBrowserHandler):
                         if (!textarea) return false;
                         const loginBtn = document.querySelector('[data-testid="to_login_button"], [class*="login-btn"]');
                         if (loginBtn && loginBtn.offsetParent !== null) return false;
+                        const verifyText = document.body?.innerText || '';
+                        if (verifyText.includes('验证') || verifyText.toLowerCase().includes('verify')) return false;
                         return true;
                     }""")
                     if ready:
-                        logger.info("[Doubao] Login confirmed (URL+textarea+no_login_btn)")
+                        logger.info("[Doubao] Chat page ready after recovery")
                         return True
                 except Exception:
                     pass
             await asyncio.sleep(2)
             elapsed += 2
+        logger.warning("[Doubao] Chat page was not ready within %ss", timeout)
         return False
+
+    async def _wait_for_doubao_login(self, timeout: int = 300) -> bool:
+        """Wait until Doubao login completes (URL contains /chat + textarea ready)."""
+        return await self._wait_for_doubao_chat_ready(timeout=timeout)

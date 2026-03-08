@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useEffect, useState, useCallback } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useConversationStore } from '@/stores/conversationStore';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
@@ -16,13 +16,12 @@ import { DEFAULT_EXAMPLE_BRANDS, ExampleBrand } from '@/config/brands';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { DEFAULT_FOLLOWUPS } from '@/types/task';
-import type { CanvasContent, CanvasContentType, CanvasContentDataMap } from '@/types/canvas';
+import type { CanvasContent, CanvasContentDataMap, CanvasContentType } from '@/types/canvas';
 import type { ContextTag } from '@/stores/contextStore';
-import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
 import type { StageResult } from '@/types/snapshot';
-import type { ActionLogEntry } from '@/types/message';
+import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
+import { buildOutputCardsFromApiMessage, rebuildPersistedLayers, VALID_OUTPUT_TYPES } from '@/adapters/chatMessage';
 
-const VALID_OUTPUT_TYPES: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
 
 interface ChatPanelProps {
   sessionId: string;
@@ -33,10 +32,13 @@ interface ChatPanelProps {
 export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const recalledContentRef = useRef<string | null>(null);
+  const autoScrollEnabledRef = useRef(true);
   const [inputValue, setInputValue] = useState('');
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const router = useRouter();
   const searchParams = useSearchParams();
   const autoSentRef = useRef(false);
+  const [isAutoStartingBrand, setIsAutoStartingBrand] = useState(Boolean(searchParams.get('brand')));
   const safeToLeaveShownRef = useRef(false);
   const [showSafeToLeave, setShowSafeToLeave] = useState(false);
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
@@ -82,18 +84,21 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     useCanvasStore.getState().clearContents();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-scroll to bottom
-  useEffect(() => {
-    if (scrollRef.current) {
-      const { scrollHeight, clientHeight, scrollTop } = scrollRef.current;
-      const isNearBottom = scrollHeight - clientHeight - scrollTop < 100;
+  const updateAutoScrollState = useCallback(() => {
+    const container = scrollRef.current;
+    if (!container) return;
 
-      if (isNearBottom) {
-        scrollRef.current.scrollTo({
-          top: scrollRef.current.scrollHeight,
-          behavior: 'smooth',
-        });
-      }
+    const distanceFromBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
+    autoScrollEnabledRef.current = distanceFromBottom < 80;
+  }, []);
+
+  // Auto-scroll only when the user is still following the latest message.
+  useEffect(() => {
+    if (scrollRef.current && autoScrollEnabledRef.current) {
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: isAgentExecuting ? 'auto' : 'smooth',
+      });
     }
   }, [messages, isAgentExecuting, stageResults, followUpSuggestions]);
 
@@ -172,49 +177,13 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         // Convert API messages to store format, reconstructing outputCards and layers from metadata
         for (const msg of msgs) {
           const role = msg.role === 'agent' || msg.role === 'assistant' ? 'agent' : 'user';
-          const rawOutputType = msg.output_type || '';
-          const mappedOutputType = rawOutputType.startsWith('report') ? 'report' : rawOutputType;
-          const outputType = mappedOutputType && VALID_OUTPUT_TYPES.includes(mappedOutputType as CanvasContentType)
-            ? (mappedOutputType as CanvasContentType)
-            : null;
-          const parsed = msg.output_data ?? null;
-          const outputCards = outputType && parsed ? [{
-            id: `${sessionId}_${msg.output_type}`,
-            type: outputType,
-            title: (parsed as Record<string, unknown>)?.headline as string || (parsed as Record<string, unknown>)?.title as string || msg.content || '分析结果',
-            preview: { description: (parsed as Record<string, unknown>)?.executive_summary as string || (parsed as Record<string, unknown>)?.description as string },
-          }] : undefined;
+          const outputCards = buildOutputCardsFromApiMessage(msg, sessionId);
 
-          // Reconstruct layers from persisted metadata
-          const meta = msg.metadata as Record<string, unknown> | null;
-          const persistedLayers = meta?.layers as Record<string, unknown> | undefined;
-          const layers = persistedLayers ? {
-            thought: (persistedLayers.thought as string) || undefined,
-            planText: (persistedLayers.planText as string) || undefined,
-            actionLogs: Array.isArray(persistedLayers.actionLogs)
-              ? (persistedLayers.actionLogs as Array<Record<string, unknown>>).map((log, i) => ({
-                  id: `log_${i}`,
-                  actionType: ((log.action_type as string) || 'generic') as ActionLogEntry['actionType'],
-                  message: (log.message as string) || '',
-                  step: (log.step as string) || '',
-                  timestamp: (log.timestamp as string) || '',
-                  isComplete: Boolean(log.is_complete),
-                }))
-              : [],
-          } : undefined;
-
-          // Reconstruct stage results from persisted metadata
-          const persistedStageResults = persistedLayers?.stageResults as Array<Record<string, unknown>> | undefined;
-          if (persistedStageResults && Array.isArray(persistedStageResults)) {
-            for (const sr of persistedStageResults) {
-              addStageResult({
-                stage: (sr.stage as string) || '',
-                stageName: (sr.stage_name as string) || '',
-                resultType: (sr.result_type as StageResult['resultType']) || 'brand_profile',
-                data: (sr.data as Record<string, unknown>) || {},
-                timestamp: (sr.timestamp as string) || '',
-              });
-            }
+          // Reconstruct layers and stage results from persisted metadata
+          const reconstructed = rebuildPersistedLayers(msg.metadata as Record<string, unknown> | null);
+          const layers = reconstructed.layers;
+          for (const sr of reconstructed.stageResults) {
+            addStageResult(sr);
           }
 
           addMessage({
@@ -245,12 +214,11 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       try {
         const outputs = await api.getOutputs(sessionId);
         if (cancelled || !outputs || outputs.length === 0) return;
-        const validTypes: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
         for (const output of outputs) {
           // Map report_baseline/report_persona to 'report' Canvas type (same as useWebSocket)
           const rawType = typeof output.type === 'string' ? output.type : 'report';
           const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
-          const outputType: CanvasContentType = validTypes.includes(canvasTypeStr as CanvasContentType)
+          const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(canvasTypeStr as CanvasContentType)
             ? (canvasTypeStr as CanvasContentType)
             : 'report';
           const category = typeof output.category === 'string' ? output.category as 'baseline' | 'scenario' : undefined;
@@ -369,6 +337,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       content: content.trim(),
     });
 
+    autoScrollEnabledRef.current = true;
+
     // Start execution state
     startExecution();
 
@@ -379,15 +349,52 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   // Auto-send brand name when navigating from Dashboard with ?brand= param
   useEffect(() => {
     const brand = searchParams.get('brand');
-    if (brand && !autoSentRef.current && messages.length === 0 && isConnected && !isLoadingHistory) {
-      autoSentRef.current = true;
-      // Small delay to ensure WebSocket is fully ready
-      const timer = setTimeout(() => {
-        handleSendMessage(brand);
-      }, 500);
-      return () => clearTimeout(timer);
+
+    if (!brand) {
+      setIsAutoStartingBrand(false);
+      return;
     }
-  }, [searchParams, messages.length, isConnected, isLoadingHistory, handleSendMessage]);
+
+    if (messages.length > 0) {
+      setIsAutoStartingBrand(false);
+      if (autoSentRef.current) {
+        router.replace(`/chat/${sessionId}`);
+      }
+      return;
+    }
+
+    if (isLoadingHistory) {
+      setIsAutoStartingBrand(true);
+      return;
+    }
+
+    if (autoSentRef.current) {
+      return;
+    }
+
+    setIsAutoStartingBrand(true);
+
+    if (!isConnected) {
+      const fallbackTimer = setTimeout(() => {
+        if (!autoSentRef.current) {
+          setIsAutoStartingBrand(false);
+          setInputValue(brand);
+          router.replace(`/chat/${sessionId}`);
+          toast.error('自动启动分析失败，请点击发送后重试');
+        }
+      }, 5000);
+      return () => clearTimeout(fallbackTimer);
+    }
+
+    autoSentRef.current = true;
+    const timer = setTimeout(() => {
+      handleSendMessage(brand);
+      setIsAutoStartingBrand(false);
+      router.replace(`/chat/${sessionId}`);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchParams, messages.length, isConnected, isLoadingHistory, handleSendMessage, router, sessionId]);
 
   // Handle stopping execution
   const handleStopExecution = useCallback(() => {
@@ -497,7 +504,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   // Determine if we should show the empty state with example brands
   // Skip welcome screen when: loading history, has ?brand= param (auto-starting), or already executing
   const hasBrandParam = !!searchParams.get('brand');
-  const showExampleBrands = messages.length === 0 && !isAgentExecuting && !isLoadingHistory && !hasBrandParam;
+  const showExampleBrands = messages.length === 0 && !isAgentExecuting && !isLoadingHistory && !isAutoStartingBrand && !hasBrandParam;
 
   const inputDisabled = Boolean(!isConnected);
 
@@ -555,6 +562,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto scroll-smooth"
+        onScroll={updateAutoScrollState}
       >
         <div className="max-w-3xl mx-auto px-4 py-6">
           {/* Cycle 3: Reconnection banner */}
@@ -568,7 +576,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           )}
 
           {/* Loading state when entering from brand card */}
-          {messages.length === 0 && (isLoadingHistory || hasBrandParam) && !showExampleBrands && (
+          {messages.length === 0 && (isLoadingHistory || isAutoStartingBrand) && !showExampleBrands && (
             <div className="flex flex-col items-center justify-center py-20">
               <div
                 className="animate-spin rounded-full h-8 w-8 border-2 mb-4"

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Message } from '@/types/message';
 import { PlanCard } from './PlanCard';
@@ -23,7 +23,6 @@ interface AgentMessageProps {
 }
 
 export function AgentMessage({ message, onConfirmation, isStreaming = false }: AgentMessageProps) {
-  const messageEndRef = useRef<HTMLDivElement>(null);
   const [showThought, setShowThought] = useState(false);
 
   const mainContent = message.content || '';
@@ -40,13 +39,6 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
     || (message.outputCards && message.outputCards.length > 0)
     || (message.attachments && message.attachments.length > 0)
     || isStreaming;
-
-  // Auto-scroll to bottom during streaming
-  useEffect(() => {
-    if (isStreaming && messageEndRef.current) {
-      messageEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
-  }, [message.content, isStreaming]);
 
   if (!hasVisibleContent) return null;
 
@@ -255,7 +247,6 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           </div>
         )}
 
-        <div ref={messageEndRef} />
       </div>
     </motion.div>
   );

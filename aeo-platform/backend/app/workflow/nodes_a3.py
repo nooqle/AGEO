@@ -83,7 +83,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
 
     await send_progress_event(
         session_id=session_id,
-        step="A3",
+        step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
         message="品牌全景模式：正在通过 LLM 生成问题",
@@ -106,7 +106,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            step="A3",
+            step="question_simulation",
             step_name="问题模拟生成",
             progress_start=0.5,
             progress_end=0.85,
@@ -164,7 +164,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
 
         await send_progress_event(
             session_id=session_id,
-            step="A3",
+            step="question_simulation",
             step_name="问题模拟生成",
             progress=1.0,
             message=f"品牌全景模式：生成 {question_count} 个问题",
@@ -174,7 +174,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
         detailed_response = f"已为「{brand_name}」生成 {question_count} 个模拟问题，详见右侧问题列表。"
 
         await send_action_log_event(
-            session_id, "agent_summary", detailed_response, step="A3", is_complete=True
+            session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
         )
 
         await save_and_send_artifact(
@@ -231,7 +231,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
         await send_error_event(session_id, "A3", str(e), recoverable=True)
         await send_progress_event(
             session_id=session_id,
-            step="A3",
+            step="question_simulation",
             step_name="问题模拟生成",
             progress=1.0,
             message=f"问题生成失败: {str(e)[:100]}",
@@ -317,7 +317,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 
     await send_progress_event(
         session_id=session_id,
-        step="A3",
+        step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
         message=f"画像聚焦模式：为 {len(selected_personas)} 个画像生成问题",
@@ -343,7 +343,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            step="A3",
+            step="question_simulation",
             step_name="问题模拟生成",
             progress_start=0.5,
             progress_end=0.85,
@@ -416,7 +416,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 
         await send_progress_event(
             session_id=session_id,
-            step="A3",
+            step="question_simulation",
             step_name="问题模拟生成",
             progress=1.0,
             message=f"画像聚焦模式：生成 {question_count} 个问题",
@@ -426,7 +426,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
         detailed_response = f"已基于「{', '.join(persona_names)}」生成 {question_count} 个聚焦问题，详见右侧问题列表。"
 
         await send_action_log_event(
-            session_id, "agent_summary", detailed_response, step="A3", is_complete=True
+            session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
         )
 
         await save_and_send_artifact(
@@ -491,7 +491,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             await send_error_event(session_id, "A3", str(e), recoverable=True)
             await send_progress_event(
                 session_id=session_id,
-                step="A3",
+                step="question_simulation",
                 step_name="问题模拟生成",
                 progress=1.0,
                 message=f"问题生成失败: {str(e)[:100]}",
@@ -792,7 +792,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
 
     await send_progress_event(
         session_id=session_id,
-        step="A3",
+        step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
         message="基线全景模式：正在生成行业全景问题",
@@ -816,7 +816,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            step="A3",
+            step="question_simulation",
             step_name="问题模拟生成",
             progress_start=0.5,
             progress_end=0.85,
@@ -882,7 +882,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
 
         await send_progress_event(
             session_id=session_id,
-            step="A3",
+            step="question_simulation",
             step_name="问题模拟生成",
             progress=1.0,
             message=f"基线全景模式：生成 {question_count} 个行业全景问题",
@@ -895,7 +895,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         )
 
         await send_action_log_event(
-            session_id, "agent_summary", detailed_response, step="A3", is_complete=True
+            session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
         )
 
         # Save and send artifact to Canvas
@@ -964,7 +964,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             await send_error_event(session_id, "A3", str(e), recoverable=True)
             await send_progress_event(
                 session_id=session_id,
-                step="A3",
+                step="question_simulation",
                 step_name="问题模拟生成",
                 progress=1.0,
                 message=f"问题生成失败: {str(e)[:100]}",
@@ -1092,3 +1092,4 @@ def _validate_baseline_questions(
             "(%d/%d). Proceeding anyway.",
             brand_ratio * 100, brand_direct_count, total,
         )
+

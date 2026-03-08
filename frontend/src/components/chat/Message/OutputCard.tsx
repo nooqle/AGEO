@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { RiFileTextLine, RiBarChartBoxLine, RiTableLine, RiGroupLine, RiArrowRightLine } from '@remixicon/react';
 import { OutputCard as OutputCardType } from '@/types/message';
@@ -105,11 +105,18 @@ const typeConfig = {
 };
 
 export function OutputCard({ card }: OutputCardProps) {
-  const { openCanvas } = useCanvasStore();
+  const { openCanvas, setActiveContentById, contents } = useCanvasStore();
   const config = typeConfig[card.type as keyof typeof typeConfig] || typeConfig.report;
   const Icon = config.icon;
 
   const handleClick = () => {
+    const existing = contents.find((content) => content.id === card.id);
+    if (existing) {
+      setActiveContentById(existing.id);
+      openCanvas();
+      return;
+    }
+
     const previewData = {
       description: card.preview.description,
       metrics: card.preview.metrics,
@@ -157,7 +164,6 @@ export function OutputCard({ card }: OutputCardProps) {
         <RiArrowRightLine className="w-4 h-4 text-[var(--text-tertiary)] group-hover:translate-x-1 transition-transform" />
       </div>
 
-      {/* 预览指标 */}
       {card.preview?.metrics && (
         <div className="grid grid-cols-3 gap-2">
           {Object.entries(card.preview.metrics).slice(0, 3).map(([key, value]) => (
@@ -169,7 +175,6 @@ export function OutputCard({ card }: OutputCardProps) {
         </div>
       )}
 
-      {/* 描述 */}
       {card.preview?.description && (
         <p className="text-sm text-[var(--text-secondary)] mt-2 line-clamp-2">
           {card.preview.description}
@@ -178,3 +183,5 @@ export function OutputCard({ card }: OutputCardProps) {
     </button>
   );
 }
+
+

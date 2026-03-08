@@ -251,12 +251,14 @@ class DoubaoSSEParser(BaseResponseParser):
         if event_type not in self.ERROR_EVENT_TYPES:
             return "", ""
         error_code = data.get("error_code", "")
-        error_msg = data.get("error_message", "") or data.get("msg", "")
-        err_type_field = data.get("type", "")
+        error_msg = data.get("error_message", "") or data.get("error_msg", "") or data.get("msg", "")
+        decision = data.get("decision", {}) if isinstance(data.get("decision"), dict) else {}
+        err_type_field = data.get("type", "") or decision.get("type", "")
+        normalized_error_msg = str(error_msg or "").lower()
         error_info = f"{event_type}: code={error_code} msg={error_msg}"
-        if "rate_limit" in str(error_code) or "rate_limit" in error_msg.lower() or error_code == 710022004:
+        if "rate limit" in normalized_error_msg or "rate_limit" in normalized_error_msg or error_code == 710022004:
             return error_info, "rate_limit"
-        if err_type_field == "verify" or "verify" in error_msg.lower():
+        if err_type_field == "verify" or "verify" in normalized_error_msg:
             return error_info, "verify"
         return error_info, "server_error"
 

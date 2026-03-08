@@ -241,7 +241,7 @@ async def a1_brand_node(state: AgentState) -> Command:
     # Send progress event
     await send_progress_event(
         session_id=session_id,
-        step="A1",
+        step="brand_analysis",
         step_name="品牌信息采集",
         progress=0.15,
         message=f"开始分析品牌: {brand_name}",
@@ -306,7 +306,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            step="A1",
+            step="brand_analysis",
             step_name="品牌信息采集",
             progress_start=0.35,
             progress_end=0.8,
@@ -378,7 +378,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": retry_prompt},
                     ],
-                    step="A1",
+                    step="brand_analysis",
                     step_name="品牌信息采集(重试)",
                     progress_start=0.8,
                     progress_end=0.95,
@@ -424,7 +424,7 @@ async def a1_brand_node(state: AgentState) -> Command:
         # Send completion event
         await send_progress_event(
             session_id=session_id,
-            step="A1",
+            step="brand_analysis",
             step_name="品牌信息采集",
             progress=1.0,
             message=f"成功分析品牌 '{brand_name}'，识别出 {len(data.get('competitors', []))} 个竞品",
@@ -438,7 +438,7 @@ async def a1_brand_node(state: AgentState) -> Command:
         )
 
         await send_action_log_event(
-            session_id, "agent_summary", summary, step="A1", is_complete=True
+            session_id, "agent_summary", summary, step="brand_analysis", is_complete=True
         )
 
         # Save and send brand profile artifact to Canvas
@@ -725,7 +725,7 @@ async def a2_persona_node(state: AgentState) -> Command:
 
     await send_progress_event(
         session_id=session_id,
-        step="A2",
+        step="persona_generation",
         step_name="用户画像生成",
         progress=0.25,
         message=f"开始生成用户画像: {brand_profile.get('brand_name', '')}",
@@ -753,7 +753,7 @@ async def a2_persona_node(state: AgentState) -> Command:
             logger.warning("[A2] Attempt 1 failed, retrying with minimal prompt...")
             await send_progress_event(
                 session_id=session_id,
-                step="A2",
+                step="persona_generation",
                 step_name="用户画像生成",
                 progress=0.5,
                 message="首次生成失败，正在重试...",
@@ -797,7 +797,7 @@ async def a2_persona_node(state: AgentState) -> Command:
 
         await send_progress_event(
             session_id=session_id,
-            step="A2",
+            step="persona_generation",
             step_name="用户画像生成",
             progress=1.0,
             message=f"成功生成 {persona_count} 个用户画像",
@@ -808,7 +808,7 @@ async def a2_persona_node(state: AgentState) -> Command:
             session_id,
             "agent_complete",
             f"用户画像生成完成，共 {persona_count} 个画像",
-            step="A2",
+            step="persona_generation",
             is_complete=True,
         )
 
@@ -944,7 +944,7 @@ async def _a2_call_and_parse(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            step="A2",
+            step="persona_generation",
             step_name="用户画像生成",
             progress_start=progress_start,
             progress_end=progress_end,
@@ -1195,3 +1195,4 @@ def _build_a2_user_content(brand_profile: dict, competitors: list) -> str:
 - 市场竞争格局：{len(competitors)} 个主要竞品
 """
     return content
+

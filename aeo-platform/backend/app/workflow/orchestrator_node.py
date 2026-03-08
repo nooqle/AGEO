@@ -107,7 +107,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "enum": ["fast", "full"],
                     "description": (
                         "采集模式（必须由用户选择）：\n"
-                        "fast=通过API调用豆包和混元+DeepSeek浏览器采集，约3-5分钟，快速建立品牌AI表现的初步观感，但API返回内容与真实用户网页端体验可能存在差异；\n"
+                        "fast=通过API调用豆包、混元和Kimi，并通过浏览器采集DeepSeek，约3-5分钟，快速建立品牌AI表现的初步观感，但API返回内容与真实用户网页端体验可能存在差异；\n"
                         "full=4平台全部通过浏览器模拟真实用户访问，约8-15分钟，完全还原用户真实体验，数据最准确，是深度AEO分析的最佳选择"
                     ),
                 },
@@ -128,7 +128,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
     {
         "name": "data_analytics",
         "description": (
-            "基于抓取结果计算品牌可见度指标（BWVS）并生成分析报告。"
+            "基于抓取结果生成品牌战况报告。"
             "需要先完成答案抓取。这是分析流程的最后一步。"
         ),
         "parameters": {
@@ -158,12 +158,12 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
             "【重要】不要直接调用此工具。你必须先用自然语言向用户详细说明定期监测的含义和可配置参数，然后调用 ask_user 让用户确认。"
             "说明内容必须包括：1) 定期监测的作用——系统会按设定频率自动重新运行品牌分析流程，生成最新报告并与历史数据对比；"
             "2) 可配置参数及默认值——监测频率（每天/每周/双周/每月，推荐每周）、执行时间（默认上午11:00）、"
-            "告警阈值（当BWVS指数变化超过此值时通知用户，默认10分）；"
+            "告警阈值（当品牌提及率、官网引用率或高风险场景数量出现明显变化时通知用户，默认 10）；"
             "3) 推荐配置——给出针对该品牌的推荐配置及理由。"
             "示例消息：'定期监测可以帮助您持续跟踪品牌在AI搜索中的表现变化。我建议为「小米」设置以下监测计划：\n\n"
             "- **监测频率**：每周（适合快速变化的科技行业）\n"
             "- **执行时间**：每周一上午 11:00\n"
-            "- **告警阈值**：BWVS 变化超过 10 分时通知您\n\n"
+            "- **告警阈值**：当品牌提及率、官网引用率或高风险场景变化超过设定阈值时通知您\n\n"
             "如果这个方案可以，请点击确认；或者告诉我您想调整哪些参数。'"
         ),
         "parameters": {
@@ -180,7 +180,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 },
                 "alert_threshold": {
                     "type": "number",
-                    "description": "BWVS 变化告警阈值（绝对值），默认 10.0",
+                    "description": "监测变化告警阈值（用于提及率、官网引用率、高风险场景等变化提醒），默认 10.0",
                 },
             },
         },
@@ -352,11 +352,11 @@ def _build_context_summary(state: AgentState) -> str:
 
     if state.get("metrics"):
         m = state["metrics"]
-        parts.append(f"- BWVS分数: {m.get('bwvs_index', 'N/A')}")
+        parts.append(f"- 品牌提及率: {m.get('mention_rate', 'N/A')}")
 
     if state.get("baseline_metrics"):
         bm = state["baseline_metrics"]
-        parts.append(f"- 基线 BWVS: {bm.get('bwvs_index', 'N/A')}")
+        parts.append(f"- 基线提及率: {bm.get('mention_rate', 'N/A')}")
         parts.append("- 基线报告: 已完成")
 
     if state.get("entity_id"):
@@ -399,18 +399,15 @@ DIRECTIVE_A1_HAS_BASELINE = (
 )
 
 DIRECTIVE_A1_NO_BASELINE = (
-    "【强制操作】该品牌尚无基线分析，你必须先用一句话向用户汇报品牌分析结果，"
-    "然后在你的消息中包含以下要点（用自然语言组织）：\n"
-    "1) 基线分析的目的：了解各大AI搜索引擎目前对该品牌的真实认知水平；\n"
-    "2) 分析内容：系统将自动生成行业问题，向多个AI平台提问并采集回答；\n"
-    "3) 预期产出：品牌AI可见度基线报告（BWVS指数）、各平台表现对比；\n"
-    "4) 预计耗时：答案采集约8-12分钟，全程自动。\n"
-    "在消息末尾用自然语言列出选项，如：\n"
-    "1. 确认，开始基线分析（推荐）\n"
-    "2. 暂不分析\n"
-    "您可以回复序号，或者直接说您的想法。\n"
-    "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
-    "用户确认后，必须执行基线分析流程。不要跳过基线分析。"
+    '【强制操作】当前仅完成了品牌分析，还没有建立行业基线。\\n'
+    '你必须先向用户说明：“基线分析会用行业通用问题建立品牌在各个AI平台的全景基线，后续画像和场景分析都会基于它进行对比。”\\n'
+    '1) 基线分析会采集行业通用问题的AI回答，建立品牌全局基线\\n'
+    '2) 基线分析完成后，再生成用户画像可以做场景对比\\n'
+    '3) 完整采集模式下需要约8-12分钟\\n'
+    '请向用户给出两个选择：\\n'
+    '1. 先运行基线分析\\n'
+    '2. 暂不\\n'
+    "然后调用 ask_user(message='是否先运行基线分析？')，不要传 options 参数。不要跳过这一确认步骤。"
 )
 
 DIRECTIVE_A2_ASK_PATH = (
@@ -428,7 +425,7 @@ DIRECTIVE_A2_ASK_PATH = (
 DIRECTIVE_A3_NEXT_FETCH = (
     "【强制操作】用 2-3 句话友好地向用户说明问题已生成（可提及问题数量、覆盖的主题方向），"
     "在消息中说明问题列表已在右侧画布中展示。然后在消息末尾用自然语言列出以下选项，每个选项必须包含说明文字：\n"
-    "1. 快速采集（推荐）— 通过 API 调用豆包和混元 + DeepSeek 浏览器采集，约 3-5 分钟。"
+    "1. 快速采集（推荐）— 通过 API 调用豆包、混元和 Kimi，并通过浏览器采集 DeepSeek，约 3-5 分钟。"
     "能快速建立品牌在 AI 搜索中的初步观感，但 API 返回的内容与真实用户在网页端看到的可能存在差异\n"
     "2. 完整采集 — 4 个平台全部通过浏览器模拟真实用户访问，约 8-15 分钟。"
     "完全还原用户在网页端的真实体验，采集到的回答、引用来源和品牌提及最为准确，是深度 AEO 分析的最佳选择\n"
@@ -464,15 +461,24 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
             f"✓ 已抓取 {len(state['fetch_results'])} 条AI回答"
         )
     if state.get("baseline_metrics"):
-        bwvs = state["baseline_metrics"].get("bwvs_index", 0)
-        data_status.append(f"✓ 基线分析已完成，基线BWVS={bwvs:.1f}")
+        baseline_summary = state["baseline_metrics"].get("summary_metrics", {}) if isinstance(state["baseline_metrics"], dict) else {}
+        mention_rate = baseline_summary.get("brand_mention_rate")
+        if isinstance(mention_rate, (int, float)):
+            data_status.append(f"✓ 基线分析已完成，基线提及率={mention_rate:.1%}")
+        else:
+            data_status.append("✓ 基线分析已完成")
     elif state.get("brand_profile") and not state.get("baseline_questions") and not state.get("marketing_personas"):
         # Only warn about pending baseline if personas haven't been generated yet.
         # Once A2 has produced personas, the user has moved past the baseline stage.
         data_status.append("⚠ 基线分析待执行 — 必须先执行基线分析流程（question_simulation mode=baseline_dynamic → answer_fetch → data_analytics report_type=baseline）")
     if state.get("metrics"):
-        bwvs = state["metrics"].get("bwvs_index", 0)
-        data_status.append(f"✓ 分析报告已生成，BWVS={bwvs:.1f}")
+        summary_metrics = state["metrics"].get("summary_metrics", {}) if isinstance(state["metrics"], dict) else {}
+        mention_rate = summary_metrics.get("brand_mention_rate")
+        high_risk_count = summary_metrics.get("high_risk_scenario_count")
+        if isinstance(mention_rate, (int, float)) and isinstance(high_risk_count, (int, float)):
+            data_status.append(f"✓ 分析报告已生成，品牌提及率={mention_rate:.1%}，高风险场景={int(high_risk_count)}")
+        else:
+            data_status.append("✓ 分析报告已生成")
 
     status_text = "\n".join(data_status) if data_status else "尚无数据"
 
@@ -641,18 +647,21 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             "问题已经在之前的步骤中生成，无需重新生成。"
         )
 
-    if tool_name == "data_analytics":
         current_mode = state.get("analysis_mode", "persona")
         if current_mode == "baseline":
             metrics = state.get("baseline_metrics") or state.get("metrics")
         else:
             metrics = state.get("metrics")
         if metrics:
-            bwvs = metrics.get("bwvs_index", 0)
+            mention_rate = float(metrics.get("mention_rate", 0) or 0) * 100
+            official_citation_rate = float(metrics.get("official_citation_rate", 0) or 0) * 100
+            high_risk_count = metrics.get("high_risk_scenario_count", 0)
             mode_label = "基线" if current_mode == "baseline" else "场景"
             return (
-                f"{mode_label}数据分析完成。BWVS指数：{bwvs:.1f}，"
-                f"总提及率：{metrics.get('mention_rate', 0):.1%}。"
+                f"{mode_label}数据分析完成。"
+                f"品牌提及率：{mention_rate:.1f}％，"
+                f"官网引用率：{official_citation_rate:.1f}％，"
+                f"高风险场景：{high_risk_count} 个。"
             )
         return "数据分析完成，但未获取到有效数据。"
 
@@ -750,7 +759,6 @@ TOOL_TO_NODE: dict[str, str] = {
     "brand_analysis": "a1_brand",
     "persona_generation": "a2_persona",
     "question_simulation": "a3_question",
-    "answer_fetch": "a4_fetch",
     "data_analytics": "a5_analytics",
     # Follow-up tools (Cycle 3)
     "drill_down_analysis": "drill_down",
@@ -1319,7 +1327,7 @@ async def _handle_tool_call(
                 "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
                 "question_simulation": "正在模拟真实用户可能在 AI 搜索中提出的问题，请稍候...",
                 "answer_fetch": _fetch_fallback,
-                "data_analytics": "正在分析各平台回答数据，计算品牌曝光率、情感分布和 BWVS 指数，请稍候...",
+                "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
             }
             fallback_text = FALLBACK_TEXTS.get(tool_name, f"正在执行：{display_name}，请稍候...")
             await send_reply_event(

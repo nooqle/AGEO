@@ -1,24 +1,29 @@
 'use client';
 
 import { useState } from 'react';
-import { RiArrowUpLine, RiArrowDownLine } from '@remixicon/react';
+import { RiArrowDownLine, RiArrowRightLine, RiArrowUpLine } from '@remixicon/react';
 
 interface KPICardProps {
   title: string;
   value: string | number;
   subtitle: string;
-  trend: { value: number; isPositive: boolean } | null;
+  trend: { value: number; isPositive: boolean; unit?: string } | null;
   tooltip?: string;
+  actionLabel?: string;
+  onClick?: () => void;
 }
 
-export function KPICard({ title, value, subtitle, trend, tooltip }: KPICardProps) {
+export function KPICard({ title, value, subtitle, trend, tooltip, actionLabel, onClick }: KPICardProps) {
   const [showTooltip, setShowTooltip] = useState(false);
+  const isInteractive = typeof onClick === 'function';
+  const Container = isInteractive ? 'button' : 'div';
 
   return (
-    <div
-      className="rounded-xl p-4"
+    <Container
+      {...(isInteractive ? { type: 'button', onClick } : {})}
+      className={`rounded-2xl p-4 text-left ${isInteractive ? 'transition-transform hover:-translate-y-0.5 cursor-pointer' : ''}`}
       style={{
-        background: 'var(--bg-elevated)',
+        background: 'linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0))',
         border: '1px solid var(--border-subtle)',
       }}
     >
@@ -62,7 +67,7 @@ export function KPICard({ title, value, subtitle, trend, tooltip }: KPICardProps
           </span>
         )}
       </div>
-      <div className="flex items-end gap-2">
+      <div className="flex items-end gap-2 mb-2">
         <span className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
           {value}
         </span>
@@ -71,18 +76,21 @@ export function KPICard({ title, value, subtitle, trend, tooltip }: KPICardProps
             className="flex items-center text-xs font-medium"
             style={{ color: trend.isPositive ? 'var(--status-success)' : 'var(--status-error)' }}
           >
-            {trend.isPositive ? (
-              <RiArrowUpLine className="w-3 h-3" />
-            ) : (
-              <RiArrowDownLine className="w-3 h-3" />
-            )}
-            {Math.abs(trend.value)}%
+            {trend.isPositive ? <RiArrowUpLine className="w-3 h-3" /> : <RiArrowDownLine className="w-3 h-3" />}
+            {trend.unit === '%' ? Math.abs(trend.value).toFixed(1) : Number.isInteger(trend.value) ? Math.abs(trend.value).toString() : Math.abs(trend.value).toFixed(1)}
+            {trend.unit ?? ''}
           </span>
         )}
       </div>
-      <div className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
+      <div className="text-xs leading-5" style={{ color: 'var(--text-tertiary)' }}>
         {subtitle}
       </div>
-    </div>
+      {actionLabel && (
+        <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--color-primary)' }}>
+          {actionLabel}
+          <RiArrowRightLine className="w-3 h-3" />
+        </div>
+      )}
+    </Container>
   );
 }

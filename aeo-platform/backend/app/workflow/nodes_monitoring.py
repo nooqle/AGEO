@@ -106,7 +106,7 @@ async def create_monitoring_node(state: AgentState) -> Command:
             f"监测计划已创建。我将{freq_label}自动分析 {brand_name} 的品牌可见度。\n"
             f"- 执行频率：{freq_label}\n"
             f"- 下次执行：{next_run_str} (UTC)\n"
-            f"- 告警阈值：BWVS 变化超过 {alert_threshold} 分时通知您\n"
+            f"- 告警阈值：当提及率、官网引用率或高风险场景变化超过 {alert_threshold} 时通知您\n"
             f"- 监测平台：{', '.join(schedule.platforms or ['doubao', 'hunyuan'])}\n\n"
             f"您可以随时说\"暂停监测\"或\"停止监测\"来管理监测计划。"
         )
@@ -172,3 +172,4 @@ async def _resolve_user_id(db: AsyncSession, session_id: str) -> UUID | None:
     if session is not None:
         return session.user_id
     return None
+

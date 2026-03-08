@@ -652,9 +652,7 @@ async def _save_final_message(session_id: str, workflow, config: dict):
             if orchestrator_reply:
                 content = orchestrator_reply
             elif report:
-                summary = report.get("executive_summary", "分析完成")
-                bwvs = metrics.get("bwvs_index", 0)
-                content = f"{summary}\n\nBWVS指数: {bwvs:.1f}"
+                content = report.get("executive_summary", "分析完成")
             else:
                 content = "分析完成"
 
@@ -767,7 +765,6 @@ async def handle_confirmation_langgraph(
             user_decisions["a3_mode"] = "brand"
             logger.info("[LangGraph] User skipped persona selection, using brand mode")
         elif isinstance(selection, dict) and selection.get("optionId"):
-            # Inline confirmation sends { optionId: "persona_focused" } or { optionId: "brand_panorama" }
             opt_id = selection["optionId"]
             if opt_id == "persona_focused":
                 user_content = "用户选择聚焦画像分析"
@@ -777,11 +774,27 @@ async def handle_confirmation_langgraph(
                 user_content = "用户选择品牌全景分析"
                 user_decisions["a3_mode"] = "brand"
                 logger.info("[LangGraph] Inline confirmation: brand_panorama mode")
+            elif opt_id == "fast":
+                user_content = "用户选择快速采集"
+                user_decisions["fetch_mode_pending"] = False
+                user_decisions["fetch_mode_confirmed"] = True
+                state_values["fetch_mode"] = "fast"
+                logger.info("[LangGraph] Inline confirmation: fast fetch mode")
+            elif opt_id == "full":
+                user_content = "用户选择完整采集"
+                user_decisions["fetch_mode_pending"] = False
+                user_decisions["fetch_mode_confirmed"] = True
+                state_values["fetch_mode"] = "full"
+                logger.info("[LangGraph] Inline confirmation: full fetch mode")
+            elif opt_id == "regenerate":
+                user_content = "用户选择重新生成问题"
+                user_decisions["fetch_mode_pending"] = False
+                user_decisions["fetch_mode_confirmed"] = False
+                logger.info("[LangGraph] Inline confirmation: regenerate questions")
             else:
                 user_content = selection.get("label", opt_id)
                 logger.info(f"[LangGraph] Inline confirmation: optionId={opt_id}")
         elif isinstance(selection, str) and selection in ("聚焦画像分析", "开始场景细化分析"):
-            # Plain text label from inline confirmation button click
             user_decisions["a3_mode"] = "persona"
             user_content = selection
             logger.info(f"[LangGraph] Text confirmation mapped to persona mode: {selection}")
@@ -789,6 +802,23 @@ async def handle_confirmation_langgraph(
             user_decisions["a3_mode"] = "brand"
             user_content = selection
             logger.info(f"[LangGraph] Text confirmation mapped to brand mode: {selection}")
+        elif isinstance(selection, str) and selection in ("快速采集（推荐）", "快速采集"):
+            user_decisions["fetch_mode_pending"] = False
+            user_decisions["fetch_mode_confirmed"] = True
+            state_values["fetch_mode"] = "fast"
+            user_content = "用户选择快速采集"
+            logger.info(f"[LangGraph] Text confirmation mapped to fast mode: {selection}")
+        elif isinstance(selection, str) and selection in ("完整采集", "完整采集（全浏览器）"):
+            user_decisions["fetch_mode_pending"] = False
+            user_decisions["fetch_mode_confirmed"] = True
+            state_values["fetch_mode"] = "full"
+            user_content = "用户选择完整采集"
+            logger.info(f"[LangGraph] Text confirmation mapped to full mode: {selection}")
+        elif isinstance(selection, str) and selection in ("重新生成问题",):
+            user_decisions["fetch_mode_pending"] = False
+            user_decisions["fetch_mode_confirmed"] = False
+            user_content = "用户选择重新生成问题"
+            logger.info(f"[LangGraph] Text confirmation mapped to regenerate: {selection}")
 
         history.append({
             "role": "user",
@@ -801,6 +831,8 @@ async def handle_confirmation_langgraph(
             "user_decisions": user_decisions,
             "awaiting_user": False,
         }
+        if state_values.get("fetch_mode"):
+            update_state["fetch_mode"] = state_values["fetch_mode"]
 
         async for event in workflow.astream(update_state, config=config):
             await _process_langgraph_event(session_id, event)

@@ -120,6 +120,8 @@ class PlaywrightBrowserClient:
                 # domcontentloaded fires once DOM is parsed; networkidle may never
                 # fire in SPAs with background heartbeat requests.
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                if headed:
+                    await self.bring_to_front()
 
             return {"success": True, "url": url}
         except Exception as e:
@@ -423,6 +425,26 @@ class PlaywrightBrowserClient:
             return {"output": str(result) if result is not None else ""}
         except Exception as e:
             logger.warning("[Browser] eval() failed: %s | script: %.120s", e, script.strip())
+            return {"error": str(e)}
+
+    async def bring_to_front(self) -> dict[str, Any]:
+        """Best-effort focus for the current page in headed mode."""
+        try:
+            if self.page is None:
+                return {"error": "Page not opened"}
+
+            await self.page.bring_to_front()
+            try:
+                await self.page.evaluate(
+                    """() => {
+                        try { window.focus(); } catch (_) {}
+                    }"""
+                )
+            except Exception:
+                pass
+            return {"success": True}
+        except Exception as e:
+            logger.debug("[Browser:%s] bring_to_front failed: %s", self.session_name, e)
             return {"error": str(e)}
 
     async def close(self) -> dict[str, Any]:

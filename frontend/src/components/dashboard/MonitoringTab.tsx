@@ -1,6 +1,6 @@
-'use client';
+﻿'use client';
 
-import { useEffect, useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { RiCalendar2Line } from '@remixicon/react';
 import { useMonitoringStore } from '@/stores/monitoringStore';
@@ -12,17 +12,15 @@ import { MetricDeltaCard } from './MetricDeltaCard';
 import { RunHistoryTable } from './RunHistoryTable';
 import { AlertCard } from '../notifications/AlertCard';
 import { EmptyState } from '@/components/ui/empty-state';
-import type { MonitoringAlert, UpdateScheduleInput } from '@/types/monitoring';
-
-// =========================================================================
-// MonitoringTab Component
-// =========================================================================
+import type { UpdateScheduleInput } from '@/types/monitoring';
 
 interface MonitoringTabProps {
   entityId: string | null;
+  brandName?: string;
+  contextCopy?: string;
 }
 
-export function MonitoringTab({ entityId }: MonitoringTabProps) {
+export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTabProps) {
   const router = useRouter();
   const { selectedBrandId } = useDashboardStore();
   const {
@@ -50,8 +48,10 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
   } = useMonitoringStore();
 
   const activeEntityId = entityId || selectedBrandId;
+  const introCopy =
+    contextCopy ||
+    `${brandName ? `${brandName} ` : ''}当前监测面板会持续记录品牌提及、官网引用、风险变化和整体走势，便于判断修复动作是否生效。`;
 
-  // Fetch all monitoring data when entity changes
   useEffect(() => {
     if (!activeEntityId) {
       reset();
@@ -65,33 +65,19 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
     fetchAlerts(activeEntityId);
   }, [activeEntityId, fetchSchedule, fetchTrendData, fetchTrendSummary, fetchMetricDeltas, fetchAlerts, reset]);
 
-  // Fetch run history when schedule changes
   useEffect(() => {
     if (schedule?.id) {
       fetchRunHistory(schedule.id);
     }
   }, [schedule?.id, fetchRunHistory]);
 
-  // Handlers
-  const handlePause = useCallback(
-    (scheduleId: string) => pauseSchedule(scheduleId),
-    [pauseSchedule]
-  );
-
-  const handleResume = useCallback(
-    (scheduleId: string) => resumeSchedule(scheduleId),
-    [resumeSchedule]
-  );
-
+  const handlePause = useCallback((scheduleId: string) => pauseSchedule(scheduleId), [pauseSchedule]);
+  const handleResume = useCallback((scheduleId: string) => resumeSchedule(scheduleId), [resumeSchedule]);
   const handleUpdate = useCallback(
     (scheduleId: string, data: UpdateScheduleInput) => updateSchedule(scheduleId, data),
     [updateSchedule]
   );
-
-  const handleDelete = useCallback(
-    (scheduleId: string) => deleteSchedule(scheduleId),
-    [deleteSchedule]
-  );
+  const handleDelete = useCallback((scheduleId: string) => deleteSchedule(scheduleId), [deleteSchedule]);
 
   const handleDimensionChange = useCallback(
     (dimension: string) => {
@@ -103,13 +89,9 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
     [activeEntityId, fetchTrendData, fetchTrendSummary]
   );
 
-  const handleAlertClick = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    (_alert: MonitoringAlert) => {
-      // Already on the monitoring tab, no navigation needed
-    },
-    []
-  );
+  const handleAlertClick = useCallback(() => {
+    // Already in monitoring context.
+  }, []);
 
   const scheduleId = schedule?.id;
   const handleClearBaseline = useCallback(async () => {
@@ -122,34 +104,26 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
     router.push('/dashboard');
   }, [router]);
 
-  // =========================================================================
-  // Loading State
-  // =========================================================================
-
   if (isScheduleLoading) {
     return (
       <div className="space-y-4">
         <div className="h-20 rounded-xl animate-shimmer" />
         <div className="h-80 rounded-xl animate-shimmer" />
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-24 rounded-xl animate-shimmer" />
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="h-24 rounded-xl animate-shimmer" />
           ))}
         </div>
       </div>
     );
   }
 
-  // =========================================================================
-  // Empty State — no schedule configured
-  // =========================================================================
-
   if (!schedule) {
     return (
       <EmptyState
         icon={RiCalendar2Line}
         title="尚未设置自动监测"
-        description="通过对话设置品牌的自动监测计划，定期跟踪 BWVS 分数和品牌可见度变化。"
+        description="通过对话设置品牌的自动监测计划，持续跟踪品牌提及率、官网引用率、关键风险和场景表现变化。"
         action={{
           label: '进入对话设置',
           onClick: handleStartChat,
@@ -158,13 +132,23 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
     );
   }
 
-  // =========================================================================
-  // Full Monitoring Dashboard
-  // =========================================================================
-
   return (
     <div className="space-y-6">
-      {/* 1. Schedule Status Card (full width) */}
+      <div
+        className="rounded-2xl px-5 py-4"
+        style={{
+          background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(6,182,212,0.08))',
+          border: '1px solid var(--border-subtle)',
+        }}
+      >
+        <div className="mb-1 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+          持续跟踪
+        </div>
+        <p className="text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+          {introCopy}
+        </p>
+      </div>
+
       <ScheduleStatusCard
         schedule={schedule}
         onPause={handlePause}
@@ -173,7 +157,6 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
         onDelete={handleDelete}
       />
 
-      {/* 1.5. Baseline Info Card */}
       <BaselineInfoCard
         hasBaseline={schedule.has_baseline}
         baselineSummary={schedule.baseline_summary}
@@ -181,7 +164,6 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
         onClearBaseline={handleClearBaseline}
       />
 
-      {/* 2. Trend Chart (full width) */}
       <TrendChart
         data={trendData}
         summary={trendSummary}
@@ -189,19 +171,17 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
         onDimensionChange={handleDimensionChange}
       />
 
-      {/* 3. Metric Delta Cards (2x2 grid, responsive) */}
       {metricDeltas.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {metricDeltas.map((metric) => (
             <MetricDeltaCard key={metric.metric_key} metric={metric} />
           ))}
         </div>
       )}
 
-      {/* 4. Recent Alerts (max 3) */}
       {alerts.length > 0 && (
         <div
-          className="rounded-xl overflow-hidden"
+          className="overflow-hidden rounded-xl"
           style={{
             background: 'var(--bg-tertiary)',
             border: '1px solid var(--border-subtle)',
@@ -214,21 +194,13 @@ export function MonitoringTab({ entityId }: MonitoringTabProps) {
           </div>
           <div>
             {alerts.slice(0, 3).map((alert) => (
-              <AlertCard
-                key={alert.id}
-                alert={alert}
-                onClick={handleAlertClick}
-              />
+              <AlertCard key={alert.id} alert={alert} onClick={handleAlertClick} />
             ))}
           </div>
         </div>
       )}
 
-      {/* 5. Run History Table */}
-      <RunHistoryTable
-        entries={runHistory}
-        isLoading={isHistoryLoading}
-      />
+      <RunHistoryTable entries={runHistory} isLoading={isHistoryLoading} />
     </div>
   );
 }

@@ -59,28 +59,27 @@ export function PersonaPipeline({
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const addContextTag = useContextStore((s) => s.addContextTag);
 
-  // Build set of connected node IDs for hover highlighting
-  const connectedMap = useMemo(() => {
+  // Only highlight downstream pipeline nodes. The graph is left-to-right,
+  // so treating edges as undirected would light up the entire connected graph.
+  const downstreamMap = useMemo(() => {
     const map = new Map<string, Set<string>>();
     for (const edge of data.edges) {
       if (!map.has(edge.source)) map.set(edge.source, new Set());
-      if (!map.has(edge.target)) map.set(edge.target, new Set());
       map.get(edge.source)!.add(edge.target);
-      map.get(edge.target)!.add(edge.source);
     }
     return map;
   }, [data.edges]);
 
-  // Get all connected nodes (transitive) for a given node
+  // Get all downstream nodes (transitive) for a given node
   const getHighlightedIds = useCallback((nodeId: string | null): Set<string> => {
     if (!nodeId) return new Set();
     const result = new Set<string>([nodeId]);
     const queue = [nodeId];
     while (queue.length > 0) {
       const current = queue.shift()!;
-      const neighbors = connectedMap.get(current);
-      if (neighbors) {
-        for (const n of neighbors) {
+      const downstreamNodes = downstreamMap.get(current);
+      if (downstreamNodes) {
+        for (const n of downstreamNodes) {
           if (!result.has(n)) {
             result.add(n);
             queue.push(n);
@@ -89,7 +88,7 @@ export function PersonaPipeline({
       }
     }
     return result;
-  }, [connectedMap]);
+  }, [downstreamMap]);
 
   const highlightedIds = useMemo(
     () => getHighlightedIds(hoveredNodeId ?? selectedNodeId ?? null),

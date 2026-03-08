@@ -55,13 +55,13 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
       // 先查已有 Session
       const session = await api.getSessionByEntity(selectedEntity.id);
       onClose();
-      router.push(`/chat/${session.id}`);
+      router.push(`/chat/${session.id}?brand=${encodeURIComponent(selectedEntity.name)}`);
     } catch {
       // 404 — 创建新 Session 后跳转
       try {
         const session = await api.createSession(selectedEntity.id);
         onClose();
-        router.push(`/chat/${session.id}`);
+        router.push(`/chat/${session.id}?brand=${encodeURIComponent(selectedEntity.name)}`);
       } catch {
         toast.error('品牌加载失败');
       }

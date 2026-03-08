@@ -505,6 +505,23 @@ class BaseBrowserHandler(ABC):
             elapsed += 2
         return False
 
+    async def _open_headed_for_user_action(self, url: str | None = None) -> bool:
+        """Reopen the page in headed mode and try to present it to the user."""
+        await self.client.close()
+        open_result = await self.client.open(url or self.URL, headed=True)
+        if not open_result.get("success"):
+            return False
+
+        bring_to_front = getattr(self.client, "bring_to_front", None)
+        if callable(bring_to_front):
+            try:
+                await bring_to_front()
+            except Exception as e:
+                logger.debug("[%s] bring_to_front failed during user-action reopen: %s", self.PLATFORM_KEY, e)
+
+        await asyncio.sleep(3)
+        return True
+
     async def _check_and_handle_modal(self) -> "BrowserEvent | None":
         """Generic modal/popup check.  Call once after navigation, not per question.
 
@@ -532,9 +549,9 @@ class BaseBrowserHandler(ABC):
         )
 
         # Reopen as headed browser for user to interact
-        await self.client.close()
-        await self.client.open(self.URL, headed=True)
-        await asyncio.sleep(3)  # Wait for page to load after reopen
+        opened = await self._open_headed_for_user_action(self.URL)
+        if not opened:
+            return self._create_event(BrowserState.ERROR, "?????????????", progress=0)
 
         # Wait for user to dismiss the modal
         modal_cleared = await self._wait_for_modal_clear(timeout=300)

@@ -1,241 +1,293 @@
-'use client';
-
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ReferenceLine,
-} from 'recharts';
-import { RiLineChartLine } from '@remixicon/react';
-import type { VisibilityDataPoint } from '@/types/dashboard';
-import type { SnapshotTrendPoint } from '@/types/snapshot';
-import { CompetitorTable } from './CompetitorTable';
-import { useDashboardStore } from '@/stores/dashboardStore';
+import type { DashboardScenarioRow } from '@/types/dashboard';
 import { EmptyState } from '@/components/ui/empty-state';
-import { chart, tooltipStyle, axisTick } from '@/styles/chart-theme';
-import { cn } from '@/lib/cn';
-import { api } from '@/services/api';
-
-type DimensionKey = 'bwvs_index' | 'mention_rate' | 'sentiment_score' | 'coverage_score' | 'citation_score';
-
-interface DimensionConfig {
-  key: DimensionKey;
-  label: string;
-  color: string;
-}
-
-const DIMENSIONS: DimensionConfig[] = [
-  { key: 'bwvs_index', label: 'BWVS 指数', color: chart.colors.primary },
-  { key: 'mention_rate', label: '提及率', color: chart.colors.green },
-  { key: 'sentiment_score', label: '情感', color: chart.colors.purple },
-  { key: 'coverage_score', label: '覆盖度', color: chart.colors.cyan },
-  { key: 'citation_score', label: '引用', color: chart.colors.yellow },
-];
+import { RiScan2Line } from '@remixicon/react';
+import { chart } from '@/styles/chart-theme';
 
 interface VisibilityTabProps {
-  data: VisibilityDataPoint[];
-  entityId?: string;
+  data: Array<{ date: string; score: number; platform?: string }>;
+  entityId?: string | null;
+  brandName?: string;
+  officialDomain?: string;
+  officialCitationRate?: number | null;
+  scenarioRows?: DashboardScenarioRow[];
 }
 
-interface SnapshotTooltipProps {
-  active?: boolean;
-  payload?: Array<{
-    value: number;
-    dataKey: string;
-    payload: SnapshotTrendPoint;
-  }>;
-  label?: string;
-  dimension: DimensionKey;
+const priorityTone = {
+  high: { color: chart.colors.red, bg: `${chart.colors.red}1a`, label: '????' },
+  medium: { color: chart.colors.yellow, bg: `${chart.colors.yellow}1a`, label: '????' },
+  low: { color: chart.colors.green, bg: `${chart.colors.green}1a`, label: '????' },
+} as const;
+
+const battleStatusTone = {
+  advantage: { color: chart.colors.green, bg: `${chart.colors.green}1a`, label: '??' },
+  defend: { color: chart.colors.cyan, bg: `${chart.colors.cyan}1a`, label: '??' },
+  contested: { color: chart.colors.yellow, bg: `${chart.colors.yellow}1a`, label: '??' },
+  missing: { color: chart.colors.red, bg: `${chart.colors.red}1a`, label: '??' },
+} as const;
+
+const riskTone = {
+  high: { color: chart.colors.red, bg: `${chart.colors.red}1a`, label: '???' },
+  medium: { color: chart.colors.yellow, bg: `${chart.colors.yellow}1a`, label: '???' },
+  low: { color: chart.colors.green, bg: `${chart.colors.green}1a`, label: '???' },
+} as const;
+
+function normalizePriority(value: string | undefined) {
+  if (value === 'high' || value === 'medium' || value === 'low') {
+    return value;
+  }
+  return 'medium';
 }
 
-function SnapshotTooltip({ active, payload, dimension }: SnapshotTooltipProps) {
-  if (!active || !payload || payload.length === 0) return null;
-  const point = payload[0]?.payload;
-  if (!point) return null;
-
-  const dimConfig = DIMENSIONS.find((d) => d.key === dimension);
-
-  return (
-    <div
-      className="rounded-lg p-3 text-xs shadow-lg"
-      style={{
-        backgroundColor: chart.tooltip.bg,
-        border: `1px solid ${chart.tooltip.border}`,
-        color: chart.tooltip.text,
-      }}
-    >
-      <div className="font-medium mb-1.5">{point.date}</div>
-      <div className="space-y-1">
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-[var(--text-secondary)]">{dimConfig?.label || dimension}:</span>
-          <span className="font-semibold" style={{ color: dimConfig?.color }}>
-            {dimension === 'mention_rate'
-              ? `${(point[dimension] * 100).toFixed(1)}%`
-              : point[dimension]?.toFixed(1) ?? '--'}
-          </span>
-        </div>
-        {dimension !== 'bwvs_index' && (
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-[var(--text-secondary)]">BWVS:</span>
-            <span className="text-[var(--text-primary)]">{point.bwvs_index?.toFixed(1) ?? '--'}</span>
-          </div>
-        )}
-      </div>
-      <div className="mt-1.5 pt-1.5 border-t border-[var(--border-subtle)] text-[10px] text-[var(--text-tertiary)]">
-        快照 ID: {point.snapshot_id?.slice(0, 8)}
-      </div>
-    </div>
-  );
+function normalizeBattleStatus(value: string | undefined) {
+  if (value === 'advantage' || value === 'defend' || value === 'contested' || value === 'missing') {
+    return value;
+  }
+  return 'missing';
 }
 
-export function VisibilityTab({ data, entityId }: VisibilityTabProps) {
-  const { data: dashboardData } = useDashboardStore();
-  const [activeDimension, setActiveDimension] = useState<DimensionKey>('bwvs_index');
-  const [snapshotTrend, setSnapshotTrend] = useState<SnapshotTrendPoint[]>([]);
-  const [isLoadingTrend, setIsLoadingTrend] = useState(false);
+function normalizeRisk(value: string | undefined) {
+  if (value === 'high' || value === 'medium' || value === 'low') {
+    return value;
+  }
+  return 'medium';
+}
 
-  // Load snapshot trend data when entityId is available
-  useEffect(() => {
-    if (!entityId) return;
-    let cancelled = false;
+function sortScenarioRows(rows: DashboardScenarioRow[]) {
+  const priorityOrder = { high: 0, medium: 1, low: 2 } as const;
+  const riskOrder = { high: 0, medium: 1, low: 2 } as const;
 
-    const loadTrend = async () => {
-      setIsLoadingTrend(true);
-      try {
-        const result = await api.getSnapshotTrend(entityId, 20);
-        if (!cancelled && result?.trend) {
-          setSnapshotTrend(result.trend);
-        }
-      } catch {
-        // Silently ignore -- snapshot API may not be available yet
-      } finally {
-        if (!cancelled) setIsLoadingTrend(false);
-      }
-    };
+  return [...rows].sort((a, b) => {
+    const priorityDiff =
+      priorityOrder[normalizePriority(a.scenario_priority)] -
+      priorityOrder[normalizePriority(b.scenario_priority)];
+    if (priorityDiff !== 0) return priorityDiff;
 
-    loadTrend();
-    return () => { cancelled = true; };
-  }, [entityId]);
+    const riskDiff = riskOrder[normalizeRisk(a.risk_level)] - riskOrder[normalizeRisk(b.risk_level)];
+    if (riskDiff !== 0) return riskDiff;
 
-  // Use snapshot trend data if available, otherwise fall back to legacy data
-  const chartData = useMemo(() => {
-    if (snapshotTrend.length > 0) {
-      return snapshotTrend;
-    }
-    // Convert legacy VisibilityDataPoint[] to a compatible format
-    return data.map((d) => ({
-      date: d.date,
-      bwvs_index: d.score,
-      mention_rate: 0,
-      sentiment_score: 0,
-      coverage_score: 0,
-      citation_score: 0,
-      snapshot_id: '',
-    }));
-  }, [snapshotTrend, data]);
+    return a.scenario_label.localeCompare(b.scenario_label, 'zh-CN');
+  });
+}
 
-  const hasSnapshotData = snapshotTrend.length > 0;
-
-  const formatYAxis = useCallback((value: number) => {
-    if (activeDimension === 'mention_rate') return `${(value * 100).toFixed(0)}%`;
-    return value.toFixed(0);
-  }, [activeDimension]);
-
-  if (data.length === 0 && snapshotTrend.length === 0) {
+export function VisibilityTab({
+  brandName,
+  officialDomain,
+  officialCitationRate,
+  scenarioRows = [],
+}: VisibilityTabProps) {
+  if (scenarioRows.length === 0) {
     return (
       <EmptyState
-        icon={RiLineChartLine}
-        title="暂无可见度数据"
-        description="完成品牌分析后即可查看可见度趋势"
+        icon={RiScan2Line}
+        title="????????"
+        description="???????????????????????????????????????"
       />
     );
   }
 
+  const sortedRows = sortScenarioRows(scenarioRows);
+  const groups = {
+    advantage: sortedRows.filter((row) => normalizeBattleStatus(row.battle_status) === 'advantage'),
+    defend: sortedRows.filter((row) => normalizeBattleStatus(row.battle_status) === 'defend'),
+    contested: sortedRows.filter((row) => normalizeBattleStatus(row.battle_status) === 'contested'),
+    missing: sortedRows.filter((row) => normalizeBattleStatus(row.battle_status) === 'missing'),
+  };
+
+  const summaryCards = [
+    {
+      label: '????',
+      value: String(sortedRows.length),
+      desc: brandName ? `${brandName} ???????????` : '?????????????',
+    },
+    {
+      label: '????',
+      value: String(sortedRows.filter((row) => row.brand_present).length),
+      desc: '?????????????',
+    },
+    {
+      label: '????',
+      value: String(groups.missing.length),
+      desc: '????????????????',
+    },
+    {
+      label: '???????',
+      value: officialCitationRate != null ? `${officialCitationRate.toFixed(1)}%` : '--',
+      desc: officialDomain ? `??? ${officialDomain} ???????` : '????????????',
+    },
+  ];
+
+  const orderedGroups: Array<{
+    key: 'missing' | 'contested' | 'defend' | 'advantage';
+    title: string;
+    description: string;
+  }> = [
+    { key: 'missing', title: '????', description: '????????????????????????' },
+    { key: 'contested', title: '????', description: '?????????????????????????' },
+    { key: 'defend', title: '????', description: '?????????????????????' },
+    { key: 'advantage', title: '????', description: '???????????????????????' },
+  ];
+
   return (
     <div className="space-y-6">
-      <div
-        className="rounded-xl p-4"
-        style={{
-          background: 'var(--bg-tertiary)',
-          border: '1px solid var(--border-subtle)',
-        }}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            {hasSnapshotData ? 'BWVS 趋势' : '可见度得分趋势'}
-          </h3>
-          {isLoadingTrend && (
-            <span className="text-[10px] text-[var(--text-tertiary)]">加载趋势数据...</span>
-          )}
-        </div>
-
-        {/* Dimension toggle pills */}
-        {hasSnapshotData && (
-          <div className="flex flex-wrap gap-1.5 mb-4">
-            {DIMENSIONS.map((dim) => (
-              <button
-                key={dim.key}
-                onClick={() => setActiveDimension(dim.key)}
-                className={cn(
-                  'px-2.5 py-1 rounded-full text-[11px] font-medium transition-all',
-                  activeDimension === dim.key
-                    ? 'text-white'
-                    : 'text-[var(--text-secondary)] bg-[var(--bg-tertiary)] hover:bg-[var(--bg-elevated)]'
-                )}
-                style={
-                  activeDimension === dim.key
-                    ? { backgroundColor: dim.color, color: '#fff' }
-                    : undefined
-                }
-              >
-                {dim.label}
-              </button>
-            ))}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {summaryCards.map((card) => (
+          <div
+            key={card.label}
+            className="rounded-2xl p-4"
+            style={{
+              background: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-subtle)',
+            }}
+          >
+            <div className="mb-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+              {card.label}
+            </div>
+            <div className="mb-2 text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+              {card.value}
+            </div>
+            <div className="text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+              {card.desc}
+            </div>
           </div>
-        )}
-
-        <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
-            <XAxis dataKey="date" tick={axisTick} />
-            <YAxis tick={axisTick} tickFormatter={formatYAxis} />
-            {hasSnapshotData ? (
-              <Tooltip
-                content={
-                  <SnapshotTooltip dimension={activeDimension} />
-                }
-              />
-            ) : (
-              <Tooltip contentStyle={tooltipStyle} />
-            )}
-            {/* Reference lines for snapshot dates */}
-            {hasSnapshotData && chartData.map((point, i) => (
-              <ReferenceLine
-                key={i}
-                x={point.date}
-                stroke="var(--border-subtle)"
-                strokeDasharray="2 4"
-              />
-            ))}
-            <Line
-              type="monotone"
-              dataKey={hasSnapshotData ? activeDimension : 'bwvs_index'}
-              stroke={DIMENSIONS.find((d) => d.key === activeDimension)?.color || chart.colors.primary}
-              strokeWidth={2}
-              dot={{ fill: DIMENSIONS.find((d) => d.key === activeDimension)?.color || chart.colors.primary, r: 3 }}
-              activeDot={{ r: 5 }}
-              animationDuration={300}
-            />
-          </LineChart>
-        </ResponsiveContainer>
+        ))}
       </div>
 
-      <CompetitorTable data={dashboardData?.competitors || []} />
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {orderedGroups.map((group) => {
+          const rows = groups[group.key];
+          const tone = battleStatusTone[group.key];
+          return (
+            <div
+              key={group.key}
+              className="rounded-2xl p-4"
+              style={{
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="mb-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    {group.title}
+                  </div>
+                  <div className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    {rows.length}
+                  </div>
+                </div>
+                <span
+                  className="rounded-full px-2 py-0.5 text-xs font-medium"
+                  style={{ color: tone.color, backgroundColor: tone.bg }}
+                >
+                  {tone.label}
+                </span>
+              </div>
+              <div className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+                {group.description}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="space-y-4">
+        {orderedGroups.map((group) => {
+          const rows = groups[group.key];
+          if (rows.length === 0) return null;
+
+          const groupTone = battleStatusTone[group.key];
+          return (
+            <section
+              key={group.key}
+              className="overflow-hidden rounded-2xl"
+              style={{
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              <div
+                className="flex items-center justify-between gap-3 px-4 py-3"
+                style={{ borderBottom: '1px solid var(--border-subtle)' }}
+              >
+                <div>
+                  <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                    {group.title}
+                  </h3>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    {group.description}
+                  </p>
+                </div>
+                <span
+                  className="rounded-full px-2 py-0.5 text-xs font-medium"
+                  style={{ color: groupTone.color, backgroundColor: groupTone.bg }}
+                >
+                  {rows.length} ???
+                </span>
+              </div>
+
+              <div className="grid gap-4 p-4 xl:grid-cols-2">
+                {rows.map((row) => {
+                  const priority = priorityTone[normalizePriority(row.scenario_priority)];
+                  const risk = riskTone[normalizeRisk(row.risk_level)];
+                  const battle = battleStatusTone[normalizeBattleStatus(row.battle_status)];
+
+                  return (
+                    <article
+                      key={row.scenario_id || row.scenario_label}
+                      className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                            {row.scenario_label}
+                          </div>
+                          {row.query_examples?.[0] && (
+                            <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-tertiary)' }}>
+                              ?????{row.query_examples[0]}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ color: priority.color, backgroundColor: priority.bg }}>
+                            {priority.label}
+                          </span>
+                          <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ color: battle.color, backgroundColor: battle.bg }}>
+                            {battle.label}
+                          </span>
+                          <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ color: risk.color, backgroundColor: risk.bg }}>
+                            {risk.label}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid gap-3 md:grid-cols-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                        <div>?????{row.present_platforms.join(' / ') || '--'}</div>
+                        <div>?????{row.official_citation_present ? '???????' : '???????'}</div>
+                        <div>?????{row.competitors_present.join(' / ') || '--'}</div>
+                        <div>?????{row.winner_brands.join(' / ') || '--'}</div>
+                      </div>
+
+                      {(row.evidence || row.action_hint) && (
+                        <div className="mt-4 space-y-2 text-sm leading-6">
+                          {row.evidence && (
+                            <div style={{ color: 'var(--text-secondary)' }}>
+                              ?????{row.evidence}
+                            </div>
+                          )}
+                          {row.action_hint && (
+                            <div style={{ color: 'var(--text-primary)' }}>
+                              ?????{row.action_hint}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }

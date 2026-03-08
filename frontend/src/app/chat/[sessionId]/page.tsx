@@ -33,9 +33,20 @@ function ChatPageContent() {
           console.log('[ChatPage] Created new session:', session.id);
           router.replace(`/chat/${session.id}`);
         })
-        .catch((error) => {
+        .catch(async (error) => {
+          if (error instanceof Error && error.message.includes('????????????')) {
+            try {
+              const existing = await api.getSessionByEntity(entityId);
+              router.replace(`/chat/${existing.id}`);
+              return;
+            } catch (fallbackError) {
+              console.error('[ChatPage] Failed to load existing session after 409:', fallbackError);
+            }
+          }
+
           console.error('[ChatPage] Failed to create session:', error);
           isCreatingSessionRef.current = false;
+          router.replace('/dashboard');
         });
     }
   }, [sessionId, router, searchParams]);

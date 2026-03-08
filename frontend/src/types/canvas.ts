@@ -80,6 +80,156 @@ export type KeywordAnalysis = {
   keywords: KeywordItem[];
 };
 
+export type ReportMetricStatus = 'good' | 'warning' | 'risk' | 'neutral';
+
+export type ReportV2Metric = {
+  id: string;
+  label: string;
+  value?: string | number;
+  unit?: string;
+  description?: string;
+  trend?: number | null;
+  status?: ReportMetricStatus;
+};
+
+export type ReportSummaryData = {
+  title?: string;
+  description?: string;
+  summary?: string;
+  status_summary?: string;
+  highlights?: string[];
+  metrics?: ReportV2Metric[];
+};
+
+export type ScenarioBattleStatus = 'advantage' | 'defend' | 'contested' | 'missing' | string;
+export type ScenarioPriority = 'high' | 'medium' | 'low' | string;
+export type RiskSeverity = 'high' | 'medium' | 'low' | string;
+
+export type ScenarioCoverageItem = {
+  scenario_id?: string;
+  scenario_label: string;
+  scenario_priority?: ScenarioPriority;
+  brand_present?: boolean;
+  present_platforms?: string[];
+  official_citation_present?: boolean;
+  official_source_domains?: string[];
+  battle_status?: ScenarioBattleStatus;
+  evidence?: string;
+  confidence?: number;
+};
+
+export type ScenarioCoverageData = {
+  title?: string;
+  description?: string;
+  summary?: string;
+  items?: ScenarioCoverageItem[];
+};
+
+export type CompetitorBattleSummaryCard = {
+  competitor: string;
+  shared_scenarios?: number;
+  competitor_only_scenarios?: number;
+  brand_only_scenarios?: number;
+  pressure_level?: RiskSeverity;
+  top_conflict_scenarios?: string[];
+};
+
+export type CompetitorBattleItem = {
+  scenario_id?: string;
+  scenario_label: string;
+  brand_present?: boolean;
+  competitors_present?: string[];
+  winner_brands?: string[];
+  battle_status?: ScenarioBattleStatus;
+  evidence?: string;
+  recommended_focus?: string;
+};
+
+export type CompetitorBattleData = {
+  title?: string;
+  description?: string;
+  overview?: string;
+  summary_cards?: CompetitorBattleSummaryCard[];
+  items?: CompetitorBattleItem[];
+  differentiation_strategy?: string;
+};
+
+export type ReportRiskItem = {
+  risk_id?: string;
+  risk_type?: string;
+  scenario_label?: string;
+  severity?: RiskSeverity;
+  reason?: string;
+  impact_summary?: string;
+  evidence?: string;
+  recommended_action_ref?: string;
+};
+
+export type RiskSectionData = {
+  title?: string;
+  description?: string;
+  summary?: string;
+  items?: ReportRiskItem[];
+};
+
+export type SourceSectionData = {
+  title?: string;
+  description?: string;
+  summary?: string;
+  official_citation_rate?: number;
+  official_top_titles?: string[];
+  citation_analysis?: CitationAnalysis | null;
+};
+
+export type ActionQueueItem = {
+  action_id?: string;
+  priority?: string | number;
+  scenario_label?: string;
+  action?: string;
+  title?: string;
+  target?: string;
+  expected_metric?: string;
+  related_competitors?: string[];
+  status?: 'not_started' | 'in_progress' | 'done' | string;
+  owner_hint?: string;
+  expected_impact?: string;
+  difficulty?: string;
+  timeline?: string;
+};
+
+export type ActionQueueData = {
+  title?: string;
+  description?: string;
+  summary?: string;
+  items?: ActionQueueItem[];
+};
+
+export type InsightSectionItem = {
+  title: string;
+  scenario?: string;
+  evidence?: string;
+  platforms?: string[];
+  improvement_hint?: string;
+};
+
+export type InsightSectionData = {
+  title?: string;
+  description?: string;
+  summary?: string;
+  strengths?: InsightSectionItem[];
+  weaknesses?: InsightSectionItem[];
+};
+
+export type ReportV2Data = {
+  summary?: ReportSummaryData;
+  scenarioCoverage?: ScenarioCoverageData;
+  competitorBattle?: CompetitorBattleData;
+  risks?: RiskSectionData;
+  sources?: SourceSectionData;
+  actionQueue?: ActionQueueData;
+  insights?: InsightSectionData;
+};
+
 export type ReportCanvasData = CanvasPreviewData & {
   headline?: string;
   subtitle?: string;
@@ -90,6 +240,24 @@ export type ReportCanvasData = CanvasPreviewData & {
   recommendations?: ReportRecommendation[];
   content?: string;
   bwvs_breakdown?: import('@/types/dashboard').BwvsBreakdown;
+  brand_name?: string;
+  analysis_period?: string;
+  platform_scope?: string[];
+  updated_at?: string;
+  report_v2?: ReportV2Data;
+  report_summary?: ReportSummaryData;
+  scenario_coverage?: ScenarioCoverageData;
+  competitor_battle?: CompetitorBattleData;
+  risk_section?: RiskSectionData;
+  source_section?: SourceSectionData;
+  action_queue_section?: ActionQueueData;
+  insight_section?: InsightSectionData;
+  summary_metrics?: unknown;
+  scenario_matrix?: unknown;
+  competitor_battles?: unknown;
+  risk_map?: unknown;
+  action_queue?: unknown;
+  source_overview?: unknown;
   // A5 extended fields (passed through from backend, consumed by ReportContent ext)
   key_findings?: unknown;
   strengths?: unknown;
@@ -97,6 +265,7 @@ export type ReportCanvasData = CanvasPreviewData & {
   opportunities?: unknown;
   threats?: unknown;
   action_plan?: unknown;
+  actionable_recommendations?: unknown;
   platform_breakdown?: unknown;
   sentiment_distribution?: unknown;
   industry_insights?: unknown;
@@ -109,7 +278,6 @@ export type ReportCanvasData = CanvasPreviewData & {
   citation_analysis?: CitationAnalysis;
   keyword_analysis?: KeywordAnalysis;
 };
-
 export type ChartSeries = { key: string; name: string };
 export type ChartDataItem = Record<string, string | number>;
 export type ChartCanvasData = CanvasPreviewData & {
@@ -421,3 +589,5 @@ export type PipelineCanvasContent = Extract<CanvasContent, { type: 'pipeline' }>
 export type WorkflowCanvasContent = Extract<CanvasContent, { type: 'workflow' }>;
 export type QuestionListCanvasContent = Extract<CanvasContent, { type: 'questionList' }>;
 export type FetchResultsCanvasContent = Extract<CanvasContent, { type: 'fetchResults' }>;
+
+

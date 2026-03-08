@@ -1,4 +1,4 @@
-"""Follow-up analysis nodes for multi-turn dialogue (Cycle 3, Module 2).
+﻿"""Follow-up analysis nodes for multi-turn dialogue (Cycle 3, Module 2).
 
 Three follow-up nodes that operate on existing session data without re-running
 the full A1-A5 pipeline:
@@ -397,16 +397,16 @@ async def _generate_comparison(
 - 新快照日期: {new_date}
 
 ## 指标变化
-- BWVS指数: {_safe_delta('bwvs_index')}
-- 提及率: {_safe_delta('mention_rate')}
+- 品牌提及率: {_safe_delta('mention_rate')}
+- 官网引用率: {_safe_delta('citation_score')}
 - 总问题数: {old_metrics.get('total_questions', 0)} → {new_metrics.get('total_questions', 0)}
 - 总提及数: {old_metrics.get('total_mentions', 0)} → {new_metrics.get('total_mentions', 0)}
 
-## 旧快照 BWVS 分解
-{json.dumps(old_metrics.get('bwvs_breakdown', {}), ensure_ascii=False, indent=2)[:800]}
+## 旧快照摘要指标
+{json.dumps(old_metrics.get('summary_metrics', {}), ensure_ascii=False, indent=2)[:800]}
 
-## 新快照 BWVS 分解
-{json.dumps(new_metrics.get('bwvs_breakdown', {}), ensure_ascii=False, indent=2)[:800]}
+## 新快照摘要指标
+{json.dumps(new_metrics.get('summary_metrics', {}), ensure_ascii=False, indent=2)[:800]}
 
 ## 旧快照平台分布
 {json.dumps(old_metrics.get('platform_breakdown', {}), ensure_ascii=False, indent=2)[:500]}
@@ -437,8 +437,8 @@ async def _generate_comparison(
         # Fallback: show raw delta
         return (
             f"## {brand_name} 分析对比\n\n"
-            f"- BWVS指数: {_safe_delta('bwvs_index')}\n"
-            f"- 提及率: {_safe_delta('mention_rate')}\n\n"
+            f"- 品牌提及率: {_safe_delta('mention_rate')}\n"
+            f"- 官网引用率: {_safe_delta('citation_score')}\n\n"
             f"*详细对比生成失败: {e}*"
         )
 
@@ -534,3 +534,4 @@ async def selective_refetch_node(state: AgentState) -> Command:
         },
         goto="a4_fetch",
     )
+

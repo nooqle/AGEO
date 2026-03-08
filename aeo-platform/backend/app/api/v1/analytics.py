@@ -90,6 +90,62 @@ async def get_competitors(
     return await service.get_competitor_data(brand_id)
 
 
+@router.get("/v2/overview")
+async def get_overview_v2(
+    brand_id: str | None = Query(None),
+    date_range: str = Query("month"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get Dashboard V2 overview data."""
+    service = AnalyticsService(db)
+    return await service.get_overview_v2(brand_id, date_range)
+
+
+@router.get("/v2/scenarios")
+async def get_scenarios_v2(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get Dashboard V2 scenario table data."""
+    service = AnalyticsService(db)
+    return await service.get_scenarios_v2(brand_id)
+
+
+@router.get("/v2/competitor-battles")
+async def get_competitor_battles_v2(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get Dashboard V2 competitor battle data."""
+    service = AnalyticsService(db)
+    return await service.get_competitor_battles_v2(brand_id)
+
+
+@router.get("/v2/sources")
+async def get_sources_v2(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get Dashboard V2 source overview."""
+    service = AnalyticsService(db)
+    return await service.get_sources_v2(brand_id)
+
+
+@router.get("/v2/risks-actions")
+async def get_risks_actions_v2(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get Dashboard V2 risks and actions."""
+    service = AnalyticsService(db)
+    return await service.get_risks_actions_v2(brand_id)
+
+
 # =========================================================================
 # Trend Endpoints (Cycle 4)
 # =========================================================================

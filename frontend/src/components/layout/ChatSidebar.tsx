@@ -77,11 +77,13 @@ export function ChatSidebar({
     setNavigating(true);
     try {
       const session = await api.getSessionByEntity(entityId);
-      router.push(`/chat/${session.id}`);
+      const entity = entities.find((item) => item.id === entityId);
+      router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity?.name || '')}`);
     } catch {
       try {
         const session = await api.createSession(entityId);
-        router.push(`/chat/${session.id}`);
+        const entity = entities.find((item) => item.id === entityId);
+        router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity?.name || '')}`);
       } catch {
         toast.error('数据加载失败');
       }

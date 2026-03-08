@@ -1,4 +1,4 @@
-"""A5 Node: Data Analytics and Report Generation.
+﻿"""A5 Node: Data Analytics and Report Generation.
 
 This module contains the A5 node implementation for analyzing fetch results
 and generating comprehensive reports with BWVS metrics.
@@ -6,250 +6,27 @@ and generating comprehensive reports with BWVS metrics.
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 from langgraph.types import Command
 
 from app.core.utils import extract_domain
+# A5 is being split by responsibility: scenario/report contracts, prompt assembly,
+# user-facing sanitization, and persistence are kept in dedicated modules.
+from app.workflow.a5 import contract as a5_contract
+from app.workflow.a5 import metrics as a5_metrics
+from app.workflow.a5 import keywords as a5_keywords
+from app.workflow.a5 import prompt as a5_prompt
+from app.workflow.a5 import postprocess as a5_postprocess
+from app.workflow.a5 import sanitizer as a5_sanitizer
+from app.workflow.a5.persistence import build_report_artifact_data
 from app.workflow.nodes_a4 import PLATFORMS
 
 logger = logging.getLogger(__name__)
 
-# --- 情感分析关键词 ---
-_POSITIVE_KEYWORDS = [
-    "推荐", "优秀", "领先", "首选", "值得", "最佳", "出色", "优质",
-    "创新", "卓越", "领导", "知名", "强大", "受欢迎", "信赖", "可靠",
-    "高品质", "好评", "优势", "突出", "一流", "顶尖", "专业",
-]
-_NEGATIVE_KEYWORDS = [
-    "不推荐", "缺点", "问题", "差评", "不足", "劣势", "风险", "争议",
-    "质疑", "不好", "差", "落后", "不稳定", "投诉", "负面", "糟糕",
-    "不佳", "低质", "不靠谱", "下滑", "亏损",
-]
-
-# BWVS v2 weights (V1: global constants, migrate to per-brand config in P2)
-BWVS_WEIGHTS = {
-    "mention": 40,     # W1: mention rate score weight
-    "sentiment": 25,   # W2: sentiment score weight
-    "coverage": 20,    # W3: platform coverage weight
-    "citation": 15,    # W4: citation quality weight
-}
-assert sum(BWVS_WEIGHTS.values()) == 100, "BWVS weights must sum to 100"
-
-
-def _analyze_sentiment(text: str) -> str:
-    """基于关键词匹配分析文本情感倾向。
-
-    先匹配否定词（更长更具体），然后将已匹配的否定词位置排除，
-    避免 "不推荐" 中的 "推荐" 被误判为正面。
-
-    Returns:
-        "positive", "negative", or "neutral"
-    """
-    if not text:
-        return "neutral"
-
-    # 先统计否定关键词，并记录匹配位置
-    neg_count = 0
-    neg_spans: list[tuple[int, int]] = []
-    for kw in _NEGATIVE_KEYWORDS:
-        start = 0
-        while True:
-            idx = text.find(kw, start)
-            if idx == -1:
-                break
-            neg_count += 1
-            neg_spans.append((idx, idx + len(kw)))
-            start = idx + len(kw)
-
-    # 统计正面关键词，排除被否定词覆盖的位置
-    pos_count = 0
-    for kw in _POSITIVE_KEYWORDS:
-        start = 0
-        while True:
-            idx = text.find(kw, start)
-            if idx == -1:
-                break
-            # 检查该正面词是否在某个否定词范围内
-            shadowed = any(ns <= idx < ne for ns, ne in neg_spans)
-            if not shadowed:
-                pos_count += 1
-            start = idx + len(kw)
-
-    if pos_count > neg_count:
-        return "positive"
-    elif neg_count > pos_count:
-        return "negative"
-    else:
-        return "neutral"
-
-
-def _compute_platform_sentiment(fetch_results: list, platform_key: str) -> float:
-    """计算指定平台的情感得分 (0-100)。
-
-    遍历 fetch_results，对匹配平台的成功回答进行情感分析，
-    将 -1~1 的原始得分映射到 0~100 区间。
-    """
-    scores: list[float] = []
-    for result in fetch_results:
-        for pr in result.get("platform_results", []):
-            if pr.get("platform", "").lower() != platform_key.lower():
-                continue
-            if not pr.get("success"):
-                continue
-            answer = pr.get("answer", {})
-            content = (
-                answer.get("content", "")
-                if isinstance(answer, dict)
-                else str(answer)
-            )
-            s = _analyze_sentiment(content)
-            from app.core.constants import SENTIMENT_SCORES
-            scores.append(SENTIMENT_SCORES.get(s, 0.0))
-    if not scores:
-        return 50.0
-    return round(max(0.0, min(100.0, (sum(scores) / len(scores) + 1) * 50)), 1)
-
-
-# --- 词云/TF-IDF 停用词 ---
-_DOMAIN_STOPWORDS = {
-    "可以", "使用", "进行", "通过", "提供", "需要", "包括", "以及",
-    "作为", "其中", "对于", "这个", "那个", "就是", "还是", "已经",
-    "但是", "因为", "所以", "如果", "或者", "虽然", "然而", "不过",
-    "一些", "一个", "一种", "之一", "方面", "情况", "方式", "功能",
-    "相关", "目前", "同时",
-}
-
-
-def _extract_keyword_analysis(
-    fetch_results: list,
-    brand_profile: dict,
-    top_k: int = 60,
-) -> dict[str, Any]:
-    """Extract TF-IDF keywords from all fetch result answers.
-
-    Uses jieba.analyse to extract keywords, then enriches each keyword
-    with platform occurrence info and context snippets.
-
-    Returns a dict with total_keywords, platforms, and keywords list.
-    """
-    try:
-        import jieba.analyse
-    except ImportError:
-        logger.warning("[A5] jieba not installed, skipping keyword analysis")
-        return {}
-
-    brand_name = brand_profile.get("brand_name", "")
-    brand_name_en = brand_profile.get("brand_name_en", "")
-    # Lowercase brand names for filtering
-    brand_names_lower = {brand_name.lower(), brand_name_en.lower()} - {""}
-
-    # Collect all text per platform
-    platform_texts: dict[str, list[str]] = {}
-    # Also collect per-keyword platform and context info
-    all_texts: list[tuple[str, str]] = []  # (platform, content)
-
-    for result in fetch_results:
-        for pr in result.get("platform_results", []):
-            platform = pr.get("platform", "unknown")
-            if not pr.get("success"):
-                continue
-            answer = pr.get("answer", {})
-            content = (
-                answer.get("content", "")
-                if isinstance(answer, dict)
-                else str(answer)
-            )
-            if not content or len(content) < 10:
-                continue
-            platform_texts.setdefault(platform, []).append(content)
-            all_texts.append((platform, content))
-
-    if not all_texts:
-        return {}
-
-    # Combine all text for TF-IDF extraction
-    combined_text = "\n".join(text for _, text in all_texts)
-
-    # Extract top keywords via TF-IDF
-    raw_keywords = jieba.analyse.extract_tags(
-        combined_text, topK=top_k * 2, withWeight=True
-    )
-
-    # Filter: remove single chars, pure digits, brand name itself, stopwords
-    filtered: list[tuple[str, float]] = []
-    for word, weight in raw_keywords:
-        if len(word) < 2:
-            continue
-        if word.isdigit():
-            continue
-        if word.lower() in brand_names_lower:
-            continue
-        if word in _DOMAIN_STOPWORDS:
-            continue
-        filtered.append((word, weight))
-        if len(filtered) >= top_k:
-            break
-
-    if not filtered:
-        return {}
-
-    # Normalize weights to 10-100
-    max_weight = filtered[0][1] if filtered else 1.0
-    min_weight = filtered[-1][1] if filtered else 0.0
-    weight_range = max_weight - min_weight if max_weight > min_weight else 1.0
-
-    # Build keyword entries with platform and context info
-    all_platforms = sorted(platform_texts.keys())
-    keywords_list: list[dict[str, Any]] = []
-
-    for word, weight in filtered:
-        # Normalize value to 10-100 (single keyword gets max value)
-        if len(filtered) == 1:
-            value = 100.0
-        else:
-            normalized = 10 + ((weight - min_weight) / weight_range) * 90
-            value = round(min(100, max(10, normalized)), 1)
-
-        # Find which platforms mention this keyword
-        kw_platforms: list[str] = []
-        for plat in all_platforms:
-            for text in platform_texts.get(plat, []):
-                if word in text:
-                    kw_platforms.append(plat)
-                    break
-
-        # Extract up to 3 context snippets (30 chars before and after)
-        contexts: list[dict[str, str]] = []
-        for plat, text in all_texts:
-            if len(contexts) >= 3:
-                break
-            idx = text.find(word)
-            if idx == -1:
-                continue
-            start = max(0, idx - 30)
-            end = min(len(text), idx + len(word) + 30)
-            snippet = text[start:end]
-            if start > 0:
-                snippet = "..." + snippet
-            if end < len(text):
-                snippet = snippet + "..."
-            contexts.append({"text": snippet, "platform": plat})
-
-        keywords_list.append({
-            "word": word,
-            "value": value,
-            "platforms": kw_platforms,
-            "contexts": contexts,
-        })
-
-    return {
-        "total_keywords": len(keywords_list),
-        "platforms": all_platforms,
-        "keywords": keywords_list,
-    }
-
+# Shared BWVS weights and sentiment helpers now live in app.workflow.a5.metrics.
 
 from app.workflow.state import AgentState
 from app.workflow.events import (
@@ -281,7 +58,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
     step_message = "开始基线全景分析..." if is_baseline else "开始分析抓取数据..."
     await send_progress_event(
         session_id=session_id,
-        step="A5",
+        step="data_analytics",
         step_name="数据分析报告",
         progress=0.65,
         message=step_message,
@@ -295,25 +72,47 @@ async def a5_analytics_node(state: AgentState) -> Command:
         # included in the prompt (was previously done after LLM, too late)
         competitor_metrics = _calculate_competitor_metrics(fetch_results, competitors)
 
+        # Thread 6: precompute scenario-first V2 structures before the LLM call
+        # so the prompt can reason about scenarios, risks, and action priorities
+        # instead of only aggregate scores.
+        source_overview = a5_contract._build_source_overview(metrics.get("citation_analysis", {}))
+        scenario_matrix = a5_contract._build_scenario_matrix(
+            fetch_results,
+            brand_profile,
+            competitors,
+            source_overview,
+        )
+        risk_map = a5_contract._build_risk_map(scenario_matrix)
+        competitor_battles = a5_contract._build_competitor_battles(scenario_matrix, competitors)
+        action_queue = a5_contract._build_action_queue(scenario_matrix, risk_map)
+        summary_metrics = a5_contract._build_summary_metrics(
+            metrics,
+            scenario_matrix,
+            risk_map,
+            source_overview,
+        )
+
         await send_progress_event(
             session_id=session_id,
-            step="A5",
+            step="data_analytics",
             step_name="数据分析报告",
             progress=0.75,
-            message=f"提及率: {metrics.get('mention_rate', 0):.1%} (BWVS指数: {metrics.get('bwvs_index', 0):.1f})",
+            message=(
+                f"提及率: {metrics.get('mention_rate', 0):.1%} | "
+                f"官网引用率: {summary_metrics.get('official_citation_rate', 0):.1%} | "
+                f"高风险问题: {summary_metrics.get('high_risk_scenario_count', 0)} 个"
+            ),
         )
 
         # Stage result: metrics preview before LLM report generation
         metrics_preview_data = {
-            "bwvs_index": round(metrics.get("bwvs_index", 0), 1),
             "mention_rate": f"{metrics.get('mention_rate', 0):.1%}",
+            "official_citation_rate": f"{summary_metrics.get('official_citation_rate', 0):.1%}",
+            "scenario_hit_count": summary_metrics.get("scenario_hit_count", 0),
+            "missing_high_value_scenario_count": summary_metrics.get("missing_high_value_scenario_count", 0),
+            "high_risk_scenario_count": summary_metrics.get("high_risk_scenario_count", 0),
             "total_mentions": metrics.get("total_mentions", 0),
             "total_questions": metrics.get("total_questions", 0),
-            "score_band": (
-                "优秀" if metrics.get("bwvs_index", 0) >= 70
-                else "良好" if metrics.get("bwvs_index", 0) >= 40
-                else "需改进"
-            ),
         }
         await send_stage_result(
             session_id, "A5", "数据分析",
@@ -370,7 +169,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         # Call 2 (supplementary): industry_insights, SWOT, risk_alerts, action_plan
         report_data = None
         try:
-            user_content = _build_a5_user_content(
+            user_content = a5_prompt._build_a5_user_content(
                 brand_profile, metrics, fetch_results, competitors,
                 marketing_personas=marketing_personas,
                 previous_snapshot=previous_snapshot_data,
@@ -378,11 +177,17 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 analysis_mode=analysis_mode,
                 baseline_metrics=state.get("baseline_metrics"),
                 baseline_report=state.get("baseline_report"),
+                summary_metrics=summary_metrics,
+                scenario_matrix=scenario_matrix,
+                competitor_battles=competitor_battles,
+                risk_map=risk_map,
+                action_queue=action_queue,
+                source_overview=source_overview,
             )
             model = get_llm_model_compat()
 
             # --- Call 1: Core report sections ---
-            core_prompt = _get_a5_core_prompt(report_type=analysis_mode)
+            core_prompt = a5_prompt._get_a5_core_prompt(report_type=analysis_mode)
             response1 = await call_llm_streaming(
                 session_id=session_id,
                 model=model,
@@ -390,7 +195,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     {"role": "system", "content": core_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                step="A5",
+                step="data_analytics",
                 step_name="数据分析报告（核心章节）",
                 progress_start=0.82,
                 progress_end=0.90,
@@ -409,7 +214,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
                 # --- Call 2: Supplementary sections ---
                 try:
-                    supp_prompt = _get_a5_supplementary_prompt(report_type=analysis_mode)
+                    supp_prompt = a5_prompt._get_a5_supplementary_prompt(report_type=analysis_mode)
                     # Include core results summary so LLM can reference them
                     supp_context = (
                         f"{user_content}\n\n"
@@ -426,7 +231,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                             {"role": "system", "content": supp_prompt},
                             {"role": "user", "content": supp_context},
                         ],
-                        step="A5",
+                        step="data_analytics",
                         step_name="数据分析报告（补充章节）",
                         progress_start=0.90,
                         progress_end=0.95,
@@ -479,7 +284,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             )
 
         if not report_data:
-            report_data = _generate_fallback_report(metrics, brand_profile)
+            report_data = a5_postprocess.generate_fallback_report(metrics, brand_profile)
             report_data["_degraded"] = True
             report_data["_degradation_note"] = (
                 "本报告基于原始数据自动生成，未经 AI 深度分析"
@@ -491,14 +296,15 @@ async def a5_analytics_node(state: AgentState) -> Command:
             )
 
         # Normalize report data: ensure all new fields have safe defaults
-        report_data = _normalize_report_data(report_data)
-        report_data = _enrich_report_data(
+        report_data = a5_sanitizer._normalize_report_data(report_data)
+        report_data = a5_postprocess.enrich_report_data(
             report_data, metrics, competitor_metrics, fetch_results, brand_profile
         )
+        report_data = a5_sanitizer._sanitize_user_facing_report(report_data)
 
         await send_progress_event(
             session_id=session_id,
-            step="A5",
+            step="data_analytics",
             step_name="数据分析报告",
             progress=0.95,
             message="报告生成完成，准备输出...",
@@ -508,7 +314,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
         from app.workflow.events import send_action_log_event
         await send_action_log_event(
-            session_id, "agent_summary", summary, step="A5", is_complete=True
+            session_id, "agent_summary", summary, step="data_analytics", is_complete=True
         )
 
         # Build fetch_results summary for analytics service
@@ -521,6 +327,35 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     "has_brand_mention": pr.get("answer", {}).get("has_brand_mention", False),
                     "citations": pr.get("citations", []),
                 })
+
+        # Build Report V2 contract fields (thread 5)
+        report_v2_sections = a5_contract._build_report_v2_sections(
+            report_data,
+            summary_metrics,
+            scenario_matrix,
+            competitor_battles,
+            risk_map,
+            action_queue,
+            source_overview,
+            metrics.get("citation_analysis", {}),
+        )
+
+        report_data["summary_metrics"] = summary_metrics
+        report_data["scenario_matrix"] = scenario_matrix
+        report_data["competitor_battles"] = competitor_battles
+        report_data["risk_map"] = risk_map
+        report_data["action_queue"] = action_queue
+        report_data["source_overview"] = source_overview
+
+        # Persist lightweight V2 fields into metrics/raw_data as well so
+        # snapshots and downstream analytics can read them without reparsing
+        # the full report payload.
+        metrics["summary_metrics"] = summary_metrics
+        metrics["scenario_matrix"] = scenario_matrix
+        metrics["competitor_battles"] = competitor_battles
+        metrics["risk_map"] = risk_map
+        metrics["action_queue"] = action_queue
+        metrics["source_overview"] = source_overview
 
         # --- Snapshot writing + Delta vs previous (single DB session) ---
         is_degraded = report_data.get("_degraded", False)
@@ -577,89 +412,28 @@ async def a5_analytics_node(state: AgentState) -> Command:
         from app.workflow.events import save_and_send_artifact
         report_output_type = "report_baseline" if is_baseline else "report"
         report_title = "基线全景分析报告" if is_baseline else "AI 可见性分析报告"
-        report_headline = (
-            f"{brand_profile.get('brand_name', '品牌')} 基线全景分析报告"
-            if is_baseline
-            else f"{brand_profile.get('brand_name', '品牌')} AI 可见性分析报告"
+        report_artifact_data = build_report_artifact_data(
+            brand_name=brand_profile.get('brand_name', '品牌'),
+            is_baseline=is_baseline,
+            metrics=metrics,
+            report_data=report_data,
+            summary_metrics=summary_metrics,
+            fetch_results_summary=fetch_results_summary,
+            competitor_metrics=competitor_metrics,
+            delta_vs_previous=delta_vs_previous,
+            report_v2_sections=report_v2_sections,
+            scenario_matrix=scenario_matrix,
+            competitor_battles=competitor_battles,
+            risk_map=risk_map,
+            action_queue=action_queue,
+            source_overview=source_overview,
         )
-        report_category = "baseline" if is_baseline else "scenario"
         await save_and_send_artifact(
             session_id=session_id,
             output_type=report_output_type,
             title=report_title,
             category=report_category,
-            data={
-                "headline": report_headline,
-                "subtitle": f"提及率: {metrics.get('mention_rate', 0):.1%} (BWVS指数: {metrics.get('bwvs_index', 0):.1f})",
-                "overallScore": metrics.get("bwvs_index", 0),
-                "bwvs_breakdown": metrics.get("bwvs_breakdown", {}),
-                "scoreBand": (
-                    "优秀" if metrics.get("bwvs_index", 0) >= 70
-                    else "良好" if metrics.get("bwvs_index", 0) >= 40
-                    else "需改进"
-                ),
-                "metrics": {
-                    "提及率": f"{metrics.get('mention_rate', 0):.1%}",
-                    "BWVS指数": metrics.get("bwvs_index", 0),
-                    "总问题数": metrics.get("total_questions", 0),
-                    "总提及数": metrics.get("total_mentions", 0),
-                },
-                "insights": [
-                    {
-                        "type": "strength",
-                        "title": (s.get("title", str(s)) if isinstance(s, dict) else str(s)),
-                        "description": (s.get("evidence", s.get("title", str(s))) if isinstance(s, dict) else str(s)),
-                    }
-                    for s in report_data.get("strengths", [])
-                ] + [
-                    {
-                        "type": "weakness",
-                        "title": (w.get("title", str(w)) if isinstance(w, dict) else str(w)),
-                        "description": (w.get("evidence", w.get("title", str(w))) if isinstance(w, dict) else str(w)),
-                    }
-                    for w in report_data.get("weaknesses", [])
-                ] + [
-                    {"type": "opportunity", "title": o, "description": o}
-                    for o in report_data.get("opportunities", [])
-                ],
-                "recommendations": [
-                    {
-                        "priority": idx + 1,
-                        "title": r.get("title", ""),
-                        "rationale": r.get("action", r.get("improvement_area", "")),
-                        "eeat_dimension": r.get("eeat_dimension", ""),
-                        "current_strength": r.get("current_strength", ""),
-                        "expected_impact": r.get("expected_impact", ""),
-                        "difficulty": r.get("difficulty", ""),
-                        "timeline": r.get("timeline", ""),
-                    }
-                    for idx, r in enumerate(report_data.get("actionable_recommendations", []))
-                ],
-                "content": report_data.get("executive_summary", ""),
-                # Raw data for enhanced rendering
-                "executive_summary": report_data.get("executive_summary", ""),
-                "key_findings": report_data.get("key_findings", []),
-                "strengths": report_data.get("strengths", []),
-                "weaknesses": report_data.get("weaknesses", []),
-                "opportunities": report_data.get("opportunities", []),
-                "threats": report_data.get("threats", []),
-                "action_plan": report_data.get("action_plan", {}),
-                "platform_breakdown": metrics.get("platform_breakdown", {}),
-                "sentiment_distribution": metrics.get("sentiment_distribution", {}),
-                "fetch_results_summary": fetch_results_summary,
-                "competitors": competitor_metrics,
-                # New enhanced fields
-                "metrics_raw": metrics,
-                "report_data": report_data,
-                "delta_vs_previous": delta_vs_previous,
-                "industry_insights": report_data.get("industry_insights"),
-                "platform_analysis": report_data.get("platform_analysis", []),
-                "competitor_deep_analysis": report_data.get("competitor_deep_analysis"),
-                "actionable_recommendations": report_data.get("actionable_recommendations", []),
-                "risk_alerts": report_data.get("risk_alerts", []),
-                "citation_analysis": metrics.get("citation_analysis", {}),
-                "keyword_analysis": metrics.get("keyword_analysis", {}),
-            },
+            data=report_artifact_data,
         )
         _ca = metrics.get("citation_analysis", {})
         logger.info(
@@ -719,7 +493,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
         await send_progress_event(
             session_id=session_id,
-            step="A5",
+            step="data_analytics",
             step_name="数据分析报告",
             progress=1.0,
             message="分析完成",
@@ -733,7 +507,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         await send_error_event(session_id, "A5", str(e), recoverable=True)
         await send_progress_event(
             session_id=session_id,
-            step="A5",
+            step="data_analytics",
             step_name="数据分析报告",
             progress=1.0,
             message=f"分析过程出错: {str(e)}",
@@ -787,7 +561,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                 "sentiment_score": 50.0,
                 "coverage_score": 0.0,
                 "citation_score": 50.0,
-                "weights": dict(BWVS_WEIGHTS),
+                "weights": dict(a5_metrics.BWVS_WEIGHTS),
                 "formula": (
                     "BWVS = 40%*提及率 + 25%*情感 + 20%*覆盖度 + 15%*引用质量"
                 ),
@@ -851,7 +625,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                 )
 
                 # Sentiment analysis
-                sentiment = _analyze_sentiment(content)
+                sentiment = a5_metrics.analyze_sentiment(content)
                 sentiment_counts[sentiment] += 1
 
                 # Brand mention
@@ -961,10 +735,10 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
 
     # ---- BWVS v2 composite score ----
     bwvs_index = (
-        BWVS_WEIGHTS["mention"] * mention_score / 100
-        + BWVS_WEIGHTS["sentiment"] * sentiment_score / 100
-        + BWVS_WEIGHTS["coverage"] * coverage_score / 100
-        + BWVS_WEIGHTS["citation"] * citation_score / 100
+        a5_metrics.BWVS_WEIGHTS["mention"] * mention_score / 100
+        + a5_metrics.BWVS_WEIGHTS["sentiment"] * sentiment_score / 100
+        + a5_metrics.BWVS_WEIGHTS["coverage"] * coverage_score / 100
+        + a5_metrics.BWVS_WEIGHTS["citation"] * citation_score / 100
     )
 
     breakdown: dict[str, Any] = {
@@ -972,7 +746,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
         "sentiment_score": round(sentiment_score, 2),
         "coverage_score": round(coverage_score, 2),
         "citation_score": round(citation_score, 2),
-        "weights": dict(BWVS_WEIGHTS),
+        "weights": dict(a5_metrics.BWVS_WEIGHTS),
         "formula": (
             "BWVS = 40%*提及率 + 25%*情感 + 20%*覆盖度 + 15%*引用质量"
         ),
@@ -1015,7 +789,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
     }
 
     # ---- Keyword analysis (TF-IDF word cloud) ----
-    keyword_analysis = _extract_keyword_analysis(fetch_results, brand_profile)
+    keyword_analysis = a5_keywords.extract_keyword_analysis(fetch_results, brand_profile)
     if keyword_analysis:
         logger.info(
             "[A5][Keywords] Extracted %d keywords across %d platforms",
@@ -1113,7 +887,7 @@ def _calculate_competitor_metrics(
                 )
                 if content and name.lower() in content.lower():
                     mentions += 1
-                    sentiment_scores.append(_analyze_sentiment(content))
+                    sentiment_scores.append(a5_metrics.analyze_sentiment(content))
                     appeared_questions.append({
                         "question": question_text[:60],
                         "platform": pr.get("platform", ""),
@@ -1148,531 +922,3 @@ def _calculate_competitor_metrics(
             cm["avg_ranking"] = name_to_rank[cm["name"]]
 
     return competitor_metrics
-
-
-def _get_a5_report_context_intro(report_type: str) -> str:
-    """Get context intro section based on report type."""
-    if report_type == "baseline":
-        return """## 报告类型：行业全景基线分析
-本次分析是品牌的行业全景基线分析。问题来源是行业通用的用户搜索问题（非特定画像）。
-请从行业全景视角分析品牌的 AI 搜索可见性。
-
-"""
-    return """## 报告类型：场景分析报告
-本次分析基于特定用户画像/场景。请从目标用户群体视角分析品牌表现。
-如果提供了基线参考数据，请在报告中对比场景表现与行业基线的差异。
-
-"""
-
-
-def _get_a5_core_prompt(report_type: str = "persona") -> str:
-    """A5 system prompt for CORE report sections (Call 1 of 2).
-
-    Generates: executive_summary, key_findings, platform_analysis,
-    competitor_deep_analysis, actionable_recommendations.
-    """
-    return _get_a5_report_context_intro(report_type) + """你是 Specta AI 的数据分析专家。基于品牌档案、抓取结果和指标，生成核心分析章节。
-
-## 核心约束
-- 所有洞察必须引用 fetch_results 中的具体内容，用具体数字支撑
-- 禁止空洞描述如"表现良好"、"总体不错"
-- 竞品数据必须从 fetch_results 样本统计，不得凭空生成
-
-## 输出 JSON（5 个核心章节）
-
-{
-  "executive_summary": "执行摘要（引用BWVS数值，不少于80字）",
-  "key_findings": ["发现1（含数字）", "发现2", "发现3"],
-  "platform_analysis": [{
-    "platform": "deepseek",
-    "platform_name": "DeepSeek",
-    "mention_count": 2,
-    "avg_citations": 1.5,
-    "answer_length_range": "200-400字",
-    "actual_quotes": ["实际引用片段"],
-    "performance_summary": "表现概述",
-    "content_preference": "内容偏好",
-    "strengths": ["优势"],
-    "weaknesses": ["短板"],
-    "optimization_tips": ["具体建议"]
-  }],
-  "competitor_deep_analysis": {
-    "overview": "对比总结（引用数字）",
-    "comparison_matrix": [{
-      "competitor": "竞品名",
-      "brand_mention_rate": 0.45,
-      "competitor_mention_rate": 0.30,
-      "vs_brand": "低于",
-      "advantage_reasons": ["原因"],
-      "learnings": ["可借鉴之处"]
-    }],
-    "differentiation_strategy": "差异化建议"
-  },
-  "actionable_recommendations": [{
-    "priority": "P0",
-    "title": "建议标题",
-    "eeat_dimension": "E1",
-    "current_strength": "当前优势（引用数据）",
-    "improvement_area": "改进方向",
-    "action": "具体行动",
-    "expected_impact": "预期效果（含指标变化）",
-    "difficulty": "低/中/高",
-    "timeline": "时间"
-  }]
-}
-
-⚠️ 直接以 { 开头输出 JSON，不要有任何解释或 Markdown 标记。"""
-
-
-def _get_a5_supplementary_prompt(report_type: str = "persona") -> str:
-    """A5 system prompt for SUPPLEMENTARY sections (Call 2 of 2).
-
-    Generates: industry_insights, SWOT, risk_alerts, recommendations, action_plan.
-    """
-    return _get_a5_report_context_intro(report_type) + """你是 Specta AI 的数据分析专家。核心报告已完成，现在生成补充分析章节。
-
-## 输出 JSON（补充章节）
-
-{
-  "industry_insights": {
-    "background": "行业背景（标注：基于行业经验）",
-    "typical_performance": "典型表现（区分数据来源）",
-    "trends": [{"trend": "趋势", "source": "实际数据/行业经验"}],
-    "opportunities": ["机会点"]
-  },
-  "strengths": [{"title": "优势标题", "scenario": "适用场景（如：送礼推荐、香氛科普）", "platforms": ["表现好的平台"], "evidence": "具体数据支撑（引用 fetch_results）", "eeat_factor": "E-E-A-T 中的哪个维度"}],
-  "weaknesses": [{"title": "劣势标题", "scenario": "薄弱场景（如：性价比对比、成分分析）", "platforms": ["表现差的平台"], "evidence": "具体数据支撑", "improvement_hint": "改进方向"}],
-  "opportunities": ["机会1", "机会2"],
-  "threats": ["威胁1", "威胁2"],
-  "risk_alerts": [{"level": "high/medium/low", "title": "风险标题", "description": "描述", "trigger_condition": "触发条件", "mitigation": "应对措施"}],
-  "action_plan": {"short_term": ["行动"], "medium_term": ["行动"], "long_term": ["行动"]}
-}
-
-⚠️ 直接以 { 开头输出 JSON，不要有任何解释或 Markdown 标记。"""
-
-
-def _get_a5_system_prompt(report_type: str = "persona") -> str:
-    """Legacy single-call prompt — kept for reference but no longer used by default."""
-    return _get_a5_core_prompt(report_type)
-
-
-def _build_a5_user_content(
-    brand_profile: dict,
-    metrics: dict,
-    fetch_results: list,
-    competitors: list,
-    marketing_personas: dict | None = None,
-    previous_snapshot: dict | None = None,
-    competitor_metrics: list | None = None,
-    analysis_mode: str = "persona",
-    baseline_metrics: dict | None = None,
-    baseline_report: dict | None = None,
-) -> str:
-    """Build enhanced user content for A5 with structured tables for LLM."""
-    sections = []
-
-    # 1. Brand info
-    sections.append(
-        f"## 品牌信息\n"
-        f"- 品牌名称: {brand_profile.get('brand_name', '')}\n"
-        f"- 行业: {brand_profile.get('industry', '')}\n"
-        f"- 核心产品: {', '.join(brand_profile.get('core_products', []))}\n"
-        f"- 品牌定位: {brand_profile.get('brand_positioning', '')}\n"
-        f"- 目标受众: {brand_profile.get('target_audience', '')}"
-    )
-
-    # 2. Core metrics — platform_breakdown as readable table
-    platform_breakdown = metrics.get("platform_breakdown", {})
-    if platform_breakdown:
-        platform_table_lines = [
-            "| 平台 | 总问题数 | 成功获取 | 品牌提及数 | 提及率 |",
-            "|------|---------|---------|-----------|--------|",
-        ]
-        for platform, stats in platform_breakdown.items():
-            total = stats.get("total", 0)
-            success = stats.get("success", 0)
-            mentions_count = stats.get("mentions", 0)
-            rate = f"{mentions_count / total:.1%}" if total > 0 else "0.0%"
-            platform_table_lines.append(
-                f"| {platform} | {total} | {success} | {mentions_count} | {rate} |"
-            )
-        platform_table = "\n".join(platform_table_lines)
-    else:
-        platform_table = "暂无平台数据"
-
-    sentiment_dist = metrics.get("sentiment_distribution", {})
-    sections.append(
-        f"## 核心指标\n"
-        f"- 提及率: {metrics.get('mention_rate', 0):.2%}\n"
-        f"- BWVS指数: {metrics.get('bwvs_index', 0):.2f}\n"
-        f"- 总问题数: {metrics.get('total_questions', 0)}\n"
-        f"- 总提及数: {metrics.get('total_mentions', 0)}\n"
-        f"- BWVS各维度: 提及={metrics.get('bwvs_breakdown', {}).get('mention_score', 0):.1f}, "
-        f"情感={metrics.get('bwvs_breakdown', {}).get('sentiment_score', 0):.1f}, "
-        f"覆盖={metrics.get('bwvs_breakdown', {}).get('coverage_score', 0):.1f}, "
-        f"引用={metrics.get('bwvs_breakdown', {}).get('citation_score', 0):.1f}\n\n"
-        f"### 各平台详细表现\n{platform_table}\n\n"
-        f"### 情感分布\n"
-        f"- 正面: {sentiment_dist.get('positive', 0)}, "
-        f"中性: {sentiment_dist.get('neutral', 0)}, "
-        f"负面: {sentiment_dist.get('negative', 0)}"
-    )
-
-    # 3. Platform answer samples
-    platform_samples = _extract_platform_samples(fetch_results, max_per_platform=3)
-    if platform_samples:
-        sections.append(
-            "## 各平台回答样本\n"
-            "（字段说明：answer_excerpt=回答摘录, has_brand_mention=是否提及品牌, "
-            "citations_count=引用总数, citation_samples=前3条实际引用链接[url+title]）\n"
-            + json.dumps(platform_samples, ensure_ascii=False, indent=2)
-        )
-
-    # 4. Competitors — structured quantitative table
-    brand_mention_rate = metrics.get("mention_rate", 0)
-    if competitor_metrics:
-        comp_lines = [
-            "## 竞品量化数据",
-            f"（本品牌提及率: {brand_mention_rate:.1%}）",
-            "",
-            "| 竞品名称 | 提及率 | 与本品牌对比 | 情感倾向 | 出现排名 |",
-            "|---------|--------|------------|---------|---------|",
-        ]
-        for cm in competitor_metrics:
-            name = cm.get("name", "")
-            mr = cm.get("mention_rate", 0)
-            sentiment = cm.get("sentiment", 0)
-            ranking = cm.get("avg_ranking", 0)
-            vs = "高于" if mr > brand_mention_rate else ("低于" if mr < brand_mention_rate else "持平")
-            sent_label = "正面" if sentiment > 0.2 else ("负面" if sentiment < -0.2 else "中性")
-            comp_lines.append(
-                f"| {name} | {mr:.1%} | {vs} | {sent_label}({sentiment:+.2f}) | #{ranking} |"
-            )
-
-        # Append appeared_in details
-        for cm in competitor_metrics:
-            appeared = cm.get("appeared_in", [])
-            if appeared:
-                comp_lines.append(f"\n**{cm['name']}** 出现在以下问题中：")
-                for a in appeared:
-                    comp_lines.append(f"  - [{a['platform']}] {a['question']}")
-
-        sections.append("\n".join(comp_lines))
-    elif competitors:
-        comp_summary = [
-            {"name": c.get("name", ""), "relevance_score": c.get("relevance_score", 0)}
-            for c in competitors[:8]
-        ]
-        sections.append(
-            f"## 竞品数据\n{json.dumps(comp_summary, ensure_ascii=False, indent=2)}"
-        )
-
-    # 5. User personas (if A2 succeeded)
-    if marketing_personas:
-        personas = marketing_personas.get("user_personas", [])
-        if personas:
-            persona_summary = [
-                {
-                    "name": p.get("persona_name", p.get("name", "")),
-                    "description": p.get("persona_description", p.get("description", "")),
-                    "priority": p.get("persona_priority", p.get("priority", "")),
-                }
-                for p in personas[:4]
-            ]
-            sections.append(
-                f"## 目标用户画像\n"
-                f"{json.dumps(persona_summary, ensure_ascii=False, indent=2)}"
-            )
-
-    # 6. Previous snapshot for comparison
-    if previous_snapshot:
-        sections.append(
-            f"## 上次分析数据 (日期: {previous_snapshot.get('date', 'N/A')})\n"
-            f"{json.dumps(previous_snapshot, ensure_ascii=False, indent=2)}"
-        )
-
-    # Inject baseline context for persona mode comparison
-    if analysis_mode == "persona" and baseline_metrics:
-        baseline_bwvs = baseline_metrics.get("bwvs_index", 0)
-        baseline_mention = baseline_metrics.get("mention_rate", 0)
-        baseline_findings = ""
-        if baseline_report:
-            findings = baseline_report.get("key_findings", [])[:3]
-            if findings:
-                baseline_findings = "\n".join(f"- {f}" for f in findings)
-        sections.append(
-            f"## 基线报告参考数据\n"
-            f"- 基线 BWVS: {baseline_bwvs:.1f}\n"
-            f"- 基线提及率: {baseline_mention:.1%}\n"
-            f"- 基线核心发现:\n{baseline_findings}\n\n"
-            f"请在场景报告中对比基线数据，说明该场景表现与行业基线的差异。"
-            f"在总览部分增加 '场景 BWVS vs 基线 BWVS' 的对比数据。"
-        )
-
-    sections.append(
-        "\n请生成完整的 7 章节分析报告（执行摘要、行业洞察、平台差异分析、"
-        "竞品深度对比、可执行建议、SWOT分析、风险提示）。"
-    )
-
-    return "\n\n".join(sections)
-
-
-def _extract_platform_samples(
-    fetch_results: list, max_per_platform: int = 3
-) -> dict[str, list[dict]]:
-    """从 fetch_results 中提取各平台的回答样本。
-
-    每个平台最多 max_per_platform 条，避免 context 过长。
-    优先选取品牌被提及的回答。
-    """
-    platform_samples: dict[str, list[dict]] = {}
-
-    for fr in fetch_results:
-        question_text = fr.get("question_text", "")
-        for pr in fr.get("platform_results", []):
-            platform = pr.get("platform", "unknown")
-            if platform not in platform_samples:
-                platform_samples[platform] = []
-
-            if len(platform_samples[platform]) >= max_per_platform:
-                continue
-
-            if pr.get("success"):
-                answer = pr.get("answer", {})
-                content = answer.get("content", "") if isinstance(answer, dict) else str(answer)
-                has_mention = answer.get("has_brand_mention", False) if isinstance(answer, dict) else False
-
-                # Truncate long answers
-                if len(content) > 500:
-                    content = content[:500] + "..."
-
-                citations = pr.get("citations", [])
-                # Provide first 3 citation URLs/titles so A5 prompt can reference
-                # actual sources when evaluating Authoritativeness (EEAT-A)
-                sample_citations = [
-                    {
-                        "url": c.get("url", ""),
-                        "title": c.get("title", "")[:60],
-                    }
-                    for c in citations[:3]
-                    if isinstance(c, dict) and c.get("url")
-                ]
-                platform_samples[platform].append({
-                    "question": question_text[:80],
-                    "answer_excerpt": content,
-                    "has_brand_mention": has_mention,
-                    "citations_count": len(citations),
-                    "citation_samples": sample_citations,  # 实际引用链接样本
-                })
-
-    return platform_samples
-
-
-def _normalize_report_data(report_data: dict[str, Any]) -> dict[str, Any]:
-    """规范化 LLM 输出的报告数据，处理缺失字段。
-
-    LLM 输出可能漏掉新增的 optional 字段，
-    此函数确保所有字段都有安全的默认值。
-    """
-    # Required fields
-    report_data.setdefault("executive_summary", "分析已完成。")
-    report_data.setdefault("key_findings", [])
-    report_data.setdefault("strengths", [])
-    report_data.setdefault("weaknesses", [])
-    report_data.setdefault("opportunities", [])
-    report_data.setdefault("threats", [])
-    report_data.setdefault("recommendations", [])
-    report_data.setdefault("action_plan", {})
-
-    # New optional fields -- None or empty list as defaults
-    report_data.setdefault("industry_insights", None)
-    report_data.setdefault("platform_analysis", [])
-    report_data.setdefault("competitor_deep_analysis", None)
-    report_data.setdefault("actionable_recommendations", [])
-    report_data.setdefault("risk_alerts", [])
-
-    return report_data
-
-
-def _enrich_report_data(
-    report_data: dict[str, Any],
-    metrics: dict[str, Any],
-    competitor_metrics: list[dict[str, Any]],
-    fetch_results: list,
-    brand_profile: dict,
-) -> dict[str, Any]:
-    """用已计算的量化指标充实 LLM 的描述性报告。
-
-    解决前端期望字段名与 LLM 输出字段名不匹配的问题。
-    使用 setdefault 保持 LLM 已有值不被覆盖。
-    """
-    platform_breakdown = metrics.get("platform_breakdown", {})
-
-    # --- 平台分析: 注入计算指标 ---
-    platform_analysis = report_data.get("platform_analysis", [])
-    for pa in platform_analysis:
-        platform_key = str(pa.get("platform") or pa.get("name") or "")
-
-        # Step 1: Map LLM field names → frontend expected names (before setdefault)
-        if "performance_summary" in pa and "summary" not in pa:
-            pa["summary"] = pa["performance_summary"]
-        if "mention_count" in pa and "mentions" not in pa:
-            pa["mentions"] = pa["mention_count"]
-
-        # Step 2: Match platform_breakdown keys (case-insensitive)
-        pb = None
-        for key, val in platform_breakdown.items():
-            if key.lower() == platform_key.lower():
-                pb = val
-                break
-
-        # Step 3: Fill missing fields with calculated values (setdefault preserves LLM/renamed values)
-        if pb:
-            total = pb.get("total", 0)
-            mentions_val = pb.get("mentions", 0)
-            pa.setdefault("mentions", mentions_val)
-            pa.setdefault("total_questions", total)
-            pa.setdefault(
-                "mention_rate",
-                round(mentions_val / total, 4) if total > 0 else 0.0,
-            )
-            pa.setdefault(
-                "sentiment",
-                _compute_platform_sentiment(fetch_results, platform_key),
-            )
-            pa.setdefault(
-                "status",
-                "success" if pb.get("success", 0) > 0 else "failed",
-            )
-
-    # --- 竞品矩阵: 注入计算指标 ---
-    comp_deep = report_data.get("competitor_deep_analysis")
-    if isinstance(comp_deep, dict):
-        matrix = comp_deep.get("comparison_matrix", [])
-
-        # Build lookup from competitor_metrics
-        cm_lookup = {
-            cm["name"].lower(): cm
-            for cm in competitor_metrics
-            if cm.get("name")
-        }
-
-        for row in matrix:
-            # Map LLM field name → frontend expected name
-            if "competitor" in row and "name" not in row:
-                row["name"] = row["competitor"]
-            if "competitor_mention_rate" in row and "mention_rate" not in row:
-                row["mention_rate"] = row["competitor_mention_rate"]
-
-            name_lower = str(
-                row.get("name") or row.get("competitor") or ""
-            ).lower()
-            cm = cm_lookup.get(name_lower)
-
-            if cm:
-                row.setdefault("mention_rate", cm.get("mention_rate", 0))
-                # Convert sentiment from -1~1 to 0~100
-                raw_sentiment = cm.get("sentiment", 0)
-                row.setdefault(
-                    "sentiment",
-                    round(max(0, min(100, (raw_sentiment + 1) * 50)), 1),
-                )
-                # Coverage: unique platforms / total platforms
-                appeared_in = cm.get("appeared_in", [])
-                unique_platforms = len(
-                    set(
-                        a.get("platform", "")
-                        for a in appeared_in
-                        if a.get("platform")
-                    )
-                )
-                total_platforms = len(PLATFORMS)
-                coverage = (
-                    unique_platforms / total_platforms
-                    if total_platforms > 0
-                    else 0
-                )
-                row.setdefault("coverage", round(coverage, 4))
-
-                # Simplified BWVS: same formula as main but citation=default
-                from app.core.constants import BWVSConstants
-                mr_score = min(100.0, row.get("mention_rate", 0) * BWVSConstants.MENTION_RATE_MULTIPLIER)
-                sent_score = row.get("sentiment", BWVSConstants.DEFAULT_SENTIMENT_SCORE)
-                cov_score = row.get("coverage", 0) * 100
-                bwvs = (
-                    BWVS_WEIGHTS["mention"] * mr_score
-                    + BWVS_WEIGHTS["sentiment"] * sent_score
-                    + BWVS_WEIGHTS["coverage"] * cov_score
-                    + BWVS_WEIGHTS["citation"] * BWVSConstants.DEFAULT_CITATION_SCORE
-                ) / 100
-                row.setdefault("bwvs", round(min(100, bwvs), 1))
-
-        # Insert brand self row at top if not present
-        has_self = any(r.get("is_self") for r in matrix)
-        if not has_self and brand_profile.get("brand_name"):
-            breakdown = metrics.get("bwvs_breakdown", {})
-            self_row = {
-                "name": brand_profile["brand_name"],
-                "is_self": True,
-                "bwvs": round(metrics.get("bwvs_index", 0), 1),
-                "mention_rate": round(metrics.get("mention_rate", 0), 4),
-                "sentiment": round(breakdown.get("sentiment_score", 50), 1),
-                "coverage": round(
-                    breakdown.get("coverage_score", 0) / 100, 4
-                ),
-            }
-            matrix.insert(0, self_row)
-
-        comp_deep["comparison_matrix"] = matrix
-
-    return report_data
-
-
-def _generate_fallback_report(metrics: dict, brand_profile: dict) -> dict[str, Any]:
-    """Generate fallback report when LLM fails.
-
-    Includes all new enhanced fields with safe defaults.
-    """
-    brand_name = brand_profile.get("brand_name", "品牌")
-    mention_rate = metrics.get("mention_rate", 0)
-    bwvs_index = metrics.get("bwvs_index", 0)
-
-    # Determine visibility level
-    if mention_rate >= 0.7:
-        summary = (
-            f"{brand_name} 的 AI 搜索可见度分析已完成。"
-            f"整体提及率为 {mention_rate:.1%}，BWVS 指数为 {bwvs_index:.1f}，表现优秀。"
-        )
-    elif mention_rate >= 0.4:
-        summary = (
-            f"{brand_name} 的 AI 搜索可见度分析已完成。"
-            f"整体提及率为 {mention_rate:.1%}，BWVS 指数为 {bwvs_index:.1f}，仍有提升空间。"
-        )
-    else:
-        summary = (
-            f"{brand_name} 的 AI 搜索可见度分析已完成。"
-            f"整体提及率为 {mention_rate:.1%}，BWVS 指数为 {bwvs_index:.1f}，建议优化内容策略。"
-        )
-
-    return {
-        "executive_summary": summary,
-        "key_findings": [
-            f"品牌整体提及率: {mention_rate:.1%}",
-            f"BWVS 综合指数: {bwvs_index:.1f}",
-        ],
-        # New enhanced fields with defaults
-        "industry_insights": None,
-        "platform_analysis": [],
-        "competitor_deep_analysis": None,
-        "actionable_recommendations": [],
-        "risk_alerts": [],
-        # Existing fields
-        "strengths": [f"品牌在 AI 搜索中有基础曝光 (提及率 {mention_rate:.1%})"] if mention_rate > 0.1 else [],
-        "weaknesses": [],
-        "opportunities": ["建议增加品牌相关内容在权威平台的布局"],
-        "threats": [],
-        "recommendations": [],
-        "action_plan": {},
-        # Degradation marker
-        "_degraded": True,
-    }

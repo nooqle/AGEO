@@ -1,10 +1,7 @@
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+﻿import type { Metadata } from 'next';
 import './globals.css';
 import '@/styles/design-system.css';
 import { ToastContainer } from '@/components/ui/toast';
-
-const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'Specta AI - 品牌声量智能分析平台',
@@ -25,7 +22,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={inter.className}>
+      <body className="antialiased">
         {children}
         <ToastContainer />
       </body>

@@ -1,5 +1,6 @@
 import type { Session, Message, Output, AgentControlResponse, ConfirmationResponse } from '@/types/api';
 import type { DashboardData } from '@/types/dashboard';
+import { buildDashboardV2Data } from '@/adapters/dashboardV2';
 import { normalizeEntity } from '@/types/entity';
 import type { Entity, CreateEntityInput, UpdateEntityInput } from '@/types/entity';
 import type { TouchpointTree } from '@/types/touchpoint';
@@ -207,8 +208,42 @@ class ApiService {
     return this.request<{ competitors: DashboardData['competitors'] }>(`/analytics/competitors${query ? `?${query}` : ''}`);
   }
 
+  async getAnalyticsOverviewV2(brandId?: string, dateRange: string = 'month') {
+    const params = new URLSearchParams({ date_range: dateRange });
+    if (brandId) params.set('brand_id', brandId);
+    return this.request<Record<string, unknown>>(`/analytics/v2/overview?${params}`);
+  }
+
+  async getAnalyticsScenariosV2(brandId?: string) {
+    const params = new URLSearchParams();
+    if (brandId) params.set('brand_id', brandId);
+    const query = params.toString();
+    return this.request<Record<string, unknown>>(`/analytics/v2/scenarios${query ? `?${query}` : ''}`);
+  }
+
+  async getAnalyticsCompetitorBattlesV2(brandId?: string) {
+    const params = new URLSearchParams();
+    if (brandId) params.set('brand_id', brandId);
+    const query = params.toString();
+    return this.request<Record<string, unknown>>(`/analytics/v2/competitor-battles${query ? `?${query}` : ''}`);
+  }
+
+  async getAnalyticsSourcesV2(brandId?: string) {
+    const params = new URLSearchParams();
+    if (brandId) params.set('brand_id', brandId);
+    const query = params.toString();
+    return this.request<Record<string, unknown>>(`/analytics/v2/sources${query ? `?${query}` : ''}`);
+  }
+
+  async getAnalyticsRisksActionsV2(brandId?: string) {
+    const params = new URLSearchParams();
+    if (brandId) params.set('brand_id', brandId);
+    const query = params.toString();
+    return this.request<Record<string, unknown>>(`/analytics/v2/risks-actions${query ? `?${query}` : ''}`);
+  }
+
   async getAnalyticsAll(brandId?: string, dateRange: string = 'month'): Promise<DashboardData> {
-    const [overview, visibility, platforms, sources, aeo, sentiment, competitors] = await Promise.all([
+    const [overview, visibility, platforms, sources, aeo, sentiment, competitors, overviewV2, scenariosV2, competitorBattlesV2, sourcesV2, risksActionsV2] = await Promise.allSettled([
       this.getAnalyticsOverview(brandId, dateRange),
       this.getAnalyticsVisibility(brandId, dateRange),
       this.getAnalyticsPlatforms(brandId),
@@ -216,17 +251,36 @@ class ApiService {
       this.getAnalyticsAeo(brandId),
       this.getAnalyticsSentiment(brandId),
       this.getAnalyticsCompetitors(brandId),
+      this.getAnalyticsOverviewV2(brandId, dateRange),
+      this.getAnalyticsScenariosV2(brandId),
+      this.getAnalyticsCompetitorBattlesV2(brandId),
+      this.getAnalyticsSourcesV2(brandId),
+      this.getAnalyticsRisksActionsV2(brandId),
     ]);
 
+    const ensure = <T,>(result: PromiseSettledResult<T>, fallback: T): T =>
+      result.status === 'fulfilled' ? result.value : fallback;
+    const optional = <T,>(result: PromiseSettledResult<T>): T | undefined =>
+      result.status === 'fulfilled' ? result.value : undefined;
+
+    const v2 = buildDashboardV2Data({
+      overview: optional(overviewV2),
+      scenarios: optional(scenariosV2),
+      competitorBattles: optional(competitorBattlesV2),
+      sources: optional(sourcesV2),
+      risksActions: optional(risksActionsV2),
+    });
+
     return {
-      kpi: overview.kpi,
-      visibility: visibility.visibility,
-      platforms: platforms.platforms,
-      sources: sources.sources,
-      aeoMetrics: aeo.aeoMetrics,
-      sentiment: sentiment.sentiment,
+      kpi: ensure(overview, { kpi: { brandVisibility: null, mentionRate: null, shareOfVoice: null, visibilityTrend: null, mentionTrend: null, sovTrend: null } }).kpi,
+      visibility: ensure(visibility, { visibility: [] }).visibility,
+      platforms: ensure(platforms, { platforms: [] }).platforms,
+      sources: ensure(sources, { sources: [] }).sources,
+      aeoMetrics: ensure(aeo, { aeoMetrics: [] }).aeoMetrics,
+      sentiment: ensure(sentiment, { sentiment: [] }).sentiment,
       optimizations: [],
-      competitors: competitors.competitors,
+      competitors: ensure(competitors, { competitors: [] }).competitors,
+      v2,
     };
   }
 
@@ -593,3 +647,4 @@ class ApiService {
 }
 
 export const api = new ApiService();
+

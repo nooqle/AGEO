@@ -38,7 +38,7 @@ export function BrandCards() {
     try {
       // 先查已有 Session — 有历史对话，直接进入，不自动发送品牌名
       const session = await api.getSessionByEntity(entity.id);
-      router.push(`/chat/${session.id}`);
+      router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity.name || '')}`);
     } catch {
       // 404 — 创建新 Session，带品牌名参数自动开始分析
       try {
