@@ -113,6 +113,7 @@ interface ConversationState {
   appendThoughtDelta: (delta: string) => void;
   addActionLog: (log: ActionLogEntry) => void;
   updateActionLog: (id: string, updates: Partial<ActionLogEntry>) => void;
+  completePendingActionLogs: (messageSuffix?: string) => void;
   setPlanText: (text: string) => void;
   setInlineConfirmation: (confirmation: InlineConfirmation | null) => void;
   markConfirmationSelected: (messageId: string, optionId: string) => void;
@@ -160,6 +161,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   // WebSocket confirmation function
   wsConfirmation: null,
   // New: streaming state
+  // These fields are transient execution buffers. They only describe the in-flight
+  // assistant turn and are folded into a persisted Message by finalizeCurrentMessage().
+  // currentAgentMessageId owns the buffer identity; streamingReply/currentActionLogs must
+  // never be treated as historical state after the message is finalized.
   streamingReply: '',
   streamingThought: '',
   currentActionLogs: [],
@@ -560,27 +565,94 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
 
   updateActionLog: (id, updates) => {
     set((state) => {
-      const newLogs = state.currentActionLogs.map((log) =>
-        log.id === id ? { ...log, ...updates } : log
-      );
-      const msgId = state.currentAgentMessageId;
-      if (msgId) {
+      let changed = false;
+      const newLogs = state.currentActionLogs.map((log) => {
+        if (log.id !== id) {
+          return log;
+        }
+        changed = true;
+        return { ...log, ...updates };
+      });
+
+      const newMessages = state.messages.map((message) => {
+        const actionLogs = message.layers?.actionLogs || [];
+        let messageChanged = false;
+        const updatedLogs = actionLogs.map((log) => {
+          if (log.id !== id) {
+            return log;
+          }
+          messageChanged = true;
+          changed = true;
+          return { ...log, ...updates };
+        });
+
+        if (!messageChanged) {
+          return message;
+        }
+
         return {
-          currentActionLogs: newLogs,
-          messages: state.messages.map((m) =>
-            m.id === msgId
-              ? {
-                  ...m,
-                  layers: {
-                    ...(m.layers || { actionLogs: [] }),
-                    actionLogs: newLogs,
-                  },
-                }
-              : m
-          ),
+          ...message,
+          layers: {
+            ...(message.layers || { actionLogs: [] }),
+            ...message.layers,
+            actionLogs: updatedLogs,
+          },
         };
+      });
+
+      if (!changed) {
+        return {};
       }
-      return { currentActionLogs: newLogs };
+
+      return {
+        currentActionLogs: newLogs,
+        messages: newMessages,
+      };
+    });
+  },
+
+  completePendingActionLogs: (messageSuffix) => {
+    set((state) => {
+      let changed = false;
+      const completeLog = (log: ActionLogEntry) => {
+        if (log.isComplete) {
+          return log;
+        }
+        changed = true;
+        const nextMessage = messageSuffix && !log.message.includes(messageSuffix)
+          ? `${log.message} ${messageSuffix}`.trim()
+          : log.message;
+        return {
+          ...log,
+          isComplete: true,
+          message: nextMessage,
+        };
+      };
+
+      const newLogs = state.currentActionLogs.map(completeLog);
+      const newMessages = state.messages.map((message) => {
+        const actionLogs = message.layers?.actionLogs || [];
+        if (!actionLogs.some((log) => !log.isComplete)) {
+          return message;
+        }
+        return {
+          ...message,
+          layers: {
+            ...(message.layers || { actionLogs: [] }),
+            ...message.layers,
+            actionLogs: actionLogs.map(completeLog),
+          },
+        };
+      });
+
+      if (!changed) {
+        return {};
+      }
+
+      return {
+        currentActionLogs: newLogs,
+        messages: newMessages,
+      };
     });
   },
 
@@ -720,3 +792,5 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     });
   },
 }));
+
+

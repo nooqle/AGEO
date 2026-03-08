@@ -1,312 +1,23 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useConversationStore } from '@/stores/conversationStore';
 import { useCanvasStore } from '@/stores/canvasStore';
 import type { Message, ExecutionStep, TPAORContent, ConfirmationRequest, ConfirmationOption, ActionLogEntry, SystemNoticeData } from '@/types/message';
-import type { CanvasContent, CanvasContentDataMap, CanvasContentType, CanvasPreviewMetricValue } from '@/types/canvas';
-import type { TPAORPhase, ExecutionProgress, ProgressStep, SubTask, BrowserState } from '@/types/agent';
+import type { TPAORPhase } from '@/types/agent';
 import { toast } from '@/components/ui/toast';
 import { LLMDecision, ExecutionPlanStep } from '@/types/orchestration';
 import { WebSocketEventData } from '@/types/websocket';
+import { collectPendingActionLogs, findMatchingPendingActionLog } from '@/hooks/websocket/actionLog';
+import { buildAgentMessage } from '@/hooks/websocket/agentMessage';
+import { buildBrowserState, buildExecutionProgress } from '@/hooks/websocket/execution';
+import { buildCompletedTask, buildFollowUpSuggestions, buildStopState } from '@/hooks/websocket/executionComplete';
+import { BROWSER_PLATFORMS, BROWSER_STATES, EXECUTION_STATUSES, TPAOR_PHASE_MAP, TPAOR_PHASES, isValidWebSocketMessage, mapStepStatus } from '@/hooks/websocket/protocol';
+import { isRecord } from '@/hooks/websocket/canvas';
+import { buildOutputReadyPayload } from '@/hooks/websocket/output';
+import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmation';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
-
-/** Map backend step status to frontend ProgressStep status */
-function _mapStepStatus(status: string | undefined): ProgressStep['status'] {
-  switch (status) {
-    case 'completed': return 'completed';
-    case 'in_progress':
-    case 'running': return 'in_progress';
-    case 'error': return 'error';
-    case 'skipped': return 'skipped';
-    default: return 'pending';
-  }
-}
-
-// TPAOR phase mapping from Chinese to English
-const TPAOR_PHASE_MAP: Record<string, string> = {
-  '思考': 'thought',
-  '规划': 'plan',
-  '行动': 'action',
-  '观察': 'observation',
-  '回复': 'response',
-};
-
-const TPAOR_PHASES: TPAORPhase[] = ['thought', 'plan', 'action', 'observation', 'response'];
-const EXECUTION_STATUSES: ExecutionProgress['status'][] = ['pending', 'running', 'completed', 'failed'];
-const BROWSER_STATES: BrowserState['state'][] = [
-  'idle',
-  'initializing',
-  'navigating',
-  'checking_login',
-  'waiting_for_login',
-  'waiting_for_modal',
-  'logged_in',
-  'enabling_search',
-  'submitting',
-  'waiting_response',
-  'extracting',
-  'completed',
-  'error',
-];
-const BROWSER_PLATFORMS: BrowserState['platform'][] = ['kimi', 'deepseek', 'doubao', 'hunyuan'];
-
-// WebSocket message validation
-interface WebSocketMessage {
-  event: string;
-  data: WebSocketEventData;
-}
-
-function isValidWebSocketMessage(message: unknown): message is WebSocketMessage {
-  if (!message || typeof message !== 'object') {
-    return false;
-  }
-
-  const msg = message as Record<string, unknown>;
-
-  // 验证 event 字段
-  if (typeof msg.event !== 'string' || !msg.event) {
-    return false;
-  }
-
-  // 验证 data 字段存在（可以是任何类型）
-  if (!('data' in msg)) {
-    return false;
-  }
-
-  return true;
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null;
-
-const normalizePreviewData = (raw: Record<string, unknown>) => ({
-  description: typeof raw.description === 'string' ? raw.description : undefined,
-  metrics: isRecord(raw.metrics) ? (raw.metrics as Record<string, CanvasPreviewMetricValue>) : undefined,
-  itemCount: typeof raw.itemCount === 'number'
-    ? raw.itemCount
-    : Array.isArray(raw.items)
-    ? raw.items.length
-    : undefined,
-});
-
-const normalizeCanvasData = <T extends CanvasContentType>(
-  type: T,
-  raw: unknown
-): CanvasContentDataMap[T] => {
-  const data = isRecord(raw) ? raw : {};
-  const preview = normalizePreviewData(data);
-
-  if (type === 'report') {
-    const insights = Array.isArray(data.insights)
-      ? (data.insights as CanvasContentDataMap['report']['insights'])
-      : undefined;
-    const recommendations = Array.isArray(data.recommendations)
-      ? (data.recommendations as CanvasContentDataMap['report']['recommendations'])
-      : undefined;
-
-    // Validate and pass through bwvs_breakdown only if all four scores are numbers
-    const rawBreakdown = isRecord(data.bwvs_breakdown) ? data.bwvs_breakdown : undefined;
-    const bwvs_breakdown = rawBreakdown &&
-      typeof rawBreakdown.mention_score === 'number' &&
-      typeof rawBreakdown.sentiment_score === 'number' &&
-      typeof rawBreakdown.coverage_score === 'number' &&
-      typeof rawBreakdown.citation_score === 'number' &&
-      isRecord(rawBreakdown.weights)
-      ? (rawBreakdown as unknown as CanvasContentDataMap['report']['bwvs_breakdown'])
-      : undefined;
-
-    return {
-      ...preview,
-      headline: typeof data.headline === 'string' ? data.headline : undefined,
-      subtitle: typeof data.subtitle === 'string' ? data.subtitle : undefined,
-      overallScore: typeof data.overallScore === 'number'
-        ? data.overallScore
-        : typeof data.overall_score === 'number'
-        ? data.overall_score
-        : undefined,
-      scoreBand: typeof data.scoreBand === 'string'
-        ? data.scoreBand
-        : typeof data.score_band === 'string'
-        ? data.score_band
-        : undefined,
-      metrics: isRecord(data.metrics)
-        ? (data.metrics as Record<string, CanvasPreviewMetricValue>)
-        : preview.metrics,
-      insights,
-      recommendations,
-      content: typeof data.content === 'string' ? data.content : undefined,
-      bwvs_breakdown,
-      // A5 extended fields passthrough (consumed by ReportContent via ext = data as Record<string, unknown>)
-      key_findings: data.key_findings,
-      strengths: data.strengths,
-      weaknesses: data.weaknesses,
-      opportunities: data.opportunities,
-      threats: data.threats,
-      action_plan: data.action_plan,
-      platform_breakdown: data.platform_breakdown,
-      sentiment_distribution: data.sentiment_distribution,
-      industry_insights: data.industry_insights,
-      platform_analysis: data.platform_analysis,
-      competitor_deep_analysis: data.competitor_deep_analysis,
-      risk_alerts: data.risk_alerts,
-      delta_vs_previous: data.delta_vs_previous,
-      competitor_bwvs: data.competitor_bwvs,
-      _degradation_note: typeof data._degradation_note === 'string' ? data._degradation_note : undefined,
-      citation_analysis: data.citation_analysis,
-    } as CanvasContentDataMap[T];
-  }
-
-  if (type === 'chart') {
-    return {
-      ...preview,
-      chartType: typeof data.chartType === 'string'
-        ? (data.chartType as CanvasContentDataMap['chart']['chartType'])
-        : typeof data.chart_type === 'string'
-        ? (data.chart_type as CanvasContentDataMap['chart']['chartType'])
-        : undefined,
-      data: Array.isArray(data.data)
-        ? (data.data as CanvasContentDataMap['chart']['data'])
-        : undefined,
-      xAxisKey: typeof data.xAxisKey === 'string'
-        ? data.xAxisKey
-        : typeof data.x_axis_key === 'string'
-        ? data.x_axis_key
-        : undefined,
-      valueKey: typeof data.valueKey === 'string'
-        ? data.valueKey
-        : typeof data.value_key === 'string'
-        ? data.value_key
-        : undefined,
-      angleKey: typeof data.angleKey === 'string'
-        ? data.angleKey
-        : typeof data.angle_key === 'string'
-        ? data.angle_key
-        : undefined,
-      series: Array.isArray(data.series)
-        ? (data.series as CanvasContentDataMap['chart']['series'])
-        : undefined,
-      summary: typeof data.summary === 'string' ? data.summary : undefined,
-    } as CanvasContentDataMap[T];
-  }
-
-  if (type === 'dataTable') {
-    return {
-      ...preview,
-      columns: Array.isArray(data.columns)
-        ? (data.columns as CanvasContentDataMap['dataTable']['columns'])
-        : undefined,
-      rows: Array.isArray(data.rows)
-        ? (data.rows as CanvasContentDataMap['dataTable']['rows'])
-        : undefined,
-    } as CanvasContentDataMap[T];
-  }
-
-  if (type === 'pipeline') {
-    return {
-      ...preview,
-      pipeline: data.pipeline && typeof data.pipeline === 'object'
-        ? data.pipeline as CanvasContentDataMap['pipeline']['pipeline']
-        : undefined,
-      maxSelection: typeof data.maxSelection === 'number'
-        ? data.maxSelection
-        : typeof data.max_selection === 'number'
-        ? data.max_selection
-        : undefined,
-      minSelection: typeof data.minSelection === 'number'
-        ? data.minSelection
-        : typeof data.min_selection === 'number'
-        ? data.min_selection
-        : undefined,
-    } as CanvasContentDataMap[T];
-  }
-
-  if (type === 'workflow') {
-    const statusOptions: Array<NonNullable<CanvasContentDataMap['workflow']['executionStatus']>> = [
-      'idle',
-      'running',
-      'paused',
-      'completed',
-      'error',
-    ];
-    const rawStatus = typeof data.executionStatus === 'string'
-      ? data.executionStatus
-      : typeof data.execution_status === 'string'
-      ? data.execution_status
-      : undefined;
-    const executionStatus = rawStatus && statusOptions.includes(rawStatus as NonNullable<CanvasContentDataMap['workflow']['executionStatus']>)
-      ? (rawStatus as NonNullable<CanvasContentDataMap['workflow']['executionStatus']>)
-      : undefined;
-
-    return {
-      ...preview,
-      currentStep: typeof data.currentStep === 'string'
-        ? data.currentStep
-        : typeof data.current_step === 'string'
-        ? data.current_step
-        : undefined,
-      executionStatus,
-      completedSteps: Array.isArray(data.completedSteps)
-        ? (data.completedSteps as CanvasContentDataMap['workflow']['completedSteps'])
-        : Array.isArray(data.completed_steps)
-        ? (data.completed_steps as CanvasContentDataMap['workflow']['completedSteps'])
-        : undefined,
-      brandProfile: isRecord(data.brandProfile)
-        ? (data.brandProfile as CanvasContentDataMap['workflow']['brandProfile'])
-        : undefined,
-      brand_profile: isRecord(data.brand_profile)
-        ? (data.brand_profile as CanvasContentDataMap['workflow']['brand_profile'])
-        : undefined,
-      competitors: Array.isArray(data.competitors)
-        ? (data.competitors as CanvasContentDataMap['workflow']['competitors'])
-        : undefined,
-      competitive_landscape: isRecord(data.competitive_landscape)
-        ? (data.competitive_landscape as CanvasContentDataMap['workflow']['competitive_landscape'])
-        : undefined,
-      personas: Array.isArray(data.personas)
-        ? (data.personas as CanvasContentDataMap['workflow']['personas'])
-        : undefined,
-      user_personas: Array.isArray(data.user_personas)
-        ? (data.user_personas as CanvasContentDataMap['workflow']['user_personas'])
-        : undefined,
-      brand_summary: isRecord(data.brand_summary)
-        ? (data.brand_summary as CanvasContentDataMap['workflow']['brand_summary'])
-        : undefined,
-      selection: isRecord(data.selection)
-        ? (data.selection as CanvasContentDataMap['workflow']['selection'])
-        : undefined,
-    } as CanvasContentDataMap[T];
-  }
-
-  if (type === 'questionList') {
-    return {
-      ...preview,
-      questions: Array.isArray(data.questions)
-        ? (data.questions as CanvasContentDataMap['questionList']['questions'])
-        : undefined,
-      simulatedQuestions: isRecord(data.simulatedQuestions)
-        ? (data.simulatedQuestions as CanvasContentDataMap['questionList']['simulatedQuestions'])
-        : isRecord(data.simulated_questions)
-        ? (data.simulated_questions as CanvasContentDataMap['questionList']['simulatedQuestions'])
-        : undefined,
-      generationMode: typeof data.generationMode === 'string'
-        ? data.generationMode
-        : typeof data.generation_mode === 'string'
-        ? data.generation_mode
-        : undefined,
-    } as CanvasContentDataMap[T];
-  }
-
-  return {
-    ...preview,
-    fetchResults: Array.isArray(data.fetchResults)
-      ? (data.fetchResults as CanvasContentDataMap['fetchResults']['fetchResults'])
-      : Array.isArray(data.fetch_results)
-      ? (data.fetch_results as CanvasContentDataMap['fetchResults']['fetchResults'])
-      : undefined,
-  } as CanvasContentDataMap[T];
-};
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -339,6 +50,7 @@ export function useWebSocket(sessionId: string | null) {
     appendThoughtDelta,
     addActionLog,
     updateActionLog,
+    completePendingActionLogs,
     setPlanText,
     setInlineConfirmation,
     finalizeCurrentMessage,
@@ -478,6 +190,7 @@ export function useWebSocket(sessionId: string | null) {
         // 新一轮编排器回复：finalize 当前消息，创建新消息
         // 这样上一轮 Agent 的内容保留在独立消息中，不会被覆盖
         if (isNewRound && agentMessageIdRef.current) {
+          completePendingActionLogs();
           finalizeCurrentMessage();
           useConversationStore.setState({
             streamingReply: '',
@@ -561,12 +274,23 @@ export function useWebSocket(sessionId: string | null) {
           useConversationStore.setState({ currentAgentMessageId: newId });
         }
 
-        // 查找是否已有同 step 的日志（用于更新完成状态）
-        const existingLogs = useConversationStore.getState().currentActionLogs;
-        const existingLog = step ? existingLogs.find(l => l.step === step && !l.isComplete) : null;
+        const storeState = useConversationStore.getState();
+        const existingLogs = collectPendingActionLogs(storeState.currentActionLogs, storeState.messages);
+        const existingLog = findMatchingPendingActionLog(existingLogs, {
+          actionType,
+          message,
+          step,
+          isComplete,
+        });
 
-        if (existingLog && isComplete) {
-          updateActionLog(existingLog.id, { isComplete: true, message });
+        if (existingLog) {
+          updateActionLog(existingLog.id, {
+            actionType: actionType as ActionLogEntry['actionType'],
+            message: message || existingLog.message,
+            step: step || existingLog.step,
+            timestamp,
+            isComplete: existingLog.isComplete || isComplete,
+          });
         } else {
           const logEntry: ActionLogEntry = {
             id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -616,60 +340,8 @@ export function useWebSocket(sessionId: string | null) {
       }
 
       case 'execution_progress': {
-        const mappedSteps: ProgressStep[] = Array.isArray(data.steps)
-          ? (data.steps.map((s, index) => ({
-              id: String((s as Record<string, unknown>).id || index),
-              label: String((s as Record<string, unknown>).label || (s as Record<string, unknown>).id || ''),
-              status: _mapStepStatus((s as Record<string, unknown>).status as string),
-            })) as ProgressStep[])
-          : (useConversationStore.getState().executionProgress?.steps || []);
-
-        // Merge with existing steps: a completed step must not regress to pending
-        // This guards against out-of-order backend events (e.g. A4 still running
-        // but a new progress event carries A4=pending in the steps array).
-        const oldSteps = useConversationStore.getState().executionProgress?.steps || [];
-        const mergedSteps = mappedSteps.map((newStep: ProgressStep) => {
-          const oldStep = oldSteps.find((s: ProgressStep) => s.id === newStep.id);
-          if (oldStep?.status === 'completed' && newStep.status === 'pending') {
-            return { ...newStep, status: 'completed' as const };
-          }
-          return newStep;
-        });
-
-        // Guard: progress must never go backwards (multiple parallel pipelines
-        // in Full mode can emit out-of-order progress values)
-        const oldProgress = useConversationStore.getState().executionProgress?.progress ?? 0;
-        const newProgress = data.progress ?? 0;
-        const safeProgress = Math.max(oldProgress, newProgress);
-
-        setExecutionProgress({
-          stage: data.stage || '',
-          stageName: data.stage_name || '',
-          stageIndex: data.current_step_index ?? 0,
-          totalStages: data.total_steps ?? 5,
-          progress: safeProgress,
-          status: EXECUTION_STATUSES.includes((data.status || 'running') as ExecutionProgress['status'])
-            ? ((data.status || 'running') as ExecutionProgress['status'])
-            : 'running',
-          details: data.message || data.details || '',
-          steps: mergedSteps,
-          subTasks: Array.isArray(data.sub_tasks)
-            ? (data.sub_tasks.map((t, index) => ({
-                id: String((t as Record<string, unknown>).id || index),
-                name: String((t as Record<string, unknown>).name || ''),
-                status: ((t as Record<string, unknown>).status || 'pending') as SubTask['status'],
-                platform: typeof (t as Record<string, unknown>).platform === 'string'
-                  ? ((t as Record<string, unknown>).platform as SubTask['platform'])
-                  : undefined,
-                progress: typeof (t as Record<string, unknown>).progress === 'number'
-                  ? ((t as Record<string, unknown>).progress as SubTask['progress'])
-                  : undefined,
-                message: typeof (t as Record<string, unknown>).message === 'string'
-                  ? ((t as Record<string, unknown>).message as SubTask['message'])
-                  : undefined,
-              })) as SubTask[])
-            : [],
-        });
+        const previousProgress = useConversationStore.getState().executionProgress;
+        setExecutionProgress(buildExecutionProgress(data, previousProgress));
 
         // Only update workflow visualization when steps array is present
         // (agent-level progress events omit steps, which would reset the counter)
@@ -741,68 +413,20 @@ export function useWebSocket(sessionId: string | null) {
         break;
 
       case 'browser_state':
-        setBrowserState({
-          state: BROWSER_STATES.includes((data.state || '') as BrowserState['state'])
-            ? ((data.state || '') as BrowserState['state'])
-            : 'idle',
-          message: data.message || '',
-          platform: BROWSER_PLATFORMS.includes((data.platform || '') as BrowserState['platform'])
-            ? ((data.platform || '') as BrowserState['platform'])
-            : 'kimi',
-          requiresAction: typeof data.requires_action === 'boolean' ? data.requires_action : false,
-          actionHint: typeof data.action_hint === 'string' ? data.action_hint : undefined,
-        });
+        setBrowserState(buildBrowserState(data));
         break;
 
       case 'output_ready': {
-        const outputTypeStr = typeof data.type === 'string' ? data.type : 'report';
-        const validTypes: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
-        // Map report_baseline/report_persona to 'report' Canvas type
-        const canvasTypeStr = outputTypeStr.startsWith('report') ? 'report' : outputTypeStr;
-        const outputType: CanvasContentType = validTypes.includes(canvasTypeStr as CanvasContentType)
-          ? (canvasTypeStr as CanvasContentType)
-          : 'report';
-        const outputTitle = typeof data.title === 'string' ? data.title : '分析结果';
-        const relatedMessageId = typeof data.related_message_id === 'string' ? data.related_message_id : '';
-        const linkedMessageId = typeof data.linked_message_id === 'string' ? data.linked_message_id : undefined;
-        const category = typeof data.category === 'string' ? data.category as 'baseline' | 'scenario' : undefined;
-        const scenarioLabel = typeof data.scenario_label === 'string' ? data.scenario_label : undefined;
-        const fallbackId = `output_${outputType}_${outputTitle}_${relatedMessageId || 'global'}`;
-        const outputId = typeof data.output_id === 'string' ? data.output_id : fallbackId;
-        const outputData = normalizeCanvasData(outputType, data.data) as CanvasContentDataMap['report'];
-        const preview = normalizePreviewData(isRecord(data.data) ? data.data : {});
-        addContent({
-          id: outputId,
-          type: outputType,
-          title: outputTitle,
-          data: outputData,
-          createdAt: new Date(),
-          relatedMessageId: relatedMessageId,
-          versions: [],
-          currentVersionIndex: -1,
-          linkedMessageId: agentMessageIdRef.current || linkedMessageId,
-          category: category,
-          scenarioLabel: scenarioLabel,
-        } as CanvasContent);
-        const targetMessageId = relatedMessageId || agentMessageIdRef.current;
-        if (targetMessageId) {
+        const payload = buildOutputReadyPayload(data, agentMessageIdRef.current);
+        addContent(payload.content);
+        if (payload.targetMessageId) {
           const state = useConversationStore.getState();
-          const msg = state.messages.find((m) => m.id === targetMessageId);
+          const msg = state.messages.find((m) => m.id === payload.targetMessageId);
           const existingCards = msg?.outputCards || [];
-          const alreadyExists = existingCards.some((card) => card.id === outputId);
+          const alreadyExists = existingCards.some((card) => card.id === payload.outputId);
           if (!alreadyExists) {
-            const card: NonNullable<Message['outputCards']>[number] = {
-              id: outputId,
-              type: outputType,
-              title: outputTitle,
-              preview: {
-                description: preview.description,
-                itemCount: preview.itemCount,
-                metrics: preview.metrics,
-              },
-            };
-            updateMessage(targetMessageId, {
-              outputCards: [...existingCards, card],
+            updateMessage(payload.targetMessageId, {
+              outputCards: [...existingCards, payload.card],
             });
           }
         }
@@ -831,106 +455,23 @@ export function useWebSocket(sessionId: string | null) {
           stepName,
         });
         if (data.canvas_content && typeof data.canvas_content === 'object') {
-          const content = data.canvas_content as Record<string, unknown>;
-          const id = typeof content.id === 'string' ? content.id : `canvas_${Date.now()}`;
-          const type: CanvasContentType =
-            typeof content.type === 'string' &&
-            ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'].includes(content.type)
-              ? (content.type as CanvasContentType)
-              : 'report';
-          const title = typeof content.title === 'string' ? content.title : '分析结果';
-          const contentData = normalizeCanvasData(type, content.data) as CanvasContentDataMap['report'];
-          const createdAt = content.createdAt instanceof Date
-            ? content.createdAt
-            : new Date(typeof content.createdAt === 'string' ? content.createdAt : Date.now());
-          const relatedMessageId = typeof content.relatedMessageId === 'string' ? content.relatedMessageId : '';
-          addContent({
-            id,
-            type,
-            title,
-            data: contentData,
-            createdAt,
-            relatedMessageId,
-            versions: [],
-            currentVersionIndex: -1,
-          } as CanvasContent);
+          addContent(buildCanvasContentFromConfirmation(data.canvas_content as Record<string, unknown>));
         }
+
         break;
       }
 
       case 'agent_message': {
-        const messageId = typeof data.id === 'string' ? data.id : `agent_${Date.now()}`;
-        const messageContent = typeof data.content === 'string' ? data.content : '';
-        const timestamp = data.timestamp ? new Date(data.timestamp as string) : new Date();
-        const relatedOutputIds = Array.isArray(data.related_output_ids) ? data.related_output_ids : [];
-        const metadata = typeof data.metadata === 'object' && data.metadata !== null
-          ? data.metadata as Message['metadata']
-          : {
-              canEdit: false,
-              canRollback: true,
-              relatedOutputIds,
-            };
-        const confirmationRequest = (() => {
-          if (typeof data.confirmation_request !== 'object' || data.confirmation_request === null) {
-            return undefined;
-          }
-          const req = data.confirmation_request as Record<string, unknown>;
-          const requestId = typeof req.request_id === 'string'
-            ? req.request_id
-            : typeof req.requestId === 'string'
-            ? req.requestId
-            : `request_${Date.now()}`;
-          const type: ConfirmationRequest['type'] =
-            typeof req.type === 'string' &&
-            ['brand_info', 'persona_selection', 'action_choice', 'continue', 'step_confirmation'].includes(req.type)
-              ? (req.type as ConfirmationRequest['type'])
-              : 'step_confirmation';
-          const message = typeof req.message === 'string' ? req.message : '';
-          const options = Array.isArray(req.options) ? req.options : [];
-          const allowTextInput = typeof req.allow_text_input === 'boolean'
-            ? req.allow_text_input
-            : typeof req.allowTextInput === 'boolean'
-            ? req.allowTextInput
-            : false;
-          const stepId = typeof req.step_id === 'string'
-            ? req.step_id
-            : typeof req.stepId === 'string'
-            ? req.stepId
-            : undefined;
-          const stepName = typeof req.step_name === 'string'
-            ? req.step_name
-            : typeof req.stepName === 'string'
-            ? req.stepName
-            : undefined;
-          return {
-            requestId,
-            type,
-            message,
-            options,
-            allowTextInput,
-            stepId,
-            stepName,
-          };
-        })();
-        const message: Message = {
-          id: messageId,
-          type: 'agent',
-          content: messageContent,
-          timestamp,
-          tpaor: typeof data.tpaor === 'object' && data.tpaor !== null ? data.tpaor : undefined,
-          outputCards: Array.isArray(data.output_cards) ? data.output_cards : undefined,
-          confirmationRequest,
-          metadata,
-        };
-        addMessage(message);
+        addMessage(buildAgentMessage(data));
         break;
       }
 
       case 'execution_complete': {
+        completePendingActionLogs();
         finalizeCurrentMessage();
         resetStreamingState();
         // NOTE: Do NOT reset agentMessageIdRef here.
-        // The orchestrator may run multiple rounds (e.g., orchestrator → agent → orchestrator).
+        // The orchestrator may run multiple rounds (e.g., orchestrator -> agent -> orchestrator).
         // If we reset the ref, the next round's reply_delta creates a duplicate message.
         // The ref is reset in 'agent_start' when a new user message triggers execution.
         stopExecution();
@@ -938,94 +479,27 @@ export function useWebSocket(sessionId: string | null) {
         setBrowserState(null);
         setStopState(null);
 
-        // Cycle 3: Update active task to completed
-        const currentTask = useConversationStore.getState().activeTask;
-        if (currentTask && currentTask.status === 'running') {
-          setActiveTask({
-            ...currentTask,
-            status: 'completed',
-            progress: 1.0,
-            progress_message: '分析完成',
-            completed_at: new Date().toISOString(),
-            snapshot_id: typeof data.snapshot_id === 'string' ? data.snapshot_id : currentTask.snapshot_id,
-          });
+        const completedTask = buildCompletedTask(useConversationStore.getState().activeTask, data);
+        if (completedTask) {
+          setActiveTask(completedTask);
         }
 
-        // Cycle 3: Handle follow-up suggestions from backend
-        if (Array.isArray(data.follow_up_suggestions) && data.follow_up_suggestions.length > 0) {
-          const validTypes = ['drill_down', 'compare', 'refetch', 'general'] as const;
-          type SuggestionType = typeof validTypes[number];
-          setFollowUpSuggestions(
-            data.follow_up_suggestions.map((s: Record<string, unknown>, i: number) => {
-              const rawType = typeof s.type === 'string' ? s.type : 'general';
-              const type: SuggestionType = (validTypes as readonly string[]).includes(rawType)
-                ? (rawType as SuggestionType)
-                : 'general';
-              return {
-                id: typeof s.id === 'string' ? s.id : `fu_${i}`,
-                label: typeof s.label === 'string' ? s.label : '',
-                message: typeof s.message === 'string' ? s.message : '',
-                type,
-                icon: typeof s.icon === 'string' ? s.icon : undefined,
-              };
-            })
-          );
+        const suggestions = buildFollowUpSuggestions(data);
+        if (suggestions.length > 0) {
+          setFollowUpSuggestions(suggestions);
         }
         break;
       }
 
       case 'execution_stopped':
+        completePendingActionLogs('（已停止）');
+        finalizeCurrentMessage();
+        resetStreamingState();
         stopExecution();
         setExecutionProgress(null);
         setBrowserState(null);
         if (data) {
-          const completedStages = Array.isArray(data.completed_stages)
-            ? data.completed_stages
-                .map((stage) => {
-                  if (typeof stage !== 'object' || stage === null) {
-                    return null;
-                  }
-                  const raw = stage as Record<string, unknown>;
-                  const name = typeof raw.name === 'string' ? raw.name : '';
-                  if (!name) return null;
-                  const description = typeof raw.description === 'string' ? raw.description : undefined;
-                  const completedAt = raw.completedAt instanceof Date
-                    ? raw.completedAt
-                    : new Date(typeof raw.completedAt === 'string' ? raw.completedAt : Date.now());
-                  return { name, description, completedAt };
-                })
-                .filter((stage): stage is { name: string; description: string | undefined; completedAt: Date } => stage !== null)
-            : [];
-          const pendingStages = Array.isArray(data.pending_stages)
-            ? data.pending_stages
-                .map((stage) => {
-                  if (typeof stage !== 'object' || stage === null) {
-                    return null;
-                  }
-                  const raw = stage as Record<string, unknown>;
-                  const name = typeof raw.name === 'string' ? raw.name : '';
-                  if (!name) return null;
-                  const description = typeof raw.description === 'string' ? raw.description : undefined;
-                  return { name, description };
-                })
-                .filter((stage): stage is { name: string; description: string | undefined } => stage !== null)
-            : [];
-          const partialResults = typeof data.partial_results === 'object' && data.partial_results !== null
-            ? data.partial_results as { fetchedCount?: number; totalCount?: number; platforms?: Record<string, { completed: number; total: number }> }
-            : undefined;
-          setStopState({
-            isStopped: true,
-            stoppedAt: new Date(),
-            completedStages,
-            pendingStages,
-            partialResults: partialResults ? {
-              fetchedCount: partialResults.fetchedCount ?? 0,
-              totalCount: partialResults.totalCount ?? 0,
-              platforms: partialResults.platforms ?? {},
-            } : undefined,
-            canResume: Boolean(data.can_resume ?? false),
-            canRetry: Boolean(data.can_retry ?? false),
-          });
+          setStopState(buildStopState(data));
         }
         break;
 
@@ -1073,6 +547,7 @@ export function useWebSocket(sessionId: string | null) {
         }
         console.error('[WebSocket] Error:', data);
         toast.error(errorMsg);
+        completePendingActionLogs('（已中断）');
         // 所有有效错误都解锁输入框 — 用户必须随时可以继续输入或重试
         stopExecution();
         break;
@@ -1136,6 +611,34 @@ export function useWebSocket(sessionId: string | null) {
           timestamp: typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
         };
         useConversationStore.getState().addStageResult(stageResult as import('@/types/snapshot').StageResult);
+
+        const stageToStep: Record<string, string> = {
+          A1: 'brand_analysis',
+          A2: 'persona_generation',
+          A3: 'question_simulation',
+          A4: 'answer_fetch',
+          A5: 'data_analytics',
+        };
+        const mappedStep = stageToStep[stageResult.stage];
+        if (mappedStep) {
+          const storeState = useConversationStore.getState();
+          const existingLogs = collectPendingActionLogs(storeState.currentActionLogs, storeState.messages);
+          const pendingLog = findMatchingPendingActionLog(existingLogs, {
+            actionType: 'tool_call',
+            message: stageResult.stageName || mappedStep,
+            step: mappedStep,
+            isComplete: true,
+          });
+          if (pendingLog) {
+            const completedLabel = stageResult.stageName || pendingLog.message.replace(/^调用\s+/, '').replace(/(?:\.\.\.|…)+$/, '');
+            updateActionLog(pendingLog.id, {
+              isComplete: true,
+              step: pendingLog.step || mappedStep,
+              message: `${completedLabel} 完成`,
+            });
+          }
+        }
+
         console.log(`[WebSocket] Stage result: ${stageResult.stage} (${stageResult.resultType})`);
         break;
       }
@@ -1259,6 +762,7 @@ export function useWebSocket(sessionId: string | null) {
     appendThoughtDelta,
     addActionLog,
     updateActionLog,
+    completePendingActionLogs,
     setPlanText,
     setInlineConfirmation,
     finalizeCurrentMessage,
@@ -1545,4 +1049,13 @@ export function useWebSocket(sessionId: string | null) {
     isConnected,
   };
 }
+
+
+
+
+
+
+
+
+
 
