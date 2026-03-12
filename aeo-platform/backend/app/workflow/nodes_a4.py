@@ -1094,7 +1094,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         detailed_response = f"""✅ **答案抓取完成**
 
-我已针对模拟问题在主流AI搜索平台进行了答案抓取，获取「{brand_name}」在AI搜索中的曝光情况：
+我已针对模拟问题在主流 AI 平台进行了答案抓取，获取「{brand_name}」在 AI 平台中的曝光情况：
 
 **📊 抓取概览**
 - 总抓取次数：{total_fetches} 次

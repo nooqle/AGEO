@@ -8,7 +8,7 @@ export function HeroSection() {
           Specta AI
         </h1>
         <p className="text-xl text-[var(--text-secondary)] mb-8 max-w-2xl mx-auto">
-          品牌声量智能分析平台 - 洞察品牌在AI搜索中的可见性
+          品牌声量智能分析平台 - 洞察品牌在 AI 平台中的可见性
         </p>
         <Link
           href="/dashboard"

@@ -615,7 +615,7 @@ def _build_persona_system_prompt() -> str:
     platform_list = "、".join(
         PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in _PLATFORMS
     )
-    return f"""你是一个资深的AI搜索行为分析专家。你的任务是根据品牌信息和用户画像，生成这些用户可能在AI搜索引擎（如{platform_list}）中提出的真实问题。
+    return f"""你是一个资深的 AI 平台用户行为分析专家。你的任务是根据品牌信息和用户画像，生成这些用户可能在 AI 平台（如{platform_list}）中提出的真实问题。
 
 ## 输出格式
 请严格输出以下 JSON 格式，不要有其他文字：
@@ -624,7 +624,7 @@ def _build_persona_system_prompt() -> str:
   "questions": [
     {{
       "question_id": "pq_001",
-      "core_question": "用户会在AI搜索中问的完整问题",
+      "core_question": "用户会在 AI 平台中问的完整问题",
       "category": "必须从以下4个值中选择：画像痛点场景 | 品牌直接问题 | 品类选购对比 | 行业趋势认知",
       "user_intent": "用户提问的潜在意图",
       "decision_stage": "认知/兴趣/评估/决策/验证",
@@ -727,7 +727,7 @@ def _build_persona_user_content(
 {scenario_text if scenario_text else '  - 无'}""".strip()
         persona_blocks.append(block)
 
-    return f"""请为以下品牌的目标用户画像生成AI搜索模拟问题。
+    return f"""请为以下品牌的目标用户画像生成 AI 平台模拟问题。
 
 ## 品牌信息
 - 品牌名称: {brand_name}
@@ -990,14 +990,14 @@ def _build_baseline_system_prompt() -> str:
     platform_list = "、".join(
         PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in _PLATFORMS
     )
-    return f"""你是一个消费者行为研究专家。请基于以下品牌信息和竞品列表，生成模拟用户在 AI 搜索引擎（如 {platform_list}）中会提问的**行业全景问题**。
+    return f"""你是一个消费者行为研究专家。请基于以下品牌信息和竞品列表，生成模拟用户在 AI 平台（如 {platform_list}）中会提问的**行业全景问题**。
 
 ## 核心规则
 1. 问题必须是**用户视角**，模拟真实消费者的搜索行为
 2. 直接提及目标品牌的问题**不超过总数的 10%**
 3. 问题必须覆盖品牌的**主要产品领域**
 4. 包含预算、场景、用途等真实决策因素
-5. 问题要口语化，像真实用户会在 AI 搜索中输入的
+5. 问题要口语化，像真实用户会在 AI 平台中输入的
 
 ## 问题分类比例
 - 品类需求咨询 (30%)

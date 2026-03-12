@@ -78,7 +78,7 @@ export function BrandCards() {
 
       {entities.length === 0 && (
         <p className="mb-4 text-[13px] leading-7" style={{ color: 'var(--text-tertiary)' }}>
-          添加品牌后，即可开始 AI 搜索可见度分析与持续监测。
+          添加品牌后，即可开始 AI 平台可见度分析与持续监测。
         </p>
       )}
 

@@ -441,8 +441,8 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
           {/* Key questions — renamed */}
           {hasKeyQuestions && (
             <div className="space-y-1.5">
-              <h6 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">AI搜索中的典型提问</h6>
-              <p className="text-xs text-[var(--text-disabled)] -mt-0.5">用户在AI搜索引擎中可能提出的问题</p>
+              <h6 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">AI平台中的典型提问</h6>
+              <p className="text-xs text-[var(--text-disabled)] -mt-0.5">用户在AI平台中可能提出的问题</p>
               <ol className="list-decimal list-inside space-y-0.5 text-xs text-[var(--text-primary)]">
                 {keyQuestions.map((q, i) => (
                   <li key={i}>{q}</li>

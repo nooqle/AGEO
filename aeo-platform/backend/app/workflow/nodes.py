@@ -1020,7 +1020,7 @@ def _get_a2_system_prompt() -> str:
         "pain_points": ["选择困难", "信息过载", "品质参差不齐"]
       },
       "priority": "核心人群/增长人群/机会人群",
-      "key_questions": ["这类用户可能在AI搜索中问的问题1", "问题2", "问题3"],
+      "key_questions": ["这类用户可能在 AI 平台中问的问题1", "问题2", "问题3"],
       "usage_scenarios": [
         {
           "scenario_name": "场景名",
@@ -1043,7 +1043,7 @@ def _get_a2_system_prompt() -> str:
 - description 字段为一句话概括（30字以内），详细人口统计放在 demographics 中
 - demographics 必须包含 age_range, gender, city_tier, income, occupation
 - psychographics 必须包含 lifestyle, values, pain_points（数组）
-- 每个画像的 key_questions 要贴合真实用户在 AI 搜索引擎中的提问习惯
+- 每个画像的 key_questions 要贴合真实用户在 AI 平台中的提问习惯
 - 每个画像的 priority 必须是 "核心人群"、"增长人群"、"机会人群" 之一
 - 每个画像包含 2-3 个 usage_scenarios
 - 每个 usage_scenario 必须包含 brand_interaction_intents（2-3个，描述用户与品牌/产品互动的意图，如咨询、比较、试用、购买、复购）和 relevant_competitors（1-3个）

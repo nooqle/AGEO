@@ -8,7 +8,7 @@ def _get_a5_report_context_intro(report_type: str) -> str:
     if report_type == "baseline":
         return """## 报告类型：行业全景基线分析
 本次分析是品牌的行业全景基线分析。问题来源是行业通用的用户搜索问题（非特定画像）。
-请从行业全景视角分析品牌的 AI 搜索可见性。
+请从行业全景视角分析品牌的 AI 平台可见性。
 
 """
     return """## 报告类型：场景分析报告

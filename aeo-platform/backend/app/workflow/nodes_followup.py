@@ -230,7 +230,7 @@ async def _generate_drill_down(
             })
         results_summary.append({"question": q_text, "results": pr_summary})
 
-    system_prompt = f"""你是 Specta AI 的数据分析专家。用户正在深入分析品牌「{brand_name}」在AI搜索中的表现。
+    system_prompt = f"""你是 Specta AI 的数据分析专家。用户正在深入分析品牌「{brand_name}」在 AI 平台中的表现。
 请基于过滤后的数据，对「{dim_label}: {focus_value or '全部'}」维度进行针对性分析。
 
 输出要求：

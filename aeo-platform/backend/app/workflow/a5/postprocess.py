@@ -129,17 +129,17 @@ def generate_fallback_report(metrics: dict[str, Any], brand_profile: dict[str, A
 
     if mention_rate >= 0.7:
         summary = (
-            f"{brand_name} 的 AI 搜索可见度分析已完成。"
+            f"{brand_name} 的 AI 平台可见度分析已完成。"
             f"整体提及率为 {mention_rate:.1%}，品牌已进入较多回答场景，表现较强。"
         )
     elif mention_rate >= 0.4:
         summary = (
-            f"{brand_name} 的 AI 搜索可见度分析已完成。"
+            f"{brand_name} 的 AI 平台可见度分析已完成。"
             f"整体提及率为 {mention_rate:.1%}，已有一定存在感，但仍有明显提升空间。"
         )
     else:
         summary = (
-            f"{brand_name} 的 AI 搜索可见度分析已完成。"
+            f"{brand_name} 的 AI 平台可见度分析已完成。"
             f"整体提及率为 {mention_rate:.1%}，当前露出偏弱，建议优先优化内容策略。"
         )
 
@@ -154,7 +154,7 @@ def generate_fallback_report(metrics: dict[str, Any], brand_profile: dict[str, A
         "competitor_deep_analysis": None,
         "actionable_recommendations": [],
         "risk_alerts": [],
-        "strengths": [f"品牌在 AI 搜索中有基础曝光 (提及率 {mention_rate:.1%})"] if mention_rate > 0.1 else [],
+        "strengths": [f"品牌在 AI 平台中有基础曝光 (提及率 {mention_rate:.1%})"] if mention_rate > 0.1 else [],
         "weaknesses": [],
         "opportunities": ["建议增加品牌相关内容在权威平台的布局"],
         "threats": [],
