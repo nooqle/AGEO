@@ -66,6 +66,60 @@ export function normalizeCanvasOutputType(rawType: string | undefined): CanvasCo
     : null;
 }
 
+const A5_FAILURE_PATTERNS = [
+  /报告生成(?:再次|仍然)?失败/,
+  /抓取的数据(?:确实)?存在问题/,
+  /无法用于分析/,
+  /重新抓取数据/,
+  /检查抓取结果/,
+  /跳过基线分析/,
+];
+
+export function isSupersededA5FailureText(content: string | undefined): boolean {
+  const normalized = (content || '').trim();
+  if (!normalized) {
+    return false;
+  }
+  return A5_FAILURE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function isReportOutputMessage(message: ApiMessage): boolean {
+  return message.type === 'output' && typeof message.output_type === 'string' && message.output_type.startsWith('report');
+}
+
+export function getSupersededHistoryMessageIds(messages: ApiMessage[]): Set<string> {
+  const suppressed = new Set<string>();
+
+  const processTurn = (turnMessages: ApiMessage[]) => {
+    if (!turnMessages.some(isReportOutputMessage)) {
+      return;
+    }
+    for (const message of turnMessages) {
+      if (
+        typeof message.id === 'string'
+        && (message.role === 'agent' || message.role === 'assistant')
+        && message.type !== 'output'
+        && isSupersededA5FailureText(message.content)
+      ) {
+        suppressed.add(message.id);
+      }
+    }
+  };
+
+  let currentTurn: ApiMessage[] = [];
+  for (const message of messages) {
+    if (message.role === 'user') {
+      processTurn(currentTurn);
+      currentTurn = [message];
+      continue;
+    }
+    currentTurn.push(message);
+  }
+  processTurn(currentTurn);
+
+  return suppressed;
+}
+
 export function buildOutputCardsFromApiMessage(msg: ApiMessage, sessionId: string): UiMessage['outputCards'] | undefined {
   const outputType = normalizeCanvasOutputType(msg.output_type);
   const parsed = msg.output_data ?? null;

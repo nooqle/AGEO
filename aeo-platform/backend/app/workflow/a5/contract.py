@@ -3,6 +3,7 @@
 from typing import Any
 
 from app.core.utils import extract_domain
+from app.workflow.brand_mentions import content_mentions_brand, extract_brand_aliases
 from app.workflow.nodes_a4 import PLATFORMS
 
 def _safe_rate(numerator: int | float, denominator: int | float) -> float:
@@ -101,7 +102,7 @@ def _build_scenario_matrix(
     """Build scenario rows from A4 fetch results."""
     brand_name = str(brand_profile.get("brand_name", "") or "")
     brand_name_en = str(brand_profile.get("brand_name_en", "") or "")
-    brand_aliases = [name for name in [brand_name, brand_name_en] if name]
+    brand_aliases = extract_brand_aliases(brand_profile)
     brand_label = brand_name or brand_name_en or "本品牌"
     brand_domain = str(source_overview.get("brand_domain", "") or "")
     competitor_names = [
@@ -136,8 +137,8 @@ def _build_scenario_matrix(
                 if isinstance(answer, dict)
                 else False
             )
-            if not has_brand_mention and any(_name_in_text(alias, content) for alias in brand_aliases):
-                has_brand_mention = True
+            if not has_brand_mention:
+                has_brand_mention = content_mentions_brand(content, brand_profile)
 
             if has_brand_mention:
                 brand_present = True

@@ -20,7 +20,12 @@ import type { CanvasContent, CanvasContentDataMap, CanvasContentType } from '@/t
 import type { ContextTag } from '@/stores/contextStore';
 import type { StageResult } from '@/types/snapshot';
 import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
-import { buildOutputCardsFromApiMessage, rebuildPersistedLayers, VALID_OUTPUT_TYPES } from '@/adapters/chatMessage';
+import {
+  buildOutputCardsFromApiMessage,
+  getSupersededHistoryMessageIds,
+  rebuildPersistedLayers,
+  VALID_OUTPUT_TYPES,
+} from '@/adapters/chatMessage';
 
 
 interface ChatPanelProps {
@@ -230,6 +235,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       try {
         const msgs = await api.getMessages(sessionId, { limit: 100 });
         if (cancelled || !msgs || msgs.length === 0) return;
+        const suppressedMessageIds = getSupersededHistoryMessageIds(msgs);
         // Convert API messages to store format, reconstructing outputCards and layers from metadata
         for (const msg of msgs) {
           const role = msg.role === 'agent' || msg.role === 'assistant' ? 'agent' : 'user';
@@ -240,6 +246,10 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           const layers = reconstructed.layers;
           for (const sr of reconstructed.stageResults) {
             addStageResult(sr);
+          }
+
+          if (suppressedMessageIds.has(msg.id)) {
+            continue;
           }
 
           addMessage({

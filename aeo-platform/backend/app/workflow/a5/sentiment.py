@@ -3,15 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.utils import extract_domain
+from app.workflow.brand_mentions import content_mentions_brand, extract_brand_aliases
 from app.workflow.a5.metrics import analyze_sentiment
 
 
 def _collect_aliases(brand_profile: dict[str, Any]) -> list[str]:
-    aliases = [
-        str(brand_profile.get("brand_name", "") or "").strip(),
-        str(brand_profile.get("brand_name_en", "") or "").strip(),
-    ]
-    return [alias for alias in aliases if alias]
+    return extract_brand_aliases(brand_profile)
 
 
 def _name_in_text(name: str, text: str) -> bool:
@@ -109,7 +106,7 @@ def build_mention_sentiment_analysis(
             brand_mentioned = False
             if isinstance(answer, dict) and answer.get("has_brand_mention"):
                 brand_mentioned = True
-            elif any(_name_in_text(alias, content) for alias in brand_aliases):
+            elif content_mentions_brand(content, brand_profile):
                 brand_mentioned = True
 
             if brand_mentioned:

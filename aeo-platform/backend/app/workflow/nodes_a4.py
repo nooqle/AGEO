@@ -73,6 +73,7 @@ PLATFORMS = {
 import httpx
 
 from app.core.constants import PlatformConstants, WorkflowConstants
+from app.workflow.brand_mentions import content_mentions_brand
 
 # Aliases from centralized constants
 MAX_RETRIES = WorkflowConstants.API_MAX_RETRIES
@@ -1316,7 +1317,7 @@ async def _fetch_from_doubao(
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
                 "has_brand_mention": _check_brand_mention(
-                    answer_text, brand_profile.get("brand_name", "")
+                    answer_text, brand_profile
                 ),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
@@ -1381,7 +1382,7 @@ async def _fetch_from_hunyuan(
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
                 "has_brand_mention": _check_brand_mention(
-                    answer_text, brand_profile.get("brand_name", "")
+                    answer_text, brand_profile
                 ),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
@@ -1442,7 +1443,7 @@ async def _fetch_from_kimi(
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
                 "has_brand_mention": _check_brand_mention(
-                    answer_text, brand_profile.get("brand_name", "")
+                    answer_text, brand_profile
                 ),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
@@ -1572,7 +1573,7 @@ async def _fetch_from_browser(
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
                 "has_brand_mention": _check_brand_mention(
-                    answer_text, brand_profile.get("brand_name", "")
+                    answer_text, brand_profile
                 ),
             },
             "citations": [ref.model_dump() for ref in result_data.search_references],
@@ -1768,8 +1769,6 @@ async def _fetch_from_browser(
     }
 
 
-def _check_brand_mention(content: str, brand_name: str) -> bool:
+def _check_brand_mention(content: str, brand_profile: dict[str, Any]) -> bool:
     """Check if brand is mentioned in content."""
-    if not brand_name or not content:
-        return False
-    return brand_name.lower() in content.lower()
+    return content_mentions_brand(content, brand_profile)

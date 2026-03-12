@@ -34,6 +34,7 @@ from app.workflow.events import (
     send_progress_event,
     send_stage_result,
 )
+from app.workflow.brand_mentions import content_mentions_brand
 from app.workflow.nodes import get_llm_model_compat, parse_llm_response
 from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.summaries import generate_a5_summary
@@ -326,14 +327,27 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
         # Build fetch_results summary for analytics service
         fetch_results_summary = []
+        recovered_brand_mentions = 0
         for fr in fetch_results:
             for pr in fr.get("platform_results", []):
+                answer_payload = pr.get("answer", {}) if isinstance(pr.get("answer"), dict) else {}
+                answer_content = answer_payload.get("content", "") if isinstance(answer_payload, dict) else ""
+                stored_has_brand_mention = bool(answer_payload.get("has_brand_mention", False)) if isinstance(answer_payload, dict) else False
+                computed_has_brand_mention = content_mentions_brand(answer_content, brand_profile)
+                if not stored_has_brand_mention and computed_has_brand_mention:
+                    recovered_brand_mentions += 1
                 fetch_results_summary.append({
                     "platform": pr.get("platform", "unknown"),
                     "success": pr.get("success", False),
-                    "has_brand_mention": pr.get("answer", {}).get("has_brand_mention", False),
+                    "has_brand_mention": computed_has_brand_mention,
                     "citations": pr.get("citations", []),
                 })
+
+        if recovered_brand_mentions:
+            logger.info(
+                "[A5] Recovered stale brand-mention flags from fetch results: %d",
+                recovered_brand_mentions,
+            )
 
         # Build Report V2 contract fields (thread 5)
         report_v2_sections = a5_contract._build_report_v2_sections(
@@ -422,6 +436,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         from app.workflow.events import save_and_send_artifact
         report_output_type = "report_baseline" if is_baseline else "report"
         report_title = "基线全景分析报告" if is_baseline else "AI 可见性分析报告"
+        report_category = "baseline" if is_baseline else "scenario"
         report_artifact_data = build_report_artifact_data(
             brand_name=brand_profile.get('brand_name', '品牌'),
             is_baseline=is_baseline,
@@ -439,13 +454,15 @@ async def a5_analytics_node(state: AgentState) -> Command:
             source_overview=source_overview,
             mention_sentiment_analysis=mention_sentiment_analysis,
         )
-        await save_and_send_artifact(
+        artifact_message_id = await save_and_send_artifact(
             session_id=session_id,
             output_type=report_output_type,
             title=report_title,
             category=report_category,
             data=report_artifact_data,
         )
+        if not artifact_message_id:
+            raise RuntimeError("A5 artifact persistence failed")
         _ca = metrics.get("citation_analysis", {})
         logger.info(
             "[A5][Artifact] citation_analysis in artifact: total=%s, domains=%s",
@@ -514,6 +531,10 @@ async def a5_analytics_node(state: AgentState) -> Command:
         return Command(update=update_dict)
 
     except Exception as e:
+        error_text = str(e)
+        error_category = "system"
+        if "artifact persistence failed" in error_text.lower():
+            error_category = "system_persistence"
         from app.workflow.events import send_error_event
         await send_error_event(session_id, "A5", str(e), recoverable=True)
         await send_progress_event(
@@ -546,7 +567,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
             update={
                 "error_info": {
                     "step": "A5",
-                    "error": str(e),
+                    "error": error_text,
+                    "category": error_category,
                     "timestamp": datetime.now().isoformat(),
                 },
                 "execution_status": "error",
@@ -645,6 +667,8 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                     if isinstance(answer, dict)
                     else False
                 )
+                if not has_mention:
+                    has_mention = content_mentions_brand(content, brand_profile)
                 if has_mention:
                     total_mentions += 1
                     platform_stats[platform]["mentions"] += 1

@@ -18,6 +18,7 @@ export interface Message {
   type?: string;
   content: string;
   created_at: string;
+  sequence?: number;
   metadata?: Record<string, unknown>;
   output_type?: string;
   output_data?: Record<string, unknown>;

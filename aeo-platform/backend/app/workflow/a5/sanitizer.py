@@ -43,10 +43,31 @@ def _normalize_report_data(report_data: dict[str, Any]) -> dict[str, Any]:
     此函数确保所有字段都有安全的默认值。
     """
     # Required fields
-    report_data.setdefault("executive_summary", "分析已完成。")
-    report_data.setdefault("key_findings", [])
-    report_data.setdefault("strengths", [])
-    report_data.setdefault("weaknesses", [])
-    report_data.setdefault("opportunities", [])
-    report_data.setdefault("threats", [])
+    if not isinstance(report_data.get("executive_summary"), str) or not report_data.get("executive_summary"):
+        report_data["executive_summary"] = "分析已完成。"
+
+    list_fields = (
+        "key_findings",
+        "strengths",
+        "weaknesses",
+        "opportunities",
+        "threats",
+        "platform_analysis",
+        "actionable_recommendations",
+        "risk_alerts",
+    )
+    for field in list_fields:
+        if not isinstance(report_data.get(field), list):
+            report_data[field] = []
+
+    dict_fields = (
+        "competitor_deep_analysis",
+        "action_plan",
+        "industry_insights",
+    )
+    for field in dict_fields:
+        if not isinstance(report_data.get(field), dict):
+            report_data[field] = {}
+
+    return report_data
 

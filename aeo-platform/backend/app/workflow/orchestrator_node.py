@@ -1050,6 +1050,109 @@ def _is_step_skipped(step_id: str, state: AgentState, user_decisions: dict) -> b
     return False
 
 
+def _matches_failed_step(tool_name: str, failed_step: str) -> bool:
+    step_id_map = {
+        "brand_analysis": "A1",
+        "persona_generation": "A2",
+        "question_simulation": "A3",
+        "answer_fetch": "A4",
+        "data_analytics": "A5",
+        "citation_confidence_analysis": "A7",
+    }
+    expected_step = step_id_map.get(tool_name, "")
+    return failed_step in {tool_name, expected_step}
+
+
+def _build_error_recovery_message(error_info: dict[str, Any]) -> str:
+    failed_step = str(error_info.get("step", "未知"))
+    error_msg = str(error_info.get("error", "未知错误")).strip()
+    error_category = str(error_info.get("category", "")).strip()
+
+    if failed_step == "A5":
+        if error_category == "system_persistence":
+            return (
+                "分析结果已经生成，但在保存最终报告产物时发生了系统错误。"
+                "这不是抓取数据质量问题，通常不需要重新抓取。"
+                "建议直接重新尝试生成报告。"
+            )
+        if error_category == "system":
+            return (
+                "报告生成遇到了系统处理问题，当前失败并不等于抓取数据不可用。"
+                "建议先重新尝试生成报告；如果仍失败，再检查当前结果结构。"
+            )
+        return (
+            "报告生成遇到了处理问题。"
+            "当前失败不一定来自抓取数据本身，建议先重新尝试生成报告。"
+        )
+
+    clipped_error = error_msg[:100] if error_msg else "未知错误"
+    return f"步骤 {failed_step} 执行遇到问题：{clipped_error}。请选择后续操作。"
+
+
+async def _route_agent_error_without_llm(
+    state: AgentState,
+    session_id: str,
+    current_retry_counts: dict[str, int],
+) -> Command:
+    error_info = dict(state.get("error_info") or {})
+    recovery_message = _build_error_recovery_message(error_info)
+    failed_step = str(error_info.get("step", "未知"))
+
+    await send_reply_event(
+        session_id,
+        recovery_message,
+        is_delta=True,
+        is_new_round=True,
+    )
+    await send_reply_event(session_id, "", is_complete=True)
+    await send_confirmation_request(
+        session_id=session_id,
+        step_id="error_recovery",
+        step_name=f"{failed_step} 执行失败",
+        message=recovery_message,
+        options=[
+            {
+                "id": "retry",
+                "label": "重新尝试",
+                "description": f"再次执行 {failed_step}",
+            },
+            {
+                "id": "skip",
+                "label": "跳过此步骤",
+                "description": "跳过此步骤，继续后续分析",
+            },
+            {
+                "id": "manual",
+                "label": "手动提供数据",
+                "description": "由您手动描述所需信息",
+            },
+        ],
+    )
+
+    new_history = build_orchestrator_messages(state)
+    new_history.append({"role": "assistant", "content": recovery_message})
+
+    return Command(
+        goto="wait_for_user",
+        update={
+            "awaiting_user": True,
+            "orchestrator_reply": recovery_message,
+            "orchestrator_history": new_history,
+            "pending_confirmation": {
+                "step_id": "error_recovery",
+                "step_name": f"{failed_step} 执行失败",
+                "message": recovery_message,
+                "options": [
+                    {"id": "retry", "label": "重新尝试"},
+                    {"id": "skip", "label": "跳过此步骤"},
+                    {"id": "manual", "label": "手动提供数据"},
+                ],
+            },
+            "agent_retry_counts": current_retry_counts,
+        },
+    )
+
+
 # =============================================================================
 # Orchestrator Node
 # =============================================================================
@@ -1089,6 +1192,9 @@ async def orchestrator_node(state: AgentState) -> Command:
         state = {**state, "agent_retry_counts": {}}
 
     current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
+    error_info = state.get("error_info")
+    exec_status = state.get("execution_status")
+    has_agent_error = bool(error_info and exec_status != "completed")
 
     # If returning from an Agent, send step completion event
     last_tool = _get_tool_name_from_node(state.get("next_action", "") or "")
@@ -1102,25 +1208,56 @@ async def orchestrator_node(state: AgentState) -> Command:
         is_baseline_phase = state.get("analysis_mode") == "baseline"
         all_done = (completed_count + skipped_count) == total_count and not is_baseline_phase
         from app.workflow.events import send_progress_event
-        await send_progress_event(
+        if has_agent_error and _matches_failed_step(last_tool, str((error_info or {}).get("step", ""))):
+            await send_progress_event(
+                session_id,
+                step=last_tool,
+                step_name=display_name,
+                progress=completed_count / total_count,
+                message=f"执行失败：{display_name}",
+                status="error",
+                steps=workflow_steps,
+            )
+            await send_action_log_event(
+                session_id,
+                "generic",
+                f"{display_name} 执行失败",
+                step=last_tool,
+                is_complete=True,
+            )
+        else:
+            await send_progress_event(
+                session_id,
+                step=last_tool,
+                step_name=display_name,
+                progress=completed_count / total_count,
+                message=f"完成：{display_name}",
+                status="completed" if all_done else "running",
+                steps=workflow_steps,
+            )
+            await send_action_log_event(
+                session_id,
+                "agent_complete",
+                f"{display_name} 完成",
+                step=last_tool,
+                is_complete=True,
+            )
+            await send_plan_event(
+                session_id,
+                f"已完成：{display_name}",
+            )
+
+    if has_agent_error:
+        logger.warning(
+            "[Orchestrator] Short-circuiting error recovery for session %s: step=%s category=%s",
             session_id,
-            step=last_tool,
-            step_name=display_name,
-            progress=completed_count / total_count,
-            message=f"完成：{display_name}",
-            status="completed" if all_done else "running",
-            steps=workflow_steps,
+            (error_info or {}).get("step"),
+            (error_info or {}).get("category"),
         )
-        await send_action_log_event(
-            session_id,
-            "agent_complete",
-            f"{display_name} 完成",
-            step=last_tool,
-            is_complete=True,
-        )
-        await send_plan_event(
-            session_id,
-            f"已完成：{display_name}",
+        return await _route_agent_error_without_llm(
+            state=state,
+            session_id=session_id,
+            current_retry_counts=current_retry_counts,
         )
 
     # Build orchestrator call

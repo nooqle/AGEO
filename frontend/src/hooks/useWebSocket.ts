@@ -16,6 +16,7 @@ import { TPAOR_PHASE_MAP, TPAOR_PHASES, isValidWebSocketMessage } from '@/hooks/
 import { isRecord } from '@/hooks/websocket/canvas';
 import { buildOutputReadyPayload } from '@/hooks/websocket/output';
 import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmation';
+import { isSupersededA5FailureText } from '@/adapters/chatMessage';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
 
@@ -426,10 +427,24 @@ export function useWebSocket(sessionId: string | null) {
           const msg = state.messages.find((m) => m.id === payload.targetMessageId);
           const existingCards = msg?.outputCards || [];
           const alreadyExists = existingCards.some((card) => card.id === payload.outputId);
+          const nextContent = payload.content.type === 'report' && isSupersededA5FailureText(msg?.content)
+            ? `${payload.card.title}已生成，右侧画布已更新。`
+            : msg?.content;
           if (!alreadyExists) {
             updateMessage(payload.targetMessageId, {
+              ...(nextContent !== undefined ? { content: nextContent } : {}),
               outputCards: [...existingCards, payload.card],
             });
+          } else if (nextContent !== undefined && nextContent !== msg?.content) {
+            updateMessage(payload.targetMessageId, {
+              content: nextContent,
+            });
+          }
+          if (
+            nextContent !== undefined
+            && payload.targetMessageId === useConversationStore.getState().currentAgentMessageId
+          ) {
+            useConversationStore.setState({ streamingReply: nextContent });
           }
         }
         break;

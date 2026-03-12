@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from app.core.celery_config import celery_app
 from app.core.constants import WorkflowConstants, PlatformConstants
+from app.workflow.brand_mentions import content_mentions_brand
 
 celery_exceptions = importlib.import_module("celery.exceptions")
 MaxRetriesExceededError = celery_exceptions.MaxRetriesExceededError
@@ -112,7 +113,7 @@ async def _fetch_all_answers(
                             "content": response.get("content", ""),
                             "has_brand_mention": _check_brand_mention(
                                 response.get("content", ""),
-                                brand_profile.get("brand_name", ""),
+                                brand_profile,
                             ),
                         },
                     }
@@ -140,8 +141,6 @@ async def _fetch_all_answers(
     return results
 
 
-def _check_brand_mention(content: str, brand_name: str) -> bool:
+def _check_brand_mention(content: str, brand_profile: dict[str, Any]) -> bool:
     """Check if brand is mentioned in content."""
-    if not brand_name or not content:
-        return False
-    return brand_name.lower() in content.lower()
+    return content_mentions_brand(content, brand_profile)
