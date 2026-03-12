@@ -124,6 +124,31 @@ Required API keys: MiniMax API key, optionally DashScope for backup LLM.
 - Do not make broad unrelated changes in one go.
 - Prefer minimal, focused edits and verify with relevant lint/tests.
 
+
+## Encoding Safety Rule (Important)
+
+This repo has had repeated real source corruption on Windows where Chinese text was written into files as literal `?` / `???`, not just displayed incorrectly.
+
+Root cause identified:
+- Writing Chinese source text through PowerShell inline scripts / pipelines / here-strings is unsafe in this environment.
+- A successful `tsc` / `build` does **not** prove text content is intact.
+- The failure mode is source-file corruption, not only console rendering issues.
+
+Mandatory rules for future edits:
+- Do **not** use PowerShell inline text replacement to write Chinese source code.
+- Prefer `apply_patch` for normal edits.
+- If scripting is necessary, use Python with explicit UTF-8 file I/O.
+- Prefer ASCII-only script bodies plus `\u` escapes when generating Chinese text programmatically on Windows.
+- After any edit involving Chinese UI copy or prompts, always verify all three:
+  1. Re-open the edited file and inspect the saved contents
+  2. Run a targeted `rg -F "???"` scan on affected files
+  3. Run relevant `tsc` / `build` / tests
+
+Scope guidance:
+- Treat any newly introduced `?` / `???` in UI strings as a blocking regression.
+- When fixing encoding corruption, first repair the source bytes, then validate rendering.
+
+
 ## Commit Scope Rule (User Preference)
 
 When committing by default, do **not** include the following unless the user explicitly asks:

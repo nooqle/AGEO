@@ -6,6 +6,9 @@ Supports Windows, Linux, and macOS.
 
 import asyncio
 import logging
+import shutil
+import subprocess
+import sys
 import traceback
 from pathlib import Path
 from typing import Any
@@ -45,6 +48,121 @@ class PlaywrightBrowserClient:
         # the context IS the browser.
         self.context: BrowserContext | None = None
         self.page: Page | None = None
+
+    def _get_browser_pid(self) -> int | None:
+        """Best-effort browser PID lookup for native window activation."""
+        if self.context is None:
+            return None
+
+        browser = getattr(self.context, "browser", None)
+        if browser is None:
+            return None
+
+        process = getattr(browser, "process", None)
+        pid = getattr(process, "pid", None)
+        return pid if isinstance(pid, int) and pid > 0 else None
+
+    def _activate_native_window(self, pid: int) -> bool:
+        """Try to bring the Chromium window to the OS foreground."""
+        if sys.platform.startswith("win"):
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                user32 = ctypes.windll.user32
+                hwnds: list[int] = []
+
+                @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+                def enum_windows(hwnd, _lparam):
+                    proc_id = wintypes.DWORD()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+                    if proc_id.value != pid:
+                        return True
+                    if not user32.IsWindowVisible(hwnd):
+                        return True
+                    if user32.GetWindowTextLengthW(hwnd) == 0:
+                        return True
+                    hwnds.append(hwnd)
+                    return True
+
+                user32.EnumWindows(enum_windows, 0)
+                if not hwnds:
+                    return False
+
+                hwnd = hwnds[0]
+                user32.ShowWindow(hwnd, 9)
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+                return True
+            except Exception as e:
+                logger.debug("[Browser:%s] Windows native activation failed: %s", self.session_name, e)
+                return False
+
+        if sys.platform == "darwin":
+            try:
+                script = (
+                    'tell application "System Events" '
+                    f'to set frontmost of first process whose unix id is {pid} to true'
+                )
+                result = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    return True
+                logger.debug(
+                    "[Browser:%s] macOS native activation failed: %s",
+                    self.session_name,
+                    (result.stderr or result.stdout).strip(),
+                )
+                return False
+            except Exception as e:
+                logger.debug("[Browser:%s] macOS native activation exception: %s", self.session_name, e)
+                return False
+
+        if sys.platform.startswith("linux"):
+            try:
+                if shutil.which("xdotool"):
+                    result = subprocess.run(
+                        ["xdotool", "search", "--pid", str(pid), "windowactivate"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
+                    )
+                    if result.returncode == 0:
+                        return True
+
+                if shutil.which("wmctrl"):
+                    listing = subprocess.run(
+                        ["wmctrl", "-lp"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
+                    )
+                    if listing.returncode == 0:
+                        for line in listing.stdout.splitlines():
+                            parts = line.split(None, 4)
+                            if len(parts) >= 3 and parts[2] == str(pid):
+                                activate = subprocess.run(
+                                    ["wmctrl", "-i", "-a", parts[0]],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=5,
+                                    check=False,
+                                )
+                                if activate.returncode == 0:
+                                    return True
+                                break
+            except Exception as e:
+                logger.debug("[Browser:%s] Linux native activation exception: %s", self.session_name, e)
+                return False
+
+        return False
 
     async def _ensure_playwright(self):
         """Ensure playwright is initialized and browser is installed."""
@@ -442,6 +560,11 @@ class PlaywrightBrowserClient:
                 )
             except Exception:
                 pass
+
+            pid = self._get_browser_pid()
+            if pid is not None:
+                self._activate_native_window(pid)
+
             return {"success": True}
         except Exception as e:
             logger.debug("[Browser:%s] bring_to_front failed: %s", self.session_name, e)

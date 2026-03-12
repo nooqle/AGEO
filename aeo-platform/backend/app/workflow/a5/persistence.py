@@ -17,6 +17,7 @@ def build_report_artifact_data(
     risk_map: list[dict[str, Any]],
     action_queue: list[dict[str, Any]],
     source_overview: dict[str, Any],
+    mention_sentiment_analysis: dict[str, Any],
 ) -> dict[str, Any]:
     report_headline = (
         f"{brand_name or '品牌'} 基线全景分析报告"
@@ -105,11 +106,13 @@ def build_report_artifact_data(
         'risk_map': risk_map,
         'action_queue': action_queue,
         'source_overview': source_overview,
+        'mention_sentiment_analysis': mention_sentiment_analysis,
         'report_summary': report_v2_sections['report_summary'],
         'scenario_coverage': report_v2_sections['scenario_coverage'],
         'competitor_battle': report_v2_sections['competitor_battle'],
         'risk_section': report_v2_sections['risk_section'],
         'source_section': report_v2_sections['source_section'],
+        'insight_section': report_v2_sections.get('insight_section', {}),
         'action_queue_section': report_v2_sections['action_queue_section'],
         'report_v2': report_v2_sections['report_v2'],
     }

@@ -21,7 +21,7 @@ import { cn } from '@/lib/cn';
 // =========================================================================
 
 /** Dimension keys used for UI toggling and API metric mapping */
-type DimensionKey = 'bwvs_index' | 'mention_rate' | 'sentiment_score' | 'coverage_score' | 'citation_score';
+type DimensionKey = 'mention_rate' | 'bwvs_index' | 'sentiment_score' | 'coverage_score' | 'citation_score';
 
 interface DimensionConfig {
   key: DimensionKey;
@@ -33,32 +33,32 @@ interface DimensionConfig {
 
 const DIMENSIONS: DimensionConfig[] = [
   {
-    key: 'bwvs_index',
-    label: 'BWVS',
-    color: chart.colors.primary,
-    formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
-  },
-  {
     key: 'mention_rate',
     label: '提及率',
     color: chart.colors.green,
     formatValue: (v) => (v != null ? `${(v * 100).toFixed(1)}%` : '--'),
   },
   {
+    key: 'bwvs_index',
+    label: '品牌可见度',
+    color: chart.colors.primary,
+    formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
+  },
+  {
     key: 'sentiment_score',
-    label: '情感',
+    label: '情感倾向',
     color: chart.colors.purple,
     formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
   },
   {
     key: 'coverage_score',
-    label: '覆盖度',
+    label: '平台覆盖',
     color: chart.colors.cyan,
     formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
   },
   {
     key: 'citation_score',
-    label: '引用',
+    label: '引用质量',
     color: chart.colors.yellow,
     formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
   },
@@ -169,7 +169,7 @@ interface TrendChartProps {
 }
 
 export function TrendChart({ data, summary, isLoading, onDimensionChange }: TrendChartProps) {
-  const [activeDimension, setActiveDimension] = useState<DimensionKey>('bwvs_index');
+  const [activeDimension, setActiveDimension] = useState<DimensionKey>('mention_rate');
 
   const dimConfig = useMemo(
     () => DIMENSIONS.find((d) => d.key === activeDimension) || DIMENSIONS[0],
@@ -182,8 +182,8 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
       // Pass the dimension key directly as the API metric parameter
       // The monitoringStore maps this to the backend metric name
       const apiDimMap: Record<DimensionKey, string> = {
-        bwvs_index: 'bwvs',
         mention_rate: 'mention_rate',
+        bwvs_index: 'bwvs',
         sentiment_score: 'sentiment',
         coverage_score: 'coverage',
         citation_score: 'citation',

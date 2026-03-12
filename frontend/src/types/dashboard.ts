@@ -1,4 +1,4 @@
-/** BWVS v2 breakdown: four-dimensional scoring */
+﻿/** BWVS v2 breakdown: four-dimensional scoring */
 export interface BwvsBreakdown {
   mention_score: number;
   sentiment_score: number;
@@ -185,6 +185,7 @@ export interface DashboardV2Data {
     summary_cards?: DashboardCompetitorPressureCard[];
     scenario_matrix?: DashboardScenarioMatrixRow[];
   };
+  home?: DashboardHomeData;
   sources?: DashboardSourcesV2;
   riskAction?: {
     risks?: DashboardRiskItem[];
@@ -193,6 +194,133 @@ export interface DashboardV2Data {
   monitoring_context_copy?: string;
 }
 
+export interface DashboardSentimentSummary {
+  positive: number;
+  neutral: number;
+  negative: number;
+}
+
+export interface DashboardMentionItem {
+  scenario_id: string;
+  scenario_label: string;
+  platform: string;
+  sentiment: 'positive' | 'neutral' | 'negative' | string;
+  evidence?: string;
+  citation_domains?: string[];
+  citation_titles?: string[];
+  citation_urls?: string[];
+  official_citation_present?: boolean;
+  competitor?: string;
+}
+
+export interface DashboardScenarioInsight {
+  scenario_id: string;
+  scenario_label: string;
+  reason: string;
+  platforms?: string[];
+}
+
+export interface DashboardMentionBoard {
+  mention_rate: number | null;
+  headline: string;
+  sentiment_summary: DashboardSentimentSummary;
+  leading_competitors: Array<{
+    competitor: string;
+    pressure_level: 'high' | 'medium' | 'low' | string;
+    competitor_only_scenarios: number;
+    sentiment_summary: DashboardSentimentSummary;
+  }>;
+  report: {
+    brand_mentions: DashboardMentionItem[];
+    competitor_mentions: DashboardMentionItem[];
+    strong_scenarios: DashboardScenarioInsight[];
+    weak_scenarios: DashboardScenarioInsight[];
+  };
+}
+
+export interface DashboardAICEDimensions {
+  authority?: number | null;
+  intent?: number | null;
+  clarity?: number | null;
+  evidence?: number | null;
+}
+
+export interface DashboardSourceCitationCase {
+  scenario_id: string;
+  scenario_label: string;
+  platform?: string;
+  matched_answer?: string;
+  citation_domains?: string[];
+  citation_titles?: string[];
+  citation_urls?: string[];
+  is_official?: boolean;
+  aice_score?: number | null;
+  aice_dimensions?: DashboardAICEDimensions | null;
+}
+
+export interface DashboardSourceContent {
+  title: string;
+  domain?: string;
+  count?: number;
+  is_official?: boolean;
+}
+
+export interface DashboardSourcePlatformStat {
+  platform: string;
+  content_citation_rate: number;
+  official_citation_rate: number;
+  top_domains: Array<{ domain: string; count: number }>;
+}
+
+export interface DashboardSourceBoard {
+  content_citation_rate: number | null;
+  cited_answer_count: number;
+  cited_content_count: number;
+  headline: string;
+  report: {
+    official_cases: DashboardSourceCitationCase[];
+    non_official_cases: DashboardSourceCitationCase[];
+    official_contents: DashboardSourceContent[];
+    non_official_contents: DashboardSourceContent[];
+    top_domains: Array<{
+      domain: string;
+      count: number;
+      share: number;
+      is_official?: boolean;
+    }>;
+    platform_stats: DashboardSourcePlatformStat[];
+  };
+}
+
+export interface DashboardRadarDimension {
+  id: string;
+  label: string;
+  score: number;
+  summary: string;
+}
+
+export interface DashboardRadarBoard {
+  headline: string;
+  strongest_dimension: string;
+  weakest_dimension: string;
+  dimensions: DashboardRadarDimension[];
+}
+
+export interface DashboardMonitoringEntry {
+  title: string;
+  description: string;
+  cta_label: string;
+}
+
+export interface DashboardHomeData {
+  summary: {
+    headline: string;
+  };
+  mention_board: DashboardMentionBoard;
+  source_board: DashboardSourceBoard;
+  radar_board: DashboardRadarBoard;
+  monitoring_entry: DashboardMonitoringEntry;
+}
 export interface DashboardData {
   kpi: KPIData;
   visibility: VisibilityDataPoint[];
@@ -204,3 +332,4 @@ export interface DashboardData {
   competitors: CompetitorRow[];
   v2?: DashboardV2Data | null;
 }
+

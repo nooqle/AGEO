@@ -15,37 +15,43 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
 
   return (
     <header
-      className="h-14 sticky top-0 z-30 flex items-center justify-between px-6"
+      className="sticky top-0 z-30 flex h-14 items-center justify-between border-b px-5 lg:px-7"
       style={{
-        backgroundColor: 'var(--bg-primary)',
-        borderBottom: '1px solid var(--border-subtle)',
+        backgroundColor: 'color-mix(in srgb, var(--bg-primary) 88%, #efe7dc 12%)',
+        borderBottomColor: 'var(--border-subtle)',
+        backdropFilter: 'blur(18px)',
       }}
     >
-      {/* Left: Logo + Brand */}
-      <div className="flex items-center gap-2.5">
-        <ThemedLogo size={28} />
-        <span
-          className="text-sm font-semibold tracking-tight"
-          style={{ color: 'var(--text-primary)' }}
-        >
-          Specta AI
-        </span>
+      <div className="flex items-center gap-3">
+        <ThemedLogo size={26} />
+        <div>
+          <div className="text-[13px] font-semibold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+            Specta AI
+          </div>
+          <div className="text-[10px] tracking-[0.12em]" style={{ color: 'var(--text-tertiary)' }}>
+            品牌AI助手
+          </div>
+        </div>
       </div>
 
-      {/* Right: Actions */}
       <div className="flex items-center gap-2">
         <button
           onClick={onNewAnalysis ?? (() => router.push('/dashboard'))}
-          className="btn-primary flex items-center gap-1.5 text-xs !py-1.5 !px-3"
+          className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-medium transition-opacity hover:opacity-90"
+          style={{
+            background: 'linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 88%, #8092ff 12%), color-mix(in srgb, var(--color-primary) 74%, #4458d7 26%))',
+            color: '#ffffff',
+            boxShadow: '0 10px 22px rgba(54, 79, 124, 0.16)',
+          }}
         >
-          <RiAddLine className="w-4 h-4" />
+          <RiAddLine className="h-3.5 w-3.5" />
           <span>新建品牌</span>
         </button>
         <ThemeToggle />
         <NotificationBell align="right" />
         <button
           onClick={() => router.push('/settings')}
-          className="p-2 rounded-lg transition-colors"
+          className="rounded-full p-2 transition-colors"
           style={{ color: 'var(--text-tertiary)' }}
           onMouseEnter={(e) => {
             e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
@@ -57,7 +63,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
           }}
           title="设置"
         >
-          <RiSettings4Line className="w-5 h-5" />
+          <RiSettings4Line className="h-4.5 w-4.5" />
         </button>
       </div>
     </header>

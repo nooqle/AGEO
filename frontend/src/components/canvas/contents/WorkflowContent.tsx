@@ -7,6 +7,7 @@ import { BrandCompetitionGraph } from '@/components/graph/BrandCompetitionGraph'
 
 import { cn } from '@/lib/cn';
 import { useConversationStore } from '@/stores/conversationStore';
+import { useTheme } from '@/hooks/useTheme';
 import type {
   WorkflowBrandProfile,
   WorkflowCompetitor,
@@ -33,6 +34,37 @@ function getScoreColor(score: number): string {
   if (score <= 5) return '#FDBA74';
   if (score <= 7) return '#FCD34D';
   return '#86EFAC';
+}
+
+function getCompetitionStyles(type: string, isDark: boolean) {
+  if (type === '直接竞争') {
+    return isDark
+      ? { background: 'rgba(239,68,68,0.18)', color: '#fca5a5', borderColor: 'rgba(239,68,68,0.24)' }
+      : { background: '#fde8e8', color: '#c24141', borderColor: '#f8c4c4' };
+  }
+  if (type === '间接竞争') {
+    return isDark
+      ? { background: 'rgba(245,158,11,0.18)', color: '#fcd34d', borderColor: 'rgba(245,158,11,0.24)' }
+      : { background: '#fff1cf', color: '#b7791f', borderColor: '#f3d48a' };
+  }
+  return isDark
+    ? { background: 'rgba(139,92,246,0.18)', color: '#c4b5fd', borderColor: 'rgba(139,92,246,0.24)' }
+    : { background: '#eee7ff', color: '#6d4fd6', borderColor: '#d9c9ff' };
+}
+
+function getScoreBoxStyle(score: number, isDark: boolean) {
+  const color = getScoreColor(score);
+  return isDark
+    ? {
+        background: 'rgba(255,255,255,0.08)',
+        borderColor: 'rgba(255,255,255,0.08)',
+        color,
+      }
+    : {
+        background: 'color-mix(in srgb, var(--bg-elevated) 86%, #eef2f7 14%)',
+        borderColor: 'color-mix(in srgb, var(--border-subtle) 78%, #d5dce6 22%)',
+        color: score >= 8 ? '#2f9e66' : score >= 6 ? '#d99a18' : score >= 4 ? '#d97706' : '#c24141',
+      };
 }
 
 const priorityColors: Record<string, string> = {
@@ -115,6 +147,8 @@ function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
 }
 
 function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
   return (
     <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
       <table className="w-full text-sm min-w-[600px]">
@@ -157,18 +191,19 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
                 </div>
               </td>
               <td className="py-3 px-4">
-                <span className={cn(
-                  'px-2 py-0.5 rounded text-xs whitespace-nowrap',
-                  c.competition_type === '直接竞争' ? 'bg-[#EF4444]/15 text-[#FCA5A5]' :
-                  c.competition_type === '间接竞争' ? 'bg-[#F59E0B]/15 text-[#FCD34D]' :
-                  'bg-[#8B5CF6]/15 text-[#C4B5FD]'
-                )}>
+                <span
+                  className="whitespace-nowrap rounded-md border px-2.5 py-1 text-xs font-medium"
+                  style={getCompetitionStyles(c.competition_type, isDark)}
+                >
                   {c.competition_type}
                 </span>
               </td>
               <td className="py-3 px-4 text-center">
-                <div className="inline-flex items-center justify-center w-8 h-8 rounded bg-[var(--bg-tertiary)]">
-                  <span className="text-sm font-semibold" style={{ color: getScoreColor(c.relevance_score ?? 0) }}>{c.relevance_score}</span>
+                <div
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  style={getScoreBoxStyle(c.relevance_score ?? 0, isDark)}
+                >
+                  <span className="text-sm font-semibold" style={{ color: 'inherit' }}>{c.relevance_score}</span>
                 </div>
               </td>
               <td className="py-3 px-4">

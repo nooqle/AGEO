@@ -1,8 +1,8 @@
-export const PLATFORM_NAMES: Record<string, string> = {
+﻿export const PLATFORM_NAMES: Record<string, string> = {
   kimi: 'Kimi',
   deepseek: 'DeepSeek',
   doubao: '豆包',
-  hunyuan: '混元',
+  hunyuan: '元宝',
   zhipu: '智谱',
 };
 

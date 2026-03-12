@@ -21,11 +21,11 @@ logger = logging.getLogger(__name__)
 
 # Metric display names for alert messages
 METRIC_DISPLAY_NAMES = {
-    "bwvs_index": "BWVS 指数",
+    "bwvs_index": "品牌可见度",
     "mention_rate": "提及率",
-    "sentiment_score": "情感得分",
-    "coverage_score": "覆盖度",
-    "citation_score": "引用得分",
+    "sentiment_score": "情感倾向",
+    "coverage_score": "平台覆盖",
+    "citation_score": "引用质量",
 }
 
 

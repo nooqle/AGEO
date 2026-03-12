@@ -1,6 +1,7 @@
 import type { Session, Message, Output, AgentControlResponse, ConfirmationResponse } from '@/types/api';
 import type { DashboardData } from '@/types/dashboard';
 import { buildDashboardV2Data } from '@/adapters/dashboardV2';
+import { buildDashboardHomeData } from '@/adapters/dashboardHome';
 import { normalizeEntity } from '@/types/entity';
 import type { Entity, CreateEntityInput, UpdateEntityInput } from '@/types/entity';
 import type { TouchpointTree } from '@/types/touchpoint';
@@ -235,6 +236,13 @@ class ApiService {
     return this.request<Record<string, unknown>>(`/analytics/v2/sources${query ? `?${query}` : ''}`);
   }
 
+  async getAnalyticsDashboardHomeV2(brandId?: string) {
+    const params = new URLSearchParams();
+    if (brandId) params.set('brand_id', brandId);
+    const query = params.toString();
+    return this.request<Record<string, unknown>>(`/analytics/v2/dashboard-home${query ? `?${query}` : ''}`);
+  }
+
   async getAnalyticsRisksActionsV2(brandId?: string) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
@@ -243,7 +251,7 @@ class ApiService {
   }
 
   async getAnalyticsAll(brandId?: string, dateRange: string = 'month'): Promise<DashboardData> {
-    const [overview, visibility, platforms, sources, aeo, sentiment, competitors, overviewV2, scenariosV2, competitorBattlesV2, sourcesV2, risksActionsV2] = await Promise.allSettled([
+    const [overview, visibility, platforms, sources, aeo, sentiment, competitors, overviewV2, scenariosV2, competitorBattlesV2, sourcesV2, risksActionsV2, homeV2] = await Promise.allSettled([
       this.getAnalyticsOverview(brandId, dateRange),
       this.getAnalyticsVisibility(brandId, dateRange),
       this.getAnalyticsPlatforms(brandId),
@@ -256,6 +264,7 @@ class ApiService {
       this.getAnalyticsCompetitorBattlesV2(brandId),
       this.getAnalyticsSourcesV2(brandId),
       this.getAnalyticsRisksActionsV2(brandId),
+      this.getAnalyticsDashboardHomeV2(brandId),
     ]);
 
     const ensure = <T,>(result: PromiseSettledResult<T>, fallback: T): T =>
@@ -270,6 +279,9 @@ class ApiService {
       sources: optional(sourcesV2),
       risksActions: optional(risksActionsV2),
     });
+    if (v2) {
+      v2.home = buildDashboardHomeData(optional(homeV2));
+    }
 
     return {
       kpi: ensure(overview, { kpi: { brandVisibility: null, mentionRate: null, shareOfVoice: null, visibilityTrend: null, mentionTrend: null, sovTrend: null } }).kpi,
@@ -537,7 +549,7 @@ class ApiService {
   /** Get trend data points for an entity and metric */
   async getMonitoringTrend(
     entityId: string,
-    metric: string = 'bwvs_index',
+    metric: string = 'mention_rate',
     limit: number = 50
   ): Promise<{ trend: TrendDataPoint[]; metric: string }> {
     const params = new URLSearchParams({
@@ -647,4 +659,3 @@ class ApiService {
 }
 
 export const api = new ApiService();
-

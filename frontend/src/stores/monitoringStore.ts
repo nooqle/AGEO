@@ -27,11 +27,11 @@ const DIMENSION_TO_METRIC: Record<string, string> = {
 
 /** Map metric names to display labels for MetricDelta cards */
 const METRIC_LABELS: Record<string, string> = {
-  bwvs_index: 'BWVS',
+  bwvs_index: '品牌可见度',
   mention_rate: '提及率',
-  sentiment_score: '情感分数',
-  coverage_score: '覆盖度',
-  citation_score: '引用分数',
+  sentiment_score: '情感倾向',
+  coverage_score: '平台覆盖',
+  citation_score: '引用质量',
 };
 
 /** Convert a TrendMetricSummary to a MetricDelta for UI rendering */
@@ -215,10 +215,10 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
   // Trend Data Actions
   // =========================================================================
 
-  fetchTrendData: async (entityId: string, dimension = 'bwvs') => {
+  fetchTrendData: async (entityId: string, dimension = 'mention_rate') => {
     set({ isTrendLoading: true });
     try {
-      const metric = DIMENSION_TO_METRIC[dimension] ?? 'bwvs_index';
+      const metric = DIMENSION_TO_METRIC[dimension] ?? 'mention_rate';
       const result = await api.getMonitoringTrend(entityId, metric);
       set({ trendData: result.trend, isTrendLoading: false });
     } catch {
@@ -226,9 +226,9 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
     }
   },
 
-  fetchTrendSummary: async (entityId: string, dimension = 'bwvs') => {
+  fetchTrendSummary: async (entityId: string, dimension = 'mention_rate') => {
     try {
-      const metric = DIMENSION_TO_METRIC[dimension] ?? 'bwvs_index';
+      const metric = DIMENSION_TO_METRIC[dimension] ?? 'mention_rate';
       const resp = await api.getMonitoringTrendSummary(entityId);
       const metricSummary = resp.summaries[metric];
       if (metricSummary) {

@@ -49,6 +49,13 @@ export interface WebSocketEventData {
     description?: string;
   }>;
 
+  // Browser state / user action
+  platform?: string;
+  state?: string;
+  requires_action?: boolean;
+  action_type?: string;
+  action_hint?: string;
+
   // Generic fields
   [key: string]: unknown;
 }

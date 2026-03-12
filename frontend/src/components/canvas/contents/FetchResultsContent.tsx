@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useMemo, useCallback } from 'react';
 import type { FetchResultsCanvasContent, FetchResultItem, FetchPlatformResult, FetchCitation } from '@/types/canvas';
@@ -13,7 +13,7 @@ interface FetchResultsContentProps {
 
 const PLATFORM_CONFIG: Record<string, { label: string; color: string; dotColor: string }> = {
   doubao:    { label: '豆包',     color: 'var(--color-accent-cyan)',   dotColor: '#06B6D4' },
-  hunyuan:   { label: '混元',     color: 'var(--color-accent-purple)', dotColor: '#A855F7' },
+  hunyuan:   { label: '元宝',     color: 'var(--color-accent-purple)', dotColor: '#A855F7' },
   kimi:      { label: 'Kimi',    color: 'var(--color-secondary)',     dotColor: '#10B981' },
   deepseek:  { label: 'DeepSeek',color: 'var(--color-primary)',       dotColor: '#6366F1' },
 };
@@ -982,3 +982,4 @@ export function FetchResultsContent({ content }: FetchResultsContentProps) {
     </div>
   );
 }
+

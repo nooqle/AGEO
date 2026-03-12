@@ -3,12 +3,12 @@
 import { cn } from '@/lib/cn';
 import type { BwvsBreakdown } from '@/types/dashboard';
 
-/** Dimension definition for a single BWVS scoring axis */
+/** Dimension definition for a single composite visibility axis */
 interface BwvsDimension {
   key: string;
   label: string;
-  weight: number;  // percentage, e.g. 40
-  score: number;   // 0-100
+  weight: number;
+  score: number;
   competitorScore?: number | null;
 }
 
@@ -29,10 +29,8 @@ interface BwvsBreakdownSectionProps {
 }
 
 /**
- * BwvsBreakdownSection renders the four BWVS v2 dimensions as horizontal bars
- * with optional competitor comparison using grouped (side-by-side) bars.
- *
- * Placement: inside ReportContent "overview" tab, below the Score Card.
+ * Legacy support section for old report payloads.
+ * It keeps the internal composite score readable without making it the main narrative.
  */
 export function BwvsBreakdownSection({
   breakdown,
@@ -72,36 +70,31 @@ export function BwvsBreakdownSection({
   ];
 
   const hasCompetitor = competitor != null;
-
-  // Build formula display string
-  const formulaText = `BWVS = ${breakdown.mention_score.toFixed(1)}x${(breakdown.weights.mention / 100).toFixed(2)} + ${breakdown.sentiment_score.toFixed(1)}x${(breakdown.weights.sentiment / 100).toFixed(2)} + ${breakdown.coverage_score.toFixed(1)}x${(breakdown.weights.coverage / 100).toFixed(2)} + ${breakdown.citation_score.toFixed(1)}x${(breakdown.weights.citation / 100).toFixed(2)} = ${overallScore.toFixed(1)}`;
+  const formulaText = `提及率 ${breakdown.weights.mention}% · 情感倾向 ${breakdown.weights.sentiment}% · 平台覆盖 ${breakdown.weights.coverage}% · 引用质量 ${breakdown.weights.citation}%`;
 
   return (
     <div
-      className="p-5 rounded-xl"
+      className="rounded-xl p-5"
       style={{
         background: 'var(--bg-elevated, #2D2D2D)',
         border: '1px solid var(--border-subtle)',
       }}
     >
-      {/* Section title */}
       <h4
-        className="text-[15px] font-semibold mb-1"
+        className="mb-1 text-[15px] font-semibold"
         style={{ color: 'var(--text-primary, #E5E5E5)' }}
       >
-        BWVS 指数构成
+        可见度维度拆解
       </h4>
       <p
-        className="text-[13px] mb-4"
+        className="mb-4 text-[13px]"
         style={{ color: 'var(--text-muted, #6B6B6B)' }}
       >
-        {breakdown.formula}
+        该拆解仅用于解释内部评分维度，不作为对客户的主结论。
       </p>
 
-      {/* Overall score header */}
       <div
-        className="flex items-center gap-4 pb-4 mb-4"
-        style={{ borderBottom: '1px solid var(--border-subtle)' }}
+        className="mb-4 flex items-center gap-4 border-b border-[var(--border-subtle)] pb-4"
       >
         <div className="text-center">
           <div
@@ -110,21 +103,21 @@ export function BwvsBreakdownSection({
               overallScore >= 70
                 ? 'text-emerald-400'
                 : overallScore >= 40
-                ? 'text-amber-400'
-                : 'text-red-400'
+                  ? 'text-amber-400'
+                  : 'text-red-400'
             )}
           >
             {overallScore.toFixed(1)}
           </div>
           <div
-            className="text-[13px] mt-1"
+            className="mt-1 text-[13px]"
             style={{ color: 'var(--text-secondary, #A3A3A3)' }}
           >
-            {scoreBand || (overallScore >= 70 ? '优秀' : overallScore >= 40 ? '良好' : '需改进')}
+            {scoreBand || '内部参考'}
           </div>
         </div>
 
-        {hasCompetitor && (
+        {hasCompetitor && competitor && (
           <>
             <div
               className="text-xs"
@@ -139,30 +132,29 @@ export function BwvsBreakdownSection({
                   competitor.total >= 70
                     ? 'text-emerald-400'
                     : competitor.total >= 40
-                    ? 'text-amber-400'
-                    : 'text-red-400'
+                      ? 'text-amber-400'
+                      : 'text-red-400'
                 )}
                 style={{ opacity: 0.7 }}
               >
                 {competitor.total.toFixed(1)}
               </div>
               <div
-                className="text-[13px] mt-1"
+                className="mt-1 text-[13px]"
                 style={{ color: 'var(--text-tertiary, #8A8A8A)' }}
               >
-                竞品均值
+                竞品参考
               </div>
             </div>
           </>
         )}
       </div>
 
-      {/* Legend for competitor mode */}
       {hasCompetitor && (
-        <div className="flex items-center gap-4 mb-3">
+        <div className="mb-3 flex items-center gap-4">
           <div className="flex items-center gap-1.5">
             <div
-              className="w-3 h-2 rounded-sm"
+              className="h-2 w-3 rounded-sm"
               style={{ background: 'var(--info, #3B82F6)' }}
             />
             <span
@@ -174,7 +166,7 @@ export function BwvsBreakdownSection({
           </div>
           <div className="flex items-center gap-1.5">
             <div
-              className="w-3 h-2 rounded-sm"
+              className="h-2 w-3 rounded-sm"
               style={{ background: 'var(--text-tertiary, #8A8A8A)', opacity: 0.5 }}
             />
             <span
@@ -187,32 +179,24 @@ export function BwvsBreakdownSection({
         </div>
       )}
 
-      {/* Dimension bars */}
       <div className="space-y-3">
         {dimensions.map((dim) => (
-          <DimensionBar
-            key={dim.key}
-            dimension={dim}
-            hasCompetitor={hasCompetitor}
-          />
+          <DimensionBar key={dim.key} dimension={dim} hasCompetitor={hasCompetitor} />
         ))}
       </div>
 
-      {/* Citation note */}
       {breakdown.citation_note && (
         <p
-          className="text-xs mt-3 ml-0"
+          className="ml-0 mt-3 text-xs"
           style={{ color: 'var(--text-muted, #6B6B6B)' }}
         >
           * {breakdown.citation_note}
         </p>
       )}
 
-      {/* Formula row */}
       <div
-        className="mt-4 pt-3"
+        className="mt-4 border-t border-[var(--border-subtle)] pt-3"
         style={{
-          borderTop: '1px solid var(--border-subtle)',
           fontFamily: 'monospace',
           fontSize: '11px',
           color: 'var(--text-disabled, #525252)',
@@ -224,7 +208,6 @@ export function BwvsBreakdownSection({
   );
 }
 
-/** Single dimension horizontal bar (with optional competitor side-by-side) */
 function DimensionBar({
   dimension,
   hasCompetitor,
@@ -238,8 +221,7 @@ function DimensionBar({
 
   return (
     <div>
-      {/* Label row */}
-      <div className="flex items-center justify-between mb-1">
+      <div className="mb-1 flex items-center justify-between">
         <span
           className="text-[13px] font-medium"
           style={{ color: 'var(--text-primary, #E5E5E5)', width: '80px' }}
@@ -254,12 +236,10 @@ function DimensionBar({
         </span>
       </div>
 
-      {/* Bar(s) + score value */}
       <div className="flex items-center gap-3">
         <div className="flex-1 space-y-1">
-          {/* Brand bar */}
           <div
-            className="w-full rounded-full overflow-hidden"
+            className="w-full overflow-hidden rounded-full"
             style={{
               height: hasCompetitor ? '8px' : '10px',
               background: 'var(--bg-tertiary, #262626)',
@@ -275,10 +255,9 @@ function DimensionBar({
             />
           </div>
 
-          {/* Competitor bar (grouped, side-by-side) */}
-          {hasCompetitor && competitorScore != null && (
+          {hasCompetitor && competitorScore != null && competitorBarColor && (
             <div
-              className="w-full rounded-full overflow-hidden"
+              className="w-full overflow-hidden rounded-full"
               style={{
                 height: '6px',
                 background: 'var(--bg-tertiary, #262626)',
@@ -297,8 +276,7 @@ function DimensionBar({
           )}
         </div>
 
-        {/* Score values */}
-        <div className="w-24 text-right flex-shrink-0">
+        <div className="w-24 flex-shrink-0 text-right">
           <span
             className="text-[13px] font-semibold"
             style={{ color: 'var(--text-primary, #E5E5E5)' }}
@@ -307,7 +285,7 @@ function DimensionBar({
           </span>
           {hasCompetitor && competitorScore != null && (
             <span
-              className="text-[11px] ml-1"
+              className="ml-1 text-[11px]"
               style={{ color: 'var(--text-tertiary, #8A8A8A)' }}
             >
               vs {competitorScore.toFixed(1)}
@@ -319,12 +297,6 @@ function DimensionBar({
   );
 }
 
-/**
- * Returns the CSS color for a score value:
- * >= 60: success green
- * 30-59: warning amber
- * < 30: error red
- */
 function getScoreColor(score: number): string {
   if (score >= 60) return 'var(--success, #22C55E)';
   if (score >= 30) return 'var(--warning, #F59E0B)';

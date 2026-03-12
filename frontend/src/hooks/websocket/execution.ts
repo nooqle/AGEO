@@ -1,4 +1,4 @@
-import type { BrowserState, ExecutionProgress, ProgressStep, SubTask } from '@/types/agent';
+import type { BrowserActionType, BrowserState, ExecutionProgress, ProgressStep, SubTask } from '@/types/agent';
 import type { WebSocketEventData } from '@/types/websocket';
 import { BROWSER_PLATFORMS, BROWSER_STATES, EXECUTION_STATUSES, mapStepStatus } from './protocol';
 
@@ -58,15 +58,34 @@ export function buildExecutionProgress(
 }
 
 export function buildBrowserState(data: WebSocketEventData): BrowserState {
+  const state = BROWSER_STATES.includes((data.state || '') as BrowserState['state'])
+    ? ((data.state || '') as BrowserState['state'])
+    : 'idle';
+  const message = data.message || '';
+  const explicitActionType = typeof data.action_type === 'string'
+    ? (data.action_type as BrowserActionType)
+    : undefined;
+
+  let actionType: BrowserActionType | undefined;
+  if (explicitActionType === 'login' || explicitActionType === 'verify' || explicitActionType === 'modal') {
+    actionType = explicitActionType;
+  } else if (message.includes('\u9a8c\u8bc1')) {
+    actionType = 'verify';
+  } else if (state === 'waiting_for_modal') {
+    actionType = 'modal';
+  } else if (state === 'waiting_for_login') {
+    actionType = 'login';
+  }
+
   return {
-    state: BROWSER_STATES.includes((data.state || '') as BrowserState['state'])
-      ? ((data.state || '') as BrowserState['state'])
-      : 'idle',
-    message: data.message || '',
+    state,
+    message,
     platform: BROWSER_PLATFORMS.includes((data.platform || '') as BrowserState['platform'])
       ? ((data.platform || '') as BrowserState['platform'])
       : 'kimi',
     requiresAction: typeof data.requires_action === 'boolean' ? data.requires_action : false,
+    actionType,
     actionHint: typeof data.action_hint === 'string' ? data.action_hint : undefined,
+    progress: typeof data.progress === 'number' ? data.progress : undefined,
   };
 }

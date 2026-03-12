@@ -1,8 +1,8 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { RiCloseLine, RiSearchLine, RiEditLine, RiDeleteBinLine, RiAddLine } from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiDeleteBinLine, RiEditLine, RiSearchLine } from '@remixicon/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EntityFormDialog } from './EntityFormDialog';
 import { BrandAvatar } from './BrandAvatar';
@@ -21,9 +21,9 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
   const [editEntity, setEditEntity] = useState<Entity | null>(null);
   const [formOpen, setFormOpen] = useState(false);
 
-  const filtered = entities.filter((e) =>
-    e.name.toLowerCase().includes(search.toLowerCase()) ||
-    e.domain.toLowerCase().includes(search.toLowerCase())
+  const filtered = entities.filter((entity) =>
+    entity.name.toLowerCase().includes(search.toLowerCase()) ||
+    entity.domain.toLowerCase().includes(search.toLowerCase())
   );
 
   const handleDelete = async (id: string) => {
@@ -32,7 +32,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
       await api.deleteEntity(id);
       removeEntity(id);
     } catch {
-      // silently handle
+      // silent for now
     }
   };
 
@@ -48,7 +48,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
       setFormOpen(false);
       setEditEntity(null);
     } catch {
-      // silently handle
+      // silent for now
     }
   };
 
@@ -58,7 +58,6 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
     setFormOpen(true);
   };
 
-  // onClose() + setFormOpen(true) 依赖 React 18+ automatic batching，两次 setState 在同一事件回调中合并为一次渲染
   const openAdd = () => {
     setEditEntity(null);
     onClose();
@@ -67,135 +66,134 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
 
   return (
     <>
-      <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
+      <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
         <Dialog.Portal>
-          <Dialog.Overlay
-            className="fixed inset-0 z-50"
-            style={{ background: 'rgba(0,0,0,0.6)' }}
-          />
-          <Dialog.Content
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          >
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-[rgba(19,23,34,0.42)] backdrop-blur-[4px]" />
+          <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
             <motion.div
-              className="w-full max-w-4xl max-h-[80vh] flex flex-col rounded-2xl overflow-hidden"
+              className="flex h-[min(88vh,980px)] w-[min(94vw,1320px)] flex-col overflow-hidden rounded-[30px] border"
               style={{
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-subtle)',
+                background:
+                  'linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 96%, #f6efe2 4%), color-mix(in srgb, var(--bg-secondary) 99%, #efe7da 1%))',
+                borderColor: 'color-mix(in srgb, var(--border-subtle) 82%, #b99969 18%)',
+                boxShadow: '0 30px 80px rgba(20, 25, 38, 0.18)',
               }}
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.96 }}
-              transition={{ duration: 0.2 }}
+              initial={{ opacity: 0, scale: 0.97, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.97, y: 8 }}
+              transition={{ duration: 0.18 }}
             >
-              {/* Header */}
-              <div
-                className="flex items-center justify-between px-6 py-4"
-                style={{ borderBottom: '1px solid var(--border-subtle)' }}
-              >
-                <Dialog.Title className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-                  品牌管理
-                </Dialog.Title>
+              <div className="flex items-center justify-between border-b px-7 py-5" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div>
+                  <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">品牌列表</div>
+                  <Dialog.Title className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">
+                    品牌管理
+                  </Dialog.Title>
+                </div>
                 <Dialog.Close asChild>
                   <button
-                    className="p-1.5 rounded-lg transition-colors cursor-pointer"
-                    style={{ color: 'var(--text-tertiary)' }}
+                    className="flex h-11 w-11 items-center justify-center rounded-full border transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--bg-tertiary)]"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
+                    aria-label="关闭品牌管理"
                   >
-                    <RiCloseLine className="w-5 h-5" />
+                    <RiCloseLine className="h-5 w-5" />
                   </button>
                 </Dialog.Close>
               </div>
 
-              {/* Search + Add */}
-              <div className="px-6 py-3 flex items-center gap-3">
-                <div
-                  className="flex items-center gap-2 flex-1 px-3 py-2 rounded-lg"
-                  style={{
-                    background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-subtle)',
-                  }}
-                >
-                  <RiSearchLine className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
-                  <input
-                    type="text"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="搜索品牌名称或域名..."
-                    className="bg-transparent text-sm outline-none flex-1"
-                    style={{ color: 'var(--text-primary)', border: 'none', background: 'transparent', boxShadow: 'none' }}
-                  />
+              <div className="border-b px-7 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                  <div
+                    className="flex flex-1 items-center gap-3 rounded-[18px] border px-4 py-3"
+                    style={{
+                      background: 'color-mix(in srgb, var(--bg-elevated) 88%, #faf4ea 12%)',
+                      borderColor: 'var(--border-subtle)',
+                    }}
+                  >
+                    <RiSearchLine className="h-4.5 w-4.5" style={{ color: 'var(--text-tertiary)' }} />
+                    <input
+                      type="text"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                      placeholder="搜索品牌名称或官网域名"
+                      className="w-full bg-transparent text-[14px] outline-none placeholder:text-[var(--text-tertiary)]"
+                      style={{ color: 'var(--text-primary)' }}
+                    />
+                  </div>
+
+                  <button
+                    className="flex items-center justify-center gap-2 rounded-[18px] px-4 py-3 text-[14px] font-medium transition-colors"
+                    style={{
+                      background: 'color-mix(in srgb, var(--color-primary) 12%, var(--bg-elevated) 88%)',
+                      color: 'color-mix(in srgb, var(--color-primary) 72%, var(--text-primary) 28%)',
+                      border: '1px solid color-mix(in srgb, var(--color-primary) 18%, var(--border-subtle) 82%)',
+                    }}
+                    onClick={openAdd}
+                  >
+                    <RiAddLine className="h-4 w-4" />
+                    新建品牌
+                  </button>
                 </div>
-                <button
-                  className="btn-primary flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer"
-                  onClick={openAdd}
-                >
-                  <RiAddLine className="w-4 h-4" />
-                  新建
-                </button>
               </div>
 
-              {/* Brand grid */}
-              <div className="flex-1 overflow-auto px-6 py-3">
+              <div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
                 {filtered.length === 0 ? (
-                  <div className="text-center py-12" style={{ color: 'var(--text-muted)' }}>
-                    {search ? '未找到匹配的品牌' : '暂无品牌，点击上方「新建」添加'}
+                  <div className="rounded-[22px] border border-dashed px-6 py-12 text-center text-[14px] text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                    {search ? '未找到匹配的品牌。' : '当前还没有品牌，点击右上角新建品牌即可开始分析。'}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
                     <AnimatePresence>
-                      {filtered.map((entity) => {
-                        return (
-                          <motion.div
-                            key={entity.id}
-                            className="card-modern flex flex-col"
-                            style={{ padding: 'var(--space-lg)' }}
-                            layout
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            transition={{ duration: 0.2 }}
-                          >
-                            <div className="flex items-start gap-3 mb-3">
-                              <BrandAvatar name={entity.name} domain={entity.domain} size={40} className="flex-shrink-0" />
-                              <div className="min-w-0 flex-1">
-                                <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-                                  {entity.name}
-                                </div>
-                                {entity.domain && (
-                                  <div className="text-xs truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                                    {entity.domain}
-                                  </div>
-                                )}
-                              </div>
+                      {filtered.map((entity) => (
+                        <motion.article
+                          key={entity.id}
+                          className="rounded-[24px] border px-5 py-5"
+                          style={{
+                            background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #fbf7ef 6%), color-mix(in srgb, var(--bg-tertiary) 98%, #f4ede1 2%))',
+                            borderColor: 'color-mix(in srgb, var(--border-subtle) 88%, #d7c4a6 12%)',
+                          }}
+                          layout
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 8 }}
+                          transition={{ duration: 0.18 }}
+                        >
+                          <div className="flex items-start gap-3">
+                            <BrandAvatar name={entity.name} domain={entity.domain} size={46} className="flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[15px] font-semibold text-[var(--text-primary)]">{entity.name}</div>
+                              {entity.domain ? (
+                                <div className="mt-1 truncate text-[12px] text-[var(--text-tertiary)]">{entity.domain}</div>
+                              ) : null}
                             </div>
+                          </div>
 
-                            {entity.industry && (
-                              <div className="text-xs mb-3" style={{ color: 'var(--text-tertiary)' }}>
-                                {entity.industry}
-                              </div>
-                            )}
+                          {entity.industry ? (
+                            <div className="mt-4 text-[13px] text-[var(--text-secondary)]">{entity.industry}</div>
+                          ) : null}
 
-                            {/* Action buttons */}
-                            <div className="flex gap-2 mt-auto pt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                          <div className="mt-4 border-t pt-3" style={{ borderColor: 'var(--border-subtle)' }}>
+                            <div className="flex items-center gap-2">
                               <button
-                                className="p-1.5 rounded-md transition-colors cursor-pointer"
-                                style={{ color: 'var(--text-tertiary)' }}
+                                className="flex h-10 w-10 items-center justify-center rounded-[14px] border transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--bg-secondary)]"
+                                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
                                 onClick={() => openEdit(entity)}
-                                title="编辑"
+                                title="编辑品牌"
                               >
-                                <RiEditLine className="w-4 h-4" />
+                                <RiEditLine className="h-4.5 w-4.5" />
                               </button>
                               <button
-                                className="p-1.5 rounded-md transition-colors cursor-pointer"
-                                style={{ color: 'var(--status-error)' }}
+                                className="flex h-10 w-10 items-center justify-center rounded-[14px] border transition-colors hover:bg-[var(--bg-secondary)]"
+                                style={{ borderColor: 'color-mix(in srgb, var(--border-subtle) 80%, #df8e84 20%)', color: 'var(--status-error)' }}
                                 onClick={() => handleDelete(entity.id)}
-                                title="删除"
+                                title="删除品牌"
                               >
-                                <RiDeleteBinLine className="w-4 h-4" />
+                                <RiDeleteBinLine className="h-4.5 w-4.5" />
                               </button>
                             </div>
-                          </motion.div>
-                        );
-                      })}
+                          </div>
+                        </motion.article>
+                      ))}
                     </AnimatePresence>
                   </div>
                 )}
@@ -205,10 +203,12 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
         </Dialog.Portal>
       </Dialog.Root>
 
-      {/* Entity form dialog (edit/add) */}
       <EntityFormDialog
         open={formOpen}
-        onClose={() => { setFormOpen(false); setEditEntity(null); }}
+        onClose={() => {
+          setFormOpen(false);
+          setEditEntity(null);
+        }}
         onSubmit={handleSubmit}
         entity={editEntity}
       />

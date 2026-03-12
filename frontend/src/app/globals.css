@@ -690,6 +690,144 @@ html.theme-transitioning *::after {
     box-shadow 200ms ease-out !important;
 }
 
+/* =========================================================================
+   Dashboard surfaces
+   ========================================================================= */
+
+.dashboard-page-bg {
+  background:
+    radial-gradient(circle at 10% -8%, color-mix(in srgb, var(--color-primary) 30%, transparent), transparent 26%),
+    radial-gradient(circle at 88% 2%, color-mix(in srgb, #d8a45d 24%, transparent), transparent 24%),
+    radial-gradient(circle at 54% 102%, color-mix(in srgb, #2c7b6f 18%, transparent), transparent 28%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 82%, #0e1b37 18%), color-mix(in srgb, var(--bg-primary) 92%, #17120f 8%));
+}
+
+.dashboard-shell {
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 52%, #c39c67 48%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 76%, #1a2743 24%), color-mix(in srgb, var(--bg-secondary) 90%, #1a140f 10%));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 28px 72px rgba(4, 10, 24, 0.38);
+}
+
+.dashboard-inner-panel {
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, rgba(255,255,255,0.08) 28%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 78%, #202c44 22%), color-mix(in srgb, var(--bg-tertiary) 92%, #18120f 8%));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 16px 34px rgba(4, 10, 24, 0.18);
+}
+
+.dashboard-board {
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 64%, rgba(255,255,255,0.1) 36%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 22px 48px rgba(7, 11, 22, 0.28);
+}
+
+.dashboard-board--violet {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 66%, #30366d 34%), color-mix(in srgb, var(--bg-secondary) 90%, #191524 10%));
+  border-color: color-mix(in srgb, var(--border-subtle) 46%, #8f8cff 54%);
+}
+
+.dashboard-board--amber {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 68%, #4b3318 32%), color-mix(in srgb, var(--bg-secondary) 90%, #1a140d 10%));
+  border-color: color-mix(in srgb, var(--border-subtle) 46%, #d3a055 54%);
+}
+
+.dashboard-board--mint {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 70%, #20473d 30%), color-mix(in srgb, var(--bg-secondary) 90%, #121914 10%));
+  border-color: color-mix(in srgb, var(--border-subtle) 48%, #78a696 52%);
+}
+
+.dashboard-dialog-shell {
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 52%, #b89462 48%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 84%, #172742 16%), color-mix(in srgb, var(--bg-primary) 93%, #18120f 7%));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 50px 124px rgba(4, 10, 24, 0.46);
+}
+
+.dashboard-dialog-hero {
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 70%, #9a7bdd 30%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 78%, #2a315c 22%), color-mix(in srgb, var(--bg-elevated) 94%, #19130f 6%));
+}
+
+.dashboard-report-panel {
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, rgba(255,255,255,0.08) 28%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 80%, #1f2943 20%), color-mix(in srgb, var(--bg-elevated) 93%, #18120f 7%));
+}
+
+html[data-theme="light"] .dashboard-page-bg {
+  background:
+    radial-gradient(circle at 10% -4%, color-mix(in srgb, var(--color-primary) 10%, transparent), transparent 24%),
+    radial-gradient(circle at 88% 6%, color-mix(in srgb, #d4a75f 12%, transparent), transparent 20%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 96%, #f7f1e5 4%), color-mix(in srgb, var(--bg-primary) 99%, #efe7da 1%));
+}
+
+html[data-theme="light"] .dashboard-shell {
+  border-color: color-mix(in srgb, var(--border-subtle) 70%, #b69467 30%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 92%, #faf5ed 8%), color-mix(in srgb, var(--bg-secondary) 98%, #f3ebdf 2%));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 22px 50px rgba(65, 49, 24, 0.05);
+}
+
+html[data-theme="light"] .dashboard-inner-panel {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 95%, #fbf7ef 5%), color-mix(in srgb, var(--bg-tertiary) 98%, #f2ebdf 2%));
+  box-shadow: none;
+}
+
+html[data-theme="light"] .dashboard-board {
+  box-shadow: 0 18px 38px rgba(65, 49, 24, 0.05);
+}
+
+html[data-theme="light"] .dashboard-board--violet {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, #f3efff 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f7f2eb 2%));
+  border-color: color-mix(in srgb, var(--border-subtle) 82%, var(--color-primary) 18%);
+}
+
+html[data-theme="light"] .dashboard-board--amber {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, #fbf2e6 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f7f3eb 2%));
+  border-color: color-mix(in srgb, var(--border-subtle) 82%, #caa06f 18%);
+}
+
+html[data-theme="light"] .dashboard-board--mint {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, #edf5f2 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f7f2eb 2%));
+  border-color: color-mix(in srgb, var(--border-subtle) 82%, #88a99d 18%);
+}
+
+html[data-theme="light"] .dashboard-dialog-shell {
+  border-color: color-mix(in srgb, var(--border-subtle) 82%, #b99969 18%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 96%, #f6efe2 4%), color-mix(in srgb, var(--bg-secondary) 99%, #efe7da 1%));
+  box-shadow: 0 30px 80px rgba(20, 25, 38, 0.18);
+}
+
+html[data-theme="light"] .dashboard-dialog-hero {
+  border-color: var(--border-subtle);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 90%, #fbf2e6 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f6f1e8 2%));
+}
+
+html[data-theme="light"] .dashboard-report-panel {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 92%, #faf4ea 8%), color-mix(in srgb, var(--bg-elevated) 98%, #f0e8dc 2%));
+}
+
 /* Glass Morphism Light 覆盖 */
 html[data-theme="light"] .glass {
   background: rgba(255, 255, 255, 0.80);

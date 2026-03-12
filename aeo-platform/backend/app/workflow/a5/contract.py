@@ -527,6 +527,146 @@ def _build_report_summary_metrics(summary_metrics: dict[str, Any]) -> list[dict[
     ]
 
 
+
+def _coerce_insight_item(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        title = str(raw.get("title", "") or raw.get("label", "") or raw.get("scenario_label", "") or "").strip()
+        if not title:
+            return None
+        return {
+            "title": title,
+            "scenario": str(raw.get("scenario", "") or raw.get("scenario_label", "") or title),
+            "evidence": str(raw.get("evidence", "") or raw.get("description", "") or raw.get("reason", "") or "").strip(),
+            "platforms": raw.get("platforms", []) or raw.get("present_platforms", []) or [],
+            "improvement_hint": str(raw.get("improvement_hint", "") or raw.get("mitigation_hint", "") or "").strip(),
+        }
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    return {
+        "title": text,
+        "scenario": text,
+        "evidence": text,
+        "platforms": [],
+        "improvement_hint": "",
+    }
+
+
+def _build_insight_section(
+    report_data: dict[str, Any],
+    mention_sentiment_analysis: dict[str, Any],
+) -> dict[str, Any]:
+    explicit_strengths = [
+        item for item in (
+            _coerce_insight_item(raw) for raw in report_data.get("strengths", []) or []
+        ) if item
+    ]
+    explicit_weaknesses = [
+        item for item in (
+            _coerce_insight_item(raw) for raw in report_data.get("weaknesses", []) or []
+        ) if item
+    ]
+
+    brand_payload = mention_sentiment_analysis.get("brand", {}) if isinstance(mention_sentiment_analysis, dict) else {}
+    brand_items = brand_payload.get("items", []) if isinstance(brand_payload, dict) else []
+
+    positive_mentions = [item for item in brand_items if item.get("sentiment") == "positive"]
+    non_positive_mentions = [item for item in brand_items if item.get("sentiment") in {"neutral", "negative"}]
+
+    sentiment_label = {"positive": "正向", "neutral": "中性", "negative": "负向"}
+
+    sentiment_strengths = []
+    for item in positive_mentions[:3]:
+        domains = item.get("citation_domains", []) or []
+        domain_text = f"，主要引用：{'、'.join(domains[:3])}" if domains else ""
+        sentiment_strengths.append({
+            "title": f"{item.get('scenario_label', '该场景')}中品牌被{sentiment_label['positive']}提及",
+            "scenario": item.get("scenario_label", ""),
+            "evidence": f"在 {item.get('platform', 'AI 平台')} 的回答中，品牌被明确正向提及{domain_text}。",
+            "platforms": [item.get("platform", "")] if item.get("platform") else [],
+            "improvement_hint": "",
+            "sentiment": item.get("sentiment"),
+            "citation_domains": domains,
+            "citation_titles": item.get("citation_titles", []) or [],
+            "official_citation_present": item.get("official_citation_present", False),
+        })
+
+    sentiment_weaknesses = []
+    for item in non_positive_mentions[:4]:
+        label = sentiment_label.get(str(item.get("sentiment", "neutral")), "中性")
+        domains = item.get("citation_domains", []) or []
+        domain_text = f"，主要引用：{'、'.join(domains[:3])}" if domains else ""
+        sentiment_weaknesses.append({
+            "title": f"{item.get('scenario_label', '该场景')}中品牌呈{label}提及",
+            "scenario": item.get("scenario_label", ""),
+            "evidence": f"在 {item.get('platform', 'AI 平台')} 的回答中，品牌呈{label}提及{domain_text}。",
+            "platforms": [item.get("platform", "")] if item.get("platform") else [],
+            "improvement_hint": "优先补强该场景的官网证据、FAQ 和对比型内容。",
+            "sentiment": item.get("sentiment"),
+            "citation_domains": domains,
+            "citation_titles": item.get("citation_titles", []) or [],
+            "official_citation_present": item.get("official_citation_present", False),
+        })
+
+    strengths = explicit_strengths + [item for item in sentiment_strengths if item["title"] not in {s["title"] for s in explicit_strengths}]
+    weaknesses = explicit_weaknesses + [item for item in sentiment_weaknesses if item["title"] not in {w["title"] for w in explicit_weaknesses}]
+
+    summary_bits = []
+    summary = brand_payload.get("summary", {}) if isinstance(brand_payload, dict) else {}
+    if isinstance(summary, dict):
+        if summary.get("positive"):
+            summary_bits.append(f"品牌共有 {summary.get('positive', 0)} 条正向提及")
+        if summary.get("neutral"):
+            summary_bits.append(f"{summary.get('neutral', 0)} 条中性提及待补强")
+        if summary.get("negative"):
+            summary_bits.append(f"{summary.get('negative', 0)} 条负向提及需优先处理")
+
+    return {
+        "title": "洞察",
+        "description": "先看品牌当前做得好的地方，以及还需要补强的地方。",
+        "summary": "，".join(summary_bits) if summary_bits else "先看品牌当前做得好的地方，以及还需要补强的地方。",
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+    }
+
+
+def _build_competitor_summary_cards(
+    competitor_battles: list[dict[str, Any]],
+    mention_sentiment_analysis: dict[str, Any],
+) -> list[dict[str, Any]]:
+    competitor_payloads = mention_sentiment_analysis.get("competitors", []) if isinstance(mention_sentiment_analysis, dict) else []
+    sentiment_map = {}
+    for item in competitor_payloads:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("competitor", "") or "").strip()
+        if not name:
+            continue
+        sentiment_map[name] = item
+
+    summary_cards = []
+    for battle in competitor_battles:
+        competitor = str(battle.get("competitor", "") or "").strip()
+        sentiment_payload = sentiment_map.get(competitor, {})
+        mention_examples = []
+        for example in (sentiment_payload.get("items", []) or [])[:3]:
+            if not isinstance(example, dict):
+                continue
+            mention_examples.append({
+                "scenario_label": example.get("scenario_label", ""),
+                "platform": example.get("platform", ""),
+                "sentiment": example.get("sentiment", "neutral"),
+                "citation_domains": example.get("citation_domains", []) or [],
+            })
+
+        summary_cards.append({
+            **battle,
+            "sentiment_summary": sentiment_payload.get("summary", {}),
+            "mention_examples": mention_examples,
+        })
+
+    return summary_cards
+
 def _build_report_v2_sections(
     report_data: dict[str, Any],
     summary_metrics: dict[str, Any],
@@ -536,6 +676,7 @@ def _build_report_v2_sections(
     action_queue: list[dict[str, Any]],
     source_overview: dict[str, Any],
     citation_analysis: dict[str, Any],
+    mention_sentiment_analysis: dict[str, Any],
 ) -> dict[str, Any]:
     """Build structured Report V2 sections for the canvas artifact."""
     report_summary = {
@@ -608,6 +749,8 @@ def _build_report_v2_sections(
         "citation_analysis": citation_analysis,
     }
 
+    insight_section = _build_insight_section(report_data, mention_sentiment_analysis)
+
     action_section = {
         "title": "下一步优化",
         "description": "优先处理这些动作，才能改善接下来的战况。",
@@ -639,6 +782,7 @@ def _build_report_v2_sections(
         "competitor_battle": competitor_battle,
         "risk_section": risk_section,
         "source_section": source_section,
+        "insight_section": insight_section,
         "action_queue_section": action_section,
         "report_v2": {
             "summary": report_summary,
@@ -646,6 +790,7 @@ def _build_report_v2_sections(
             "competitorBattle": competitor_battle,
             "risks": risk_section,
             "sources": source_section,
+            "insights": insight_section,
             "actionQueue": action_section,
         },
     }

@@ -21,6 +21,7 @@ from app.workflow.a5 import keywords as a5_keywords
 from app.workflow.a5 import prompt as a5_prompt
 from app.workflow.a5 import postprocess as a5_postprocess
 from app.workflow.a5 import sanitizer as a5_sanitizer
+from app.workflow.a5 import sentiment as a5_sentiment
 from app.workflow.a5.persistence import build_report_artifact_data
 from app.workflow.nodes_a4 import PLATFORMS
 
@@ -76,6 +77,11 @@ async def a5_analytics_node(state: AgentState) -> Command:
         # so the prompt can reason about scenarios, risks, and action priorities
         # instead of only aggregate scores.
         source_overview = a5_contract._build_source_overview(metrics.get("citation_analysis", {}))
+        mention_sentiment_analysis = a5_sentiment.build_mention_sentiment_analysis(
+            fetch_results,
+            brand_profile,
+            competitors,
+        )
         scenario_matrix = a5_contract._build_scenario_matrix(
             fetch_results,
             brand_profile,
@@ -183,6 +189,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 risk_map=risk_map,
                 action_queue=action_queue,
                 source_overview=source_overview,
+            mention_sentiment_analysis=mention_sentiment_analysis,
             )
             model = get_llm_model_compat()
 
@@ -338,6 +345,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             action_queue,
             source_overview,
             metrics.get("citation_analysis", {}),
+            mention_sentiment_analysis,
         )
 
         report_data["summary_metrics"] = summary_metrics
@@ -346,6 +354,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         report_data["risk_map"] = risk_map
         report_data["action_queue"] = action_queue
         report_data["source_overview"] = source_overview
+        report_data["mention_sentiment_analysis"] = mention_sentiment_analysis
 
         # Persist lightweight V2 fields into metrics/raw_data as well so
         # snapshots and downstream analytics can read them without reparsing
@@ -356,6 +365,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         metrics["risk_map"] = risk_map
         metrics["action_queue"] = action_queue
         metrics["source_overview"] = source_overview
+        metrics["mention_sentiment_analysis"] = mention_sentiment_analysis
 
         # --- Snapshot writing + Delta vs previous (single DB session) ---
         is_degraded = report_data.get("_degraded", False)
@@ -427,6 +437,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             risk_map=risk_map,
             action_queue=action_queue,
             source_overview=source_overview,
+            mention_sentiment_analysis=mention_sentiment_analysis,
         )
         await save_and_send_artifact(
             session_id=session_id,
@@ -761,7 +772,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
     )
     sorted_domains = sorted(
         domain_stats.items(), key=lambda x: x[1]["count"], reverse=True
-    )[:10]
+    )
     total_cit = max(total_citations, 1)  # avoid division by zero
 
     citation_analysis: dict[str, Any] = {
@@ -780,7 +791,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                 "count": stats["count"],
                 "share": round(stats["count"] / total_cit * 100, 1),
                 "is_official": stats["is_official"],
-                "sample_titles": stats["sample_titles"][:2],
+                "sample_titles": stats["sample_titles"][:3],
             }
             for domain, stats in sorted_domains
         ],

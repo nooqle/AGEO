@@ -1,4 +1,4 @@
-"""Analytics API endpoints for Dashboard."""
+﻿"""Analytics API endpoints for Dashboard."""
 
 from uuid import UUID
 
@@ -135,6 +135,18 @@ async def get_sources_v2(
     return await service.get_sources_v2(brand_id)
 
 
+
+@router.get("/v2/dashboard-home")
+async def get_dashboard_home_v2(
+    brand_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get Dashboard homepage three-board aggregate data."""
+    service = AnalyticsService(db)
+    return await service.get_dashboard_home_v2(brand_id)
+
+
 @router.get("/v2/risks-actions")
 async def get_risks_actions_v2(
     brand_id: str | None = Query(None),
@@ -154,7 +166,7 @@ async def get_risks_actions_v2(
 @router.get("/trend")
 async def get_trend(
     brand_id: str = Query(..., description="Entity ID"),
-    metric: str = Query("bwvs_index", description="Metric name"),
+    metric: str = Query("mention_rate", description="Metric name"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
@@ -201,3 +213,5 @@ async def get_trend_summary(
             for name, s in summaries.items()
         }
     }
+
+

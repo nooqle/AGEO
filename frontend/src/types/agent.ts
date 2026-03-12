@@ -59,11 +59,14 @@ export type BrowserStateType =
   | 'completed'
   | 'error';
 
+export type BrowserActionType = 'login' | 'verify' | 'modal';
+
 export interface BrowserState {
   state: BrowserStateType;
   platform: 'kimi' | 'deepseek' | 'doubao' | 'hunyuan';
   message: string;
   requiresAction: boolean;
+  actionType?: BrowserActionType;
   actionHint?: string;
   progress?: number;
 }
