@@ -52,6 +52,7 @@ def _get_layers(session_id: str) -> dict[str, Any]:
         # message.metadata.layers and consumed by the frontend as-is.
         _session_layers[session_id] = {
             "_created_at": now,
+            "replyText": "",
             "thought": "",
             "planText": "",
             "actionLogs": [],
@@ -108,6 +109,14 @@ async def send_reply_event(
     """
     if _is_headless(session_id):
         return
+
+    if not is_complete:
+        layers = _get_layers(session_id)
+        if is_new_round or not is_delta:
+            layers["replyText"] = content
+        else:
+            layers["replyText"] += content
+
     await manager.emit_to_session(session_id, "reply_delta", {
         "content": content,
         "is_delta": is_delta,

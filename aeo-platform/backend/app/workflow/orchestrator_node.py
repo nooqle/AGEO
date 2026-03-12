@@ -696,6 +696,51 @@ def _get_tool_name_from_node(node_name: str) -> str | None:
     return node_to_tool.get(node_name)
 
 
+def _build_ask_user_fallback_reply(
+    state: AgentState,
+    tool_name: str | None,
+    message: str,
+) -> str:
+    """Build a deterministic user-facing reply when LLM omits natural language."""
+    if tool_name == "brand_analysis":
+        has_baseline = bool(state.get("baseline_metrics"))
+        brand_name = (
+            state.get("brand_profile", {}) or {}
+        ).get("brand_name") or state.get("brand_name") or "该品牌"
+        if has_baseline:
+            return (
+                f"{brand_name}的品牌分析已完成，我已经整理出品牌画像和竞品格局。"
+                "接下来您可以选择继续生成用户画像做场景细化分析、重新运行基线分析，"
+                "或者直接基于已有结果提问。"
+            )
+        return (
+            f"{brand_name}的品牌分析已完成，但当前还没有行业基线。"
+            "建议先运行基线分析，建立各 AI 平台对该品牌的全景认知基线，"
+            "后续再做画像和场景分析会更有对照价值。"
+        )
+
+    if tool_name == "persona_generation":
+        return (
+            "用户画像已生成并展示在右侧画布中。"
+            "请先在画布里勾选您想重点分析的画像，然后回复我继续；"
+            "如果不想限定画像，也可以直接告诉我走品牌全景分析。"
+        )
+
+    if tool_name == "question_simulation":
+        return (
+            "问题模拟已完成，相关问题已经展示在右侧画布中。"
+            "您现在可以告诉我选择快速采集、完整采集，或要求我重新生成问题。"
+        )
+
+    if tool_name == "answer_fetch":
+        return (
+            "答案抓取已准备就绪。"
+            "如果您希望继续，我会根据您选择的模式开始采集并在完成后继续分析。"
+        )
+
+    return message or "请继续告诉我您的选择。"
+
+
 async def _force_fetch_mode_confirmation(
     *,
     state: AgentState,
@@ -836,6 +881,7 @@ TOOL_TO_NODE: dict[str, str] = {
     "brand_analysis": "a1_brand",
     "persona_generation": "a2_persona",
     "question_simulation": "a3_question",
+    "answer_fetch": "a4_fetch",
     "data_analytics": "a5_analytics",
     # Follow-up tools (Cycle 3)
     "drill_down_analysis": "drill_down",
@@ -1209,6 +1255,7 @@ async def _handle_tool_call(
         # Layer 4: inline confirmation (simple or guided)
         msg = tool_args.get("message", "请确认")
         options = tool_args.get("options", [])
+        last_tool_name = _get_tool_name_from_node(state.get("next_action", "") or "")
         # Hard filter: remove any "stop/cancel" options
         BANNED_KEYWORDS = ["停止", "取消", "放弃", "终止"]
         options = [
@@ -1254,7 +1301,7 @@ async def _handle_tool_call(
         if (
             not options
             and state.get("simulated_questions")
-            and _get_tool_name_from_node(state.get("next_action", "") or "") == "question_simulation"
+            and last_tool_name == "question_simulation"
         ):
             logger.warning(
                 "[Orchestrator] ask_user called without options after A3; "
@@ -1268,6 +1315,17 @@ async def _handle_tool_call(
                 request_id=request_id,
                 current_retry_counts=current_retry_counts,
             )
+
+        if not reply_text.strip():
+            fallback_reply = _build_ask_user_fallback_reply(state, last_tool_name, msg)
+            await send_reply_event(
+                session_id,
+                fallback_reply,
+                is_delta=True,
+                is_new_round=True,
+            )
+            await send_reply_event(session_id, "", is_complete=True)
+            reply_text = fallback_reply
 
         # Enhanced inline confirmation with type, tips, and checklist
         payload: dict[str, Any] = {

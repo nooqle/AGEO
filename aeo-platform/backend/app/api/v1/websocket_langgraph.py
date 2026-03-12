@@ -652,8 +652,13 @@ async def _save_final_message(session_id: str, workflow, config: dict):
             orchestrator_reply = state_values.get("orchestrator_reply", "")
             report = state_values.get("report") or {}
             metrics = state_values.get("metrics") or {}
+            layered_reply = ""
+            if isinstance(layers, dict):
+                layered_reply = str(layers.get("replyText", "") or "").strip()
 
-            if orchestrator_reply:
+            if layered_reply:
+                content = layered_reply
+            elif orchestrator_reply:
                 content = orchestrator_reply
             elif report:
                 content = report.get("executive_summary", "分析完成")
