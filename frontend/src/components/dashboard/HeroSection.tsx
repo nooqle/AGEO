@@ -131,7 +131,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
 
   return (
     <motion.section
-      className="dashboard-shell overflow-hidden rounded-[26px] px-6 py-4"
+      className="dashboard-shell overflow-hidden rounded-[24px] px-5 py-3"
       style={{
         position: 'relative',
       }}
@@ -139,17 +139,17 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.28 }}
     >
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
         <div className="max-w-3xl">
           <div className="text-[10px] font-medium tracking-[0.16em]" style={{ color: 'var(--text-tertiary)' }}>
             概览
           </div>
-          <div className="mt-1.5 text-[clamp(0.98rem,1.12vw,1.14rem)] font-semibold tracking-[-0.03em]" style={{ color: 'var(--text-primary)' }}>
+          <div className="mt-1 text-[clamp(0.94rem,1.02vw,1.08rem)] font-semibold tracking-[-0.03em]" style={{ color: 'var(--text-primary)' }}>
             当前已管理 {totalBrands} 个品牌，累计完成 {totalSessions} 次分析
           </div>
-          <div className="mt-2.5 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <span
-              className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
+              className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
               style={{
                 background: 'color-mix(in srgb, var(--bg-elevated) 92%, #faf5ec 8%)',
                 borderColor: 'color-mix(in srgb, var(--border-subtle) 80%, #b99968 20%)',
@@ -159,7 +159,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
               {totalBrands} 个品牌
             </span>
             <span
-              className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
+              className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
               style={{
                 background: 'color-mix(in srgb, var(--bg-elevated) 92%, #f3eef9 8%)',
                 borderColor: 'color-mix(in srgb, var(--border-subtle) 82%, var(--color-primary) 18%)',
@@ -170,7 +170,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
             </span>
             {lastActiveBrand ? (
               <span
-                className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
+                className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
                 style={{
                   background: 'color-mix(in srgb, var(--bg-elevated) 94%, #eef6f4 6%)',
                   borderColor: 'color-mix(in srgb, var(--border-subtle) 84%, #7ca89a 16%)',
@@ -183,7 +183,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
           </div>
         </div>
         {lastActiveBrand ? (
-          <div className="rounded-full border px-3 py-1.5 text-[11px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'color-mix(in srgb, var(--bg-elevated) 90%, #f3eef9 10%)' }}>
+          <div className="rounded-full border px-3 py-1 text-[11px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'color-mix(in srgb, var(--bg-elevated) 90%, #f3eef9 10%)' }}>
             当前查看：{lastActiveBrand}
           </div>
         ) : null}

@@ -10,6 +10,7 @@ import { BrandAvatar } from './BrandAvatar';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 
 interface BrandDetailDialogProps {
@@ -71,9 +72,9 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
     if (!entity || isCreating) return;
     setIsCreating(true);
     try {
-      const session = await api.getSessionByEntity(entity.id).catch(() => api.createSession(entity.id));
+      const session = await api.getOrCreateSessionByEntity(entity.id);
       onClose();
-      router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity.name)}`);
+      router.push(`/chat/${session.id}?entity_id=${encodeURIComponent(entity.id)}&brand=${encodeURIComponent(entity.name)}`);
     } catch {
       // silently handle
     } finally {
@@ -98,10 +99,7 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
     <>
       <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
         <Dialog.Portal>
-          <Dialog.Overlay
-            className="fixed inset-0 z-50"
-            style={{ background: 'rgba(0,0,0,0.6)' }}
-          />
+          <Dialog.Overlay className={modalScrimClassName('z-50')} />
           <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               className="w-full max-w-lg flex flex-col rounded-2xl overflow-hidden max-h-[80vh]"

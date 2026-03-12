@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RiCloseLine } from '@remixicon/react';
 import { AliasTagInput } from './AliasTagInput';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 
 interface EntityFormDialogProps {
@@ -65,7 +66,7 @@ function EntityFormDialogInner({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className={modalScrimClassName('z-50 flex items-center justify-center p-4')}
       onClick={onClose}
     >
       <div

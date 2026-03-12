@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { RiPieChartLine, RiRadarLine, RiRobot2Line } from '@remixicon/react';
+import { RiRobot2Line } from '@remixicon/react';
 import { KPICard } from './KPICard';
 import { VisibilityTab } from './VisibilityTab';
 import { SourcesTab } from './SourcesTab';
@@ -98,8 +98,8 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [brandArchive, setBrandArchive] = useState<DashboardBrandArchiveData | null>(null);
   const { data, dateRange, selectedBrandId, setSelectedBrandId, fetchData } = useDashboardStore();
-  const { entities, isLoading: entitiesLoading, fetchEntities } = useEntityStore();
-  const { totalSessions, fetchSessionList } = useSessionStore();
+  const { entities, isLoading: entitiesLoading, error: entityError, fetchEntities } = useEntityStore();
+  const { totalSessions, listError, fetchSessionList } = useSessionStore();
 
   useEffect(() => {
     fetchEntities();
@@ -171,6 +171,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
   const selectedBrand = entities.find((entity) => entity.id === selectedBrandId);
   const selectedBrandName = selectedBrand?.name;
+  const hasLoadError = Boolean(entityError || listError);
   const fallbackOfficialDomain =
     selectedBrand?.domain?.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase() || '';
   const hasData = entities.length > 0;
@@ -193,16 +194,10 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     if (!selectedBrand) return;
 
     try {
-      const existing = await api.getSessionByEntity(selectedBrand.id);
-      router.push(`/chat/${existing.id}?brand=${encodeURIComponent(selectedBrand.name)}`);
-      return;
-    } catch {}
-
-    try {
-      const created = await api.createSession(selectedBrand.id);
-      router.push(`/chat/${created.id}?brand=${encodeURIComponent(selectedBrand.name)}`);
-    } catch {
-      toast.error('打开品牌分析失败，请稍后重试。');
+      const session = await api.getOrCreateSessionByEntity(selectedBrand.id);
+      router.push(`/chat/${session.id}?entity_id=${encodeURIComponent(selectedBrand.id)}&brand=${encodeURIComponent(selectedBrand.name)}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '打开品牌分析失败，请稍后重试。');
     }
   };
 
@@ -211,15 +206,12 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     setDialogOpen(true);
   };
 
-  const oldOfficialCitationRate = useMemo(() => {
-    const allSources = data?.sources || [];
-    const sourceTotalCount = allSources.reduce((sum, item) => sum + item.count, 0);
-    const officialSourceCount = allSources
-      .filter((item) => officialDomain && item.source.toLowerCase().includes(officialDomain))
-      .reduce((sum, item) => sum + item.count, 0);
-    const ratio = sourceTotalCount > 0 ? officialSourceCount / sourceTotalCount : null;
-    return normalizePercent(ratio);
-  }, [data?.sources, officialDomain]);
+  const allSources = data?.sources || [];
+  const sourceTotalCount = allSources.reduce((sum, item) => sum + item.count, 0);
+  const officialSourceCount = allSources
+    .filter((item) => officialDomain && item.source.toLowerCase().includes(officialDomain))
+    .reduce((sum, item) => sum + item.count, 0);
+  const oldOfficialCitationRate = normalizePercent(sourceTotalCount > 0 ? officialSourceCount / sourceTotalCount : null);
 
   const fallbackBrandMentionRate = normalizePercent(kpi?.mentionRate ?? null);
   const fallbackScenarioHitCount = Math.max(
@@ -378,8 +370,8 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
         />
       </div>
 
-      <div className="relative mx-auto w-full max-w-[1920px] px-5 py-6 lg:px-7 lg:py-8 2xl:px-10">
-        <div className="space-y-6">
+      <div className="relative mx-auto w-full max-w-[1920px] px-5 py-4 lg:px-7 lg:py-5 2xl:px-10">
+        <div className="space-y-4">
           <HeroSection
             totalSessions={totalSessions}
             totalBrands={entities.length}
@@ -387,38 +379,27 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
             onNewAnalysis={onNewAnalysis ?? (() => {})}
           />
 
-          <BrandCards />
-
-          {!hasData && (
+          {hasLoadError && (
             <motion.div
-              className="rounded-[24px] border bg-[var(--bg-tertiary)] px-6 py-6"
-              style={{ borderColor: 'var(--border-subtle)' }}
+              className="rounded-[24px] border px-5 py-4"
+              style={{
+                background: 'color-mix(in srgb, var(--bg-elevated) 92%, #fff5e8 8%)',
+                borderColor: 'color-mix(in srgb, #d79b45 26%, var(--border-subtle) 74%)',
+              }}
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35 }}
+              transition={{ duration: 0.3 }}
             >
-              <div className="border-b border-[var(--border-subtle)] pb-4">
-                <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">首页看板</div>
-                <div className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">分析完成后，这里会出现三张首页看板。</div>
-                <p className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">首页只回答三个问题：品牌有没有被提及、内容有没有进入答案、整体战况轮廓如何。</p>
+              <div className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
+                当前首页未成功加载真实品牌数据
               </div>
-              <div className="mt-5 grid gap-4 xl:grid-cols-3">
-                {[
-                  { icon: RiRobot2Line, title: '提及率看板', desc: '看品牌在哪些问题进入答案，以及四个平台提及时的语气。' },
-                  { icon: RiPieChartLine, title: '内容引用率看板', desc: '看被引用的品牌内容来自官网还是第三方站点。' },
-                  { icon: RiRadarLine, title: '五维雷达看板', desc: '看品牌在行业影响、人群覆盖、场景覆盖、风险和积极情绪上的表现。' },
-                ].map((item) => (
-                  <div key={item.title} className="rounded-[20px] border bg-[var(--bg-elevated)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-[var(--bg-tertiary)]">
-                      <item.icon className="h-5 w-5" style={{ color: 'var(--color-primary)' }} />
-                    </div>
-                    <div className="mt-4 text-[17px] font-semibold text-[var(--text-primary)]">{item.title}</div>
-                    <div className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">{item.desc}</div>
-                  </div>
-                ))}
-              </div>
+              <p className="mt-2 text-[13px] leading-7" style={{ color: 'var(--text-secondary)' }}>
+                这不是“历史为空”。而是品牌列表或会话列表接口本轮加载失败。先恢复接口，再重新加载首页。
+              </p>
             </motion.div>
           )}
+
+          <BrandCards onAddBrand={onNewAnalysis} />
 
           {hasData && !hasSelectedBrandAnalysis && selectedBrand && (
             <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>

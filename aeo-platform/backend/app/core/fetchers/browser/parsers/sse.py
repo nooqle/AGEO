@@ -252,14 +252,41 @@ class DoubaoSSEParser(BaseResponseParser):
             return "", ""
         error_code = data.get("error_code", "")
         error_msg = data.get("error_message", "") or data.get("error_msg", "") or data.get("msg", "")
+        extra = data.get("extra", {})
+        if isinstance(extra, str):
+            try:
+                extra = json.loads(extra)
+            except (json.JSONDecodeError, ValueError):
+                extra = {}
+
         decision = data.get("decision", {}) if isinstance(data.get("decision"), dict) else {}
+        if not decision and isinstance(extra, dict):
+            extra_decision = extra.get("decision", {})
+            if isinstance(extra_decision, str):
+                try:
+                    extra_decision = json.loads(extra_decision)
+                except (json.JSONDecodeError, ValueError):
+                    extra_decision = {}
+            if isinstance(extra_decision, dict):
+                decision = extra_decision
+
+        verify_scene = ""
+        if isinstance(extra, dict):
+            verify_scene = str(extra.get("verify_scene", "") or "")
         err_type_field = data.get("type", "") or decision.get("type", "")
         normalized_error_msg = str(error_msg or "").lower()
         error_info = f"{event_type}: code={error_code} msg={error_msg}"
+
+        # Browser-side verify challenges must take precedence over generic
+        # rate-limit text, otherwise the frontend never prompts the user.
+        if (
+            err_type_field == "verify"
+            or "verify" in normalized_error_msg
+            or bool(verify_scene)
+        ):
+            return error_info, "verify"
         if "rate limit" in normalized_error_msg or "rate_limit" in normalized_error_msg or error_code == 710022004:
             return error_info, "rate_limit"
-        if err_type_field == "verify" or "verify" in normalized_error_msg:
-            return error_info, "verify"
         return error_info, "server_error"
 
     def parse(self, body: str, url: str = "") -> ParsedResponse:

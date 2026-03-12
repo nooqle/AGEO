@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -13,9 +13,13 @@ import { toast } from '@/components/ui/toast';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 import { DashboardSectionHeader } from './DashboardSectionHeader';
 
-export function BrandCards() {
+interface BrandCardsProps {
+  onAddBrand?: () => void;
+}
+
+export function BrandCards({ onAddBrand }: BrandCardsProps) {
   const router = useRouter();
-  const { entities, addEntity } = useEntityStore();
+  const { entities, addEntity, error, fetchEntities } = useEntityStore();
   const { selectedBrandId, setSelectedBrandId } = useDashboardStore();
   const [manageOpen, setManageOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -36,15 +40,10 @@ export function BrandCards() {
     if (navigating) return;
     setNavigating(true);
     try {
-      const session = await api.getSessionByEntity(entity.id);
-      router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity.name || '')}`);
-    } catch {
-      try {
-        const session = await api.createSession(entity.id);
-        router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity.name || '')}`);
-      } catch {
-        toast.error('品牌加载失败');
-      }
+      const session = await api.getOrCreateSessionByEntity(entity.id);
+      router.push(`/chat/${session.id}?entity_id=${encodeURIComponent(entity.id)}&brand=${encodeURIComponent(entity.name || '')}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '品牌加载失败');
     } finally {
       setNavigating(false);
     }
@@ -55,9 +54,17 @@ export function BrandCards() {
     router.push('/dashboard?tab=monitoring');
   };
 
+  const openBrandCreator = () => {
+    if (onAddBrand) {
+      onAddBrand();
+      return;
+    }
+    setAddOpen(true);
+  };
+
   return (
     <section
-      className="dashboard-shell rounded-[28px] px-6 py-5"
+      className="dashboard-shell rounded-[26px] px-5 py-4"
     >
       <div>
         <DashboardSectionHeader
@@ -76,13 +83,40 @@ export function BrandCards() {
         />
       </div>
 
-      {entities.length === 0 && (
+      {error ? (
+        <div
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[20px] border px-4 py-3"
+          style={{
+            background: 'color-mix(in srgb, var(--bg-elevated) 92%, #fff5e8 8%)',
+            borderColor: 'color-mix(in srgb, #d79b45 26%, var(--border-subtle) 74%)',
+          }}
+        >
+          <div>
+            <div className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
+              品牌数据加载失败
+            </div>
+            <div className="mt-1 text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
+              当前不是“没有品牌”，而是后端接口没有成功返回数据。请先重试加载。
+            </div>
+          </div>
+          <button
+            type="button"
+            className="cursor-pointer rounded-full border px-3 py-1.5 text-[12px] font-medium transition-opacity hover:opacity-80"
+            style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-subtle)' }}
+            onClick={() => {
+              void fetchEntities();
+            }}
+          >
+            重新加载
+          </button>
+        </div>
+      ) : entities.length === 0 ? (
         <p className="mb-4 text-[13px] leading-7" style={{ color: 'var(--text-tertiary)' }}>
-          添加品牌后，即可开始 AI 平台可见度分析与持续监测。
+          创建第一个品牌后，这里会出现对话分析入口和持续监测入口。
         </p>
-      )}
+      ) : null}
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(232px,1fr))] gap-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
         {entities.map((entity) => (
           <BrandCard
             key={entity.id}
@@ -95,7 +129,7 @@ export function BrandCards() {
             onMonitor={() => handleOpenMonitoring(entity)}
           />
         ))}
-        <AddBrandCard onClick={() => setAddOpen(true)} />
+        <AddBrandCard onClick={openBrandCreator} />
       </div>
 
       <BrandManageDialog open={manageOpen} onClose={() => setManageOpen(false)} />

@@ -67,6 +67,63 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     setExecutionProgress,
   } = useConversationStore();
 
+  const setOptimisticExecutionProgress = useCallback((optionId: string) => {
+    const optimisticProgressMap: Record<string, {
+      stage: string;
+      stageName: string;
+      progress: number;
+      details: string;
+    }> = {
+      persona_focused: {
+        stage: 'question_simulation',
+        stageName: '问题模拟生成',
+        progress: 0.45,
+        details: '已确认画像聚焦分析，正在生成问题...',
+      },
+      brand_panorama: {
+        stage: 'question_simulation',
+        stageName: '问题模拟生成',
+        progress: 0.45,
+        details: '已确认品牌全景分析，正在生成问题...',
+      },
+      fast: {
+        stage: 'answer_fetch',
+        stageName: 'AI答案抓取',
+        progress: 0.55,
+        details: '已确认快速采集，正在启动抓取...',
+      },
+      full: {
+        stage: 'answer_fetch',
+        stageName: 'AI答案抓取',
+        progress: 0.55,
+        details: '已确认完整采集，正在启动全平台浏览器抓取...',
+      },
+      regenerate: {
+        stage: 'question_simulation',
+        stageName: '问题模拟生成',
+        progress: 0.45,
+        details: '已确认重新生成问题，正在启动问题模拟...',
+      },
+    };
+
+    const optimistic = optimisticProgressMap[optionId];
+    if (!optimistic) {
+      return;
+    }
+
+    setExecutionProgress({
+      stage: optimistic.stage,
+      stageName: optimistic.stageName,
+      stageIndex: 0,
+      totalStages: 5,
+      progress: optimistic.progress,
+      status: 'running',
+      details: optimistic.details,
+      steps: [],
+      subTasks: [],
+    });
+  }, [setExecutionProgress]);
+
   // Initialize WebSocket connection
   const {
     sendMessage,
@@ -462,11 +519,21 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
       // Start execution state (backend will restart workflow)
       startExecution();
+      setOptimisticExecutionProgress(optionId);
 
       // Send confirmation to backend — selection must be a plain string
       sendConfirmation('', label);
     }
-  }, [pendingConfirmation, messages, addMessage, sendConfirmation, setPendingConfirmation, startExecution, markConfirmationSelected]);
+  }, [
+    pendingConfirmation,
+    messages,
+    addMessage,
+    sendConfirmation,
+    setPendingConfirmation,
+    startExecution,
+    markConfirmationSelected,
+    setOptimisticExecutionProgress,
+  ]);
 
   // Handle retry: re-send the user message that preceded the agent message
   const handleRetry = useCallback((messageId: string) => {
@@ -552,13 +619,13 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   };
 
   const liveCurrentStage = isAgentExecuting
-    ? (executionProgress?.stage ?? activeTask?.current_stage)
+    ? executionProgress?.stage
     : activeTask?.current_stage ?? executionProgress?.stage;
   const liveProgress = isAgentExecuting
-    ? (executionProgress?.progress ?? activeTask?.progress)
+    ? executionProgress?.progress
     : activeTask?.progress ?? executionProgress?.progress;
   const liveProgressMessage = isAgentExecuting
-    ? (executionProgress?.details ?? activeTask?.progress_message)
+    ? executionProgress?.details
     : activeTask?.progress_message ?? executionProgress?.details;
 
   return (
@@ -571,7 +638,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         >
           <div className="flex-1" />
           <TaskStatusBadge
-            status={activeTask?.status ?? 'running'}
+            status={isAgentExecuting ? 'running' : (activeTask?.status ?? 'running')}
             currentStage={liveCurrentStage}
             progress={liveProgress}
             progressMessage={liveProgressMessage}

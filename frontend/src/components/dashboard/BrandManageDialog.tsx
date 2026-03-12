@@ -8,6 +8,7 @@ import { EntityFormDialog } from './EntityFormDialog';
 import { BrandAvatar } from './BrandAvatar';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 
 interface BrandManageDialogProps {
@@ -68,7 +69,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
     <>
       <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-[rgba(19,23,34,0.42)] backdrop-blur-[4px]" />
+          <Dialog.Overlay className={modalScrimClassName('z-50')} />
           <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
             <motion.div
               className="flex h-[min(88vh,980px)] w-[min(94vw,1320px)] flex-col overflow-hidden rounded-[30px] border"

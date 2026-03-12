@@ -12,10 +12,21 @@ import type { CreateEntityInput } from '@/types/entity';
 function DashboardContent() {
   const [entityFormOpen, setEntityFormOpen] = useState(false);
   const addEntity = useEntityStore((s) => s.addEntity);
+  const entities = useEntityStore((s) => s.entities);
+  const entityError = useEntityStore((s) => s.error);
+  const entitiesLoading = useEntityStore((s) => s.isLoading);
+  const hasFetchedEntities = useEntityStore((s) => s.hasFetched);
+  const [hasDismissedAutoPrompt, setHasDismissedAutoPrompt] = useState(false);
 
   const handleNewAnalysis = useCallback(() => {
     setEntityFormOpen(true);
   }, []);
+  const shouldAutoPrompt =
+    hasFetchedEntities &&
+    !entitiesLoading &&
+    !entityError &&
+    entities.length === 0 &&
+    !hasDismissedAutoPrompt;
 
   const handleCreateBrand = async (data: CreateEntityInput) => {
     try {
@@ -31,11 +42,16 @@ function DashboardContent() {
     <div className="h-screen flex flex-col" style={{ backgroundColor: 'var(--bg-primary)' }}>
       <DashboardTopBar onNewAnalysis={handleNewAnalysis} />
       <div className="flex-1 overflow-auto">
-        <DashboardPage onNewAnalysis={handleNewAnalysis} />
+      <DashboardPage onNewAnalysis={handleNewAnalysis} />
       </div>
       <EntityFormDialog
-        open={entityFormOpen}
-        onClose={() => setEntityFormOpen(false)}
+        open={entityFormOpen || shouldAutoPrompt}
+        onClose={() => {
+          setEntityFormOpen(false);
+          if (shouldAutoPrompt) {
+            setHasDismissedAutoPrompt(true);
+          }
+        }}
         onSubmit={handleCreateBrand}
       />
     </div>

@@ -10,7 +10,8 @@ import { BrandAvatar } from './BrandAvatar';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
-import type { Entity, CreateEntityInput } from '@/types/entity';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
+import type { CreateEntityInput } from '@/types/entity';
 
 interface BrandSelectDialogProps {
   open: boolean;
@@ -52,19 +53,11 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
     if (!selectedEntity || isCreating) return;
     setIsCreating(true);
     try {
-      // 先查已有 Session
-      const session = await api.getSessionByEntity(selectedEntity.id);
+      const session = await api.getOrCreateSessionByEntity(selectedEntity.id);
       onClose();
-      router.push(`/chat/${session.id}?brand=${encodeURIComponent(selectedEntity.name)}`);
-    } catch {
-      // 404 — 创建新 Session 后跳转
-      try {
-        const session = await api.createSession(selectedEntity.id);
-        onClose();
-        router.push(`/chat/${session.id}?brand=${encodeURIComponent(selectedEntity.name)}`);
-      } catch {
-        toast.error('品牌加载失败');
-      }
+      router.push(`/chat/${session.id}?entity_id=${encodeURIComponent(selectedEntity.id)}&brand=${encodeURIComponent(selectedEntity.name)}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '品牌加载失败');
     } finally {
       setIsCreating(false);
     }
@@ -86,10 +79,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
     <>
       <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
         <Dialog.Portal>
-          <Dialog.Overlay
-            className="fixed inset-0 z-50"
-            style={{ background: 'rgba(0,0,0,0.6)' }}
-          />
+          <Dialog.Overlay className={modalScrimClassName('z-50')} />
           <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               className="w-full max-w-2xl flex flex-col rounded-2xl overflow-hidden max-h-[80vh]"

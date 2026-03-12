@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useMemo, type KeyboardEvent } from 'react';
+import { useMemo, useState, type KeyboardEvent } from 'react';
 import { motion } from 'framer-motion';
 import { RiAddLine, RiCalendar2Line, RiChat1Line } from '@remixicon/react';
 import type { Entity } from '@/types/entity';
@@ -21,15 +21,16 @@ interface AddBrandCardProps {
 
 export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }: BrandCardProps) {
   const { theme } = useTheme();
+  const [renderedAt] = useState(() => Date.now());
   const lastAnalyzedLabel = useMemo(() => {
     if (!entity.lastAnalyzed) return '尚未分析';
-    const diff = Date.now() - new Date(entity.lastAnalyzed).getTime();
+    const diff = renderedAt - new Date(entity.lastAnalyzed).getTime();
     const days = Math.floor(diff / 86400000);
     if (days === 0) return '今天分析';
     if (days === 1) return '昨天分析';
     if (days < 7) return `${days} 天前分析`;
     return new Date(entity.lastAnalyzed).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) + ' 分析';
-  }, [entity.lastAnalyzed]);
+  }, [entity.lastAnalyzed, renderedAt]);
 
   const isDark = theme === 'dark';
   const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -45,7 +46,7 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
       role="button"
       tabIndex={0}
       aria-pressed={isSelected}
-      className="w-full min-w-0 rounded-[24px] border px-4 py-3.5 text-left transition-all duration-200"
+      className="w-full min-w-0 rounded-[22px] border px-3.5 py-3 text-left transition-all duration-200"
       style={{
         background: isDark
           ? (isSelected
@@ -66,7 +67,7 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
       whileHover={{ y: -2 }}
       transition={{ duration: 0.18 }}
     >
-      <div className="flex min-h-[156px] flex-col">
+      <div className="flex min-h-[132px] flex-col">
         <div className="flex items-start justify-between gap-3">
           <BrandAvatar name={entity.name} domain={entity.domain} size={42} />
           <span
@@ -77,19 +78,19 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
           </span>
         </div>
 
-        <div className="mt-3 min-w-0">
-          <div className="truncate text-[15px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+        <div className="mt-2.5 min-w-0">
+          <div className="truncate text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>
             {entity.name}
           </div>
           {entity.domain && (
-            <div className="mt-0.5 truncate text-[12px]" style={{ color: 'var(--text-tertiary)' }}>
+            <div className="mt-0.5 truncate text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
               {entity.domain}
             </div>
           )}
         </div>
 
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <div className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>
+        <div className="mt-2.5 flex items-center justify-between gap-3">
+          <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
             {entity.industry || '未设置行业'}
           </div>
           <div className="text-[11px]" style={{ color: isSelected ? 'var(--color-primary)' : 'var(--text-tertiary)' }}>
@@ -97,11 +98,11 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
           </div>
         </div>
 
-        <div className="mt-3 border-t pt-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="mt-2.5 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              className="flex items-center justify-center gap-1.5 rounded-[13px] px-3 py-1.5 text-[12px] font-medium transition-colors"
+              className="flex items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-[11px] font-medium transition-colors"
               style={{
                 background: isDark
                   ? (isSelected
@@ -128,7 +129,7 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
             </button>
             <button
               type="button"
-              className="flex items-center justify-center gap-1.5 rounded-[13px] px-3 py-1.5 text-[12px] font-medium transition-colors"
+              className="flex items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-[11px] font-medium transition-colors"
               style={{
                 background: isDark
                   ? 'linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025))'
@@ -161,7 +162,7 @@ export function AddBrandCard({ onClick }: AddBrandCardProps) {
   return (
     <motion.button
       type="button"
-      className="flex h-[188px] w-full min-w-0 flex-col items-start justify-between rounded-[24px] border border-dashed px-4 py-3.5 text-left transition-all duration-200"
+      className="flex h-[164px] w-full min-w-0 flex-col items-start justify-between rounded-[22px] border border-dashed px-3.5 py-3 text-left transition-all duration-200"
       style={{
         background: isDark
           ? 'linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018))'
@@ -181,10 +182,10 @@ export function AddBrandCard({ onClick }: AddBrandCardProps) {
         <RiAddLine className="h-5 w-5" style={{ color: 'var(--text-secondary)' }} />
       </div>
       <div>
-        <div className="text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+        <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
           新建品牌
         </div>
-        <div className="mt-1 text-[12px] leading-6" style={{ color: 'var(--text-tertiary)' }}>
+        <div className="mt-1 text-[11px] leading-5" style={{ color: 'var(--text-tertiary)' }}>
           添加新的品牌对象并进入对话分析。
         </div>
       </div>

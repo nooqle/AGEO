@@ -162,6 +162,7 @@ def _build_a5_user_content(
     risk_map: list | None = None,
     action_queue: list | None = None,
     source_overview: dict | None = None,
+    mention_sentiment_analysis: dict | None = None,
 ) -> str:
     """Build enhanced user content for A5 with structured tables for LLM."""
     sections = []
@@ -250,6 +251,12 @@ def _build_a5_user_content(
             "- Never write BWVS, overall score, score_band, 综合分, 品牌AI可见度指数 in headline/subtitle/content/executive_summary.\n"
             "- If official_top_titles exists, treat it as concrete evidence for official-page title samples used by AI citations.\n"
             "- If some value is missing, keep it null/empty instead of inventing explanatory prose.\n"
+        )
+
+    if mention_sentiment_analysis:
+        sections.append(
+            "## 品牌与竞品提及情绪分析\n"
+            + json.dumps(mention_sentiment_analysis, ensure_ascii=False, indent=2)
         )
 
     # 3. Platform answer samples

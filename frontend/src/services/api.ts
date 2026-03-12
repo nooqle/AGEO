@@ -77,6 +77,19 @@ class ApiService {
     return this.request<{ id: string; entity_id: string; created_at: string }>(`/sessions/by-entity/${entityId}`);
   }
 
+  async getOrCreateSessionByEntity(entityId: string) {
+    try {
+      return await this.getSessionByEntity(entityId);
+    } catch {
+      try {
+        return await this.createSession(entityId);
+      } catch {
+        // If create lost a race against another request, fetch once more.
+        return await this.getSessionByEntity(entityId);
+      }
+    }
+  }
+
   async deleteSession(sessionId: string) {
     return this.request<void>(`/sessions/${sessionId}`, {
       method: 'DELETE',

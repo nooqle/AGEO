@@ -146,6 +146,18 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "citation_confidence_analysis",
+        "description": (
+            "基于当前会话里已经抓取到的引用来源，生成一份引用内容置信度评估。"
+            "不会重新抓取数据，只会评估当前 fetch_results 中已有的引用来源。"
+            "通常在 A5 报告生成后，用户明确表示希望检查引用可信度时调用。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
     # --- Monitoring tools (Cycle 4) ---
     {
         "name": "create_monitoring_schedule",
@@ -390,9 +402,10 @@ def _build_context_summary(state: AgentState) -> str:
 DIRECTIVE_A1_HAS_BASELINE = (
     "【强制操作】你必须先用 3-5 句话向用户汇报品牌分析结果（包含至少1个具体洞察），"
     "然后在消息末尾用自然语言列出选项：\n"
-    "1. 生成用户画像，进入场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现\n"
-    "2. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现\n"
-    "3. 直接提问 — 针对已有数据自由提问\n"
+    "1. 做一次引用内容置信度评估（可选）— 检查当前引用来源的可信度、结构化质量与可核查性\n"
+    "2. 生成用户画像，进入场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现\n"
+    "3. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现\n"
+    "4. 直接提问 — 针对已有数据自由提问\n"
     "您可以回复序号，或者直接说您的想法。\n"
     "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
     "不要跳过 ask_user，不要自行决定下一步。"
@@ -434,6 +447,27 @@ DIRECTIVE_A3_NEXT_FETCH = (
     "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
     "不要逐条列出问题内容（UI 已经展示了）。"
     "用户选择 1 后调用 answer_fetch(fetch_mode='fast')，选择 2 后调用 answer_fetch(fetch_mode='full')。"
+)
+
+DIRECTIVE_A5_BASELINE_NEXT = (
+    "【强制操作】你必须先用 3-5 句话向用户汇报基线报告结果，至少包含 1 个具体指标或风险发现。"
+    "然后在消息末尾用自然语言列出以下编号选项，每个选项都要说明作用：\n"
+    "1. 做一次引用内容置信度评估（可选）— 检查当前报告中引用来源的可信度、结构化质量和可核查性\n"
+    "2. 生成用户画像，进入场景细化分析（推荐）— 在基线之上继续看不同人群场景中的品牌表现\n"
+    "3. 重新运行基线分析 — 用新的问题或新的采集结果重建当前基线\n"
+    "4. 直接提问 — 基于当前报告继续追问任何具体问题\n"
+    "您可以回复序号，或者直接说您的想法。\n"
+    "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
+)
+
+DIRECTIVE_A5_PERSONA_NEXT = (
+    "【强制操作】你必须先用 3-5 句话向用户汇报场景分析报告结果，至少包含 1 个具体指标或风险发现。"
+    "然后在消息末尾用自然语言列出以下编号选项，每个选项都要说明作用：\n"
+    "1. 做一次引用内容置信度评估（可选）— 检查当前报告中引用来源的可信度、结构化质量和可核查性\n"
+    "2. 深入分析当前报告 — 继续围绕某个平台、问题场景或竞品展开分析\n"
+    "3. 直接提问 — 针对当前报告继续追问任何具体问题\n"
+    "您可以回复序号，或者直接说您的想法。\n"
+    "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
 )
 
 
@@ -511,19 +545,22 @@ A1 完成后的流程（最高优先级）：
   2. answer_fetch 抓取AI平台回答
   3. data_analytics(report_type="baseline") 生成基线报告
 基线分析全部完成后，在消息中用自然语言列出编号选项（包含简要说明），然后调用 ask_user 等待回复，不传 options：
-  1. 开始场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现
-  2. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现
-  3. 直接提问 — 针对已有数据自由提问，深入了解特定方面
+  1. 做一次引用内容置信度评估（可选）— 进一步检查当前引用来源的可信度、结构化质量与可核查性
+  2. 开始场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现
+  3. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现
+  4. 直接提问 — 针对已有数据自由提问，深入了解特定方面
 ⚠ 绝对不可以在基线分析完成前调用 persona_generation（A2）
 
 【情况B：已有基线分析（baseline_metrics 已有值）】
 在消息中用自然语言列出编号选项（包含简要说明），然后调用 ask_user 等待回复，不传 options：
-  1. 生成用户画像，进入场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现
-  2. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现
-  3. 直接提问 — 针对已有数据自由提问，深入了解特定方面
+  1. 做一次引用内容置信度评估（可选）— 检查当前引用来源的可信度、结构化质量与可核查性
+  2. 生成用户画像，进入场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现
+  3. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现
+  4. 直接提问 — 针对已有数据自由提问，深入了解特定方面
 
 场景细化流程：用户选择"场景细化"时：persona_generation → 用户选择画像 → question_simulation(mode="persona_focused") → answer_fetch → data_analytics(report_type="persona")
 重跑基线流程：用户说"重跑基线"时：跳过A1，直接 question_simulation(mode="baseline_dynamic") → answer_fetch → data_analytics(report_type="baseline")
+引用内容置信度评估流程：用户在报告后明确表示要检查引用可信度时：citation_confidence_analysis
 直接提问流程：用户选择"直接提问"时，【禁止】再次调用 ask_user 给子选项。直接用自然语言回复，告诉用户可以在输入框中自由提问，并举几个他们可能感兴趣的方向作为启发（不是按钮选项）。例如：
 "没问题！您可以直接在输入框中提问，比如：某个具体平台上品牌表现如何？竞品在 AI 平台中的优势是什么？某类用户场景下的推荐逻辑是怎样的？——任何和品牌 AEO 相关的问题我都可以为您深入分析。"
 
@@ -535,17 +572,20 @@ A1 完成后的流程（最高优先级）：
   - 品牌分析（A1）完成后：见上方"A1 完成后的流程"
   - 用户画像（A2）完成后：必须调用 ask_user 引导用户在画布管道图中选择画像，不可自行决定，不可直接调用 question_simulation
   - 问题模拟（A3）完成后：必须调用 ask_user 让用户选择采集模式（快速/完整/重新生成），用户选择后根据其选择调用 answer_fetch(fetch_mode=对应模式)，不可直接调用
+  - AI答案抓取（A4）完成后：不要 ask_user，不要等待用户确认，必须立即调用 data_analytics 生成报告
+  - 数据分析报告（A5）完成后：必须调用 ask_user 让用户决定是否做引用内容置信度评估，或继续后续分析
   - 其他步骤：直接建议或执行下一步
 - 如果用户的请求不明确，用自然语言追问，不要调用 ask_user
 
 ask_user 使用限制（非常重要）：
 ask_user 只允许在以下场景使用，其他任何场景都【禁止】调用 ask_user：
   1. A1 完成后 → 确认开始基线分析
-  2. 基线分析完成后 / 已有基线 → 选择下一步路径（场景细化/重跑基线/直接提问）
+  2. 基线分析完成后 / 已有基线 → 选择下一步路径（置信度评估/场景细化/重跑基线/直接提问）
   3. A2 完成后 → 引导用户选择画像
   4. A3 完成后 → 让用户选择采集模式（快速采集/完整采集/重新生成问题），用户选择后才能调用 answer_fetch(fetch_mode=对应模式)
-  5. 步骤执行失败 → 提供恢复选项（重试/跳过/手动输入）
-除以上 5 种场景外，所有其他情况（包括闲聊、查询结果、用户提问、不确定时）都必须直接用自然语言回复，绝不调用 ask_user。用户随时可以在输入框中自由打字与你对话，不需要通过选项按钮。
+  5. A5 完成后 → 选择是否做引用内容置信度评估，或继续后续分析
+  6. 步骤执行失败 → 提供恢复选项（重试/跳过/手动输入）
+除以上 6 种场景外，所有其他情况（包括闲聊、查询结果、用户提问、不确定时）都必须直接用自然语言回复，绝不调用 ask_user。用户随时可以在输入框中自由打字与你对话，不需要通过选项按钮。
 - 回复风格要求（非常重要，你的回复代表品牌的专业形象）：
   - 你是一位资深品牌营销顾问，每一句话都应体现专业洞察，而不仅仅是传达状态
   - 开始执行时：先说明分析思路和价值（为什么要做这一步、能带来什么洞察），让用户理解分析的意义
@@ -636,7 +676,13 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
     if tool_name == "answer_fetch":
         fr = state.get("fetch_results")
         if fr:
-            return f"AI答案抓取完成。共抓取 {len(fr)} 条结果。"
+            report_type = "baseline" if (state.get("analysis_mode") or "persona") == "baseline" else "persona"
+            report_label = "基线分析报告" if report_type == "baseline" else "场景分析报告"
+            return (
+                f"AI答案抓取完成。共抓取 {len(fr)} 组问题结果。"
+                f"【强制操作】不要调用 ask_user，不要等待用户确认。"
+                f"你必须立即调用 data_analytics(report_type='{report_type}') 生成{report_label}。"
+            )
         return (
             "AI答案抓取完成，但未获取到有效数据。"
             "【强制操作】你必须使用 ask_user 向用户说明抓取失败，并提供以下选项："
@@ -654,17 +700,29 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         else:
             metrics = state.get("metrics")
         if metrics:
-            mention_rate = float(metrics.get("mention_rate", 0) or 0) * 100
-            official_citation_rate = float(metrics.get("official_citation_rate", 0) or 0) * 100
-            high_risk_count = metrics.get("high_risk_scenario_count", 0)
+            summary_metrics = metrics.get("summary_metrics", {}) if isinstance(metrics, dict) else {}
+            mention_rate = float(
+                summary_metrics.get("brand_mention_rate", metrics.get("mention_rate", 0) if isinstance(metrics, dict) else 0) or 0
+            ) * 100
+            official_citation_rate = float(summary_metrics.get("official_citation_rate", 0) or 0) * 100
+            high_risk_count = int(summary_metrics.get("high_risk_scenario_count", 0) or 0)
             mode_label = "基线" if current_mode == "baseline" else "场景"
-            return (
+            summary = (
                 f"{mode_label}数据分析完成。"
                 f"品牌提及率：{mention_rate:.1f}％，"
                 f"官网引用率：{official_citation_rate:.1f}％，"
                 f"高风险场景：{high_risk_count} 个。"
             )
+            if current_mode == "baseline":
+                return summary + DIRECTIVE_A5_BASELINE_NEXT
+            return summary + DIRECTIVE_A5_PERSONA_NEXT
         return "数据分析完成，但未获取到有效数据。"
+
+    if tool_name == "citation_confidence_analysis":
+        return (
+            "引用内容置信度评估已完成。"
+            "结果已经展示在画布中，您可以继续查看各引用来源的可信度、结构化质量和可核查性差异。"
+        )
 
     if tool_name == "drill_down_analysis":
         reply = state.get("orchestrator_reply", "")
@@ -711,7 +769,8 @@ def _build_ask_user_fallback_reply(
         if has_baseline:
             return (
                 f"{brand_name}的品牌分析已完成，我已经整理出品牌画像和竞品格局。"
-                "接下来您可以选择继续生成用户画像做场景细化分析、重新运行基线分析，"
+                "接下来您可以先做一次引用内容置信度评估，"
+                "也可以继续生成用户画像做场景细化分析、重新运行基线分析，"
                 "或者直接基于已有结果提问。"
             )
         return (
@@ -735,15 +794,23 @@ def _build_ask_user_fallback_reply(
 
     if tool_name == "answer_fetch":
         return (
-            "答案抓取已准备就绪。"
-            "如果您希望继续，我会根据您选择的模式开始采集并在完成后继续分析。"
+            "答案抓取已完成。"
+            "我会基于当前抓取结果立即继续生成分析报告，"
+            "报告出来后您再决定是否继续做引用内容置信度评估或进入后续分析。"
         )
 
     if tool_name == "data_analytics":
         return (
             "分析报告已生成。"
-            "如果您希望，我可以继续陪您查看关键发现、对比历史表现，"
-            "或者围绕某个具体场景深入拆解。"
+            "您现在可以选择继续做一次引用内容置信度评估，"
+            "或者基于当前报告进入下一步画像分析、深入分析或直接提问。"
+        )
+
+    if tool_name == "citation_confidence_analysis":
+        return (
+            "引用内容置信度评估已完成。"
+            "您现在可以继续基于这份评估追问具体来源问题，"
+            "或者回到主报告继续后续分析。"
         )
 
     return message or "请继续告诉我您的选择。"
@@ -905,6 +972,7 @@ TOOL_TO_NODE: dict[str, str] = {
     "question_simulation": "a3_question",
     "answer_fetch": "a4_fetch",
     "data_analytics": "a5_analytics",
+    "citation_confidence_analysis": "a7_confidence_signal",
     # Follow-up tools (Cycle 3)
     "drill_down_analysis": "drill_down",
     "compare_snapshots": "compare_snapshots",
@@ -919,6 +987,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "question_simulation": "问题模拟生成",
     "answer_fetch": "AI答案抓取",
     "data_analytics": "数据分析报告",
+    "citation_confidence_analysis": "引用内容置信度评估",
     # Follow-up tools (Cycle 3)
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
@@ -1085,6 +1154,19 @@ async def orchestrator_node(state: AgentState) -> Command:
             if chunk.finish_reason:
                 last_finish_reason = chunk.finish_reason
             if chunk.tool_calls:
+                logger.warning(
+                    "[Orchestrator] Stream tool_calls captured for session %s: %s finish=%s",
+                    session_id,
+                    [
+                        {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                            "id": tc.id,
+                        }
+                        for tc in chunk.tool_calls
+                    ],
+                    chunk.finish_reason,
+                )
                 tool_call_result = chunk.tool_calls[0]
                 continue
 
@@ -1111,6 +1193,15 @@ async def orchestrator_node(state: AgentState) -> Command:
 
         if thinking_text:
             await send_thought_event(session_id, "", is_complete=True)
+
+        logger.warning(
+            "[Orchestrator] Stream completed for session %s: reply_len=%d thinking_len=%d finish=%s saw_tool=%s",
+            session_id,
+            len(reply_text),
+            len(thinking_text),
+            last_finish_reason,
+            bool(tool_call_result),
+        )
 
         # Check finish_reason for abnormal termination
         if last_finish_reason == "sensitive":
@@ -1525,6 +1616,7 @@ async def _handle_tool_call(
                 "question_simulation": "正在模拟真实用户可能在 AI 平台中提出的问题，请稍候...",
                 "answer_fetch": _fetch_fallback,
                 "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
+                "citation_confidence_analysis": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
             }
             fallback_text = FALLBACK_TEXTS.get(tool_name, f"正在执行：{display_name}，请稍候...")
             await send_reply_event(

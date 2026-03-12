@@ -76,17 +76,11 @@ export function ChatSidebar({
     if (navigating) return;
     setNavigating(true);
     try {
-      const session = await api.getSessionByEntity(entityId);
+      const session = await api.getOrCreateSessionByEntity(entityId);
       const entity = entities.find((item) => item.id === entityId);
-      router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity?.name || '')}`);
-    } catch {
-      try {
-        const session = await api.createSession(entityId);
-        const entity = entities.find((item) => item.id === entityId);
-        router.push(`/chat/${session.id}?brand=${encodeURIComponent(entity?.name || '')}`);
-      } catch {
-        toast.error('数据加载失败');
-      }
+      router.push(`/chat/${session.id}?entity_id=${encodeURIComponent(entityId)}&brand=${encodeURIComponent(entity?.name || '')}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '数据加载失败');
     } finally {
       setNavigating(false);
     }

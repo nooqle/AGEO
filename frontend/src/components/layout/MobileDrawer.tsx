@@ -2,6 +2,7 @@
 
 import { ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 
 interface MobileDrawerProps {
   open: boolean;
@@ -16,8 +17,7 @@ export function MobileDrawer({ open, onClose, children }: MobileDrawerProps) {
         <>
           {/* Overlay */}
           <motion.div
-            className="fixed inset-0 z-40"
-            style={{ background: 'rgba(0,0,0,0.6)' }}
+            className={modalScrimClassName('z-40')}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}

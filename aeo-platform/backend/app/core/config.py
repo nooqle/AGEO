@@ -9,6 +9,24 @@ from pydantic_settings import BaseSettings
 _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 
 
+def _resolve_sqlite_url(url: str) -> str:
+    """Pin relative SQLite URLs to the backend directory.
+
+    Dev restarts on Windows may happen from different working directories. A
+    relative sqlite path would silently create a second empty DB and make the UI
+    look like all history disappeared.
+    """
+    prefixes = ("sqlite+aiosqlite:///", "sqlite:///")
+    for prefix in prefixes:
+        if url.startswith(prefix):
+            db_path = url[len(prefix) :]
+            if db_path.startswith("./"):
+                absolute = (_BACKEND_DIR / db_path[2:]).resolve().as_posix()
+                return f"{prefix}{absolute}"
+            break
+    return url
+
+
 class Settings(BaseSettings):
     """Application settings."""
 
@@ -82,3 +100,4 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+settings.DATABASE_URL = _resolve_sqlite_url(settings.DATABASE_URL)

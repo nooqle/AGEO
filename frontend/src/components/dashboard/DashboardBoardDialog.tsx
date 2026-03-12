@@ -7,6 +7,7 @@ import type { DashboardBoardId } from './DashboardHomeBoards';
 import { MentionBoardReport } from './MentionBoardReport';
 import { SourceBoardReport } from './SourceBoardReport';
 import { RadarBoardReport } from './RadarBoardReport';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 
 interface DashboardBoardDialogProps {
   open: boolean;
@@ -65,8 +66,8 @@ export function DashboardBoardDialog({ open, board, home, onClose }: DashboardBo
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
-        <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-[rgba(11,15,26,0.58)] backdrop-blur-[6px]" />
+      <Dialog.Portal>
+        <Dialog.Overlay className={modalScrimClassName('z-50')} />
         <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
           <div
             className="dashboard-dialog-shell flex h-[min(92vh,1120px)] w-[min(96vw,1640px)] flex-col overflow-hidden rounded-[32px]"

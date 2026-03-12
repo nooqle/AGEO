@@ -488,6 +488,23 @@ async def a4_fetch_node(state: AgentState) -> Command:
         message=f"开始抓取 {len(questions)} 个问题的答案（{mode_label}）",
     )
 
+    task_id = state.get("task_id")
+    if task_id:
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.services.task_service import TaskService
+            from uuid import UUID as _UUID
+            async with AsyncSessionLocal() as db:
+                ts = TaskService(db)
+                await ts.update_progress(
+                    _UUID(task_id),
+                    stage="A4",
+                    progress=0.55,
+                    message=f"开始抓取 {len(questions)} 个问题的答案（{mode_label}）",
+                )
+        except Exception as te:
+            logger.warning("[A4] TaskService start milestone failed: %s", te)
+
     fetch_results: list[dict[str, Any]] = []
 
     try:
@@ -790,6 +807,26 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     elif error_type == "verify":
                         # CAPTCHA/verify challenge — stop this platform entirely
                         logger.warning("[A4] %s verify challenge on Q%d, stopping platform", platform_name, idx + 1)
+                        if session_id:
+                            await send_browser_state_event(
+                                session_id=session_id,
+                                platform=platform,
+                                state="error",
+                                message=f"{platform_name} 再次触发安全验证，本轮已跳过该平台并继续其他平台",
+                                progress=0.7,
+                                requires_action=False,
+                            )
+                            await send_reply_event(
+                                session_id,
+                                (
+                                    f"**{platform_name}** 在恢复后再次触发安全验证，"
+                                    "本轮无法继续自动抓取该平台。我会继续完成其他平台采集，"
+                                    "并在后续报告中基于已成功的平台生成结果。"
+                                ),
+                                is_delta=True,
+                                is_new_round=True,
+                            )
+                            await send_reply_event(session_id, "", is_complete=True)
                         breaker.record_failure()
                         breaker.record_failure()
                         breaker.record_failure()  # Force OPEN
@@ -1112,8 +1149,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
 - 完整抓取结果（左侧 Canvas）
 - 平台答案对比分析
 
-**⏸️ 需要您确认**
-答案抓取已完成。我已获取各AI平台对您品牌的回答内容，请查看左侧 Canvas 中的抓取结果。如果数据完整，请点击确认开始最终分析报告生成；如果需要补充抓取，请告诉我。"""
+**⏭️ 下一步**
+答案抓取已完成。我会基于当前抓取结果立即继续生成分析报告。报告生成后，您可以再决定是否继续做引用内容置信度评估或进入后续画像分析。"""
 
         from app.workflow.events import send_tpaor_event
         await send_tpaor_event(
@@ -1169,20 +1206,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 len(fetch_results), len(baseline), len(final_fetch_results),
             )
 
-        try:
-            from app.workflow.a7.confidence_signal import generate_confidence_signal_artifact
-
-            asyncio.create_task(
-                generate_confidence_signal_artifact(
-                    session_id=session_id,
-                    fetch_results=final_fetch_results,
-                )
-            )
-        except Exception as confidence_err:
-            logger.warning("[A4] Failed to trigger A7 confidence signal artifact: %s", confidence_err)
-
         # Task milestone: A4 completed (Cycle 3, Module 1)
-        task_id = state.get("task_id")
         if task_id:
             try:
                 from app.core.database import AsyncSessionLocal
@@ -1461,11 +1485,13 @@ async def _fetch_from_browser(
     browser_state,
     session_id: str = "",
     _is_retry: bool = False,
+    _verify_recovery_count: int = 0,
 ) -> dict[str, Any]:
     start_time = datetime.now(timezone.utc)
     result_data = None
     error_message = None
     error_type = ""
+    max_verify_recoveries = 3
 
     try:
         async for event in handler.fetch(question):
@@ -1554,8 +1580,7 @@ async def _fetch_from_browser(
         }
 
     # -- Failure path: try platform-specific recovery first --
-    if not _is_retry and error_type in {"rate_limit", "verify"}:
-        if error_type == "rate_limit" and platform == "doubao" and hasattr(handler, "recover_after_rate_limit"):
+    if error_type == "rate_limit" and not _is_retry and platform == "doubao" and hasattr(handler, "recover_after_rate_limit"):
             logger.info("[A4] %s rate limited, attempting one automatic recovery", platform_name)
             if session_id:
                 await send_browser_state_event(
@@ -1574,8 +1599,49 @@ async def _fetch_from_browser(
                     session_id=session_id, _is_retry=True,
                 )
 
-        if error_type == "verify" and platform == "doubao" and hasattr(handler, "recover_after_verify"):
-            logger.info("[A4] %s verify challenge detected, waiting for user to clear it", platform_name)
+    if error_type == "verify" and platform == "doubao" and hasattr(handler, "recover_after_verify"):
+            if _verify_recovery_count >= max_verify_recoveries:
+                logger.warning(
+                    "[A4] %s verify challenge exceeded max recoveries (%d), giving up on current question",
+                    platform_name,
+                    max_verify_recoveries,
+                )
+                if session_id:
+                    await send_browser_state_event(
+                        session_id=session_id,
+                        platform=platform,
+                        state="error",
+                        message=f"{platform_name} 连续触发安全验证，本轮已跳过该平台并继续其他平台",
+                        progress=0.7,
+                        requires_action=False,
+                    )
+                    await send_reply_event(
+                        session_id,
+                        (
+                            f"**{platform_name}** 连续多次触发安全验证，"
+                            "本轮无法继续自动抓取该平台。我会继续完成其他平台采集，"
+                            "并在后续报告中基于已成功的平台生成结果。"
+                        ),
+                        is_delta=True,
+                        is_new_round=True,
+                    )
+                    await send_reply_event(session_id, "", is_complete=True)
+                return {
+                    "platform": platform,
+                    "platform_name": platform_name,
+                    "fetch_method": "browser",
+                    "success": False,
+                    "error": error_message or "安全验证未通过",
+                    "error_type": error_type,
+                    "duration": duration,
+                }
+
+            logger.info(
+                "[A4] %s verify challenge detected, waiting for user to clear it (attempt %d/%d)",
+                platform_name,
+                _verify_recovery_count + 1,
+                max_verify_recoveries,
+            )
             if session_id:
                 await send_browser_state_event(
                     session_id=session_id,
@@ -1603,10 +1669,30 @@ async def _fetch_from_browser(
                 await send_reply_event(session_id, "", is_complete=True)
             recovered = await handler.recover_after_verify()
             if recovered:
+                if session_id:
+                    await send_browser_state_event(
+                        session_id=session_id,
+                        platform=platform,
+                        state="waiting_response",
+                        message=f"{platform_name} 验证已完成，正在继续抓取当前问题",
+                        progress=0.45,
+                        requires_action=False,
+                    )
                 return await _fetch_from_browser(
                     handler, question, brand_profile,
                     platform, platform_name, browser_state,
-                    session_id=session_id, _is_retry=True,
+                    session_id=session_id,
+                    _is_retry=True,
+                    _verify_recovery_count=_verify_recovery_count + 1,
+                )
+            if session_id:
+                await send_browser_state_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state="error",
+                    message=f"{platform_name} 验证未完成或等待超时，本轮将跳过该平台",
+                    progress=0.35,
+                    requires_action=False,
                 )
 
     # -- Failure path: diagnose if a blocking modal caused the failure --
@@ -1649,7 +1735,7 @@ async def _fetch_from_browser(
                 return {
                     "platform": platform, "platform_name": platform_name,
                     "fetch_method": "browser", "success": False,
-                    "error": "?????????????",
+                    "error": "打开浏览器窗口失败，请稍后重试",
                     "error_type": "modal_reopen_failed",
                     "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
                 }

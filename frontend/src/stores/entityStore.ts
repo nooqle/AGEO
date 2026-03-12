@@ -6,6 +6,7 @@ interface EntityState {
   entities: Entity[];
   isLoading: boolean;
   error: string | null;
+  hasFetched: boolean;
 
   setEntities: (entities: Entity[]) => void;
   addEntity: (entity: Entity) => void;
@@ -20,10 +21,11 @@ export const useEntityStore = create<EntityState>((set) => ({
   entities: [],
   isLoading: false,
   error: null,
+  hasFetched: false,
 
-  setEntities: (entities) => set({ entities, isLoading: false }),
+  setEntities: (entities) => set({ entities, isLoading: false, error: null, hasFetched: true }),
   addEntity: (entity) =>
-    set((state) => ({ entities: [...state.entities, entity] })),
+    set((state) => ({ entities: [...state.entities, entity], hasFetched: true })),
   updateEntity: (id, updates) =>
     set((state) => ({
       entities: state.entities.map((e) =>
@@ -41,11 +43,12 @@ export const useEntityStore = create<EntityState>((set) => ({
     set({ isLoading: true, error: null });
     try {
       const entities = await api.listEntities();
-      set({ entities, isLoading: false });
+      set({ entities, isLoading: false, error: null, hasFetched: true });
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : '加载品牌列表失败',
         isLoading: false,
+        hasFetched: true,
       });
     }
   },

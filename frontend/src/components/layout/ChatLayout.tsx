@@ -8,6 +8,7 @@ import { useResponsive } from '@/hooks/useResponsive';
 import { MobileDrawer } from './MobileDrawer';
 import { ArtifactNav } from './ArtifactNav';
 import { cn } from '@/lib/cn';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 
 interface ChatLayoutProps {
   children: ReactNode;
@@ -179,7 +180,7 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
         {isOpen && !canShowSplitCanvas && canvas && (
           <>
             <motion.div
-              className="fixed inset-0 z-40 bg-black/60"
+              className={modalScrimClassName('z-40')}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
