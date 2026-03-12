@@ -15,6 +15,7 @@ import {
   RiTableLine,
   RiGitBranchLine,
   RiPieChartLine,
+  RiShieldCheckLine,
 } from '@remixicon/react';
 import type { CanvasContent } from '@/types/canvas';
 
@@ -42,6 +43,9 @@ const TYPE_LABELS: Record<CanvasContentType, string> = {
 function getReportMeta(content: CanvasContent) {
   if (content.type !== 'report') {
     return { icon: TYPE_ICONS[content.type] || RiFileTextLine, label: TYPE_LABELS[content.type] || '' };
+  }
+  if (content.data?.report_kind === 'confidence_signal') {
+    return { icon: RiShieldCheckLine, label: '置信' };
   }
   if (content.category === 'baseline') {
     return { icon: RiFileChartLine, label: '基准' };

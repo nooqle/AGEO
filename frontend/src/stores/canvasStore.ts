@@ -2,6 +2,73 @@ import { create } from 'zustand';
 import { CanvasContent, CanvasMode, ContentVersion } from '@/types/canvas';
 
 const MAX_VERSIONS = 10;
+const MERGED_ITEM_ARRAY_KEYS = new Set(['auto_items', 'manual_items']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function mergeItemsById(existing: unknown, incoming: unknown): unknown {
+  if (!Array.isArray(incoming)) {
+    return existing;
+  }
+  if (!Array.isArray(existing)) {
+    return incoming;
+  }
+
+  const merged = new Map<string, Record<string, unknown>>();
+
+  for (const item of existing) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const itemId = typeof item.item_id === 'string' ? item.item_id : null;
+    if (!itemId) {
+      continue;
+    }
+    merged.set(itemId, item);
+  }
+
+  for (const item of incoming) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const itemId = typeof item.item_id === 'string' ? item.item_id : null;
+    if (!itemId) {
+      continue;
+    }
+    const previous = merged.get(itemId) ?? {};
+    merged.set(itemId, { ...previous, ...item });
+  }
+
+  return Array.from(merged.values());
+}
+
+function mergeCanvasData(
+  currentData: CanvasContent['data'],
+  patchData: Partial<CanvasContent['data']>
+): CanvasContent['data'] {
+  const merged: Record<string, unknown> = {
+    ...(currentData as Record<string, unknown>),
+    ...(patchData as Record<string, unknown>),
+  };
+
+  for (const key of Object.keys(patchData as Record<string, unknown>)) {
+    const nextValue = (patchData as Record<string, unknown>)[key];
+    const previousValue = (currentData as Record<string, unknown>)[key];
+
+    if (MERGED_ITEM_ARRAY_KEYS.has(key)) {
+      merged[key] = mergeItemsById(previousValue, nextValue);
+      continue;
+    }
+
+    if (isRecord(previousValue) && isRecord(nextValue)) {
+      merged[key] = { ...previousValue, ...nextValue };
+    }
+  }
+
+  return merged as CanvasContent['data'];
+}
 
 interface CanvasState {
   isOpen: boolean;
@@ -19,6 +86,7 @@ interface CanvasState {
   removeContent: (id: string) => void;
   removeContentsByIds: (ids: string[]) => void;
   updateContent: (id: string, data: Partial<CanvasContent['data']>) => void;
+  patchContent: (id: string, patch: Partial<CanvasContent['data']>) => void;
   setOpen: (open: boolean) => void;
   clearContents: () => void;
   setContentVersion: (id: string, versionIndex: number) => void;
@@ -134,6 +202,17 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   updateContent: (id, data) => set((state) => ({
     contents: state.contents.map((c) =>
       c.id === id ? { ...c, data: { ...c.data, ...data } } as CanvasContent : c
+    ),
+  })),
+
+  patchContent: (id, patch) => set((state) => ({
+    contents: state.contents.map((content) =>
+      content.id === id
+        ? {
+            ...content,
+            data: mergeCanvasData(content.data, patch),
+          } as CanvasContent
+        : content
     ),
   })),
 

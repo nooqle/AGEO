@@ -279,6 +279,7 @@ async def save_and_send_artifact(
     related_message_id: str | None = None,
     category: str | None = None,
     scenario_label: str | None = None,
+    artifact_key: str | None = None,
 ) -> str:
     """Save artifact to DB and send to frontend via WebSocket.
 
@@ -309,18 +310,23 @@ async def save_and_send_artifact(
     try:
         async with AsyncSessionLocal() as db:
             service = MessageService(db)
+            resolved_artifact_id = artifact_key or f"{session_id}_{output_type}"
             msg = await service.save_message(
                 session_id=UUID(session_id),
                 role="agent",
                 content=title,
+                metadata={
+                    "output_id": resolved_artifact_id,
+                    "artifact_kind": data.get("artifact_kind"),
+                    "report_kind": data.get("report_kind"),
+                },
                 message_type="OUTPUT",
                 output_type=output_type,
                 output_data=json.dumps(data, ensure_ascii=False),
             )
             db_message_id = msg["id"]
 
-        # Fixed artifact ID: same output_type always maps to the same Canvas Tab
-        artifact_id = f"{session_id}_{output_type}"
+        artifact_id = resolved_artifact_id
 
         await send_output_ready(
             session_id=session_id,
@@ -338,6 +344,29 @@ async def save_and_send_artifact(
     except Exception as e:
         logger.error(f"[Artifact] Failed to save/send artifact: {e}", exc_info=True)
         return ""
+
+
+async def send_artifact_patch(
+    session_id: str,
+    artifact_id: str,
+    patch: dict[str, Any],
+    patch_type: str = "merge",
+    status: str | None = None,
+    message: str | None = None,
+) -> None:
+    """Send incremental patch update for an existing artifact."""
+    if _is_headless(session_id):
+        return
+    payload: dict[str, Any] = {
+        "artifact_id": artifact_id,
+        "patch_type": patch_type,
+        "patch": patch,
+    }
+    if status:
+        payload["status"] = status
+    if message:
+        payload["message"] = message
+    await manager.emit_to_session(session_id, "artifact_patch", payload)
 
 
 async def send_execution_complete(
@@ -527,6 +556,36 @@ async def send_browser_state_event(
     if action_hint:
         payload["action_hint"] = action_hint
     await manager.emit_to_session(session_id, "browser_state", payload)
+
+
+async def send_browser_user_action_event(
+    session_id: str,
+    platform: str,
+    state: str,
+    action_type: str,
+    message: str,
+    progress: float = 0.0,
+    action_hint: str | None = None,
+) -> None:
+    """Send a normalized browser user-action event to frontend.
+
+    This is the action-oriented companion to ``browser_state`` and is used for
+    cases where the UI should clearly distinguish login, verification, and
+    modal-confirmation flows.
+    """
+    if _is_headless(session_id):
+        return
+    payload: dict[str, Any] = {
+        "platform": platform,
+        "state": state,
+        "action_type": action_type,
+        "message": message,
+        "progress": progress,
+        "requires_action": True,
+    }
+    if action_hint:
+        payload["action_hint"] = action_hint
+    await manager.emit_to_session(session_id, "browser_user_action", payload)
 
 
 async def send_confirmation_request(

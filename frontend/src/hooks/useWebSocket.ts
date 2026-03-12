@@ -12,7 +12,7 @@ import { collectPendingActionLogs, findMatchingPendingActionLog } from '@/hooks/
 import { buildAgentMessage } from '@/hooks/websocket/agentMessage';
 import { buildBrowserState, buildExecutionProgress } from '@/hooks/websocket/execution';
 import { buildCompletedTask, buildFollowUpSuggestions, buildStopState } from '@/hooks/websocket/executionComplete';
-import { BROWSER_PLATFORMS, BROWSER_STATES, EXECUTION_STATUSES, TPAOR_PHASE_MAP, TPAOR_PHASES, isValidWebSocketMessage, mapStepStatus } from '@/hooks/websocket/protocol';
+import { TPAOR_PHASE_MAP, TPAOR_PHASES, isValidWebSocketMessage } from '@/hooks/websocket/protocol';
 import { isRecord } from '@/hooks/websocket/canvas';
 import { buildOutputReadyPayload } from '@/hooks/websocket/output';
 import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmation';
@@ -60,6 +60,7 @@ export function useWebSocket(sessionId: string | null) {
     updateActiveTaskProgress,
     setFollowUpSuggestions,
     setWsConfirmation,
+    setWsArtifactAction,
     // Recall support
     clearMessagesAfter,
     removeMessage,
@@ -67,7 +68,7 @@ export function useWebSocket(sessionId: string | null) {
     replaceMessageId,
   } = useConversationStore();
 
-  const { addContent } = useCanvasStore();
+  const { addContent, patchContent } = useCanvasStore();
 
   const getAuthToken = useCallback(() => {
     if (typeof window === 'undefined') return null;
@@ -413,6 +414,7 @@ export function useWebSocket(sessionId: string | null) {
         break;
 
       case 'browser_state':
+      case 'browser_user_action':
         setBrowserState(buildBrowserState(data));
         break;
 
@@ -430,6 +432,16 @@ export function useWebSocket(sessionId: string | null) {
             });
           }
         }
+        break;
+      }
+
+      case 'artifact_patch': {
+        const artifactId = typeof data.artifact_id === 'string' ? data.artifact_id : '';
+        const patch = isRecord(data.patch) ? data.patch : null;
+        if (!artifactId || !patch) {
+          break;
+        }
+        patchContent(artifactId, patch as Record<string, unknown>);
         break;
       }
 
@@ -768,6 +780,7 @@ export function useWebSocket(sessionId: string | null) {
     finalizeCurrentMessage,
     resetStreamingState,
     addContent,
+    patchContent,
     setActiveTask,
     updateActiveTaskProgress,
     setFollowUpSuggestions,
@@ -978,6 +991,26 @@ export function useWebSocket(sessionId: string | null) {
     };
   }, [sendConfirmation, setWsConfirmation]);
 
+  const sendArtifactAction = useCallback((artifactId: string, action: string, payload: Record<string, unknown> = {}) => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      event: 'artifact_action',
+      data: {
+        artifact_id: artifactId,
+        action,
+        payload,
+      },
+    }));
+  }, []);
+
+  useEffect(() => {
+    setWsArtifactAction(sendArtifactAction);
+    return () => {
+      setWsArtifactAction(null);
+    };
+  }, [sendArtifactAction, setWsArtifactAction]);
+
   // Send step control
   const sendStepControl = useCallback((action: 'continue' | 'skip' | 'retry', stepId?: string) => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
@@ -1041,6 +1074,7 @@ export function useWebSocket(sessionId: string | null) {
   return {
     sendMessage,
     sendConfirmation,
+    sendArtifactAction,
     sendStepControl,
     stopExecution: sendStop,
     resumeExecution,

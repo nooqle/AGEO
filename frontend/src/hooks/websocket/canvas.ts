@@ -165,6 +165,8 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
 
     return {
       ...preview,
+      report_kind: typeof data.report_kind === 'string' ? data.report_kind : undefined,
+      artifact_kind: typeof data.artifact_kind === 'string' ? data.artifact_kind : undefined,
       headline: typeof data.headline === 'string' ? data.headline : undefined,
       subtitle: typeof data.subtitle === 'string' ? data.subtitle : undefined,
       overallScore: typeof data.overallScore === 'number'
@@ -220,6 +222,7 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
       risk_map: data.risk_map,
       action_queue: data.action_queue,
       source_overview: data.source_overview,
+      mention_sentiment_analysis: data.mention_sentiment_analysis,
       key_findings: data.key_findings,
       strengths: data.strengths,
       weaknesses: data.weaknesses,
@@ -235,9 +238,29 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
       risk_alerts: data.risk_alerts,
       delta_vs_previous: data.delta_vs_previous,
       competitor_bwvs: data.competitor_bwvs,
+      report_data: data.report_data,
+      metrics_raw: data.metrics_raw,
       _degradation_note: typeof data._degradation_note === 'string' ? data._degradation_note : undefined,
       citation_analysis: data.citation_analysis,
       keyword_analysis: data.keyword_analysis,
+      summary: isRecord(data.summary)
+        ? (data.summary as CanvasContentDataMap['report']['summary'])
+        : undefined,
+      auto_items: Array.isArray(data.auto_items)
+        ? (data.auto_items as CanvasContentDataMap['report']['auto_items'])
+        : undefined,
+      manual_items: Array.isArray(data.manual_items)
+        ? (data.manual_items as CanvasContentDataMap['report']['manual_items'])
+        : undefined,
+      aggregate_findings: Array.isArray(data.aggregate_findings)
+        ? (data.aggregate_findings as CanvasContentDataMap['report']['aggregate_findings'])
+        : undefined,
+      composer: isRecord(data.composer)
+        ? (data.composer as CanvasContentDataMap['report']['composer'])
+        : undefined,
+      status: isRecord(data.status)
+        ? (data.status as CanvasContentDataMap['report']['status'])
+        : undefined,
     } as CanvasContentDataMap[T];
   }
 

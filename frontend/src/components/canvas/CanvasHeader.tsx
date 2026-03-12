@@ -15,8 +15,9 @@ import {
   RiArrowDownSLine,
   RiChatForwardLine,
   RiHistoryLine,
+  RiShieldCheckLine,
 } from '@remixicon/react';
-import { CanvasContent, ContentVersion } from '@/types/canvas';
+import { CanvasContent } from '@/types/canvas';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { cn } from '@/lib/cn';
 
@@ -35,12 +36,12 @@ function formatTimestamp(ts: string): string {
 }
 
 export function CanvasHeader({ content }: CanvasHeaderProps) {
-  const { mode, setMode, closeCanvas, setContentVersion, contents, activeContentIndex } = useCanvasStore();
+  const { mode, setMode, closeCanvas, setContentVersion, contents } = useCanvasStore();
   const [copied, setCopied] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
 
-  const versions = content.versions || [];
+  const versions = useMemo(() => content.versions || [], [content.versions]);
   const hasVersions = versions.length > 0;
   const isViewingHistory = content.currentVersionIndex >= 0;
 
@@ -160,6 +161,9 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const getTypeIcon = () => {
     switch (content.type) {
       case 'report':
+        if (content.data?.report_kind === 'confidence_signal') {
+          return <RiShieldCheckLine className="w-4 h-4" style={{ color: 'var(--warning)' }} />;
+        }
         return <RiFileTextLine className="w-4 h-4" style={{ color: 'var(--color-primary)' }} />;
       case 'dataTable':
         return <RiTableLine className="w-4 h-4" style={{ color: 'var(--info)' }} />;
@@ -219,7 +223,9 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
             <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
               <span className="capitalize">
                 {content.type === 'dataTable' ? '数据表格' :
-                 content.type === 'report' ? '分析报告' :
+                 content.type === 'report' ? (
+                   content.data?.report_kind === 'confidence_signal' ? '置信度信号' : '分析报告'
+                 ) :
                  content.type === 'chart' ? '数据图表' :
                  content.type === 'questionList' ? '问题列表' :
                  content.type === 'fetchResults' ? '抓取结果' :

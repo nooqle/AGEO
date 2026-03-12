@@ -125,6 +125,13 @@ export type ScenarioCoverageData = {
   items?: ScenarioCoverageItem[];
 };
 
+export type CompetitorBattleMentionExample = {
+  scenario_label?: string;
+  platform?: string;
+  sentiment?: string;
+  citation_domains?: string[];
+};
+
 export type CompetitorBattleSummaryCard = {
   competitor: string;
   shared_scenarios?: number;
@@ -132,6 +139,8 @@ export type CompetitorBattleSummaryCard = {
   brand_only_scenarios?: number;
   pressure_level?: RiskSeverity;
   top_conflict_scenarios?: string[];
+  sentiment_summary?: Partial<Record<'positive' | 'neutral' | 'negative', number>>;
+  mention_examples?: CompetitorBattleMentionExample[];
 };
 
 export type CompetitorBattleItem = {
@@ -176,9 +185,61 @@ export type SourceSectionData = {
   title?: string;
   description?: string;
   summary?: string;
+  content_citation_rate?: number;
+  cited_answer_count?: number;
+  cited_content_count?: number;
+  official_case_count?: number;
+  non_official_case_count?: number;
   official_citation_rate?: number;
   official_top_titles?: string[];
+  citation_cases?: ReportCitationCase[];
   citation_analysis?: CitationAnalysis | null;
+};
+
+export type ReportCitationCase = {
+  scenario_label: string;
+  platform?: string;
+  matched_answer?: string;
+  citation_domains?: string[];
+  citation_titles?: string[];
+  citation_urls?: string[];
+  is_official?: boolean;
+  aice_score?: number | null;
+  aice_dimensions?: {
+    authority?: number | null;
+    intent?: number | null;
+    clarity?: number | null;
+    evidence?: number | null;
+  } | null;
+};
+
+export type ReportMentionItem = {
+  scenario_id?: string;
+  scenario_label: string;
+  platform?: string;
+  sentiment?: 'positive' | 'neutral' | 'negative' | string;
+  evidence?: string;
+  citation_domains?: string[];
+  citation_titles?: string[];
+  citation_urls?: string[];
+  official_citation_present?: boolean;
+  competitor?: string;
+};
+
+export type ReportMentionSummary = {
+  positive: number;
+  neutral: number;
+  negative: number;
+};
+
+export type ReportMentionSectionData = {
+  title?: string;
+  description?: string;
+  mention_rate?: number;
+  mention_count?: number;
+  sentiment_summary?: ReportMentionSummary;
+  brand_mentions?: ReportMentionItem[];
+  competitor_mentions?: ReportMentionItem[];
 };
 
 export type ActionQueueItem = {
@@ -210,6 +271,10 @@ export type InsightSectionItem = {
   evidence?: string;
   platforms?: string[];
   improvement_hint?: string;
+  sentiment?: string;
+  citation_domains?: string[];
+  citation_titles?: string[];
+  official_citation_present?: boolean;
 };
 
 export type InsightSectionData = {
@@ -222,6 +287,7 @@ export type InsightSectionData = {
 
 export type ReportV2Data = {
   summary?: ReportSummaryData;
+  mentions?: ReportMentionSectionData;
   scenarioCoverage?: ScenarioCoverageData;
   competitorBattle?: CompetitorBattleData;
   risks?: RiskSectionData;
@@ -230,7 +296,87 @@ export type ReportV2Data = {
   insights?: InsightSectionData;
 };
 
+export type ConfidenceSignalLevel = 'high' | 'neutral' | 'caution';
+
+export type ConfidenceSignalStatus = {
+  phase?: 'idle' | 'running' | 'ready' | 'error';
+  message?: string;
+};
+
+export type ConfidenceSignalSummary = {
+  total_citations?: number;
+  evaluated_count?: number;
+  failed_count?: number;
+  high_confidence_count?: number;
+  neutral_count?: number;
+  caution_count?: number;
+  manual_count?: number;
+  average_score?: number;
+  updated_at?: string;
+};
+
+export type ConfidenceSignalFinding = {
+  title?: string;
+  description?: string;
+};
+
+export type ConfidenceSignalRecommendation = {
+  title?: string;
+  action?: string;
+  reason?: string;
+};
+
+export type ConfidenceSignalDimensionScore = {
+  key?: string;
+  label?: string;
+  max_score?: number;
+  score?: number;
+  confidence?: number;
+  reasoning?: string;
+};
+
+export type ConfidenceSignalItem = {
+  item_id: string;
+  item_origin: 'auto_citation' | 'manual_extra';
+  input_type: 'url' | 'text';
+  label: string;
+  url?: string;
+  domain?: string;
+  site_name?: string;
+  is_official?: boolean;
+  occurrences?: number;
+  platforms?: string[];
+  signal_level?: ConfidenceSignalLevel;
+  overall_score?: number;
+  overall_confidence?: number;
+  top_signals?: string[];
+  dimension_scores?: ConfidenceSignalDimensionScore[];
+  recommendations?: ConfidenceSignalRecommendation[];
+  status?: 'pending' | 'running' | 'ready' | 'error';
+  error_message?: string;
+  question_samples?: string[];
+  created_at?: string;
+  raw_text?: string;
+  crawl_readable?: boolean;
+  http_status?: number | null;
+  has_h1?: boolean;
+  h1_count?: number;
+  has_main?: boolean;
+  has_article?: boolean;
+  schema_types?: string[];
+  published_at?: string;
+};
+
+export type ConfidenceSignalComposerState = {
+  enabled?: boolean;
+  allowed_input_types?: Array<'url' | 'text'>;
+  placeholder?: string;
+  helper_text?: string;
+};
+
 export type ReportCanvasData = CanvasPreviewData & {
+  report_kind?: string;
+  artifact_kind?: string;
   headline?: string;
   subtitle?: string;
   overallScore?: number;
@@ -258,6 +404,7 @@ export type ReportCanvasData = CanvasPreviewData & {
   risk_map?: unknown;
   action_queue?: unknown;
   source_overview?: unknown;
+  mention_sentiment_analysis?: unknown;
   // A5 extended fields (passed through from backend, consumed by ReportContent ext)
   key_findings?: unknown;
   strengths?: unknown;
@@ -274,9 +421,17 @@ export type ReportCanvasData = CanvasPreviewData & {
   risk_alerts?: unknown;
   delta_vs_previous?: unknown;
   competitor_bwvs?: unknown;
+  report_data?: unknown;
+  metrics_raw?: unknown;
   _degradation_note?: string;
   citation_analysis?: CitationAnalysis;
   keyword_analysis?: KeywordAnalysis;
+  summary?: ConfidenceSignalSummary;
+  auto_items?: ConfidenceSignalItem[];
+  manual_items?: ConfidenceSignalItem[];
+  aggregate_findings?: ConfidenceSignalFinding[];
+  composer?: ConfidenceSignalComposerState;
+  status?: ConfidenceSignalStatus;
 };
 export type ChartSeries = { key: string; name: string };
 export type ChartDataItem = Record<string, string | number>;

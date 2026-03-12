@@ -696,6 +696,83 @@ def _get_tool_name_from_node(node_name: str) -> str | None:
     return node_to_tool.get(node_name)
 
 
+async def _force_fetch_mode_confirmation(
+    *,
+    state: AgentState,
+    session_id: str,
+    reply_text: str,
+    new_history: list[dict[str, Any]],
+    request_id: str,
+    current_retry_counts: dict[str, int],
+) -> Command:
+    """Deterministically ask for fetch mode after A3.
+
+    This is the hard guard for the A3 -> A4 handoff. It prevents the flow from
+    silently ending when the LLM forgets to call ask_user or returns a pure
+    natural-language reply after simulated questions are ready.
+    """
+    defense_options = [
+        {
+            "id": "fast",
+            "label": "快速采集（推荐）",
+            "description": "API + 浏览器混合，约 5-10 分钟",
+        },
+        {
+            "id": "full",
+            "label": "完整采集",
+            "description": "全浏览器模拟真实用户，约 10-20 分钟，数据最准",
+        },
+        {
+            "id": "regenerate",
+            "label": "重新生成问题",
+            "description": "对模拟问题不满意，返回重新生成",
+        },
+    ]
+    defense_msg = "问题模拟已完成，请选择采集模式："
+    await manager.emit_to_session(
+        session_id,
+        "inline_confirmation",
+        {
+            "message": defense_msg,
+            "options": defense_options,
+            "type": "simple",
+        },
+    )
+    await manager.emit_to_session(session_id, "confirmation_request", {
+        "request_id": request_id,
+        "type": "step_confirmation",
+        "message": defense_msg,
+        "options": defense_options,
+        "allow_text_input": True,
+        "step_id": "orchestrator",
+        "step_name": "选择采集模式",
+    })
+
+    user_decisions = dict(state.get("user_decisions", {}))
+    user_decisions["fetch_mode_pending"] = True
+    new_history.append({
+        "role": "tool",
+        "content": "等待用户选择采集模式...",
+        "tool_call_id": request_id,
+    })
+    return Command(
+        goto="wait_for_user",
+        update={
+            "awaiting_user": True,
+            "orchestrator_reply": reply_text,
+            "orchestrator_history": new_history,
+            "user_decisions": user_decisions,
+            "pending_confirmation": {
+                "step_id": "orchestrator",
+                "step_name": "选择采集模式",
+                "message": defense_msg,
+                "options": defense_options,
+            },
+            "agent_retry_counts": current_retry_counts,
+        },
+    )
+
+
 def build_orchestrator_messages(state: AgentState) -> list[dict[str, Any]]:
     """Build message history for the orchestrator LLM call.
 
@@ -874,6 +951,8 @@ async def orchestrator_node(state: AgentState) -> Command:
         logger.info("[Orchestrator] User retry intent detected, resetting agent_retry_counts")
         state = {**state, "agent_retry_counts": {}}
 
+    current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
+
     # If returning from an Agent, send step completion event
     last_tool = _get_tool_name_from_node(state.get("next_action", "") or "")
     if last_tool and last_tool in TOOL_TO_NODE:
@@ -1003,6 +1082,26 @@ async def orchestrator_node(state: AgentState) -> Command:
         if tool_call_result:
             return await _handle_tool_call(
                 state, session_id, tool_call_result, reply_text, new_history
+            )
+
+        user_decisions = dict(state.get("user_decisions", {}))
+        if (
+            last_tool == "question_simulation"
+            and state.get("simulated_questions")
+            and not user_decisions.get("fetch_mode_confirmed", False)
+            and not user_decisions.get("fetch_mode_pending", False)
+        ):
+            logger.warning(
+                "[Orchestrator] No tool call after A3 completion; "
+                "forcing fetch-mode confirmation instead of ending run."
+            )
+            return await _force_fetch_mode_confirmation(
+                state=state,
+                session_id=session_id,
+                reply_text=reply_text,
+                new_history=new_history,
+                request_id=f"defense_fetch_{int(datetime.now().timestamp() * 1000)}",
+                current_retry_counts=current_retry_counts,
             )
 
         # No tool call — check if we're in an error state before ending
@@ -1150,9 +1249,27 @@ async def _handle_tool_call(
         confirm_type = tool_args.get("type", "simple")
         waiting_tips = tool_args.get("waiting_tips", [])
         checklist = tool_args.get("checklist", [])
+        request_id = tool_call.id or f"ask_user_{id(tool_call)}"
+
+        if (
+            not options
+            and state.get("simulated_questions")
+            and _get_tool_name_from_node(state.get("next_action", "") or "") == "question_simulation"
+        ):
+            logger.warning(
+                "[Orchestrator] ask_user called without options after A3; "
+                "injecting deterministic fetch-mode confirmation."
+            )
+            return await _force_fetch_mode_confirmation(
+                state=state,
+                session_id=session_id,
+                reply_text=reply_text,
+                new_history=new_history,
+                request_id=request_id,
+                current_retry_counts=current_retry_counts,
+            )
 
         # Enhanced inline confirmation with type, tips, and checklist
-        request_id = tool_call.id or f"ask_user_{id(tool_call)}"
         payload: dict[str, Any] = {
             "message": msg,
             "options": options,

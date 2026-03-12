@@ -20,6 +20,10 @@ from app.core.websocket_server import manager as ws_session_manager
 from app.services.message_service import MessageService
 from app.services.entity_service import EntityService
 from app.models.session import Session
+from app.models.message import Message, MessageType
+from app.workflow.a7.confidence_signal import (
+    append_manual_items_async,
+)
 
 from sqlalchemy import select
 
@@ -914,5 +918,128 @@ async def handle_recall_langgraph(
 __all__ = [
     "handle_user_message_langgraph",
     "handle_confirmation_langgraph",
+    "handle_artifact_action_langgraph",
     "handle_recall_langgraph",
 ]
+
+
+async def _load_output_by_artifact_id(
+    session_id: str,
+    artifact_id: str,
+) -> tuple[Message | None, dict[str, Any] | None]:
+    """Load the latest OUTPUT message by persisted artifact id metadata."""
+    async with AsyncSessionLocal() as db:
+        query = (
+            select(Message)
+            .where(
+                Message.session_id == UUID(session_id),
+                Message.type == MessageType.OUTPUT,
+            )
+            .order_by(Message.sequence.desc())
+        )
+        result = await db.execute(query)
+        messages = result.scalars().all()
+
+    for message in messages:
+        metadata = None
+        if message.extra_metadata:
+            try:
+                metadata = json.loads(message.extra_metadata)
+            except Exception:
+                metadata = None
+        if not isinstance(metadata, dict) or metadata.get("output_id") != artifact_id:
+            continue
+
+        output_data = None
+        if message.output_data:
+            try:
+                output_data = json.loads(message.output_data)
+            except Exception:
+                output_data = None
+
+        if isinstance(output_data, dict):
+            return message, output_data
+    return None, None
+
+
+async def handle_artifact_action_langgraph(
+    websocket: WebSocket, session_id: str, data: dict
+) -> None:
+    """Handle artifact-scoped actions without polluting the chat transcript."""
+    artifact_id = data.get("artifact_id", "")
+    action = data.get("action", "")
+    payload = data.get("payload", {}) or {}
+    raw_input = payload.get("raw_input", "") if isinstance(payload, dict) else ""
+
+    from app.workflow.events import save_and_send_artifact, send_artifact_patch
+
+    if not artifact_id:
+        await ws_session_manager.emit_to_websocket(
+            websocket,
+            "error",
+            {"message": "缺少 artifact_id", "recoverable": True},
+        )
+        return
+
+    if action != "extra_evaluate":
+        await ws_session_manager.emit_to_websocket(
+            websocket,
+            "error",
+            {"message": "不支持的交付物动作", "recoverable": True},
+        )
+        return
+
+    message, existing_report = await _load_output_by_artifact_id(session_id, artifact_id)
+    if not existing_report:
+        await ws_session_manager.emit_to_websocket(
+            websocket,
+            "error",
+            {"message": "未找到对应的置信度信号交付物", "recoverable": True},
+        )
+        return
+
+    if existing_report.get("report_kind") != "confidence_signal":
+        await ws_session_manager.emit_to_websocket(
+            websocket,
+            "error",
+            {"message": "当前交付物不支持额外评估", "recoverable": True},
+        )
+        return
+
+    await send_artifact_patch(
+        session_id=session_id,
+        artifact_id=artifact_id,
+        patch={
+            "status": {
+                "phase": "running",
+                "message": "正在生成额外评估…",
+            }
+        },
+        status="running",
+        message="正在生成额外评估…",
+    )
+
+    try:
+        updated_report = await append_manual_items_async(existing_report, raw_input=raw_input)
+    except ValueError as exc:
+        await send_artifact_patch(
+            session_id=session_id,
+            artifact_id=artifact_id,
+            patch={
+                "status": {
+                    "phase": "error",
+                    "message": str(exc),
+                }
+            },
+            status="error",
+            message=str(exc),
+        )
+        return
+
+    await save_and_send_artifact(
+        session_id=session_id,
+        output_type="report",
+        title=message.content if message else "置信度信号",
+        data=updated_report,
+        artifact_key=artifact_id,
+    )

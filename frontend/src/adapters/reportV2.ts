@@ -9,7 +9,10 @@
   InsightSectionData,
   InsightSectionItem,
   PlatformCitationStats,
+  ReportCitationCase,
   ReportCanvasContent,
+  ReportMentionItem,
+  ReportMentionSectionData,
   ReportRiskItem,
   ReportSummaryData,
   ReportV2Metric,
@@ -453,10 +456,10 @@ function buildSummaryMetricsFromRoot(summaryMetrics: UnknownRecord | undefined):
     },
     {
       id: 'official_citation_rate',
-      label: '官网引用率',
+      label: '内容引用率',
       value: readNumber(summaryMetrics, 'official_citation_rate', 'officialCitationRate'),
       unit: 'ratio',
-      description: '官网是否进入 AI 的引用链路。',
+      description: '品牌相关内容是否进入 AI 答案的证据链。',
     },
     {
       id: 'platform_coverage_count',
@@ -466,9 +469,9 @@ function buildSummaryMetricsFromRoot(summaryMetrics: UnknownRecord | undefined):
     },
     {
       id: 'scenario_hit_count',
-      label: '有效场景数',
+      label: '被提及问题',
       value: readNumber(summaryMetrics, 'scenario_hit_count', 'scenarioHitCount'),
-      description: '品牌已建立有效存在感的场景数。',
+      description: '当前有多少个问题的回答提到了品牌。',
     },
     {
       id: 'missing_high_value_scenario_count',
@@ -499,7 +502,8 @@ function createSummaryMetrics(
   const brandMentionRate = normalizePercent(
     toNumberValue(pickMetricValue(metrics, ['brand_mention_rate', 'mention_rate', 'mentionRate']))
   );
-  const officialCitationRate =
+  const contentCitationRate =
+    sources.content_citation_rate ??
     sources.official_citation_rate ??
     normalizePercent(toNumberValue(pickMetricValue(metrics, ['official_citation_rate', 'citation_rate'])));
   const inferredPlatformCoverageCount =
@@ -539,16 +543,16 @@ function createSummaryMetrics(
     },
     {
       id: 'official_citation_rate',
-      label: '官网引用率',
-      value: officialCitationRate,
-      unit: officialCitationRate !== undefined ? '%' : undefined,
-      description: '官网是否被 AI 当作可信信息源。',
+      label: '内容引用率',
+      value: contentCitationRate,
+      unit: contentCitationRate !== undefined ? '%' : undefined,
+      description: '品牌相关内容是否进入 AI 答案的证据链。',
       status:
-        officialCitationRate === undefined
+        contentCitationRate === undefined
           ? 'neutral'
-          : officialCitationRate >= 30
+          : contentCitationRate >= 30
           ? 'good'
-          : officialCitationRate >= 10
+          : contentCitationRate >= 10
           ? 'warning'
           : 'risk',
     },
@@ -561,10 +565,10 @@ function createSummaryMetrics(
     },
     {
       id: 'scenario_hit_count',
-      label: '有效场景数',
+      label: '被提及问题',
       value: scenarioHitCount,
       description:
-        scenarioTotal !== undefined ? `当前识别场景总数 ${scenarioTotal}。` : '品牌已建立有效存在感的场景数量。',
+        scenarioTotal !== undefined ? `当前识别问题总数 ${scenarioTotal}。` : '当前有多少个问题的回答提到了品牌。',
       status: scenarioHitCount === undefined ? 'neutral' : scenarioHitCount >= 3 ? 'good' : 'warning',
     },
     {
@@ -701,7 +705,10 @@ function normalizeCompetitorBattle(data: ReportCanvasContent['data']): Competito
   const explicit = data.report_v2?.competitorBattle ?? data.competitor_battle;
   const competitorDeep = isRecord(data.competitor_deep_analysis) ? data.competitor_deep_analysis : undefined;
 
-  const explicitCards = (explicit?.summary_cards ?? [])
+  const explicitCards = [
+    ...(explicit?.summary_cards ?? []),
+    ...((explicit?.summary_cards?.length ?? 0) === 0 ? (explicit?.items ?? []) : []),
+  ]
     .map((item) => normalizeCompetitorCard(item as unknown as UnknownRecord))
     .filter((item): item is CompetitorBattleSummaryCard => Boolean(item));
   const rawCards = toRecordArray(data.competitor_battles)
@@ -816,7 +823,71 @@ function normalizeInsightItem(record: UnknownRecord, fallbackTitle: string): Ins
     evidence: readString(record, 'evidence', 'description', 'reason'),
     platforms: readStringList(record, 'platforms', 'present_platforms', 'presentPlatforms'),
     improvement_hint: readString(record, 'improvement_hint', 'improvementHint', 'mitigation_hint', 'mitigationHint'),
+    sentiment: readString(record, 'sentiment'),
+    citation_domains: readStringList(record, 'citation_domains', 'citationDomains'),
+    citation_titles: readStringList(record, 'citation_titles', 'citationTitles'),
+    official_citation_present: readBoolean(record, 'official_citation_present', 'officialCitationPresent'),
   };
+}
+
+function buildSentimentInsightItems(data: ReportCanvasContent['data']) {
+  const payload = isRecord(data.mention_sentiment_analysis)
+    ? data.mention_sentiment_analysis
+    : isRecord(data.report_data) && isRecord(data.report_data.mention_sentiment_analysis)
+    ? (data.report_data.mention_sentiment_analysis as UnknownRecord)
+    : undefined;
+
+  const brandPayload = payload && isRecord(payload.brand) ? (payload.brand as UnknownRecord) : undefined;
+  const brandItems = toRecordArray(brandPayload?.items);
+
+  const strengths = brandItems
+    .filter((item) => readString(item, 'sentiment') === 'positive')
+    .slice(0, 3)
+    .map((item, index) =>
+      normalizeInsightItem(
+        {
+          title: `${readString(item, 'scenario_label', 'scenarioLabel') || `优势 ${index + 1}`}中品牌被正向提及`,
+          scenario: readString(item, 'scenario_label', 'scenarioLabel'),
+          evidence:
+            readString(item, 'evidence') ||
+            `${readString(item, 'platform') || 'AI 平台'} 对品牌给出了正向表述。`,
+          platforms: readStringList(item, 'platform'),
+          sentiment: 'positive',
+          citation_domains: readStringList(item, 'citation_domains', 'citationDomains'),
+          citation_titles: readStringList(item, 'citation_titles', 'citationTitles'),
+          official_citation_present: readBoolean(item, 'official_citation_present', 'officialCitationPresent'),
+        },
+        `优势 ${index + 1}`
+      )
+    )
+    .filter((item): item is InsightSectionItem => Boolean(item));
+
+  const weaknesses = brandItems
+    .filter((item) => ['neutral', 'negative'].includes(readString(item, 'sentiment') || ''))
+    .slice(0, 4)
+    .map((item, index) => {
+      const sentiment = readString(item, 'sentiment') || 'neutral';
+      const sentimentText = sentiment === 'negative' ? '负向' : '中性';
+      return normalizeInsightItem(
+        {
+          title: `${readString(item, 'scenario_label', 'scenarioLabel') || `短板 ${index + 1}`}中品牌呈${sentimentText}提及`,
+          scenario: readString(item, 'scenario_label', 'scenarioLabel'),
+          evidence:
+            readString(item, 'evidence') ||
+            `${readString(item, 'platform') || 'AI 平台'} 对品牌呈${sentimentText}提及，建议补强证据和内容表达。`,
+          platforms: readStringList(item, 'platform'),
+          sentiment,
+          citation_domains: readStringList(item, 'citation_domains', 'citationDomains'),
+          citation_titles: readStringList(item, 'citation_titles', 'citationTitles'),
+          official_citation_present: readBoolean(item, 'official_citation_present', 'officialCitationPresent'),
+          improvement_hint: '优先补强该场景的官网证据、FAQ 和对比型内容。',
+        },
+        `短板 ${index + 1}`
+      );
+    })
+    .filter((item): item is InsightSectionItem => Boolean(item));
+
+  return { strengths, weaknesses };
 }
 
 function normalizeInsights(data: ReportCanvasContent['data']): InsightSectionData {
@@ -939,8 +1010,8 @@ function normalizeSummary(
     summaryText;
 
   return {
-    title: explicit?.title || '品牌现状',
-    description: explicit?.description || '先看品牌当前在 AI 回答中的整体战况。',
+    title: explicit?.title || '核心指标',
+    description: explicit?.description || '先看品牌在提及、内容引用和风险上的核心表现。',
     summary: summaryText,
     status_summary: statusSummary,
     highlights: explicitHighlights.length > 0 ? explicitHighlights : legacyHighlights.slice(0, 4),
@@ -981,6 +1052,252 @@ function formatUpdatedAt(updatedAt: string | undefined): string | undefined {
   });
 }
 
+function extractMentionPayload(data: ReportCanvasContent['data']): UnknownRecord | undefined {
+  if (isRecord(data.mention_sentiment_analysis)) {
+    return data.mention_sentiment_analysis;
+  }
+  if (isRecord(data.report_data) && isRecord(data.report_data.mention_sentiment_analysis)) {
+    return data.report_data.mention_sentiment_analysis as UnknownRecord;
+  }
+  return undefined;
+}
+
+function sanitizeCustomerText(value: string | undefined): string | undefined {
+  const text = sanitizeNarrativeText(value);
+  if (!text) return undefined;
+  return text
+    .replace(/bwvs[^。！？]*[。！？]?/gi, '')
+    .replace(/引用得分为[^。！？]*[。！？]?/g, '')
+    .replace(/品牌口碑基础/g, '品牌认知基础')
+    .replace(/全平台权威性背书/g, '权威来源背书')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function isMeaningfulQuestionLabel(value: string | undefined): boolean {
+  const label = (value || '').trim();
+  if (!label) return false;
+  const lowered = label.toLowerCase();
+  if (lowered.includes('bwvs')) return false;
+  return !['未命名问题', '问题待补全', '回答样本', '引用样本', '品牌认知基础', '权威来源背书'].some((token) =>
+    label.includes(token)
+  );
+}
+
+function buildQuestionLabel(record: UnknownRecord, index: number): string {
+  const label =
+    readString(record, 'scenario_label', 'scenarioLabel', 'question_text', 'questionText', 'query', 'question', 'title') ||
+    `问题 ${index + 1}`;
+  return isMeaningfulQuestionLabel(label) ? label : `问题 ${index + 1}`;
+}
+
+function normalizeMentionItem(record: UnknownRecord, index: number) {
+  return {
+    scenario_id: readString(record, 'scenario_id', 'scenarioId'),
+    scenario_label: buildQuestionLabel(record, index),
+    platform: readString(record, 'platform'),
+    sentiment: readString(record, 'sentiment') || 'neutral',
+    evidence: sanitizeCustomerText(readString(record, 'evidence', 'matched_answer', 'matchedAnswer')),
+    citation_domains: readStringList(record, 'citation_domains', 'citationDomains'),
+    citation_titles: readStringList(record, 'citation_titles', 'citationTitles'),
+    citation_urls: readStringList(record, 'citation_urls', 'citationUrls'),
+    official_citation_present: readBoolean(record, 'official_citation_present', 'officialCitationPresent'),
+    competitor: readString(record, 'competitor'),
+  };
+}
+
+function normalizeMentions(data: ReportCanvasContent['data']): ReportMentionSectionData {
+  const explicit = data.report_v2?.mentions;
+  if (explicit) {
+    return explicit;
+  }
+
+  const payload = extractMentionPayload(data);
+  const brandPayload = payload && isRecord(payload.brand) ? (payload.brand as UnknownRecord) : undefined;
+  const competitorPayload = payload && Array.isArray(payload.competitors) ? payload.competitors : [];
+  const brandMentions = toRecordArray(brandPayload?.items).map(normalizeMentionItem);
+  const competitorMentions = competitorPayload.flatMap((competitor) =>
+    toRecordArray(isRecord(competitor) ? competitor.items : undefined).map((item, index) =>
+      normalizeMentionItem(
+        {
+          ...(item as UnknownRecord),
+          competitor: readString(isRecord(competitor) ? (competitor as UnknownRecord) : {}, 'competitor'),
+        },
+        index
+      )
+    )
+  );
+  const mentionRate =
+    readNumber(isRecord(data.summary_metrics) ? data.summary_metrics : {}, 'brand_mention_rate', 'brandMentionRate') ??
+    normalizePercent(toNumberValue(pickMetricValue(data.metrics as Record<string, unknown> | undefined, ['brand_mention_rate', 'mention_rate', 'mentionRate'])));
+  const groupedCount = new Set(
+    brandMentions.map((item) => item.scenario_id || item.scenario_label).filter((value): value is string => Boolean(value))
+  ).size;
+  const summaryRecord = isRecord(brandPayload?.summary) ? brandPayload.summary : {};
+
+  return {
+    title: '提及率分析',
+    description: '先看品牌在哪些问题进入了答案，再看四个平台的提及状态和语气差异。',
+    mention_rate: mentionRate,
+    mention_count: groupedCount,
+    sentiment_summary: {
+      positive: readNumber(summaryRecord, 'positive') ?? 0,
+      neutral: readNumber(summaryRecord, 'neutral') ?? 0,
+      negative: readNumber(summaryRecord, 'negative') ?? 0,
+    },
+    brand_mentions: brandMentions,
+    competitor_mentions: competitorMentions,
+  };
+}
+
+function buildCitationCasesFromMentions(items: ReportMentionItem[]): ReportCitationCase[] {
+  return items
+    .filter((item) => (item.citation_domains?.length ?? 0) > 0 || (item.citation_titles?.length ?? 0) > 0 || (item.citation_urls?.length ?? 0) > 0)
+    .map((item) => ({
+      scenario_label: item.scenario_label,
+      platform: item.platform,
+      matched_answer: item.evidence,
+      citation_domains: item.citation_domains,
+      citation_titles: item.citation_titles,
+      citation_urls: item.citation_urls,
+      is_official: item.official_citation_present,
+      aice_score: null,
+      aice_dimensions: null,
+    }));
+}
+
+function normalizeSourcesForReport(
+  data: ReportCanvasContent['data'],
+  mentions: ReportMentionSectionData
+): SourceSectionData {
+  const explicit = data.report_v2?.sources ?? data.source_section;
+  const rawSourceOverview = isRecord(data.source_overview) ? data.source_overview : undefined;
+  const citationAnalysis =
+    explicit?.citation_analysis ??
+    data.citation_analysis ??
+    buildCitationAnalysisFromSourceOverview(rawSourceOverview);
+
+  const cases = explicit?.citation_cases && explicit.citation_cases.length > 0
+    ? explicit.citation_cases
+    : buildCitationCasesFromMentions(mentions.brand_mentions ?? []);
+
+  const officialCases = cases.filter((item) => item.is_official);
+  const nonOfficialCases = cases.filter((item) => !item.is_official);
+  const citedAnswerCount = new Set(
+    cases.map((item) => `${item.scenario_label}::${item.platform || ''}`).filter(Boolean)
+  ).size;
+  const citedContentCount = new Set(
+    cases.flatMap((item) => [
+      ...(item.citation_titles ?? []),
+      ...(item.citation_domains ?? []),
+      ...(item.citation_urls ?? []),
+    ]).filter(Boolean)
+  ).size;
+  const mentionCount = mentions.brand_mentions?.length ?? 0;
+  const contentCitationRate =
+    mentionCount > 0 ? normalizePercent((citedAnswerCount / mentionCount) as number) : undefined;
+
+  return {
+    title: '内容引用分析',
+    description: '把进入答案的品牌内容、引用来源和证据链放在一起看。',
+    content_citation_rate: explicit?.content_citation_rate ?? contentCitationRate,
+    cited_answer_count: explicit?.cited_answer_count ?? citedAnswerCount,
+    cited_content_count: explicit?.cited_content_count ?? citedContentCount,
+    official_case_count: explicit?.official_case_count ?? officialCases.length,
+    non_official_case_count: explicit?.non_official_case_count ?? nonOfficialCases.length,
+    official_citation_rate:
+      explicit?.official_citation_rate ??
+      (citationAnalysis ? citationAnalysis.official_share : undefined) ??
+      normalizePercent(readNumber(rawSourceOverview ?? {}, 'official_citation_rate', 'officialCitationRate')),
+    official_top_titles: uniqueStrings([
+      ...toStringArray(readField(rawSourceOverview ?? {}, 'official_top_titles', 'officialTopTitles')),
+      ...officialCases.flatMap((item) => item.citation_titles ?? []),
+    ]),
+    citation_cases: cases,
+    citation_analysis: citationAnalysis,
+  };
+}
+
+function normalizeInsightsForReport(
+  mentions: ReportMentionSectionData,
+  risks: RiskSectionData
+): InsightSectionData {
+  const groupedByScenario = new Map<
+    string,
+    {
+      scenario: string;
+      platforms: string[];
+      positive: number;
+      negative: number;
+      neutral: number;
+      evidence?: string;
+      citationDomains: string[];
+      officialCitationPresent: boolean;
+    }
+  >();
+
+  for (const item of mentions.brand_mentions ?? []) {
+    const key = item.scenario_id || item.scenario_label;
+    if (!key) continue;
+    if (!groupedByScenario.has(key)) {
+      groupedByScenario.set(key, {
+        scenario: item.scenario_label,
+        platforms: [],
+        positive: 0,
+        negative: 0,
+        neutral: 0,
+        evidence: item.evidence,
+        citationDomains: [],
+        officialCitationPresent: false,
+      });
+    }
+    const row = groupedByScenario.get(key)!;
+    if (item.platform && !row.platforms.includes(item.platform)) row.platforms.push(item.platform);
+    if (item.sentiment === 'positive') row.positive += 1;
+    else if (item.sentiment === 'negative') row.negative += 1;
+    else row.neutral += 1;
+    row.evidence = row.evidence || item.evidence;
+    row.citationDomains = uniqueStrings([...row.citationDomains, ...(item.citation_domains ?? [])]);
+    row.officialCitationPresent = row.officialCitationPresent || Boolean(item.official_citation_present);
+  }
+
+  const strengths = [...groupedByScenario.values()]
+    .filter((item) => item.positive > 0 || item.officialCitationPresent)
+    .sort((a, b) => (b.positive + (b.officialCitationPresent ? 1 : 0)) - (a.positive + (a.officialCitationPresent ? 1 : 0)))
+    .slice(0, 4)
+    .map((item) => ({
+      title: item.scenario,
+      scenario: item.scenario,
+      evidence:
+        item.officialCitationPresent
+          ? `该问题中品牌已进入答案，且已有品牌官网或品牌自有内容被引用。`
+          : item.positive > 0
+          ? `该问题中品牌已进入答案，提及时的语气偏正向。`
+          : sanitizeCustomerText(item.evidence),
+      platforms: item.platforms,
+      citation_domains: item.citationDomains,
+      official_citation_present: item.officialCitationPresent,
+    }));
+
+  const riskWeaknesses = (risks.items ?? [])
+    .filter((item) => isMeaningfulQuestionLabel(item.scenario_label))
+    .slice(0, 4)
+    .map((item) => ({
+      title: item.scenario_label || '待补强问题',
+      scenario: item.scenario_label,
+      evidence: sanitizeCustomerText(item.reason) || sanitizeCustomerText(item.impact_summary),
+      improvement_hint: sanitizeCustomerText(item.evidence) || sanitizeCustomerText(item.recommended_action_ref),
+    }));
+
+  return {
+    title: '当前优势与补强',
+    description: '把已经站住的问题和仍需补强的具体问题分开看，方便直接转成动作。',
+    summary: undefined,
+    strengths,
+    weaknesses: riskWeaknesses,
+  };
+}
+
 export interface ReportViewModel {
   headline: string;
   subtitle?: string;
@@ -988,9 +1305,7 @@ export interface ReportViewModel {
   degradationNote?: string;
   isBaseline: boolean;
   summary: ReportSummaryData;
-  scenarios: ScenarioCoverageData;
-  competitorBattle: CompetitorBattleData;
-  risks: RiskSectionData;
+  mentions: ReportMentionSectionData;
   sources: SourceSectionData;
   insights: InsightSectionData;
 }
@@ -999,9 +1314,9 @@ export function buildReportViewModel(content: ReportCanvasContent): ReportViewMo
   const data = content.data;
   const scenarios = normalizeScenarioCoverage(data);
   const risks = normalizeRisks(data);
-  const sources = normalizeSources(data);
-  const competitorBattle = normalizeCompetitorBattle(data);
-  const insights = normalizeInsights(data);
+  const mentions = normalizeMentions(data);
+  const sources = normalizeSourcesForReport(data, mentions);
+  const insights = normalizeInsightsForReport(mentions, risks);
   const summary = normalizeSummary(data, scenarios, risks, sources);
   const subtitle = formatSubtitle(data);
   const headline = sanitizeNarrativeText(data.headline) || '品牌战况报告';
@@ -1016,9 +1331,7 @@ export function buildReportViewModel(content: ReportCanvasContent): ReportViewMo
     degradationNote,
     isBaseline,
     summary,
-    scenarios,
-    competitorBattle,
-    risks,
+    mentions,
     sources,
     insights,
   };

@@ -2,11 +2,10 @@
 
 import type { ReportCanvasContent } from '@/types/canvas';
 import { buildReportViewModel } from '@/adapters/reportV2';
-import { CompetitorBattleSection } from './CompetitorBattleSection';
+import { ConfidenceSignalContent } from './ConfidenceSignalContent';
 import { InsightSection } from './InsightSection';
+import { ReportMentionSection } from './ReportMentionSection';
 import { ReportSummarySection } from './ReportSummarySection';
-import { RiskSection } from './RiskSection';
-import { ScenarioCoverageSection } from './ScenarioCoverageSection';
 import { SourceSection } from './SourceSection';
 
 interface ReportContentProps {
@@ -14,50 +13,46 @@ interface ReportContentProps {
 }
 
 export function ReportContent({ content }: ReportContentProps) {
+  if (content.data.report_kind === 'confidence_signal') {
+    return <ConfidenceSignalContent content={content} />;
+  }
+
   const view = buildReportViewModel(content);
 
   return (
-    <div className="space-y-10 p-6 md:p-8">
-      <header className="space-y-4 rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-5 py-5 md:px-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-3">
-            <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
-              Report Artifact
-            </div>
-            <h1 className="text-[28px] font-semibold tracking-[-0.02em] text-[var(--text-primary)] md:text-[32px]">
+    <div className="mx-auto max-w-[1080px] space-y-6 px-6 py-6 md:px-8 md:py-8">
+      <header className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-6 md:px-7" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--border-subtle)] pb-4">
+          <div>
+            <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">分析报告</div>
+            <h1 className="mt-3 text-[clamp(2rem,3.2vw,3rem)] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
               {view.headline || '品牌战况报告'}
             </h1>
           </div>
-          {view.isBaseline && (
-            <span className="inline-flex h-fit items-center rounded-full border border-violet-500/25 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-300">
+          {view.isBaseline ? (
+            <span className="inline-flex h-fit items-center rounded-full border px-3 py-1.5 text-[12px] font-medium text-[var(--text-secondary)]" style={{ borderColor: 'var(--border-subtle)' }}>
               基线报告
             </span>
-          )}
+          ) : null}
         </div>
 
-        {view.subtitle && (
-          <p className="max-w-3xl text-sm leading-7 text-[var(--text-secondary)]">{view.subtitle}</p>
-        )}
+        {view.subtitle ? <p className="mt-4 max-w-4xl text-[14px] leading-7 text-[var(--text-secondary)]">{view.subtitle}</p> : null}
 
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--text-tertiary)]">
-          {view.updatedAt && <span>最近更新：{view.updatedAt}</span>}
-          {content.data.platform_scope && content.data.platform_scope.length > 0 && (
-            <span>平台范围：{content.data.platform_scope.join(' / ')}</span>
-          )}
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-[var(--text-tertiary)]">
+          {view.updatedAt ? <span>最近更新：{view.updatedAt}</span> : null}
+          {content.data.platform_scope && content.data.platform_scope.length > 0 ? <span>平台范围：{content.data.platform_scope.join(' / ')}</span> : null}
         </div>
 
-        {view.degradationNote && (
-          <div className="rounded-2xl border border-amber-500/20 bg-amber-500/8 px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
+        {view.degradationNote ? (
+          <div className="mt-5 rounded-[16px] border bg-[var(--bg-elevated)] px-4 py-3 text-[13px] leading-7 text-[var(--text-secondary)]" style={{ borderColor: 'var(--border-subtle)' }}>
             {view.degradationNote}
           </div>
-        )}
+        ) : null}
       </header>
 
-      <div className="space-y-10">
+      <div className="space-y-5">
         <ReportSummarySection data={view.summary} />
-        <ScenarioCoverageSection data={view.scenarios} />
-        <CompetitorBattleSection data={view.competitorBattle} />
-        <RiskSection data={view.risks} />
+        <ReportMentionSection data={view.mentions} />
         <SourceSection data={view.sources} />
         <InsightSection data={view.insights} />
       </div>

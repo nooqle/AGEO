@@ -64,6 +64,7 @@ interface ConversationState {
 
   // WebSocket send function (registered by ChatPanel's useWebSocket, shared with Canvas components)
   wsConfirmation: ((requestId: string, selection: string | Record<string, unknown>) => void) | null;
+  wsArtifactAction: ((artifactId: string, action: string, payload?: Record<string, unknown>) => void) | null;
 
   // New: 实时流式状态（当前正在执行的消息）
   streamingReply: string;
@@ -120,6 +121,7 @@ interface ConversationState {
   finalizeCurrentMessage: () => void;
   resetStreamingState: () => void;
   setWsConfirmation: (fn: ((requestId: string, selection: string | Record<string, unknown>) => void) | null) => void;
+  setWsArtifactAction: (fn: ((artifactId: string, action: string, payload?: Record<string, unknown>) => void) | null) => void;
 
   startExecution: () => void;
   stopExecution: () => void;
@@ -160,6 +162,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   followUpSuggestions: [],
   // WebSocket confirmation function
   wsConfirmation: null,
+  wsArtifactAction: null,
   // New: streaming state
   // These fields are transient execution buffers. They only describe the in-flight
   // assistant turn and are folded into a persisted Message by finalizeCurrentMessage().
@@ -748,6 +751,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   },
 
   setWsConfirmation: (fn) => set({ wsConfirmation: fn }),
+  setWsArtifactAction: (fn) => set({ wsArtifactAction: fn }),
 
   clearMessagesAfter: (messageId) => {
     const { messages } = get();
@@ -781,8 +785,8 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       // Cycle 3
       activeTask: null,
       followUpSuggestions: [],
-      // NOTE: wsConfirmation is NOT reset here — it's a connection-level
-      // function registered by useWebSocket, not session state.
+      // NOTE: wsConfirmation / wsArtifactAction are NOT reset here — they are
+      // connection-level functions registered by useWebSocket, not session state.
       // Streaming state
       streamingReply: '',
       streamingThought: '',

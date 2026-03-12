@@ -34,6 +34,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal, init_db
 from app.core.websocket_server import (
     manager,
+    handle_artifact_action,
     handle_user_message,
     handle_confirmation,
     handle_stop,
@@ -344,6 +345,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 else:
                     agent_task = asyncio.create_task(
                         handle_recall(websocket, session_id, data)
+                    )
+                    agent_task.add_done_callback(_on_agent_done)
+            elif event == "artifact_action":
+                if agent_task and not agent_task.done():
+                    await manager.emit_to_websocket(websocket, "error", {
+                        "message": "正在执行中，请等待当前任务完成",
+                        "recoverable": True,
+                    })
+                else:
+                    agent_task = asyncio.create_task(
+                        handle_artifact_action(websocket, session_id, data)
                     )
                     agent_task.add_done_callback(_on_agent_done)
             elif event == "ping":

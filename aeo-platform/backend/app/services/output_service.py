@@ -116,25 +116,35 @@ class OutputService:
 
     def _output_to_dict(self, message: Message) -> dict[str, Any]:
         data = None
+        metadata = None
         if message.output_data:
             try:
                 data = json.loads(message.output_data)
             except Exception:
                 data = message.output_data
-        # Use same artifact_id format as WebSocket output_ready event
-        # so loadArtifacts() and WS events merge into one Tab instead of duplicating
-        artifact_id = f"{message.session_id}_{message.output_type}"
+        if message.extra_metadata:
+            try:
+                metadata = json.loads(message.extra_metadata)
+            except Exception:
+                metadata = None
+        artifact_id = (
+            metadata.get("output_id")
+            if isinstance(metadata, dict) and isinstance(metadata.get("output_id"), str)
+            else f"{message.session_id}_{message.output_type}"
+        )
         # Derive category from output_type (report_baseline → baseline, report → scenario)
         category = None
         if message.output_type and message.output_type.startswith("report"):
             category = "baseline" if message.output_type == "report_baseline" else "scenario"
         return {
-            "id": artifact_id,
+            "id": str(message.id),
+            "artifact_id": artifact_id,
             "message_id": str(message.id),
             "session_id": str(message.session_id),
             "type": message.output_type,
             "title": message.content or "分析结果",
             "data": data,
+            "metadata": metadata,
             "category": category,
             "created_at": message.created_at.isoformat(),
         }

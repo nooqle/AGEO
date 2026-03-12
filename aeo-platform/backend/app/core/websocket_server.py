@@ -138,3 +138,12 @@ async def handle_recall(websocket: WebSocket, session_id: str, data: dict):
 
     await handle_recall_langgraph(websocket, session_id, data)
 
+
+async def handle_artifact_action(websocket: WebSocket, session_id: str, data: dict):
+    """Handle artifact-scoped actions using LangGraph-aligned handlers."""
+    logger.info(f"[WebSocket] artifact_action event from session: {session_id}")
+
+    from app.api.v1.websocket_langgraph import handle_artifact_action_langgraph
+
+    await handle_artifact_action_langgraph(websocket, session_id, data)
+

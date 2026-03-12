@@ -28,6 +28,7 @@ from app.workflow.events import (
     send_error_event,
     send_stage_result,
     send_browser_state_event,
+    send_browser_user_action_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -1168,6 +1169,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 len(fetch_results), len(baseline), len(final_fetch_results),
             )
 
+        try:
+            from app.workflow.a7.confidence_signal import generate_confidence_signal_artifact
+
+            asyncio.create_task(
+                generate_confidence_signal_artifact(
+                    session_id=session_id,
+                    fetch_results=final_fetch_results,
+                )
+            )
+        except Exception as confidence_err:
+            logger.warning("[A4] Failed to trigger A7 confidence signal artifact: %s", confidence_err)
+
         # Task milestone: A4 completed (Cycle 3, Module 1)
         task_id = state.get("task_id")
         if task_id:
@@ -1466,6 +1479,15 @@ async def _fetch_from_browser(
                     requires_action=event.requires_action,
                     action_hint=event.action_hint,
                 )
+                await send_browser_user_action_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state=event.state.value,
+                    action_type="login",
+                    message=event.message,
+                    progress=event.progress,
+                    action_hint=event.action_hint,
+                )
                 login_msg = (
                     f"**{platform_name}** 需要登录\n\n"
                     f"已打开浏览器窗口，请在浏览器中完成登录。"
@@ -1482,6 +1504,15 @@ async def _fetch_from_browser(
                     message=event.message,
                     progress=event.progress,
                     requires_action=event.requires_action,
+                    action_hint=event.action_hint,
+                )
+                await send_browser_user_action_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state=event.state.value,
+                    action_type="modal",
+                    message=event.message,
+                    progress=event.progress,
                     action_hint=event.action_hint,
                 )
                 modal_msg = (
@@ -1555,6 +1586,15 @@ async def _fetch_from_browser(
                     requires_action=True,
                     action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证",
                 )
+                await send_browser_user_action_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state="waiting_for_login",
+                    action_type="verify",
+                    message=f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
+                    progress=0.35,
+                    action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证",
+                )
                 verify_msg = (
                     f"**{platform_name}** 触发了安全验证\n\n"
                     f"请在浏览器窗口中完成验证，完成后系统会自动重试当前问题。"
@@ -1585,6 +1625,15 @@ async def _fetch_from_browser(
                     state="waiting_for_modal",
                     message=f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
                     progress=0.35, requires_action=True,
+                    action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议（{platform_name}）",
+                )
+                await send_browser_user_action_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state="waiting_for_modal",
+                    action_type="modal",
+                    message=f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
+                    progress=0.35,
                     action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议（{platform_name}）",
                 )
                 modal_msg = (

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -6,10 +6,10 @@ import { useConversationStore } from '@/stores/conversationStore';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { MessageList } from './MessageList';
-import { ConfirmationCard } from './ConfirmationCard';
 import { TaskStatusBadge } from './TaskStatusBadge';
 import { ReconnectionBanner } from './ReconnectionBanner';
 import { FollowUpChips } from './FollowUpChips';
+import { BrowserActionBanner } from './BrowserActionBanner';
 import { InputArea } from './InputArea';
 import { cn } from '@/lib/cn';
 import { DEFAULT_EXAMPLE_BRANDS, ExampleBrand } from '@/config/brands';
@@ -43,11 +43,13 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const [showSafeToLeave, setShowSafeToLeave] = useState(false);
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
   const replayAnimatingRef = useRef(false);
+  const browserActionToastRef = useRef<string | null>(null);
 
   const {
     messages,
     isAgentExecuting,
     stopState,
+    browserState,
     pendingConfirmation,
     executionProgress,
     stageResults,
@@ -60,13 +62,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     markConfirmationSelected,
     reset: resetConversation,
     setActiveTask,
-    setFollowUpSuggestions,
     clearFollowUpSuggestions,
     addStageResult,
     setExecutionProgress,
-    clearMessagesAfter,
-    removeMessage,
-    clearStageResults,
   } = useConversationStore();
 
   // Initialize WebSocket connection
@@ -82,7 +80,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   useEffect(() => {
     resetConversation();
     useCanvasStore.getState().clearContents();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [resetConversation]);
 
   const updateAutoScrollState = useCallback(() => {
     const container = scrollRef.current;
@@ -120,7 +118,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
   // Listen for recall-fill-input events from useWebSocket recall_complete handler
   useEffect(() => {
-    const handler = (e: Event) => {
+    const handler = () => {
       const content = recalledContentRef.current;
       if (content) {
         setInputValue(content);
@@ -129,7 +127,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     };
     window.addEventListener('recall-fill-input', handler);
     return () => window.removeEventListener('recall-fill-input', handler);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Listen for recall-reload-artifacts: reload surviving artifacts from DB after recall
   useEffect(() => {
@@ -140,11 +138,12 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         if (cancelled || !outputs || outputs.length === 0) return;
         const store = useCanvasStore.getState();
         for (const output of outputs) {
+          const artifactId = output.artifact_id || output.id;
           const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(output.type as CanvasContentType)
             ? (output.type as CanvasContentType)
             : 'report';
           store.addContent({
-            id: output.id,
+            id: artifactId,
             type: outputType,
             title: output.title || output.type || '分析结果',
             data: (output.data || {}) as CanvasContent['data'],
@@ -215,6 +214,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         const outputs = await api.getOutputs(sessionId);
         if (cancelled || !outputs || outputs.length === 0) return;
         for (const output of outputs) {
+          const artifactId = output.artifact_id || output.id;
           // Map report_baseline/report_persona to 'report' Canvas type (same as useWebSocket)
           const rawType = typeof output.type === 'string' ? output.type : 'report';
           const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
@@ -223,7 +223,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             : 'report';
           const category = typeof output.category === 'string' ? output.category as 'baseline' | 'scenario' : undefined;
           addContent({
-            id: output.id,
+            id: artifactId,
             type: outputType,
             title: output.title || output.type || '分析结果',
             data: (output.data || {}) as CanvasContentDataMap['report'],
@@ -321,6 +321,35 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
   }, [isAgentExecuting, executionProgress]);
 
+
+  useEffect(() => {
+    if (!browserState?.requiresAction) {
+      browserActionToastRef.current = null;
+      return;
+    }
+
+    const fingerprint = `${browserState.platform}:${browserState.state}:${browserState.message}:${browserState.actionHint || ''}`;
+    if (browserActionToastRef.current === fingerprint) {
+      return;
+    }
+
+    browserActionToastRef.current = fingerprint;
+    const platformNameMap: Record<string, string> = {
+      doubao: '豆包',
+      deepseek: 'DeepSeek',
+      kimi: 'Kimi',
+      hunyuan: '元宝',
+    };
+    const platformName = platformNameMap[browserState.platform] || browserState.platform;
+    const actionLabel = browserState.actionType === 'verify'
+      ? '\u89e6\u53d1\u4e86\u5b89\u5168\u9a8c\u8bc1'
+      : browserState.actionType === 'login'
+      ? '\u9700\u8981\u767b\u5f55'
+      : browserState.actionType === 'modal'
+      ? '\u51fa\u73b0\u4e86\u9875\u9762\u5f39\u6846'
+      : '\u9700\u8981\u4f60\u5728\u6d4f\u89c8\u5668\u7a97\u53e3\u4e2d\u64cd\u4f5c';
+    toast.info(`${platformName}${actionLabel}\uff0c\u7cfb\u7edf\u5df2\u5c1d\u8bd5\u5c06\u7a97\u53e3\u5207\u5230\u524d\u53f0\u3002`, 8000);
+  }, [browserState]);
   // Handle sending message
   const handleSendMessage = useCallback((content: string, _attachments?: unknown[], context?: ContextTag[]) => {
     if (!content.trim() || isAgentExecuting) return;
@@ -522,6 +551,16 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return undefined;
   };
 
+  const liveCurrentStage = isAgentExecuting
+    ? (executionProgress?.stage ?? activeTask?.current_stage)
+    : activeTask?.current_stage ?? executionProgress?.stage;
+  const liveProgress = isAgentExecuting
+    ? (executionProgress?.progress ?? activeTask?.progress)
+    : activeTask?.progress ?? executionProgress?.progress;
+  const liveProgressMessage = isAgentExecuting
+    ? (executionProgress?.details ?? activeTask?.progress_message)
+    : activeTask?.progress_message ?? executionProgress?.details;
+
   return (
     <div className={cn('relative flex flex-col h-full bg-[var(--bg-primary)]', className)}>
       {/* Cycle 3: Task status badge in header area */}
@@ -533,9 +572,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           <div className="flex-1" />
           <TaskStatusBadge
             status={activeTask?.status ?? 'running'}
-            currentStage={activeTask?.current_stage ?? executionProgress?.stage}
-            progress={activeTask?.progress ?? executionProgress?.progress}
-            progressMessage={activeTask?.progress_message ?? executionProgress?.details}
+            currentStage={liveCurrentStage}
+            progress={liveProgress}
+            progressMessage={liveProgressMessage}
             lightweightLabel={getLightweightLabel()}
           />
         </div>
@@ -556,6 +595,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             您的分析会安全继续，结果将被保留
           </span>
         </div>
+      )}
+      {browserState?.requiresAction && (
+        <BrowserActionBanner browserState={browserState} />
       )}
 
       {/* Message list */}
@@ -654,8 +696,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         value={inputValue}
         onChange={handleInputChange}
         placeholder={!isConnected ? '正在重新连接...' : undefined}
-        progressMessage={activeTask?.progress_message ?? executionProgress?.details}
+        progressMessage={liveProgressMessage}
       />
     </div>
   );
 }
+

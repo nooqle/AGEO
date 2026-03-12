@@ -1,15 +1,9 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import {
-  RiAlarmWarningLine,
-  RiDashboardLine,
-  RiEyeLine,
-  RiPieChartLine,
-  RiRobot2Line,
-} from '@remixicon/react';
+import { RiPieChartLine, RiRadarLine, RiRobot2Line } from '@remixicon/react';
 import { KPICard } from './KPICard';
 import { VisibilityTab } from './VisibilityTab';
 import { SourcesTab } from './SourcesTab';
@@ -19,6 +13,9 @@ import { MonitoringTab } from './MonitoringTab';
 import { HeroSection } from './HeroSection';
 import { BrandCards } from './BrandCards';
 import { CompetitorTable } from './CompetitorTable';
+import { DashboardBrandOverview, type DashboardBrandArchiveData } from './DashboardBrandOverview';
+import { DashboardHomeBoards, type DashboardBoardId } from './DashboardHomeBoards';
+import { DashboardBoardDialog } from './DashboardBoardDialog';
 import { useDashboardStore } from '@/stores/dashboardStore';
 import { useEntityStore } from '@/stores/entityStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -95,7 +92,11 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const searchParams = useSearchParams();
   const urlTab = searchParams.get('tab') as TabId | null;
   const initialTab = urlTab && TABS.some((tab) => tab.id === urlTab) ? urlTab : 'overview';
+  const isMonitoringMode = searchParams.get('tab') === 'monitoring';
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
+  const [activeBoard, setActiveBoard] = useState<DashboardBoardId | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [brandArchive, setBrandArchive] = useState<DashboardBrandArchiveData | null>(null);
   const { data, dateRange, selectedBrandId, setSelectedBrandId, fetchData } = useDashboardStore();
   const { entities, isLoading: entitiesLoading, fetchEntities } = useEntityStore();
   const { totalSessions, fetchSessionList } = useSessionStore();
@@ -112,6 +113,51 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   }, [dateRange, selectedBrandId, fetchData]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const fetchBrandArchive = async () => {
+      if (!selectedBrandId) {
+        setBrandArchive(null);
+        return;
+      }
+
+      try {
+        const session = await api.getSessionByEntity(selectedBrandId);
+        const outputs = await api.getOutputs(session.id);
+        const workflowOutput = [...outputs]
+          .filter((output) => output.type === 'workflow')
+          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+
+        if (!workflowOutput || cancelled) {
+          setBrandArchive(null);
+          return;
+        }
+
+        const raw = workflowOutput.data ?? {};
+        const brandProfile = (raw.brandProfile ?? raw.brand_profile ?? null) as DashboardBrandArchiveData['brandProfile'];
+        const competitors = Array.isArray(raw.competitors) ? raw.competitors : [];
+
+        if (!cancelled) {
+          setBrandArchive({
+            brandProfile,
+            competitors,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setBrandArchive(null);
+        }
+      }
+    };
+
+    void fetchBrandArchive();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBrandId]);
+
+  useEffect(() => {
     if (entities.length === 0) {
       if (selectedBrandId) setSelectedBrandId(null);
     } else if (!selectedBrandId || !entities.some((entity) => entity.id === selectedBrandId)) {
@@ -119,20 +165,28 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     }
   }, [selectedBrandId, entities, setSelectedBrandId]);
 
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
   const selectedBrand = entities.find((entity) => entity.id === selectedBrandId);
   const selectedBrandName = selectedBrand?.name;
   const fallbackOfficialDomain =
     selectedBrand?.domain?.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase() || '';
-  const officialDomain = data?.v2?.sources?.official_domain || fallbackOfficialDomain;
   const hasData = entities.length > 0;
   const isInitialLoading = entitiesLoading;
+  const kpi = data?.kpi;
+  const v2 = data?.v2;
+  const home = v2?.home;
+  const officialDomain = v2?.sources?.official_domain || fallbackOfficialDomain;
   const hasSelectedBrandAnalysis = Boolean(
-    selectedBrand?.lastAnalyzed ||
-      data?.v2?.overview?.status_summary ||
-      (data?.v2?.overview?.kpis ?? []).some((item) => item.value != null) ||
-      (data?.v2?.scenarios?.length ?? 0) > 0 ||
-      (data?.v2?.riskAction?.risks?.length ?? 0) > 0 ||
-      (data?.v2?.riskAction?.actions?.length ?? 0) > 0
+    home ||
+      selectedBrand?.lastAnalyzed ||
+      v2?.overview?.status_summary ||
+      (v2?.overview?.kpis ?? []).some((item) => item.value != null) ||
+      (v2?.scenarios?.length ?? 0) > 0 ||
+      (v2?.riskAction?.risks?.length ?? 0) > 0 ||
+      (v2?.riskAction?.actions?.length ?? 0) > 0
   );
 
   const handleOpenBrandAnalysis = async () => {
@@ -148,12 +202,15 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       const created = await api.createSession(selectedBrand.id);
       router.push(`/chat/${created.id}?brand=${encodeURIComponent(selectedBrand.name)}`);
     } catch {
-      toast.error('????????');
+      toast.error('打开品牌分析失败，请稍后重试。');
     }
   };
 
-  const kpi = data?.kpi;
-  const v2 = data?.v2;
+  const handleSelectBoard = (board: DashboardBoardId) => {
+    setActiveBoard(board);
+    setDialogOpen(true);
+  };
+
   const oldOfficialCitationRate = useMemo(() => {
     const allSources = data?.sources || [];
     const sourceTotalCount = allSources.reduce((sum, item) => sum + item.count, 0);
@@ -230,7 +287,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           },
         ];
 
-  const renderTab = () => {
+  const renderLegacyTab = () => {
     switch (activeTab) {
       case 'overview':
         return (
@@ -309,131 +366,163 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-auto">
-      <div className="px-6 py-4">
-        <div className="mb-4">
+    <div className="dashboard-page-bg relative flex flex-1 flex-col overflow-auto">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] opacity-80">
+        <div
+          className="absolute left-[8%] top-[-80px] h-[280px] w-[280px] rounded-full blur-3xl"
+          style={{ background: 'color-mix(in srgb, var(--color-primary) 12%, transparent)' }}
+        />
+        <div
+          className="absolute right-[12%] top-[20px] h-[240px] w-[240px] rounded-full blur-3xl"
+          style={{ background: 'color-mix(in srgb, #d5a159 14%, transparent)' }}
+        />
+      </div>
+
+      <div className="relative mx-auto w-full max-w-[1920px] px-5 py-6 lg:px-7 lg:py-8 2xl:px-10">
+        <div className="space-y-6">
           <HeroSection
             totalSessions={totalSessions}
             totalBrands={entities.length}
             isLoading={isInitialLoading}
             onNewAnalysis={onNewAnalysis ?? (() => {})}
           />
-        </div>
 
-        {hasData && hasSelectedBrandAnalysis && (
-          <div className="mb-8">
-            {selectedBrandName && (
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                  {selectedBrandName}
-                </span>
-                <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                  当前诊断面板
-                </span>
-              </div>
-            )}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-              {displayKpis.slice(0, 5).map((item) => (
-                <KPICard
-                  key={item.id}
-                  title={item.label}
-                  value={formatKpiValue(item)}
-                  subtitle={item.subtitle || 'Dashboard V2 指标'}
-                  tooltip={item.subtitle}
-                  trend={item.trend != null ? { value: item.trend, isPositive: item.trend >= 0, unit: item.trendUnit ?? item.unit } : null}
-                  actionLabel={getKpiActionLabel(item.targetTab)}
-                  onClick={() => setActiveTab(resolveTargetTab(item.targetTab))}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="mb-8">
           <BrandCards />
-        </div>
 
-        {!hasData && (
-          <motion.div
-            className="mb-8"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.2 }}
-          >
-            <h3 className="text-sm font-medium mb-4" style={{ color: 'var(--text-secondary)' }}>
-              分析完成后，您将看到
-            </h3>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {[
-                { icon: RiEyeLine, title: '场景覆盖', desc: '识别品牌已经进入回答的关键场景' },
-                { icon: RiDashboardLine, title: '竞品争夺', desc: '定位被竞品抢走的重点场景' },
-                { icon: RiPieChartLine, title: '信息源结构', desc: '判断官网是否进入 AI 引用链路' },
-                { icon: RiAlarmWarningLine, title: '风险与动作', desc: '把缺口收束成可执行的优先动作' },
-              ].map((item) => (
-                <div
-                  key={item.title}
-                  className="rounded-xl p-5 text-center"
-                  style={{
-                    background: 'var(--bg-tertiary)',
-                    border: '1px dashed var(--border-subtle)',
-                    opacity: 0.7,
-                  }}
-                >
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center mx-auto mb-3"
-                    style={{ background: 'var(--bg-elevated)' }}
+          {!hasData && (
+            <motion.div
+              className="rounded-[24px] border bg-[var(--bg-tertiary)] px-6 py-6"
+              style={{ borderColor: 'var(--border-subtle)' }}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35 }}
+            >
+              <div className="border-b border-[var(--border-subtle)] pb-4">
+                <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">首页看板</div>
+                <div className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">分析完成后，这里会出现三张首页看板。</div>
+                <p className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">首页只回答三个问题：品牌有没有被提及、内容有没有进入答案、整体战况轮廓如何。</p>
+              </div>
+              <div className="mt-5 grid gap-4 xl:grid-cols-3">
+                {[
+                  { icon: RiRobot2Line, title: '提及率看板', desc: '看品牌在哪些问题进入答案，以及四个平台提及时的语气。' },
+                  { icon: RiPieChartLine, title: '内容引用率看板', desc: '看被引用的品牌内容来自官网还是第三方站点。' },
+                  { icon: RiRadarLine, title: '五维雷达看板', desc: '看品牌在行业影响、人群覆盖、场景覆盖、风险和积极情绪上的表现。' },
+                ].map((item) => (
+                  <div key={item.title} className="rounded-[20px] border bg-[var(--bg-elevated)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-[var(--bg-tertiary)]">
+                      <item.icon className="h-5 w-5" style={{ color: 'var(--color-primary)' }} />
+                    </div>
+                    <div className="mt-4 text-[17px] font-semibold text-[var(--text-primary)]">{item.title}</div>
+                    <div className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">{item.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+
+          {hasData && !hasSelectedBrandAnalysis && selectedBrand && (
+            <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
+              <EmptyState
+                icon={RiRobot2Line}
+                title={`${selectedBrand.name} 尚未开始分析`}
+                description="这个品牌还没有形成首页看板。先进入对话分析，完成首次采集后，这里才会出现提及率、内容引用率和五维雷达。"
+                action={{
+                  label: '进入首次分析',
+                  onClick: () => {
+                    void handleOpenBrandAnalysis();
+                  },
+                }}
+              />
+            </motion.div>
+          )}
+
+          {hasData && isMonitoringMode && selectedBrand && (
+            <div className="space-y-5">
+              <section className="rounded-[24px] border bg-[var(--bg-tertiary)] px-6 py-5" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">持续监测</div>
+                    <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">{selectedBrand.name} 的持续监测</h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => router.push('/dashboard')}
+                    className="rounded-full border px-4 py-2 text-[13px] font-medium"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
                   >
-                    <item.icon className="w-5 h-5" style={{ color: 'var(--text-tertiary)' }} />
-                  </div>
-                  <div className="text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    {item.title}
-                  </div>
-                  <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                    {item.desc}
-                  </div>
+                    返回首页看板
+                  </button>
                 </div>
-              ))}
+              </section>
+              <MonitoringTab entityId={selectedBrandId} brandName={selectedBrandName} contextCopy={v2?.monitoring_context_copy} />
             </div>
-          </motion.div>
-        )}
+          )}
 
-        {hasData && !hasSelectedBrandAnalysis && selectedBrand && (
-          <motion.div
-            className="mb-8"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35 }}
-          >
-            <EmptyState
-              icon={RiRobot2Line}
-              title={`${selectedBrand.name} 尚未开始分析`}
-              description="这个品牌还没有生成任何品牌诊断结果。先进入对话分析，完成首次采集后，这里才会显示场景、竞品争夺、风险与动作。"
-              action={{
-                label: '进入首次分析',
-                onClick: () => { void handleOpenBrandAnalysis(); },
-              }}
-            />
-          </motion.div>
-        )}
-
-        {hasData && hasSelectedBrandAnalysis && (
-          <div className="space-y-6">
-            <div className="flex flex-wrap gap-2">
-              {TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`px-3 py-1.5 rounded-full text-sm transition-colors ${activeTab === tab.id ? 'text-white' : 'text-[var(--text-secondary)]'}`}
-                  style={activeTab === tab.id ? { background: 'var(--color-primary)' } : { background: 'var(--bg-tertiary)' }}
-                >
-                  {tab.label}
-                </button>
-              ))}
+          {hasData && hasSelectedBrandAnalysis && !isMonitoringMode && home && (
+            <div className="space-y-6">
+              {selectedBrand && <DashboardBrandOverview entity={selectedBrand} archive={brandArchive} />}
+              <DashboardHomeBoards home={home} onSelectBoard={handleSelectBoard} />
+              <DashboardBoardDialog open={dialogOpen} board={activeBoard} home={home} onClose={() => setDialogOpen(false)} />
             </div>
-            {renderTab()}
-          </div>
-        )}
+          )}
+
+          {hasData && hasSelectedBrandAnalysis && !isMonitoringMode && !home && (
+            <div className="space-y-6">
+              <section className="rounded-[24px] border bg-[var(--bg-tertiary)] px-6 py-5" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div>
+                  <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">兼容模式</div>
+                  <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">当前显示历史诊断面板</h2>
+                  <p className="mt-2 max-w-3xl text-[14px] leading-7 text-[var(--text-secondary)]">
+                    这个品牌已有历史分析结果，但首页三看板数据暂未就绪，所以先回退到旧版 dashboard 视图，避免页面空白。
+                  </p>
+                </div>
+              </section>
+
+              <div>
+                {selectedBrandName && (
+                  <div className="mb-3 flex items-center gap-2">
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                      {selectedBrandName}
+                    </span>
+                    <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                      当前诊断面板
+                    </span>
+                  </div>
+                )}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+                  {displayKpis.slice(0, 5).map((item) => (
+                    <KPICard
+                      key={item.id}
+                      title={item.label}
+                      value={formatKpiValue(item)}
+                      subtitle={item.subtitle || 'Dashboard V2 指标'}
+                      tooltip={item.subtitle}
+                      trend={item.trend != null ? { value: item.trend, isPositive: item.trend >= 0, unit: item.trendUnit ?? item.unit } : null}
+                      actionLabel={getKpiActionLabel(item.targetTab)}
+                      onClick={() => setActiveTab(resolveTargetTab(item.targetTab))}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {TABS.filter((tab) => tab.id !== 'monitoring').map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`rounded-full px-3 py-1.5 text-sm transition-colors ${activeTab === tab.id ? 'text-white' : 'text-[var(--text-secondary)]'}`}
+                    style={activeTab === tab.id ? { background: 'var(--color-primary)' } : { background: 'var(--bg-tertiary)' }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {renderLegacyTab()}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
