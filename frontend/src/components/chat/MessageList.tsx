@@ -3,7 +3,13 @@
 import { Message as MessageType } from '@/types/message';
 import { Message } from './Message';
 import { cn } from '@/lib/cn';
-import { ExampleBrand, FEATURE_HIGHLIGHTS } from '@/config/brands';
+import { ExampleBrand, FEATURE_HIGHLIGHTS, FeatureHighlight } from '@/config/brands';
+import { ThemedLogo } from '@/components/ui/ThemedLogo';
+import {
+  RiCompassDiscoverLine,
+  RiBookMarkedLine,
+  RiSwordLine,
+} from '@remixicon/react';
 
 interface MessageListProps {
   messages: MessageType[];
@@ -67,6 +73,24 @@ interface EmptyStateProps {
   onBrandClick?: (brandName: string) => void;
 }
 
+function FeatureIcon({ feature }: { feature: FeatureHighlight }) {
+  const commonProps = {
+    size: 20,
+    className: 'text-[var(--color-brand-primary)]',
+  };
+
+  switch (feature.key) {
+    case 'brandMention':
+      return <RiCompassDiscoverLine {...commonProps} />;
+    case 'contentCitation':
+      return <RiBookMarkedLine {...commonProps} />;
+    case 'competitionScene':
+      return <RiSwordLine {...commonProps} />;
+    default:
+      return <RiCompassDiscoverLine {...commonProps} />;
+  }
+}
+
 function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
   const brands = exampleBrands?.length ? exampleBrands : [];
 
@@ -86,16 +110,16 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
 
   return (
     <div className="flex flex-col items-center justify-center py-20 px-4">
-      <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mb-6 shadow-lg">
-        <span className="text-4xl">🔍</span>
+      <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[0_20px_50px_rgba(99,102,241,0.12)]">
+        <ThemedLogo size={42} />
       </div>
 
       <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2 text-center">
-        欢迎使用 Specta AI 智能分析
+        欢迎使用 Specta AI 智能分析助手
       </h2>
 
       <p className="text-[var(--text-secondary)] text-center mb-8 max-w-md">
-        输入品牌名称，AI 将自动分析该品牌在主流 AI 平台的声量表现，并生成优化建议
+        快速看清品牌在 AI 答案里的位置。
       </p>
 
       {brands.length > 0 && (
@@ -116,7 +140,11 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
       <div className="mt-12 grid grid-cols-3 gap-8 text-center">
         {FEATURE_HIGHLIGHTS.map((feature) => (
           <div key={feature.title} className="text-[var(--text-tertiary)]">
-            <div className="text-2xl mb-2">{feature.icon}</div>
+            <div className="mb-3 flex justify-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[0_10px_24px_rgba(99,102,241,0.08)]">
+                <FeatureIcon feature={feature} />
+              </div>
+            </div>
             <div className="font-medium text-[var(--text-secondary)]">{feature.title}</div>
             <div className="text-xs">{feature.desc}</div>
           </div>

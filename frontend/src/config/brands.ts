@@ -8,6 +8,12 @@ export interface ExampleBrand {
   emoji: string;
 }
 
+export interface FeatureHighlight {
+  key: 'brandMention' | 'contentCitation' | 'competitionScene';
+  title: string;
+  desc: string;
+}
+
 // Default example brands - can be fetched from API in production
 export const DEFAULT_EXAMPLE_BRANDS: ExampleBrand[] = [
   { name: '观夏', emoji: '🌸' },
@@ -17,10 +23,10 @@ export const DEFAULT_EXAMPLE_BRANDS: ExampleBrand[] = [
 ];
 
 // Feature highlights shown in empty state
-export const FEATURE_HIGHLIGHTS = [
-  { icon: '📊', title: '声量分析', desc: '多平台数据采集' },
-  { icon: '👥', title: '画像洞察', desc: '精准用户分析' },
-  { icon: '📈', title: '优化建议', desc: '可落地执行方案' },
+export const FEATURE_HIGHLIGHTS: FeatureHighlight[] = [
+  { key: 'brandMention', title: '品牌提及', desc: '看品牌被哪些问题提及' },
+  { key: 'contentCitation', title: '内容引用', desc: '看哪些内容真正进入答案' },
+  { key: 'competitionScene', title: '竞争场景', desc: '看哪些竞品正在抢占位置' },
 ];
 
 // Input area placeholders
