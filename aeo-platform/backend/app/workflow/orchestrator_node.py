@@ -647,6 +647,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             "问题已经在之前的步骤中生成，无需重新生成。"
         )
 
+    if tool_name == "data_analytics":
         current_mode = state.get("analysis_mode", "persona")
         if current_mode == "baseline":
             metrics = state.get("baseline_metrics") or state.get("metrics")
@@ -738,6 +739,13 @@ def _build_ask_user_fallback_reply(
             "如果您希望继续，我会根据您选择的模式开始采集并在完成后继续分析。"
         )
 
+    if tool_name == "data_analytics":
+        return (
+            "分析报告已生成。"
+            "如果您希望，我可以继续陪您查看关键发现、对比历史表现，"
+            "或者围绕某个具体场景深入拆解。"
+        )
+
     return message or "请继续告诉我您的选择。"
 
 
@@ -774,6 +782,20 @@ async def _force_fetch_mode_confirmation(
         },
     ]
     defense_msg = "问题模拟已完成，请选择采集模式："
+    visible_reply = reply_text.strip() or _build_ask_user_fallback_reply(
+        state,
+        "question_simulation",
+        defense_msg,
+    )
+    if visible_reply and not reply_text.strip():
+        await send_reply_event(
+            session_id,
+            visible_reply,
+            is_delta=True,
+            is_new_round=True,
+        )
+        await send_reply_event(session_id, "", is_complete=True)
+
     await manager.emit_to_session(
         session_id,
         "inline_confirmation",
@@ -804,7 +826,7 @@ async def _force_fetch_mode_confirmation(
         goto="wait_for_user",
         update={
             "awaiting_user": True,
-            "orchestrator_reply": reply_text,
+            "orchestrator_reply": visible_reply,
             "orchestrator_history": new_history,
             "user_decisions": user_decisions,
             "pending_confirmation": {
