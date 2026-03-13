@@ -3,12 +3,11 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { RiTimeLine, RiMoreLine, RiDeleteBinLine, RiEditLine } from '@remixicon/react';
+import { RiTimeLine, RiMoreLine, RiDeleteBinLine } from '@remixicon/react';
 import { cn } from '@/lib/cn';
-import { ArtifactNav } from './ArtifactNav';
 import { NotificationBell } from '@/components/notifications/NotificationBell';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
-import { ThemedLogo } from '@/components/ui/ThemedLogo';
+import { HomeBrandLink } from './HomeBrandLink';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
@@ -156,16 +155,7 @@ export function ChatSidebar({
         className="flex items-center justify-between p-3"
         style={{ borderBottom: '1px solid var(--border-subtle)' }}
       >
-        <button
-          onClick={() => router.push('/dashboard')}
-          className="flex items-center gap-2 p-1 rounded-lg transition-colors"
-          title="返回数据面板"
-          style={{ color: 'var(--text-primary)' }}
-          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-        >
-          <ThemedLogo size={24} />
-        </button>
+        <HomeBrandLink size={24} showSubtitle={false} requireConfirm className="flex items-center gap-2 rounded-lg p-1 transition-colors" />
         <div className="flex items-center gap-1">
           <ThemeToggle />
           <NotificationBell align="left" />

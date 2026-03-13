@@ -16,10 +16,15 @@ import {
   RiChatForwardLine,
   RiHistoryLine,
   RiShieldCheckLine,
+  RiLinkM,
+  RiSparklingLine,
 } from '@remixicon/react';
 import { CanvasContent } from '@/types/canvas';
 import { useCanvasStore } from '@/stores/canvasStore';
+import { useConversationStore } from '@/stores/conversationStore';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 
 interface CanvasHeaderProps {
   content: CanvasContent;
@@ -40,10 +45,17 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const [copied, setCopied] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
+  const [artifactInputOpen, setArtifactInputOpen] = useState(false);
+  const [artifactInputValue, setArtifactInputValue] = useState('');
+  const sendArtifactAction = useConversationStore((state) => state.wsArtifactAction);
 
   const versions = useMemo(() => content.versions || [], [content.versions]);
   const hasVersions = versions.length > 0;
   const isViewingHistory = content.currentVersionIndex >= 0;
+  const isConfidenceSignal = content.type === 'report' && content.data?.report_kind === 'confidence_signal';
+  const confidenceComposer = isConfidenceSignal ? content.data?.composer : undefined;
+  const confidenceStatus = isConfidenceSignal ? content.data?.status : undefined;
+  const isArtifactActionRunning = confidenceStatus?.phase === 'running';
 
   // Determine which linkedMessageId to use for "jump to conversation"
   const activeLinkedMessageId = useMemo(() => {
@@ -84,6 +96,16 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
     window.dispatchEvent(new CustomEvent('scroll-to-message', {
       detail: { messageId: activeLinkedMessageId },
     }));
+  };
+
+  const handleArtifactSubmit = () => {
+    const rawInput = artifactInputValue.trim();
+    if (!sendArtifactAction || !rawInput || !isConfidenceSignal || isArtifactActionRunning) {
+      return;
+    }
+    sendArtifactAction(content.id, 'extra_evaluate', { raw_input: rawInput });
+    setArtifactInputValue('');
+    setArtifactInputOpen(false);
   };
 
   // Copy content to clipboard
@@ -247,6 +269,22 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
 
         {/* Right: Action buttons */}
         <div className="flex items-center gap-1">
+          {isConfidenceSignal ? (
+            <button
+              onClick={() => setArtifactInputOpen(true)}
+              className="mr-2 inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium transition-all duration-200 active:scale-95"
+              style={{
+                borderColor: 'var(--border-subtle)',
+                color: 'var(--text-primary)',
+                backgroundColor: 'var(--bg-secondary)',
+              }}
+              title="额外评估"
+            >
+              <RiSparklingLine className="h-3.5 w-3.5" />
+              额外评估
+            </button>
+          ) : null}
+
           {/* Copy button */}
           <button
             onClick={handleCopy}
@@ -503,6 +541,64 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
           )}
         </div>
       )}
+
+      {artifactInputOpen && isConfidenceSignal ? (
+        <div className={modalScrimClassName('z-40 flex items-center justify-center px-4 py-6')}>
+          <div
+            className="w-full max-w-[640px] rounded-[24px] border bg-[var(--bg-primary)] p-5 shadow-[0_24px_60px_rgba(15,23,42,0.28)]"
+            style={{ borderColor: 'var(--border-subtle)' }}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-[18px] font-semibold text-[var(--text-primary)]">额外评估</div>
+                <div className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">
+                  在当前置信度报告中追加一个链接或一段文本，系统会把结果写回当前交付物。
+                </div>
+              </div>
+              <button
+                onClick={() => setArtifactInputOpen(false)}
+                className="rounded-lg p-2 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+                title="关闭"
+              >
+                <RiCloseLine className="h-4 w-4" />
+              </button>
+            </div>
+
+            <textarea
+              value={artifactInputValue}
+              onChange={(event) => setArtifactInputValue(event.target.value)}
+              placeholder={confidenceComposer?.placeholder || '粘贴链接或文本，生成额外评估'}
+              className="mt-5 min-h-[180px] w-full resize-y rounded-[18px] border bg-[var(--bg-secondary)] px-4 py-4 text-[14px] leading-7 text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--brand-primary)]"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            />
+
+            <div className="mt-3 flex flex-wrap gap-2 text-[12px] text-[var(--text-tertiary)]">
+              <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1.5">支持链接</span>
+              <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1.5">支持文本</span>
+              <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1.5">不支持混合提交</span>
+            </div>
+
+            <div className="mt-4 flex items-center justify-between gap-4">
+              <div className="text-[12px] leading-6 text-[var(--text-secondary)]">
+                {confidenceComposer?.helper_text || '支持单个链接、多个链接或一段文本；当前不支持问题抓取命令。'}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" onClick={() => setArtifactInputOpen(false)}>
+                  取消
+                </Button>
+                <Button
+                  onClick={handleArtifactSubmit}
+                  disabled={!confidenceComposer?.enabled || !sendArtifactAction || !artifactInputValue.trim() || isArtifactActionRunning}
+                  isLoading={isArtifactActionRunning}
+                  leftIcon={<RiLinkM className="h-4 w-4" />}
+                >
+                  开始评估
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

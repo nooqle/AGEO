@@ -1039,17 +1039,74 @@ def build_aggregate_findings(
     ]
 
 
+def _collect_brand_keywords(brand_profile: dict[str, Any] | None) -> list[str]:
+    if not brand_profile:
+        return []
+
+    keywords: list[str] = []
+    for key in ("brand_name", "brand_name_en"):
+        value = str(brand_profile.get(key, "") or "").strip()
+        if value:
+            keywords.append(value)
+    for key in ("brand_keywords", "core_products"):
+        raw = brand_profile.get(key) or []
+        if isinstance(raw, list):
+            keywords.extend(str(item).strip() for item in raw if str(item).strip())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for keyword in keywords:
+        lowered = keyword.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(keyword)
+    return deduped
+
+
+def _collect_competitor_names(competitors: list[dict[str, Any]] | None) -> list[str]:
+    if not competitors:
+        return []
+
+    names: list[str] = []
+    for competitor in competitors:
+        if not isinstance(competitor, dict):
+            continue
+        for key in ("name", "name_en"):
+            value = str(competitor.get(key, "") or "").strip()
+            if value:
+                names.append(value)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        lowered = name.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(name)
+    return deduped
+
+
 def _compose_report_payload(
     auto_items: list[dict[str, Any]],
     manual_items: list[dict[str, Any]],
+    *,
+    brand_profile: dict[str, Any] | None = None,
+    competitors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     summary = summarize_signal_items(auto_items, manual_items)
+    brand_keywords = _collect_brand_keywords(brand_profile)
+    competitor_names = _collect_competitor_names(competitors)
     return {
         "report_kind": "confidence_signal",
         "artifact_kind": "confidence_signal",
         "headline": "置信度信号",
         "subtitle": "围绕 A4 抓取答案中的引用来源，按 AICE 9C 维度生成一个可持续追加的可信信号工作面板。",
         "description": "每条来源均输出 AICE 维度得分、置信度和可执行修改建议；当前网页结构维度在未抓取 DOM 时按保守逻辑处理。",
+        "brand_name": str((brand_profile or {}).get("brand_name", "") or ""),
+        "brand_keywords": brand_keywords,
+        "competitor_names": competitor_names,
         "updated_at": summary["updated_at"],
         "metrics": {
             "引用来源数": summary["total_citations"],
@@ -1078,20 +1135,34 @@ def build_confidence_signal_report(
     fetch_results: list[dict[str, Any]] | None,
     *,
     manual_items: list[dict[str, Any]] | None = None,
+    brand_profile: dict[str, Any] | None = None,
+    competitors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     auto_items = extract_citations(fetch_results)
     manual_items = manual_items or []
-    return _compose_report_payload(auto_items, manual_items)
+    return _compose_report_payload(
+        auto_items,
+        manual_items,
+        brand_profile=brand_profile,
+        competitors=competitors,
+    )
 
 
 async def build_confidence_signal_report_async(
     fetch_results: list[dict[str, Any]] | None,
     *,
     manual_items: list[dict[str, Any]] | None = None,
+    brand_profile: dict[str, Any] | None = None,
+    competitors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     auto_items = extract_citations(fetch_results)
     auto_items = await _enrich_url_items(auto_items)
-    return _compose_report_payload(auto_items, manual_items or [])
+    return _compose_report_payload(
+        auto_items,
+        manual_items or [],
+        brand_profile=brand_profile,
+        competitors=competitors,
+    )
 
 
 def parse_extra_input(raw_input: str) -> tuple[str, Any]:
@@ -1194,7 +1265,18 @@ async def append_manual_items_async(
 
     merged_manual = current_manual_items + new_items
     auto_items = list(existing_report.get("auto_items", []) or [])
-    updated = _compose_report_payload(auto_items, merged_manual)
+    updated = _compose_report_payload(
+        auto_items,
+        merged_manual,
+        brand_profile={
+            "brand_name": existing_report.get("brand_name", ""),
+            "brand_keywords": existing_report.get("brand_keywords", []) or [],
+        },
+        competitors=[
+            {"name": name}
+            for name in list(existing_report.get("competitor_names", []) or [])
+        ],
+    )
     updated["status"] = {
         "phase": "ready",
         "message": "额外评估已完成",
@@ -1205,11 +1287,18 @@ async def append_manual_items_async(
 async def generate_confidence_signal_artifact(
     session_id: str,
     fetch_results: list[dict[str, Any]] | None,
+    *,
+    brand_profile: dict[str, Any] | None = None,
+    competitors: list[dict[str, Any]] | None = None,
 ) -> None:
     """Generate the independent A7 confidence signal artifact from A4 data."""
     from app.workflow.events import save_and_send_artifact
 
-    report_data = await build_confidence_signal_report_async(fetch_results)
+    report_data = await build_confidence_signal_report_async(
+        fetch_results,
+        brand_profile=brand_profile,
+        competitors=competitors,
+    )
     await save_and_send_artifact(
         session_id=session_id,
         output_type="report",

@@ -26,7 +26,7 @@ const SECTION_TONES: Record<'good' | 'bad', { label: string; style: CSSPropertie
   },
 };
 
-function renderItem(item: InsightSectionItem, index: number, tone: 'good' | 'bad') {
+function renderItem(item: InsightSectionItem, index: number) {
   return (
     <article key={`${item.title}-${item.scenario || index}`} className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-4 py-4">
       <h3 className="text-[15px] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">{item.title}</h3>
@@ -63,9 +63,9 @@ function renderItem(item: InsightSectionItem, index: number, tone: 'good' | 'bad
         </div>
       )}
 
-      {tone === 'bad' && item.improvement_hint && (
+      {item.improvement_hint && (
         <div className="mt-4 rounded-[16px] bg-[var(--bg-secondary)] px-4 py-3 text-[13px] leading-7 text-[var(--text-secondary)]">
-          <span className="font-medium text-[var(--text-primary)]">改进提示：</span>
+          <span className="font-medium text-[var(--text-primary)]">下一步建议：</span>
           {item.improvement_hint}
         </div>
       )}
@@ -105,7 +105,7 @@ export function InsightSection({ data }: InsightSectionProps) {
               暂未识别出明确优势。
             </div>
           ) : (
-            strengths.map((item, index) => renderItem(item, index, 'good'))
+            strengths.map((item, index) => renderItem(item, index))
           )}
         </div>
 
@@ -116,7 +116,7 @@ export function InsightSection({ data }: InsightSectionProps) {
               暂未识别出明确补强问题。
             </div>
           ) : (
-            weaknesses.map((item, index) => renderItem(item, index, 'bad'))
+            weaknesses.map((item, index) => renderItem(item, index))
           )}
         </div>
       </div>

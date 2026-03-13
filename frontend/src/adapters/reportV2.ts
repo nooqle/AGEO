@@ -1235,6 +1235,14 @@ function normalizeInsightsForReport(
       officialCitationPresent: boolean;
     }
   >();
+  const competitorsByScenario = new Map<
+    string,
+    {
+      scenario: string;
+      competitors: string[];
+      platforms: string[];
+    }
+  >();
 
   for (const item of mentions.brand_mentions ?? []) {
     const key = item.scenario_id || item.scenario_label;
@@ -1261,38 +1269,82 @@ function normalizeInsightsForReport(
     row.officialCitationPresent = row.officialCitationPresent || Boolean(item.official_citation_present);
   }
 
-  const strengths = [...groupedByScenario.values()]
-    .filter((item) => item.positive > 0 || item.officialCitationPresent)
-    .sort((a, b) => (b.positive + (b.officialCitationPresent ? 1 : 0)) - (a.positive + (a.officialCitationPresent ? 1 : 0)))
-    .slice(0, 4)
-    .map((item) => ({
-      title: item.scenario,
-      scenario: item.scenario,
-      evidence:
-        item.officialCitationPresent
-          ? `该问题中品牌已进入答案，且已有品牌官网或品牌自有内容被引用。`
-          : item.positive > 0
-          ? `该问题中品牌已进入答案，提及时的语气偏正向。`
-          : sanitizeCustomerText(item.evidence),
-      platforms: item.platforms,
-      citation_domains: item.citationDomains,
-      official_citation_present: item.officialCitationPresent,
-    }));
+  for (const item of mentions.competitor_mentions ?? []) {
+    const key = item.scenario_id || item.scenario_label;
+    if (!key) continue;
+    if (!competitorsByScenario.has(key)) {
+      competitorsByScenario.set(key, {
+        scenario: item.scenario_label,
+        competitors: [],
+        platforms: [],
+      });
+    }
+    const row = competitorsByScenario.get(key)!;
+    row.competitors = uniqueStrings([...row.competitors, item.competitor]);
+    row.platforms = uniqueStrings([...row.platforms, item.platform]);
+  }
+
+  const strongestScenario = [...groupedByScenario.values()]
+    .filter((item) => item.positive > 0 || item.officialCitationPresent || item.platforms.length > 1)
+    .sort(
+      (a, b) =>
+        b.platforms.length * 10 +
+        b.positive * 3 +
+        (b.officialCitationPresent ? 4 : 0) -
+        (a.platforms.length * 10 + a.positive * 3 + (a.officialCitationPresent ? 4 : 0)),
+    )[0];
+
+  const strengths = strongestScenario
+    ? [{
+        title: strongestScenario.scenario,
+        scenario: strongestScenario.scenario,
+        evidence: strongestScenario.officialCitationPresent
+          ? `这个场景里品牌已经稳定进入回答，并且已有品牌自有内容被引用，说明当前表达方式已经开始被 AI 采纳。`
+          : `这个场景里品牌已经稳定进入回答，在 ${strongestScenario.platforms.length} 个平台出现，属于当前可继续放大的优势场景。`,
+        platforms: strongestScenario.platforms,
+        citation_domains: strongestScenario.citationDomains,
+        official_citation_present: strongestScenario.officialCitationPresent,
+        improvement_hint:
+          '下一步建议：打开引用内容置信度报告，优先检查这个场景里哪些高置信度内容被采纳了，再围绕同一表述扩展到相邻问题，放大已有优势。',
+      }]
+    : [];
 
   const riskWeaknesses = (risks.items ?? [])
     .filter((item) => isMeaningfulQuestionLabel(item.scenario_label))
-    .slice(0, 4)
-    .map((item) => ({
-      title: item.scenario_label || '待补强问题',
-      scenario: item.scenario_label,
-      evidence: sanitizeCustomerText(item.reason) || sanitizeCustomerText(item.impact_summary),
-      improvement_hint: sanitizeCustomerText(item.evidence) || sanitizeCustomerText(item.recommended_action_ref),
-    }));
+    .map((item) => {
+      const key = item.risk_id || item.scenario_label || '';
+      const competitors = competitorsByScenario.get(key)?.competitors || competitorsByScenario.get(item.scenario_label || '')?.competitors || [];
+      const platforms = competitorsByScenario.get(key)?.platforms || competitorsByScenario.get(item.scenario_label || '')?.platforms || [];
+      const competitorLabel = competitors.length > 0 ? competitors.join('、') : '竞品';
+
+      let evidence = sanitizeCustomerText(item.reason) || sanitizeCustomerText(item.impact_summary) || '该场景已经出现明显竞争压力。';
+      let improvementHint =
+        '下一步建议：进入用户画像分析，拆开这个问题背后的人群、预算和使用场景，再围绕最有价值的细分场景补充对比页、FAQ 和案例内容。';
+
+      if (item.risk_type === 'no_official_citation') {
+        evidence = `品牌虽然已经被提及，但当前答案主要依赖第三方内容，官方信息链路还没有稳定进入回答。`;
+        improvementHint =
+          '下一步建议：先看置信度报告，确认当前被采纳的是哪些第三方高置信度内容；再把这些表达补成官网或自有内容版本，争取把引用链路收回到官方。';
+      } else if (item.risk_type === 'competitor_substitution' || item.risk_type === 'missing_presence') {
+        evidence = `${competitorLabel} 已经在这个场景先进入答案，品牌当前还没有稳定站住。`;
+        improvementHint =
+          '下一步建议：从用户画像里继续下钻，找到这个场景下真正被抢走的是哪类人群与需求，再针对对应细分场景补强内容和对比表达。';
+      }
+
+      return {
+        title: item.scenario_label || '待补强问题',
+        scenario: item.scenario_label,
+        evidence,
+        platforms,
+        improvement_hint: improvementHint,
+      };
+    })
+    .slice(0, 2);
 
   return {
     title: '当前优势与补强',
-    description: '把已经站住的问题和仍需补强的具体问题分开看，方便直接转成动作。',
-    summary: undefined,
+    description: '这里只保留最值得立刻行动的场景，直接对应你下一步该看置信度，还是该继续做用户画像下钻。',
+    summary: '先守住已经站住的优势场景，再把有竞争压力的场景拆到更细的人群和需求层继续优化。',
     strengths,
     weaknesses: riskWeaknesses,
   };

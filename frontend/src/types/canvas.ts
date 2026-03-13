@@ -432,6 +432,8 @@ export type ReportCanvasData = CanvasPreviewData & {
   aggregate_findings?: ConfidenceSignalFinding[];
   composer?: ConfidenceSignalComposerState;
   status?: ConfidenceSignalStatus;
+  brand_keywords?: string[];
+  competitor_names?: string[];
 };
 export type ChartSeries = { key: string; name: string };
 export type ChartDataItem = Record<string, string | number>;

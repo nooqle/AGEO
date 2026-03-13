@@ -7,6 +7,7 @@ import { useCanvasStore } from '@/stores/canvasStore';
 import { useResponsive } from '@/hooks/useResponsive';
 import { MobileDrawer } from './MobileDrawer';
 import { ArtifactNav } from './ArtifactNav';
+import { HomeBrandLink } from './HomeBrandLink';
 import { cn } from '@/lib/cn';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
 
@@ -125,17 +126,25 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
           {/* Mobile hamburger menu button */}
           {isMobile && hasSidebar && (
             <div
-              className="flex items-center px-3 py-2 flex-shrink-0"
+              className="flex items-center justify-between px-3 py-2 flex-shrink-0"
               style={{ borderBottom: '1px solid var(--border-subtle)' }}
             >
-              <button
-                onClick={() => setMobileDrawerOpen(true)}
-                className="p-2 rounded-lg transition-colors cursor-pointer"
-                style={{ color: 'var(--text-secondary)' }}
-                title="菜单"
-              >
-                <RiMenuLine className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setMobileDrawerOpen(true)}
+                  className="p-2 rounded-lg transition-colors cursor-pointer"
+                  style={{ color: 'var(--text-secondary)' }}
+                  title="菜单"
+                >
+                  <RiMenuLine className="w-5 h-5" />
+                </button>
+                <HomeBrandLink
+                  size={24}
+                  showSubtitle={false}
+                  requireConfirm
+                  className="flex items-center gap-2 rounded-lg p-1 transition-colors"
+                />
+              </div>
             </div>
           )}
           {children}

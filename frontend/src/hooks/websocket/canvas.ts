@@ -261,6 +261,12 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
       status: isRecord(data.status)
         ? (data.status as CanvasContentDataMap['report']['status'])
         : undefined,
+      brand_keywords: Array.isArray(data.brand_keywords)
+        ? data.brand_keywords.filter((item): item is string => typeof item === 'string')
+        : undefined,
+      competitor_names: Array.isArray(data.competitor_names)
+        ? data.competitor_names.filter((item): item is string => typeof item === 'string')
+        : undefined,
     } as CanvasContentDataMap[T];
   }
 

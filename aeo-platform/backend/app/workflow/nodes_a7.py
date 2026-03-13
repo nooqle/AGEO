@@ -48,6 +48,8 @@ async def a7_confidence_signal_node(state: AgentState) -> Command:
         await generate_confidence_signal_artifact(
             session_id=session_id,
             fetch_results=fetch_results,
+            brand_profile=state.get("brand_profile"),
+            competitors=state.get("competitors"),
         )
 
         await send_progress_event(

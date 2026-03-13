@@ -39,6 +39,14 @@ type ScenarioGroup = {
   officialCitationPresent: boolean;
 };
 
+type ScenarioActionCard = {
+  scenario_id: string;
+  scenario_label: string;
+  reason: string;
+  action: string;
+  platforms: string[];
+};
+
 function cleanNarrativeText(value: string | undefined): string {
   if (!value) return '';
   return value
@@ -119,27 +127,36 @@ function groupMentionsByScenario(items: DashboardMentionItem[]) {
     });
 }
 
-function buildStrongScenarios(groups: ScenarioGroup[]) {
-  return groups
-    .filter((item) => item.positive > 0 || item.officialCitationPresent)
-    .slice(0, 4)
-    .map((item) => ({
-      scenario_id: item.scenarioId,
-      scenario_label: item.scenarioLabel,
-      reason: item.officialCitationPresent
-        ? '该问题中品牌已进入答案，且答案引用了品牌官网或品牌自有内容。'
-        : item.positive > item.negative
-          ? '该问题中品牌已进入答案，且提及时的语气偏正向。'
-          : '该问题中品牌已进入答案，并具备继续放大的基础。',
-      platforms: Array.from(item.platforms.keys()),
-    }));
+function buildStrongScenarios(groups: ScenarioGroup[]): ScenarioActionCard[] {
+  const strongest = groups
+    .filter((item) => item.positive > 0 || item.officialCitationPresent || item.platforms.size > 1)
+    .sort(
+      (a, b) =>
+        b.platforms.size * 10 +
+        b.positive * 3 +
+        (b.officialCitationPresent ? 4 : 0) -
+        (a.platforms.size * 10 + a.positive * 3 + (a.officialCitationPresent ? 4 : 0)),
+    )[0];
+
+  if (!strongest) return [];
+
+  return [{
+    scenario_id: strongest.scenarioId,
+    scenario_label: strongest.scenarioLabel,
+    reason: strongest.officialCitationPresent
+      ? '这个场景里品牌已经进入答案，并且已有品牌自有内容被引用，说明当前表达方式已经开始被 AI 采纳。'
+      : `这个场景里品牌已经在 ${strongest.platforms.size} 个平台进入回答，属于当前最值得继续放大的优势场景。`,
+    action:
+      '下一步建议：打开引用内容置信度报告，确认这个场景里哪些高置信度内容被采纳了，再沿着同一表达方式扩展到相邻问题。',
+    platforms: Array.from(strongest.platforms.keys()),
+  }];
 }
 
 function buildWeakScenarios(
   competitorMentions: DashboardMentionItem[],
   brandGroups: ScenarioGroup[],
   fallbackWeak: DashboardScenarioInsight[],
-) {
+): ScenarioActionCard[] {
   const brandScenarioKeys = new Set(brandGroups.map((item) => item.scenarioId || item.scenarioLabel));
   const groupedCompetitor = new Map<
     string,
@@ -175,21 +192,27 @@ function buildWeakScenarios(
     .map((item) => ({
       scenario_id: item.scenarioId,
       scenario_label: item.scenarioLabel,
-      reason: `${Array.from(item.competitors).join('、') || '竞品'}已在该问题进入答案，品牌仍未稳定出现。`,
+      reason: `${Array.from(item.competitors).join('、') || '竞品'}已在这个场景先进入答案，品牌当前还没有稳定站住。`,
+      action:
+        '下一步建议：进入用户画像分析，继续拆开这个问题背后的人群、预算和使用场景，找到被竞品抢走的是哪类细分需求，再补相应内容。',
       platforms: Array.from(item.platforms),
     }));
 
   if (missingByCompetitor.length > 0) {
-    return missingByCompetitor.slice(0, 4);
+    return missingByCompetitor.slice(0, 2);
   }
 
   return fallbackWeak
     .filter((item) => isMeaningfulScenarioLabel(item.scenario_label))
     .map((item) => ({
-      ...item,
+      scenario_id: item.scenario_id,
+      scenario_label: item.scenario_label,
       reason: cleanNarrativeText(item.reason) || '当前仍需补强该类问题中的品牌出现率。',
+      action:
+        '下一步建议：从用户画像分析继续下钻，把这个场景拆到更细的人群与需求层，再决定优先补哪些对比页、FAQ 或案例内容。',
+      platforms: item.platforms ?? [],
     }))
-    .slice(0, 4);
+    .slice(0, 2);
 }
 
 export function MentionBoardReport({ data }: MentionBoardReportProps) {
@@ -340,6 +363,10 @@ export function MentionBoardReport({ data }: MentionBoardReportProps) {
                     <div className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">
                       {cleanNarrativeText(item.reason)}
                     </div>
+                    <div className="mt-4 rounded-[16px] bg-[var(--bg-secondary)] px-4 py-3 text-[13px] leading-7 text-[var(--text-secondary)]">
+                      <span className="font-medium text-[var(--text-primary)]">下一步建议：</span>
+                      {item.action}
+                    </div>
                   </div>
                 ))
               ) : (
@@ -366,6 +393,10 @@ export function MentionBoardReport({ data }: MentionBoardReportProps) {
                     <div className="text-[15px] font-semibold text-[var(--text-primary)]">{item.scenario_label}</div>
                     <div className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">
                       {cleanNarrativeText(item.reason)}
+                    </div>
+                    <div className="mt-4 rounded-[16px] bg-[var(--bg-secondary)] px-4 py-3 text-[13px] leading-7 text-[var(--text-secondary)]">
+                      <span className="font-medium text-[var(--text-primary)]">下一步建议：</span>
+                      {item.action}
                     </div>
                   </div>
                 ))

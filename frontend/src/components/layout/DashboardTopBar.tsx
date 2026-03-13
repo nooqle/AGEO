@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { RiAddLine, RiSettings4Line } from '@remixicon/react';
 import { NotificationBell } from '@/components/notifications/NotificationBell';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
-import { ThemedLogo } from '@/components/ui/ThemedLogo';
+import { HomeBrandLink } from './HomeBrandLink';
 
 interface DashboardTopBarProps {
   onNewAnalysis?: () => void;
@@ -22,17 +22,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
         backdropFilter: 'blur(18px)',
       }}
     >
-      <div className="flex items-center gap-3">
-        <ThemedLogo size={26} />
-        <div>
-          <div className="text-[13px] font-semibold tracking-tight" style={{ color: 'var(--text-primary)' }}>
-            Specta AI
-          </div>
-          <div className="text-[10px] tracking-[0.12em]" style={{ color: 'var(--text-tertiary)' }}>
-            品牌AI助手
-          </div>
-        </div>
-      </div>
+      <HomeBrandLink />
 
       <div className="flex items-center gap-2">
         <button

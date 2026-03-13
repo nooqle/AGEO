@@ -115,12 +115,72 @@ class AnalyticsService:
             if msg.output_data:
                 try:
                     data = json.loads(msg.output_data)
+                    metadata = None
+                    if msg.extra_metadata:
+                        try:
+                            metadata = json.loads(msg.extra_metadata)
+                        except (json.JSONDecodeError, TypeError):
+                            metadata = None
                     data["_output_type"] = msg.output_type
                     data["_created_at"] = msg.created_at.isoformat() if msg.created_at else None
+                    data["_artifact_kind"] = (
+                        metadata.get("artifact_kind")
+                        if isinstance(metadata, dict)
+                        else None
+                    )
+                    data["_report_kind"] = (
+                        metadata.get("report_kind")
+                        if isinstance(metadata, dict)
+                        else None
+                    )
                     outputs.append(data)
                 except (json.JSONDecodeError, TypeError):
                     continue
         return outputs
+
+    def _is_dashboard_report_output(self, output: dict[str, Any]) -> bool:
+        """Return True when the artifact is an A5 report suitable for dashboard boards."""
+        output_type = str(output.get("_output_type") or "")
+        artifact_kind = str(
+            output.get("_artifact_kind")
+            or output.get("artifact_kind")
+            or ""
+        ).strip().lower()
+        report_kind = str(
+            output.get("_report_kind")
+            or output.get("report_kind")
+            or ""
+        ).strip().lower()
+
+        if artifact_kind == "confidence_signal" or report_kind == "confidence_signal":
+            return False
+        if output_type == "report_baseline":
+            return True
+        if output_type != "report":
+            return False
+
+        # A5 reports carry V2 dashboard fields; A7 confidence signal reports do not.
+        v2_keys = (
+            "summary_metrics",
+            "scenario_matrix",
+            "competitor_battles",
+            "risk_map",
+            "action_queue",
+            "source_overview",
+            "mention_sentiment_analysis",
+        )
+        if any(key in output for key in v2_keys):
+            return True
+
+        report_data = output.get("report_data")
+        if isinstance(report_data, dict) and any(key in report_data for key in v2_keys):
+            return True
+
+        metrics_raw = output.get("metrics_raw")
+        if isinstance(metrics_raw, dict) and any(key in metrics_raw for key in v2_keys):
+            return True
+
+        return False
 
     def _extract_metrics(self, data: dict[str, Any]) -> dict[str, Any] | None:
         """Extract metrics from output data (supports nested structures)."""
@@ -165,11 +225,58 @@ class AnalyticsService:
         self, brand_id: str | None = None
     ) -> list[dict[str, Any]]:
         """Get recent report artifacts only, ordered from newest to oldest."""
-        outputs = await self._get_all_outputs(brand_id=brand_id)
-        return [
-            output for output in outputs
-            if output.get("_output_type") in {"report", "report_baseline"}
-        ]
+        query = (
+            select(Message)
+            .where(
+                Message.role == MessageRole.ASSISTANT,
+                Message.type == MessageType.OUTPUT,
+                Message.output_type.in_(("report", "report_baseline")),
+            )
+            .order_by(desc(Message.created_at))
+            .limit(20)
+        )
+        query = query.join(Session, Message.session_id == Session.id)
+        if brand_id:
+            try:
+                brand_uuid = UUID(brand_id)
+            except (ValueError, AttributeError):
+                return []
+            query = query.where(Session.entity_id == brand_uuid)
+        else:
+            query = query.where(Session.entity_id.isnot(None))
+
+        result = await self.db.execute(query)
+        messages = result.scalars().all()
+
+        outputs: list[dict[str, Any]] = []
+        for msg in messages:
+            if not msg.output_data:
+                continue
+            try:
+                data = json.loads(msg.output_data)
+                metadata = None
+                if msg.extra_metadata:
+                    try:
+                        metadata = json.loads(msg.extra_metadata)
+                    except (json.JSONDecodeError, TypeError):
+                        metadata = None
+                data["_output_type"] = msg.output_type
+                data["_created_at"] = msg.created_at.isoformat() if msg.created_at else None
+                data["_artifact_kind"] = (
+                    metadata.get("artifact_kind")
+                    if isinstance(metadata, dict)
+                    else None
+                )
+                data["_report_kind"] = (
+                    metadata.get("report_kind")
+                    if isinstance(metadata, dict)
+                    else None
+                )
+                if self._is_dashboard_report_output(data):
+                    outputs.append(data)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return outputs
 
     def _extract_v2_payload(self, data: dict[str, Any]) -> dict[str, Any]:
         """Extract V2 contract fields from artifact, report_data, or metrics_raw."""

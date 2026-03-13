@@ -134,7 +134,22 @@ class OutputService:
         )
         # Derive category from output_type (report_baseline → baseline, report → scenario)
         category = None
-        if message.output_type and message.output_type.startswith("report"):
+        artifact_kind = (
+            metadata.get("artifact_kind")
+            if isinstance(metadata, dict) and isinstance(metadata.get("artifact_kind"), str)
+            else None
+        )
+        report_kind = (
+            metadata.get("report_kind")
+            if isinstance(metadata, dict) and isinstance(metadata.get("report_kind"), str)
+            else None
+        )
+        if (
+            artifact_kind != "confidence_signal"
+            and report_kind != "confidence_signal"
+            and message.output_type
+            and message.output_type.startswith("report")
+        ):
             category = "baseline" if message.output_type == "report_baseline" else "scenario"
         return {
             "id": str(message.id),
