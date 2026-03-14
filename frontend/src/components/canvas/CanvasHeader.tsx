@@ -246,7 +246,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
               <span className="capitalize">
                 {content.type === 'dataTable' ? '数据表格' :
                  content.type === 'report' ? (
-                   content.data?.report_kind === 'confidence_signal' ? '置信度信号' : '分析报告'
+                   content.data?.report_kind === 'confidence_signal' ? '置信度报告' : '分析报告'
                  ) :
                  content.type === 'chart' ? '数据图表' :
                  content.type === 'questionList' ? '问题列表' :

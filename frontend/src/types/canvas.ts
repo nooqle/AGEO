@@ -297,6 +297,15 @@ export type ReportV2Data = {
 };
 
 export type ConfidenceSignalLevel = 'high' | 'neutral' | 'caution';
+export type ConfidenceEntityClassification =
+  | 'brand'
+  | 'competitor'
+  | 'general_knowledge';
+export type ConfidenceQuadrant =
+  | 'q1_anchor'
+  | 'q2_false_prosperity'
+  | 'q3_noise'
+  | 'q4_sleeping_asset';
 
 export type ConfidenceSignalStatus = {
   phase?: 'idle' | 'running' | 'ready' | 'error';
@@ -311,6 +320,10 @@ export type ConfidenceSignalSummary = {
   neutral_count?: number;
   caution_count?: number;
   manual_count?: number;
+  brand_count?: number;
+  competitor_count?: number;
+  general_knowledge_count?: number;
+  second_quadrant_count?: number;
   average_score?: number;
   updated_at?: string;
 };
@@ -318,6 +331,29 @@ export type ConfidenceSignalSummary = {
 export type ConfidenceSignalFinding = {
   title?: string;
   description?: string;
+};
+
+export type ConfidenceMatrixConfig = {
+  aice_threshold?: number;
+  frequency_threshold?: number;
+  frequency_threshold_mode?: string;
+};
+
+export type ConfidenceEcosystemMatrix = {
+  title?: string;
+  x_axis_label?: string;
+  y_axis_label?: string;
+  total_points?: number;
+  diagnosis?: string;
+};
+
+export type ConfidenceQuadrantOverview = {
+  quadrant: ConfidenceQuadrant;
+  quadrant_label?: string;
+  description?: string;
+  strategy?: string;
+  count?: number;
+  entity_breakdown?: Partial<Record<ConfidenceEntityClassification, number>>;
 };
 
 export type ConfidenceSignalRecommendation = {
@@ -349,6 +385,16 @@ export type ConfidenceSignalItem = {
   signal_level?: ConfidenceSignalLevel;
   overall_score?: number;
   overall_confidence?: number;
+  entity_classification?: ConfidenceEntityClassification;
+  entity_label?: string;
+  frequency?: number;
+  aice_score?: number;
+  quadrant?: ConfidenceQuadrant;
+  quadrant_label?: string;
+  quadrant_description?: string;
+  primary_reasons?: string[];
+  repair_action?: string;
+  analysis_group?: string;
   top_signals?: string[];
   dimension_scores?: ConfidenceSignalDimensionScore[];
   recommendations?: ConfidenceSignalRecommendation[];
@@ -365,6 +411,30 @@ export type ConfidenceSignalItem = {
   has_article?: boolean;
   schema_types?: string[];
   published_at?: string;
+};
+
+export type ConfidenceAnalysisBlock = {
+  key: string;
+  title?: string;
+  description?: string;
+  reason_label?: string;
+  action_label?: string;
+  item_count?: number;
+  items?: ConfidenceSignalItem[];
+};
+
+export type ConfidenceGeneralKnowledgeInsight = {
+  summary?: string;
+  top_frequency_items?: ConfidenceSignalItem[];
+  top_score_items?: ConfidenceSignalItem[];
+};
+
+export type ConfidenceRepairAction = {
+  priority?: string;
+  title?: string;
+  summary?: string;
+  count?: number;
+  related_item_ids?: string[];
 };
 
 export type ConfidenceSignalComposerState = {
@@ -427,6 +497,12 @@ export type ReportCanvasData = CanvasPreviewData & {
   citation_analysis?: CitationAnalysis;
   keyword_analysis?: KeywordAnalysis;
   summary?: ConfidenceSignalSummary;
+  matrix_config?: ConfidenceMatrixConfig;
+  ecosystem_matrix?: ConfidenceEcosystemMatrix;
+  quadrant_overview?: ConfidenceQuadrantOverview[];
+  analysis_blocks?: ConfidenceAnalysisBlock[];
+  general_knowledge_insight?: ConfidenceGeneralKnowledgeInsight;
+  repair_actions?: ConfidenceRepairAction[];
   auto_items?: ConfidenceSignalItem[];
   manual_items?: ConfidenceSignalItem[];
   aggregate_findings?: ConfidenceSignalFinding[];
@@ -434,6 +510,7 @@ export type ReportCanvasData = CanvasPreviewData & {
   status?: ConfidenceSignalStatus;
   brand_keywords?: string[];
   competitor_names?: string[];
+  diagnosis?: string;
 };
 export type ChartSeries = { key: string; name: string };
 export type ChartDataItem = Record<string, string | number>;
