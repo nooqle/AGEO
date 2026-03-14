@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.brand import BrandProfile, Competitor
 from app.schemas.persona import UserPersona
@@ -84,6 +84,18 @@ class QuestionSimulationInput(BaseModel):
     - persona_focus: Generate questions for specific personas
     """
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "brand_profile": {"brand_name": "观夏", "industry": "香氛"},
+                    "competitors": [],
+                    "mode": "baseline",
+                }
+            ]
+        }
+    )
+
     brand_profile: BrandProfile = Field(..., description="品牌档案")
     competitors: list[Competitor] = Field(..., description="竞品列表")
     mode: Literal["baseline", "persona_focus"] = Field(
@@ -98,17 +110,6 @@ class QuestionSimulationInput(BaseModel):
         None,
         description="选中的画像ID列表（persona_focus模式）",
     )
-
-    class Config:
-        json_schema_extra = {
-            "examples": [
-                {
-                    "brand_profile": {"brand_name": "观夏", "industry": "香氛"},
-                    "competitors": [],
-                    "mode": "baseline",
-                }
-            ]
-        }
 
 
 class QuestionSimulationOutput(BaseModel):

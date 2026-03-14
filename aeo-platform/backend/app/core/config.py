@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import List
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/ 目录的绝对路径，确保无论 cwd 在哪都能找到 .env.local
 _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
@@ -29,6 +29,13 @@ def _resolve_sqlite_url(url: str) -> str:
 
 class Settings(BaseSettings):
     """Application settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=str(_BACKEND_DIR / ".env.local"),
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
     # App
     APP_NAME: str = "Specta AI"
@@ -78,14 +85,6 @@ class Settings(BaseSettings):
     DEV_TOKEN: str = "dev-token"  # Default token for development
     DEV_USER_EMAIL: str = "dev@test.com"  # Default test user email
     DEV_USER_NAME: str = "Development User"  # Default test user name
-
-    class Config:
-        """Config."""
-
-        env_file = str(_BACKEND_DIR / ".env.local")
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-        extra = "ignore"
 
     @property
     def is_sqlite(self) -> bool:
