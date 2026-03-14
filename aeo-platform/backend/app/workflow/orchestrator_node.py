@@ -95,7 +95,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
     {
         "name": "answer_fetch",
         "description": (
-            "从多个AI平台（豆包、混元、Kimi、DeepSeek）抓取对模拟问题的回答。"
+            "从多个AI平台（豆包、元宝、Kimi、DeepSeek）抓取对模拟问题的回答。"
             "前置条件：1) 问题模拟已完成（或提供了 custom_questions）；2) 用户已明确选择 fetch_mode（fast 或 full）。"
             "如果用户尚未选择采集模式，此工具无法执行。"
         ),
@@ -107,7 +107,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "enum": ["fast", "full"],
                     "description": (
                         "采集模式（必须由用户选择）：\n"
-                        "fast=通过API调用豆包、混元和Kimi，并通过浏览器采集DeepSeek，约3-5分钟，快速建立品牌AI表现的初步观感，但API返回内容与真实用户网页端体验可能存在差异；\n"
+                        "fast=通过API调用豆包、元宝和Kimi，并通过浏览器采集DeepSeek，约3-5分钟，快速建立品牌AI表现的初步观感，但API返回内容与真实用户网页端体验可能存在差异；\n"
                         "full=4平台全部通过浏览器模拟真实用户访问，约8-15分钟，完全还原用户真实体验，数据最准确，是深度AEO分析的最佳选择"
                     ),
                 },
@@ -256,7 +256,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 "platforms": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "要重新抓取的平台列表: 'kimi', 'deepseek', 'doubao', 'hunyuan'",
+                    "description": "要重新抓取的平台列表: 'kimi', 'deepseek', 'doubao', 'hunyuan'（元宝）",
                 },
                 "fetch_mode": {
                     "type": "string",
@@ -438,7 +438,7 @@ DIRECTIVE_A2_ASK_PATH = (
 DIRECTIVE_A3_NEXT_FETCH = (
     "【强制操作】用 2-3 句话友好地向用户说明问题已生成（可提及问题数量、覆盖的主题方向），"
     "在消息中说明问题列表已在右侧画布中展示。然后在消息末尾用自然语言列出以下选项，每个选项必须包含说明文字：\n"
-    "1. 快速采集（推荐）— 通过 API 调用豆包、混元和 Kimi，并通过浏览器采集 DeepSeek，约 3-5 分钟。"
+    "1. 快速采集（推荐）— 通过 API 调用豆包、元宝和 Kimi，并通过浏览器采集 DeepSeek，约 3-5 分钟。"
     "能快速建立品牌在 AI 平台中的初步观感，但 API 返回的内容与真实用户在网页端看到的可能存在差异\n"
     "2. 完整采集 — 4 个平台全部通过浏览器模拟真实用户访问，约 8-15 分钟。"
     "完全还原用户在网页端的真实体验，采集到的回答、引用来源和品牌提及最为准确，是深度 AEO 分析的最佳选择\n"

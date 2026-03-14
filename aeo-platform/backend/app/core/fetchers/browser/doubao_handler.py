@@ -104,22 +104,37 @@ class DoubaoHandler(BaseBrowserHandler):
             detected_modal = await self._detect_blocking_modal()
             if detected_modal:
                 logger.info("[Doubao] Blocking modal detected before login check: %s", detected_modal)
-                yield self._create_event(
-                    BrowserState.WAITING_FOR_MODAL,
-                    "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作",
+                waiting_message = "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作"
+                action_hint = "请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”"
+                request_id = await self._prepare_user_action_request(
+                    action_type="modal",
+                    message=waiting_message,
+                    action_hint=action_hint,
                     progress=0.25,
-                    requires_action=True,
-                    action_hint="请在弹出的浏览器窗口中关闭弹窗或同意协议（豆包）",
+                    url=self.URL,
                 )
-                opened = await self._open_headed_for_user_action(self.URL)
-                if not opened:
+                if not request_id:
                     yield self._create_event(
                         BrowserState.ERROR,
                         "打开豆包浏览器窗口失败，请重试",
                         progress=0,
                     )
                     return
-                modal_cleared = await self._wait_for_modal_clear(timeout=300)
+                yield self._create_event(
+                    BrowserState.WAITING_FOR_MODAL,
+                    waiting_message,
+                    progress=0.25,
+                    requires_action=True,
+                    action_type="modal",
+                    action_hint=action_hint,
+                    request_id=request_id,
+                )
+                modal_cleared = await self._wait_for_user_action_completion(
+                    request_id=request_id,
+                    ready_check=self._wait_for_modal_clear,
+                    timeout=300,
+                    ready_timeout=120,
+                )
                 if not modal_cleared:
                     yield self._create_event(BrowserState.ERROR, "弹窗处理超时，请重试", progress=0)
                     return
@@ -149,46 +164,72 @@ class DoubaoHandler(BaseBrowserHandler):
                     logger.debug("[Doubao] Login check failed: %s", e)
 
             if login_needed:
-                yield self._create_event(
-                    BrowserState.WAITING_FOR_LOGIN,
-                    "检测到需要登录，请在浏览器窗口中完成登录",
-                    progress=0.35, requires_action=True,
-                    action_hint="请在弹出的浏览器窗口中完成豆包登录",
+                waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
+                action_hint = "请在弹出的浏览器窗口中完成豆包登录，完成后点击“我已完成”"
+                request_id = await self._prepare_user_action_request(
+                    action_type="login",
+                    message=waiting_message,
+                    action_hint=action_hint,
+                    progress=0.35,
+                    url=self.URL,
                 )
-                opened = await self._open_headed_for_user_action(self.URL)
-                if not opened:
+                if not request_id:
                     yield self._create_event(BrowserState.ERROR, "打开豆包浏览器窗口失败，请重试", progress=0)
                     return
-                # Wait for login: check for chat URL + textarea ready
-                login_success = await self._wait_for_doubao_login(timeout=300)
+                yield self._create_event(
+                    BrowserState.WAITING_FOR_LOGIN,
+                    waiting_message,
+                    progress=0.35,
+                    requires_action=True,
+                    action_type="login",
+                    action_hint=action_hint,
+                    request_id=request_id,
+                )
+                login_success = await self._wait_for_user_action_completion(
+                    request_id=request_id,
+                    ready_check=self._wait_for_doubao_login,
+                    timeout=300,
+                    ready_timeout=120,
+                )
                 if not login_success:
                     yield self._create_event(BrowserState.ERROR, "登录超时，请重试", progress=0)
                     return
-                # After login, navigate to clean chat page to ensure Q1 isn't lost
-                await self.client.close()
-                await self.client.open(self.URL, headed=self.headed)
-                await asyncio.sleep(3)
-                logger.info("[Doubao] Re-navigated after login to ensure clean state")
+                logger.info("[Doubao] Login completed, continuing on current chat page")
 
                 detected_modal = await self._detect_blocking_modal()
                 if detected_modal:
                     logger.info("[Doubao] Blocking modal detected after login: %s", detected_modal)
-                    yield self._create_event(
-                        BrowserState.WAITING_FOR_MODAL,
-                        "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作",
+                    waiting_message = "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作"
+                    action_hint = "请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”"
+                    request_id = await self._prepare_user_action_request(
+                        action_type="modal",
+                        message=waiting_message,
+                        action_hint=action_hint,
                         progress=0.4,
-                        requires_action=True,
-                        action_hint="请在弹出的浏览器窗口中关闭弹窗或同意协议（豆包）",
+                        url=self.URL,
                     )
-                    opened = await self._open_headed_for_user_action(self.URL)
-                    if not opened:
+                    if not request_id:
                         yield self._create_event(
                             BrowserState.ERROR,
                             "打开豆包浏览器窗口失败，请重试",
                             progress=0,
                         )
                         return
-                    modal_cleared = await self._wait_for_modal_clear(timeout=300)
+                    yield self._create_event(
+                        BrowserState.WAITING_FOR_MODAL,
+                        waiting_message,
+                        progress=0.4,
+                        requires_action=True,
+                        action_type="modal",
+                        action_hint=action_hint,
+                        request_id=request_id,
+                    )
+                    modal_cleared = await self._wait_for_user_action_completion(
+                        request_id=request_id,
+                        ready_check=self._wait_for_modal_clear,
+                        timeout=300,
+                        ready_timeout=120,
+                    )
                     if not modal_cleared:
                         yield self._create_event(BrowserState.ERROR, "弹窗处理超时，请重试", progress=0)
                         return
@@ -312,13 +353,14 @@ class DoubaoHandler(BaseBrowserHandler):
         await asyncio.sleep(3)
         return await self._wait_for_doubao_chat_ready(timeout=45)
 
-    async def recover_after_verify(self, timeout: int = 300) -> bool:
-        """Open headed browser and wait for user to clear Doubao verify challenge."""
-        logger.info("[Doubao] Opening headed browser for verify recovery")
-        opened = await self._open_headed_for_user_action(self.URL)
-        if not opened:
-            logger.warning("[Doubao] Failed to open headed browser for verify")
-            return False
+    async def recover_after_verify(self, timeout: int = 300, prepare_window: bool = True) -> bool:
+        """Wait until Doubao returns to a usable chat state after manual verify."""
+        if prepare_window:
+            logger.info("[Doubao] Opening headed browser for verify recovery")
+            opened = await self._open_headed_for_user_action(self.URL)
+            if not opened:
+                logger.warning("[Doubao] Failed to open headed browser for verify")
+                return False
         return await self._wait_for_doubao_chat_ready(timeout=timeout)
 
     async def _wait_for_doubao_chat_ready(self, timeout: int = 300) -> bool:

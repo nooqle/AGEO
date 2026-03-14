@@ -179,6 +179,7 @@ class BrowserEvent(BaseModel):
     requires_action: bool = Field(False, description="是否需要操作")
     action_type: Optional[str] = Field(None, description="操作类型")
     action_hint: Optional[str] = Field(None, description="操作提示")
+    request_id: Optional[str] = Field(None, description="人工接管请求ID")
 
     # Error
     error: Optional[str] = Field(None, description="错误信息")

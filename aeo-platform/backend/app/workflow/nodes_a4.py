@@ -1,10 +1,10 @@
 """A4 Node: Answer Fetching from AI Platforms.
 
 This module contains the A4 node implementation for fetching answers
-from various AI platforms (Doubao, Hunyuan, Kimi, DeepSeek, etc.)
+from various AI platforms (Doubao, Yuanbao, Kimi, DeepSeek, etc.)
 
 Optimizations:
-- API-first strategy: Doubao/Hunyuan (API) execute first, Kimi/DeepSeek (Browser) second
+- API-first strategy: Doubao/Yuanbao (API) execute first, Kimi/DeepSeek (Browser) second
 - API platforms retry up to 2 times on failure (exponential backoff)
 - Browser platforms have a 90s per-question timeout (from PlatformConstants), no retries
 - Browser failures do not block the overall flow
@@ -65,7 +65,7 @@ for _handler_mod in [
 # Platform configurations
 PLATFORMS = {
     "doubao": {"name": "豆包", "method": "api"},
-    "hunyuan": {"name": "混元", "method": "api"},
+    "hunyuan": {"name": "元宝", "method": "api"},
     "kimi": {"name": "Kimi", "method": "api"},
     "deepseek": {"name": "DeepSeek", "method": "browser"},
 }
@@ -74,6 +74,11 @@ import httpx
 
 from app.core.constants import PlatformConstants, WorkflowConstants
 from app.workflow.brand_mentions import content_mentions_brand
+from app.workflow.browser_action_runtime import (
+    clear_browser_action_request,
+    register_browser_action_request,
+    wait_for_browser_action_resolution,
+)
 
 # Aliases from centralized constants
 MAX_RETRIES = WorkflowConstants.API_MAX_RETRIES
@@ -438,7 +443,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
     """A4: Fetch answers from AI platforms for all questions.
 
     Supports two modes (controlled by state['fetch_mode']):
-    - fast: API (Doubao/Hunyuan/Kimi) + DeepSeek Browser  (~5-10 min)
+    - fast: API (Doubao/Yuanbao/Kimi) + DeepSeek Browser  (~5-10 min)
     - full: All 4 platforms via Browser only, no API       (~10-20 min)
     """
     session_id = state["session_id"]
@@ -480,7 +485,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
     await send_reply_event(session_id, "", is_complete=True)
 
-    mode_label = "完整采集（4平台全浏览器）" if fetch_mode == "full" else "快速采集（豆包、混元、Kimi API + DeepSeek 浏览器）"
+    mode_label = "完整采集（4平台全浏览器）" if fetch_mode == "full" else "快速采集（豆包、元宝、Kimi API + DeepSeek 浏览器）"
     await send_progress_event(
         session_id=session_id,
         step="A4",
@@ -535,7 +540,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 if _pf is None or "hunyuan" in _pf:
                     hunyuan_client = HunyuanClient()
             except Exception as e:
-                logger.warning("[A4] HunyuanClient init failed: %s", e)
+                logger.warning("[A4] Yuanbao client init failed: %s", e)
 
             try:
                 if _pf is None or "kimi" in _pf:
@@ -576,7 +581,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 if _pf is None or "deepseek" in _pf:
                     from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
                     deepseek_browser_client = PlaywrightBrowserClient(session_name="deepseek")
-                    deepseek_handler = DeepSeekHandler(deepseek_browser_client)
+                    deepseek_handler = DeepSeekHandler(deepseek_browser_client, session_id=session_id)
                     browser_clients.append(deepseek_browser_client)
                     logger.info("[A4] DeepSeek browser handler initialized")
 
@@ -590,7 +595,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     if _pf is None or "kimi" in _pf:
                         from app.core.fetchers.browser.kimi_handler import KimiHandler
                         kimi_browser_client = PlaywrightBrowserClient(session_name="kimi")
-                        kimi_browser_handler = KimiHandler(kimi_browser_client)
+                        kimi_browser_handler = KimiHandler(kimi_browser_client, session_id=session_id)
                         browser_clients.append(kimi_browser_client)
                         logger.info("[A4] Kimi browser handler initialized")
 
@@ -602,9 +607,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     if _pf is None or "hunyuan" in _pf:
                         from app.core.fetchers.browser.yuanbao_handler import YuanbaoHandler
                         yuanbao_browser_client = PlaywrightBrowserClient(session_name="yuanbao")
-                        yuanbao_handler = YuanbaoHandler(yuanbao_browser_client)
+                        yuanbao_handler = YuanbaoHandler(yuanbao_browser_client, session_id=session_id)
                         browser_clients.append(yuanbao_browser_client)
-                        logger.info("[A4] Yuanbao (Hunyuan) browser handler initialized")
+                        logger.info("[A4] Yuanbao browser handler initialized")
 
                 except Exception as e:
                     logger.warning("[A4] Yuanbao browser init failed: %s", e)
@@ -614,7 +619,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     if _pf is None or "doubao" in _pf:
                         from app.core.fetchers.browser.doubao_handler import DoubaoHandler as DoubaoWebHandler
                         doubao_browser_client = PlaywrightBrowserClient(session_name="doubao")
-                        doubao_browser_handler = DoubaoWebHandler(doubao_browser_client)
+                        doubao_browser_handler = DoubaoWebHandler(doubao_browser_client, session_id=session_id)
                         browser_clients.append(doubao_browser_client)
                         logger.info("[A4] Doubao browser handler initialized")
 
@@ -641,7 +646,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     step="A4",
                     step_name="AI答案抓取",
                     progress=0.57,
-                    message=f"Phase 1: {total} 个问题 × 豆包、混元、Kimi API，批量并行抓取中...",
+                    message=f"Phase 1: {total} 个问题 × 豆包、元宝、Kimi API，批量并行抓取中...",
                 )
 
                 api_tasks = []
@@ -721,7 +726,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     step="A4",
                     step_name="AI答案抓取",
                     progress=0.72,
-                    message=f"Phase 1 完成: 豆包、混元、Kimi API {api_success_total}/{len(api_tasks)} 成功。开始 DeepSeek 浏览器采集...",
+                    message=f"Phase 1 完成: 豆包、元宝、Kimi API {api_success_total}/{len(api_tasks)} 成功。开始 DeepSeek 浏览器采集...",
                 )
             else:
                 # full mode: skip API entirely
@@ -731,7 +736,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     step="A4",
                     step_name="AI答案抓取",
                     progress=0.57,
-                    message="完整采集模式：跳过 API，直接启动豆包、混元、Kimi、DeepSeek 4 平台浏览器采集...",
+                    message="完整采集模式：跳过 API，直接启动豆包、元宝、Kimi、DeepSeek 4 平台浏览器采集...",
                 )
 
             # =============================================================
@@ -914,9 +919,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     browser_task_platforms.append("kimi")
 
                 if yuanbao_handler is not None and yuanbao_browser_client is not None:
-                    logger.info("[A4] Phase 2: Yuanbao (Hunyuan) browser pipeline queued")
+                    logger.info("[A4] Phase 2: Yuanbao browser pipeline queued")
                     browser_tasks.append(
-                        _pipeline_with_global_timeout(yuanbao_handler, yuanbao_browser_client, "hunyuan", "混元")
+                        _pipeline_with_global_timeout(yuanbao_handler, yuanbao_browser_client, "hunyuan", "元宝")
                     )
                     browser_task_platforms.append("hunyuan")
 
@@ -1354,7 +1359,7 @@ async def _fetch_from_doubao(
 async def _fetch_from_hunyuan(
     client, question: str, brand_profile: dict
 ) -> dict[str, Any]:
-    """Fetch answer from Hunyuan."""
+    """Fetch answer from Yuanbao."""
     start_time = datetime.now(timezone.utc)
 
     try:
@@ -1366,7 +1371,7 @@ async def _fetch_from_hunyuan(
             logger.warning("[A4] hunyuan returned empty answer for question: %s", question[:60])
             return {
                 "platform": "hunyuan",
-                "platform_name": "混元",
+                "platform_name": "元宝",
                 "fetch_method": "api",
                 "success": False,
                 "error": "empty answer from API",
@@ -1375,7 +1380,7 @@ async def _fetch_from_hunyuan(
 
         return {
             "platform": "hunyuan",
-            "platform_name": "混元",
+            "platform_name": "元宝",
             "fetch_method": "api",
             "success": True,
             "answer": {
@@ -1394,7 +1399,7 @@ async def _fetch_from_hunyuan(
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         return {
             "platform": "hunyuan",
-            "platform_name": "混元",
+            "platform_name": "元宝",
             "fetch_method": "api",
             "success": False,
             "error": str(e),
@@ -1404,7 +1409,7 @@ async def _fetch_from_hunyuan(
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         return {
             "platform": "hunyuan",
-            "platform_name": "混元",
+            "platform_name": "元宝",
             "fetch_method": "api",
             "success": False,
             "error": str(e),
@@ -1477,6 +1482,56 @@ async def _fetch_from_kimi(
         }
 
 
+async def _emit_browser_action_prompt(
+    session_id: str,
+    platform: str,
+    state: str,
+    action_type: str,
+    message: str,
+    action_hint: str,
+    progress: float,
+    reply_markdown: str,
+) -> str:
+    request = register_browser_action_request(
+        session_id=session_id,
+        platform=platform,
+        action_type=action_type,
+        message=message,
+        action_hint=action_hint,
+        progress=progress,
+    )
+    await send_browser_state_event(
+        session_id=session_id,
+        platform=platform,
+        state=state,
+        message=message,
+        progress=progress,
+        requires_action=True,
+        action_hint=action_hint,
+        request_id=request.request_id,
+    )
+    await send_browser_user_action_event(
+        session_id=session_id,
+        platform=platform,
+        state=state,
+        action_type=action_type,
+        message=message,
+        progress=progress,
+        action_hint=action_hint,
+        request_id=request.request_id,
+    )
+    await send_reply_event(session_id, reply_markdown, is_delta=True, is_new_round=True)
+    await send_reply_event(session_id, "", is_complete=True)
+    return request.request_id
+
+
+async def _wait_for_browser_action_resolution(request_id: str, timeout: int = 300) -> str | None:
+    try:
+        return await wait_for_browser_action_resolution(request_id, timeout=timeout)
+    finally:
+        clear_browser_action_request(request_id)
+
+
 async def _fetch_from_browser(
     handler,
     question: str,
@@ -1505,20 +1560,22 @@ async def _fetch_from_browser(
                     progress=event.progress,
                     requires_action=event.requires_action,
                     action_hint=event.action_hint,
+                    request_id=event.request_id,
                 )
                 await send_browser_user_action_event(
                     session_id=session_id,
                     platform=platform,
                     state=event.state.value,
-                    action_type="login",
+                    action_type=event.action_type or "login",
                     message=event.message,
                     progress=event.progress,
                     action_hint=event.action_hint,
+                    request_id=event.request_id,
                 )
                 login_msg = (
                     f"**{platform_name}** 需要登录\n\n"
-                    f"已打开浏览器窗口，请在浏览器中完成登录。"
-                    f"登录后将自动继续抓取。"
+                    f"请在浏览器窗口中完成登录。"
+                    f"完成后点击下方“我已完成”，我会继续接管抓取。"
                 )
                 await send_reply_event(session_id, login_msg, is_delta=True, is_new_round=True)
                 await send_reply_event(session_id, "", is_complete=True)
@@ -1532,19 +1589,22 @@ async def _fetch_from_browser(
                     progress=event.progress,
                     requires_action=event.requires_action,
                     action_hint=event.action_hint,
+                    request_id=event.request_id,
                 )
                 await send_browser_user_action_event(
                     session_id=session_id,
                     platform=platform,
                     state=event.state.value,
-                    action_type="modal",
+                    action_type=event.action_type or "modal",
                     message=event.message,
                     progress=event.progress,
                     action_hint=event.action_hint,
+                    request_id=event.request_id,
                 )
                 modal_msg = (
                     f"**{platform_name}** 页面弹窗需要确认\n\n"
-                    f"已打开浏览器窗口，请在浏览器中关闭弹窗或同意协议。"
+                    f"请在浏览器中关闭弹窗或同意协议。"
+                    f"完成后点击下方“我已完成”，我会继续接管抓取。"
                 )
                 await send_reply_event(session_id, modal_msg, is_delta=True, is_new_round=True)
                 await send_reply_event(session_id, "", is_complete=True)
@@ -1644,31 +1704,30 @@ async def _fetch_from_browser(
                 max_verify_recoveries,
             )
             if session_id:
-                await send_browser_state_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state="waiting_for_login",
-                    message=f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
-                    progress=0.35,
-                    requires_action=True,
-                    action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证",
-                )
-                await send_browser_user_action_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state="waiting_for_login",
-                    action_type="verify",
-                    message=f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
-                    progress=0.35,
-                    action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证",
-                )
-                verify_msg = (
-                    f"**{platform_name}** 触发了安全验证\n\n"
-                    f"请在浏览器窗口中完成验证，完成后系统会自动重试当前问题。"
-                )
-                await send_reply_event(session_id, verify_msg, is_delta=True, is_new_round=True)
-                await send_reply_event(session_id, "", is_complete=True)
-            recovered = await handler.recover_after_verify()
+                recovered = False
+                if await handler._open_headed_for_user_action(handler.URL):
+                    request_id = await _emit_browser_action_prompt(
+                        session_id=session_id,
+                        platform=platform,
+                        state="waiting_for_login",
+                        action_type="verify",
+                        message=f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
+                        action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证，完成后点击“我已完成”",
+                        progress=0.35,
+                        reply_markdown=(
+                            f"**{platform_name}** 触发了安全验证\n\n"
+                            f"请在浏览器窗口中完成验证。完成后点击下方“我已完成”，我会继续接管当前问题。"
+                        ),
+                    )
+                    resolution = await _wait_for_browser_action_resolution(request_id, timeout=300)
+                    if resolution == "completed":
+                        recovered = await handler.recover_after_verify(prepare_window=False)
+                    elif resolution == "skip":
+                        recovered = False
+                else:
+                    recovered = False
+            else:
+                recovered = await handler.recover_after_verify()
             if recovered:
                 if session_id:
                     await send_browser_state_event(
@@ -1706,31 +1765,6 @@ async def _fetch_from_browser(
         if detected:
             logger.info("[A4] %s fetch failed, modal detected: %s — alerting user",
                         platform_name, detected)
-            if session_id:
-                await send_browser_state_event(
-                    session_id=session_id, platform=platform,
-                    state="waiting_for_modal",
-                    message=f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
-                    progress=0.35, requires_action=True,
-                    action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议（{platform_name}）",
-                )
-                await send_browser_user_action_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state="waiting_for_modal",
-                    action_type="modal",
-                    message=f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
-                    progress=0.35,
-                    action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议（{platform_name}）",
-                )
-                modal_msg = (
-                    f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
-                    f"已打开浏览器窗口，请在浏览器中关闭弹窗或同意协议。"
-                )
-                await send_reply_event(session_id, modal_msg, is_delta=True, is_new_round=True)
-                await send_reply_event(session_id, "", is_complete=True)
-
-            # Open headed browser for user to handle the modal
             opened = await handler._open_headed_for_user_action(handler.URL)
             if not opened:
                 return {
@@ -1741,7 +1775,25 @@ async def _fetch_from_browser(
                     "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
                 }
 
-            modal_cleared = await handler._wait_for_modal_clear(timeout=300)
+            modal_cleared = False
+            if session_id:
+                request_id = await _emit_browser_action_prompt(
+                    session_id=session_id,
+                    platform=platform,
+                    state="waiting_for_modal",
+                    action_type="modal",
+                    message=f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
+                    action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”",
+                    progress=0.35,
+                    reply_markdown=(
+                        f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
+                        f"请在浏览器中关闭弹窗或同意协议。完成后点击下方“我已完成”，我会继续接管抓取。"
+                    ),
+                )
+                resolution = await _wait_for_browser_action_resolution(request_id, timeout=300)
+                modal_cleared = resolution == "completed" and await handler._wait_for_modal_clear(timeout=45)
+            else:
+                modal_cleared = await handler._wait_for_modal_clear(timeout=300)
             if modal_cleared:
                 logger.info("[A4] %s modal cleared by user, retrying fetch", platform_name)
                 return await _fetch_from_browser(

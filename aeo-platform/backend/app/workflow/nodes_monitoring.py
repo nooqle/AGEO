@@ -30,6 +30,13 @@ FREQ_LABELS = {
     "monthly": "每月",
 }
 
+PLATFORM_LABELS = {
+    "doubao": "豆包",
+    "hunyuan": "元宝",
+    "kimi": "Kimi",
+    "deepseek": "DeepSeek",
+}
+
 
 async def create_monitoring_node(state: AgentState) -> Command:
     """Create a monitoring schedule via chat command.
@@ -107,7 +114,7 @@ async def create_monitoring_node(state: AgentState) -> Command:
             f"- 执行频率：{freq_label}\n"
             f"- 下次执行：{next_run_str} (UTC)\n"
             f"- 告警阈值：当提及率、官网引用率或高风险场景变化超过 {alert_threshold} 时通知您\n"
-            f"- 监测平台：{', '.join(schedule.platforms or ['doubao', 'hunyuan'])}\n\n"
+            f"- 监测平台：{', '.join(PLATFORM_LABELS.get(p, p) for p in (schedule.platforms or ['doubao', 'hunyuan']))}\n\n"
             f"您可以随时说\"暂停监测\"或\"停止监测\"来管理监测计划。"
         )
 

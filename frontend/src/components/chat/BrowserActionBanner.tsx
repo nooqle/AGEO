@@ -1,6 +1,9 @@
-﻿'use client';
+'use client';
+
+import { useState } from 'react';
 
 import type { BrowserState } from '@/types/agent';
+import { useConversationStore } from '@/stores/conversationStore';
 
 const PLATFORM_LABELS: Record<BrowserState['platform'], string> = {
   doubao: '豆包',
@@ -14,15 +17,28 @@ interface BrowserActionBannerProps {
 }
 
 export function BrowserActionBanner({ browserState }: BrowserActionBannerProps) {
+  const sendBrowserActionResolution = useConversationStore((state) => state.wsBrowserActionResolution);
+  const [localSubmitting, setLocalSubmitting] = useState<'completed' | 'skip' | null>(null);
+
   const platformLabel = PLATFORM_LABELS[browserState.platform] || browserState.platform;
   const title = browserState.actionType === 'verify'
-    ? `${platformLabel} \u89e6\u53d1\u5b89\u5168\u9a8c\u8bc1\uff0c\u7b49\u5f85\u4f60\u5904\u7406`
+    ? `${platformLabel} 遇到了安全验证，需要你协助处理`
     : browserState.actionType === 'login'
-    ? `${platformLabel} \u9700\u8981\u767b\u5f55`
+    ? `${platformLabel} 需要登录后才能继续抓取`
     : browserState.actionType === 'modal'
-    ? `${platformLabel} \u9875\u9762\u51fa\u73b0\u5f39\u6846\uff0c\u7b49\u5f85\u4f60\u786e\u8ba4`
-    : `${platformLabel} \u9700\u8981\u4f60\u5728\u6d4f\u89c8\u5668\u7a97\u53e3\u4e2d\u64cd\u4f5c`;
+    ? `${platformLabel} 页面有弹窗阻碍，需要你协助确认`
+    : `${platformLabel} 需要你在浏览器窗口中协助操作`;
+
   const detail = browserState.actionHint || browserState.message;
+  const canConfirm = Boolean(browserState.requestId && sendBrowserActionResolution);
+
+  const handleResolve = (resolution: 'completed' | 'skip') => {
+    if (!browserState.requestId || !sendBrowserActionResolution || localSubmitting) {
+      return;
+    }
+    setLocalSubmitting(resolution);
+    sendBrowserActionResolution(browserState.requestId, resolution);
+  };
 
   return (
     <div
@@ -47,8 +63,34 @@ export function BrowserActionBanner({ browserState }: BrowserActionBannerProps) 
             {detail}
           </p>
           <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-            系统已尝试将浏览器切到前台。如果没看到窗口，请检查任务栏中的 Chromium / Patchright 窗口。
+            请先在浏览器窗口中完成操作，再点击下方按钮，我会继续接管当前任务。
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleResolve('completed')}
+              disabled={!canConfirm || localSubmitting !== null}
+              className="rounded-full px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                background: 'var(--color-primary)',
+                color: '#fff',
+              }}
+            >
+              {localSubmitting === 'completed' ? '已提交，正在恢复...' : '我已完成'}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleResolve('skip')}
+              disabled={!canConfirm || localSubmitting !== null}
+              className="rounded-full px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {localSubmitting === 'skip' ? '已提交跳过...' : '暂时跳过该平台'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -24,6 +24,10 @@ from app.models.message import Message, MessageType
 from app.workflow.a7.confidence_signal import (
     append_manual_items_async,
 )
+from app.workflow.browser_action_runtime import (
+    get_browser_action_request,
+    resolve_browser_action_request,
+)
 
 from sqlalchemy import select
 
@@ -923,6 +927,7 @@ async def handle_recall_langgraph(
 __all__ = [
     "handle_user_message_langgraph",
     "handle_confirmation_langgraph",
+    "handle_browser_action_resolution_langgraph",
     "handle_artifact_action_langgraph",
     "handle_recall_langgraph",
 ]
@@ -1047,4 +1052,41 @@ async def handle_artifact_action_langgraph(
         title=message.content if message else "置信度信号",
         data=updated_report,
         artifact_key=artifact_id,
+    )
+
+
+async def handle_browser_action_resolution_langgraph(
+    websocket: WebSocket, session_id: str, data: dict
+) -> None:
+    """Resolve a pending browser user-action handoff request."""
+    request_id = data.get("request_id", "")
+    resolution = data.get("resolution", "")
+
+    if not request_id or resolution not in {"completed", "skip"}:
+        await ws_session_manager.emit_to_websocket(
+            websocket,
+            "error",
+            {"message": "浏览器操作确认参数无效", "recoverable": True},
+        )
+        return
+
+    request = get_browser_action_request(request_id)
+    if request is None or request.session_id != session_id:
+        await ws_session_manager.emit_to_websocket(
+            websocket,
+            "error",
+            {"message": "未找到对应的浏览器操作请求", "recoverable": True},
+        )
+        return
+
+    resolve_browser_action_request(request_id, resolution)
+    await ws_session_manager.emit_to_session(
+        session_id,
+        "browser_user_action_ack",
+        {
+            "request_id": request_id,
+            "platform": request.platform,
+            "action_type": request.action_type,
+            "resolution": resolution,
+        },
     )

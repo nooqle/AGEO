@@ -69,6 +69,7 @@ export interface BrowserState {
   actionType?: BrowserActionType;
   actionHint?: string;
   progress?: number;
+  requestId?: string;
 }
 
 export interface StopState {

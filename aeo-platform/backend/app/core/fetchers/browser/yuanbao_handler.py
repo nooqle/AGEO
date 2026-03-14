@@ -153,15 +153,33 @@ class YuanbaoHandler(BaseBrowserHandler):
                     logger.debug("[Yuanbao] Login check failed: %s", e)
 
             if login_needed:
+                waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
+                action_hint = "请在弹出的浏览器窗口中完成元宝登录，完成后点击“我已完成”"
+                request_id = await self._prepare_user_action_request(
+                    action_type="login",
+                    message=waiting_message,
+                    action_hint=action_hint,
+                    progress=0.35,
+                    url=self.URL,
+                )
+                if not request_id:
+                    yield self._create_event(BrowserState.ERROR, "打开元宝浏览器窗口失败，请重试", progress=0)
+                    return
                 yield self._create_event(
                     BrowserState.WAITING_FOR_LOGIN,
-                    "检测到需要登录，请在浏览器窗口中完成登录",
-                    progress=0.35, requires_action=True,
-                    action_hint="请在弹出的浏览器窗口中完成元宝登录（支持微信/QQ扫码）",
+                    waiting_message,
+                    progress=0.35,
+                    requires_action=True,
+                    action_type="login",
+                    action_hint=action_hint,
+                    request_id=request_id,
                 )
-                await self.client.close()
-                await self.client.open(self.URL, headed=True)
-                login_success = await self._wait_for_login_ready(timeout=300)
+                login_success = await self._wait_for_user_action_completion(
+                    request_id=request_id,
+                    ready_check=self._wait_for_login_ready,
+                    timeout=300,
+                    ready_timeout=120,
+                )
                 if not login_success:
                     yield self._create_event(BrowserState.ERROR, "登录超时，请重试", progress=0)
                     return

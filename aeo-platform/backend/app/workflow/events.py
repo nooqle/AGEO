@@ -539,6 +539,7 @@ async def send_browser_state_event(
     progress: float = 0.0,
     requires_action: bool = False,
     action_hint: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Send browser state event to frontend.
 
@@ -564,6 +565,8 @@ async def send_browser_state_event(
     }
     if action_hint:
         payload["action_hint"] = action_hint
+    if request_id:
+        payload["request_id"] = request_id
     await manager.emit_to_session(session_id, "browser_state", payload)
 
 
@@ -575,6 +578,7 @@ async def send_browser_user_action_event(
     message: str,
     progress: float = 0.0,
     action_hint: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Send a normalized browser user-action event to frontend.
 
@@ -594,6 +598,8 @@ async def send_browser_user_action_event(
     }
     if action_hint:
         payload["action_hint"] = action_hint
+    if request_id:
+        payload["request_id"] = request_id
     await manager.emit_to_session(session_id, "browser_user_action", payload)
 
 

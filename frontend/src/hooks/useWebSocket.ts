@@ -37,6 +37,8 @@ export function useWebSocket(sessionId: string | null) {
     updateTPAOR,
     setExecutionProgress,
     setBrowserState,
+    updateBrowserState,
+    clearBrowserStates,
     startExecution,
     stopExecution,
     setPendingConfirmation,
@@ -62,6 +64,7 @@ export function useWebSocket(sessionId: string | null) {
     setFollowUpSuggestions,
     setWsConfirmation,
     setWsArtifactAction,
+    setWsBrowserActionResolution,
     // Recall support
     clearMessagesAfter,
     removeMessage,
@@ -419,6 +422,26 @@ export function useWebSocket(sessionId: string | null) {
         setBrowserState(buildBrowserState(data));
         break;
 
+      case 'browser_user_action_ack': {
+        const requestId = typeof data.request_id === 'string' ? data.request_id : '';
+        const resolution = typeof data.resolution === 'string' ? data.resolution : '';
+        if (requestId) {
+          updateBrowserState(
+            requestId,
+            resolution === 'completed'
+              ? {
+                  requiresAction: false,
+                  message: '已收到您的完成确认，正在检查页面状态并继续任务...',
+                }
+              : {
+                  requiresAction: false,
+                  message: '已跳过当前平台的人工处理，系统将继续后续流程...',
+                },
+          );
+        }
+        break;
+      }
+
       case 'output_ready': {
         const payload = buildOutputReadyPayload(data, agentMessageIdRef.current);
         addContent(payload.content);
@@ -503,7 +526,7 @@ export function useWebSocket(sessionId: string | null) {
         // The ref is reset in 'agent_start' when a new user message triggers execution.
         stopExecution();
         setExecutionProgress(null);
-        setBrowserState(null);
+        clearBrowserStates();
         setStopState(null);
 
         const completedTask = buildCompletedTask(useConversationStore.getState().activeTask, data);
@@ -524,7 +547,7 @@ export function useWebSocket(sessionId: string | null) {
         resetStreamingState();
         stopExecution();
         setExecutionProgress(null);
-        setBrowserState(null);
+        clearBrowserStates();
         if (data) {
           setStopState(buildStopState(data));
         }
@@ -540,7 +563,7 @@ export function useWebSocket(sessionId: string | null) {
         // 2. Clear stage results and execution progress
         clearStageResults();
         setExecutionProgress(null);
-        setBrowserState(null);
+        clearBrowserStates();
 
         // 3. Reset execution / stop / task / confirmation state (BUG-RECALL-01/03/06)
         stopExecution();
@@ -777,6 +800,8 @@ export function useWebSocket(sessionId: string | null) {
     updateTPAOR,
     setExecutionProgress,
     setBrowserState,
+    updateBrowserState,
+    clearBrowserStates,
     startExecution,
     stopExecution,
     setPendingConfirmation,
@@ -1025,6 +1050,24 @@ export function useWebSocket(sessionId: string | null) {
       setWsArtifactAction(null);
     };
   }, [sendArtifactAction, setWsArtifactAction]);
+
+  const sendBrowserActionResolution = useCallback((requestId: string, resolution: 'completed' | 'skip') => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({
+      event: 'browser_action_resolution',
+      data: {
+        request_id: requestId,
+        resolution,
+      },
+    }));
+  }, []);
+
+  useEffect(() => {
+    setWsBrowserActionResolution(sendBrowserActionResolution);
+    return () => {
+      setWsBrowserActionResolution(null);
+    };
+  }, [sendBrowserActionResolution, setWsBrowserActionResolution]);
 
   // Send step control
   const sendStepControl = useCallback((action: 'continue' | 'skip' | 'retry', stepId?: string) => {

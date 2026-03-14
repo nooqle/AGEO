@@ -35,6 +35,7 @@ from app.core.database import AsyncSessionLocal, init_db
 from app.core.websocket_server import (
     manager,
     handle_artifact_action,
+    handle_browser_action_resolution,
     handle_user_message,
     handle_confirmation,
     handle_stop,
@@ -358,6 +359,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         handle_artifact_action(websocket, session_id, data)
                     )
                     agent_task.add_done_callback(_on_agent_done)
+            elif event == "browser_action_resolution":
+                await handle_browser_action_resolution(websocket, session_id, data)
             elif event == "ping":
                 await manager.emit_to_websocket(websocket, "pong", {})
             else:

@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, Union
+from typing import AsyncGenerator, Awaitable, Callable, Union
 from urllib.parse import urlparse
 
 # CP1252 byte-to-Unicode mappings for the 0x80-0x9F range (where CP1252 differs
@@ -63,8 +63,15 @@ from app.schemas.fetch import (
     Platform,
     SearchReference,
 )
+from app.workflow.browser_action_runtime import (
+    clear_browser_action_request,
+    register_browser_action_request,
+    wait_for_browser_action_resolution,
+)
 
 logger = logging.getLogger(__name__)
+
+ReadyCheck = Callable[[int], Awaitable[bool]]
 
 
 def _is_junk_title(title: str) -> bool:
@@ -93,9 +100,15 @@ class BaseBrowserHandler(ABC):
     _DEFAULTS: dict = {}
     DOUBLE_UTF8_FIX: bool = False  # Doubao needs double UTF-8 decoding
 
-    def __init__(self, client: Union[AgentBrowserClient, PlaywrightBrowserClient], headed: bool = False):
+    def __init__(
+        self,
+        client: Union[AgentBrowserClient, PlaywrightBrowserClient],
+        headed: bool = False,
+        session_id: str | None = None,
+    ):
         self.client = client
         self.headed = headed
+        self.session_id = session_id
         self._is_playwright = isinstance(client, PlaywrightBrowserClient)
         self._sel_cache: dict = {}
 
@@ -512,6 +525,17 @@ class BaseBrowserHandler(ABC):
         if not open_result.get("success"):
             return False
 
+        # Avoid prompting the user while the window is still on a blank bootstrap page.
+        if self.client.page is not None:
+            for _ in range(10):
+                try:
+                    current_url = self.client.page.url or ""
+                    if current_url and current_url != "about:blank":
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+
         bring_to_front = getattr(self.client, "bring_to_front", None)
         if callable(bring_to_front):
             try:
@@ -521,6 +545,49 @@ class BaseBrowserHandler(ABC):
 
         await asyncio.sleep(3)
         return True
+
+    async def _prepare_user_action_request(
+        self,
+        action_type: str,
+        message: str,
+        action_hint: str | None,
+        progress: float,
+        url: str | None = None,
+    ) -> str | None:
+        """Open a stable headed browser window, then register a user-action request."""
+        opened = await self._open_headed_for_user_action(url)
+        if not opened:
+            return None
+        if not self.session_id:
+            return None
+        request = register_browser_action_request(
+            session_id=self.session_id,
+            platform=self.PLATFORM.value,
+            action_type=action_type,
+            message=message,
+            action_hint=action_hint,
+            progress=progress,
+        )
+        return request.request_id
+
+    async def _wait_for_user_action_completion(
+        self,
+        request_id: str | None,
+        ready_check: ReadyCheck,
+        timeout: int = 300,
+        ready_timeout: int = 45,
+    ) -> bool:
+        """Wait until the user explicitly confirms completion, then validate readiness."""
+        if not request_id:
+            return False
+
+        try:
+            resolution = await wait_for_browser_action_resolution(request_id, timeout=timeout)
+            if resolution != "completed":
+                return False
+            return await ready_check(ready_timeout)
+        finally:
+            clear_browser_action_request(request_id)
 
     async def _check_and_handle_modal(self) -> "BrowserEvent | None":
         """Generic modal/popup check.  Call once after navigation, not per question.
@@ -545,13 +612,13 @@ class BaseBrowserHandler(ABC):
             f"检测到 {display_name} 页面弹窗需要确认，请在浏览器窗口中操作",
             progress=0.35,
             requires_action=True,
-            action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议（{display_name}）",
+            action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议（{display_name}），完成后点击“我已完成”",
         )
 
         # Reopen as headed browser for user to interact
         opened = await self._open_headed_for_user_action(self.URL)
         if not opened:
-            return self._create_event(BrowserState.ERROR, "?????????????", progress=0)
+            return self._create_event(BrowserState.ERROR, "打开浏览器窗口失败，请重试", progress=0)
 
         # Wait for user to dismiss the modal
         modal_cleared = await self._wait_for_modal_clear(timeout=300)
@@ -697,7 +764,9 @@ class BaseBrowserHandler(ABC):
         message: str,
         progress: float = 0,
         requires_action: bool = False,
+        action_type: str | None = None,
         action_hint: str | None = None,
+        request_id: str | None = None,
         data: FetchResult | None = None,
         error_type: str | None = None,
     ) -> BrowserEvent:
@@ -707,8 +776,9 @@ class BaseBrowserHandler(ABC):
             message=message,
             progress=progress,
             requires_action=requires_action,
-            action_type=None,
+            action_type=action_type,
             action_hint=action_hint,
+            request_id=request_id,
             error=None,
             error_type=error_type,
             recoverable=True,

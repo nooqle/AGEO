@@ -147,3 +147,16 @@ async def handle_artifact_action(websocket: WebSocket, session_id: str, data: di
 
     await handle_artifact_action_langgraph(websocket, session_id, data)
 
+
+async def handle_browser_action_resolution(
+    websocket: WebSocket, session_id: str, data: dict
+):
+    """Handle browser handoff completion/skip acknowledgement."""
+    logger.info(f"[WebSocket] browser_action_resolution event from session: {session_id}")
+
+    from app.api.v1.websocket_langgraph import (
+        handle_browser_action_resolution_langgraph,
+    )
+
+    await handle_browser_action_resolution_langgraph(websocket, session_id, data)
+

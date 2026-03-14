@@ -48,13 +48,13 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const [showSafeToLeave, setShowSafeToLeave] = useState(false);
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
   const replayAnimatingRef = useRef(false);
-  const browserActionToastRef = useRef<string | null>(null);
+  const browserActionToastRef = useRef<Set<string>>(new Set());
 
   const {
     messages,
     isAgentExecuting,
     stopState,
-    browserState,
+    browserStates,
     pendingConfirmation,
     executionProgress,
     stageResults,
@@ -389,34 +389,35 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   }, [isAgentExecuting, executionProgress]);
 
 
+  const actionableBrowserStates = browserStates.filter((state) => state.requiresAction);
+
   useEffect(() => {
-    if (!browserState?.requiresAction) {
-      browserActionToastRef.current = null;
-      return;
-    }
-
-    const fingerprint = `${browserState.platform}:${browserState.state}:${browserState.message}:${browserState.actionHint || ''}`;
-    if (browserActionToastRef.current === fingerprint) {
-      return;
-    }
-
-    browserActionToastRef.current = fingerprint;
+    const nextFingerprints = new Set<string>();
     const platformNameMap: Record<string, string> = {
       doubao: '豆包',
       deepseek: 'DeepSeek',
       kimi: 'Kimi',
       hunyuan: '元宝',
     };
-    const platformName = platformNameMap[browserState.platform] || browserState.platform;
-    const actionLabel = browserState.actionType === 'verify'
-      ? '\u89e6\u53d1\u4e86\u5b89\u5168\u9a8c\u8bc1'
-      : browserState.actionType === 'login'
-      ? '\u9700\u8981\u767b\u5f55'
-      : browserState.actionType === 'modal'
-      ? '\u51fa\u73b0\u4e86\u9875\u9762\u5f39\u6846'
-      : '\u9700\u8981\u4f60\u5728\u6d4f\u89c8\u5668\u7a97\u53e3\u4e2d\u64cd\u4f5c';
-    toast.info(`${platformName}${actionLabel}\uff0c\u7cfb\u7edf\u5df2\u5c1d\u8bd5\u5c06\u7a97\u53e3\u5207\u5230\u524d\u53f0\u3002`, 8000);
-  }, [browserState]);
+    actionableBrowserStates.forEach((state) => {
+      const fingerprint = state.requestId || `${state.platform}:${state.state}:${state.message}:${state.actionHint || ''}`;
+      nextFingerprints.add(fingerprint);
+      if (browserActionToastRef.current.has(fingerprint)) {
+        return;
+      }
+
+      const platformName = platformNameMap[state.platform] || state.platform;
+      const actionLabel = state.actionType === 'verify'
+        ? '\u89e6\u53d1\u4e86\u5b89\u5168\u9a8c\u8bc1'
+        : state.actionType === 'login'
+        ? '\u9700\u8981\u767b\u5f55'
+        : state.actionType === 'modal'
+        ? '\u51fa\u73b0\u4e86\u9875\u9762\u5f39\u6846'
+        : '\u9700\u8981\u4f60\u5728\u6d4f\u89c8\u5668\u7a97\u53e3\u4e2d\u64cd\u4f5c';
+      toast.info(`${platformName}${actionLabel}\uff0c\u7cfb\u7edf\u5df2\u5c1d\u8bd5\u5c06\u7a97\u53e3\u5207\u5230\u524d\u53f0\u3002`, 8000);
+    });
+    browserActionToastRef.current = nextFingerprints;
+  }, [actionableBrowserStates]);
   // Handle sending message
   const handleSendMessage = useCallback((content: string, _attachments?: unknown[], context?: ContextTag[]) => {
     if (!content.trim() || isAgentExecuting) return;
@@ -673,8 +674,15 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           </span>
         </div>
       )}
-      {browserState?.requiresAction && (
-        <BrowserActionBanner browserState={browserState} />
+      {actionableBrowserStates.length > 0 && (
+        <div className="flex flex-col">
+          {actionableBrowserStates.map((state) => (
+            <BrowserActionBanner
+              key={state.requestId || `${state.platform}:${state.state}:${state.message}`}
+              browserState={state}
+            />
+          ))}
+        </div>
       )}
 
       {/* Message list */}

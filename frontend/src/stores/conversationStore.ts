@@ -39,6 +39,7 @@ interface ConversationState {
 
   // 浏览器状态
   browserState: BrowserState | null;
+  browserStates: BrowserState[];
 
   // 停止状态
   stopState: StopState | null;
@@ -65,6 +66,7 @@ interface ConversationState {
   // WebSocket send function (registered by ChatPanel's useWebSocket, shared with Canvas components)
   wsConfirmation: ((requestId: string, selection: string | Record<string, unknown>) => void) | null;
   wsArtifactAction: ((artifactId: string, action: string, payload?: Record<string, unknown>) => void) | null;
+  wsBrowserActionResolution: ((requestId: string, resolution: 'completed' | 'skip') => void) | null;
 
   // New: 实时流式状态（当前正在执行的消息）
   streamingReply: string;
@@ -84,6 +86,8 @@ interface ConversationState {
 
   setExecutionProgress: (progress: ExecutionProgress | null) => void;
   setBrowserState: (state: BrowserState | null) => void;
+  updateBrowserState: (requestId: string, updates: Partial<BrowserState>) => void;
+  clearBrowserStates: () => void;
   setStopState: (state: StopState | null) => void;
   setPendingConfirmation: (request: ConfirmationRequest | null) => void;
 
@@ -122,6 +126,7 @@ interface ConversationState {
   resetStreamingState: () => void;
   setWsConfirmation: (fn: ((requestId: string, selection: string | Record<string, unknown>) => void) | null) => void;
   setWsArtifactAction: (fn: ((artifactId: string, action: string, payload?: Record<string, unknown>) => void) | null) => void;
+  setWsBrowserActionResolution: (fn: ((requestId: string, resolution: 'completed' | 'skip') => void) | null) => void;
 
   startExecution: () => void;
   stopExecution: () => void;
@@ -147,6 +152,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   tpaorPhaseHistory: [],
   executionProgress: null,
   browserState: null,
+  browserStates: [],
   stopState: null,
   pendingConfirmation: null,
   currentExecutionStep: null,
@@ -163,6 +169,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   // WebSocket confirmation function
   wsConfirmation: null,
   wsArtifactAction: null,
+  wsBrowserActionResolution: null,
   // New: streaming state
   // These fields are transient execution buffers. They only describe the in-flight
   // assistant turn and are folded into a persisted Message by finalizeCurrentMessage().
@@ -259,7 +266,59 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   },
 
   setBrowserState: (browserState) => {
-    set({ browserState });
+    if (!browserState) {
+      set({ browserState: null, browserStates: [] });
+      return;
+    }
+
+    set((state) => {
+      const nextStates = [...state.browserStates];
+      const requestId = browserState.requestId;
+      const fingerprint = requestId
+        ? `request:${requestId}`
+        : `${browserState.platform}:${browserState.state}:${browserState.message}:${browserState.actionHint || ''}`;
+      const existingIndex = nextStates.findIndex((existing) => {
+        if (requestId && existing.requestId) {
+          return existing.requestId === requestId;
+        }
+        const existingFingerprint = existing.requestId
+          ? `request:${existing.requestId}`
+          : `${existing.platform}:${existing.state}:${existing.message}:${existing.actionHint || ''}`;
+        return existingFingerprint === fingerprint;
+      });
+
+      if (existingIndex >= 0) {
+        nextStates[existingIndex] = {
+          ...nextStates[existingIndex],
+          ...browserState,
+        };
+      } else {
+        nextStates.push(browserState);
+      }
+
+      return {
+        browserState: nextStates.find((item) => item.requiresAction) || nextStates[0] || null,
+        browserStates: nextStates,
+      };
+    });
+  },
+
+  updateBrowserState: (requestId, updates) => {
+    set((state) => {
+      const nextStates = state.browserStates.map((browserState) =>
+        browserState.requestId === requestId
+          ? { ...browserState, ...updates }
+          : browserState
+      );
+      return {
+        browserState: nextStates.find((item) => item.requiresAction) || nextStates[0] || null,
+        browserStates: nextStates,
+      };
+    });
+  },
+
+  clearBrowserStates: () => {
+    set({ browserState: null, browserStates: [] });
   },
 
   setStopState: (stopState) => {
@@ -359,6 +418,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     set({
       isAgentExecuting: false,
       browserState: null,
+      browserStates: [],
     });
   },
 
@@ -752,6 +812,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
 
   setWsConfirmation: (fn) => set({ wsConfirmation: fn }),
   setWsArtifactAction: (fn) => set({ wsArtifactAction: fn }),
+  setWsBrowserActionResolution: (fn) => set({ wsBrowserActionResolution: fn }),
 
   clearMessagesAfter: (messageId) => {
     const { messages } = get();
@@ -772,6 +833,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       tpaorPhaseHistory: [],
       executionProgress: null,
       browserState: null,
+      browserStates: [],
       stopState: null,
       pendingConfirmation: null,
       currentExecutionStep: null,

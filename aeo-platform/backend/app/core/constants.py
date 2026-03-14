@@ -87,7 +87,7 @@ class PlatformConstants:
 
     PLATFORM_DISPLAY_NAMES: Final[dict[str, str]] = {
         "doubao": "豆包",
-        "hunyuan": "混元",
+        "hunyuan": "元宝",
         "kimi": "Kimi",
         "deepseek": "DeepSeek",
     }

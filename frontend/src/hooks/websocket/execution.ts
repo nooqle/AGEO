@@ -87,5 +87,6 @@ export function buildBrowserState(data: WebSocketEventData): BrowserState {
     actionType,
     actionHint: typeof data.action_hint === 'string' ? data.action_hint : undefined,
     progress: typeof data.progress === 'number' ? data.progress : undefined,
+    requestId: typeof data.request_id === 'string' ? data.request_id : undefined,
   };
 }
