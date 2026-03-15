@@ -1,11 +1,12 @@
-import { RiExternalLinkLine } from '@remixicon/react';
-import { getPlatformDisplayName } from '@/lib/platformLabel';
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { getSourceLabel } from '@/lib/sourceLabel';
 import type { ReportCitationCase, SourceSectionData } from '@/types/canvas';
 
 interface SourceSectionProps {
   data?: SourceSectionData | null;
 }
+
+const PIE_COLORS = ['#1d4ed8', '#0f766e', '#b45309', '#7c3aed', '#be123c', '#2563eb', '#4d7c0f', '#9f1239', '#0f766e', '#334155'];
 
 function formatRate(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return '--';
@@ -20,160 +21,132 @@ function normalizeDomain(domain: string | null | undefined): string {
   return withoutProtocol.split('/')[0]?.split('?')[0]?.split('#')[0]?.replace(/:.*$/, '') || '';
 }
 
-function extractDomainFromUrl(url: string | null | undefined): string {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  try {
-    return normalizeDomain(new URL(raw).hostname);
-  } catch {
-    return normalizeDomain(raw);
-  }
-}
-
-function extractRootDomain(domain: string | null | undefined): string {
-  const normalized = normalizeDomain(domain);
-  const parts = normalized.split('.').filter(Boolean);
-  if (parts.length <= 2) return normalized;
-
-  const tld2 = `${parts[parts.length - 2]}.${parts[parts.length - 1]}`;
-  const knownSecondLevel = new Set(['com.cn', 'net.cn', 'org.cn', 'gov.cn']);
-  if (knownSecondLevel.has(tld2) && parts.length >= 3) {
-    return `${parts[parts.length - 3]}.${tld2}`;
-  }
-  return `${parts[parts.length - 2]}.${parts[parts.length - 1]}`;
-}
-
-function resolveOfficialDomains(data?: SourceSectionData | null): string[] {
-  const roots = new Set<string>();
-  const explicit = extractRootDomain(data?.citation_analysis?.brand_domain);
-  if (explicit) roots.add(explicit);
-
-  for (const item of data?.citation_analysis?.top_domains ?? []) {
-    if (!item.is_official) continue;
-    const root = extractRootDomain(item.domain);
-    if (root) roots.add(root);
-  }
-
-  if (roots.size > 0) {
-    return Array.from(roots);
-  }
-
-  for (const item of data?.citation_cases ?? []) {
-    if (!item.is_official) continue;
-    for (const domain of item.citation_domains ?? []) {
-      const root = extractRootDomain(domain);
-      if (root) roots.add(root);
+function buildTopSourcesFromCases(cases: ReportCitationCase[]) {
+  const grouped = new Map<
+    string,
+    {
+      label: string;
+      count: number;
+      isOfficial: boolean;
+      domains: string[];
     }
-    for (const url of item.citation_urls ?? []) {
-      const root = extractRootDomain(extractDomainFromUrl(url));
-      if (root) roots.add(root);
-    }
-  }
+  >();
 
-  return Array.from(roots);
-}
-
-function isOfficialCitationDomain(domain: string, officialDomains: string[]): boolean {
-  const normalized = normalizeDomain(domain);
-  if (!normalized || officialDomains.length === 0) return false;
-  return officialDomains.some((officialDomain) => {
-    const official = normalizeDomain(officialDomain);
-    return official && (normalized === official || normalized.endsWith(`.${official}`));
+  cases.forEach((item) => {
+    const rawDomains = [
+      ...(item.citation_domains ?? []),
+      ...(item.citation_urls ?? []).map((url) => normalizeDomain(url)),
+    ];
+    const domains = [...new Set(rawDomains.map((domain) => normalizeDomain(domain)).filter(Boolean))];
+    domains.forEach((domain) => {
+      const label = getSourceLabel(domain, Boolean(item.is_official)) || `外部站点（${domain}）`;
+      const existing = grouped.get(label) ?? {
+        label,
+        count: 0,
+        isOfficial: Boolean(item.is_official),
+        domains: [],
+      };
+      existing.count += 1;
+      existing.isOfficial = existing.isOfficial || Boolean(item.is_official);
+      existing.domains = [...new Set([...existing.domains, domain])];
+      grouped.set(label, existing);
+    });
   });
+
+  const totalCount = [...grouped.values()].reduce((sum, item) => sum + item.count, 0);
+  return [...grouped.values()]
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'zh-CN'))
+    .slice(0, 10)
+    .map((item) => ({
+      domain: item.domains[0] || '',
+      label: item.label,
+      count: item.count,
+      share: totalCount > 0 ? (item.count / totalCount) * 100 : 0,
+      isOfficial: item.isOfficial,
+      domains: item.domains,
+    }));
 }
 
-function buildQuestionLabel(item: ReportCitationCase, index: number): string {
-  const label = (item.scenario_label || '').trim();
-  if (label && !/引用案例|引用样本/i.test(label)) return label;
-  return item.citation_titles?.find(Boolean) || `引用案例 ${index + 1}`;
-}
+function buildTopSources(data?: SourceSectionData | null) {
+  if ((data?.citation_analysis?.top_domains?.length ?? 0) === 0 && (data?.citation_cases?.length ?? 0) > 0) {
+    return buildTopSourcesFromCases(data?.citation_cases ?? []);
+  }
 
-function buildCitationRows(item: ReportCitationCase, officialDomains: string[]) {
-  const urls = item.citation_urls ?? [];
-  const domains = item.citation_domains ?? [];
-  const titles = item.citation_titles ?? [];
-  const count = Math.max(urls.length, domains.length, titles.length, 1);
+  const grouped = new Map<
+    string,
+    {
+      label: string;
+      count: number;
+      share: number;
+      isOfficial: boolean;
+      domains: string[];
+    }
+  >();
 
-  return Array.from({ length: count }).map((_, index) => {
-    const url = urls[index] || urls[0];
-    const domain = domains[index] || extractDomainFromUrl(url) || domains[0] || '';
-    const title = titles[index] || titles[0];
-    return {
-      key: `${item.scenario_label}-${domain}-${index}`,
-      domain,
-      url,
-      is_official: officialDomains.length > 0
-        ? isOfficialCitationDomain(domain, officialDomains)
-        : Boolean(item.is_official),
-      label: getSourceLabel(
-        domain,
-        officialDomains.length > 0 ? isOfficialCitationDomain(domain, officialDomains) : Boolean(item.is_official),
-      ),
-      title,
+  (data?.citation_analysis?.top_domains ?? []).forEach((item) => {
+    const domain = normalizeDomain(item.domain);
+    if (!domain) return;
+    const label = getSourceLabel(item.domain, item.is_official) || `外部站点（${domain}）`;
+    const existing = grouped.get(label) ?? {
+      label,
+      count: 0,
+      share: 0,
+      isOfficial: item.is_official,
+      domains: [],
     };
+    existing.count += item.count;
+    existing.share += item.share;
+    existing.isOfficial = existing.isOfficial || item.is_official;
+    existing.domains = [...new Set([...existing.domains, domain])];
+    grouped.set(label, existing);
   });
+
+  return [...grouped.values()]
+    .sort((a, b) => b.count - a.count || b.share - a.share)
+    .slice(0, 10)
+    .map((item) => ({
+      domain: item.domains[0] || '',
+      label: item.label,
+      count: item.count,
+      share: item.share,
+      isOfficial: item.isOfficial,
+      domains: item.domains,
+    }));
 }
 
-function splitCitationCases(items: ReportCitationCase[], officialDomains: string[]): ReportCitationCase[] {
-  return items.flatMap((item) => {
-    const links = buildCitationRows(item, officialDomains);
-    if (links.length === 0) return [];
+function buildPieData(data?: SourceSectionData | null) {
+  const topSources = buildTopSources(data);
+  if (topSources.length <= 5) return topSources;
 
-    const groups = [
-      { is_official: true, links: links.filter((link) => link.is_official) },
-      { is_official: false, links: links.filter((link) => !link.is_official) },
-    ].filter((group) => group.links.length > 0);
+  const primary = topSources.slice(0, 5);
+  const others = topSources.slice(5);
+  const othersCount = others.reduce((sum, item) => sum + item.count, 0);
+  const othersShare = others.reduce((sum, item) => sum + item.share, 0);
 
-    if (groups.length === 1) {
-      return [{
-        ...item,
-        is_official: groups[0].is_official,
-        citation_domains: groups[0].links.map((link) => link.domain),
-        citation_titles: groups[0].links.map((link) => link.title || ''),
-        citation_urls: groups[0].links.map((link) => link.url || ''),
-      }];
-    }
-
-    return groups.map((group) => ({
-      ...item,
-      is_official: group.is_official,
-      citation_domains: group.links.map((link) => link.domain),
-      citation_titles: group.links.map((link) => link.title || ''),
-      citation_urls: group.links.map((link) => link.url || ''),
-    }));
-  });
-}
-
-function buildCitationTableRows(items: ReportCitationCase[], officialDomains: string[]) {
-  return items.flatMap((item, index) => {
-    const question = buildQuestionLabel(item, index);
-    return buildCitationRows(item, officialDomains).map((link, linkIndex) => ({
-      key: `${item.scenario_label || question}-${item.platform || 'unknown'}-${link.domain}-${linkIndex}`,
-      type: link.is_official ? '官网' : '第三方',
-      platform: item.platform ? getPlatformDisplayName(item.platform) : '--',
-      question,
-      sourceLabel: link.label,
-      domain: link.domain || '--',
-      url: link.url,
-    }));
-  });
+  return [
+    ...primary,
+    {
+      domain: 'others',
+      label: '其他来源',
+      count: othersCount,
+      share: Number(othersShare.toFixed(1)),
+      isOfficial: false,
+    },
+  ];
 }
 
 export function SourceSection({ data }: SourceSectionProps) {
-  const officialDomains = resolveOfficialDomains(data);
-  const rawCases = data?.citation_cases ?? [];
-  const cases = splitCitationCases(rawCases, officialDomains);
-  const analysis = data?.citation_analysis;
-  const tableRows = buildCitationTableRows(cases, officialDomains);
-  const officialLinkCount = tableRows.filter((item) => item.type === '官网').length;
-  const thirdPartyLinkCount = tableRows.filter((item) => item.type === '第三方').length;
+  const topSources = buildTopSources(data);
+  const pieData = buildPieData(data);
+  const officialCount = topSources.filter((item) => item.isOfficial).reduce((sum, item) => sum + item.count, 0);
+  const thirdPartyCount = topSources.filter((item) => !item.isOfficial).reduce((sum, item) => sum + item.count, 0);
 
   return (
     <section className="rounded-[20px] border bg-[var(--bg-tertiary)] p-6" style={{ borderColor: 'var(--border-subtle)' }}>
       <div className="space-y-1.5 border-b border-[var(--border-subtle)] pb-4">
-        <h2 className="text-[24px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">{data?.title || '内容引用分析'}</h2>
+        <h2 className="text-[24px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">{data?.title || '引用来源分析'}</h2>
         <p className="max-w-3xl text-[14px] leading-7 text-[var(--text-secondary)]">
-          {data?.description || '看品牌内容是否进入了答案，以及引用来自官网还是第三方站点。'}
+          {data?.description || '这里只保留来源结构和头部来源，不再堆冗长明细表。'}
         </p>
       </div>
 
@@ -183,99 +156,103 @@ export function SourceSection({ data }: SourceSectionProps) {
           <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{formatRate(data?.content_citation_rate)}</div>
         </div>
         <div className="rounded-[16px] border bg-[var(--bg-elevated)] p-4" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="text-[12px] text-[var(--text-tertiary)]">被引用回答</div>
+          <div className="text-[12px] text-[var(--text-tertiary)]">进入引用链的问题数</div>
           <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{data?.cited_answer_count ?? '--'}</div>
         </div>
         <div className="rounded-[16px] border bg-[var(--bg-elevated)] p-4" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="text-[12px] text-[var(--text-tertiary)]">官网引用</div>
-          <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{officialLinkCount}</div>
+          <div className="text-[12px] text-[var(--text-tertiary)]">官网引用次数</div>
+          <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{officialCount}</div>
         </div>
         <div className="rounded-[16px] border bg-[var(--bg-elevated)] p-4" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="text-[12px] text-[var(--text-tertiary)]">第三方引用</div>
-          <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{thirdPartyLinkCount}</div>
+          <div className="text-[12px] text-[var(--text-tertiary)]">第三方引用次数</div>
+          <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{thirdPartyCount}</div>
         </div>
       </div>
 
-      <section className="mt-5 rounded-[18px] border bg-[var(--bg-elevated)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-        <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
-          <h3 className="text-[18px] font-semibold text-[var(--text-primary)]">引用明细表</h3>
-          <span className="text-[12px] text-[var(--text-tertiary)]">{tableRows.length} 条链接</span>
-        </div>
-        {tableRows.length > 0 ? (
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-separate border-spacing-0">
-              <thead>
-                <tr className="text-left text-[12px] text-[var(--text-tertiary)]">
-                  <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">类型</th>
-                  <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">平台</th>
-                  <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">涉及问题</th>
-                  <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">来源</th>
-                  <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">域名</th>
-                  <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">链接</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tableRows.map((row) => (
-                  <tr key={row.key} className="align-top">
-                    <td className="border-b border-[var(--border-subtle)] px-3 py-3">
-                      <span
-                        className="rounded-full px-2.5 py-1 text-[11px] font-medium"
-                        style={{
-                          color: row.type === '官网' ? '#0f766e' : 'var(--text-secondary)',
-                          backgroundColor: row.type === '官网' ? 'rgba(20,184,166,0.12)' : 'var(--bg-secondary)',
-                        }}
-                      >
-                        {row.type}
-                      </span>
-                    </td>
-                    <td className="border-b border-[var(--border-subtle)] px-3 py-3 text-[13px] text-[var(--text-secondary)]">{row.platform}</td>
-                    <td className="border-b border-[var(--border-subtle)] px-3 py-3 text-[13px] leading-6 text-[var(--text-primary)]">{row.question}</td>
-                    <td className="border-b border-[var(--border-subtle)] px-3 py-3 text-[13px] text-[var(--text-secondary)]">{row.sourceLabel || '--'}</td>
-                    <td className="border-b border-[var(--border-subtle)] px-3 py-3 text-[13px] text-[var(--text-tertiary)]">{row.domain}</td>
-                    <td className="border-b border-[var(--border-subtle)] px-3 py-3 text-[13px] leading-6 text-[var(--text-secondary)]">
-                      {row.url ? (
-                        <a href={row.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 break-all text-[var(--color-primary)] hover:underline">
-                          <span>{row.url}</span>
-                          <RiExternalLinkLine className="h-3.5 w-3.5 shrink-0" />
-                        </a>
-                      ) : (
-                        <span>当前未保留原始链接</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="mt-4 rounded-[16px] border border-dashed border-[var(--border-subtle)] px-4 py-6 text-[14px] text-[var(--text-tertiary)]">
-            当前还没有可展示的引用明细。
-          </div>
-        )}
-      </section>
-
-      {analysis?.top_domains && analysis.top_domains.length > 0 ? (
-        <section className="mt-5 rounded-[18px] border bg-[var(--bg-elevated)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
+      <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(320px,400px)_1fr]">
+        <section className="rounded-[18px] border bg-[var(--bg-elevated)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
             <h3 className="text-[18px] font-semibold text-[var(--text-primary)]">来源分布</h3>
-            <span className="text-[12px] text-[var(--text-tertiary)]">{analysis.total_citations ?? 0} 次引用</span>
+            <span className="text-[12px] text-[var(--text-tertiary)]">{data?.citation_analysis?.total_citations ?? 0} 次引用</span>
           </div>
-          <div className="mt-4 space-y-3">
-            {analysis.top_domains.slice(0, 8).map((domain, index) => (
-              <div key={`${domain.domain}-${index}`} className="flex items-center justify-between gap-3 rounded-[14px] border bg-[var(--bg-secondary)] px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="min-w-0">
-                  <div className="text-[14px] font-semibold text-[var(--text-primary)]">{getSourceLabel(domain.domain, domain.is_official)}</div>
-                  <div className="mt-1 text-[12px] text-[var(--text-tertiary)]">{domain.domain}</div>
+          {pieData.length > 0 ? (
+            <div className="mt-4 h-[240px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    dataKey="count"
+                    nameKey="label"
+                    innerRadius={62}
+                    outerRadius={92}
+                    paddingAngle={3}
+                    stroke="transparent"
+                  >
+                    {pieData.map((entry, index) => (
+                      <Cell key={`${entry.domain}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value, _name, payload) => [`${value ?? '--'} 次`, payload?.payload?.label || '来源']}
+                    labelFormatter={() => '来源分布'}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="mt-4 rounded-[16px] border border-dashed border-[var(--border-subtle)] px-4 py-6 text-[14px] text-[var(--text-tertiary)]">
+              当前还没有足够的来源分布数据。
+            </div>
+          )}
+          {pieData.length > 0 ? (
+            <div className="mt-4 space-y-2">
+              {pieData.map((item, index) => (
+                <div key={`${item.label}-${index}`} className="flex items-center justify-between gap-3 text-[12px] text-[var(--text-secondary)]">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[index % PIE_COLORS.length] }} />
+                    <span>{item.label}</span>
+                  </div>
+                  <span>{item.share.toFixed(1)}%</span>
                 </div>
-                <div className="text-right text-[12px] leading-5 text-[var(--text-secondary)]">
-                  <div>{domain.share.toFixed(1)}%</div>
-                  <div>{domain.count} 次</div>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : null}
         </section>
-      ) : null}
+
+        <section className="rounded-[18px] border bg-[var(--bg-elevated)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
+            <h3 className="text-[18px] font-semibold text-[var(--text-primary)]">Top 10 来源</h3>
+            <span className="text-[12px] text-[var(--text-tertiary)]">按引用次数排序</span>
+          </div>
+          {topSources.length > 0 ? (
+            <div className="mt-4 space-y-3">
+              {topSources.map((source, index) => (
+                <div key={`${source.domain}-${index}`} className="rounded-[14px] border bg-[var(--bg-secondary)] px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[13px] font-semibold text-[var(--text-primary)]">{index + 1}. {source.label}</span>
+                        {source.isOfficial ? (
+                          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">官网</span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 text-[12px] text-[var(--text-tertiary)]">{source.domains?.slice(0, 2).join(' / ') || source.domain}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[14px] font-semibold text-[var(--text-primary)]">{source.count} 次</div>
+                      <div className="mt-1 text-[12px] text-[var(--text-tertiary)]">{source.share.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4 rounded-[16px] border border-dashed border-[var(--border-subtle)] px-4 py-6 text-[14px] text-[var(--text-tertiary)]">
+              当前还没有可展示的头部来源。
+            </div>
+          )}
+        </section>
+      </div>
     </section>
   );
 }

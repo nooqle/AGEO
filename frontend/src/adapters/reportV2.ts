@@ -7,7 +7,6 @@
   CompetitorBattleItem,
   CompetitorBattleSummaryCard,
   InsightSectionData,
-  InsightSectionItem,
   PlatformCitationStats,
   ReportCitationCase,
   ReportCanvasContent,
@@ -19,8 +18,14 @@
   RiskSectionData,
   ScenarioCoverageData,
   ScenarioCoverageItem,
+  ScenarioCoverageLens,
   SourceSectionData,
 } from '@/types/canvas';
+import {
+  buildScenarioSemanticLenses,
+  enrichScenarioItemSemantics,
+  summarizeSemanticTags,
+} from '@/lib/a5Semantic';
 type UnknownRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -131,6 +136,13 @@ function sanitizeNarrativeText(value: string | undefined): string | undefined {
   return text;
 }
 
+function statusToAssessment(status: ReportV2Metric['status']): string {
+  if (status === 'good') return '优秀';
+  if (status === 'warning') return '及格';
+  if (status === 'risk') return '不及格';
+  return '待判断';
+}
+
 function readField(record: UnknownRecord, ...keys: string[]): unknown {
   for (const key of keys) {
     if (key in record) {
@@ -237,7 +249,7 @@ function normalizeScenarioItem(record: UnknownRecord, fallbackLabel: string, def
     readString(record, 'evidence', 'reason', 'description', 'improvement_hint', 'improvementHint') ||
     undefined;
 
-  return {
+  return enrichScenarioItemSemantics({
     scenario_id: readString(record, 'scenario_id', 'scenarioId'),
     scenario_label: scenarioLabel,
     scenario_priority: readString(record, 'scenario_priority', 'scenarioPriority', 'priority'),
@@ -250,7 +262,110 @@ function normalizeScenarioItem(record: UnknownRecord, fallbackLabel: string, def
     battle_status: readString(record, 'battle_status', 'battleStatus'),
     evidence,
     confidence: readNumber(record, 'confidence'),
+    competitors_present: readStringList(record, 'competitors_present', 'competitorsPresent', 'competitors'),
+  });
+}
+
+function toRiskScenarioItem(
+  item: ReportRiskItem,
+  scenarioMap: Map<string, ScenarioCoverageItem>
+): ScenarioCoverageItem {
+  const scenarioLabel = item.scenario_label || '待补强场景';
+  const scenarioKey = scenarioLabel.trim().toLowerCase();
+  const matched = scenarioMap.get(scenarioKey);
+  return enrichScenarioItemSemantics({
+    scenario_id: matched?.scenario_id || item.risk_id,
+    scenario_label: scenarioLabel,
+    scenario_priority: matched?.scenario_priority || (item.severity === 'high' ? 'high' : 'medium'),
+    brand_present: matched?.brand_present ?? (item.risk_type === 'no_official_citation'),
+    present_platforms: matched?.present_platforms ?? [],
+    official_citation_present: matched?.official_citation_present ?? false,
+    official_source_domains: matched?.official_source_domains ?? [],
+    battle_status:
+      matched?.battle_status ||
+      (item.risk_type === 'missing_presence'
+        ? 'missing'
+        : item.risk_type === 'competitor_substitution'
+        ? 'contested'
+        : 'defend'),
+    evidence: sanitizeCustomerText(item.reason) || sanitizeCustomerText(item.impact_summary) || matched?.evidence,
+    confidence: matched?.confidence,
+    competitors_present: matched?.competitors_present ?? [],
+  });
+}
+
+function buildScenarioMap(items: ScenarioCoverageItem[]): Map<string, ScenarioCoverageItem> {
+  return new Map(
+    items
+      .filter((item) => item.scenario_label.trim())
+      .map((item) => [item.scenario_label.trim().toLowerCase(), item] as const)
+  );
+}
+
+function buildScenarioSemanticSummary(
+  prefix: string,
+  items: ScenarioCoverageItem[]
+): string | undefined {
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  const topLabels = (values: string[], fallback: string) => {
+    if (values.length === 0) return fallback;
+    const counter = new Map<string, number>();
+    values.forEach((value) => counter.set(value, (counter.get(value) ?? 0) + 1));
+    return [...counter.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
+      .slice(0, 3)
+      .map(([label]) => label)
+      .join('、');
   };
+
+  const audiences = topLabels(items.flatMap((item) => item.semantic_tags?.audiences ?? []), '泛人群');
+  const prices = topLabels(items.flatMap((item) => item.semantic_tags?.prices ?? []), '价格未明确');
+  const features = topLabels(items.flatMap((item) => item.semantic_tags?.features ?? []), '决策点未明确');
+  const usages = topLabels(items.flatMap((item) => item.semantic_tags?.usages ?? []), '使用场景未明确');
+
+  return `${prefix}主要集中在 ${audiences}，价格带以 ${prices} 为主，用户最关心 ${features}，对应的使用场景主要是 ${usages}。`;
+}
+
+function collectScenarioLenses(
+  effectiveItems: ScenarioCoverageItem[],
+  missingItems: ScenarioCoverageItem[],
+  riskItems: ScenarioCoverageItem[]
+): ScenarioCoverageLens[] {
+  const recordMap = new Map<
+    string,
+    {
+      texts: string[];
+      brandPresent?: boolean;
+      competitorPresent?: boolean;
+      missing?: boolean;
+      risk?: boolean;
+    }
+  >();
+  [...effectiveItems, ...missingItems, ...riskItems].forEach((item) => {
+    const key = item.scenario_label.trim().toLowerCase();
+    const existing = recordMap.get(key) ?? {
+      texts: [],
+      brandPresent: false,
+      competitorPresent: false,
+      missing: false,
+      risk: false,
+    };
+    existing.texts = uniqueStrings([...existing.texts, item.scenario_label, item.evidence || '']);
+    existing.brandPresent = existing.brandPresent || item.brand_present;
+    existing.competitorPresent =
+      existing.competitorPresent ||
+      (item.competitors_present?.length ?? 0) > 0 ||
+      item.battle_status === 'contested' ||
+      item.battle_status === 'missing';
+    existing.missing = existing.missing || item.battle_status === 'missing';
+    existing.risk = existing.risk || item.battle_status === 'contested' || item.battle_status === 'defend';
+    recordMap.set(key, existing);
+  });
+  const records = [...recordMap.values()];
+  return buildScenarioSemanticLenses(records);
 }
 
 function normalizeCompetitorCard(record: UnknownRecord): CompetitorBattleSummaryCard | null {
@@ -441,155 +556,86 @@ function buildCitationAnalysisFromSourceOverview(raw: UnknownRecord | undefined)
   };
 }
 
-function buildSummaryMetricsFromRoot(summaryMetrics: UnknownRecord | undefined): ReportV2Metric[] {
-  if (!summaryMetrics) {
-    return [];
-  }
-
-  return [
-    {
-      id: 'brand_mention_rate',
-      label: '品牌提及率',
-      value: readNumber(summaryMetrics, 'brand_mention_rate', 'brandMentionRate'),
-      unit: 'ratio',
-      description: '品牌在 AI 回答中被直接提到的频率。',
-    },
-    {
-      id: 'official_citation_rate',
-      label: '内容引用率',
-      value: readNumber(summaryMetrics, 'official_citation_rate', 'officialCitationRate'),
-      unit: 'ratio',
-      description: '品牌相关内容是否进入 AI 答案的证据链。',
-    },
-    {
-      id: 'platform_coverage_count',
-      label: '覆盖平台数',
-      value: readNumber(summaryMetrics, 'platform_coverage_count', 'platformCoverageCount'),
-      description: '品牌已进入回答的平台数量。',
-    },
-    {
-      id: 'scenario_hit_count',
-      label: '被提及问题',
-      value: readNumber(summaryMetrics, 'scenario_hit_count', 'scenarioHitCount'),
-      description: '当前有多少个问题的回答提到了品牌。',
-    },
-    {
-      id: 'missing_high_value_scenario_count',
-      label: '缺席高价值场景',
-      value: readNumber(summaryMetrics, 'missing_high_value_scenario_count', 'missingHighValueScenarioCount'),
-      description: '高价值但品牌仍未进入回答的场景数。',
-    },
-    {
-      id: 'high_risk_scenario_count',
-      label: '高风险场景',
-      value: readNumber(summaryMetrics, 'high_risk_scenario_count', 'highRiskScenarioCount'),
-      description: '当前需要优先处理的高风险问题数。',
-    },
-  ];
-}
-
 function createSummaryMetrics(
   metrics: Record<string, unknown> | undefined,
   scenarios: ScenarioCoverageData,
   risks: RiskSectionData,
-  sources: SourceSectionData,
-  summaryMetrics: UnknownRecord | undefined
+  sources: SourceSectionData
 ): ReportV2Metric[] {
   const scenarioItems = scenarios.items ?? [];
   const riskItems = risks.items ?? [];
-  const citationAnalysis = sources.citation_analysis;
-
   const brandMentionRate = normalizePercent(
     toNumberValue(pickMetricValue(metrics, ['brand_mention_rate', 'mention_rate', 'mentionRate']))
   );
-  const contentCitationRate =
-    sources.content_citation_rate ??
+  const officialCitationRate =
     sources.official_citation_rate ??
     normalizePercent(toNumberValue(pickMetricValue(metrics, ['official_citation_rate', 'citation_rate'])));
-  const inferredPlatformCoverageCount =
-    uniqueStrings(scenarioItems.flatMap((item) => item.present_platforms ?? [])).length ||
-    Object.keys(citationAnalysis?.platform_citation_stats ?? {}).length ||
-    undefined;
-  const platformCoverageCount =
-    toNumberValue(pickMetricValue(metrics, ['platform_coverage_count', 'coverage_platform_count', 'platform_count'])) ??
-    inferredPlatformCoverageCount;
-  const scenarioTotal =
-    toNumberValue(pickMetricValue(metrics, ['scenario_total', 'total_scenarios'])) ??
-    (scenarioItems.length > 0 ? scenarioItems.length : undefined);
-  const inferredScenarioHitCount = scenarioItems.filter((item) => item.brand_present).length || undefined;
-  const scenarioHitCount =
-    toNumberValue(pickMetricValue(metrics, ['scenario_hit_count', 'effective_scenario_count'])) ??
-    inferredScenarioHitCount;
-  const inferredMissingHighValueScenarioCount =
-    riskItems.filter((item) => item.risk_type === 'missing_presence').length || undefined;
+  const inferredMissingHighValueScenarioCount = riskItems.filter((item) => item.risk_type === 'missing_presence').length || undefined;
   const missingHighValueScenarioCount =
     toNumberValue(
       pickMetricValue(metrics, ['missing_high_value_scenario_count', 'missing_scenario_count'])
     ) ?? inferredMissingHighValueScenarioCount;
+  const highValueScenarioCoverageCount =
+    scenarioItems.filter((item) => item.brand_present && item.scenario_priority === 'high').length || undefined;
+  const totalHighValueScenarioCount =
+    (highValueScenarioCoverageCount ?? 0) + (missingHighValueScenarioCount ?? 0) || undefined;
   const inferredHighRiskScenarioCount =
     riskItems.filter((item) => item.severity === 'high').length || undefined;
   const highRiskScenarioCount =
     toNumberValue(pickMetricValue(metrics, ['high_risk_scenario_count'])) ?? inferredHighRiskScenarioCount;
 
-  const fallbackMetrics: ReportV2Metric[] = [
+  const highValueCoverageRate =
+    totalHighValueScenarioCount && totalHighValueScenarioCount > 0
+      ? ((highValueScenarioCoverageCount ?? 0) / totalHighValueScenarioCount) * 100
+      : undefined;
+
+  const items: ReportV2Metric[] = [
     {
       id: 'brand_mention_rate',
       label: '品牌提及率',
       value: brandMentionRate,
       unit: brandMentionRate !== undefined ? '%' : undefined,
-      description: '品牌在 AI 回答中被直接提到的频率。',
+      description: '回答里直接提到品牌的占比，先看品牌有没有进场。',
       status:
         brandMentionRate === undefined ? 'neutral' : brandMentionRate >= 50 ? 'good' : brandMentionRate >= 20 ? 'warning' : 'risk',
     },
     {
       id: 'official_citation_rate',
-      label: '内容引用率',
-      value: contentCitationRate,
-      unit: contentCitationRate !== undefined ? '%' : undefined,
-      description: '品牌相关内容是否进入 AI 答案的证据链。',
+      label: '官网引用率',
+      value: officialCitationRate,
+      unit: officialCitationRate !== undefined ? '%' : undefined,
+      description: 'AI 引用链里有多少比例来自官网，决定官方说法有没有被采信。',
       status:
-        contentCitationRate === undefined
+        officialCitationRate === undefined
           ? 'neutral'
-          : contentCitationRate >= 30
+          : officialCitationRate >= 30
           ? 'good'
-          : contentCitationRate >= 10
+          : officialCitationRate >= 10
           ? 'warning'
           : 'risk',
     },
     {
-      id: 'platform_coverage_count',
-      label: '覆盖平台数',
-      value: platformCoverageCount,
-      description: '品牌已进入回答的平台数量。',
-      status: platformCoverageCount === undefined ? 'neutral' : platformCoverageCount >= 3 ? 'good' : 'warning',
-    },
-    {
-      id: 'scenario_hit_count',
-      label: '被提及问题',
-      value: scenarioHitCount,
+      id: 'high_value_scenario_coverage_count',
+      label: '高价值场景覆盖数',
+      value: highValueScenarioCoverageCount,
       description:
-        scenarioTotal !== undefined ? `当前识别问题总数 ${scenarioTotal}。` : '当前有多少个问题的回答提到了品牌。',
-      status: scenarioHitCount === undefined ? 'neutral' : scenarioHitCount >= 3 ? 'good' : 'warning',
-    },
-    {
-      id: 'missing_high_value_scenario_count',
-      label: '缺席高价值场景',
-      value: missingHighValueScenarioCount,
-      description: '高价值但品牌仍未进入回答的场景数。',
+        totalHighValueScenarioCount && totalHighValueScenarioCount > 0
+          ? `已覆盖 ${highValueScenarioCoverageCount ?? 0}/${totalHighValueScenarioCount} 个高价值场景。`
+          : '高价值场景指购买意图强、值得优先抢占的问题。',
       status:
-        missingHighValueScenarioCount === undefined
+        highValueCoverageRate === undefined
           ? 'neutral'
-          : missingHighValueScenarioCount === 0
+          : highValueCoverageRate >= 70
           ? 'good'
-          : missingHighValueScenarioCount <= 2
+          : highValueCoverageRate >= 40
           ? 'warning'
           : 'risk',
     },
     {
       id: 'high_risk_scenario_count',
-      label: '高风险场景',
+      label: '高风险场景数',
       value: highRiskScenarioCount,
-      description: '当前需要优先处理的高风险问题数。',
+      description: '需要优先补强的问题数，通常意味着竞品抢位、品牌缺席或官网证据链薄弱。',
       status:
         highRiskScenarioCount === undefined
           ? 'neutral'
@@ -601,23 +647,10 @@ function createSummaryMetrics(
     },
   ];
 
-  const rootMetrics = buildSummaryMetricsFromRoot(summaryMetrics);
-  if (!summaryMetrics || rootMetrics.length === 0) {
-    return fallbackMetrics;
-  }
-
-  const fallbackById = new Map(fallbackMetrics.map((metric) => [metric.id, metric]));
-  return rootMetrics.map((metric) => {
-    const fallback = fallbackById.get(metric.id);
-    return {
-      ...fallback,
-      ...metric,
-      value: metric.value !== undefined && metric.value !== null ? metric.value : fallback?.value,
-      unit: metric.value !== undefined && metric.value !== null ? metric.unit : fallback?.unit,
-      description: metric.description || fallback?.description,
-      status: metric.value !== undefined && metric.value !== null ? metric.status || fallback?.status : fallback?.status,
-    } satisfies ReportV2Metric;
-  });
+  return items.map((metric) => ({
+    ...metric,
+    assessment: statusToAssessment(metric.status),
+  }));
 }
 
 function buildStatusSummary(
@@ -626,39 +659,32 @@ function buildStatusSummary(
   metrics: ReportV2Metric[],
   summaryMetrics: UnknownRecord | undefined
 ): string | undefined {
-  const rootSummary = summaryMetrics ? sanitizeNarrativeText(readString(summaryMetrics, 'status_summary', 'statusSummary')) : undefined;
-  if (rootSummary) {
-    return rootSummary;
-  }
-
   const metricMap = new Map(metrics.map((metric) => [metric.id, metric.value]));
-  const scenarioHitCount =
-    readNumber(summaryMetrics ?? {}, 'scenario_hit_count', 'scenarioHitCount') ??
-    metricMap.get('scenario_hit_count');
   const missingCount =
     readNumber(summaryMetrics ?? {}, 'missing_high_value_scenario_count', 'missingHighValueScenarioCount') ??
-    metricMap.get('missing_high_value_scenario_count');
-  const platformCount =
-    readNumber(summaryMetrics ?? {}, 'platform_coverage_count', 'platformCoverageCount') ??
-    metricMap.get('platform_coverage_count');
-  const scenarioTotal =
-    readNumber(summaryMetrics ?? {}, 'scenario_total', 'scenarioTotal') ??
-    scenarios.items?.length;
+    0;
+  const highValueCoveredCount =
+    (typeof metricMap.get('high_value_scenario_coverage_count') === 'number'
+      ? Number(metricMap.get('high_value_scenario_coverage_count'))
+      : undefined) ??
+    scenarios.items?.filter((item) => item.brand_present && item.scenario_priority === 'high').length ??
+    0;
   const highRiskCount =
     readNumber(summaryMetrics ?? {}, 'high_risk_scenario_count', 'highRiskScenarioCount') ??
     risks.items?.filter((item) => item.severity === 'high').length;
+  const officialCitationRate = metricMap.get('official_citation_rate');
+  const brandMentionRate = metricMap.get('brand_mention_rate');
 
-  if (
-    scenarioHitCount === undefined &&
-    missingCount === undefined &&
-    platformCount === undefined &&
-    scenarioTotal === undefined &&
-    highRiskCount === undefined
-  ) {
+  if (highValueCoveredCount === undefined && missingCount === undefined && highRiskCount === undefined && officialCitationRate === undefined) {
     return undefined;
   }
 
-  return `当前品牌已覆盖 ${scenarioHitCount ?? '--'} / ${scenarioTotal ?? '--'} 个场景，覆盖 ${platformCount ?? '--'} 个平台，仍有 ${missingCount ?? '--'} 个高价值场景缺席，高风险问题 ${highRiskCount ?? '--'} 个。`;
+  const effectiveSummary = scenarios.summary;
+  if ((highRiskCount ?? 0) > 0 || (missingCount ?? 0) > 0) {
+    return `${effectiveSummary || '这份报告在看品牌进入了哪些购车场景。'} 其中仍有 ${missingCount ?? 0} 个高价值场景缺席，${highRiskCount ?? 0} 个场景已经进入优先补强区。`;
+  }
+
+  return `${effectiveSummary || '这份报告在看品牌进入了哪些购车场景。'} 当前品牌提及率 ${brandMentionRate ?? '--'}%，官网引用率 ${officialCitationRate ?? '--'}%。`;
 }
 
 function normalizeScenarioCoverage(data: ReportCanvasContent['data']): ScenarioCoverageData {
@@ -667,9 +693,10 @@ function normalizeScenarioCoverage(data: ReportCanvasContent['data']): ScenarioC
     .map((item, index) => normalizeScenarioItem(item as unknown as UnknownRecord, `场景 ${index + 1}`))
     .filter((item): item is ScenarioCoverageItem => Boolean(item));
 
-  const rawScenarioItems = toRecordArray(data.scenario_matrix)
+  const allRawScenarioItems = toRecordArray(data.scenario_matrix)
     .map((item, index) => normalizeScenarioItem(item, `场景 ${index + 1}`))
-    .filter((item): item is ScenarioCoverageItem => item !== null && item.brand_present === true);
+    .filter((item): item is ScenarioCoverageItem => item !== null && isMeaningfulQuestionLabel(item.scenario_label));
+  const rawScenarioItems = allRawScenarioItems.filter((item) => item.brand_present === true);
 
   const strengthItems = [
     ...toRecordArray(data.strengths).map((record, index) => normalizeScenarioItem(record, `优势场景 ${index + 1}`, true)),
@@ -692,12 +719,31 @@ function normalizeScenarioCoverage(data: ReportCanvasContent['data']): ScenarioC
     explicitItems.length > 0 ? explicitItems : rawScenarioItems.length > 0 ? rawScenarioItems : strengthItems
   );
   const hitCount = items.filter((item) => item.brand_present).length;
+  const scenarioMap = buildScenarioMap(allRawScenarioItems.length > 0 ? allRawScenarioItems : items);
+  const riskCandidates = normalizeRisks(data).items ?? [];
+  const missingItems = riskCandidates
+    .filter((item) => item.risk_type === 'missing_presence')
+    .map((item) => toRiskScenarioItem(item, scenarioMap));
+  const riskItems = riskCandidates
+    .filter((item) => item.severity === 'high' || item.risk_type === 'competitor_substitution' || item.risk_type === 'no_official_citation')
+    .map((item) => toRiskScenarioItem(item, scenarioMap));
+  const semanticLenses = collectScenarioLenses(items, missingItems, riskItems);
+  const overview =
+    allRawScenarioItems.length > 0
+      ? `本次共识别 ${allRawScenarioItems.length} 个购车问题，其中品牌已进入 ${hitCount} 个，缺席高价值场景 ${missingItems.length} 个，高风险场景 ${riskItems.length} 个。`
+      : undefined;
 
   return {
-    title: explicit?.title || '有效场景',
-    description: explicit?.description || '这些场景里，品牌已经建立了有效存在感。',
-    summary: explicit?.summary || (items.length > 0 ? `已识别 ${hitCount} 个品牌已进入回答的场景。` : undefined),
+    title: '有效场景',
+    description: '有效场景指品牌已经进入 AI 回答，说明这类问题里已经建立了基础存在感。',
+    summary: explicit?.summary || buildScenarioSemanticSummary('品牌当前已经进入的场景', items),
+    overview,
     items,
+    missing_items: missingItems,
+    risk_items: riskItems,
+    missing_summary: buildScenarioSemanticSummary('品牌当前缺席的高价值场景', missingItems),
+    risk_summary: buildScenarioSemanticSummary('当前高风险场景', riskItems),
+    semantic_lenses: semanticLenses,
   };
 }
 
@@ -751,40 +797,12 @@ function normalizeRisks(data: ReportCanvasContent['data']): RiskSectionData {
   const highRiskCount = items.filter((item) => item.severity === 'high').length;
 
   return {
-    title: explicit?.title || '缺口与风险',
-    description: explicit?.description || '这些缺口正在影响品牌被提及和被引用。',
+    title: '缺席高价值场景与高风险场景',
+    description: '缺席高价值场景，指购买意图强但品牌没进回答；高风险场景，指已经出现竞品抢位、品牌缺席或官网证据链薄弱。',
     summary:
       explicit?.summary ||
-      (items.length > 0 ? `当前识别 ${items.length} 个风险点，其中 ${highRiskCount} 个为高风险。` : undefined),
+      (items.length > 0 ? `当前识别 ${items.length} 个需要补强的场景，其中 ${highRiskCount} 个属于高风险。` : undefined),
     items,
-  };
-}
-
-function normalizeSources(data: ReportCanvasContent['data']): SourceSectionData {
-  const explicit = data.report_v2?.sources ?? data.source_section;
-  const rawSourceOverview = isRecord(data.source_overview) ? data.source_overview : undefined;
-  const citationAnalysis =
-    explicit?.citation_analysis ??
-    data.citation_analysis ??
-    buildCitationAnalysisFromSourceOverview(rawSourceOverview);
-  const officialCitationRate =
-    explicit?.official_citation_rate ??
-    (citationAnalysis ? citationAnalysis.official_share : undefined) ??
-    normalizePercent(readNumber(rawSourceOverview ?? {}, 'official_citation_rate', 'officialCitationRate')) ??
-    normalizePercent(toNumberValue(pickMetricValue(data.metrics as Record<string, unknown> | undefined, ['official_citation_rate'])));
-
-  return {
-    title: explicit?.title || '信息源分析',
-    description: explicit?.description || 'AI 平台正在引用哪些来源来形成回答。',
-    summary: explicit?.summary || readString(rawSourceOverview ?? {}, 'note'),
-    official_citation_rate: officialCitationRate,
-    official_top_titles: uniqueStrings([
-      ...toStringArray(readField(rawSourceOverview ?? {}, 'official_top_titles', 'officialTopTitles')),
-      ...(citationAnalysis?.top_domains ?? [])
-        .filter((item) => item.is_official)
-        .flatMap((item) => item.sample_titles ?? []),
-    ]),
-    citation_analysis: citationAnalysis,
   };
 }
 
@@ -796,135 +814,33 @@ function mergeSummaryMetrics(
     return fallbackMetrics;
   }
 
-  const fallbackById = new Map(fallbackMetrics.map((metric) => [metric.id, metric]));
+  const explicitById = new Map(explicitMetrics.map((metric) => [metric.id, metric]));
+  const fallbackIds = new Set(fallbackMetrics.map((metric) => metric.id));
 
-  return explicitMetrics.map((metric) => {
-    const fallback = fallbackById.get(metric.id);
+  const merged = fallbackMetrics.map((fallback) => {
+    const metric = explicitById.get(fallback.id);
+    if (!metric) {
+      return fallback;
+    }
     return {
       ...fallback,
       ...metric,
-      value: metric.value !== undefined && metric.value !== null ? metric.value : fallback?.value,
-      unit: metric.value !== undefined && metric.value !== null ? metric.unit : fallback?.unit,
-      description: metric.description || fallback?.description,
-      status: metric.value !== undefined && metric.value !== null ? metric.status || fallback?.status : fallback?.status,
+      value: metric.value !== undefined && metric.value !== null ? metric.value : fallback.value,
+      unit: metric.value !== undefined && metric.value !== null ? metric.unit : fallback.unit,
+      description: metric.description || fallback.description,
+      status: metric.value !== undefined && metric.value !== null ? metric.status || fallback.status : fallback.status,
+      assessment: metric.assessment || fallback.assessment,
     } satisfies ReportV2Metric;
   });
-}
 
-function normalizeInsightItem(record: UnknownRecord, fallbackTitle: string): InsightSectionItem | null {
-  const title = readString(record, 'title', 'label', 'scenario_label', 'scenarioLabel') || fallbackTitle;
-  if (!title) {
-    return null;
-  }
+  const extras = explicitMetrics
+    .filter((metric) => !fallbackIds.has(metric.id))
+    .map((metric) => ({
+      ...metric,
+      assessment: metric.assessment || statusToAssessment(metric.status),
+    }));
 
-  return {
-    title,
-    scenario: readString(record, 'scenario', 'scenario_label', 'scenarioLabel'),
-    evidence: readString(record, 'evidence', 'description', 'reason'),
-    platforms: readStringList(record, 'platforms', 'present_platforms', 'presentPlatforms'),
-    improvement_hint: readString(record, 'improvement_hint', 'improvementHint', 'mitigation_hint', 'mitigationHint'),
-    sentiment: readString(record, 'sentiment'),
-    citation_domains: readStringList(record, 'citation_domains', 'citationDomains'),
-    citation_titles: readStringList(record, 'citation_titles', 'citationTitles'),
-    official_citation_present: readBoolean(record, 'official_citation_present', 'officialCitationPresent'),
-  };
-}
-
-function buildSentimentInsightItems(data: ReportCanvasContent['data']) {
-  const payload = isRecord(data.mention_sentiment_analysis)
-    ? data.mention_sentiment_analysis
-    : isRecord(data.report_data) && isRecord(data.report_data.mention_sentiment_analysis)
-    ? (data.report_data.mention_sentiment_analysis as UnknownRecord)
-    : undefined;
-
-  const brandPayload = payload && isRecord(payload.brand) ? (payload.brand as UnknownRecord) : undefined;
-  const brandItems = toRecordArray(brandPayload?.items);
-
-  const strengths = brandItems
-    .filter((item) => readString(item, 'sentiment') === 'positive')
-    .slice(0, 3)
-    .map((item, index) =>
-      normalizeInsightItem(
-        {
-          title: `${readString(item, 'scenario_label', 'scenarioLabel') || `优势 ${index + 1}`}中品牌被正向提及`,
-          scenario: readString(item, 'scenario_label', 'scenarioLabel'),
-          evidence:
-            readString(item, 'evidence') ||
-            `${readString(item, 'platform') || 'AI 平台'} 对品牌给出了正向表述。`,
-          platforms: readStringList(item, 'platform'),
-          sentiment: 'positive',
-          citation_domains: readStringList(item, 'citation_domains', 'citationDomains'),
-          citation_titles: readStringList(item, 'citation_titles', 'citationTitles'),
-          official_citation_present: readBoolean(item, 'official_citation_present', 'officialCitationPresent'),
-        },
-        `优势 ${index + 1}`
-      )
-    )
-    .filter((item): item is InsightSectionItem => Boolean(item));
-
-  const weaknesses = brandItems
-    .filter((item) => ['neutral', 'negative'].includes(readString(item, 'sentiment') || ''))
-    .slice(0, 4)
-    .map((item, index) => {
-      const sentiment = readString(item, 'sentiment') || 'neutral';
-      const sentimentText = sentiment === 'negative' ? '负向' : '中性';
-      return normalizeInsightItem(
-        {
-          title: `${readString(item, 'scenario_label', 'scenarioLabel') || `短板 ${index + 1}`}中品牌呈${sentimentText}提及`,
-          scenario: readString(item, 'scenario_label', 'scenarioLabel'),
-          evidence:
-            readString(item, 'evidence') ||
-            `${readString(item, 'platform') || 'AI 平台'} 对品牌呈${sentimentText}提及，建议补强证据和内容表达。`,
-          platforms: readStringList(item, 'platform'),
-          sentiment,
-          citation_domains: readStringList(item, 'citation_domains', 'citationDomains'),
-          citation_titles: readStringList(item, 'citation_titles', 'citationTitles'),
-          official_citation_present: readBoolean(item, 'official_citation_present', 'officialCitationPresent'),
-          improvement_hint: '优先补强该场景的官网证据、FAQ 和对比型内容。',
-        },
-        `短板 ${index + 1}`
-      );
-    })
-    .filter((item): item is InsightSectionItem => Boolean(item));
-
-  return { strengths, weaknesses };
-}
-
-function normalizeInsights(data: ReportCanvasContent['data']): InsightSectionData {
-  const explicit = data.report_v2?.insights ?? data.insight_section;
-  const explicitStrengths = (explicit?.strengths ?? [])
-    .map((item, index) => normalizeInsightItem(item as unknown as UnknownRecord, `优势 ${index + 1}`))
-    .filter((item): item is InsightSectionItem => Boolean(item));
-  const explicitWeaknesses = (explicit?.weaknesses ?? [])
-    .map((item, index) => normalizeInsightItem(item as unknown as UnknownRecord, `短板 ${index + 1}`))
-    .filter((item): item is InsightSectionItem => Boolean(item));
-
-  const strengths = (explicitStrengths.length > 0
-    ? explicitStrengths
-    : toRecordArray(data.strengths)
-        .map((item, index) => normalizeInsightItem(item, `优势 ${index + 1}`))
-        .filter((item): item is InsightSectionItem => Boolean(item))
-  );
-
-  const weaknesses = (explicitWeaknesses.length > 0
-    ? explicitWeaknesses
-    : toRecordArray(data.weaknesses)
-        .map((item, index) => normalizeInsightItem(item, `短板 ${index + 1}`))
-        .filter((item): item is InsightSectionItem => Boolean(item))
-  );
-
-  const fallbackSummary = [
-    strengths.length > 0 ? `已识别 ${strengths.length} 条当前优势` : undefined,
-    weaknesses.length > 0 ? `${weaknesses.length} 条当前短板待补强` : undefined,
-  ].filter((item): item is string => Boolean(item)).join('，');
-
-  return {
-    title: explicit?.title || '洞察',
-    description: explicit?.description || '先看品牌当前做得好的地方，以及还需要补强的地方。',
-    summary: explicit?.summary || fallbackSummary || undefined,
-    strengths,
-    weaknesses,
-  };
+  return [...merged, ...extras];
 }
 
 function normalizeActionQueue(data: ReportCanvasContent['data']): ActionQueueData {
@@ -986,17 +902,12 @@ function normalizeSummary(
   const summaryMetrics = isRecord(data.summary_metrics) ? data.summary_metrics : undefined;
   const explicitHighlights = (explicit?.highlights ?? []).map(sanitizeNarrativeText).filter((item): item is string => Boolean(item));
   const keyFindings = toStringArray(data.key_findings).map(sanitizeNarrativeText).filter((item): item is string => Boolean(item));
-  const legacyHighlights = [
-    ...keyFindings,
-    ...(data.insights ?? []).map((item) => sanitizeNarrativeText(item.title)).filter((item): item is string => Boolean(item)),
-  ];
 
   const fallbackMetrics = createSummaryMetrics(
     data.metrics as Record<string, unknown> | undefined,
     scenarios,
     risks,
-    sources,
-    summaryMetrics
+    sources
   );
   const metrics = mergeSummaryMetrics(explicit?.metrics, fallbackMetrics);
 
@@ -1011,10 +922,21 @@ function normalizeSummary(
 
   return {
     title: explicit?.title || '核心指标',
-    description: explicit?.description || '先看品牌在提及、内容引用和风险上的核心表现。',
+    description: explicit?.description || '先看这份报告到底在统计什么：品牌进入了哪些购车场景、官网有没有进引用链、还有哪些高价值问题没打进去。',
     summary: summaryText,
     status_summary: statusSummary,
-    highlights: explicitHighlights.length > 0 ? explicitHighlights : legacyHighlights.slice(0, 4),
+    highlights:
+      explicitHighlights.length > 0
+        ? explicitHighlights
+        : [
+            scenarios.summary,
+            scenarios.missing_items?.length
+              ? buildScenarioSemanticSummary('品牌当前缺席的高价值场景', scenarios.missing_items)
+              : undefined,
+            scenarios.risk_items?.length
+              ? buildScenarioSemanticSummary('当前高风险场景', scenarios.risk_items)
+              : undefined,
+          ].filter((item): item is string => Boolean(item)),
     metrics,
   };
 }
@@ -1137,7 +1059,7 @@ function normalizeMentions(data: ReportCanvasContent['data']): ReportMentionSect
 
   return {
     title: '提及率分析',
-    description: '先看品牌在哪些问题进入了答案，再看四个平台的提及状态和语气差异。',
+    description: '这里重点看品牌进入了哪些问题、提到了什么产品、涉及什么场景，以及同场竞品是谁。',
     mention_rate: mentionRate,
     mention_count: groupedCount,
     sentiment_summary: {
@@ -1198,8 +1120,8 @@ function normalizeSourcesForReport(
     mentionCount > 0 ? normalizePercent((citedAnswerCount / mentionCount) as number) : undefined;
 
   return {
-    title: '内容引用分析',
-    description: '把进入答案的品牌内容、引用来源和证据链放在一起看。',
+    title: '引用来源分析',
+    description: '把进入答案的品牌内容和头部引用来源放在一起看，重点判断官网有没有真正进入证据链。',
     content_citation_rate: explicit?.content_citation_rate ?? contentCitationRate,
     cited_answer_count: explicit?.cited_answer_count ?? citedAnswerCount,
     cited_content_count: explicit?.cited_content_count ?? citedContentCount,
@@ -1219,134 +1141,89 @@ function normalizeSourcesForReport(
 }
 
 function normalizeInsightsForReport(
-  mentions: ReportMentionSectionData,
-  risks: RiskSectionData
+  scenarios: ScenarioCoverageData,
+  mentions: ReportMentionSectionData
 ): InsightSectionData {
-  const groupedByScenario = new Map<
-    string,
-    {
-      scenario: string;
-      platforms: string[];
-      positive: number;
-      negative: number;
-      neutral: number;
-      evidence?: string;
-      citationDomains: string[];
-      officialCitationPresent: boolean;
-    }
-  >();
-  const competitorsByScenario = new Map<
-    string,
-    {
-      scenario: string;
-      competitors: string[];
-      platforms: string[];
-    }
-  >();
+  const effectiveItems = scenarios.items ?? [];
+  const missingItems = scenarios.missing_items ?? [];
+  const riskItems = scenarios.risk_items ?? [];
+  const officialCoveredCount = effectiveItems.filter((item) => item.official_citation_present).length;
+  const mentionPlatforms = uniqueStrings((mentions.brand_mentions ?? []).map((item) => item.platform));
 
-  for (const item of mentions.brand_mentions ?? []) {
-    const key = item.scenario_id || item.scenario_label;
-    if (!key) continue;
-    if (!groupedByScenario.has(key)) {
-      groupedByScenario.set(key, {
-        scenario: item.scenario_label,
-        platforms: [],
-        positive: 0,
-        negative: 0,
-        neutral: 0,
-        evidence: item.evidence,
-        citationDomains: [],
-        officialCitationPresent: false,
-      });
-    }
-    const row = groupedByScenario.get(key)!;
-    if (item.platform && !row.platforms.includes(item.platform)) row.platforms.push(item.platform);
-    if (item.sentiment === 'positive') row.positive += 1;
-    else if (item.sentiment === 'negative') row.negative += 1;
-    else row.neutral += 1;
-    row.evidence = row.evidence || item.evidence;
-    row.citationDomains = uniqueStrings([...row.citationDomains, ...(item.citation_domains ?? [])]);
-    row.officialCitationPresent = row.officialCitationPresent || Boolean(item.official_citation_present);
+  const strengths: NonNullable<InsightSectionData['strengths']> = [];
+  if (effectiveItems.length > 0) {
+    strengths.push({
+      title: '品牌已经站住的场景',
+      scenario: summarizeSemanticTags(
+        effectiveItems.flatMap((item) => item.semantic_tags?.usages ?? []),
+        '使用场景未明确'
+      ),
+      evidence:
+        buildScenarioSemanticSummary('品牌已经站住的高价值场景', effectiveItems) ||
+        '品牌已经在部分关键购车问题里建立基础存在感。',
+      platforms: mentionPlatforms,
+      official_citation_present: officialCoveredCount > 0,
+      improvement_hint:
+        officialCoveredCount > 0
+          ? '优先打开置信度分析，确认这些已站住场景里到底是哪些官网页面和第三方内容在支撑优势，再沿着同一主题继续扩写。'
+          : '这些场景已经有回答存在感，但官网还没稳定进入引用链，下一步优先补官网版本和证据链。',
+    });
+    strengths.push({
+      title: '目前吃到的主要人群与预算带',
+      scenario: summarizeSemanticTags(
+        effectiveItems.flatMap((item) => item.semantic_tags?.audiences ?? []),
+        '泛人群'
+      ),
+      evidence: `当前有效覆盖主要落在 ${summarizeSemanticTags(
+        effectiveItems.flatMap((item) => item.semantic_tags?.audiences ?? []),
+        '泛人群'
+      )}，预算带集中在 ${summarizeSemanticTags(
+        effectiveItems.flatMap((item) => item.semantic_tags?.prices ?? []),
+        '价格未明确'
+      )}。`,
+      improvement_hint: '建议继续沿着这些已经有效的人群与预算带扩写相邻问题，把单点回答优势做成连续覆盖。',
+    });
   }
 
-  for (const item of mentions.competitor_mentions ?? []) {
-    const key = item.scenario_id || item.scenario_label;
-    if (!key) continue;
-    if (!competitorsByScenario.has(key)) {
-      competitorsByScenario.set(key, {
-        scenario: item.scenario_label,
-        competitors: [],
-        platforms: [],
-      });
-    }
-    const row = competitorsByScenario.get(key)!;
-    row.competitors = uniqueStrings([...row.competitors, item.competitor]);
-    row.platforms = uniqueStrings([...row.platforms, item.platform]);
+  const weaknesses: NonNullable<InsightSectionData['weaknesses']> = [];
+  if (missingItems.length > 0) {
+    weaknesses.push({
+      title: '仍缺席的高价值场景',
+      scenario: summarizeSemanticTags(
+        missingItems.flatMap((item) => item.semantic_tags?.usages ?? []),
+        '高价值场景'
+      ),
+      evidence:
+        buildScenarioSemanticSummary('品牌缺席的高价值场景', missingItems) ||
+        '仍有高价值场景没有进入回答。',
+      improvement_hint:
+        '先打开场景细分分析，把这些缺席问题拆到具体人群、预算和决策点，再决定优先补 FAQ、对比页还是场景案例。',
+    });
   }
-
-  const strongestScenario = [...groupedByScenario.values()]
-    .filter((item) => item.positive > 0 || item.officialCitationPresent || item.platforms.length > 1)
-    .sort(
-      (a, b) =>
-        b.platforms.length * 10 +
-        b.positive * 3 +
-        (b.officialCitationPresent ? 4 : 0) -
-        (a.platforms.length * 10 + a.positive * 3 + (a.officialCitationPresent ? 4 : 0)),
-    )[0];
-
-  const strengths = strongestScenario
-    ? [{
-        title: strongestScenario.scenario,
-        scenario: strongestScenario.scenario,
-        evidence: strongestScenario.officialCitationPresent
-          ? `这个场景里品牌已经稳定进入回答，并且已有品牌自有内容被引用，说明当前表达方式已经开始被 AI 采纳。`
-          : `这个场景里品牌已经稳定进入回答，在 ${strongestScenario.platforms.length} 个平台出现，属于当前可继续放大的优势场景。`,
-        platforms: strongestScenario.platforms,
-        citation_domains: strongestScenario.citationDomains,
-        official_citation_present: strongestScenario.officialCitationPresent,
-        improvement_hint:
-          '下一步建议：打开引用内容置信度报告，优先检查这个场景里哪些高置信度内容被采纳了，再围绕同一表述扩展到相邻问题，放大已有优势。',
-      }]
-    : [];
-
-  const riskWeaknesses = (risks.items ?? [])
-    .filter((item) => isMeaningfulQuestionLabel(item.scenario_label))
-    .map((item) => {
-      const key = item.risk_id || item.scenario_label || '';
-      const competitors = competitorsByScenario.get(key)?.competitors || competitorsByScenario.get(item.scenario_label || '')?.competitors || [];
-      const platforms = competitorsByScenario.get(key)?.platforms || competitorsByScenario.get(item.scenario_label || '')?.platforms || [];
-      const competitorLabel = competitors.length > 0 ? competitors.join('、') : '竞品';
-
-      let evidence = sanitizeCustomerText(item.reason) || sanitizeCustomerText(item.impact_summary) || '该场景已经出现明显竞争压力。';
-      let improvementHint =
-        '下一步建议：进入用户画像分析，拆开这个问题背后的人群、预算和使用场景，再围绕最有价值的细分场景补充对比页、FAQ 和案例内容。';
-
-      if (item.risk_type === 'no_official_citation') {
-        evidence = `品牌虽然已经被提及，但当前答案主要依赖第三方内容，官方信息链路还没有稳定进入回答。`;
-        improvementHint =
-          '下一步建议：先看置信度报告，确认当前被采纳的是哪些第三方高置信度内容；再把这些表达补成官网或自有内容版本，争取把引用链路收回到官方。';
-      } else if (item.risk_type === 'competitor_substitution' || item.risk_type === 'missing_presence') {
-        evidence = `${competitorLabel} 已经在这个场景先进入答案，品牌当前还没有稳定站住。`;
-        improvementHint =
-          '下一步建议：从用户画像里继续下钻，找到这个场景下真正被抢走的是哪类人群与需求，再针对对应细分场景补强内容和对比表达。';
-      }
-
-      return {
-        title: item.scenario_label || '待补强问题',
-        scenario: item.scenario_label,
-        evidence,
-        platforms,
-        improvement_hint: improvementHint,
-      };
-    })
-    .slice(0, 2);
+  if (riskItems.length > 0) {
+    weaknesses.push({
+      title: '高风险场景还没打透',
+      scenario: summarizeSemanticTags(
+        riskItems.flatMap((item) => item.semantic_tags?.features ?? []),
+        '关键决策点'
+      ),
+      evidence:
+        buildScenarioSemanticSummary('当前高风险场景', riskItems) ||
+        '部分场景虽然有提及，但官网证据链或竞争优势仍不稳定。',
+      improvement_hint:
+        '建议先看这些场景里竞品覆盖了什么，再回到置信度分析确认哪些页面和来源在支撑竞争对手。',
+    });
+  }
 
   return {
     title: '当前优势与补强',
-    description: '这里只保留最值得立刻行动的场景，直接对应你下一步该看置信度，还是该继续做用户画像下钻。',
-    summary: '先守住已经站住的优势场景，再把有竞争压力的场景拆到更细的人群和需求层继续优化。',
+    description: '先看已经站住的高价值场景，再看最该补的风险场景，并直接引导到置信度分析或场景细分分析。',
+    summary:
+      strengths.length > 0 || weaknesses.length > 0
+        ? '优势和补强都直接基于上面的场景统计结果来写，不再脱离事实单独胡写。'
+        : '当前还没有足够的场景统计结果可形成优势与补强结论。',
     strengths,
-    weaknesses: riskWeaknesses,
+    weaknesses,
   };
 }
 
@@ -1357,18 +1234,24 @@ export interface ReportViewModel {
   degradationNote?: string;
   isBaseline: boolean;
   summary: ReportSummaryData;
+  scenarioCoverage: ScenarioCoverageData;
+  competitorBattle: CompetitorBattleData;
+  risks: RiskSectionData;
   mentions: ReportMentionSectionData;
   sources: SourceSectionData;
   insights: InsightSectionData;
+  actionQueue: ActionQueueData;
 }
 
 export function buildReportViewModel(content: ReportCanvasContent): ReportViewModel {
   const data = content.data;
   const scenarios = normalizeScenarioCoverage(data);
+  const competitorBattle = normalizeCompetitorBattle(data);
   const risks = normalizeRisks(data);
   const mentions = normalizeMentions(data);
   const sources = normalizeSourcesForReport(data, mentions);
-  const insights = normalizeInsightsForReport(mentions, risks);
+  const insights = normalizeInsightsForReport(scenarios, mentions);
+  const actionQueue = normalizeActionQueue(data);
   const summary = normalizeSummary(data, scenarios, risks, sources);
   const subtitle = formatSubtitle(data);
   const headline = sanitizeNarrativeText(data.headline) || '品牌战况报告';
@@ -1383,9 +1266,13 @@ export function buildReportViewModel(content: ReportCanvasContent): ReportViewMo
     degradationNote,
     isBaseline,
     summary,
+    scenarioCoverage: scenarios,
+    competitorBattle,
+    risks,
     mentions,
     sources,
     insights,
+    actionQueue,
   };
 }
 
