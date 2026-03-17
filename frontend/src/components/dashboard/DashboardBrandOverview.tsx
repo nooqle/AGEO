@@ -1,7 +1,10 @@
 'use client';
 
+import { useState } from 'react';
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import {
+  RiArrowDownLine,
+  RiArrowUpLine,
   RiBookmark3Line,
   RiBriefcase4Line,
   RiCalendarEventLine,
@@ -114,6 +117,7 @@ function FieldLabel({
 }
 
 export function DashboardBrandOverview({ entity, archive }: DashboardBrandOverviewProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const profile = archive?.brandProfile;
   const competitors = archive?.competitors || [];
   const groupedCompetitors = groupCompetitors(competitors);
@@ -134,177 +138,203 @@ export function DashboardBrandOverview({ entity, archive }: DashboardBrandOvervi
     <section
       className="dashboard-shell rounded-[30px] px-6 py-6"
     >
-      <DashboardSectionHeader title="品牌档案与竞品分类" />
+      <DashboardSectionHeader
+        title="品牌档案与竞品分类"
+        action={(
+          <button
+            type="button"
+            onClick={() => setIsExpanded((current) => !current)}
+            className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] font-medium transition-colors"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              color: 'var(--text-secondary)',
+              background: 'var(--bg-elevated)',
+            }}
+          >
+            {isExpanded ? '收起品牌信息' : '展开品牌信息'}
+            {isExpanded ? <RiArrowUpLine className="h-4 w-4" /> : <RiArrowDownLine className="h-4 w-4" />}
+          </button>
+        )}
+      />
 
-      <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+      {!isExpanded ? (
         <div
-          className="dashboard-inner-panel rounded-[24px] px-5 py-5"
+          className="dashboard-inner-panel rounded-[22px] px-4 py-4 text-[14px] leading-7"
+          style={{ color: 'var(--text-secondary)' }}
         >
-          <TitleWithIcon icon={RiBookmark3Line}>品牌档案</TitleWithIcon>
-
-          <div className="mt-4 flex items-start gap-4">
-            <BrandAvatar name={displayName} domain={website || entity.domain} size={56} />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-[24px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{displayName}</h2>
-                {displayNameEn ? (
-                  <span className="text-[16px] text-[var(--text-secondary)]">{displayNameEn}</span>
-                ) : null}
-                {industry ? (
-                  <span
-                    className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)' }}
-                  >
-                    {industry}
-                  </span>
-                ) : null}
-              </div>
-
-              {website ? (
-                <div className="mt-2 flex items-center gap-2 text-[13px] text-[var(--text-secondary)]">
-                  <RiGlobalLine className="h-4 w-4" />
-                  <a
-                    href={website.startsWith('http') ? website : `https://${website}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="truncate underline-offset-2 hover:underline"
-                  >
-                    {website}
-                  </a>
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <p className="mt-5 text-[14px] leading-8 text-[var(--text-secondary)]">{description}</p>
-
-          <div className="mt-5 grid gap-3 md:grid-cols-2">
-            <div className="dashboard-inner-panel rounded-[18px] px-4 py-4">
-              <FieldLabel icon={RiShapesLine}>品牌定位</FieldLabel>
-              <div className="mt-2 text-[14px] leading-7 text-[var(--text-primary)]">{profile?.brand_positioning || '暂无定位信息'}</div>
-            </div>
-            <div className="dashboard-inner-panel rounded-[18px] px-4 py-4">
-              <FieldLabel icon={RiTeamLine}>目标受众</FieldLabel>
-              <div className="mt-2 text-[14px] leading-7 text-[var(--text-primary)]">{profile?.target_audience || '暂无受众信息'}</div>
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <div className="dashboard-inner-panel rounded-[18px] px-4 py-4">
-              <FieldLabel icon={RiPriceTag3Line}>价格带</FieldLabel>
-              <div className="mt-2 text-[14px] font-medium text-[var(--text-primary)]">{profile?.price_positioning || '暂无价格带信息'}</div>
-            </div>
-            <div className="dashboard-inner-panel rounded-[18px] px-4 py-4">
-              <FieldLabel icon={RiCalendarEventLine}>成立年份</FieldLabel>
-              <div className="mt-2 text-[14px] font-medium text-[var(--text-primary)]">{profile?.founded_year || '暂无成立年份'}</div>
-            </div>
-          </div>
-
-          {productTags.length > 0 ? (
-            <div className="mt-4">
-              <FieldLabel icon={RiBriefcase4Line}>核心产品</FieldLabel>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {productTags.map((product) => (
-                  <span
-                    key={product}
-                    className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)' }}
-                  >
-                    {product}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {aliasTags.length > 0 ? (
-            <div className="mt-4">
-              <FieldLabel icon={RiBookmark3Line}>别名</FieldLabel>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {aliasTags.map((alias) => (
-                <span
-                  key={alias}
-                  className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)' }}
-                >
-                  {alias}
-                </span>
-              ))}
-            </div>
-            </div>
-          ) : null}
+          已默认收起品牌档案与竞品分类，避免首页首屏被占满；需要时可手动展开查看 {displayName} 的品牌档案、定位和竞品分类。
         </div>
+      ) : (
+        <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+          <div
+            className="dashboard-inner-panel rounded-[24px] px-5 py-5"
+          >
+            <TitleWithIcon icon={RiBookmark3Line}>品牌档案</TitleWithIcon>
 
-        <div
-          className="dashboard-inner-panel rounded-[24px] px-5 py-5"
-        >
-          <TitleWithIcon icon={RiLeafLine}>竞品分类</TitleWithIcon>
-
-          <div className="mt-3 text-[14px] leading-7 text-[var(--text-secondary)]">
-            这里直接使用品牌竞品分析产物中的竞品分类结果，按直接竞争、间接竞争和潜在竞争展示，不再额外编造图谱。
-          </div>
-
-          <div className="mt-5 space-y-3">
-            {(['直接竞争', '间接竞争', '潜在竞争'] as CompetitorGroupKey[]).map((group) => {
-              const items = groupedCompetitors[group];
-              const meta = COMPETITOR_GROUP_META[group];
-              return (
-                <div
-                  key={group}
-                  className="dashboard-inner-panel rounded-[20px] px-4 py-4"
-                  style={{
-                    background: meta.surface,
-                    borderColor: 'color-mix(in srgb, var(--border-subtle) 72%, transparent 28%)',
-                  }}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-[17px] font-semibold text-[var(--text-primary)]">
-                      <RiLeafLine className="h-4 w-4" style={{ color: meta.accent }} />
-                      <span>{group}</span>
-                    </div>
-                    <div
-                      className="rounded-full px-2.5 py-1 text-[12px] font-medium"
-                      style={{ background: meta.badge, color: meta.text }}
+            <div className="mt-4 flex items-start gap-4">
+              <BrandAvatar name={displayName} domain={website || entity.domain} size={56} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-[24px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{displayName}</h2>
+                  {displayNameEn ? (
+                    <span className="text-[16px] text-[var(--text-secondary)]">{displayNameEn}</span>
+                  ) : null}
+                  {industry ? (
+                    <span
+                      className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
+                      style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)' }}
                     >
-                      {items.length} 个品牌
-                    </div>
-                  </div>
-
-                  {items.length > 0 ? (
-                    <div className="mt-3 flex flex-wrap gap-2.5">
-                      {items.map((competitor, index) => (
-                        <span
-                          key={`${group}-${competitor.name}`}
-                          className="inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-[13px] font-medium"
-                          style={{
-                            borderColor: 'color-mix(in srgb, transparent 42%, var(--border-subtle) 58%)',
-                            background: `color-mix(in srgb, ${meta.badge} 72%, var(--bg-elevated) 28%)`,
-                            color: 'var(--text-secondary)',
-                          }}
-                        >
-                          <span
-                            className="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold"
-                            style={{ background: meta.badge, color: meta.text }}
-                          >
-                            #{index + 1}
-                          </span>
-                          <span className="text-[14px] font-semibold text-[var(--text-primary)]">
-                            {competitor.name}
-                          </span>
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mt-3 text-[13px] leading-6 text-[var(--text-tertiary)]">
-                      当前产物里还没有识别到这一类竞品。
-                    </div>
-                  )}
+                      {industry}
+                    </span>
+                  ) : null}
                 </div>
-              );
-            })}
+
+                {website ? (
+                  <div className="mt-2 flex items-center gap-2 text-[13px] text-[var(--text-secondary)]">
+                    <RiGlobalLine className="h-4 w-4" />
+                    <a
+                      href={website.startsWith('http') ? website : `https://${website}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="truncate underline-offset-2 hover:underline"
+                    >
+                      {website}
+                    </a>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <p className="mt-5 text-[14px] leading-8 text-[var(--text-secondary)]">{description}</p>
+
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              <div className="dashboard-inner-panel rounded-[18px] px-4 py-4">
+                <FieldLabel icon={RiShapesLine}>品牌定位</FieldLabel>
+                <div className="mt-2 text-[14px] leading-7 text-[var(--text-primary)]">{profile?.brand_positioning || '暂无定位信息'}</div>
+              </div>
+              <div className="dashboard-inner-panel rounded-[18px] px-4 py-4">
+                <FieldLabel icon={RiTeamLine}>目标受众</FieldLabel>
+                <div className="mt-2 text-[14px] leading-7 text-[var(--text-primary)]">{profile?.target_audience || '暂无受众信息'}</div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="dashboard-inner-panel rounded-[18px] px-4 py-4">
+                <FieldLabel icon={RiPriceTag3Line}>价格带</FieldLabel>
+                <div className="mt-2 text-[14px] font-medium text-[var(--text-primary)]">{profile?.price_positioning || '暂无价格带信息'}</div>
+              </div>
+              <div className="dashboard-inner-panel rounded-[18px] px-4 py-4">
+                <FieldLabel icon={RiCalendarEventLine}>成立年份</FieldLabel>
+                <div className="mt-2 text-[14px] font-medium text-[var(--text-primary)]">{profile?.founded_year || '暂无成立年份'}</div>
+              </div>
+            </div>
+
+            {productTags.length > 0 ? (
+              <div className="mt-4">
+                <FieldLabel icon={RiBriefcase4Line}>核心产品</FieldLabel>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {productTags.map((product) => (
+                    <span
+                      key={product}
+                      className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
+                      style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)' }}
+                    >
+                      {product}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {aliasTags.length > 0 ? (
+              <div className="mt-4">
+                <FieldLabel icon={RiBookmark3Line}>别名</FieldLabel>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {aliasTags.map((alias) => (
+                    <span
+                      key={alias}
+                      className="rounded-full border px-2.5 py-1 text-[11px] font-medium"
+                      style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)' }}
+                    >
+                      {alias}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div
+            className="dashboard-inner-panel rounded-[24px] px-5 py-5"
+          >
+            <TitleWithIcon icon={RiLeafLine}>竞品分类</TitleWithIcon>
+
+            <div className="mt-3 text-[14px] leading-7 text-[var(--text-secondary)]">
+              这里直接使用品牌竞品分析产物中的竞品分类结果，按直接竞争、间接竞争和潜在竞争展示，不再额外编造图谱。
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {(['直接竞争', '间接竞争', '潜在竞争'] as CompetitorGroupKey[]).map((group) => {
+                const items = groupedCompetitors[group];
+                const meta = COMPETITOR_GROUP_META[group];
+                return (
+                  <div
+                    key={group}
+                    className="dashboard-inner-panel rounded-[20px] px-4 py-4"
+                    style={{
+                      background: meta.surface,
+                      borderColor: 'color-mix(in srgb, var(--border-subtle) 72%, transparent 28%)',
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-[17px] font-semibold text-[var(--text-primary)]">
+                        <RiLeafLine className="h-4 w-4" style={{ color: meta.accent }} />
+                        <span>{group}</span>
+                      </div>
+                      <div
+                        className="rounded-full px-2.5 py-1 text-[12px] font-medium"
+                        style={{ background: meta.badge, color: meta.text }}
+                      >
+                        {items.length} 个品牌
+                      </div>
+                    </div>
+
+                    {items.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2.5">
+                        {items.map((competitor, index) => (
+                          <span
+                            key={`${group}-${competitor.name}`}
+                            className="inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-[13px] font-medium"
+                            style={{
+                              borderColor: 'color-mix(in srgb, transparent 42%, var(--border-subtle) 58%)',
+                              background: `color-mix(in srgb, ${meta.badge} 72%, var(--bg-elevated) 28%)`,
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            <span
+                              className="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold"
+                              style={{ background: meta.badge, color: meta.text }}
+                            >
+                              #{index + 1}
+                            </span>
+                            <span className="text-[14px] font-semibold text-[var(--text-primary)]">
+                              {competitor.name}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-[13px] leading-6 text-[var(--text-tertiary)]">
+                        当前产物里还没有识别到这一类竞品。
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }
