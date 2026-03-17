@@ -17,30 +17,62 @@ interface ChatLayoutProps {
   sidebar?: ReactNode;
 }
 
-const CANVAS_MIN_W = 360;
-const CANVAS_MAX_W = 800;
-const CANVAS_DEFAULT_DESKTOP = 800;
+const CANVAS_MIN_W = 480;
+const CANVAS_MAX_W = 1400;
+const CANVAS_DEFAULT_DESKTOP_RATIO = 0.6;
+const CANVAS_MIN_RATIO = 0.48;
+const CANVAS_MAX_RATIO = 0.72;
+const CHAT_MIN_W = 320;
 const CANVAS_DEFAULT_TABLET = 440;
 
 export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
   const { isOpen, setOpen } = useCanvasStore();
   const { isMobile, isTablet, canShowSplitCanvas, isDesktop } = useResponsive();
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const hasSidebar = !!sidebar;
+  const showSplitCanvas = isOpen && canShowSplitCanvas && canvas;
+  const splitHostRef = useRef<HTMLDivElement>(null);
+  const availableSplitWidthRef = useRef(CANVAS_DEFAULT_TABLET);
 
   // Resizable canvas width
   const [canvasWidth, setCanvasWidth] = useState(
-    () => isDesktop ? CANVAS_DEFAULT_DESKTOP : CANVAS_DEFAULT_TABLET
+    () => isDesktop ? 960 : CANVAS_DEFAULT_TABLET
   );
-  const [prevIsDesktop, setPrevIsDesktop] = useState(isDesktop);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
 
-  // Reset width when switching between desktop/tablet (derived state during render)
-  if (prevIsDesktop !== isDesktop) {
-    setPrevIsDesktop(isDesktop);
-    setCanvasWidth(isDesktop ? CANVAS_DEFAULT_DESKTOP : CANVAS_DEFAULT_TABLET);
-  }
+  const reservedDesktopWidth = useCallback(() => {
+    if (!hasSidebar || isMobile) {
+      return 0;
+    }
+    return (isTablet ? 240 : 280) + 48;
+  }, [hasSidebar, isMobile, isTablet]);
+
+  const clampCanvasWidth = useCallback((width: number, availableWidth = availableSplitWidthRef.current) => {
+    const safeAvailableWidth = Math.max(0, availableWidth);
+    if (safeAvailableWidth <= 0) {
+      return width;
+    }
+
+    const hardMax = Math.max(
+      Math.min(CANVAS_MAX_W, safeAvailableWidth - CHAT_MIN_W),
+      Math.min(CANVAS_MIN_W, safeAvailableWidth)
+    );
+    const ratioMin = safeAvailableWidth * CANVAS_MIN_RATIO;
+    const ratioMax = safeAvailableWidth * CANVAS_MAX_RATIO;
+    const minWidth = Math.min(hardMax, Math.max(Math.min(CANVAS_MIN_W, safeAvailableWidth), ratioMin));
+    const maxWidth = Math.max(minWidth, Math.min(hardMax, ratioMax));
+
+    return Math.min(maxWidth, Math.max(minWidth, width));
+  }, []);
+
+  const getDefaultCanvasWidth = useCallback((availableWidth = availableSplitWidthRef.current) => {
+    if (!isDesktop) {
+      return CANVAS_DEFAULT_TABLET;
+    }
+    return clampCanvasWidth(availableWidth * CANVAS_DEFAULT_DESKTOP_RATIO, availableWidth);
+  }, [clampCanvasWidth, isDesktop]);
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -56,7 +88,7 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
       if (!isDragging.current) return;
       // Dragging left increases canvas width (canvas is on the right)
       const delta = startX.current - e.clientX;
-      const newWidth = Math.min(CANVAS_MAX_W, Math.max(CANVAS_MIN_W, startWidth.current + delta));
+      const newWidth = clampCanvasWidth(startWidth.current + delta);
       setCanvasWidth(newWidth);
     };
 
@@ -73,15 +105,42 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
       window.removeEventListener('mousemove', onDragMove);
       window.removeEventListener('mouseup', onDragEnd);
     };
-  }, []);
+  }, [clampCanvasWidth]);
 
-  const hasSidebar = !!sidebar;
-  const showSplitCanvas = isOpen && canShowSplitCanvas && canvas;
+  useEffect(() => {
+    if (!splitHostRef.current) {
+      return;
+    }
+
+    const updateCanvasWidth = () => {
+      const totalWidth = splitHostRef.current?.clientWidth ?? 0;
+      const availableWidth = Math.max(0, totalWidth - reservedDesktopWidth());
+      availableSplitWidthRef.current = availableWidth;
+
+      if (!canShowSplitCanvas) {
+        return;
+      }
+
+      setCanvasWidth(getDefaultCanvasWidth(availableWidth));
+    };
+
+    updateCanvasWidth();
+
+    const observer = new ResizeObserver(() => {
+      if (isDragging.current) {
+        return;
+      }
+      updateCanvasWidth();
+    });
+    observer.observe(splitHostRef.current);
+
+    return () => observer.disconnect();
+  }, [canShowSplitCanvas, getDefaultCanvasWidth, reservedDesktopWidth]);
 
   return (
     <div className="h-screen flex" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden" ref={splitHostRef}>
         {/* Sidebar — fixed 280px on desktop, 240px on laptop, hidden on mobile */}
         {hasSidebar && !isMobile && (
           <motion.div

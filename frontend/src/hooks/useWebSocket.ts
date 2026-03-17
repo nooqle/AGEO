@@ -480,6 +480,16 @@ export function useWebSocket(sessionId: string | null) {
           break;
         }
         patchContent(artifactId, patch as Record<string, unknown>);
+        const nextStatus = isRecord((patch as Record<string, unknown>).status)
+          ? ((patch as Record<string, unknown>).status as Record<string, unknown>)
+          : null;
+        const nextPhase = typeof nextStatus?.phase === 'string' ? nextStatus.phase : '';
+        const nextMessage = typeof nextStatus?.message === 'string' ? nextStatus.message : '';
+        if (nextPhase === 'ready' && nextMessage) {
+          toast.success(nextMessage);
+        } else if (nextPhase === 'error' && nextMessage) {
+          toast.error(nextMessage);
+        }
         break;
       }
 

@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import type { FetchResultsCanvasContent, FetchResultItem, FetchPlatformResult, FetchCitation } from '@/types/canvas';
+import { ReportHero, ReportMetricCard, ReportPage, ReportSection } from './ReportScaffold';
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -9,6 +10,7 @@ import type { FetchResultsCanvasContent, FetchResultItem, FetchPlatformResult, F
 
 interface FetchResultsContentProps {
   content: FetchResultsCanvasContent;
+  printMode?: boolean;
 }
 
 const PLATFORM_CONFIG: Record<string, { label: string; color: string; dotColor: string }> = {
@@ -348,9 +350,10 @@ interface QuestionSectionProps {
   index: number;
   platforms: string[];
   defaultExpanded?: boolean;
+  printMode?: boolean;
 }
 
-function QuestionSection({ item, index, platforms, defaultExpanded = true }: QuestionSectionProps) {
+function QuestionSection({ item, index, platforms, defaultExpanded = true, printMode = false }: QuestionSectionProps) {
   // Build a lookup for platform results present in this question
   const resultsByPlatform = useMemo<Record<string, FetchPlatformResult>>(() => {
     const map: Record<string, FetchPlatformResult> = {};
@@ -380,30 +383,76 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
   const successCount = item.platform_results?.filter((pr) => pr.success).length ?? 0;
   const totalCount = item.platform_results?.length ?? 0;
 
+  if (printMode) {
+    return (
+      <div className="overflow-hidden rounded-[22px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+        <div className="flex items-start gap-3 px-5 py-4">
+          <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[11px] font-semibold text-[var(--text-secondary)]">
+            {index + 1}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[16px] font-semibold leading-7 text-[var(--text-primary)]">{item.question_text || item.question_id}</div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span
+                className="whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold"
+                style={{
+                  color: successCount === totalCount ? 'var(--status-success)' : 'var(--status-warning)',
+                  backgroundColor:
+                    successCount === totalCount
+                      ? 'rgba(16,185,129,0.10)'
+                      : 'rgba(245,158,11,0.10)',
+                  borderColor:
+                    successCount === totalCount ? 'rgba(16,185,129,0.22)' : 'rgba(245,158,11,0.22)',
+                }}
+              >
+                {successCount}/{totalCount} 平台
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-[var(--border-subtle)] px-5 py-5">
+          <div className="space-y-5">
+            {availablePlatforms.map((platform) => {
+              const result = resultsByPlatform[platform];
+              if (!result) {
+                return null;
+              }
+
+              return (
+                <section key={`${item.question_id}-${platform}`} className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-4">
+                  <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] pb-3">
+                    <span
+                      style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        backgroundColor: result.success ? getPlatformDotColor(platform) : 'var(--status-error)',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span className="text-[13px] font-semibold text-[var(--text-secondary)]">
+                      {getPlatformLabel(platform)}
+                    </span>
+                  </div>
+                  <div className="pt-4">
+                    <PlatformPane platformResult={result} />
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
-      style={{
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-lg)',
-        overflow: 'hidden',
-        backgroundColor: 'var(--bg-secondary)',
-      }}
-    >
+    <div className="overflow-hidden rounded-[22px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
       {/* Question header — click to collapse/expand */}
       <button
         onClick={toggleExpand}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '0.75rem',
-          padding: '0.875rem 1rem',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          textAlign: 'left',
-          transition: 'background-color var(--transition-fast)',
-        }}
+        className="flex w-full items-start gap-3 bg-transparent px-5 py-4 text-left transition-colors duration-150"
         onMouseEnter={(e) => {
           (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--bg-tertiary)';
         }}
@@ -415,59 +464,30 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
       >
         {/* Index badge */}
         <span
-          style={{
-            flexShrink: 0,
-            width: '1.375rem',
-            height: '1.375rem',
-            borderRadius: '50%',
-            backgroundColor: 'var(--bg-elevated)',
-            border: '1px solid var(--border-subtle)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '0.6875rem',
-            fontWeight: 600,
-            color: 'var(--text-secondary)',
-            marginTop: '0.0625rem',
-          }}
+          className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[11px] font-semibold text-[var(--text-secondary)]"
         >
           {index + 1}
         </span>
 
         {/* Question text */}
         <span
-          style={{
-            flex: 1,
-            fontSize: '0.875rem',
-            fontWeight: 500,
-            color: 'var(--text-primary)',
-            lineHeight: '1.45',
-          }}
+          className="flex-1 text-[16px] font-semibold leading-7 text-[var(--text-primary)]"
         >
           {item.question_text || item.question_id}
         </span>
 
         {/* Right side: success badge + chevron */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            flexShrink: 0,
-          }}
-        >
+        <div className="flex shrink-0 items-center gap-2">
           <span
+            className="whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold"
             style={{
-              fontSize: '0.6875rem',
               color: successCount === totalCount ? 'var(--status-success)' : 'var(--status-warning)',
               backgroundColor:
                 successCount === totalCount
-                  ? 'rgba(16,185,129,0.1)'
-                  : 'rgba(245,158,11,0.1)',
-              padding: '0.125rem 0.5rem',
-              borderRadius: 'var(--radius-full)',
-              border: `1px solid ${successCount === totalCount ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}`,
-              whiteSpace: 'nowrap',
+                  ? 'rgba(16,185,129,0.10)'
+                  : 'rgba(245,158,11,0.10)',
+              borderColor:
+                successCount === totalCount ? 'rgba(16,185,129,0.22)' : 'rgba(245,158,11,0.22)',
             }}
           >
             {successCount}/{totalCount} 平台
@@ -498,20 +518,13 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
 
       {/* Expanded content */}
       {isExpanded && (
-        <div id={`question-body-${item.question_id}`} style={{ borderTop: '1px solid var(--border-subtle)' }}>
+        <div id={`question-body-${item.question_id}`} className="border-t border-[var(--border-subtle)]">
           {/* Platform tab bar */}
           {availablePlatforms.length > 1 && (
             <div
               role="tablist"
               aria-label="平台选择"
-              style={{
-                display: 'flex',
-                gap: '0',
-                padding: '0.5rem 1rem 0',
-                borderBottom: '1px solid var(--border-subtle)',
-                backgroundColor: 'var(--bg-tertiary)',
-                overflowX: 'auto',
-              }}
+              className="flex overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-5 pt-3"
               onKeyDown={(e) => {
                 const currentIdx = availablePlatforms.indexOf(activeTab);
                 if (e.key === 'ArrowRight') {
@@ -535,23 +548,11 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
                     key={platform}
                     id={`tab-${item.question_id}-${platform}`}
                     onClick={() => setActiveTab(platform)}
+                    className="mb-[-1px] flex items-center gap-1.5 border-b-2 bg-transparent px-3 py-2 text-[13px] whitespace-nowrap transition-colors duration-150"
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.375rem',
-                      padding: '0.375rem 0.75rem',
-                      background: 'none',
-                      border: 'none',
-                      borderBottom: isActive
-                        ? `2px solid ${dotColor}`
-                        : '2px solid transparent',
-                      cursor: 'pointer',
-                      fontSize: '0.8125rem',
-                      fontWeight: isActive ? 600 : 400,
+                      borderBottomColor: isActive ? dotColor : 'transparent',
                       color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
-                      whiteSpace: 'nowrap',
-                      transition: 'color var(--transition-fast)',
-                      marginBottom: '-1px',
+                      fontWeight: isActive ? 600 : 500,
                     }}
                     aria-selected={isActive}
                     role="tab"
@@ -576,14 +577,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
           {/* Single platform — show label inline without tabs */}
           {availablePlatforms.length === 1 && (
             <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.375rem',
-                padding: '0.5rem 1rem',
-                borderBottom: '1px solid var(--border-subtle)',
-                backgroundColor: 'var(--bg-tertiary)',
-              }}
+              className="flex items-center gap-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-5 py-3"
             >
               <span
                 style={{
@@ -596,11 +590,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
                 }}
               />
               <span
-                style={{
-                  fontSize: '0.8125rem',
-                  fontWeight: 600,
-                  color: 'var(--text-secondary)',
-                }}
+                className="text-[13px] font-semibold text-[var(--text-secondary)]"
               >
                 {getPlatformLabel(availablePlatforms[0])}
               </span>
@@ -611,7 +601,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
           <div
             role="tabpanel"
             aria-labelledby={`tab-${item.question_id}-${activeTab}`}
-            style={{ padding: '1rem' }}
+            className="px-5 py-5"
           >
             {activePlatformResult ? (
               <PlatformPane platformResult={activePlatformResult} />
@@ -641,9 +631,10 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true }: Que
 interface StatsPanelProps {
   fetchResults: FetchResultItem[];
   platforms: string[];
+  printMode?: boolean;
 }
 
-function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
+function StatsPanel({ fetchResults, platforms, printMode = false }: StatsPanelProps) {
   const [open, setOpen] = useState(false);
 
   const stats = useMemo(() => {
@@ -671,29 +662,111 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
     };
   }, [fetchResults]);
 
+  if (printMode) {
+    return (
+      <div className="overflow-hidden rounded-[22px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        <div className="flex items-center justify-between px-5 py-4">
+          <div className="flex items-center gap-2.5">
+            <span className="text-[15px] font-semibold text-[var(--text-secondary)]">数据统计</span>
+            <span
+              style={{
+                fontSize: '0.6875rem',
+                color: 'var(--status-success)',
+                backgroundColor: 'rgba(16,185,129,0.1)',
+                padding: '0.125rem 0.5rem',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid rgba(16,185,129,0.2)',
+              }}
+            >
+              {stats.successRate}% 成功率
+            </span>
+            <span
+              style={{
+                fontSize: '0.6875rem',
+                color: 'var(--text-muted)',
+                backgroundColor: 'var(--bg-elevated)',
+                padding: '0.125rem 0.5rem',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              {stats.total} 次抓取
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-4 border-t border-[var(--border-subtle)] px-5 py-5">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: '总抓取', value: stats.total, color: 'var(--status-info)' },
+              { label: '成功', value: stats.success, color: 'var(--status-success)' },
+              { label: '失败', value: stats.failed, color: 'var(--status-error)' },
+              { label: '成功率', value: `${stats.successRate}%`, color: 'var(--text-primary)' },
+            ].map(({ label, value, color }) => (
+              <div key={label}>
+                <ReportMetricCard
+                  label={label}
+                  value={<span style={{ color }}>{value}</span>}
+                  accent="rgba(148,163,184,0.06)"
+                />
+              </div>
+            ))}
+          </div>
+
+          {platforms.length > 0 ? (
+            <div>
+              <p className="mb-2 text-[12px] font-medium tracking-[0.12em] text-[var(--text-tertiary)]">
+                平台分布
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                {platforms.map((platform) => {
+                  const ps = stats.platformStats[platform];
+                  if (!ps) return null;
+                  const rate = Math.round((ps.success / ps.total) * 100);
+                  const dotColor = getPlatformDotColor(platform);
+
+                  return (
+                    <div
+                      key={platform}
+                      className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-4 py-3"
+                    >
+                      <div className="mb-1.5 flex items-center gap-1.5">
+                        <span
+                          style={{
+                            width: '6px',
+                            height: '6px',
+                            borderRadius: '50%',
+                            backgroundColor: dotColor,
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span className="text-[14px] font-semibold text-[var(--text-primary)]">
+                          {getPlatformLabel(platform)}
+                        </span>
+                      </div>
+                      <div className="text-[13px] text-[var(--text-secondary)]">
+                        {ps.success}/{ps.total} 成功
+                      </div>
+                      <div className="text-[12px] text-[var(--text-tertiary)]">
+                        {rate}% 成功率
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
-      style={{
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-lg)',
-        overflow: 'hidden',
-        backgroundColor: 'var(--bg-secondary)',
-      }}
-    >
+    <div className="overflow-hidden rounded-[22px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       {/* Toggle header */}
       <button
         onClick={() => setOpen((v) => !v)}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0.75rem 1rem',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          transition: 'background-color var(--transition-fast)',
-        }}
+        className="flex w-full items-center justify-between bg-transparent px-5 py-4 transition-colors duration-150"
         onMouseEnter={(e) => {
           (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--bg-tertiary)';
         }}
@@ -703,8 +776,8 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
         aria-expanded={open}
         aria-controls="stats-panel-body"
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-          <span style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--text-secondary)' }}>
+        <div className="flex items-center gap-2.5">
+          <span className="text-[15px] font-semibold text-[var(--text-secondary)]">
             数据统计
           </span>
           {/* Quick summary chips */}
@@ -758,44 +831,22 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
       {open && (
         <div
           id="stats-panel-body"
-          style={{
-            borderTop: '1px solid var(--border-subtle)',
-            padding: '1rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '1rem',
-          }}
+          className="flex flex-col gap-4 border-t border-[var(--border-subtle)] px-5 py-5"
         >
           {/* Overview metrics */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: '0.5rem',
-            }}
-          >
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {[
               { label: '总抓取', value: stats.total, color: 'var(--status-info)' },
               { label: '成功', value: stats.success, color: 'var(--status-success)' },
               { label: '失败', value: stats.failed, color: 'var(--status-error)' },
               { label: '成功率', value: `${stats.successRate}%`, color: 'var(--text-primary)' },
             ].map(({ label, value, color }) => (
-              <div
-                key={label}
-                style={{
-                  padding: '0.625rem 0.75rem',
-                  borderRadius: 'var(--radius-md)',
-                  backgroundColor: 'var(--bg-tertiary)',
-                  border: '1px solid var(--border-subtle)',
-                  textAlign: 'center',
-                }}
-              >
-                <div style={{ fontSize: '1.25rem', fontWeight: 700, color }}>
-                  {value}
-                </div>
-                <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', marginTop: '0.125rem' }}>
-                  {label}
-                </div>
+              <div key={label}>
+                <ReportMetricCard
+                  label={label}
+                  value={<span style={{ color }}>{value}</span>}
+                  accent="rgba(148,163,184,0.06)"
+                />
               </div>
             ))}
           </div>
@@ -803,25 +854,10 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
           {/* Per-platform breakdown */}
           {platforms.length > 0 && (
             <div>
-              <p
-                style={{
-                  margin: '0 0 0.5rem',
-                  fontSize: '0.75rem',
-                  fontWeight: 500,
-                  color: 'var(--text-muted)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                }}
-              >
+              <p className="mb-2 text-[12px] font-medium tracking-[0.12em] text-[var(--text-tertiary)]">
                 平台分布
               </p>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-                  gap: '0.5rem',
-                }}
-              >
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                 {platforms.map((platform) => {
                   const ps = stats.platformStats[platform];
                   if (!ps) return null;
@@ -831,21 +867,9 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
                   return (
                     <div
                       key={platform}
-                      style={{
-                        padding: '0.625rem 0.75rem',
-                        borderRadius: 'var(--radius-md)',
-                        backgroundColor: 'var(--bg-elevated)',
-                        border: '1px solid var(--border-subtle)',
-                      }}
+                      className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-4 py-3"
                     >
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.375rem',
-                          marginBottom: '0.375rem',
-                        }}
-                      >
+                      <div className="mb-1.5 flex items-center gap-1.5">
                         <span
                           style={{
                             width: '6px',
@@ -855,20 +879,14 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
                             flexShrink: 0,
                           }}
                         />
-                        <span
-                          style={{
-                            fontSize: '0.8125rem',
-                            fontWeight: 500,
-                            color: 'var(--text-primary)',
-                          }}
-                        >
+                        <span className="text-[14px] font-semibold text-[var(--text-primary)]">
                           {getPlatformLabel(platform)}
                         </span>
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      <div className="text-[13px] text-[var(--text-secondary)]">
                         {ps.success}/{ps.total} 成功
                       </div>
-                      <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>
+                      <div className="text-[12px] text-[var(--text-tertiary)]">
                         {rate}% 成功率
                       </div>
                     </div>
@@ -887,7 +905,7 @@ function StatsPanel({ fetchResults, platforms }: StatsPanelProps) {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function FetchResultsContent({ content }: FetchResultsContentProps) {
+export function FetchResultsContent({ content, printMode = false }: FetchResultsContentProps) {
   const { fetchResults } = content.data;
 
   // All unique platforms in a stable display order
@@ -910,76 +928,46 @@ export function FetchResultsContent({ content }: FetchResultsContentProps) {
   // Empty state
   if (!fetchResults || fetchResults.length === 0) {
     return (
-      <div
-        style={{
-          padding: '3rem 1.5rem',
-          textAlign: 'center',
-          color: 'var(--text-muted)',
-        }}
-      >
-        <p style={{ margin: 0, fontSize: '0.875rem' }}>暂无抓取结果</p>
-      </div>
+      <ReportPage>
+        <ReportSection eyebrow="抓取结果">
+          <div className="py-10 text-center text-[14px] text-[var(--text-tertiary)]">暂无抓取结果</div>
+        </ReportSection>
+      </ReportPage>
     );
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-      }}
-    >
-      {/* Scrollable content area */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '1.25rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.75rem',
-        }}
-      >
-        {/* Page header */}
-        <div style={{ marginBottom: '0.25rem' }}>
-          <h2
-            style={{
-              margin: '0 0 0.25rem',
-              fontSize: '1rem',
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-            }}
-          >
-            答案抓取结果
-          </h2>
-          <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
-            共 {fetchResults.length} 个问题，覆盖 {platforms.length} 个平台
-          </p>
+    <ReportPage>
+      <ReportHero
+        eyebrow="抓取结果"
+        title={content.title || 'AI答案抓取结果'}
+        meta={
+          <>
+            <span>共 {fetchResults.length} 个问题</span>
+            <span>覆盖 {platforms.length} 个平台</span>
+          </>
+        }
+      />
+
+      <ReportSection eyebrow="抓取概览">
+        <StatsPanel fetchResults={fetchResults} platforms={platforms} printMode={printMode} />
+      </ReportSection>
+
+      <ReportSection eyebrow="逐题查看" title="按问题查看各平台回答">
+        <div className="space-y-4">
+          {fetchResults.map((item, idx) => (
+            <QuestionSection
+              key={item.question_id || idx}
+              item={item}
+              index={idx}
+              platforms={platforms}
+              defaultExpanded={true}
+              printMode={printMode}
+            />
+          ))}
         </div>
-
-        {/* Collapsible stats — secondary, placed before main content */}
-        <StatsPanel fetchResults={fetchResults} platforms={platforms} />
-
-        {/* Divider */}
-        <div
-          style={{
-            borderBottom: '1px solid var(--border-subtle)',
-          }}
-        />
-
-        {/* One section per question */}
-        {fetchResults.map((item, idx) => (
-          <QuestionSection
-            key={item.question_id || idx}
-            item={item}
-            index={idx}
-            platforms={platforms}
-            defaultExpanded={true}
-          />
-        ))}
-      </div>
-    </div>
+      </ReportSection>
+    </ReportPage>
   );
 }
 

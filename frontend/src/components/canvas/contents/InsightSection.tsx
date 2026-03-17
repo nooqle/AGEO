@@ -97,7 +97,7 @@ export function InsightSection({ data }: InsightSectionProps) {
         </p>
       </div>
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-2">
+      <div className="mt-5 space-y-5">
         <div className="space-y-3.5">
           {renderColumnHeader('good')}
           {strengths.length === 0 ? (

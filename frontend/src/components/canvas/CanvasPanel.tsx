@@ -96,6 +96,8 @@ export function CanvasPanel() {
         'flex flex-col h-full',
         'shadow-[-2px_0_16px_rgba(0,0,0,0.08)]'
       )}
+      data-canvas-export-root="true"
+      data-canvas-export-id={rawContent?.id || ''}
       style={{ backgroundColor: 'var(--bg-primary)' }}
       initial={{ x: 100, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
@@ -118,6 +120,7 @@ export function CanvasPanel() {
             ? 'overflow-hidden'
             : 'overflow-y-auto'
         )}
+        data-canvas-export-scroll="true"
       >
         <AnimatePresence mode="wait">
           <motion.div
@@ -125,6 +128,7 @@ export function CanvasPanel() {
             className={cn(
               activeContent?.type === 'pipeline' ? 'h-full' : ''
             )}
+            data-canvas-export-body="true"
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}

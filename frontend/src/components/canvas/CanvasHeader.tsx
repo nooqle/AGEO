@@ -18,6 +18,7 @@ import {
   RiShieldCheckLine,
   RiLinkM,
   RiSparklingLine,
+  RiLoader4Line,
 } from '@remixicon/react';
 import { CanvasContent } from '@/types/canvas';
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -25,6 +26,14 @@ import { useConversationStore } from '@/stores/conversationStore';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
+import { toast } from '@/components/ui/toast';
+import {
+  exportCanvasContent,
+  getCanvasContentText,
+  getCanvasExportLabel,
+  isCanvasContentExportable,
+  type SupportedExportFormat,
+} from '@/lib/canvasExport';
 
 interface CanvasHeaderProps {
   content: CanvasContent;
@@ -47,15 +56,27 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const [versionMenuOpen, setVersionMenuOpen] = useState(false);
   const [artifactInputOpen, setArtifactInputOpen] = useState(false);
   const [artifactInputValue, setArtifactInputValue] = useState('');
+  const [exportingFormat, setExportingFormat] = useState<SupportedExportFormat | null>(null);
   const sendArtifactAction = useConversationStore((state) => state.wsArtifactAction);
 
   const versions = useMemo(() => content.versions || [], [content.versions]);
   const hasVersions = versions.length > 0;
   const isViewingHistory = content.currentVersionIndex >= 0;
-  const isConfidenceSignal = content.type === 'report' && content.data?.report_kind === 'confidence_signal';
-  const confidenceComposer = isConfidenceSignal ? content.data?.composer : undefined;
-  const confidenceStatus = isConfidenceSignal ? content.data?.status : undefined;
+  const effectiveContent = useMemo(() => {
+    if (isViewingHistory && content.currentVersionIndex < versions.length) {
+      return {
+        ...content,
+        data: versions[content.currentVersionIndex].data as CanvasContent['data'],
+      } as CanvasContent;
+    }
+    return content;
+  }, [content, isViewingHistory, versions]);
+  const isConfidenceSignal = effectiveContent.type === 'report' && effectiveContent.data?.report_kind === 'confidence_signal';
+  const confidenceComposer = isConfidenceSignal ? effectiveContent.data?.composer : undefined;
+  const confidenceStatus = isConfidenceSignal ? effectiveContent.data?.status : undefined;
   const isArtifactActionRunning = confidenceStatus?.phase === 'running';
+  const exportable = useMemo(() => isCanvasContentExportable(content), [content]);
+  const exportLabel = useMemo(() => getCanvasExportLabel(content), [content]);
 
   // Determine which linkedMessageId to use for "jump to conversation"
   const activeLinkedMessageId = useMemo(() => {
@@ -101,9 +122,13 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const handleArtifactSubmit = () => {
     const rawInput = artifactInputValue.trim();
     if (!sendArtifactAction || !rawInput || !isConfidenceSignal || isArtifactActionRunning) {
+      if (!sendArtifactAction && isConfidenceSignal) {
+        toast.error('当前连接不可用，请稍后重试');
+      }
       return;
     }
     sendArtifactAction(content.id, 'extra_evaluate', { raw_input: rawInput });
+    toast.info('已开始额外评估，结果会写回当前报告');
     setArtifactInputValue('');
     setArtifactInputOpen(false);
   };
@@ -112,23 +137,11 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const handleCopy = async () => {
     try {
       let contentText: string;
-      const d = content.data as Record<string, unknown>;
+      const d = effectiveContent.data as Record<string, unknown>;
 
-      if (content.type === 'report') {
-        const parts: string[] = [];
-        if (typeof d.headline === 'string') parts.push(`# ${d.headline}`);
-        if (typeof d.subtitle === 'string') parts.push(d.subtitle);
-        if (typeof d.content === 'string') parts.push(d.content);
-        if (Array.isArray(d.insights)) {
-          parts.push('\n## 关键洞察');
-          (d.insights as Array<Record<string, string>>).forEach((i) => parts.push(`- ${i.text || i.title || ''}`));
-        }
-        if (Array.isArray(d.recommendations)) {
-          parts.push('\n## 优化建议');
-          (d.recommendations as Array<Record<string, string>>).forEach((r) => parts.push(`- ${r.text || r.title || ''}`));
-        }
-        contentText = parts.filter(Boolean).join('\n') || JSON.stringify(d, null, 2);
-      } else if (content.type === 'dataTable') {
+      if (exportable) {
+        contentText = getCanvasContentText(content, contents);
+      } else if (effectiveContent.type === 'dataTable') {
         const cols = Array.isArray(d.columns) ? (d.columns as Array<Record<string, string>>) : [];
         const rows = Array.isArray(d.rows) ? (d.rows as Array<Record<string, unknown>>) : [];
         const header = cols.map((c) => c.label || c.key || '').join('\t');
@@ -139,7 +152,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
           }).join('\t')
         ).join('\n');
         contentText = header + '\n' + body;
-      } else if (content.type === 'questionList') {
+      } else if (effectiveContent.type === 'questionList') {
         const questions = Array.isArray(d.questions) ? (d.questions as Array<Record<string, string>>) : [];
         contentText = questions.map((q, i) => `${i + 1}. ${q.text || q.question || JSON.stringify(q)}`).join('\n');
       } else {
@@ -156,27 +169,22 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   };
 
   // Export content
-  const handleExport = (format: 'pdf' | 'excel' | 'json') => {
-    switch (format) {
-      case 'json': {
-        const jsonStr = JSON.stringify(content.data, null, 2);
-        const jsonBlob = new Blob([jsonStr], { type: 'application/json' });
-        const jsonUrl = URL.createObjectURL(jsonBlob);
-        const jsonLink = document.createElement('a');
-        jsonLink.href = jsonUrl;
-        jsonLink.download = `${content.title}.json`;
-        jsonLink.click();
-        URL.revokeObjectURL(jsonUrl);
-        break;
-      }
-      case 'pdf':
-        console.log('Export PDF:', content.id);
-        break;
-      case 'excel':
-        console.log('Export Excel:', content.id);
-        break;
+  const handleExport = async (format: SupportedExportFormat) => {
+    if (!exportable || exportingFormat) {
+      return;
     }
-    setExportMenuOpen(false);
+
+    try {
+      setExportingFormat(format);
+      setExportMenuOpen(false);
+      const fileName = await exportCanvasContent(content, contents, format);
+      toast.success(`已导出 ${fileName}`);
+    } catch (error) {
+      console.error('Export failed:', error);
+      toast.error(error instanceof Error ? error.message : '导出失败');
+    } finally {
+      setExportingFormat(null);
+    }
   };
 
   // Get icon based on content type
@@ -245,12 +253,12 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
             <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
               <span className="capitalize">
                 {content.type === 'dataTable' ? '数据表格' :
-                 content.type === 'report' ? (
-                   content.data?.report_kind === 'confidence_signal' ? '置信度报告' : '分析报告'
+                 effectiveContent.type === 'report' ? (
+                   effectiveContent.data?.report_kind === 'confidence_signal' ? '置信度报告' : '分析报告'
                  ) :
-                 content.type === 'chart' ? '数据图表' :
-                 content.type === 'questionList' ? '问题列表' :
-                 content.type === 'fetchResults' ? '抓取结果' :
+                 effectiveContent.type === 'chart' ? '数据图表' :
+                 effectiveContent.type === 'questionList' ? '问题列表' :
+                 effectiveContent.type === 'fetchResults' ? '抓取结果' :
                  '选择项'}
               </span>
               {content.category === 'baseline' && (
@@ -321,17 +329,18 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
           </button>
 
           {/* Export button with dropdown */}
-          {(content.type === 'report' || content.type === 'dataTable') && (
+          {exportable && (
             <div className="relative">
               <button
                 onClick={() => setExportMenuOpen(!exportMenuOpen)}
                 className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
                 style={actionBtnStyle}
-                onMouseEnter={handleActionEnter}
-                onMouseLeave={handleActionLeave}
+                onMouseEnter={exportingFormat ? undefined : handleActionEnter}
+                onMouseLeave={exportingFormat ? undefined : handleActionLeave}
                 title="导出"
+                disabled={Boolean(exportingFormat)}
               >
-                <RiDownloadLine className="w-4 h-4" />
+                {exportingFormat ? <RiLoader4Line className="w-4 h-4 animate-spin" /> : <RiDownloadLine className="w-4 h-4" />}
               </button>
 
               <AnimatePresence>
@@ -344,33 +353,30 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                     style={dropdownStyle}
                   >
                     <button
-                      disabled
-                      className={`${menuItemClass} cursor-not-allowed opacity-40`}
-                      style={{ color: 'var(--text-tertiary)' }}
-                      title="即将推出"
-                    >
-                      <RiFileTextLine className="w-3.5 h-3.5" />
-                      导出 PDF（即将推出）
-                    </button>
-                    <button
-                      disabled
-                      className={`${menuItemClass} cursor-not-allowed opacity-40`}
-                      style={{ color: 'var(--text-tertiary)' }}
-                      title="即将推出"
-                    >
-                      <RiTableLine className="w-3.5 h-3.5" />
-                      导出 Excel（即将推出）
-                    </button>
-                    <button
-                      onClick={() => handleExport('json')}
+                      onClick={() => handleExport('pdf')}
                       className={menuItemClass}
                       style={{ color: 'var(--text-primary)' }}
                       onMouseEnter={handleMenuItemEnter}
                       onMouseLeave={handleMenuItemLeave}
+                      disabled={Boolean(exportingFormat)}
                     >
-                      <span className="text-xs font-mono">{'{}'}</span>
-                      导出 JSON
+                      <RiFileTextLine className="w-3.5 h-3.5" />
+                      导出 PDF
                     </button>
+                    <button
+                      onClick={() => handleExport('md')}
+                      className={menuItemClass}
+                      style={{ color: 'var(--text-primary)' }}
+                      onMouseEnter={handleMenuItemEnter}
+                      onMouseLeave={handleMenuItemLeave}
+                      disabled={Boolean(exportingFormat)}
+                    >
+                      <span className="text-[11px] font-semibold tracking-[0.08em]">MD</span>
+                      导出 MD
+                    </button>
+                    <div className="px-3 pb-2 pt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                      文件名：品牌名 + {exportLabel} + 时间 + 版本号
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>

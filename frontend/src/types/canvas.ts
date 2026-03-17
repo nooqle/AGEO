@@ -90,6 +90,7 @@ export type ReportV2Metric = {
   description?: string;
   trend?: number | null;
   status?: ReportMetricStatus;
+  assessment?: string;
 };
 
 export type ReportSummaryData = {
@@ -116,13 +117,44 @@ export type ScenarioCoverageItem = {
   battle_status?: ScenarioBattleStatus;
   evidence?: string;
   confidence?: number;
+  competitors_present?: string[];
+  risk_reason_type?: 'competitor_crowding' | 'negative_brand' | string;
+  risk_reason_summary?: string;
+  fact_basis?: string[];
+  semantic_tags?: {
+    audiences?: string[];
+    prices?: string[];
+    features?: string[];
+    usages?: string[];
+  };
+};
+
+export type ScenarioCoverageLensItem = {
+  label: string;
+  count: number;
+  brandCount: number;
+  competitorCount: number;
+  missingCount: number;
+  riskCount: number;
+};
+
+export type ScenarioCoverageLens = {
+  key: 'audiences' | 'prices' | 'features' | 'usages';
+  label: string;
+  items?: ScenarioCoverageLensItem[];
 };
 
 export type ScenarioCoverageData = {
   title?: string;
   description?: string;
   summary?: string;
+  overview?: string;
   items?: ScenarioCoverageItem[];
+  missing_items?: ScenarioCoverageItem[];
+  risk_items?: ScenarioCoverageItem[];
+  missing_summary?: string;
+  risk_summary?: string;
+  semantic_lenses?: ScenarioCoverageLens[];
 };
 
 export type CompetitorBattleMentionExample = {
@@ -186,6 +218,7 @@ export type SourceSectionData = {
   description?: string;
   summary?: string;
   content_citation_rate?: number;
+  mention_question_count?: number;
   cited_answer_count?: number;
   cited_content_count?: number;
   official_case_count?: number;
@@ -232,6 +265,20 @@ export type ReportMentionSummary = {
   negative: number;
 };
 
+export type ReportMentionScenarioGroup = {
+  key: string;
+  question: string;
+  platforms: string[];
+  source_labels: string[];
+  brand_count: number;
+  competitor_count: number;
+  sentiment: 'positive' | 'neutral' | 'negative' | string;
+  brand_labels: string[];
+  competitor_labels: string[];
+  brand_facts: string[];
+  competitor_facts: string[];
+};
+
 export type ReportMentionSectionData = {
   title?: string;
   description?: string;
@@ -240,6 +287,7 @@ export type ReportMentionSectionData = {
   sentiment_summary?: ReportMentionSummary;
   brand_mentions?: ReportMentionItem[];
   competitor_mentions?: ReportMentionItem[];
+  groups?: ReportMentionScenarioGroup[];
 };
 
 export type ActionQueueItem = {
@@ -325,6 +373,8 @@ export type ConfidenceSignalSummary = {
   general_knowledge_count?: number;
   second_quadrant_count?: number;
   average_score?: number;
+  average_confidence_score?: number;
+  vulnerable_source_count?: number;
   updated_at?: string;
 };
 
@@ -335,8 +385,19 @@ export type ConfidenceSignalFinding = {
 
 export type ConfidenceMatrixConfig = {
   aice_threshold?: number;
+  aice_threshold_mode?: string;
   frequency_threshold?: number;
   frequency_threshold_mode?: string;
+  threshold_diagnostics?: {
+    current_threshold?: number;
+    average_score?: number;
+    median_score?: number;
+    percentile_75_score?: number;
+    suggested_threshold?: number;
+    high_score_share?: number;
+    fit?: 'strict' | 'balanced' | 'loose' | string;
+    note?: string;
+  };
 };
 
 export type ConfidenceEcosystemMatrix = {
@@ -360,6 +421,32 @@ export type ConfidenceSignalRecommendation = {
   title?: string;
   action?: string;
   reason?: string;
+};
+
+export type ConfidenceAuditPoint = {
+  dimension_key?: string;
+  dimension_label?: string;
+  fact?: string;
+  logic?: string;
+  evidence?: string;
+};
+
+export type ConfidenceAuditActionStep = {
+  priority?: number;
+  dimension_key?: string;
+  dimension_label?: string;
+  issue_type?: string;
+  instruction?: string;
+  reason?: string;
+  example?: string | null;
+};
+
+export type ConfidenceAuditReport = {
+  score_formula?: string;
+  core_summary?: string;
+  high_confidence_points?: ConfidenceAuditPoint[];
+  risk_points?: ConfidenceAuditPoint[];
+  action_steps?: ConfidenceAuditActionStep[];
 };
 
 export type ConfidenceSignalDimensionScore = {
@@ -398,6 +485,7 @@ export type ConfidenceSignalItem = {
   top_signals?: string[];
   dimension_scores?: ConfidenceSignalDimensionScore[];
   recommendations?: ConfidenceSignalRecommendation[];
+  audit_report?: ConfidenceAuditReport;
   status?: 'pending' | 'running' | 'ready' | 'error';
   error_message?: string;
   question_samples?: string[];
@@ -427,6 +515,7 @@ export type ConfidenceGeneralKnowledgeInsight = {
   summary?: string;
   top_frequency_items?: ConfidenceSignalItem[];
   top_score_items?: ConfidenceSignalItem[];
+  representative_items?: ConfidenceSignalItem[];
 };
 
 export type ConfidenceRepairAction = {

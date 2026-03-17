@@ -1,9 +1,12 @@
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { useEffect, useRef, useState } from 'react';
+import { Cell, Pie, PieChart, Tooltip } from 'recharts';
 import { getSourceLabel } from '@/lib/sourceLabel';
 import type { ReportCitationCase, SourceSectionData } from '@/types/canvas';
+import { ReportMetricCard, ReportSection } from './ReportScaffold';
 
 interface SourceSectionProps {
   data?: SourceSectionData | null;
+  printMode?: boolean;
 }
 
 const PIE_COLORS = ['#1d4ed8', '#0f766e', '#b45309', '#7c3aed', '#be123c', '#2563eb', '#4d7c0f', '#9f1239', '#0f766e', '#334155'];
@@ -135,50 +138,74 @@ function buildPieData(data?: SourceSectionData | null) {
   ];
 }
 
-export function SourceSection({ data }: SourceSectionProps) {
+export function SourceSection({ data, printMode = false }: SourceSectionProps) {
+  const chartFrameRef = useRef<HTMLDivElement | null>(null);
+  const [chartSize, setChartSize] = useState(() => (printMode ? { width: 320, height: 240 } : { width: 0, height: 0 }));
   const topSources = buildTopSources(data);
   const pieData = buildPieData(data);
   const officialCount = topSources.filter((item) => item.isOfficial).reduce((sum, item) => sum + item.count, 0);
   const thirdPartyCount = topSources.filter((item) => !item.isOfficial).reduce((sum, item) => sum + item.count, 0);
+  const citedQuestionCount = data?.cited_answer_count ?? 0;
+  const mentionQuestionCount = data?.mention_question_count ?? 0;
+
+  useEffect(() => {
+    if (printMode) {
+      return;
+    }
+
+    const node = chartFrameRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const updateSize = () => {
+      const width = Math.floor(node.clientWidth);
+      const height = Math.floor(node.clientHeight);
+      if (width > 0 && height > 0) {
+        setChartSize((current) =>
+          current.width === width && current.height === height ? current : { width, height }
+        );
+      }
+    };
+
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(node);
+
+    return () => observer.disconnect();
+  }, [printMode]);
 
   return (
-    <section className="rounded-[20px] border bg-[var(--bg-tertiary)] p-6" style={{ borderColor: 'var(--border-subtle)' }}>
-      <div className="space-y-1.5 border-b border-[var(--border-subtle)] pb-4">
-        <h2 className="text-[24px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">{data?.title || '引用来源分析'}</h2>
-        <p className="max-w-3xl text-[14px] leading-7 text-[var(--text-secondary)]">
-          {data?.description || '这里只保留来源结构和头部来源，不再堆冗长明细表。'}
-        </p>
+    <ReportSection title={data?.title || '引用来源分析'}>
+      <div className="grid gap-3 md:grid-cols-3">
+        <ReportMetricCard
+          label="内容引用率"
+          value={formatRate(data?.content_citation_rate)}
+          caption={
+            <>
+              公式：有引用来源的问题数 ÷ {mentionQuestionCount > 0 ? `${mentionQuestionCount} 个我方品牌被提及的问题` : '我方品牌被提及的问题数'}
+              {mentionQuestionCount > 0 ? ` = ${citedQuestionCount}/${mentionQuestionCount}` : ''}
+            </>
+          }
+        />
+        <ReportMetricCard label="官网引用次数" value={officialCount} />
+        <ReportMetricCard label="第三方引用次数" value={thirdPartyCount} />
       </div>
 
-      <div className="mt-5 grid gap-3 md:grid-cols-4">
-        <div className="rounded-[16px] border bg-[var(--bg-elevated)] p-4" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="text-[12px] text-[var(--text-tertiary)]">内容引用率</div>
-          <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{formatRate(data?.content_citation_rate)}</div>
-        </div>
-        <div className="rounded-[16px] border bg-[var(--bg-elevated)] p-4" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="text-[12px] text-[var(--text-tertiary)]">进入引用链的问题数</div>
-          <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{data?.cited_answer_count ?? '--'}</div>
-        </div>
-        <div className="rounded-[16px] border bg-[var(--bg-elevated)] p-4" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="text-[12px] text-[var(--text-tertiary)]">官网引用次数</div>
-          <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{officialCount}</div>
-        </div>
-        <div className="rounded-[16px] border bg-[var(--bg-elevated)] p-4" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="text-[12px] text-[var(--text-tertiary)]">第三方引用次数</div>
-          <div className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{thirdPartyCount}</div>
-        </div>
-      </div>
-
-      <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(320px,400px)_1fr]">
+      <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(320px,400px)_1fr]">
         <section className="rounded-[18px] border bg-[var(--bg-elevated)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
           <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
             <h3 className="text-[18px] font-semibold text-[var(--text-primary)]">来源分布</h3>
             <span className="text-[12px] text-[var(--text-tertiary)]">{data?.citation_analysis?.total_citations ?? 0} 次引用</span>
           </div>
           {pieData.length > 0 ? (
-            <div className="mt-4 h-[240px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
+            <div
+              ref={printMode ? null : chartFrameRef}
+              className="mt-4 h-[240px]"
+              style={printMode ? { width: `${chartSize.width}px` } : undefined}
+            >
+              {chartSize.width > 0 && chartSize.height > 0 ? (
+                <PieChart width={chartSize.width} height={chartSize.height}>
                   <Pie
                     data={pieData}
                     dataKey="count"
@@ -197,7 +224,7 @@ export function SourceSection({ data }: SourceSectionProps) {
                     labelFormatter={() => '来源分布'}
                   />
                 </PieChart>
-              </ResponsiveContainer>
+              ) : null}
             </div>
           ) : (
             <div className="mt-4 rounded-[16px] border border-dashed border-[var(--border-subtle)] px-4 py-6 text-[14px] text-[var(--text-tertiary)]">
@@ -253,6 +280,6 @@ export function SourceSection({ data }: SourceSectionProps) {
           )}
         </section>
       </div>
-    </section>
+    </ReportSection>
   );
 }

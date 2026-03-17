@@ -1,40 +1,23 @@
 'use client';
 
-import {
-  RiArrowRightUpLine,
-  RiCompass3Line,
-  RiFlag2Line,
-  RiFocus3Line,
-  RiShieldCheckLine,
-  RiSparklingLine,
-} from '@remixicon/react';
-import {
-  CartesianGrid,
-  ReferenceLine,
-  ResponsiveContainer,
-  Scatter,
-  ScatterChart,
-  Tooltip,
-  XAxis,
-  YAxis,
-  ZAxis,
-} from 'recharts';
+import { type ReactNode, useEffect, useRef } from 'react';
+import { RiArrowRightUpLine, RiShieldCheckLine } from '@remixicon/react';
 import { Card } from '@/components/ui/card';
-import { cn } from '@/lib/cn';
-import { axisTick, tooltipStyle } from '@/styles/chart-theme';
+import { ReportHero, ReportMetricCard, ReportPage, ReportSection } from './ReportScaffold';
 import type {
-  ConfidenceAnalysisBlock,
+  ConfidenceAuditActionStep,
+  ConfidenceAuditPoint,
   ConfidenceEntityClassification,
   ConfidenceQuadrant,
   ConfidenceQuadrantOverview,
-  ConfidenceRepairAction,
+  ConfidenceSignalDimensionScore,
   ConfidenceSignalItem,
-  ConfidenceSignalStatus,
   ReportCanvasContent,
 } from '@/types/canvas';
 
 interface ConfidenceSignalContentProps {
   content: ReportCanvasContent;
+  printMode?: boolean;
 }
 
 type MatrixPoint = {
@@ -48,21 +31,91 @@ type MatrixPoint = {
   quadrantLabel: string;
   score: number;
   frequency: number;
-  z: number;
+  count: number;
+  scoreBandLabel: string;
+  sampleTitles: string[];
 };
 
-const ENTITY_META: Record<ConfidenceEntityClassification, { label: string; fill: string; softBg: string; softText: string }> = {
-  brand: { label: '我方阵营', fill: '#38BDF8', softBg: 'rgba(56,189,248,0.12)', softText: '#38BDF8' },
-  competitor: { label: '竞方阵营', fill: '#FB7185', softBg: 'rgba(251,113,133,0.12)', softText: '#FB7185' },
-  general_knowledge: { label: '共业阵营', fill: '#A3A3A3', softBg: 'rgba(163,163,163,0.14)', softText: '#D4D4D4' },
+type RawMatrixPoint = Omit<
+  MatrixPoint,
+  'count' | 'scoreBandLabel' | 'sampleTitles'
+>;
+
+const ENTITY_META: Record<
+  ConfidenceEntityClassification,
+  { label: string; fill: string; softBg: string; softText: string }
+> = {
+  brand: {
+    label: '我方阵营',
+    fill: '#3B82F6',
+    softBg: 'rgba(59,130,246,0.12)',
+    softText: '#2563EB',
+  },
+  competitor: {
+    label: '竞方阵营',
+    fill: '#F43F5E',
+    softBg: 'rgba(244,63,94,0.12)',
+    softText: '#E11D48',
+  },
+  general_knowledge: {
+    label: '共业阵营',
+    fill: '#64748B',
+    softBg: 'rgba(100,116,139,0.12)',
+    softText: '#475569',
+  },
 };
 
-const QUADRANT_META: Record<ConfidenceQuadrant, { label: string; short: string; border: string; glow: string }> = {
-  q1_anchor: { label: '定海神针', short: 'Q1', border: 'rgba(16,185,129,0.28)', glow: 'rgba(16,185,129,0.12)' },
-  q2_false_prosperity: { label: '虚假繁荣', short: 'Q2', border: 'rgba(245,158,11,0.28)', glow: 'rgba(245,158,11,0.12)' },
-  q3_noise: { label: '沉寂噪音', short: 'Q3', border: 'rgba(148,163,184,0.22)', glow: 'rgba(148,163,184,0.10)' },
-  q4_sleeping_asset: { label: '高潜伏藏', short: 'Q4', border: 'rgba(59,130,246,0.28)', glow: 'rgba(59,130,246,0.12)' },
+const QUADRANT_META: Record<
+  ConfidenceQuadrant,
+  {
+    label: string;
+    plainLabel: string;
+    feature: string;
+    border: string;
+    glow: string;
+    area: string;
+  }
+> = {
+  q1_anchor: {
+    label: '定海神针',
+    plainLabel: '第一象限',
+    feature: '高频 + 高分',
+    border: 'rgba(22,163,74,0.25)',
+    glow: 'rgba(22,163,74,0.10)',
+    area: 'rgba(22,163,74,0.08)',
+  },
+  q2_false_prosperity: {
+    label: '虚假繁荣',
+    plainLabel: '第二象限',
+    feature: '高频 + 低分',
+    border: 'rgba(245,158,11,0.28)',
+    glow: 'rgba(245,158,11,0.10)',
+    area: 'rgba(245,158,11,0.09)',
+  },
+  q3_noise: {
+    label: '沉寂噪音',
+    plainLabel: '第三象限',
+    feature: '低频 + 低分',
+    border: 'rgba(148,163,184,0.28)',
+    glow: 'rgba(148,163,184,0.10)',
+    area: 'rgba(148,163,184,0.08)',
+  },
+  q4_sleeping_asset: {
+    label: '高潜伏藏',
+    plainLabel: '第四象限',
+    feature: '低频 + 高分',
+    border: 'rgba(14,165,233,0.28)',
+    glow: 'rgba(14,165,233,0.10)',
+    area: 'rgba(14,165,233,0.08)',
+  },
 };
+
+const QUADRANT_ORDER: ConfidenceQuadrant[] = [
+  'q1_anchor',
+  'q2_false_prosperity',
+  'q3_noise',
+  'q4_sleeping_asset',
+];
 
 function formatScore(value?: number) {
   if (typeof value !== 'number' || Number.isNaN(value)) return '--';
@@ -73,18 +126,61 @@ function formatUpdatedAt(value?: string) {
   if (!value) return '刚刚更新';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
-function statusTone(status?: ConfidenceSignalStatus) {
-  switch (status?.phase) {
-    case 'running':
-      return 'border-amber-500/30 bg-amber-500/10 text-amber-100';
-    case 'error':
-      return 'border-rose-500/30 bg-rose-500/10 text-rose-100';
-    default:
-      return 'border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]';
-  }
+function MetaPill({
+  children,
+  tone = 'neutral',
+}: {
+  children: ReactNode;
+  tone?: 'neutral' | 'accent';
+}) {
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-3 py-1.5 text-[12px]"
+      style={{
+        background:
+          tone === 'accent'
+            ? 'color-mix(in srgb, var(--color-primary) 12%, var(--bg-secondary))'
+            : 'var(--bg-secondary)',
+        color: tone === 'accent' ? 'var(--brand-text)' : 'var(--text-secondary)',
+        border: `1px solid ${
+          tone === 'accent'
+            ? 'color-mix(in srgb, var(--color-primary) 22%, transparent)'
+            : 'var(--border-subtle)'
+        }`,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function MatrixSummaryStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <div
+      className="min-w-[132px] rounded-[18px] px-4 py-3"
+      style={{
+        background: 'color-mix(in srgb, var(--bg-elevated) 88%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--border-subtle) 72%, rgba(255,255,255,0.08) 28%)',
+      }}
+    >
+      <div className="text-[11px] tracking-[0.12em] text-[var(--text-tertiary)]">{label}</div>
+      <div className="mt-1 text-[20px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{value}</div>
+    </div>
+  );
 }
 
 function getEntityMeta(entity?: ConfidenceEntityClassification) {
@@ -95,7 +191,7 @@ function getQuadrantMeta(quadrant?: ConfidenceQuadrant) {
   return QUADRANT_META[quadrant ?? 'q3_noise'];
 }
 
-function toMatrixPoint(item: ConfidenceSignalItem): MatrixPoint | null {
+function toMatrixPoint(item: ConfidenceSignalItem): RawMatrixPoint | null {
   const score = item.aice_score ?? item.overall_score;
   const frequency = item.frequency ?? item.occurrences;
   if (typeof score !== 'number' || typeof frequency !== 'number') return null;
@@ -112,13 +208,76 @@ function toMatrixPoint(item: ConfidenceSignalItem): MatrixPoint | null {
     quadrantLabel: item.quadrant_label || QUADRANT_META[quadrant].label,
     score,
     frequency,
-    z: Math.max(10, frequency * 12),
   };
 }
 
+const SCORE_BUCKET_SIZE = 5;
+
+const MATRIX_LAYOUT: ConfidenceQuadrant[][] = [
+  ['q4_sleeping_asset', 'q1_anchor'],
+  ['q3_noise', 'q2_false_prosperity'],
+];
+
+function buildScoreBucket(score: number, threshold: number) {
+  const isHighScore = score >= threshold;
+  const zoneStart = isHighScore ? threshold : 0;
+  const zoneEnd = isHighScore ? 100 : threshold;
+  const relative = Math.max(0, score - zoneStart);
+  const bucketIndex = Math.floor(relative / SCORE_BUCKET_SIZE);
+  const start = Math.min(zoneEnd, zoneStart + bucketIndex * SCORE_BUCKET_SIZE);
+  const end = Math.min(zoneEnd, start + SCORE_BUCKET_SIZE);
+  const center = start + Math.max(1, end - start) / 2;
+  return {
+    key: `${isHighScore ? 'high' : 'low'}::${bucketIndex}`,
+    start,
+    end,
+    center,
+    label: `${formatScore(start)}-${formatScore(end)}`,
+  };
+}
+
+function buildMatrixPoints(
+  points: RawMatrixPoint[],
+  aiceThreshold: number,
+): MatrixPoint[] {
+  const grouped = new Map<string, { bucket: ReturnType<typeof buildScoreBucket>; items: RawMatrixPoint[] }>();
+
+  points.forEach((point) => {
+    const scoreBucket = buildScoreBucket(point.score, aiceThreshold);
+    const key = `${point.entity}::${point.frequency}::${scoreBucket.key}`;
+    const entry = grouped.get(key);
+    if (entry) {
+      entry.items.push(point);
+      return;
+    }
+    grouped.set(key, { bucket: scoreBucket, items: [point] });
+  });
+
+  return [...grouped.values()]
+    .map(({ bucket, items }) => {
+      const sample = items[0];
+      const averageScore = items.reduce((sum, item) => sum + item.score, 0) / items.length;
+      return {
+        ...sample,
+        title: items.length === 1 ? sample.title : `${sample.entityLabel} · ${items.length} 个来源`,
+        url: items.length === 1 ? sample.url : undefined,
+        domain: items.length === 1 ? sample.domain : undefined,
+        score: averageScore,
+        count: items.length,
+        scoreBandLabel: bucket.label,
+        sampleTitles: items.slice(0, 3).map((item) => item.title),
+      };
+    })
+    .sort((left, right) => {
+      if (left.frequency !== right.frequency) return right.frequency - left.frequency;
+      if (left.score !== right.score) return right.score - left.score;
+      if (left.count !== right.count) return right.count - left.count;
+      return left.entity.localeCompare(right.entity);
+    });
+}
+
 function buildFallbackQuadrantOverview(items: ConfidenceSignalItem[]): ConfidenceQuadrantOverview[] {
-  const quadrants: ConfidenceQuadrant[] = ['q1_anchor', 'q2_false_prosperity', 'q3_noise', 'q4_sleeping_asset'];
-  return quadrants.map((quadrant) => {
+  return QUADRANT_ORDER.map((quadrant) => {
     const filtered = items.filter((item) => item.quadrant === quadrant);
     return {
       quadrant,
@@ -133,306 +292,886 @@ function buildFallbackQuadrantOverview(items: ConfidenceSignalItem[]): Confidenc
   });
 }
 
-function buildFallbackAnalysisBlocks(items: ConfidenceSignalItem[]): ConfidenceAnalysisBlock[] {
-  const defs = [
-    ['brand_q1', '我方阵地：坚如磐石（善因固化）', '我方第一象限内容是当前 AI 语境中的稳定资产。', '高置信度归因分析'],
-    ['competitor_q1', '竞方阵地：坚如磐石（见贤思齐）', '竞方第一象限内容说明对方已有稳定投喂能力。', '高置信度归因分析'],
-    ['brand_q2', '我方阵地：被引用但置信度不高（发露修缮）', '我方第二象限内容是当前最优先的修缮区。', '低置信度归因分析'],
-    ['competitor_q2', '竞方阵地：被引用但置信度不高（法施填补）', '竞方第二象限内容是降维覆盖的主要机会位。', '低置信度归因分析'],
-  ] as const;
-  return defs.map(([key, title, description, reasonLabel]) => {
-    const blockItems = items.filter((item) => item.analysis_group === key).slice(0, 5);
-    return { key, title, description, reason_label: reasonLabel, action_label: '修我/行动指南', item_count: blockItems.length, items: blockItems };
-  });
+function dimensionRatio(dimension: ConfidenceSignalDimensionScore) {
+  const max = Number(dimension.max_score ?? 0) || 1;
+  const score = Number(dimension.score ?? 0) || 0;
+  return score / max;
 }
 
-function buildFallbackRepairActions(items: ConfidenceSignalItem[]): ConfidenceRepairAction[] {
-  return [
-    { priority: 'P0', title: '立即修缮', summary: '优先修复我方高频低置信来源。', count: items.filter((item) => item.analysis_group === 'brand_q2').length },
-    { priority: 'P1', title: '对标固化', summary: '抽取第一象限优秀样本，沉淀为 SOP。', count: items.filter((item) => item.analysis_group === 'brand_q1' || item.analysis_group === 'competitor_q1').length },
-    { priority: 'P2', title: '降维覆盖', summary: '针对竞方高频低置信来源供给更高质量内容。', count: items.filter((item) => item.analysis_group === 'competitor_q2').length },
-    { priority: 'P3', title: '战略性忽略', summary: '低频低置信内容不投入专项资源。', count: items.filter((item) => item.quadrant === 'q3_noise').length },
-  ];
+function shortReason(text?: string) {
+  return (text || '').split('。', 1)[0]?.trim() || '当前维度暂无进一步说明。';
 }
 
-function MatrixTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload?: MatrixPoint }> }) {
-  const point = payload?.[0]?.payload;
-  if (!active || !point) return null;
-  const entityMeta = getEntityMeta(point.entity);
+function buildFallbackAuditReport(item: ConfidenceSignalItem) {
+  const dimensions = [...(item.dimension_scores ?? [])];
+  if (!dimensions.length) return item.audit_report;
+
+  const rankedHigh = [...dimensions]
+    .sort((left, right) => dimensionRatio(right) - dimensionRatio(left))
+    .slice(0, 3);
+  const rankedLow = [...dimensions]
+    .sort((left, right) => dimensionRatio(left) - dimensionRatio(right))
+    .slice(0, 3);
+
+  return {
+    score_formula: `${dimensions
+      .map((dimension) => `${formatScore(dimension.score)} (${String(dimension.key || '').toUpperCase()})`)
+      .join(' + ')} = ${formatScore(item.aice_score ?? item.overall_score)}`,
+    core_summary:
+      item.repair_action ||
+      `该来源当前置信分为 ${formatScore(item.aice_score ?? item.overall_score)}，可先从高分维度和低分维度两侧审视。`,
+    high_confidence_points: rankedHigh.map((dimension) => ({
+      dimension_key: dimension.key,
+      dimension_label: dimension.label,
+      fact: shortReason(dimension.reasoning),
+      logic: '该维度当前得分相对更高，是 AI 更容易采信的部分。',
+      evidence: dimension.reasoning,
+    })),
+    risk_points: rankedLow.map((dimension) => ({
+      dimension_key: dimension.key,
+      dimension_label: dimension.label,
+      fact: shortReason(dimension.reasoning),
+      logic: '该维度当前得分相对更低，是需要优先排查的风险点。',
+      evidence: dimension.reasoning,
+    })),
+    action_steps:
+      item.recommendations?.map((recommendation, index) => ({
+        priority: index + 1,
+        dimension_key: undefined,
+        dimension_label: recommendation.title,
+        issue_type: '动作',
+        instruction: recommendation.action,
+        reason: recommendation.reason,
+        example: null,
+      })) ?? [],
+  };
+}
+
+
+function StatusBanner({
+  phase,
+  message,
+}: {
+  phase?: 'idle' | 'running' | 'ready' | 'error';
+  message?: string;
+}) {
+  if (!message || phase === 'idle' || !phase) {
+    return null;
+  }
+
+  const tone =
+    phase === 'running'
+      ? {
+          border: 'rgba(59,130,246,0.22)',
+          bg: 'rgba(59,130,246,0.10)',
+          text: '#1d4ed8',
+          label: '额外评估进行中',
+        }
+      : phase === 'error'
+      ? {
+          border: 'rgba(244,63,94,0.22)',
+          bg: 'rgba(244,63,94,0.10)',
+          text: '#be123c',
+          label: '额外评估失败',
+        }
+      : {
+          border: 'rgba(16,185,129,0.22)',
+          bg: 'rgba(16,185,129,0.10)',
+          text: '#047857',
+          label: '额外评估已完成',
+        };
+
   return (
-    <div className="w-[260px] rounded-[18px] border p-4 shadow-xl" style={{ ...tooltipStyle, borderRadius: '18px' }}>
-      <div className="text-[14px] font-semibold text-[var(--text-primary)]">{point.title}</div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <span className="rounded-full px-2.5 py-1 text-[11px] font-medium" style={{ backgroundColor: entityMeta.softBg, color: entityMeta.softText }}>{point.entityLabel}</span>
-        <span className="rounded-full bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)]">{point.quadrantLabel}</span>
+    <div
+      className="rounded-[20px] border px-4 py-4"
+      style={{ borderColor: tone.border, backgroundColor: tone.bg }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex items-center gap-2 text-[13px] font-semibold" style={{ color: tone.text }}>
+          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: tone.text }} />
+          {tone.label}
+        </div>
+        <div className="text-[12px]" style={{ color: tone.text }}>
+          {phase === 'running' ? '请稍候' : phase === 'ready' ? '已写回当前报告' : '请检查输入'}
+        </div>
       </div>
-      <div className="mt-3 space-y-1.5 text-[12px] text-[var(--text-secondary)]">
-        <div>AICE：{formatScore(point.score)}</div>
-        <div>引用频次：{point.frequency}</div>
-        {point.domain ? <div>域名：{point.domain}</div> : null}
+      <div className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">{message}</div>
+    </div>
+  );
+}
+
+function AuditSectionTitle({ children }: { children: ReactNode }) {
+  return <div className="text-[12px] tracking-[0.12em] text-[var(--text-tertiary)]">{children}</div>;
+}
+
+function DimensionScoreList({ dimensions }: { dimensions?: ConfidenceSignalDimensionScore[] }) {
+  if (!dimensions?.length) return null;
+  return (
+    <div className="space-y-2.5">
+      {dimensions.map((dimension, index) => (
+        <div
+          key={`${dimension.key}_${index}`}
+          className="rounded-[18px] border px-4 py-3"
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--bg-secondary)',
+          }}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-[13px] font-medium text-[var(--text-primary)]">{dimension.label || dimension.key}</div>
+            <MetaPill>
+              {formatScore(dimension.score)} / {formatScore(dimension.max_score)}
+            </MetaPill>
+          </div>
+          {dimension.reasoning ? (
+            <div className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">{dimension.reasoning}</div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AuditPointList({
+  title,
+  points,
+  emptyText,
+}: {
+  title: string;
+  points?: ConfidenceAuditPoint[];
+  emptyText: string;
+}) {
+  return (
+    <div className="space-y-3">
+      <AuditSectionTitle>{title}</AuditSectionTitle>
+      {points?.length ? (
+        <div className="space-y-2.5">
+          {points.map((point, index) => (
+            <div
+              key={`${point.dimension_key}_${index}`}
+              className="rounded-[18px] border px-4 py-3"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {point.dimension_label ? <MetaPill>{point.dimension_label}</MetaPill> : null}
+              </div>
+              {point.fact ? (
+                <div className="mt-2 text-[14px] font-medium leading-6 text-[var(--text-primary)]">{point.fact}</div>
+              ) : null}
+              {point.logic ? (
+                <div className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">{point.logic}</div>
+              ) : null}
+              {point.evidence ? (
+                <div className="mt-2 text-[12px] leading-6 text-[var(--text-tertiary)]">证据：{point.evidence}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-[18px] border border-dashed border-[var(--border-subtle)] px-4 py-6 text-[13px] text-[var(--text-tertiary)]">
+          {emptyText}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModificationBasisList({
+  points,
+  steps,
+}: {
+  points?: ConfidenceAuditPoint[];
+  steps?: ConfidenceAuditActionStep[];
+}) {
+  const pointMap = new Map((points ?? []).map((point) => [point.dimension_key, point]));
+  const rows = (steps ?? []).map((step, index) => ({
+    step,
+    point: pointMap.get(step.dimension_key),
+    index,
+  }));
+
+  return (
+    <div className="space-y-3">
+      <AuditSectionTitle>修改方向的事实依据</AuditSectionTitle>
+      {rows.length ? (
+        <div className="space-y-2.5">
+          {rows.map(({ step, point, index }) => (
+            <div
+              key={`${step.dimension_key}_${index}`}
+              className="rounded-[18px] border px-4 py-3"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <MetaPill tone="accent">P{step.priority ?? index + 1}</MetaPill>
+                {step.dimension_label ? <MetaPill>{step.dimension_label}</MetaPill> : null}
+                {step.issue_type ? <MetaPill>{step.issue_type}</MetaPill> : null}
+              </div>
+              {point?.fact ? (
+                <div className="mt-3 text-[14px] font-medium leading-6 text-[var(--text-primary)]">{point.fact}</div>
+              ) : null}
+              {point?.evidence ? (
+                <div className="mt-2 text-[12px] leading-6 text-[var(--text-tertiary)]">事实依据：{point.evidence}</div>
+              ) : null}
+              {step.instruction ? (
+                <div className="mt-3 text-[14px] font-medium leading-6 text-[var(--text-primary)]">{step.instruction}</div>
+              ) : null}
+              {step.reason ? (
+                <div className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">为什么这么改：{step.reason}</div>
+              ) : null}
+              {step.example ? (
+                <div className="mt-2 text-[12px] leading-6 text-[var(--text-tertiary)]">修改示例：{step.example}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-[18px] border border-dashed border-[var(--border-subtle)] px-4 py-6 text-[13px] text-[var(--text-tertiary)]">
+          当前没有明确的修改方向依据。
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuditBody({ item }: { item: ConfidenceSignalItem }) {
+  const audit = item.audit_report ?? buildFallbackAuditReport(item);
+  return (
+    <div className="mt-5 space-y-5">
+      {audit?.core_summary ? (
+        <div className="space-y-3">
+          <AuditSectionTitle>评估结论</AuditSectionTitle>
+          <div
+            className="rounded-[20px] border px-4 py-4"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--bg-secondary) 90%, transparent)',
+            }}
+          >
+            <div className="text-[14px] leading-7 text-[var(--text-primary)]">{audit.core_summary}</div>
+          </div>
+        </div>
+      ) : null}
+
+      <AuditPointList
+        title="高分事实依据"
+        points={audit?.high_confidence_points}
+        emptyText="当前没有足够强的高分维度证据。"
+      />
+
+      <ModificationBasisList points={audit?.risk_points} steps={audit?.action_steps} />
+
+      <div className="space-y-3">
+        <AuditSectionTitle>维度参考</AuditSectionTitle>
+        <DimensionScoreList dimensions={item.dimension_scores} />
       </div>
     </div>
   );
 }
 
-function SummaryMetric({ label, value, description }: { label: string; value: string | number; description: string }) {
+function DetailItemCard({ item }: { item: ConfidenceSignalItem }) {
+  const entityMeta = getEntityMeta(item.entity_classification);
+  const quadrantMeta = getQuadrantMeta(item.quadrant);
+
   return (
-    <Card padding="none" className="rounded-[24px] border border-white/10 bg-white/[0.06] p-5">
-      <div className="text-[12px] tracking-[0.16em] text-white/60">{label}</div>
-      <div className="mt-3 text-[34px] font-semibold tracking-[-0.06em] text-white">{value}</div>
-      <div className="mt-2 text-[13px] leading-6 text-white/70">{description}</div>
+    <Card padding="none" className="rounded-[24px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: quadrantMeta.border }}>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-[20px] font-semibold leading-8 text-[var(--text-primary)]">{item.label}</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <span
+              className="rounded-full px-3 py-1 text-[12px] font-medium"
+              style={{ backgroundColor: entityMeta.softBg, color: entityMeta.softText }}
+            >
+              {item.entity_label || entityMeta.label}
+            </span>
+            <span
+              className="rounded-full border px-3 py-1 text-[12px] font-medium text-[var(--text-primary)]"
+              style={{ borderColor: quadrantMeta.border, backgroundColor: quadrantMeta.glow }}
+            >
+              {quadrantMeta.plainLabel} · {item.quadrant_label || quadrantMeta.label}
+            </span>
+            <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+              频次 {item.frequency ?? item.occurrences ?? '--'}
+            </span>
+            <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+              置信分 {formatScore(item.aice_score ?? item.overall_score)}
+            </span>
+          </div>
+        </div>
+        {item.url ? (
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-[13px] text-[var(--color-primary)] hover:underline"
+          >
+            查看链接
+            <RiArrowRightUpLine className="h-3.5 w-3.5" />
+          </a>
+        ) : null}
+      </div>
+      <AuditBody item={item} />
     </Card>
   );
 }
 
-function DetailItemCard({ item, reasonLabel, actionLabel }: { item: ConfidenceSignalItem; reasonLabel?: string; actionLabel?: string }) {
-  const entityMeta = getEntityMeta(item.entity_classification);
-  const quadrantMeta = getQuadrantMeta(item.quadrant);
-  const reasons = item.primary_reasons ?? item.top_signals ?? [];
+function GeneralKnowledgeRow({ item }: { item: ConfidenceSignalItem }) {
   return (
-    <Card padding="none" className="rounded-[24px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="rounded-[20px] border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-4 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-[16px] font-semibold leading-7 text-[var(--text-primary)]">{item.label}</div>
+          <div className="text-[15px] font-medium leading-7 text-[var(--text-primary)]">{item.label}</div>
           <div className="mt-2 flex flex-wrap gap-2">
-            <span className="rounded-full px-2.5 py-1 text-[11px] font-medium" style={{ backgroundColor: entityMeta.softBg, color: entityMeta.softText }}>{item.entity_label || entityMeta.label}</span>
-            <span className="rounded-full border px-2.5 py-1 text-[11px] font-medium" style={{ borderColor: quadrantMeta.border, backgroundColor: quadrantMeta.glow, color: 'var(--text-primary)' }}>{item.quadrant_label || quadrantMeta.label}</span>
-            <span className="rounded-full bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)]">频次 {item.frequency ?? item.occurrences ?? '--'}</span>
-            <span className="rounded-full bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)]">AICE {formatScore(item.aice_score ?? item.overall_score)}</span>
+            <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+              频次 {item.frequency ?? item.occurrences ?? '--'}
+            </span>
+            <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+              置信分 {formatScore(item.aice_score ?? item.overall_score)}
+            </span>
+            {item.site_name ? (
+              <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+                {item.site_name}
+              </span>
+            ) : null}
           </div>
         </div>
         {item.url ? (
-          <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[13px] text-[var(--color-primary)] hover:underline">
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-[13px] text-[var(--color-primary)] hover:underline"
+          >
+            查看链接
+            <RiArrowRightUpLine className="h-3.5 w-3.5" />
+          </a>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ExtraResultCard({
+  item,
+  indexLabel,
+  isLatest = false,
+}: {
+  item: ConfidenceSignalItem;
+  indexLabel: string;
+  isLatest?: boolean;
+}) {
+  const entityMeta = getEntityMeta(item.entity_classification);
+  const quadrantMeta = getQuadrantMeta(item.quadrant);
+
+  return (
+    <div
+      className="rounded-[24px] border px-5 py-5"
+      style={{
+        borderColor: isLatest ? entityMeta.fill : 'var(--border-subtle)',
+        background: isLatest
+          ? `linear-gradient(180deg, color-mix(in srgb, ${entityMeta.fill} 14%, var(--bg-elevated)), var(--bg-elevated) 72%)`
+          : 'var(--bg-elevated)',
+        boxShadow: isLatest ? '0 14px 36px rgba(4, 10, 24, 0.22)' : undefined,
+      }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[12px] tracking-[0.12em] text-[var(--text-tertiary)]">{indexLabel}</span>
+            {isLatest ? (
+              <span
+                className="rounded-full px-3 py-1 text-[11px] font-semibold"
+                style={{
+                  backgroundColor: 'var(--status-success-bg)',
+                  color: 'var(--status-success)',
+                }}
+              >
+                最近追加
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-3 text-[24px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{item.label}</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <span
+              className="rounded-full px-3 py-1 text-[12px] font-medium"
+              style={{ backgroundColor: entityMeta.softBg, color: entityMeta.softText }}
+            >
+              {item.entity_label || entityMeta.label}
+            </span>
+            <span
+              className="rounded-full border px-3 py-1 text-[12px] font-medium text-[var(--text-primary)]"
+              style={{ borderColor: quadrantMeta.border, backgroundColor: quadrantMeta.glow }}
+            >
+              {quadrantMeta.plainLabel} · {item.quadrant_label || quadrantMeta.label}
+            </span>
+            <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+              频次 {item.frequency ?? item.occurrences ?? '--'}
+            </span>
+            <span className="rounded-full bg-[var(--bg-secondary)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+              置信分 {formatScore(item.aice_score ?? item.overall_score)}
+            </span>
+          </div>
+        </div>
+        {item.url ? (
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-[13px] text-[var(--color-primary)] hover:underline"
+          >
             查看链接
             <RiArrowRightUpLine className="h-3.5 w-3.5" />
           </a>
         ) : null}
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
-        <div>
-          <div className="text-[12px] tracking-[0.14em] text-[var(--text-tertiary)]">{reasonLabel || '原因分析'}</div>
-          <div className="mt-2 space-y-2">
-            {reasons.length > 0 ? reasons.slice(0, 3).map((reason, index) => (
-              <div key={`${item.item_id}_reason_${index}`} className="rounded-[16px] border px-4 py-3 text-[13px] leading-6 text-[var(--text-secondary)]" style={{ borderColor: 'var(--border-subtle)' }}>
-                {reason}
-              </div>
-            )) : (
-              <div className="rounded-[16px] border border-dashed px-4 py-3 text-[13px] text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }}>
-                当前还没有可展示的原因拆解。
-              </div>
-            )}
-          </div>
+      {item.site_name || item.domain ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {item.site_name ? <MetaPill>{item.site_name}</MetaPill> : null}
+          {!item.site_name && item.domain ? <MetaPill>{item.domain}</MetaPill> : null}
         </div>
-        <div>
-          <div className="text-[12px] tracking-[0.14em] text-[var(--text-tertiary)]">{actionLabel || '行动建议'}</div>
-          <div className="mt-2 rounded-[18px] border px-4 py-4 text-[13px] leading-7 text-[var(--text-secondary)]" style={{ borderColor: quadrantMeta.border, background: quadrantMeta.glow }}>
-            {item.repair_action || '当前还没有返回修我动作。'}
-          </div>
-        </div>
-      </div>
-    </Card>
+      ) : null}
+      <AuditBody item={item} />
+    </div>
   );
 }
 
-function CompactItemList({ title, items }: { title: string; items: ConfidenceSignalItem[] }) {
+function MatrixCluster({
+  point,
+}: {
+  point: MatrixPoint;
+}) {
+  const entityMeta = getEntityMeta(point.entity);
+
   return (
-    <Card padding="none" className="rounded-[22px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-      <div className="text-[16px] font-semibold text-[var(--text-primary)]">{title}</div>
-      <div className="mt-4 space-y-3">
-        {items.length > 0 ? items.map((item) => (
-          <div key={item.item_id} className="rounded-[16px] border px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-medium text-[var(--text-primary)]">{item.label}</div>
-                <div className="mt-1 text-[12px] text-[var(--text-secondary)]">频次 {item.frequency ?? item.occurrences ?? '--'} · AICE {formatScore(item.aice_score ?? item.overall_score)}</div>
-              </div>
-              {item.url ? <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[12px] text-[var(--color-primary)] hover:underline"><RiArrowRightUpLine className="h-3.5 w-3.5" /></a> : null}
-            </div>
+    <div
+      className="rounded-[18px] border px-4 py-3"
+      style={{
+        borderColor: 'color-mix(in srgb, var(--border-subtle) 70%, rgba(255,255,255,0.10) 30%)',
+        background:
+          'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 88%, rgba(255,255,255,0.02) 12%), var(--bg-secondary))',
+        boxShadow: '0 8px 24px rgba(4, 10, 24, 0.16)',
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entityMeta.fill }} />
+            <span className="text-[12px] font-medium" style={{ color: entityMeta.softText }}>
+              {point.entityLabel}
+            </span>
           </div>
-        )) : (
-          <div className="rounded-[16px] border border-dashed px-4 py-6 text-[13px] text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }}>
-            当前没有可展示的样本。
+          <div className="mt-2 text-[14px] font-semibold leading-6 text-[var(--text-primary)]">
+            {point.count > 1 ? `${point.count} 个来源聚合` : point.title}
+          </div>
+          <div className="mt-1 text-[12px] leading-6 text-[var(--text-secondary)]">
+            频次 {point.frequency} · 均分 {formatScore(point.score)}
+            {point.domain ? ` · ${point.domain}` : ''}
+          </div>
+        </div>
+        <div
+          className="flex h-10 min-w-10 items-center justify-center rounded-full px-3 text-[13px] font-semibold"
+          style={{ backgroundColor: entityMeta.softBg, color: entityMeta.softText }}
+        >
+          {point.count}
+        </div>
+      </div>
+      <div className="mt-3 text-[11px] tracking-[0.08em] text-[var(--text-tertiary)]">代表事实</div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {point.sampleTitles.slice(0, 3).map((title, index) => (
+          <span
+            key={`${point.item_id}_${index}`}
+            className="rounded-full bg-[var(--bg-secondary)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)]"
+          >
+            {title}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function QuadrantMatrixCard({
+  quadrant,
+  points,
+  overview,
+}: {
+  quadrant: ConfidenceQuadrant;
+  points: MatrixPoint[];
+  overview?: ConfidenceQuadrantOverview;
+}) {
+  const meta = getQuadrantMeta(quadrant);
+  const count = overview?.count ?? points.reduce((sum, point) => sum + point.count, 0);
+  const breakdown = overview?.entity_breakdown;
+
+  return (
+    <div
+      className="rounded-[24px] border px-5 py-5"
+      style={{
+        borderColor: meta.border,
+        background: `linear-gradient(180deg, color-mix(in srgb, ${meta.area} 82%, var(--bg-elevated)), color-mix(in srgb, var(--bg-elevated) 92%, var(--bg-secondary)) 68%)`,
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
+      }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="text-[12px] tracking-[0.12em] text-[var(--text-tertiary)]">{meta.plainLabel}</div>
+          <div className="mt-2 text-[22px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{overview?.quadrant_label || meta.label}</div>
+          <div className="mt-1 text-[13px] text-[var(--text-secondary)]">{meta.feature}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[30px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">{count}</div>
+          <div className="text-[12px] text-[var(--text-tertiary)]">来源</div>
+        </div>
+      </div>
+
+      <div
+        className="mt-4 rounded-[18px] border px-4 py-3 text-[12px] leading-6 text-[var(--text-secondary)]"
+        style={{
+          borderColor: 'color-mix(in srgb, var(--border-subtle) 68%, rgba(255,255,255,0.08) 32%)',
+          background: 'color-mix(in srgb, var(--bg-secondary) 88%, transparent)',
+        }}
+      >
+        我方 {breakdown?.brand ?? 0} · 竞方 {breakdown?.competitor ?? 0} · 共业 {breakdown?.general_knowledge ?? 0}
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {points.length > 0 ? (
+          <div className="text-[11px] tracking-[0.12em] text-[var(--text-tertiary)]">代表来源</div>
+        ) : null}
+        {points.length > 0 ? (
+          points.slice(0, 4).map((point) => <MatrixCluster key={`${quadrant}_${point.item_id}_${point.frequency}`} point={point} />)
+        ) : (
+          <div className="rounded-[18px] border border-dashed border-[var(--border-subtle)] px-4 py-8 text-[13px] text-[var(--text-tertiary)]">
+            当前没有落在这个象限的代表来源。
           </div>
         )}
       </div>
-    </Card>
+    </div>
   );
 }
 
-export function ConfidenceSignalContent({ content }: ConfidenceSignalContentProps) {
+export function ConfidenceSignalContent({ content, printMode = false }: ConfidenceSignalContentProps) {
+  const extraResultRef = useRef<HTMLDivElement | null>(null);
+  const didHydrateManualStateRef = useRef(false);
+  const previousManualCountRef = useRef(0);
+  const previousPhaseRef = useRef<string | undefined>(undefined);
   const summary = content.data.summary;
-  const status = content.data.status;
-  const findings = content.data.aggregate_findings ?? [];
   const matrixConfig = content.data.matrix_config;
   const ecosystemMatrix = content.data.ecosystem_matrix;
   const allItems = [...(content.data.auto_items ?? []), ...(content.data.manual_items ?? [])];
-  const matrixPoints = allItems.map(toMatrixPoint).filter((item): item is MatrixPoint => Boolean(item));
-  const quadrantOverview = content.data.quadrant_overview?.length ? content.data.quadrant_overview : buildFallbackQuadrantOverview(allItems);
-  const analysisBlocks = content.data.analysis_blocks?.length ? content.data.analysis_blocks : buildFallbackAnalysisBlocks(allItems);
-  const repairActions = content.data.repair_actions?.length ? content.data.repair_actions : buildFallbackRepairActions(allItems);
+  const manualItems = content.data.manual_items ?? [];
+  const confidenceStatus = content.data.status;
+  const aiceThreshold = Number(matrixConfig?.aice_threshold ?? 75);
+  const frequencyThreshold = Number(matrixConfig?.frequency_threshold ?? 1);
+  const matrixPoints = buildMatrixPoints(
+    allItems.map(toMatrixPoint).filter((item): item is RawMatrixPoint => Boolean(item)),
+    aiceThreshold,
+  );
+  const quadrantOverview = content.data.quadrant_overview?.length
+    ? content.data.quadrant_overview
+    : buildFallbackQuadrantOverview(allItems);
+  const analysisBlocks = (content.data.analysis_blocks ?? []).filter(
+    (block) => (block.item_count ?? block.items?.length ?? 0) > 0
+  );
   const generalKnowledgeInsight = content.data.general_knowledge_insight;
-  const brandPoints = matrixPoints.filter((point) => point.entity === 'brand');
-  const competitorPoints = matrixPoints.filter((point) => point.entity === 'competitor');
-  const generalPoints = matrixPoints.filter((point) => point.entity === 'general_knowledge');
+  const quadrantOverviewMap = new Map(quadrantOverview.map((item) => [item.quadrant, item]));
+  const quadrantPointsMap = new Map<ConfidenceQuadrant, MatrixPoint[]>(
+    QUADRANT_ORDER.map((quadrant) => [quadrant, matrixPoints.filter((point) => point.quadrant === quadrant)]),
+  );
+  const generalKnowledgeItems =
+    generalKnowledgeInsight?.representative_items?.length
+      ? generalKnowledgeInsight.representative_items
+      : [
+          ...(generalKnowledgeInsight?.top_frequency_items ?? []),
+          ...(generalKnowledgeInsight?.top_score_items ?? []),
+        ].filter(
+          (item, index, array) =>
+            array.findIndex((candidate) => candidate.item_id === item.item_id) === index,
+        );
+  const latestManualItem = manualItems.length > 0 ? manualItems[manualItems.length - 1] : null;
+  const previousManualItems = manualItems.length > 1 ? manualItems.slice(0, -1).reverse() : [];
+
+  useEffect(() => {
+    const previousCount = previousManualCountRef.current;
+    const previousPhase = previousPhaseRef.current;
+    const nextCount = manualItems.length;
+    const nextPhase = confidenceStatus?.phase;
+
+    if (!didHydrateManualStateRef.current) {
+      previousManualCountRef.current = nextCount;
+      previousPhaseRef.current = nextPhase;
+      didHydrateManualStateRef.current = true;
+      return;
+    }
+
+    if (
+      !printMode &&
+      extraResultRef.current &&
+      nextCount > 0 &&
+      (nextCount > previousCount || (previousPhase === 'running' && nextPhase === 'ready'))
+    ) {
+      extraResultRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    previousManualCountRef.current = nextCount;
+    previousPhaseRef.current = nextPhase;
+  }, [manualItems.length, confidenceStatus?.phase, printMode]);
 
   return (
-    <div className="mx-auto max-w-[1360px] space-y-6 px-6 py-6 md:px-8 md:py-8">
-      <section className="overflow-hidden rounded-[30px] border" style={{ borderColor: 'rgba(148,163,184,0.18)', background: 'radial-gradient(circle at top left, rgba(56,189,248,0.18), transparent 28%), radial-gradient(circle at top right, rgba(251,113,133,0.16), transparent 26%), linear-gradient(180deg, rgba(15,23,42,0.95), rgba(17,24,39,0.92))' }}>
-        <div className="grid gap-6 px-6 py-6 md:px-7 md:py-7 lg:grid-cols-[1.15fr_0.85fr]">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-[11px] tracking-[0.16em] text-white/70"><RiSparklingLine className="h-3.5 w-3.5" />CONFIDENCE REPORT</span>
-              <span className={cn('inline-flex items-center rounded-full border px-3 py-1 text-[12px]', statusTone(status))}>{status?.message || '置信度报告已就绪'}</span>
-            </div>
-            <h1 className="mt-5 text-[clamp(2.3rem,4vw,3.8rem)] font-semibold tracking-[-0.05em] text-white">{content.data.headline || '置信度报告'}</h1>
-            <p className="mt-4 max-w-3xl text-[15px] leading-8 text-white/74">{content.data.subtitle || '评估 AI 回答引用语料的阵营分布、生态位置与修我方向。'}</p>
-            <div className="mt-5 rounded-[20px] border border-white/10 bg-white/[0.06] px-5 py-4">
-              <div className="text-[12px] tracking-[0.14em] text-white/55">总诊断</div>
-              <div className="mt-2 text-[15px] leading-8 text-white/80">{content.data.diagnosis || ecosystemMatrix?.diagnosis || '当前引用生态诊断数据正在生成。'}</div>
-            </div>
-            <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-white/50">
-              <span>额外评估结果会继续合并进同一份报告</span>
-              <span>AICE 高分阈值 {formatScore(matrixConfig?.aice_threshold)} / 高频阈值 {formatScore(matrixConfig?.frequency_threshold)}</span>
-              <span>最近更新 {formatUpdatedAt(summary?.updated_at || content.data.updated_at)}</span>
-            </div>
+    <ReportPage>
+      <ReportHero
+        eyebrow="置信度报告"
+        title={content.data.headline || '置信度报告'}
+        meta={
+          <>
+            <span>最近更新 {formatUpdatedAt(summary?.updated_at || content.data.updated_at)}</span>
+            <span>平均置信分 {formatScore(summary?.average_confidence_score ?? summary?.average_score)}</span>
+            <span>共业阵营 {summary?.general_knowledge_count ?? 0}</span>
+          </>
+        }
+      />
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <ReportMetricCard
+          label="已评估来源"
+          value={summary?.evaluated_count ?? matrixPoints.length}
+          accent="rgba(59,130,246,0.08)"
+        />
+        <ReportMetricCard
+          label="我方阵营"
+          value={summary?.brand_count ?? 0}
+          accent="rgba(59,130,246,0.08)"
+        />
+        <ReportMetricCard
+          label="竞方阵营"
+          value={summary?.competitor_count ?? 0}
+          accent="rgba(244,63,94,0.08)"
+        />
+        <ReportMetricCard
+          label="重点修缮来源"
+          value={summary?.vulnerable_source_count ?? summary?.second_quadrant_count ?? 0}
+          accent="rgba(245,158,11,0.08)"
+        />
+        <ReportMetricCard
+          label="额外评估条数"
+          value={manualItems.length}
+          accent="rgba(16,185,129,0.08)"
+        />
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-[12px] text-[var(--text-secondary)]">
+        <MetaPill tone="accent">高分线 {formatScore(aiceThreshold)}</MetaPill>
+        <MetaPill>
+          高频从 {Number.isInteger(frequencyThreshold) ? `${frequencyThreshold} 次` : `${formatScore(frequencyThreshold)} 次`} 开始
+        </MetaPill>
+      </div>
+
+      <StatusBanner phase={confidenceStatus?.phase} message={confidenceStatus?.message} />
+
+      <ReportSection
+        eyebrow="语境生态坐标系"
+        title={ecosystemMatrix?.title || '引用来源生态矩阵'}
+        description="用矩阵辅助看整体分布，不替代单条来源的审计判断。"
+        className="rounded-[30px]"
+      >
+        <div className="flex flex-wrap items-stretch justify-between gap-3">
+          <div className="flex flex-wrap gap-3">
+            <MatrixSummaryStat label="评估来源" value={summary?.evaluated_count ?? allItems.length} />
+            <MatrixSummaryStat label="图上聚合" value={`${matrixPoints.length} 组`} />
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <SummaryMetric label="总引用来源" value={summary?.evaluated_count ?? 0} description="当前已进入分析的自动引用与手动追加来源总数。" />
-            <SummaryMetric label="我方阵营" value={summary?.brand_count ?? 0} description="明确服务于我方品牌认知的语料来源。" />
-            <SummaryMetric label="竞方阵营" value={summary?.competitor_count ?? 0} description="当前被 AI 引用的竞品相关语料数量。" />
-            <SummaryMetric label="共业阵营" value={summary?.general_knowledge_count ?? 0} description="行业默认解释框架中的通用知识来源。" />
-            <SummaryMetric label="第二象限" value={summary?.second_quadrant_count ?? 0} description="被引用但置信度不高的脆弱来源数量。" />
-            <SummaryMetric label="平均 AICE" value={formatScore(summary?.average_score)} description="当前整体语料质量与可采信稳定性的平均水平。" />
+          <div className="flex flex-wrap items-center gap-2">
+            <MetaPill tone="accent">高分线 {formatScore(matrixConfig?.aice_threshold)}</MetaPill>
+            <MetaPill>
+              高频线 {Number.isInteger(frequencyThreshold) ? `${frequencyThreshold} 次` : formatScore(matrixConfig?.frequency_threshold)}
+            </MetaPill>
+            <MetaPill>气泡大小代表聚合来源数</MetaPill>
           </div>
         </div>
-      </section>
 
-      {findings.length > 0 ? (
-        <section className="grid gap-4 xl:grid-cols-3">
-          {findings.slice(0, 3).map((finding, index) => (
-            <Card key={`${finding.title}_${index}`} padding="none" className="rounded-[24px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="text-[12px] tracking-[0.14em] text-[var(--text-tertiary)]">摘要 {index + 1}</div>
-              <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">{finding.title || `发现 ${index + 1}`}</div>
-              <div className="mt-3 text-[13px] leading-7 text-[var(--text-secondary)]">{finding.description}</div>
-            </Card>
-          ))}
-        </section>
-      ) : null}
-
-      <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card padding="none" className="rounded-[28px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2 text-[12px] tracking-[0.14em] text-[var(--text-tertiary)]"><RiCompass3Line className="h-4 w-4" />语境生态坐标系</div>
-              <div className="mt-2 text-[20px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{ecosystemMatrix?.title || '引用语料生态矩阵'}</div>
-              <div className="mt-1 text-[13px] leading-7 text-[var(--text-secondary)]">X 轴表示 AICE 置信度，Y 轴表示引用频次。颜色表示阵营归属，阈值线决定四象限分布。</div>
-            </div>
-            <div className="text-[12px] text-[var(--text-tertiary)]">共 {matrixPoints.length} 个来源</div>
-          </div>
-          <div className="mt-5 h-[420px] rounded-[24px] bg-[var(--bg-elevated)] px-2 py-4">
-            {matrixPoints.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart margin={{ top: 16, right: 18, left: 10, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(115,115,115,0.18)" />
-                  <XAxis type="number" dataKey="score" name="AICE 置信度" domain={[0, 100]} tick={axisTick} label={{ value: ecosystemMatrix?.x_axis_label || 'AICE 置信度', position: 'insideBottom', offset: -4, fill: axisTick.fill, fontSize: 12 }} />
-                  <YAxis type="number" dataKey="frequency" allowDecimals={false} tick={axisTick} label={{ value: ecosystemMatrix?.y_axis_label || '引用频次', angle: -90, position: 'insideLeft', fill: axisTick.fill, fontSize: 12 }} />
-                  <ZAxis type="number" dataKey="z" range={[80, 300]} />
-                  <ReferenceLine x={matrixConfig?.aice_threshold ?? 75} stroke="rgba(245,158,11,0.8)" strokeDasharray="6 6" />
-                  <ReferenceLine y={matrixConfig?.frequency_threshold ?? 1} stroke="rgba(14,165,233,0.8)" strokeDasharray="6 6" />
-                  <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<MatrixTooltip />} />
-                  <Scatter data={brandPoints} fill={ENTITY_META.brand.fill} />
-                  <Scatter data={competitorPoints} fill={ENTITY_META.competitor.fill} />
-                  <Scatter data={generalPoints} fill={ENTITY_META.general_knowledge.fill} />
-                </ScatterChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex h-full items-center justify-center rounded-[20px] border border-dashed border-[var(--border-subtle)] text-[14px] text-[var(--text-tertiary)]">当前还没有足够的来源数据可绘制生态矩阵。</div>
-            )}
-          </div>
-        </Card>
-        <div className="space-y-6">
-          <Card padding="none" className="rounded-[28px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-center gap-2 text-[12px] tracking-[0.14em] text-[var(--text-tertiary)]"><RiFlag2Line className="h-4 w-4" />阵营图例</div>
-            <div className="mt-4 space-y-3">
+        <div
+          className="relative mt-6 overflow-hidden rounded-[32px] border px-4 py-4 md:px-5"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--border-subtle) 70%, rgba(255,255,255,0.08) 30%)',
+            background:
+              'radial-gradient(circle at top right, color-mix(in srgb, #0ea5e9 14%, transparent), transparent 32%), radial-gradient(circle at top left, color-mix(in srgb, #f59e0b 14%, transparent), transparent 32%), linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 86%, #13273a 14%), color-mix(in srgb, var(--bg-secondary) 94%, #17130f 6%))',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05), 0 10px 30px rgba(4, 10, 24, 0.22)',
+          }}
+        >
+          <div
+            className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[20px] border px-4 py-3 backdrop-blur-sm"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--border-subtle) 64%, rgba(255,255,255,0.08) 36%)',
+              background: 'color-mix(in srgb, var(--bg-elevated) 88%, transparent)',
+              boxShadow: '0 8px 24px rgba(4, 10, 24, 0.16)',
+            }}
+          >
+            <div className="flex flex-wrap gap-2">
               {(Object.keys(ENTITY_META) as ConfidenceEntityClassification[]).map((key) => {
                 const meta = ENTITY_META[key];
-                return <div key={key} className="rounded-[18px] border px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}><div className="flex items-center gap-3"><span className="h-3.5 w-3.5 rounded-full" style={{ backgroundColor: meta.fill }} /><div className="text-[13px] font-medium text-[var(--text-primary)]">{meta.label}</div></div></div>;
+                return (
+                  <span
+                    key={key}
+                    className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] font-medium"
+                    style={{ backgroundColor: meta.softBg, color: meta.softText }}
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: meta.fill }} />
+                    {meta.label}
+                  </span>
+                );
               })}
             </div>
-          </Card>
-          <Card padding="none" className="rounded-[28px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="flex items-center gap-2 text-[12px] tracking-[0.14em] text-[var(--text-tertiary)]"><RiFocus3Line className="h-4 w-4" />象限释义</div>
-            <div className="mt-4 space-y-3">
-              {(Object.keys(QUADRANT_META) as ConfidenceQuadrant[]).map((quadrant) => {
-                const meta = QUADRANT_META[quadrant];
-                const label = meta.label === '定海神针' ? '高频 + 高分' : meta.label === '虚假繁荣' ? '高频 + 低分' : meta.label === '沉寂噪音' ? '低频 + 低分' : '低频 + 高分';
-                return <div key={quadrant} className="rounded-[18px] border px-4 py-3" style={{ borderColor: meta.border, backgroundColor: meta.glow }}><div className="text-[13px] font-medium text-[var(--text-primary)]">{meta.short} · {meta.label}</div><div className="mt-1 text-[12px] leading-6 text-[var(--text-secondary)]">{label}</div></div>;
-              })}
+            <div className="flex flex-wrap gap-2">
+              <MetaPill>横轴：引用频次</MetaPill>
+              <MetaPill>纵轴：置信分</MetaPill>
             </div>
-          </Card>
-        </div>
-      </section>
+          </div>
 
-      <section className="grid gap-4 xl:grid-cols-4">
-        {quadrantOverview.map((quadrant) => {
-          const meta = getQuadrantMeta(quadrant.quadrant);
-          return (
-            <Card key={quadrant.quadrant} padding="none" className="rounded-[24px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: meta.border, background: `linear-gradient(180deg, ${meta.glow}, transparent 85%), var(--bg-tertiary)` }}>
-              <div className="text-[12px] tracking-[0.14em] text-[var(--text-tertiary)]">{meta.short}</div>
-              <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">{quadrant.quadrant_label || meta.label}</div>
-              <div className="mt-2 text-[30px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">{quadrant.count ?? 0}</div>
-              <div className="mt-3 text-[13px] leading-7 text-[var(--text-secondary)]">{quadrant.description || meta.label}</div>
-              <div className="mt-4 rounded-[18px] bg-[var(--bg-elevated)] px-4 py-3 text-[12px] leading-6 text-[var(--text-secondary)]">我方 {quadrant.entity_breakdown?.brand ?? 0} · 竞方 {quadrant.entity_breakdown?.competitor ?? 0} · 共业 {quadrant.entity_breakdown?.general_knowledge ?? 0}</div>
-              {quadrant.strategy ? <div className="mt-3 text-[12px] leading-6 text-[var(--text-tertiary)]">{quadrant.strategy}</div> : null}
-            </Card>
-          );
-        })}
-      </section>
-
-      <section className="space-y-6">
-        {analysisBlocks.map((block) => (
-          <Card key={block.key} padding="none" className="rounded-[28px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <div className="text-[22px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{block.title}</div>
-                <div className="mt-2 max-w-4xl text-[14px] leading-7 text-[var(--text-secondary)]">{block.description}</div>
+          <div
+            className="rounded-[28px] border p-4 backdrop-blur-sm md:p-5"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--border-subtle) 68%, rgba(255,255,255,0.08) 32%)',
+              background: 'color-mix(in srgb, var(--bg-secondary) 82%, transparent)',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
+            }}
+          >
+            <div className="grid gap-4 md:grid-cols-[84px_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)_auto]">
+              <div />
+              <div className="grid grid-cols-2 gap-4 text-[12px] font-medium tracking-[0.12em] text-[var(--text-tertiary)]">
+                <div className="rounded-full bg-[var(--bg-secondary)] px-4 py-2 text-center">低频</div>
+                <div className="rounded-full bg-[var(--bg-secondary)] px-4 py-2 text-center">高频</div>
               </div>
-              <div className="rounded-full bg-[var(--bg-elevated)] px-3 py-1.5 text-[12px] text-[var(--text-secondary)]">{block.item_count ?? block.items?.length ?? 0} 条样本</div>
-            </div>
-            <div className="mt-5 space-y-4">
-              {block.items && block.items.length > 0 ? block.items.map((item) => <DetailItemCard key={item.item_id} item={item} reasonLabel={block.reason_label} actionLabel={block.action_label} />) : (
-                <div className="rounded-[18px] border border-dashed px-4 py-8 text-[14px] text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }}>当前这一区块还没有可展示的代表样本。</div>
-              )}
-            </div>
-          </Card>
-        ))}
-      </section>
 
-      <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-        <Card padding="none" className="rounded-[28px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-          <div className="flex items-center gap-2 text-[12px] tracking-[0.14em] text-[var(--text-tertiary)]"><RiShieldCheckLine className="h-4 w-4" />共业阵营观察</div>
-          <div className="mt-3 text-[14px] leading-8 text-[var(--text-secondary)]">{generalKnowledgeInsight?.summary || '当前没有足够的共业语料可供进一步分析。'}</div>
-        </Card>
-        <div className="grid gap-6 lg:grid-cols-2">
-          <CompactItemList title="共业高频来源" items={generalKnowledgeInsight?.top_frequency_items ?? []} />
-          <CompactItemList title="共业高分来源" items={generalKnowledgeInsight?.top_score_items ?? []} />
+              <div className="hidden flex-col justify-between py-4 md:flex">
+                <div className="rounded-full bg-[var(--bg-secondary)] px-3 py-2 text-center text-[12px] font-medium tracking-[0.12em] text-[var(--text-tertiary)]">高分</div>
+                <div className="rounded-full bg-[var(--bg-secondary)] px-3 py-2 text-center text-[12px] font-medium tracking-[0.12em] text-[var(--text-tertiary)]">低分</div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                {MATRIX_LAYOUT.flatMap((row) =>
+                  row.map((quadrant) => (
+                    <QuadrantMatrixCard
+                      key={quadrant}
+                      quadrant={quadrant}
+                      points={quadrantPointsMap.get(quadrant) ?? []}
+                      overview={quadrantOverviewMap.get(quadrant)}
+                    />
+                  )),
+                )}
+              </div>
+
+              <div />
+              <div className="grid grid-cols-2 gap-4 text-[12px] font-medium tracking-[0.12em] text-[var(--text-tertiary)]">
+                <div className="rounded-full bg-[var(--bg-secondary)] px-4 py-2 text-center">引用少</div>
+                <div className="rounded-full bg-[var(--bg-secondary)] px-4 py-2 text-center">引用多</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </ReportSection>
+
+      <ReportSection
+        eyebrow="AICE 审计"
+        title="重点审计来源"
+        description="先用坐标判断整体分布，再展开关键来源的事实依据、风险点和修改方向。"
+      >
+        <div className="space-y-6">
+          {analysisBlocks.length ? (
+            analysisBlocks.map((block) => (
+              <Card
+                key={block.key}
+                padding="none"
+                className="rounded-[28px] border bg-[var(--bg-tertiary)] p-5 md:p-6"
+                style={{ borderColor: 'var(--border-subtle)' }}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[24px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{block.title}</div>
+                    {block.description ? (
+                      <div className="mt-2 max-w-4xl text-[14px] leading-7 text-[var(--text-secondary)]">{block.description}</div>
+                    ) : null}
+                  </div>
+                  <MetaPill>{block.item_count ?? block.items?.length ?? 0} 条样本</MetaPill>
+                </div>
+
+                <div className="mt-5 space-y-4">
+                  {block.items?.map((item) => <DetailItemCard key={item.item_id} item={item} />)}
+                </div>
+              </Card>
+            ))
+          ) : (
+            <div className="rounded-[20px] border border-dashed border-[var(--border-subtle)] px-5 py-10 text-[14px] text-[var(--text-tertiary)]">
+              当前高频高分和高频低分区域里还没有足够的品牌/竞品代表样本，暂不展开阵地分析。
+            </div>
+          )}
+        </div>
+      </ReportSection>
+
+      <div ref={extraResultRef}>
+        <ReportSection
+          eyebrow="额外评估"
+          title="额外评估结果"
+          description="手动追加的链接或文本会单独写回这里，方便和原始引用来源分开看。"
+        >
+          {manualItems.length > 0 ? (
+            <div className="space-y-5">
+              {latestManualItem ? (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[12px] tracking-[0.12em] text-[var(--text-tertiary)]">最新结果</div>
+                      <div className="mt-1 text-[18px] font-semibold text-[var(--text-primary)]">最近一次额外评估</div>
+                    </div>
+                    <MetaPill tone="accent">新增</MetaPill>
+                  </div>
+                  <ExtraResultCard item={latestManualItem} indexLabel={`追加评估 #${manualItems.length}`} isLatest />
+                </div>
+              ) : null}
+
+              {previousManualItems.length > 0 ? (
+                <div className="rounded-[22px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-4">
+                  <div className="text-[12px] tracking-[0.12em] text-[var(--text-tertiary)]">历史补样</div>
+                  <div className="mt-3 space-y-3">
+                    {previousManualItems.map((item, reverseIndex) => {
+                      const itemIndex = manualItems.length - reverseIndex - 1;
+                      return (
+                        <ExtraResultCard
+                          key={`manual_${item.item_id}`}
+                          item={item}
+                          indexLabel={`追加评估 #${itemIndex}`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="rounded-[20px] border border-dashed border-[var(--border-subtle)] px-5 py-10 text-[14px] text-[var(--text-tertiary)]">
+              当前还没有额外评估结果。你可以从右上角“额外评估”继续追加链接或文本。
+            </div>
+          )}
+        </ReportSection>
+      </div>
+
+      <section className="rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5 md:p-6">
+        <div className="flex items-center gap-2 text-[12px] tracking-[0.12em] text-[var(--text-tertiary)]">
+          <RiShieldCheckLine className="h-4 w-4" />
+          共业阵营观察
+        </div>
+        <div className="mt-3 text-[14px] leading-8 text-[var(--text-secondary)]">
+          {generalKnowledgeInsight?.summary || '当前没有足够的共业语料可供进一步分析。'}
+        </div>
+        <div className="mt-5 space-y-3">
+          {generalKnowledgeItems.length ? (
+            generalKnowledgeItems.map((item) => <GeneralKnowledgeRow key={item.item_id} item={item} />)
+          ) : (
+            <div className="rounded-[18px] border border-dashed px-4 py-8 text-[14px] text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }}>
+              当前没有可展示的共业样本。
+            </div>
+          )}
         </div>
       </section>
-
-      <section>
-        <div className="mb-4 text-[24px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">修我行动清单</div>
-        <div className="grid gap-4 xl:grid-cols-4">
-          {repairActions.map((action) => (
-            <Card key={`${action.priority}_${action.title}`} padding="none" className="rounded-[24px] border bg-[var(--bg-tertiary)] p-5" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="text-[12px] tracking-[0.16em] text-[var(--text-tertiary)]">{action.priority}</div>
-              <div className="mt-2 text-[18px] font-semibold text-[var(--text-primary)]">{action.title}</div>
-              <div className="mt-3 text-[13px] leading-7 text-[var(--text-secondary)]">{action.summary}</div>
-              <div className="mt-4 rounded-[16px] bg-[var(--bg-elevated)] px-4 py-3 text-[12px] text-[var(--text-secondary)]">涉及样本 {action.count ?? 0} 条</div>
-            </Card>
-          ))}
-        </div>
-      </section>
-    </div>
+    </ReportPage>
   );
 }
