@@ -11,6 +11,12 @@ export interface AnalysisTask {
   current_stage: string;
   progress: number;
   progress_message: string;
+  llm_call_count?: number;
+  llm_prompt_tokens?: number;
+  llm_completion_tokens?: number;
+  llm_total_tokens?: number;
+  llm_total_latency_ms?: number;
+  llm_estimated_cost?: number;
   snapshot_id: string | null;
   session_id: string;
   entity_id: string | null;

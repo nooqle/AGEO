@@ -7,6 +7,7 @@ to dynamically decide which Agent to invoke, replacing the hardcoded pipeline.
 import json
 import logging
 from datetime import datetime
+from time import perf_counter
 from typing import Any
 
 from langgraph.graph import END
@@ -1273,6 +1274,8 @@ async def orchestrator_node(state: AgentState) -> Command:
     tool_call_result = None
     is_first_reply_chunk = True
     last_finish_reason: str | None = None
+    last_usage = None
+    stream_started_at = perf_counter()
 
     try:
         async for chunk in async_wrap_sync_gen(lambda: model.stream(
@@ -1290,6 +1293,8 @@ async def orchestrator_node(state: AgentState) -> Command:
             # so we must skip content/thinking processing for that chunk.
             if chunk.finish_reason:
                 last_finish_reason = chunk.finish_reason
+            if chunk.usage:
+                last_usage = chunk.usage
             if chunk.tool_calls:
                 logger.warning(
                     "[Orchestrator] Stream tool_calls captured for session %s: %s finish=%s",
@@ -1339,6 +1344,24 @@ async def orchestrator_node(state: AgentState) -> Command:
             last_finish_reason,
             bool(tool_call_result),
         )
+
+        if last_usage:
+            from app.services.llm_usage_service import record_llm_usage_async
+
+            await record_llm_usage_async(
+                session_id=session_id,
+                task_id=state.get("task_id"),
+                step="orchestrator",
+                step_name="编排决策",
+                model=model,
+                usage=last_usage,
+                latency_ms=max(int((perf_counter() - stream_started_at) * 1000), 0),
+                extra_metadata={
+                    "streaming": True,
+                    "message_count": len(messages) + 1,
+                    "tool_count": len(tools),
+                },
+            )
 
         # Check finish_reason for abnormal termination
         if last_finish_reason == "sensitive":

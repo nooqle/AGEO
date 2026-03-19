@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +16,7 @@ from app.models.snapshot import JSONText  # Reuse from Cycle 2
 
 if TYPE_CHECKING:
     from app.models.entity import Entity
+    from app.models.llm_usage import LLMUsageRecord
     from app.models.monitoring_schedule import MonitoringSchedule
     from app.models.session import Session
     from app.models.user import User
@@ -94,6 +95,14 @@ class AnalysisTask(Base):
         String(255), default="", nullable=False
     )
 
+    # LLM usage aggregate
+    llm_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    llm_prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    llm_completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    llm_total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    llm_total_latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    llm_estimated_cost: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
     # Stage results snapshot (for reconnection replay)
     #
     # CONCURRENCY NOTE (Review C1/T2): This JSON column is subject to concurrent
@@ -156,6 +165,11 @@ class AnalysisTask(Base):
         "MonitoringSchedule",
         back_populates="tasks",
         foreign_keys=[monitoring_schedule_id],
+    )
+    llm_usage_records: Mapped[list["LLMUsageRecord"]] = relationship(
+        "LLMUsageRecord",
+        back_populates="task",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:

@@ -15,8 +15,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=(
-            str(_BACKEND_DIR / ".env.local"),
             str(_BACKEND_DIR / ".env"),
+            str(_BACKEND_DIR / ".env.local"),
         ),
         env_file_encoding="utf-8",
         extra="ignore",
@@ -69,6 +69,19 @@ class Settings(BaseSettings):
     GLM5_THINKING_ENABLED: bool = True
     GLM5_TEMPERATURE: float = 0.7
     GLM5_MAX_TOKENS: int = 16384
+    GLM5_LONG_CONTEXT_THRESHOLD_TOKENS: int = 32000
+    GLM5_PRICE_INPUT_PER_MTOKENS: float | None = None
+    GLM5_PRICE_OUTPUT_PER_MTOKENS: float | None = None
+    GLM5_PRICE_LONG_INPUT_PER_MTOKENS: float | None = None
+    GLM5_PRICE_LONG_OUTPUT_PER_MTOKENS: float | None = None
+    GLM5_TURBO_PRICE_INPUT_PER_MTOKENS: float | None = None
+    GLM5_TURBO_PRICE_OUTPUT_PER_MTOKENS: float | None = None
+    GLM5_TURBO_PRICE_LONG_INPUT_PER_MTOKENS: float | None = None
+    GLM5_TURBO_PRICE_LONG_OUTPUT_PER_MTOKENS: float | None = None
+
+    # MiniMax cost config (optional)
+    MINIMAX_PRICE_INPUT_PER_MTOKENS: float | None = None
+    MINIMAX_PRICE_OUTPUT_PER_MTOKENS: float | None = None
 
     # Doubao API
     DOUBAO_API_KEY: str | None = None

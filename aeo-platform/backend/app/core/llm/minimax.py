@@ -5,6 +5,7 @@ Migrated from app/core/minimax_config.py + app/core/minimax_model.py.
 
 import json
 import re
+from time import perf_counter
 from dataclasses import dataclass
 from typing import Any, Generator
 
@@ -172,12 +173,15 @@ class MiniMaxModel(BaseLLMModel):
                 request_kwargs["tools"] = fn_tools
         request_kwargs.update(self._filter_kwargs(kwargs))
 
+        started_at = perf_counter()
         response = self._make_api_call(request_kwargs)
+        latency_ms = max(int((perf_counter() - started_at) * 1000), 0)
         message = response.choices[0].message
         finish_reason = response.choices[0].finish_reason
 
         thinking_blocks = self._parse_reasoning_details(message)
         tool_calls = self._parse_tool_calls(message)
+        usage = self._parse_usage(getattr(response, "usage", None))
 
         content = message.content or ""
         if tool_calls and "<minimax:tool_call>" in content:
@@ -187,8 +191,10 @@ class MiniMaxModel(BaseLLMModel):
             content=content,
             thinking_blocks=thinking_blocks,
             tool_calls=tool_calls,
+            usage=usage,
             raw_response=response,
             finish_reason=finish_reason,
+            latency_ms=latency_ms,
         )
 
     def stream(
@@ -212,11 +218,14 @@ class MiniMaxModel(BaseLLMModel):
         reasoning_buffer = ""
         current_tool_calls: dict[int, dict[str, Any]] = {}
         last_finish_reason: str | None = None
+        final_usage = None
 
         for chunk in stream_response:
             delta = chunk.choices[0].delta
             if hasattr(chunk.choices[0], "finish_reason") and chunk.choices[0].finish_reason:
                 last_finish_reason = chunk.choices[0].finish_reason
+            if getattr(chunk, "usage", None):
+                final_usage = self._parse_usage(chunk.usage)
 
             # Reasoning details
             if hasattr(delta, "reasoning_details") and delta.reasoning_details:
@@ -285,7 +294,12 @@ class MiniMaxModel(BaseLLMModel):
                     else []
                 ),
                 tool_calls=tool_blocks,
+                usage=final_usage,
                 finish_reason=last_finish_reason,
             )
-        elif last_finish_reason:
-            yield LLMResponse(content="", finish_reason=last_finish_reason)
+        elif final_usage or last_finish_reason:
+            yield LLMResponse(
+                content="",
+                usage=final_usage,
+                finish_reason=last_finish_reason,
+            )

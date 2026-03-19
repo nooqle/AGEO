@@ -108,6 +108,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             ],
             step="question_simulation",
             step_name="问题模拟生成",
+            task_id=state.get("task_id"),
             progress_start=0.5,
             progress_end=0.85,
         )
@@ -345,6 +346,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             ],
             step="question_simulation",
             step_name="问题模拟生成",
+            task_id=state.get("task_id"),
             progress_start=0.5,
             progress_end=0.85,
         )
@@ -818,6 +820,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             ],
             step="question_simulation",
             step_name="问题模拟生成",
+            task_id=state.get("task_id"),
             progress_start=0.5,
             progress_end=0.85,
         )

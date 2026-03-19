@@ -308,6 +308,7 @@ async def a1_brand_node(state: AgentState) -> Command:
             ],
             step="brand_analysis",
             step_name="品牌信息采集",
+            task_id=state.get("task_id"),
             progress_start=0.35,
             progress_end=0.8,
             tools=[GLM5_WEB_SEARCH_TOOL],
@@ -380,6 +381,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                     ],
                     step="brand_analysis",
                     step_name="品牌信息采集(重试)",
+                    task_id=state.get("task_id"),
                     progress_start=0.8,
                     progress_end=0.95,
                 )

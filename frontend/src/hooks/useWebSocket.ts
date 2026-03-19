@@ -17,6 +17,7 @@ import { isRecord } from '@/hooks/websocket/canvas';
 import { buildOutputReadyPayload } from '@/hooks/websocket/output';
 import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmation';
 import { isSupersededA5FailureText } from '@/adapters/chatMessage';
+import { api } from '@/services/api';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
 
@@ -543,6 +544,19 @@ export function useWebSocket(sessionId: string | null) {
         if (completedTask) {
           setActiveTask(completedTask);
         }
+        const taskId =
+          completedTask?.id ||
+          useConversationStore.getState().activeTask?.id ||
+          (typeof data.task_id === 'string' ? data.task_id : null);
+        if (sessionId && taskId) {
+          void api.getTask(sessionId, taskId).then((latestTask) => {
+            if (latestTask) {
+              setActiveTask(latestTask);
+            }
+          }).catch(() => {
+            // Ignore task refresh errors and keep optimistic completion state.
+          });
+        }
 
         const suggestions = buildFollowUpSuggestions(data);
         if (suggestions.length > 0) {
@@ -769,6 +783,12 @@ export function useWebSocket(sessionId: string | null) {
               progress_message: '分析完成',
               completed_at: typeof taskData.completed_at === 'string' ? taskData.completed_at : new Date().toISOString(),
               snapshot_id: typeof taskData.snapshot_id === 'string' ? taskData.snapshot_id : ct.snapshot_id,
+              llm_call_count: typeof taskData.llm_call_count === 'number' ? taskData.llm_call_count : ct.llm_call_count,
+              llm_prompt_tokens: typeof taskData.llm_prompt_tokens === 'number' ? taskData.llm_prompt_tokens : ct.llm_prompt_tokens,
+              llm_completion_tokens: typeof taskData.llm_completion_tokens === 'number' ? taskData.llm_completion_tokens : ct.llm_completion_tokens,
+              llm_total_tokens: typeof taskData.llm_total_tokens === 'number' ? taskData.llm_total_tokens : ct.llm_total_tokens,
+              llm_total_latency_ms: typeof taskData.llm_total_latency_ms === 'number' ? taskData.llm_total_latency_ms : ct.llm_total_latency_ms,
+              llm_estimated_cost: typeof taskData.llm_estimated_cost === 'number' ? taskData.llm_estimated_cost : ct.llm_estimated_cost,
             });
           }
         } else if (taskStatus === 'failed') {
@@ -777,6 +797,12 @@ export function useWebSocket(sessionId: string | null) {
             setActiveTask({
               ...ft,
               status: 'failed',
+              llm_call_count: typeof taskData.llm_call_count === 'number' ? taskData.llm_call_count : ft.llm_call_count,
+              llm_prompt_tokens: typeof taskData.llm_prompt_tokens === 'number' ? taskData.llm_prompt_tokens : ft.llm_prompt_tokens,
+              llm_completion_tokens: typeof taskData.llm_completion_tokens === 'number' ? taskData.llm_completion_tokens : ft.llm_completion_tokens,
+              llm_total_tokens: typeof taskData.llm_total_tokens === 'number' ? taskData.llm_total_tokens : ft.llm_total_tokens,
+              llm_total_latency_ms: typeof taskData.llm_total_latency_ms === 'number' ? taskData.llm_total_latency_ms : ft.llm_total_latency_ms,
+              llm_estimated_cost: typeof taskData.llm_estimated_cost === 'number' ? taskData.llm_estimated_cost : ft.llm_estimated_cost,
               error_message: typeof taskData.error_message === 'string' ? taskData.error_message : null,
               error_stage: typeof taskData.error_stage === 'string' ? taskData.error_stage : null,
             });
@@ -838,6 +864,7 @@ export function useWebSocket(sessionId: string | null) {
     removeMessage,
     clearStageResults,
     replaceMessageId,
+    sessionId,
   ]);
 
   useEffect(() => {

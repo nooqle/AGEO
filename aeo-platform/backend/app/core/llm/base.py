@@ -40,20 +40,48 @@ class ToolCallBlock:
 
 
 @dataclass
+class LLMUsage:
+    """Token usage information reported by the provider."""
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    image_tokens: int | None = None
+    video_tokens: int | None = None
+    raw: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "image_tokens": self.image_tokens,
+            "video_tokens": self.video_tokens,
+            "raw": self.raw,
+        }
+
+
+@dataclass
 class LLMResponse:
     """Parsed response from an LLM provider."""
 
     content: str = ""
     thinking_blocks: list[ThinkingBlock] = field(default_factory=list)
     tool_calls: list[ToolCallBlock] = field(default_factory=list)
+    usage: LLMUsage | None = None
     raw_response: Any = None
     finish_reason: str | None = None
+    latency_ms: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "content": self.content,
             "thinking": [t.to_dict() for t in self.thinking_blocks],
             "tool_calls": [t.to_dict() for t in self.tool_calls],
+            "usage": self.usage.to_dict() if self.usage else None,
+            "latency_ms": self.latency_ms,
         }
 
 
@@ -105,6 +133,44 @@ class BaseLLMModel(ABC):
                 formatted_msg["name"] = msg["name"]
             formatted_messages.append(formatted_msg)
         return formatted_messages
+
+    def _parse_usage(self, usage: Any) -> LLMUsage | None:
+        """Normalize provider usage payload into a shared structure."""
+        if not usage:
+            return None
+
+        if isinstance(usage, dict):
+            data = usage
+        elif hasattr(usage, "model_dump"):
+            data = usage.model_dump()
+        elif hasattr(usage, "dict"):
+            data = usage.dict()
+        else:
+            data = {
+                key: getattr(usage, key)
+                for key in (
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "reasoning_tokens",
+                    "image_tokens",
+                    "video_tokens",
+                )
+                if hasattr(usage, key)
+            }
+
+        if not data:
+            return None
+
+        return LLMUsage(
+            prompt_tokens=data.get("prompt_tokens"),
+            completion_tokens=data.get("completion_tokens"),
+            total_tokens=data.get("total_tokens"),
+            reasoning_tokens=data.get("reasoning_tokens"),
+            image_tokens=data.get("image_tokens"),
+            video_tokens=data.get("video_tokens"),
+            raw=data,
+        )
 
     @abstractmethod
     def __call__(

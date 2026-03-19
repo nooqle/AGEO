@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.models.task import TaskStatus
+from app.services.llm_usage_service import LLMUsageService
 from app.services.task_service import TaskService, task_to_dict
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,26 @@ async def list_user_tasks(
         "limit": limit,
         "offset": offset,
     }
+
+
+@global_tasks_router.get("/observability")
+async def get_llm_observability(
+    days: int = 30,
+    limit: int = 20,
+    entity_id: str | None = None,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return aggregated LLM observability metrics for the current user."""
+    parsed_entity_id = _parse_uuid(entity_id, "entity_id") if entity_id else None
+    usage_service = LLMUsageService(db)
+    snapshot = await usage_service.get_observability_snapshot(
+        user_id=current_user.id,
+        entity_id=parsed_entity_id,
+        days=days,
+        limit=limit,
+    )
+    return snapshot
 
 
 @router.post("/{task_id}/cancel")

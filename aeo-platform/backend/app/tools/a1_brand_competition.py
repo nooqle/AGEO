@@ -4,6 +4,7 @@ Pure function implementation for brand profile and competitor analysis.
 This replaces the old class-based Tool with stateless functions.
 """
 
+from time import perf_counter
 from typing import Any
 
 from app.core.llm import get_llm_model
@@ -12,12 +13,17 @@ from app.core.utils import (
     load_prompt_template,
     render_prompt,
 )
+from app.services.llm_usage_service import record_llm_usage_async
 
 
 async def analyze_brand_competition(
     brand_name: str,
     official_website: str | None = None,
     industry_hint: str | None = None,
+    session_id: str | None = None,
+    task_id: str | None = None,
+    step: str = "a1_tool",
+    step_name: str = "品牌竞品分析",
 ) -> dict[str, Any]:
     """Analyze brand profile and identify competitors.
 
@@ -51,12 +57,27 @@ async def analyze_brand_competition(
 
     # Call LLM
     model = get_llm_model()
-
-    response = model(
+    started_at = perf_counter()
+    response = await model.async_call(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
+    )
+    latency_ms = response.latency_ms or max(int((perf_counter() - started_at) * 1000), 0)
+    await record_llm_usage_async(
+        session_id=session_id,
+        task_id=task_id,
+        step=step,
+        step_name=step_name,
+        model=model,
+        usage=response.usage,
+        latency_ms=latency_ms,
+        extra_metadata={
+            "streaming": False,
+            "message_count": 2,
+            "tool_entrypoint": "a1_brand_competition",
+        },
     )
 
     # Parse response

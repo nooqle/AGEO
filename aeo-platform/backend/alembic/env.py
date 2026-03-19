@@ -34,10 +34,13 @@ settings = get_settings()
 
 def get_database_url() -> str:
     """Get database URL from settings."""
-    # Convert asyncpg URL to psycopg2 URL for sync operations
     url = settings.DATABASE_URL
     if "postgresql+asyncpg://" in url:
         return url.replace("postgresql+asyncpg://", "postgresql://")
+    if "sqlite+aiosqlite:///" in url:
+        return url.replace("sqlite+aiosqlite:///", "sqlite:///")
+    if "sqlite+aiosqlite://" in url:
+        return url.replace("sqlite+aiosqlite://", "sqlite://")
     return url
 
 

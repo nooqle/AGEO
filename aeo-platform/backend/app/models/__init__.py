@@ -3,6 +3,7 @@
 from app.models.brand import BrandProfile
 from app.models.entity import Entity
 from app.models.file_metadata import FileMetadata
+from app.models.llm_usage import LLMUsageRecord
 from app.models.message import Message
 from app.models.monitoring_alert import AlertSeverity, AlertStatus, MonitoringAlert
 from app.models.monitoring_schedule import (
@@ -22,6 +23,7 @@ __all__ = [
     "User",
     "Entity",
     "FileMetadata",
+    "LLMUsageRecord",
     "AnalysisSnapshot",
     "SnapshotStatus",
     "AnalysisTask",
