@@ -19,12 +19,16 @@ from uuid import UUID
 
 from app.core.database import AsyncSessionLocal
 from app.models.entity import Entity
+from app.models.task import AnalysisTask
+from app.models.task_run import ExecutorKind, TaskTriggerSource
+from app.services.runtime_coordinator import runtime_coordinator
 
 logger = logging.getLogger(__name__)
 
 # Maximum concurrent scheduled analyses
 MAX_CONCURRENT_SCHEDULED = 3
 POLL_INTERVAL_SECONDS = 60
+SCHEDULE_RUN_LEASE_TIMEOUT_SECONDS = 180
 
 _scheduler_task: asyncio.Task | None = None
 _running_tasks: set[asyncio.Task] = set()
@@ -44,7 +48,13 @@ async def start_scheduler() -> None:
     global _scheduler_task
     if _scheduler_task is not None:
         return
+    recovered = await _recover_stale_scheduler_runs(lease_timeout_seconds=0)
     _scheduler_task = asyncio.create_task(_scheduler_loop())
+    if recovered:
+        logger.warning(
+            "[Scheduler] Re-queued %d stale scheduled runs during startup recovery",
+            recovered,
+        )
     logger.info(
         "[Scheduler] Started with poll interval %ds, max concurrent %d",
         POLL_INTERVAL_SECONDS,
@@ -67,9 +77,7 @@ async def stop_scheduler() -> None:
 
     # Cancel all running pipeline tasks
     if _running_tasks:
-        logger.info(
-            "[Scheduler] Cancelling %d running tasks...", len(_running_tasks)
-        )
+        logger.info("[Scheduler] Cancelling %d running tasks...", len(_running_tasks))
         for task in _running_tasks:
             task.cancel()
         await asyncio.wait(_running_tasks, timeout=30.0)
@@ -99,7 +107,11 @@ async def _scheduler_loop() -> None:
     """
     while True:
         try:
+            await _recover_stale_scheduler_runs(
+                lease_timeout_seconds=SCHEDULE_RUN_LEASE_TIMEOUT_SECONDS
+            )
             await _process_due_schedules()
+            await _dispatch_queued_runs()
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -128,9 +140,7 @@ async def _process_due_schedules() -> None:
         if not due_schedules:
             return
 
-        logger.info(
-            "[Scheduler] Found %d due schedules", len(due_schedules)
-        )
+        logger.info("[Scheduler] Found %d due schedules", len(due_schedules))
 
         for schedule in due_schedules:
             if len(_running_tasks) >= MAX_CONCURRENT_SCHEDULED:
@@ -163,76 +173,168 @@ async def _process_due_schedules() -> None:
 
 
 async def _launch_scheduled_analysis(db, schedule, entity) -> None:
-    """Create a task and launch the pipeline for a scheduled analysis.
+    """Create a task and queue it for runtime dispatch.
 
     If the schedule has baseline_data (from a previous successful run),
     pass it to the pipeline so it skips A1-A3 and only runs A4+A5 with
     the same questions. This enables meaningful trend comparison.
     """
-    from app.services.monitoring_service import MonitoringService
-    from app.services.task_service import TaskService
+    from app.services.job_submission_service import JobSubmissionService
 
-    task_service = TaskService(db)
-    task = await task_service.create_task(
+    submission_service = JobSubmissionService(db)
+    submitted = await submission_service.submit_scheduled_analysis(
         user_id=schedule.user_id,
-        session_id=None,
         brand_name=entity.name,
         entity_id=schedule.entity_id,
         monitoring_schedule_id=schedule.id,
     )
-
-    monitoring_service = MonitoringService(db)
-    await monitoring_service.record_run_started(schedule.id, task.id)
-
-    # Load baseline (None on first run, dict on subsequent runs)
-    baseline = schedule.baseline_data
-
-    # Launch pipeline in background (semaphore-controlled)
-    try:
-        pipeline_task = asyncio.create_task(
-            _run_pipeline_headless(
-                task_id=task.id,
-                entity_id=entity.id,
-                entity_name=entity.name,
-                entity_industry=getattr(entity, "industry", None),
-                schedule_id=schedule.id,
-                user_id=schedule.user_id,
-                platforms=schedule.platforms,
-                baseline=baseline,
-            )
-        )
-    except Exception as e:
-        # create_task failed (e.g. event loop closing) — mark run as failed
-        logger.error(
-            "[Scheduler] Failed to create pipeline task for schedule %s: %s",
-            schedule.id,
-            e,
-            exc_info=True,
-        )
-        await monitoring_service.record_run_failed(schedule.id)
-        from app.services.task_service import TaskService
-
-        task_service = TaskService(db)
-        await task_service.fail_task(
-            task.id,
-            error_message=f"Failed to launch pipeline: {e}",
-            error_stage="scheduler",
-        )
-        return
-
-    _running_tasks.add(pipeline_task)
-    pipeline_task.add_done_callback(_running_tasks.discard)
+    task = submitted.task
+    run = submitted.run
 
     logger.info(
-        "[Scheduler] Launched pipeline for schedule %s (task=%s, entity=%s)",
+        "[Scheduler] Queued scheduled run %s for schedule %s (task=%s, entity=%s)",
+        run.id,
         schedule.id,
         task.id,
         entity.name,
     )
 
 
+async def _dispatch_queued_runs() -> None:
+    """Claim queued scheduler runs and launch them in background workers."""
+
+    if len(_running_tasks) >= MAX_CONCURRENT_SCHEDULED:
+        return
+
+    from app.models.monitoring_schedule import MonitoringSchedule
+    from app.services.job_dispatcher import JobDispatcher
+    from app.services.monitoring_service import MonitoringService
+    from app.services.task_service import TaskService
+
+    while len(_running_tasks) < MAX_CONCURRENT_SCHEDULED:
+        async with AsyncSessionLocal() as db:
+            dispatcher = JobDispatcher(db)
+            claimed = await dispatcher.claim_next_run(
+                lease_owner="scheduler:dispatcher",
+                executor_kind=ExecutorKind.LOCAL_WORKFLOW,
+                trigger_source=TaskTriggerSource.SCHEDULER,
+                executor_ref="scheduler:dispatcher",
+            )
+            if claimed is None:
+                break
+
+            task = await db.get(AnalysisTask, claimed.task_id)
+            if task is None or task.monitoring_schedule_id is None:
+                logger.warning(
+                    "[Scheduler] Claimed run %s has no scheduled task context, failing",
+                    claimed.id,
+                )
+                task_service = TaskService(db)
+                await task_service.fail_task(
+                    claimed.task_id,
+                    error_message="Scheduled run is missing task context",
+                    error_stage="scheduler_dispatch",
+                    run_id=claimed.id,
+                )
+                continue
+
+            schedule = await db.get(MonitoringSchedule, task.monitoring_schedule_id)
+            entity = await db.get(Entity, task.entity_id) if task.entity_id else None
+            if schedule is None or entity is None:
+                logger.warning(
+                    "[Scheduler] Claimed run %s missing schedule/entity, failing",
+                    claimed.id,
+                )
+                task_service = TaskService(db)
+                await task_service.fail_task(
+                    task.id,
+                    error_message="Scheduled run is missing schedule or entity",
+                    error_stage="scheduler_dispatch",
+                    run_id=claimed.id,
+                )
+                monitoring_service = MonitoringService(db)
+                await monitoring_service.record_run_failed(task.monitoring_schedule_id)
+                continue
+
+            lease_owner = claimed.lease_owner or "scheduler:dispatcher"
+            await monitoring_service.record_run_started(schedule.id, task.id)
+            baseline = schedule.baseline_data
+            platforms = schedule.platforms
+            entity_id = entity.id
+            entity_name = entity.name
+            entity_industry = getattr(entity, "industry", None)
+            schedule_id = schedule.id
+            user_id = schedule.user_id
+            task_id = task.id
+            run_id = claimed.id
+
+        try:
+            pipeline_task = asyncio.create_task(
+                _run_pipeline_headless(
+                    task_id=task_id,
+                    run_id=run_id,
+                    entity_id=entity_id,
+                    entity_name=entity_name,
+                    entity_industry=entity_industry,
+                    schedule_id=schedule_id,
+                    user_id=user_id,
+                    platforms=platforms,
+                    baseline=baseline,
+                    lease_owner=lease_owner,
+                )
+            )
+        except Exception as e:
+            logger.error(
+                "[Scheduler] Failed to launch claimed run %s: %s",
+                run_id,
+                e,
+                exc_info=True,
+            )
+            async with AsyncSessionLocal() as db:
+                monitoring_service = MonitoringService(db)
+                await monitoring_service.record_run_failed(schedule_id)
+                task_service = TaskService(db)
+                await task_service.fail_task(
+                    task_id,
+                    error_message=f"Failed to launch pipeline: {e}",
+                    error_stage="scheduler_dispatch",
+                    run_id=run_id,
+                )
+            continue
+
+        _running_tasks.add(pipeline_task)
+        pipeline_task.add_done_callback(_running_tasks.discard)
+        logger.info(
+            "[Scheduler] Dispatched claimed run %s for task %s",
+            run_id,
+            task_id,
+        )
+
+
+async def _recover_stale_scheduler_runs(*, lease_timeout_seconds: int) -> int:
+    """Re-queue scheduled runs whose lease heartbeat expired."""
+
+    from app.services.job_dispatcher import JobDispatcher
+
+    async with AsyncSessionLocal() as db:
+        dispatcher = JobDispatcher(db)
+        recovered = await dispatcher.requeue_expired_runs(
+            lease_timeout_seconds=lease_timeout_seconds,
+            executor_kind=ExecutorKind.LOCAL_WORKFLOW,
+            trigger_source=TaskTriggerSource.SCHEDULER,
+        )
+        if recovered:
+            logger.warning(
+                "[Scheduler] Re-queued %d stale scheduled runs (timeout=%ss)",
+                recovered,
+                lease_timeout_seconds,
+            )
+        return recovered
+
+
 async def _run_pipeline_headless(
     task_id: UUID,
+    run_id: UUID,
     entity_id: UUID,
     entity_name: str,
     entity_industry: str | None,
@@ -240,6 +342,7 @@ async def _run_pipeline_headless(
     user_id: UUID,
     platforms: list[str] | None = None,
     baseline: dict | None = None,
+    lease_owner: str | None = None,
 ) -> None:
     """Run the analysis pipeline using the existing LangGraph compiled_workflow.
 
@@ -260,6 +363,7 @@ async def _run_pipeline_headless(
             from app.workflow.graph import get_compiled_workflow
 
             workflow = await get_compiled_workflow()
+            effective_lease_owner = lease_owner or f"scheduler:{schedule_id}"
 
             # --- Build initial state ---
             # Common fields shared by both first-run and baseline-run
@@ -287,6 +391,7 @@ async def _run_pipeline_headless(
                 "metrics": None,
                 "report": None,
                 "task_id": str(task_id),
+                "run_id": str(run_id),
                 "platform_filter": platforms,
                 "preserved_fetch_results": None,
                 "auto_trigger_a5": False,
@@ -311,19 +416,22 @@ async def _run_pipeline_headless(
                     "marketing_personas": None,
                     "simulated_questions": baseline.get("simulated_questions"),
                     "questions": baseline["questions"],
-                    "orchestrator_history": [{
-                        "role": "user",
-                        "content": (
-                            f"这是定时监测任务。品牌「{entity_name}」已有"
-                            f"{n_questions}组监测问题基线，"
-                            f"请直接使用 answer_fetch 抓取最新AI答案，"
-                            f"然后使用 data_analytics 生成分析报告。"
-                        ),
-                    }],
+                    "orchestrator_history": [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"这是定时监测任务。品牌「{entity_name}」已有"
+                                f"{n_questions}组监测问题基线，"
+                                f"请直接使用 answer_fetch 抓取最新AI答案，"
+                                f"然后使用 data_analytics 生成分析报告。"
+                            ),
+                        }
+                    ],
                 }
                 logger.info(
                     "[Scheduler] Baseline run for task %s: %d questions preloaded",
-                    task_id, n_questions,
+                    task_id,
+                    n_questions,
                 )
             else:
                 # First run: full A1→A5 pipeline with explicit instruction
@@ -335,14 +443,16 @@ async def _run_pipeline_headless(
                     "marketing_personas": None,
                     "simulated_questions": None,
                     "questions": None,
-                    "orchestrator_history": [{
-                        "role": "user",
-                        "content": (
-                            f"这是定时监测任务。请对品牌「{entity_name}」执行完整分析流程："
-                            f"品牌分析 → 用户画像 → 问题模拟（品牌全景模式）"
-                            f" → AI答案抓取 → 数据分析报告。无需确认，直接执行。"
-                        ),
-                    }],
+                    "orchestrator_history": [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"这是定时监测任务。请对品牌「{entity_name}」执行完整分析流程："
+                                f"品牌分析 → 用户画像 → 问题模拟（品牌全景模式）"
+                                f" → AI答案抓取 → 数据分析报告。无需确认，直接执行。"
+                            ),
+                        }
+                    ],
                 }
                 logger.info(
                     "[Scheduler] First run for task %s: full pipeline (no baseline)",
@@ -357,12 +467,25 @@ async def _run_pipeline_headless(
                 entity_name,
             )
 
-            # Mark task as running
+            # Claim the queued run, then mark task as running
             async with AsyncSessionLocal() as db:
                 from app.services.task_service import TaskService
 
                 ts = TaskService(db)
-                await ts.start_task(task_id)
+                await ts.start_task(
+                    task_id,
+                    run_id=run_id,
+                    lease_owner=effective_lease_owner,
+                )
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    await runtime_coordinator.register_local_execution(
+                        session_id=sentinel_session_id,
+                        task_id=task_id,
+                        run_id=run_id,
+                        lease_owner=effective_lease_owner,
+                        execution_task=current_task,
+                    )
 
             # Invoke the same compiled workflow used by manual analyses
             final_state = await workflow.ainvoke(initial_state, config=config)
@@ -370,6 +493,7 @@ async def _run_pipeline_headless(
             # Handle completion
             await _handle_pipeline_success(
                 task_id=task_id,
+                run_id=run_id,
                 entity_id=entity_id,
                 schedule_id=schedule_id,
                 user_id=user_id,
@@ -378,9 +502,7 @@ async def _run_pipeline_headless(
             )
 
         except asyncio.CancelledError:
-            logger.info(
-                "[Scheduler] Pipeline task %s cancelled (shutdown)", task_id
-            )
+            logger.info("[Scheduler] Pipeline task %s cancelled (shutdown)", task_id)
             raise
         except Exception as e:
             logger.error(
@@ -391,6 +513,7 @@ async def _run_pipeline_headless(
             )
             await _handle_pipeline_failure(
                 task_id=task_id,
+                run_id=run_id,
                 schedule_id=schedule_id,
                 error=str(e),
             )
@@ -398,6 +521,7 @@ async def _run_pipeline_headless(
 
 async def _handle_pipeline_success(
     task_id: UUID,
+    run_id: UUID,
     entity_id: UUID,
     schedule_id: UUID,
     user_id: UUID,
@@ -435,9 +559,7 @@ async def _handle_pipeline_success(
                 metrics=metrics,
                 report_data=report or {},
                 fetch_results_summary=(
-                    [{"question_count": len(fetch_results)}]
-                    if fetch_results
-                    else None
+                    [{"question_count": len(fetch_results)}] if fetch_results else None
                 ),
                 triggered_by="scheduled",
                 snapshot_type=final_state.get("analysis_mode") or "baseline",
@@ -480,21 +602,22 @@ async def _handle_pipeline_success(
                     "simulated_questions": final_state.get("simulated_questions"),
                     "brand_profile": final_state.get("brand_profile"),
                     "competitors": final_state.get("competitors"),
-                    "competitive_landscape": final_state.get(
-                        "competitive_landscape"
-                    ),
+                    "competitive_landscape": final_state.get("competitive_landscape"),
                     "saved_at": datetime.now(timezone.utc).isoformat(),
                     "source_task_id": str(task_id),
                 }
-                await monitoring_service.save_baseline(
-                    schedule_id, baseline_data
-                )
+                await monitoring_service.save_baseline(schedule_id, baseline_data)
                 logger.info(
                     "[Scheduler] Saved baseline for schedule %s (%d questions)",
-                    schedule_id, len(questions),
+                    schedule_id,
+                    len(questions),
                 )
 
-        await task_service.complete_task(task_id, snapshot_id=snapshot_id)
+        await task_service.complete_task(
+            task_id,
+            snapshot_id=snapshot_id,
+            run_id=run_id,
+        )
         await monitoring_service.record_run_completed(schedule_id)
 
         logger.info(
@@ -507,6 +630,7 @@ async def _handle_pipeline_success(
 
 async def _handle_pipeline_failure(
     task_id: UUID,
+    run_id: UUID,
     schedule_id: UUID,
     error: str,
 ) -> None:
@@ -520,6 +644,7 @@ async def _handle_pipeline_failure(
             task_id,
             error_message=error,
             error_stage="pipeline",
+            run_id=run_id,
         )
 
         monitoring_service = MonitoringService(db)

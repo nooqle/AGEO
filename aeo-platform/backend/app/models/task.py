@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from app.models.llm_usage import LLMUsageRecord
     from app.models.monitoring_schedule import MonitoringSchedule
     from app.models.session import Session
+    from app.models.task_run import TaskRun
     from app.models.user import User
 
 
@@ -170,6 +171,12 @@ class AnalysisTask(Base):
         "LLMUsageRecord",
         back_populates="task",
         cascade="all, delete-orphan",
+    )
+    task_runs: Mapped[list["TaskRun"]] = relationship(
+        "TaskRun",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskRun.submitted_at.desc()",
     )
 
     def __repr__(self) -> str:

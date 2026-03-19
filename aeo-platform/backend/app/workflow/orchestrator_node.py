@@ -15,7 +15,7 @@ from langgraph.types import Command
 
 from app.workflow.state import AgentState
 from app.core.llm import get_llm_model
-from app.core.websocket_server import manager
+from app.services.session_event_publisher import session_event_publisher
 from app.workflow.events import (
     send_reply_event,
     send_plan_event,
@@ -326,15 +326,13 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
 
 def build_agent_tools() -> list[dict[str, Any]]:
     """Build LLM tools format from AGENT_REGISTRY."""
-    return [
-        {"type": "function", "function": agent}
-        for agent in AGENT_REGISTRY
-    ]
+    return [{"type": "function", "function": agent} for agent in AGENT_REGISTRY]
 
 
 # =============================================================================
 # System Prompt Builder
 # =============================================================================
+
 
 def _build_context_summary(state: AgentState) -> str:
     """Build a summary of what data exists in the current session.
@@ -387,9 +385,13 @@ def _build_context_summary(state: AgentState) -> str:
 
     # Tool availability hints (Review C4)
     if available_tools:
-        summary += "\n\n可用的追问工具:\n" + "\n".join(f"  - {t}" for t in available_tools)
+        summary += "\n\n可用的追问工具:\n" + "\n".join(
+            f"  - {t}" for t in available_tools
+        )
     if unavailable_tools:
-        summary += "\n\n不可用的工具（缺少前置数据）:\n" + "\n".join(f"  - {t}" for t in unavailable_tools)
+        summary += "\n\n不可用的工具（缺少前置数据）:\n" + "\n".join(
+            f"  - {t}" for t in unavailable_tools
+        )
 
     return summary
 
@@ -413,14 +415,14 @@ DIRECTIVE_A1_HAS_BASELINE = (
 )
 
 DIRECTIVE_A1_NO_BASELINE = (
-    '【强制操作】当前仅完成了品牌分析，还没有建立行业基线。\\n'
-    '你必须先向用户说明：“基线分析会用行业通用问题建立品牌在各个AI平台的全景基线，后续画像和场景分析都会基于它进行对比。”\\n'
-    '1) 基线分析会采集行业通用问题的AI回答，建立品牌全局基线\\n'
-    '2) 基线分析完成后，再生成用户画像可以做场景对比\\n'
-    '3) 完整采集模式下需要约8-12分钟\\n'
-    '请向用户给出两个选择：\\n'
-    '1. 先运行基线分析\\n'
-    '2. 暂不\\n'
+    "【强制操作】当前仅完成了品牌分析，还没有建立行业基线。\\n"
+    "你必须先向用户说明：“基线分析会用行业通用问题建立品牌在各个AI平台的全景基线，后续画像和场景分析都会基于它进行对比。”\\n"
+    "1) 基线分析会采集行业通用问题的AI回答，建立品牌全局基线\\n"
+    "2) 基线分析完成后，再生成用户画像可以做场景对比\\n"
+    "3) 完整采集模式下需要约8-12分钟\\n"
+    "请向用户给出两个选择：\\n"
+    "1. 先运行基线分析\\n"
+    "2. 暂不\\n"
     "然后调用 ask_user(message='是否先运行基线分析？')，不要传 options 参数。不要跳过这一确认步骤。"
 )
 
@@ -489,29 +491,51 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
     if state.get("simulated_questions"):
         qs = state["simulated_questions"].get("simulated_questions", [])
         a3_mode = state.get("user_decisions", {}).get("a3_mode", "brand")
-        mode_label = {"brand": "品牌全景模式", "baseline_dynamic": "基线全景模式", "persona": "画像聚焦模式"}.get(a3_mode, "画像聚焦模式")
-        data_status.append(f"✓ 已生成 {len(qs)} 组模拟问题（{mode_label}）— 用户可要求以不同模式/画像重新生成")
-    if state.get("fetch_results"):
+        mode_label = {
+            "brand": "品牌全景模式",
+            "baseline_dynamic": "基线全景模式",
+            "persona": "画像聚焦模式",
+        }.get(a3_mode, "画像聚焦模式")
         data_status.append(
-            f"✓ 已抓取 {len(state['fetch_results'])} 条AI回答"
+            f"✓ 已生成 {len(qs)} 组模拟问题（{mode_label}）— 用户可要求以不同模式/画像重新生成"
         )
+    if state.get("fetch_results"):
+        data_status.append(f"✓ 已抓取 {len(state['fetch_results'])} 条AI回答")
     if state.get("baseline_metrics"):
-        baseline_summary = state["baseline_metrics"].get("summary_metrics", {}) if isinstance(state["baseline_metrics"], dict) else {}
+        baseline_summary = (
+            state["baseline_metrics"].get("summary_metrics", {})
+            if isinstance(state["baseline_metrics"], dict)
+            else {}
+        )
         mention_rate = baseline_summary.get("brand_mention_rate")
         if isinstance(mention_rate, (int, float)):
             data_status.append(f"✓ 基线分析已完成，基线提及率={mention_rate:.1%}")
         else:
             data_status.append("✓ 基线分析已完成")
-    elif state.get("brand_profile") and not state.get("baseline_questions") and not state.get("marketing_personas"):
+    elif (
+        state.get("brand_profile")
+        and not state.get("baseline_questions")
+        and not state.get("marketing_personas")
+    ):
         # Only warn about pending baseline if personas haven't been generated yet.
         # Once A2 has produced personas, the user has moved past the baseline stage.
-        data_status.append("⚠ 基线分析待执行 — 必须先执行基线分析流程（question_simulation mode=baseline_dynamic → answer_fetch → data_analytics report_type=baseline）")
+        data_status.append(
+            "⚠ 基线分析待执行 — 必须先执行基线分析流程（question_simulation mode=baseline_dynamic → answer_fetch → data_analytics report_type=baseline）"
+        )
     if state.get("metrics"):
-        summary_metrics = state["metrics"].get("summary_metrics", {}) if isinstance(state["metrics"], dict) else {}
+        summary_metrics = (
+            state["metrics"].get("summary_metrics", {})
+            if isinstance(state["metrics"], dict)
+            else {}
+        )
         mention_rate = summary_metrics.get("brand_mention_rate")
         high_risk_count = summary_metrics.get("high_risk_scenario_count")
-        if isinstance(mention_rate, (int, float)) and isinstance(high_risk_count, (int, float)):
-            data_status.append(f"✓ 分析报告已生成，品牌提及率={mention_rate:.1%}，高风险场景={int(high_risk_count)}")
+        if isinstance(mention_rate, (int, float)) and isinstance(
+            high_risk_count, (int, float)
+        ):
+            data_status.append(
+                f"✓ 分析报告已生成，品牌提及率={mention_rate:.1%}，高风险场景={int(high_risk_count)}"
+            )
         else:
             data_status.append("✓ 分析报告已生成")
 
@@ -641,7 +665,9 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 f"识别出 {len(comps or [])} 个竞品：{', '.join(comp_names[:5])}。"
             )
             has_baseline = bool(state.get("baseline_metrics"))
-            summary += DIRECTIVE_A1_HAS_BASELINE if has_baseline else DIRECTIVE_A1_NO_BASELINE
+            summary += (
+                DIRECTIVE_A1_HAS_BASELINE if has_baseline else DIRECTIVE_A1_NO_BASELINE
+            )
             return summary
         return "品牌分析执行完成，但未获取到有效数据。"
 
@@ -651,8 +677,10 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             personas = mp.get("user_personas", [])
             if not personas:
                 return "画像生成未获取到数据，请提供建设性选项帮助用户继续。"
-            persona_names = [p.get("persona_name", p.get("name", f"画像{i+1}"))
-                             for i, p in enumerate(personas[:6])]
+            persona_names = [
+                p.get("persona_name", p.get("name", f"画像{i+1}"))
+                for i, p in enumerate(personas[:6])
+            ]
             names_str = "、".join(persona_names)
             return (
                 f"用户画像生成完成，共 {len(personas)} 个画像：{names_str}。"
@@ -664,8 +692,13 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         sq = state.get("simulated_questions")
         if sq:
             qs = sq.get("simulated_questions", [])
-            summary = f"问题模拟完成。共生成 {len(qs)} 组模拟问题。{DIRECTIVE_A3_NEXT_FETCH}"
-            logger.info("[Orchestrator] A3 tool_result directive (first 300 chars): %s", summary[:300])
+            summary = (
+                f"问题模拟完成。共生成 {len(qs)} 组模拟问题。{DIRECTIVE_A3_NEXT_FETCH}"
+            )
+            logger.info(
+                "[Orchestrator] A3 tool_result directive (first 300 chars): %s",
+                summary[:300],
+            )
             return summary
         return (
             "问题模拟未获取到有效数据，流程中止。"
@@ -677,8 +710,14 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
     if tool_name == "answer_fetch":
         fr = state.get("fetch_results")
         if fr:
-            report_type = "baseline" if (state.get("analysis_mode") or "persona") == "baseline" else "persona"
-            report_label = "基线分析报告" if report_type == "baseline" else "场景分析报告"
+            report_type = (
+                "baseline"
+                if (state.get("analysis_mode") or "persona") == "baseline"
+                else "persona"
+            )
+            report_label = (
+                "基线分析报告" if report_type == "baseline" else "场景分析报告"
+            )
             return (
                 f"AI答案抓取完成。共抓取 {len(fr)} 组问题结果。"
                 f"【强制操作】不要调用 ask_user，不要等待用户确认。"
@@ -701,12 +740,29 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         else:
             metrics = state.get("metrics")
         if metrics:
-            summary_metrics = metrics.get("summary_metrics", {}) if isinstance(metrics, dict) else {}
-            mention_rate = float(
-                summary_metrics.get("brand_mention_rate", metrics.get("mention_rate", 0) if isinstance(metrics, dict) else 0) or 0
-            ) * 100
-            official_citation_rate = float(summary_metrics.get("official_citation_rate", 0) or 0) * 100
-            high_risk_count = int(summary_metrics.get("high_risk_scenario_count", 0) or 0)
+            summary_metrics = (
+                metrics.get("summary_metrics", {}) if isinstance(metrics, dict) else {}
+            )
+            mention_rate = (
+                float(
+                    summary_metrics.get(
+                        "brand_mention_rate",
+                        (
+                            metrics.get("mention_rate", 0)
+                            if isinstance(metrics, dict)
+                            else 0
+                        ),
+                    )
+                    or 0
+                )
+                * 100
+            )
+            official_citation_rate = (
+                float(summary_metrics.get("official_citation_rate", 0) or 0) * 100
+            )
+            high_risk_count = int(
+                summary_metrics.get("high_risk_scenario_count", 0) or 0
+            )
             mode_label = "基线" if current_mode == "baseline" else "场景"
             summary = (
                 f"{mode_label}数据分析完成。"
@@ -765,8 +821,10 @@ def _build_ask_user_fallback_reply(
     if tool_name == "brand_analysis":
         has_baseline = bool(state.get("baseline_metrics"))
         brand_name = (
-            state.get("brand_profile", {}) or {}
-        ).get("brand_name") or state.get("brand_name") or "该品牌"
+            (state.get("brand_profile", {}) or {}).get("brand_name")
+            or state.get("brand_name")
+            or "该品牌"
+        )
         if has_baseline:
             return (
                 f"{brand_name}的品牌分析已完成，我已经整理出品牌画像和竞品格局。"
@@ -864,7 +922,7 @@ async def _force_fetch_mode_confirmation(
         )
         await send_reply_event(session_id, "", is_complete=True)
 
-    await manager.emit_to_session(
+    await session_event_publisher.emit_to_session(
         session_id,
         "inline_confirmation",
         {
@@ -873,23 +931,29 @@ async def _force_fetch_mode_confirmation(
             "type": "simple",
         },
     )
-    await manager.emit_to_session(session_id, "confirmation_request", {
-        "request_id": request_id,
-        "type": "step_confirmation",
-        "message": defense_msg,
-        "options": defense_options,
-        "allow_text_input": True,
-        "step_id": "orchestrator",
-        "step_name": "选择采集模式",
-    })
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "confirmation_request",
+        {
+            "request_id": request_id,
+            "type": "step_confirmation",
+            "message": defense_msg,
+            "options": defense_options,
+            "allow_text_input": True,
+            "step_id": "orchestrator",
+            "step_name": "选择采集模式",
+        },
+    )
 
     user_decisions = dict(state.get("user_decisions", {}))
     user_decisions["fetch_mode_pending"] = True
-    new_history.append({
-        "role": "tool",
-        "content": "等待用户选择采集模式...",
-        "tool_call_id": request_id,
-    })
+    new_history.append(
+        {
+            "role": "tool",
+            "content": "等待用户选择采集模式...",
+            "tool_call_id": request_id,
+        }
+    )
     return Command(
         goto="wait_for_user",
         update={
@@ -1158,6 +1222,7 @@ async def _route_agent_error_without_llm(
 # Orchestrator Node
 # =============================================================================
 
+
 async def orchestrator_node(state: AgentState) -> Command:
     """Main orchestrator node: uses LLM Function Calling to decide next action.
 
@@ -1184,12 +1249,16 @@ async def orchestrator_node(state: AgentState) -> Command:
         user_messages = state.get("messages", [])
         if user_messages:
             last_msg = user_messages[-1] if isinstance(user_messages[-1], dict) else {}
-            last_content = last_msg.get("content", "") if last_msg.get("role") == "user" else ""
+            last_content = (
+                last_msg.get("content", "") if last_msg.get("role") == "user" else ""
+            )
             if any(kw in last_content for kw in retry_keywords):
                 retry_detected = True
 
     if retry_detected:
-        logger.info("[Orchestrator] User retry intent detected, resetting agent_retry_counts")
+        logger.info(
+            "[Orchestrator] User retry intent detected, resetting agent_retry_counts"
+        )
         state = {**state, "agent_retry_counts": {}}
 
     current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
@@ -1207,9 +1276,14 @@ async def orchestrator_node(state: AgentState) -> Command:
         total_count = len(workflow_steps)
         # In baseline mode, Phase 1 completion is not "all done" — Phase 2 may follow
         is_baseline_phase = state.get("analysis_mode") == "baseline"
-        all_done = (completed_count + skipped_count) == total_count and not is_baseline_phase
+        all_done = (
+            completed_count + skipped_count
+        ) == total_count and not is_baseline_phase
         from app.workflow.events import send_progress_event
-        if has_agent_error and _matches_failed_step(last_tool, str((error_info or {}).get("step", ""))):
+
+        if has_agent_error and _matches_failed_step(
+            last_tool, str((error_info or {}).get("step", ""))
+        ):
             await send_progress_event(
                 session_id,
                 step=last_tool,
@@ -1278,15 +1352,17 @@ async def orchestrator_node(state: AgentState) -> Command:
     stream_started_at = perf_counter()
 
     try:
-        async for chunk in async_wrap_sync_gen(lambda: model.stream(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                *messages,
-            ],
-            tools=tools,
-            temperature=0.3,
-            tool_choice="auto",
-        )):
+        async for chunk in async_wrap_sync_gen(
+            lambda: model.stream(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    *messages,
+                ],
+                tools=tools,
+                temperature=0.3,
+                tool_choice="auto",
+            )
+        ):
             # Tool calls arrive at end of stream.
             # IMPORTANT: The final chunk with tool_calls also contains the
             # full accumulated content_buffer and reasoning_buffer (not deltas),
@@ -1316,7 +1392,9 @@ async def orchestrator_node(state: AgentState) -> Command:
             if chunk.content:
                 reply_text += chunk.content
                 await send_reply_event(
-                    session_id, chunk.content, is_delta=True,
+                    session_id,
+                    chunk.content,
+                    is_delta=True,
                     is_new_round=is_first_reply_chunk,
                 )
                 is_first_reply_chunk = False
@@ -1326,9 +1404,7 @@ async def orchestrator_node(state: AgentState) -> Command:
                 for block in chunk.thinking_blocks:
                     if block.text:
                         thinking_text += block.text
-                        await send_thought_event(
-                            session_id, block.text, is_delta=True
-                        )
+                        await send_thought_event(session_id, block.text, is_delta=True)
 
         # Mark reply as complete
         await send_reply_event(session_id, "", is_complete=True)
@@ -1367,14 +1443,20 @@ async def orchestrator_node(state: AgentState) -> Command:
         if last_finish_reason == "sensitive":
             logger.warning("[Orchestrator] Response blocked by content safety filter")
             from app.workflow.events import send_error_event
+
             await send_error_event(
-                session_id, "orchestrator", "内容被安全审核拦截，请调整输入后重试", recoverable=True
+                session_id,
+                "orchestrator",
+                "内容被安全审核拦截，请调整输入后重试",
+                recoverable=True,
             )
         elif last_finish_reason == "length":
             logger.warning("[Orchestrator] Response truncated due to max_tokens")
             from app.workflow.events import send_error_event
+
             await send_error_event(
-                session_id, "orchestrator",
+                session_id,
+                "orchestrator",
                 "回复被截断（达到最大token限制），结果可能不完整",
                 recoverable=True,
             )
@@ -1386,16 +1468,18 @@ async def orchestrator_node(state: AgentState) -> Command:
             "content": reply_text,
         }
         if tool_call_result:
-            assistant_msg["tool_calls"] = [{
-                "id": tool_call_result.id or "call_1",
-                "type": "function",
-                "function": {
-                    "name": tool_call_result.name,
-                    "arguments": json.dumps(
-                        tool_call_result.arguments, ensure_ascii=False
-                    ),
-                },
-            }]
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tool_call_result.id or "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": tool_call_result.name,
+                        "arguments": json.dumps(
+                            tool_call_result.arguments, ensure_ascii=False
+                        ),
+                    },
+                }
+            ]
         new_history.append(assistant_msg)
 
         if tool_call_result:
@@ -1481,6 +1565,7 @@ async def orchestrator_node(state: AgentState) -> Command:
 
         # Pure conversation reply, execution complete
         from app.workflow.events import send_execution_complete
+
         await send_execution_complete(session_id, "对话完成")
         return Command(
             goto=END,
@@ -1494,6 +1579,7 @@ async def orchestrator_node(state: AgentState) -> Command:
     except Exception as e:
         logger.error(f"[Orchestrator] Error: {e}", exc_info=True)
         from app.workflow.events import send_error_event
+
         await send_error_event(session_id, "orchestrator", str(e), recoverable=False)
         return Command(
             goto=END,
@@ -1532,8 +1618,12 @@ async def _handle_tool_call(
         # Hard filter: remove any "stop/cancel" options
         BANNED_KEYWORDS = ["停止", "取消", "放弃", "终止"]
         options = [
-            opt for opt in options
-            if not any(kw in (opt.get("label", "") + opt.get("description", "")) for kw in BANNED_KEYWORDS)
+            opt
+            for opt in options
+            if not any(
+                kw in (opt.get("label", "") + opt.get("description", ""))
+                for kw in BANNED_KEYWORDS
+            )
         ]
 
         # ---- Headless mode: auto-confirm with first option, skip wait ----
@@ -1542,19 +1632,24 @@ async def _handle_tool_call(
             auto_reply = f"[自动确认] {auto_choice.get('label', '确认')}"
             logger.info(
                 "[Orchestrator] Headless mode: auto-confirming ask_user "
-                "with option '%s'", auto_choice.get("id"),
+                "with option '%s'",
+                auto_choice.get("id"),
             )
             # Inject tool result with auto-confirm into history
-            new_history.append({
-                "role": "tool",
-                "content": auto_reply,
-                "tool_call_id": tool_call.id or "call_1",
-            })
+            new_history.append(
+                {
+                    "role": "tool",
+                    "content": auto_reply,
+                    "tool_call_id": tool_call.id or "call_1",
+                }
+            )
             # Append user message so orchestrator sees the "reply"
-            new_history.append({
-                "role": "user",
-                "content": auto_reply,
-            })
+            new_history.append(
+                {
+                    "role": "user",
+                    "content": auto_reply,
+                }
+            )
             return Command(
                 goto="orchestrator",
                 update={
@@ -1610,29 +1705,37 @@ async def _handle_tool_call(
             payload["waiting_tips"] = waiting_tips
         if checklist:
             payload["checklist"] = checklist
-        await manager.emit_to_session(session_id, "inline_confirmation", payload)
+        await session_event_publisher.emit_to_session(
+            session_id, "inline_confirmation", payload
+        )
 
         # Also emit confirmation_request so SelectionContent's pendingConfirmation
         # guard is satisfied — that component reads pendingConfirmation.requestId
         # which is only set by the setPendingConfirmation handler, triggered by this
         # separate event. Both events are required: inline_confirmation drives the
         # per-message UI layer, confirmation_request drives the store-level guard.
-        await manager.emit_to_session(session_id, "confirmation_request", {
-            "request_id": request_id,
-            "type": "step_confirmation",
-            "message": msg,
-            "options": options,
-            "allow_text_input": True,
-            "step_id": "orchestrator",
-            "step_name": "等待用户确认",
-        })
+        await session_event_publisher.emit_to_session(
+            session_id,
+            "confirmation_request",
+            {
+                "request_id": request_id,
+                "type": "step_confirmation",
+                "message": msg,
+                "options": options,
+                "allow_text_input": True,
+                "step_id": "orchestrator",
+                "step_name": "等待用户确认",
+            },
+        )
 
         # Add tool result placeholder to history
-        new_history.append({
-            "role": "tool",
-            "content": "等待用户回复...",
-            "tool_call_id": tool_call.id or "call_1",
-        })
+        new_history.append(
+            {
+                "role": "tool",
+                "content": "等待用户回复...",
+                "tool_call_id": tool_call.id or "call_1",
+            }
+        )
 
         return Command(
             goto="wait_for_user",
@@ -1667,12 +1770,14 @@ async def _handle_tool_call(
                     "问题已成功生成，无需重新生成。"
                     "请直接调用 answer_fetch 进行数据抓取，或调用 ask_user 询问用户下一步操作。"
                 )
-                new_history.append({
-                    "role": "tool",
-                    "content": block_msg,
-                    "tool_call_id": tool_call.id or "call_1",
-                    "name": tool_name,
-                })
+                new_history.append(
+                    {
+                        "role": "tool",
+                        "content": block_msg,
+                        "tool_call_id": tool_call.id or "call_1",
+                        "name": tool_name,
+                    }
+                )
                 return Command(
                     goto="orchestrator",
                     update={
@@ -1696,12 +1801,14 @@ async def _handle_tool_call(
                 f"1) 跳过此步骤继续下一步 2) 手动提供所需数据 3) 用不同参数再次尝试。"
                 f"绝对不要提供'停止分析'或'取消分析'选项。"
             )
-            new_history.append({
-                "role": "tool",
-                "content": error_msg,
-                "tool_call_id": tool_call.id or "call_1",
-                "name": tool_name,
-            })
+            new_history.append(
+                {
+                    "role": "tool",
+                    "content": error_msg,
+                    "tool_call_id": tool_call.id or "call_1",
+                    "name": tool_name,
+                }
+            )
             # Return to orchestrator to let LLM decide next step
             return Command(
                 goto="orchestrator",
@@ -1717,6 +1824,7 @@ async def _handle_tool_call(
 
         # Send progress event with steps
         from app.workflow.events import send_progress_event
+
         tool_to_step_id = {
             "brand_analysis": "A1",
             "persona_generation": "A2",
@@ -1748,7 +1856,11 @@ async def _handle_tool_call(
                 PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
                 for p in PlatformConstants.SUPPORTED_PLATFORMS
             )
-            _current_fetch_mode = tool_args.get("fetch_mode", "fast") if tool_name == "answer_fetch" else state.get("fetch_mode", "fast")
+            _current_fetch_mode = (
+                tool_args.get("fetch_mode", "fast")
+                if tool_name == "answer_fetch"
+                else state.get("fetch_mode", "fast")
+            )
             if _current_fetch_mode == "full":
                 _fetch_fallback = (
                     f"正在向{_all_names}平台提问（完整采集模式，全浏览器），抓取各平台对品牌的真实回答。"
@@ -1778,7 +1890,9 @@ async def _handle_tool_call(
                 "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
                 "citation_confidence_analysis": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
             }
-            fallback_text = FALLBACK_TEXTS.get(tool_name, f"正在执行：{display_name}，请稍候...")
+            fallback_text = FALLBACK_TEXTS.get(
+                tool_name, f"正在执行：{display_name}，请稍候..."
+            )
             await send_reply_event(
                 session_id, fallback_text, is_delta=True, is_new_round=True
             )
@@ -1844,7 +1958,7 @@ async def _handle_tool_call(
                 ]
                 defense_request_id = tool_call.id or f"defense_a3_{id(tool_call)}"
                 defense_msg = "请选择问题模拟的分析路径："
-                await manager.emit_to_session(
+                await session_event_publisher.emit_to_session(
                     session_id,
                     "inline_confirmation",
                     {
@@ -1856,21 +1970,27 @@ async def _handle_tool_call(
                 # Mirror the same confirmation_request event that the normal ask_user
                 # path now emits, so SelectionContent's pendingConfirmation guard is
                 # satisfied identically regardless of which path triggered the prompt.
-                await manager.emit_to_session(session_id, "confirmation_request", {
-                    "request_id": defense_request_id,
-                    "type": "step_confirmation",
-                    "message": defense_msg,
-                    "options": ask_options,
-                    "allow_text_input": True,
-                    "step_id": "orchestrator",
-                    "step_name": "选择分析路径",
-                })
+                await session_event_publisher.emit_to_session(
+                    session_id,
+                    "confirmation_request",
+                    {
+                        "request_id": defense_request_id,
+                        "type": "step_confirmation",
+                        "message": defense_msg,
+                        "options": ask_options,
+                        "allow_text_input": True,
+                        "step_id": "orchestrator",
+                        "step_name": "选择分析路径",
+                    },
+                )
                 # Inject tool_result placeholder so MiniMax history stays consistent
-                new_history.append({
-                    "role": "tool",
-                    "content": "等待用户选择分析路径...",
-                    "tool_call_id": tool_call.id or "call_1",
-                })
+                new_history.append(
+                    {
+                        "role": "tool",
+                        "content": "等待用户选择分析路径...",
+                        "tool_call_id": tool_call.id or "call_1",
+                    }
+                )
                 return Command(
                     goto="wait_for_user",
                     update={
@@ -1916,9 +2036,11 @@ async def _handle_tool_call(
             is_headless = state.get("headless", False)
             already_confirmed = user_decisions.get("fetch_mode_confirmed", False)
             already_pending = user_decisions.get("fetch_mode_pending", False)
-            is_custom = bool(custom_qs and isinstance(custom_qs, list) and any(
-                isinstance(q, str) and q.strip() for q in custom_qs
-            ))
+            is_custom = bool(
+                custom_qs
+                and isinstance(custom_qs, list)
+                and any(isinstance(q, str) and q.strip() for q in custom_qs)
+            )
             # If LLM explicitly set fetch_mode in tool args, the user's intent
             # has already been captured — no need to re-ask.
             explicit_mode = bool(tool_args.get("fetch_mode"))
@@ -1955,7 +2077,7 @@ async def _handle_tool_call(
                 ]
                 defense_request_id = tool_call.id or f"defense_fetch_{id(tool_call)}"
                 defense_msg = "问题模拟已完成，请选择采集模式："
-                await manager.emit_to_session(
+                await session_event_publisher.emit_to_session(
                     session_id,
                     "inline_confirmation",
                     {
@@ -1964,23 +2086,29 @@ async def _handle_tool_call(
                         "type": "simple",
                     },
                 )
-                await manager.emit_to_session(session_id, "confirmation_request", {
-                    "request_id": defense_request_id,
-                    "type": "step_confirmation",
-                    "message": defense_msg,
-                    "options": defense_options,
-                    "allow_text_input": True,
-                    "step_id": "orchestrator",
-                    "step_name": "选择采集模式",
-                })
+                await session_event_publisher.emit_to_session(
+                    session_id,
+                    "confirmation_request",
+                    {
+                        "request_id": defense_request_id,
+                        "type": "step_confirmation",
+                        "message": defense_msg,
+                        "options": defense_options,
+                        "allow_text_input": True,
+                        "step_id": "orchestrator",
+                        "step_name": "选择采集模式",
+                    },
+                )
                 # Mark pending so next call passes through
                 user_decisions["fetch_mode_pending"] = True
                 # Inject tool_result placeholder for MiniMax history consistency
-                new_history.append({
-                    "role": "tool",
-                    "content": "等待用户选择采集模式...",
-                    "tool_call_id": tool_call.id or "call_1",
-                })
+                new_history.append(
+                    {
+                        "role": "tool",
+                        "content": "等待用户选择采集模式...",
+                        "tool_call_id": tool_call.id or "call_1",
+                    }
+                )
                 return Command(
                     goto="wait_for_user",
                     update={
@@ -2037,6 +2165,7 @@ async def _handle_tool_call(
 # =============================================================================
 # Wait for User Node
 # =============================================================================
+
 
 async def wait_for_user_node(state: AgentState) -> Command:
     """Node that terminates the workflow to wait for user input.

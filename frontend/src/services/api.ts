@@ -8,7 +8,7 @@ import type { TouchpointTree } from '@/types/touchpoint';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import type { SessionListResponse } from '@/types/session';
 import type { SnapshotSummary, SnapshotTrendPoint, SnapshotCompare } from '@/types/snapshot';
-import type { AnalysisTask } from '@/types/task';
+import type { AnalysisTask, TaskRunRecord } from '@/types/task';
 import type { LLMObservabilitySnapshot } from '@/types/observability';
 import type {
   MonitoringSchedule,
@@ -441,6 +441,16 @@ class ApiService {
       `/sessions/${sessionId}/tasks/${taskId}`
     ).catch(() => ({ task: null }));
     return resp.task;
+  }
+
+  async getTaskRuns(
+    sessionId: string,
+    taskId: string,
+    limit: number = 20
+  ): Promise<{ task_id: string; runs: TaskRunRecord[]; limit: number }> {
+    return this.request<{ task_id: string; runs: TaskRunRecord[]; limit: number }>(
+      `/sessions/${sessionId}/tasks/${taskId}/runs?limit=${limit}`
+    );
   }
 
   /** Cancel a running task */

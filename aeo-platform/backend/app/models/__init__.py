@@ -14,6 +14,13 @@ from app.models.monitoring_schedule import (
 from app.models.session import Session
 from app.models.snapshot import AnalysisSnapshot, SnapshotStatus
 from app.models.task import AnalysisTask, TaskStatus
+from app.models.task_run import (
+    ExecutorKind,
+    TaskRun,
+    TaskRunKind,
+    TaskRunStatus,
+    TaskTriggerSource,
+)
 from app.models.user import User
 
 __all__ = [
@@ -28,6 +35,11 @@ __all__ = [
     "SnapshotStatus",
     "AnalysisTask",
     "TaskStatus",
+    "TaskRun",
+    "TaskRunStatus",
+    "TaskRunKind",
+    "TaskTriggerSource",
+    "ExecutorKind",
     "MonitoringSchedule",
     "ScheduleFrequency",
     "ScheduleStatus",

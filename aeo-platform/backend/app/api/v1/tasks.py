@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.models.task import TaskStatus
 from app.services.llm_usage_service import LLMUsageService
-from app.services.task_service import TaskService, task_to_dict
+from app.services.runtime_coordinator import runtime_coordinator
+from app.services.task_service import TaskService, task_run_to_dict, task_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,36 @@ async def get_task(
     return {"task": task_to_dict(task)}
 
 
+@router.get("/{task_id}/runs")
+async def get_task_runs(
+    session_id: str,
+    task_id: str,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """List runtime attempts for a specific task."""
+
+    sid = _parse_uuid(session_id, "session_id")
+    tid = _parse_uuid(task_id, "task_id")
+    service = TaskService(db)
+    task = await service.get_task(tid)
+    if not task or str(task.session_id) != str(sid):
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    runs = await service.get_task_runs(tid, limit=limit)
+    return {
+        "task_id": str(task.id),
+        "runs": [task_run_to_dict(run) for run in runs],
+        "limit": limit,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Global tasks router (not scoped to session)
 # ---------------------------------------------------------------------------
@@ -129,8 +160,6 @@ async def list_user_tasks(
                       Filtering is done at the SQL layer for correct
                       pagination counts.
     """
-    from app.models.task import AnalysisTask
-
     service = TaskService(db)
     task_status = None
     if status_filter:
@@ -194,7 +223,7 @@ async def cancel_task(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Cancel a running task (marks status only -- Review T8)."""
+    """Cancel a task and request the local executor to stop if it is active."""
     _parse_uuid(session_id, "session_id")
     tid = _parse_uuid(task_id, "task_id")
     service = TaskService(db)
@@ -215,5 +244,14 @@ async def cancel_task(
             detail=f"Cannot cancel task with status: {task.status.value}",
         )
 
-    cancelled = await service.cancel_task(tid)
+    loaded_runs = task.__dict__.get("task_runs") or []
+    latest_run = loaded_runs[0] if loaded_runs else None
+    cancelled = await service.cancel_task(
+        tid,
+        run_id=latest_run.id if latest_run is not None else None,
+    )
+    await runtime_coordinator.cancel_task_execution(
+        tid,
+        session_id=str(task.session_id) if task.session_id else None,
+    )
     return {"task": task_to_dict(cancelled) if cancelled else None}

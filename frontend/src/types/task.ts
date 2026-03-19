@@ -3,6 +3,37 @@
  */
 
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TaskRunStatus =
+  | 'queued'
+  | 'claimed'
+  | 'running'
+  | 'waiting_input'
+  | 'cancelling'
+  | 'cancelled'
+  | 'failed'
+  | 'completed';
+
+export interface TaskRunRecord {
+  id: string;
+  task_id: string;
+  run_kind: 'initial' | 'scheduled' | 'resume_after_input' | 'retry' | 'follow_up';
+  trigger_source: 'websocket' | 'scheduler' | 'messages_api' | 'system_retry';
+  executor_kind: 'local_workflow' | 'sandbox_workflow' | 'celery_fetch' | 'external';
+  status: TaskRunStatus;
+  attempt_no: number;
+  priority: number;
+  lease_owner: string | null;
+  executor_ref: string | null;
+  checkpoint_stage: string | null;
+  checkpoint_payload_ref: string | null;
+  error_kind: string | null;
+  error_message: string | null;
+  cancel_requested_at: string | null;
+  heartbeat_at: string | null;
+  submitted_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
 
 export interface AnalysisTask {
   id: string;
@@ -23,6 +54,8 @@ export interface AnalysisTask {
   error_message: string | null;
   error_stage: string | null;
   stage_results_cache: import('@/types/snapshot').StageResult[] | null;
+  latest_run?: TaskRunRecord | null;
+  task_runs?: TaskRunRecord[] | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;

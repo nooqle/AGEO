@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from app.core.websocket_server import manager
+from app.services.session_event_publisher import session_event_publisher
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,7 @@ def pop_accumulated_layers(session_id: str) -> dict[str, Any]:
 # Headless Detection Helper
 # =============================================================================
 
+
 def _is_headless(session_id: str) -> bool:
     """Return True if session_id belongs to a headless (no-WS-client) run."""
     return bool(session_id and session_id.startswith("headless-"))
@@ -94,6 +95,7 @@ def _is_headless(session_id: str) -> bool:
 # =============================================================================
 # New Event System (Layer 1-4)
 # =============================================================================
+
 
 async def send_reply_event(
     session_id: str,
@@ -117,12 +119,16 @@ async def send_reply_event(
         else:
             layers["replyText"] += content
 
-    await manager.emit_to_session(session_id, "reply_delta", {
-        "content": content,
-        "is_delta": is_delta,
-        "is_complete": is_complete,
-        "is_new_round": is_new_round,
-    })
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "reply_delta",
+        {
+            "content": content,
+            "is_delta": is_delta,
+            "is_complete": is_complete,
+            "is_new_round": is_new_round,
+        },
+    )
 
 
 async def send_plan_event(
@@ -139,10 +145,14 @@ async def send_plan_event(
     layers = _get_layers(session_id)
     layers["planText"] = plan_text
 
-    await manager.emit_to_session(session_id, "plan_update", {
-        "text": plan_text,
-        "steps": steps,
-    })
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "plan_update",
+        {
+            "text": plan_text,
+            "steps": steps,
+        },
+    )
 
 
 async def send_action_log_event(
@@ -160,21 +170,27 @@ async def send_action_log_event(
     ts = datetime.now(timezone.utc).isoformat()
     # Accumulate for persistence
     layers = _get_layers(session_id)
-    layers["actionLogs"].append({
-        "action_type": action_type,
-        "message": message,
-        "step": step,
-        "is_complete": is_complete,
-        "timestamp": ts,
-    })
+    layers["actionLogs"].append(
+        {
+            "action_type": action_type,
+            "message": message,
+            "step": step,
+            "is_complete": is_complete,
+            "timestamp": ts,
+        }
+    )
 
-    await manager.emit_to_session(session_id, "action_log", {
-        "action_type": action_type,
-        "message": message,
-        "step": step,
-        "is_complete": is_complete,
-        "timestamp": ts,
-    })
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "action_log",
+        {
+            "action_type": action_type,
+            "message": message,
+            "step": step,
+            "is_complete": is_complete,
+            "timestamp": ts,
+        },
+    )
 
 
 async def send_thought_event(
@@ -195,11 +211,15 @@ async def send_thought_event(
     else:
         layers["thought"] = content
 
-    await manager.emit_to_session(session_id, "thought_delta", {
-        "content": content,
-        "is_delta": is_delta,
-        "is_complete": is_complete,
-    })
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "thought_delta",
+        {
+            "content": content,
+            "is_delta": is_delta,
+            "is_complete": is_complete,
+        },
+    )
 
 
 async def send_inline_confirmation(
@@ -210,15 +230,20 @@ async def send_inline_confirmation(
     """Layer 4: Send inline confirmation request."""
     if _is_headless(session_id):
         return
-    await manager.emit_to_session(session_id, "inline_confirmation", {
-        "message": message,
-        "options": options,
-    })
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "inline_confirmation",
+        {
+            "message": message,
+            "options": options,
+        },
+    )
 
 
 # =============================================================================
 # Preserved Events (used by agent nodes and websocket handler)
 # =============================================================================
+
 
 async def send_progress_event(
     session_id: str,
@@ -241,7 +266,7 @@ async def send_progress_event(
     }
     if steps is not None:
         payload["steps"] = steps
-    await manager.emit_to_session(
+    await session_event_publisher.emit_to_session(
         session_id,
         "execution_progress",
         payload,
@@ -277,7 +302,7 @@ async def send_output_ready(
         payload["category"] = category
     if scenario_label:
         payload["scenario_label"] = scenario_label
-    await manager.emit_to_session(session_id, "output_ready", payload)
+    await session_event_publisher.emit_to_session(session_id, "output_ready", payload)
 
 
 async def save_and_send_artifact(
@@ -309,7 +334,8 @@ async def save_and_send_artifact(
     if session_id.startswith("headless-"):
         logger.info(
             "[Artifact] Headless mode, skipping Message save: %s (type=%s)",
-            title, output_type,
+            title,
+            output_type,
         )
         return ""
 
@@ -348,7 +374,9 @@ async def save_and_send_artifact(
             category=category,
             scenario_label=scenario_label,
         )
-        logger.info(f"[Artifact] Saved and sent: {title} (type={output_type}, artifact={artifact_id}, msg={db_message_id})")
+        logger.info(
+            f"[Artifact] Saved and sent: {title} (type={output_type}, artifact={artifact_id}, msg={db_message_id})"
+        )
         return db_message_id
     except Exception as e:
         logger.error(f"[Artifact] Failed to save/send artifact: {e}", exc_info=True)
@@ -375,16 +403,14 @@ async def send_artifact_patch(
         payload["status"] = status
     if message:
         payload["message"] = message
-    await manager.emit_to_session(session_id, "artifact_patch", payload)
+    await session_event_publisher.emit_to_session(session_id, "artifact_patch", payload)
 
 
-async def send_execution_complete(
-    session_id: str, message: str = "分析完成"
-) -> None:
+async def send_execution_complete(session_id: str, message: str = "分析完成") -> None:
     """Send execution complete event."""
     if _is_headless(session_id):
         return
-    await manager.emit_to_session(
+    await session_event_publisher.emit_to_session(
         session_id, "execution_complete", {"message": message}
     )
 
@@ -398,8 +424,10 @@ async def send_error_event(
     # Guard: never send empty error string to frontend
     if not error or not error.strip():
         error = f"未知错误 ({step})"
-        logger.warning("[Events] send_error_event called with empty error for step %s", step)
-    await manager.emit_to_session(
+        logger.warning(
+            "[Events] send_error_event called with empty error for step %s", step
+        )
+    await session_event_publisher.emit_to_session(
         session_id,
         "error",
         {
@@ -413,6 +441,7 @@ async def send_error_event(
 # =============================================================================
 # Backward-Compatible Stubs (used by agent nodes during transition)
 # =============================================================================
+
 
 async def send_tpaor_event(
     session_id: str,
@@ -442,7 +471,9 @@ async def send_tpaor_event(
     elif phase == "response":
         await send_reply_event(session_id, content, is_delta=False)
     else:
-        await send_action_log_event(session_id, "generic", content, is_complete=is_complete)
+        await send_action_log_event(
+            session_id, "generic", content, is_complete=is_complete
+        )
 
 
 async def send_system_notice_event(
@@ -481,7 +512,7 @@ async def send_system_notice_event(
     if platforms is not None:
         payload["platforms"] = platforms
 
-    await manager.emit_to_session(session_id, "system_notice", payload)
+    await session_event_publisher.emit_to_session(session_id, "system_notice", payload)
 
 
 async def send_stage_result(
@@ -510,15 +541,17 @@ async def send_stage_result(
     ts = datetime.now(timezone.utc).isoformat()
     # Accumulate for persistence
     layers = _get_layers(session_id)
-    layers["stageResults"].append({
-        "stage": stage,
-        "stage_name": stage_name,
-        "result_type": result_type,
-        "data": data,
-        "timestamp": ts,
-    })
+    layers["stageResults"].append(
+        {
+            "stage": stage,
+            "stage_name": stage_name,
+            "result_type": result_type,
+            "data": data,
+            "timestamp": ts,
+        }
+    )
 
-    await manager.emit_to_session(
+    await session_event_publisher.emit_to_session(
         session_id,
         "stage_result",
         {
@@ -567,7 +600,7 @@ async def send_browser_state_event(
         payload["action_hint"] = action_hint
     if request_id:
         payload["request_id"] = request_id
-    await manager.emit_to_session(session_id, "browser_state", payload)
+    await session_event_publisher.emit_to_session(session_id, "browser_state", payload)
 
 
 async def send_browser_user_action_event(
@@ -600,7 +633,9 @@ async def send_browser_user_action_event(
         payload["action_hint"] = action_hint
     if request_id:
         payload["request_id"] = request_id
-    await manager.emit_to_session(session_id, "browser_user_action", payload)
+    await session_event_publisher.emit_to_session(
+        session_id, "browser_user_action", payload
+    )
 
 
 async def send_confirmation_request(
