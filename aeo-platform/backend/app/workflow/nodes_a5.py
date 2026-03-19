@@ -4,7 +4,6 @@ This module contains the A5 node implementation for analyzing fetch results
 and generating comprehensive reports with BWVS metrics.
 """
 
-import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -74,9 +73,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
         # included in the prompt (was previously done after LLM, too late)
         competitor_metrics = _calculate_competitor_metrics(fetch_results, competitors)
 
-        # Thread 6: precompute scenario-first V2 structures before the LLM call
-        # so the prompt can reason about scenarios, risks, and action priorities
-        # instead of only aggregate scores.
+        # Precompute fact-layer structures before the LLM call so the agent can
+        # generate the report directly from scenarios, mentions, and sources.
         source_overview = a5_contract._build_source_overview(metrics.get("citation_analysis", {}))
         mention_sentiment_analysis = a5_sentiment.build_mention_sentiment_analysis(
             fetch_results,
@@ -89,14 +87,11 @@ async def a5_analytics_node(state: AgentState) -> Command:
             competitors,
             source_overview,
         )
-        risk_map = a5_contract._build_risk_map(scenario_matrix)
-        competitor_battles = a5_contract._build_competitor_battles(scenario_matrix, competitors)
-        action_queue = a5_contract._build_action_queue(scenario_matrix, risk_map)
         summary_metrics = a5_contract._build_summary_metrics(
             metrics,
             scenario_matrix,
-            risk_map,
             source_overview,
+            mention_sentiment_analysis,
         )
 
         await send_progress_event(
@@ -106,18 +101,18 @@ async def a5_analytics_node(state: AgentState) -> Command:
             progress=0.75,
             message=(
                 f"提及率: {metrics.get('mention_rate', 0):.1%} | "
-                f"官网引用率: {summary_metrics.get('official_citation_rate', 0):.1%} | "
-                f"高风险问题: {summary_metrics.get('high_risk_scenario_count', 0)} 个"
+                f"内容引用率: {summary_metrics.get('content_citation_rate', 0):.1%} | "
+                f"场景覆盖: {summary_metrics.get('scenario_hit_count', 0)}/{summary_metrics.get('scenario_total', 0)}"
             ),
         )
 
         # Stage result: metrics preview before LLM report generation
         metrics_preview_data = {
             "mention_rate": f"{metrics.get('mention_rate', 0):.1%}",
-            "official_citation_rate": f"{summary_metrics.get('official_citation_rate', 0):.1%}",
+            "content_citation_rate": f"{summary_metrics.get('content_citation_rate', 0):.1%}",
             "scenario_hit_count": summary_metrics.get("scenario_hit_count", 0),
-            "missing_high_value_scenario_count": summary_metrics.get("missing_high_value_scenario_count", 0),
-            "high_risk_scenario_count": summary_metrics.get("high_risk_scenario_count", 0),
+            "scenario_total": summary_metrics.get("scenario_total", 0),
+            "accuracy_status": summary_metrics.get("accuracy_status"),
             "total_mentions": metrics.get("total_mentions", 0),
             "total_questions": metrics.get("total_questions", 0),
         }
@@ -169,11 +164,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
             except Exception as snap_err:
                 logger.warning("[A5] Failed to query previous snapshot: %s", snap_err)
 
-        # Generate report using LLM -- split into 2 calls to stay within
-        # token limits and avoid JSON truncation.
-        # Call 1 (core): executive_summary, platform_analysis, competitor_deep_analysis,
-        #                 actionable_recommendations, key_findings
-        # Call 2 (supplementary): industry_insights, SWOT, risk_alerts, action_plan
+        # Generate the A5 customer-facing report payload.
+        # The agent now owns the report judgement layer; runtime only prepares
+        # factual inputs and validates the returned JSON.
         report_data = None
         try:
             user_content = a5_prompt._build_a5_user_content(
@@ -186,11 +179,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 baseline_report=state.get("baseline_report"),
                 summary_metrics=summary_metrics,
                 scenario_matrix=scenario_matrix,
-                competitor_battles=competitor_battles,
-                risk_map=risk_map,
-                action_queue=action_queue,
                 source_overview=source_overview,
-            mention_sentiment_analysis=mention_sentiment_analysis,
+                mention_sentiment_analysis=mention_sentiment_analysis,
             )
             model = get_llm_model_compat()
 
@@ -205,6 +195,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 ],
                 step="data_analytics",
                 step_name="数据分析报告（核心章节）",
+                task_id=state.get("task_id"),
                 progress_start=0.82,
                 progress_end=0.90,
                 max_tokens=8192,
@@ -214,51 +205,10 @@ async def a5_analytics_node(state: AgentState) -> Command:
             if core_data:
                 report_data = core_data
                 logger.info(
-                    "[A5] Core report generated: summary=%d chars, platforms=%d, recs=%d",
+                    "[A5] Agent report generated: summary=%d chars, findings=%d",
                     len(core_data.get("executive_summary", "")),
-                    len(core_data.get("platform_analysis", [])),
-                    len(core_data.get("actionable_recommendations", [])),
+                    len(core_data.get("key_findings", [])),
                 )
-
-                # --- Call 2: Supplementary sections ---
-                try:
-                    supp_prompt = a5_prompt._get_a5_supplementary_prompt(report_type=analysis_mode)
-                    # Include core results summary so LLM can reference them
-                    supp_context = (
-                        f"{user_content}\n\n"
-                        f"## 已完成的核心分析结果\n"
-                        f"- 执行摘要: {core_data.get('executive_summary', '')[:200]}\n"
-                        f"- 核心发现: {json.dumps(core_data.get('key_findings', [])[:3], ensure_ascii=False)}\n"
-                        f"- 平台数量: {len(core_data.get('platform_analysis', []))}\n"
-                        f"- 建议数量: {len(core_data.get('actionable_recommendations', []))}\n"
-                    )
-                    response2 = await call_llm_streaming(
-                        session_id=session_id,
-                        model=model,
-                        messages=[
-                            {"role": "system", "content": supp_prompt},
-                            {"role": "user", "content": supp_context},
-                        ],
-                        step="data_analytics",
-                        step_name="数据分析报告（补充章节）",
-                        progress_start=0.90,
-                        progress_end=0.95,
-                        max_tokens=6144,
-                    )
-                    supp_data = parse_llm_response(response2)
-
-                    if supp_data:
-                        # Merge supplementary into core report
-                        for key in ("industry_insights", "strengths", "weaknesses",
-                                    "opportunities", "threats", "risk_alerts",
-                                    "action_plan"):
-                            if supp_data.get(key):
-                                report_data[key] = supp_data[key]
-                        logger.info("[A5] Supplementary sections merged successfully")
-                    else:
-                        logger.warning("[A5] Supplementary LLM call returned no valid JSON, core report still usable")
-                except Exception as supp_err:
-                    logger.warning("[A5] Supplementary report call failed (core report still usable): %s", supp_err)
 
             # Partial degradation validation: only reject if executive_summary is missing
             if report_data:
@@ -270,18 +220,16 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     )
                     report_data = None
                 else:
-                    # Log missing optional sections as warnings, don't invalidate
                     missing = []
-                    if not report_data.get("platform_analysis"):
-                        missing.append("platform_analysis")
-                    if not report_data.get("actionable_recommendations"):
-                        missing.append("actionable_recommendations")
-                    if competitors and not report_data.get("competitor_deep_analysis"):
-                        missing.append("competitor_deep_analysis")
-                    if not report_data.get("industry_insights"):
-                        missing.append("industry_insights")
-                    if not report_data.get("risk_alerts"):
-                        missing.append("risk_alerts")
+                    if not report_data.get("key_findings"):
+                        missing.append("key_findings")
+                    report_v2 = report_data.get("report_v2", {})
+                    if not isinstance(report_v2, dict):
+                        missing.append("report_v2")
+                    else:
+                        for field in ("summary", "scenarioCoverage", "mentions", "sources"):
+                            if not report_v2.get(field):
+                                missing.append(f"report_v2.{field}")
                     if missing:
                         logger.warning("[A5] Report partial: missing sections: %s", ", ".join(missing))
 
@@ -354,9 +302,6 @@ async def a5_analytics_node(state: AgentState) -> Command:
             report_data,
             summary_metrics,
             scenario_matrix,
-            competitor_battles,
-            risk_map,
-            action_queue,
             source_overview,
             metrics.get("citation_analysis", {}),
             mention_sentiment_analysis,
@@ -364,9 +309,6 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
         report_data["summary_metrics"] = summary_metrics
         report_data["scenario_matrix"] = scenario_matrix
-        report_data["competitor_battles"] = competitor_battles
-        report_data["risk_map"] = risk_map
-        report_data["action_queue"] = action_queue
         report_data["source_overview"] = source_overview
         report_data["mention_sentiment_analysis"] = mention_sentiment_analysis
 
@@ -375,9 +317,6 @@ async def a5_analytics_node(state: AgentState) -> Command:
         # the full report payload.
         metrics["summary_metrics"] = summary_metrics
         metrics["scenario_matrix"] = scenario_matrix
-        metrics["competitor_battles"] = competitor_battles
-        metrics["risk_map"] = risk_map
-        metrics["action_queue"] = action_queue
         metrics["source_overview"] = source_overview
         metrics["mention_sentiment_analysis"] = mention_sentiment_analysis
 
@@ -448,9 +387,6 @@ async def a5_analytics_node(state: AgentState) -> Command:
             delta_vs_previous=delta_vs_previous,
             report_v2_sections=report_v2_sections,
             scenario_matrix=scenario_matrix,
-            competitor_battles=competitor_battles,
-            risk_map=risk_map,
-            action_queue=action_queue,
             source_overview=source_overview,
             mention_sentiment_analysis=mention_sentiment_analysis,
         )

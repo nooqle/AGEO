@@ -163,10 +163,11 @@ def generate_a5_summary(
     elif metrics:
         mention_rate = float(metrics.get("mention_rate", 0) or 0) * 100
 
-    official_citation_rate = float(summary_metrics.get("official_citation_rate", 0) or 0) * 100
+    content_citation_rate = float(summary_metrics.get("content_citation_rate", 0) or 0) * 100
     scenario_hit_count = summary_metrics.get("scenario_hit_count")
     scenario_total = summary_metrics.get("scenario_total")
-    missing_high_value = summary_metrics.get("missing_high_value_scenario_count")
+    accuracy_score = summary_metrics.get("accuracy_score")
+    accuracy_status = summary_metrics.get("accuracy_status")
 
     # Get key findings count
     key_findings_count = 0
@@ -178,12 +179,14 @@ def generate_a5_summary(
     details = []
     if mention_rate > 0:
         details.append(f"品牌提及率 {mention_rate:.1f}%")
-    if official_citation_rate > 0:
-        details.append(f"官网引用率 {official_citation_rate:.1f}%")
+    if content_citation_rate > 0:
+        details.append(f"内容引用率 {content_citation_rate:.1f}%")
     if scenario_hit_count is not None and scenario_total is not None:
         details.append(f"已覆盖 {scenario_hit_count}/{scenario_total} 个场景")
-    if missing_high_value is not None:
-        details.append(f"缺席高价值场景 {missing_high_value} 个")
+    if accuracy_score is not None:
+        details.append(f"答案正确率 {float(accuracy_score) * 100:.1f}%")
+    elif accuracy_status == "pending":
+        details.append("答案正确率待事实库补充后再评估")
     if key_findings_count > 0:
         details.append(f"{key_findings_count}项发现")
     if details:

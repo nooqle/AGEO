@@ -740,30 +740,6 @@ function ReportPdfDocument({ content, descriptor }: { content: ReportCanvasConte
         </Section>
       ) : null}
 
-      {view.competitorBattle.items && view.competitorBattle.items.length > 0 ? (
-        <Section title={view.competitorBattle.title || '竞品争夺'} subtitle={view.competitorBattle.overview}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th style={{ width: '24%' }}>争夺场景</th>
-                <th style={{ width: '24%' }}>竞品</th>
-                <th style={{ width: '16%' }}>态势</th>
-                <th>建议</th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.competitorBattle.items.map((item, index) => (
-                <tr key={`${item.scenario_label}-${index}`}>
-                  <td>{item.scenario_label}</td>
-                  <td>{item.competitors_present?.join('、') || '--'}</td>
-                  <td>{item.battle_status || '--'}</td>
-                  <td>{joinInline([item.evidence, item.recommended_focus]) || '--'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-      ) : null}
 
       {(view.mentions.brand_mentions?.length || view.mentions.competitor_mentions?.length) ? (
         <Section title="提及与引用样本" subtitle="记录品牌和竞品在问答中的真实进入方式">
@@ -828,66 +804,6 @@ function ReportPdfDocument({ content, descriptor }: { content: ReportCanvasConte
         </Section>
       ) : null}
 
-      {(view.insights.strengths?.length || view.insights.weaknesses?.length) ? (
-        <Section title={view.insights.title || '当前优势与补强'} subtitle={view.insights.summary}>
-          <div className="grid grid-2">
-            {view.insights.strengths && view.insights.strengths.length > 0 ? (
-              <div className="quote-card">
-                <div className="metric-label">优势洞察</div>
-                <div className="list" style={{ marginTop: 8 }}>
-                  {view.insights.strengths.map((item) => (
-                    <div key={item.title} className="list-item">
-                      <div className="list-title">{item.title}</div>
-                      <div className="list-meta">{item.scenario || '--'}</div>
-                      {item.evidence ? <div className="list-body">{item.evidence}</div> : null}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {view.insights.weaknesses && view.insights.weaknesses.length > 0 ? (
-              <div className="quote-card">
-                <div className="metric-label">待补强</div>
-                <div className="list" style={{ marginTop: 8 }}>
-                  {view.insights.weaknesses.map((item) => (
-                    <div key={item.title} className="list-item">
-                      <div className="list-title">{item.title}</div>
-                      <div className="list-meta">{item.scenario || '--'}</div>
-                      {item.evidence ? <div className="list-body">{item.evidence}</div> : null}
-                      {item.improvement_hint ? <div className="list-body muted">{item.improvement_hint}</div> : null}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </Section>
-      ) : null}
-
-      {view.actionQueue.items && view.actionQueue.items.length > 0 ? (
-        <Section title={view.actionQueue.title || '下一步优化'} subtitle={view.actionQueue.summary}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th style={{ width: '12%' }}>优先级</th>
-                <th style={{ width: '24%' }}>动作</th>
-                <th style={{ width: '24%' }}>目标</th>
-                <th>影响 / 周期</th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.actionQueue.items.map((item, index) => (
-                <tr key={`${item.title || item.action}-${index}`}>
-                  <td>{item.priority || '--'}</td>
-                  <td>{item.title || item.action || '--'}</td>
-                  <td>{item.target || item.scenario_label || '--'}</td>
-                  <td>{joinInline([item.expected_impact, item.timeline, item.difficulty]) || '--'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-      ) : null}
 
       <AppendixSection content={content} descriptor={descriptor} />
     </DocumentFrame>

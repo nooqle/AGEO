@@ -362,6 +362,7 @@ export type ConfidenceSignalStatus = {
 
 export type ConfidenceSignalSummary = {
   total_citations?: number;
+  auto_evaluated_count?: number;
   evaluated_count?: number;
   failed_count?: number;
   high_confidence_count?: number;
@@ -376,6 +377,53 @@ export type ConfidenceSignalSummary = {
   average_confidence_score?: number;
   vulnerable_source_count?: number;
   updated_at?: string;
+};
+
+export type ConfidenceRepresentativeSource = {
+  item_id?: string;
+  label?: string;
+  domain?: string;
+  url?: string;
+  score?: number;
+  frequency?: number;
+};
+
+export type ConfidenceOverview = {
+  entity_label?: string;
+  average_confidence?: number | null;
+  weighted_average_confidence?: number | null;
+  source_count?: number;
+  low_confidence_source_count?: number;
+  representative_sources?: ConfidenceRepresentativeSource[];
+};
+
+export type ConfidencePatternExample = {
+  label?: string;
+  domain?: string;
+  score?: number;
+  evidence?: string;
+};
+
+export type ConfidencePattern = {
+  pattern_key?: string;
+  pattern_label?: string;
+  sample_count?: number;
+  average_confidence?: number | null;
+  weighted_average_confidence?: number | null;
+  affected_dimensions?: string[];
+  evidence_examples?: ConfidencePatternExample[];
+  suggestion?: string;
+};
+
+export type ConfidenceStrategicRecommendation = {
+  title?: string;
+  reason?: string;
+  action?: string;
+};
+
+export type ConfidenceExtraEvaluation = {
+  count?: number;
+  items?: ConfidenceSignalItem[];
 };
 
 export type ConfidenceSignalFinding = {
@@ -586,6 +634,18 @@ export type ReportCanvasData = CanvasPreviewData & {
   citation_analysis?: CitationAnalysis;
   keyword_analysis?: KeywordAnalysis;
   summary?: ConfidenceSignalSummary;
+  config?: {
+    low_confidence_threshold?: number;
+    low_confidence_threshold_mode?: string;
+    frequency_threshold?: number;
+  };
+  overall_conclusion?: string;
+  brand_confidence_overview?: ConfidenceOverview;
+  competitor_confidence_overview?: ConfidenceOverview;
+  brand_low_confidence_patterns?: ConfidencePattern[];
+  competitor_low_confidence_patterns?: ConfidencePattern[];
+  strategic_recommendations?: ConfidenceStrategicRecommendation[];
+  extra_evaluation?: ConfidenceExtraEvaluation;
   matrix_config?: ConfidenceMatrixConfig;
   ecosystem_matrix?: ConfidenceEcosystemMatrix;
   quadrant_overview?: ConfidenceQuadrantOverview[];

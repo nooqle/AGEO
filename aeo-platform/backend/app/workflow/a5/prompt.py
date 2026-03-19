@@ -19,123 +19,70 @@ def _get_a5_report_context_intro(report_type: str) -> str:
 
 
 def _get_a5_core_prompt(report_type: str = "persona") -> str:
-    """A5 system prompt for CORE report sections (Call 1 of 2).
-
-    Generates: executive_summary, key_findings, platform_analysis,
-    competitor_deep_analysis, actionable_recommendations.
-    """
+    """A5 system prompt for the customer-facing report payload."""
     return _get_a5_report_context_intro(report_type) + """You are Specta AI's analytics expert.
-Generate the core report using brand profile, fetch results, metrics, and scenario-level structured data.
+Generate a fact-first A5 report from the provided A4 fetch results and structured evidence.
 
 ## Primary narrative
-- Lead with scenarios, not composite scores.
-- First answer: where the brand is present, where it is missing, who is competing, what the main risks are, and what to optimize next.
-- BWVS can be mentioned only as a background metric, never as the headline conclusion.
-- Every claim must be grounded in fetch_results or scenario-level structured data.
-- Avoid vague statements like 'overall good' or 'performing well'.
-- Do not mention BWVS, overall score, score band, or any composite score in headline, subtitle, content, or executive_summary.
+- The report must answer three core metrics first:
+  1. 品牌提及率
+  2. 内容引用率
+  3. 场景覆盖数
+- Do not lead with composite scores, platform scores, or abstract conclusions.
+- Every statement must be traceable to provided structured facts.
+- If there is not enough evidence, leave the field empty instead of inventing an explanation.
 
-## Scenario-first requirements
-- executive_summary must mention scenario coverage, missing important scenarios, official citation rate, and major competitor pressure.
-- At least 2 key_findings must name concrete scenario labels.
-- platform_analysis must explain which scenarios each platform performs well or poorly in.
-- competitor_deep_analysis must focus on scenario battles instead of average scores.
-- actionable_recommendations must bind each recommendation to a specific scenario_label.
-- If `official_top_titles` or official citation title samples are provided, source-related analysis should use them as concrete evidence.
+## Report sections
+Only produce content for these customer-facing sections:
+1. summary
+2. scenarioCoverage
+3. mentions
+4. sources
 
-## Compatibility-shell requirements
-- `headline` must be a neutral diagnosis title, never a score-based title.
-- `subtitle` must summarize mention rate, official citation rate, effective scenarios, or missing high-value scenarios.
-- `content` / `executive_summary` must follow this order: facts -> risks -> actions.
-- If compatibility `metrics` are produced, prioritize these six cards:
-  1. brand_mention_rate
-  2. official_citation_rate
-  3. platform_coverage_count
-  4. scenario_hit_count
-  5. missing_high_value_scenario_count
-  6. high_risk_scenario_count
-- If a field is missing, use null / empty array / empty string. Never invent positive or negative judgments.
+## Output rules
+- `executive_summary` must follow: facts -> risks -> actions
+- `key_findings` must contain 2-4 factual findings, each grounded in scenario labels, mention counts, citation counts, or source examples
+- `report_v2.summary` should only describe the three core metrics above
+- `report_v2.scenarioCoverage` should summarize where the brand is already present and which scenes remain risky or missing
+- `report_v2.mentions` should summarize mention facts, not abstract sentiment prose
+- `report_v2.sources` should summarize source structure and citation behavior
+- Do not output competitor_battle, risk_section, action_queue, strengths, weaknesses, opportunities, threats, industry_insights, platform_analysis, competitor_deep_analysis, or actionable_recommendations
+- Do not mention BWVS, overall score, score band, or any synthetic scoring headline
 
-## Output JSON (5 sections)
+## Output JSON
 {
-  "executive_summary": "At least 120 Chinese characters. Lead with scenario coverage / missing scenarios / competitor pressure / official citation.",
-  "key_findings": ["Finding 1 with scenario label and number", "Finding 2", "Finding 3"],
-  "platform_analysis": [{
-    "platform": "deepseek",
-    "platform_name": "DeepSeek",
-    "scenario_focus": ["Scenario A", "Scenario B"],
-    "mention_count": 2,
-    "avg_citations": 1.5,
-    "actual_quotes": ["Quoted sample"],
-    "performance_summary": "Explain which scenarios this platform favors",
-    "content_preference": "Preferred content type",
-    "strengths": ["Strong scenario"],
-    "weaknesses": ["Weak or missing scenario"],
-    "optimization_tips": ["Specific suggestion"]
-  }],
-  "competitor_deep_analysis": {
-    "overview": "Summary focused on scenario battles and pressure",
-    "comparison_matrix": [{
-      "competitor": "Competitor Name",
-      "shared_scenarios": 4,
-      "competitor_only_scenarios": 7,
-      "brand_only_scenarios": 1,
-      "top_conflict_scenarios": ["Scenario A"],
-      "advantage_reasons": ["Reason"],
-      "learnings": ["What to learn"]
-    }],
-    "differentiation_strategy": "Differentiation strategy"
-  },
-  "actionable_recommendations": [{
-    "priority": "P0",
-    "scenario_label": "Scenario A",
-    "title": "Recommendation title",
-    "eeat_dimension": "E1",
-    "current_strength": "Current state with evidence",
-    "improvement_area": "Improvement area",
-    "action": "Action starts with a verb",
-    "target": "What result should improve",
-    "related_competitors": ["Competitor A"],
-    "expected_impact": "Expected impact with metric direction",
-    "difficulty": "low/medium/high",
-    "timeline": "time window"
-  }]
+  "executive_summary": "至少 120 字，顺序必须是事实 -> 风险 -> 动作。",
+  "key_findings": [
+    "发现 1：必须包含具体场景、问题数、来源或引用事实。",
+    "发现 2"
+  ],
+  "report_v2": {
+    "summary": {
+      "title": "核心指标",
+      "summary": "一句话概括品牌提及率、内容引用率、场景覆盖数的现状。",
+      "status_summary": "只允许引用事实，不允许抽象口号。"
+    },
+    "scenarioCoverage": {
+      "title": "场景覆盖",
+      "summary": "围绕已覆盖场景、待进入场景、高风险场景的事实总结。"
+    },
+    "mentions": {
+      "title": "提及率分析",
+      "summary": "围绕我方/竞品被提及的事实总结。"
+    },
+    "sources": {
+      "title": "引用来源分析",
+      "summary": "围绕内容引用率、来源分布、官网与第三方来源结构的事实总结。"
+    }
+  }
 }
 
 Output raw JSON only. Start directly with { and do not include Markdown fences or explanations."""
 
 
 def _get_a5_supplementary_prompt(report_type: str = "persona") -> str:
-    """A5 system prompt for SUPPLEMENTARY sections (Call 2 of 2).
-
-    Generates: industry_insights, SWOT, risk_alerts, recommendations, action_plan.
-    """
-    return _get_a5_report_context_intro(report_type) + """You are Specta AI's analytics expert.
-The core report is already generated. Now add supplementary diagnostic sections.
-
-## Supplementary requirements
-- strengths and weaknesses must be tied to concrete scenarios.
-- risk_alerts should prioritize missing important scenarios, competitor substitution, and no-official-citation risks.
-- action_plan must be consistent with the previously identified scenario risks.
-- If you use industry heuristics, label them clearly as industry experience.
-- Supplementary sections must not reintroduce BWVS-first or overall-score-first wording.
-- strengths / weaknesses / risk_alerts / action_plan should use scenario labels and observable evidence, not abstract score descriptions.
-
-## Output JSON
-{
-  "industry_insights": {
-    "background": "Industry context (label as industry experience if needed)",
-    "typical_performance": "Typical performance with source attribution",
-    "trends": [{"trend": "Trend", "source": "actual data / industry experience"}],
-    "opportunities": ["Opportunity"]
-  },
-  "strengths": [{"title": "Strength title", "scenario": "Concrete scenario", "platforms": ["Platforms"], "evidence": "Evidence", "eeat_factor": "E-E-A-T factor"}],
-  "weaknesses": [{"title": "Weakness title", "scenario": "Concrete scenario", "platforms": ["Platforms"], "evidence": "Evidence", "improvement_hint": "Improvement hint"}],
-  "opportunities": ["Opportunity 1", "Opportunity 2"],
-  "threats": ["Threat 1", "Threat 2"],
-  "risk_alerts": [{"level": "high/medium/low", "title": "Risk title", "scenario_label": "Concrete scenario", "description": "Description", "trigger_condition": "Trigger", "mitigation": "Mitigation"}],
-  "action_plan": {"short_term": ["Action"], "medium_term": ["Action"], "long_term": ["Action"]}
-}
+    """Deprecated supplementary prompt kept for compatibility."""
+    return _get_a5_report_context_intro(report_type) + """Return an empty JSON object.
 
 Output raw JSON only. Start directly with { and do not include Markdown fences or explanations."""
 
@@ -158,9 +105,6 @@ def _build_a5_user_content(
     baseline_report: dict | None = None,
     summary_metrics: dict | None = None,
     scenario_matrix: list | None = None,
-    competitor_battles: list | None = None,
-    risk_map: list | None = None,
-    action_queue: list | None = None,
     source_overview: dict | None = None,
     mention_sentiment_analysis: dict | None = None,
 ) -> str:
@@ -200,9 +144,8 @@ def _build_a5_user_content(
     sections.append(
         f"## 核心指标\n"
         f"- 提及率: {metrics.get('mention_rate', 0):.2%}\n"
-        f"- 官网引用率: {(summary_metrics or {}).get('official_citation_rate', 0):.2%}\n"
-        f"- 有效场景数: {(summary_metrics or {}).get('scenario_hit_count', 0)}/{(summary_metrics or {}).get('scenario_total', 0)}\n"
-        f"- 缺席高价值场景数: {(summary_metrics or {}).get('missing_high_value_scenario_count', 0)}\n"
+        f"- 内容引用率: {(summary_metrics or {}).get('content_citation_rate', 0):.2%}\n"
+        f"- 场景覆盖数: {(summary_metrics or {}).get('scenario_hit_count', 0)}/{(summary_metrics or {}).get('scenario_total', 0)}\n"
         f"- 总问题数: {metrics.get('total_questions', 0)}\n"
         f"- 总提及数: {metrics.get('total_mentions', 0)}\n\n"
         f"### 各平台详细表现\n{platform_table}\n\n"
@@ -212,11 +155,8 @@ def _build_a5_user_content(
         f"负面: {sentiment_dist.get('negative', 0)}"
     )
 
-    if summary_metrics or scenario_matrix or competitor_battles or risk_map or action_queue or source_overview:
+    if summary_metrics or scenario_matrix or source_overview:
         scenario_rows = list(scenario_matrix or [])
-        battle_rows = list(competitor_battles or [])
-        risk_rows = list(risk_map or [])
-        action_rows = list(action_queue or [])
         source_summary = source_overview or {}
 
         top_missing = [
@@ -230,23 +170,20 @@ def _build_a5_user_content(
 
         sections.append(
             "## Scenario-first structured diagnostics\n"
-            "Use this section as the primary evidence base. Focus on scenarios, competitor battles, risks, and actions instead of composite scores.\n\n"
+            "Use this section as the primary evidence base. Focus on scenarios, mention facts, and source facts instead of composite scores.\n\n"
             + json.dumps({
                 "summary_metrics": summary_metrics or {},
                 "source_overview": source_summary,
                 "scenario_matrix_sample": scenario_rows[:12],
                 "top_missing_scenarios": top_missing,
                 "top_contested_scenarios": top_contested,
-                "competitor_battles": battle_rows[:8],
-                "risk_map": risk_rows[:10],
-                "action_queue": action_rows[:10],
             }, ensure_ascii=False, indent=2)
         )
 
         sections.append(
             "## Compatibility field rules\n"
             "- headline must be a diagnosis title, never a score headline.\n"
-            "- subtitle must summarize mention rate / official citation / effective scenarios / missing scenarios.\n"
+            "- subtitle must summarize mention rate / content citation rate / scenario coverage.\n"
             "- content and executive_summary must use facts -> risks -> actions.\n"
             "- Never write BWVS, overall score, score_band, 综合分, 品牌AI可见度指数 in headline/subtitle/content/executive_summary.\n"
             "- If official_top_titles exists, treat it as concrete evidence for official-page title samples used by AI citations.\n"
@@ -335,7 +272,7 @@ def _build_a5_user_content(
     # Inject baseline context for persona mode comparison
     if analysis_mode == "persona" and baseline_metrics:
         baseline_mention = baseline_metrics.get("mention_rate", 0)
-        baseline_official = (baseline_metrics.get("summary_metrics", {}) or {}).get("official_citation_rate", 0)
+        baseline_content_citation = (baseline_metrics.get("summary_metrics", {}) or {}).get("content_citation_rate", 0)
         baseline_findings = ""
         if baseline_report:
             findings = baseline_report.get("key_findings", [])[:3]
@@ -344,14 +281,14 @@ def _build_a5_user_content(
         sections.append(
             f"## 基线报告参考数据\n"
             f"- 基线提及率: {baseline_mention:.1%}\n"
-            f"- 基线官网引用率: {baseline_official:.1%}\n"
+            f"- 基线内容引用率: {baseline_content_citation:.1%}\n"
             f"- 基线核心发现:\n{baseline_findings}\n\n"
             f"请在场景报告中对比基线数据，说明该场景表现与行业基线的差异。"
-            f"重点比较场景覆盖、官网引用和竞品争夺，不要输出综合分数对比。"
+            f"重点比较场景覆盖、内容引用和竞品提及事实，不要输出综合分数对比。"
         )
 
     sections.append(
-        "\nPlease generate a scenario-first diagnostic report. Prioritize scenario coverage, competitor battles, risks, official citation performance, and next actions."
+        "\nPlease generate a fact-first A5 report. Prioritize brand mention rate, content citation rate, scenario coverage, mention facts, and source structure."
     )
 
     return "\n\n".join(sections)

@@ -1,14 +1,12 @@
 import type {
-  ConfidenceAnalysisBlock,
   ConfidenceSignalDimensionScore,
-  ConfidenceEcosystemMatrix,
-  ConfidenceGeneralKnowledgeInsight,
-  ConfidenceQuadrant,
-  ConfidenceQuadrantOverview,
-  ConfidenceRepairAction,
+  ConfidenceExtraEvaluation,
   ConfidenceSignalFinding,
   ConfidenceSignalItem,
+  ConfidenceOverview,
+  ConfidencePattern,
   ConfidenceSignalRecommendation,
+  ConfidenceStrategicRecommendation,
   ConfidenceSignalSummary,
   FetchCitation,
   FetchPlatformResult,
@@ -31,18 +29,15 @@ export type FetchExportViewModel = {
 export type ConfidenceExportViewModel = {
   title: string;
   subtitle?: string;
-  diagnosis?: string;
   summary?: ConfidenceSignalSummary;
+  overallConclusion?: string;
   findings: ConfidenceSignalFinding[];
-  quadrantOverview: ConfidenceQuadrantOverview[];
-  analysisBlocks: ConfidenceAnalysisBlock[];
-  repairActions: ConfidenceRepairAction[];
-  generalKnowledgeInsight?: ConfidenceGeneralKnowledgeInsight;
-  matrixConfig?: {
-    aice_threshold?: number;
-    frequency_threshold?: number;
-  };
-  ecosystemMatrix?: ConfidenceEcosystemMatrix;
+  brandConfidenceOverview?: ConfidenceOverview;
+  competitorConfidenceOverview?: ConfidenceOverview;
+  brandLowConfidencePatterns: ConfidencePattern[];
+  competitorLowConfidencePatterns: ConfidencePattern[];
+  strategicRecommendations: ConfidenceStrategicRecommendation[];
+  extraEvaluation?: ConfidenceExtraEvaluation;
   items: ConfidenceSignalItem[];
 };
 
@@ -242,20 +237,6 @@ function normalizeConfidenceFinding(record: UnknownRecord): ConfidenceSignalFind
   return { title, description };
 }
 
-function normalizeConfidenceQuadrant(record: UnknownRecord): ConfidenceQuadrantOverview | null {
-  const quadrant = readString(record, 'quadrant', 'key') as ConfidenceQuadrant | undefined;
-  if (!quadrant) {
-    return null;
-  }
-  return {
-    quadrant,
-    quadrant_label: readString(record, 'quadrant_label', 'quadrantLabel', 'label'),
-    description: readString(record, 'description', 'summary'),
-    strategy: readString(record, 'strategy', 'action'),
-    count: readNumber(record, 'count', 'item_count', 'itemCount'),
-  };
-}
-
 function normalizeConfidenceDimensionScore(record: UnknownRecord) {
   const label = readString(record, 'label', 'name', 'key');
   if (!label) {
@@ -361,68 +342,6 @@ function normalizeConfidenceItem(record: UnknownRecord, index: number): Confiden
   };
 }
 
-function normalizeConfidenceBlock(record: UnknownRecord, index: number): ConfidenceAnalysisBlock | null {
-  const key = readString(record, 'key', 'id') || `block_${index + 1}`;
-  const items = toRecordArray(readField(record, 'items'))
-    .map((item, itemIndex) => normalizeConfidenceItem(item, itemIndex))
-    .filter((item): item is ConfidenceSignalItem => Boolean(item));
-
-  if (!key && items.length === 0) {
-    return null;
-  }
-
-  return {
-    key,
-    title: readString(record, 'title', 'label'),
-    description: readString(record, 'description', 'summary'),
-    reason_label: readString(record, 'reason_label', 'reasonLabel'),
-    action_label: readString(record, 'action_label', 'actionLabel'),
-    item_count: readNumber(record, 'item_count', 'itemCount') ?? items.length,
-    items,
-  };
-}
-
-function normalizeRepairAction(record: UnknownRecord): ConfidenceRepairAction | null {
-  const title = readString(record, 'title', 'action');
-  if (!title) {
-    return null;
-  }
-  return {
-    priority: readString(record, 'priority'),
-    title,
-    summary: readString(record, 'summary', 'description', 'reason'),
-    count: readNumber(record, 'count', 'item_count', 'itemCount'),
-    related_item_ids: readStringList(record, 'related_item_ids', 'relatedItemIds'),
-  };
-}
-
-function normalizeGeneralKnowledge(record: UnknownRecord | undefined): ConfidenceGeneralKnowledgeInsight | undefined {
-  if (!record) {
-    return undefined;
-  }
-
-  const topFrequencyItems = toRecordArray(readField(record, 'top_frequency_items', 'topFrequencyItems'))
-    .map((item, index) => normalizeConfidenceItem(item, index))
-    .filter((item): item is ConfidenceSignalItem => Boolean(item));
-  const topScoreItems = toRecordArray(readField(record, 'top_score_items', 'topScoreItems'))
-    .map((item, index) => normalizeConfidenceItem(item, index))
-    .filter((item): item is ConfidenceSignalItem => Boolean(item));
-  const representativeItems = toRecordArray(readField(record, 'representative_items', 'representativeItems'))
-    .map((item, index) => normalizeConfidenceItem(item, index))
-    .filter((item): item is ConfidenceSignalItem => Boolean(item));
-
-  if (!readString(record, 'summary') && topFrequencyItems.length === 0 && topScoreItems.length === 0 && representativeItems.length === 0) {
-    return undefined;
-  }
-
-  return {
-    summary: readString(record, 'summary'),
-    top_frequency_items: topFrequencyItems,
-    top_score_items: topScoreItems,
-    representative_items: representativeItems,
-  };
-}
-
 function normalizeConfidenceSummary(record: UnknownRecord | undefined): ConfidenceSignalSummary | undefined {
   if (!record) {
     return undefined;
@@ -446,7 +365,95 @@ function normalizeConfidenceSummary(record: UnknownRecord | undefined): Confiden
   };
 }
 
-function extractConfidenceItems(data: UnknownRecord, blocks: ConfidenceAnalysisBlock[]): ConfidenceSignalItem[] {
+function normalizeConfidenceOverview(record: UnknownRecord | undefined): ConfidenceOverview | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  const representativeSources = toRecordArray(
+    readField(record, 'representative_sources', 'representativeSources')
+  ).map((item) => ({
+    item_id: readString(item, 'item_id', 'itemId', 'id'),
+    label: readString(item, 'label', 'title'),
+    domain: readString(item, 'domain'),
+    url: readString(item, 'url'),
+    score: readNumber(item, 'score', 'aice_score', 'aiceScore'),
+    frequency: readNumber(item, 'frequency', 'occurrences'),
+  }));
+
+  if (
+    readNumber(record, 'average_confidence', 'averageConfidence') === undefined &&
+    readNumber(record, 'weighted_average_confidence', 'weightedAverageConfidence') === undefined &&
+    readNumber(record, 'source_count', 'sourceCount') === undefined &&
+    representativeSources.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    entity_label: readString(record, 'entity_label', 'entityLabel'),
+    average_confidence: readNumber(record, 'average_confidence', 'averageConfidence'),
+    weighted_average_confidence: readNumber(
+      record,
+      'weighted_average_confidence',
+      'weightedAverageConfidence'
+    ),
+    source_count: readNumber(record, 'source_count', 'sourceCount'),
+    low_confidence_source_count: readNumber(
+      record,
+      'low_confidence_source_count',
+      'lowConfidenceSourceCount'
+    ),
+    representative_sources: representativeSources,
+  };
+}
+
+function normalizeConfidencePattern(record: UnknownRecord): ConfidencePattern | null {
+  const patternLabel = readString(record, 'pattern_label', 'patternLabel', 'title', 'label');
+  if (!patternLabel) {
+    return null;
+  }
+  return {
+    pattern_key: readString(record, 'pattern_key', 'patternKey', 'key'),
+    pattern_label: patternLabel,
+    sample_count: readNumber(record, 'sample_count', 'sampleCount', 'count'),
+    average_confidence: readNumber(record, 'average_confidence', 'averageConfidence'),
+    weighted_average_confidence: readNumber(
+      record,
+      'weighted_average_confidence',
+      'weightedAverageConfidence'
+    ),
+    affected_dimensions: readStringList(
+      record,
+      'affected_dimensions',
+      'affectedDimensions',
+      'dimensions'
+    ),
+    evidence_examples: toRecordArray(readField(record, 'evidence_examples', 'evidenceExamples')).map(
+      (item) => ({
+        label: readString(item, 'label', 'title'),
+        domain: readString(item, 'domain'),
+        score: readNumber(item, 'score', 'aice_score', 'aiceScore'),
+        evidence: readString(item, 'evidence', 'summary', 'reason'),
+      })
+    ),
+    suggestion: readString(record, 'suggestion', 'action', 'recommendation'),
+  };
+}
+
+function normalizeStrategicRecommendation(
+  record: UnknownRecord
+): ConfidenceStrategicRecommendation | null {
+  const title = readString(record, 'title', 'label');
+  const action = readString(record, 'action');
+  const reason = readString(record, 'reason', 'summary', 'description');
+  if (!title && !action && !reason) {
+    return null;
+  }
+  return { title, action, reason };
+}
+
+function extractConfidenceItems(data: UnknownRecord): ConfidenceSignalItem[] {
   const autoItems = toRecordArray(readField(data, 'auto_items', 'autoItems'))
     .map((item, index) => normalizeConfidenceItem(item, index))
     .filter((item): item is ConfidenceSignalItem => Boolean(item));
@@ -454,11 +461,7 @@ function extractConfidenceItems(data: UnknownRecord, blocks: ConfidenceAnalysisB
     .map((item, index) => normalizeConfidenceItem(item, index + autoItems.length))
     .filter((item): item is ConfidenceSignalItem => Boolean(item));
 
-  const blockItems = blocks.flatMap((block) => block.items || []);
-  const merged = [...autoItems, ...manualItems];
-  const effectiveItems = merged.length > 0 ? merged : blockItems;
-
-  return uniqueByKey(effectiveItems, (item) => item.item_id || item.label);
+  return uniqueByKey([...autoItems, ...manualItems], (item) => item.item_id || item.label);
 }
 
 export function isConfidenceCanvasReport(content: ReportCanvasContent): boolean {
@@ -480,57 +483,62 @@ export function isConfidenceCanvasReport(content: ReportCanvasContent): boolean 
 
 export function buildConfidenceExportViewModel(content: ReportCanvasContent): ConfidenceExportViewModel {
   const data = content.data as UnknownRecord;
+  const extraEvaluationRecord = isRecord(readField(data, 'extra_evaluation', 'extraEvaluation'))
+    ? (readField(data, 'extra_evaluation', 'extraEvaluation') as UnknownRecord)
+    : undefined;
   const findings = toRecordArray(readField(data, 'aggregate_findings', 'aggregateFindings', 'findings', 'key_findings'))
     .map(normalizeConfidenceFinding)
     .filter((item): item is ConfidenceSignalFinding => Boolean(item));
-  const quadrantOverview = toRecordArray(readField(data, 'quadrant_overview', 'quadrantOverview', 'quadrants'))
-    .map(normalizeConfidenceQuadrant)
-    .filter((item): item is ConfidenceQuadrantOverview => Boolean(item));
-  const analysisBlocks = toRecordArray(readField(data, 'analysis_blocks', 'analysisBlocks', 'blocks'))
-    .map(normalizeConfidenceBlock)
-    .filter((item): item is ConfidenceAnalysisBlock => Boolean(item));
-  const repairActions = toRecordArray(readField(data, 'repair_actions', 'repairActions', 'actions'))
-    .map(normalizeRepairAction)
-    .filter((item): item is ConfidenceRepairAction => Boolean(item));
-  const generalKnowledgeInsight = normalizeGeneralKnowledge(
-    isRecord(readField(data, 'general_knowledge_insight', 'generalKnowledgeInsight'))
-      ? (readField(data, 'general_knowledge_insight', 'generalKnowledgeInsight') as UnknownRecord)
-      : undefined
-  );
   const summary = normalizeConfidenceSummary(
     isRecord(readField(data, 'summary')) ? (readField(data, 'summary') as UnknownRecord) : undefined
   );
-  const matrixConfigRecord = isRecord(readField(data, 'matrix_config', 'matrixConfig'))
-    ? (readField(data, 'matrix_config', 'matrixConfig') as UnknownRecord)
-    : undefined;
-  const ecosystemMatrixRecord = isRecord(readField(data, 'ecosystem_matrix', 'ecosystemMatrix'))
-    ? (readField(data, 'ecosystem_matrix', 'ecosystemMatrix') as UnknownRecord)
-    : undefined;
-  const items = extractConfidenceItems(data, analysisBlocks);
+  const brandConfidenceOverview = normalizeConfidenceOverview(
+    isRecord(readField(data, 'brand_confidence_overview', 'brandConfidenceOverview'))
+      ? (readField(data, 'brand_confidence_overview', 'brandConfidenceOverview') as UnknownRecord)
+      : undefined
+  );
+  const competitorConfidenceOverview = normalizeConfidenceOverview(
+    isRecord(readField(data, 'competitor_confidence_overview', 'competitorConfidenceOverview'))
+      ? (readField(data, 'competitor_confidence_overview', 'competitorConfidenceOverview') as UnknownRecord)
+      : undefined
+  );
+  const brandLowConfidencePatterns = toRecordArray(
+    readField(data, 'brand_low_confidence_patterns', 'brandLowConfidencePatterns')
+  )
+    .map(normalizeConfidencePattern)
+    .filter((item): item is ConfidencePattern => Boolean(item));
+  const competitorLowConfidencePatterns = toRecordArray(
+    readField(data, 'competitor_low_confidence_patterns', 'competitorLowConfidencePatterns')
+  )
+    .map(normalizeConfidencePattern)
+    .filter((item): item is ConfidencePattern => Boolean(item));
+  const strategicRecommendations = toRecordArray(
+    readField(data, 'strategic_recommendations', 'strategicRecommendations')
+  )
+    .map(normalizeStrategicRecommendation)
+    .filter((item): item is ConfidenceStrategicRecommendation => Boolean(item));
+  const items = extractConfidenceItems(data);
+  const extraEvaluationItems = toRecordArray(
+    readField(extraEvaluationRecord, 'items') ?? readField(data, 'manual_items', 'manualItems')
+  )
+    .map((item, index) => normalizeConfidenceItem(item, index))
+    .filter((item): item is ConfidenceSignalItem => Boolean(item));
 
   return {
     title: readString(data, 'headline') || content.title || '置信度报告',
     subtitle: readString(data, 'subtitle'),
-    diagnosis: readString(data, 'diagnosis') || readString(ecosystemMatrixRecord, 'diagnosis'),
     summary,
+    overallConclusion: readString(data, 'overall_conclusion', 'overallConclusion'),
     findings,
-    quadrantOverview,
-    analysisBlocks,
-    repairActions,
-    generalKnowledgeInsight,
-    matrixConfig: matrixConfigRecord
+    brandConfidenceOverview,
+    competitorConfidenceOverview,
+    brandLowConfidencePatterns,
+    competitorLowConfidencePatterns,
+    strategicRecommendations,
+    extraEvaluation: extraEvaluationItems.length > 0
       ? {
-          aice_threshold: readNumber(matrixConfigRecord, 'aice_threshold', 'aiceThreshold'),
-          frequency_threshold: readNumber(matrixConfigRecord, 'frequency_threshold', 'frequencyThreshold'),
-        }
-      : undefined,
-    ecosystemMatrix: ecosystemMatrixRecord
-      ? {
-          title: readString(ecosystemMatrixRecord, 'title'),
-          x_axis_label: readString(ecosystemMatrixRecord, 'x_axis_label', 'xAxisLabel'),
-          y_axis_label: readString(ecosystemMatrixRecord, 'y_axis_label', 'yAxisLabel'),
-          total_points: readNumber(ecosystemMatrixRecord, 'total_points', 'totalPoints'),
-          diagnosis: readString(ecosystemMatrixRecord, 'diagnosis'),
+          count: readNumber(extraEvaluationRecord, 'count') ?? extraEvaluationItems.length,
+          items: extraEvaluationItems,
         }
       : undefined,
     items,

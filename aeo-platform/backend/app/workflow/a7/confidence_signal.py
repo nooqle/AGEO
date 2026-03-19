@@ -7,7 +7,16 @@ already applies a structured AICE 9C scoring model with:
 - per-dimension score / max score / confidence / reasoning
 - conservative hard-deduction handling for C6 / C9a / C9b
 - overall confidence derived from evidence sufficiency
-- actionable recommendations for low-scoring dimensions
+
+Output guardrails for A7 report:
+
+- only describe facts that can be traced back to score dimensions, citation data,
+  DOM/text evidence, or deterministic rules
+- do not fabricate causes, actions, or labels that lack evidence
+- do not emit filler summaries, slogan-like headings, or generic advice with no
+  factual anchor
+- if a source lacks enough evidence for a strong conclusion, say that directly
+  instead of inventing confidence reasons
 """
 
 from __future__ import annotations
@@ -53,7 +62,6 @@ DIMENSION_PLAIN_LABELS = {
     "c5": "主题表达",
     "c7": "场景匹配度",
 }
-TECHNICAL_DIMENSION_KEYS = {"c6", "c9a", "c9b"}
 QUADRANT_META: dict[str, dict[str, str]] = {
     "q1_anchor": {
         "label": "定海神针",
@@ -76,33 +84,6 @@ QUADRANT_META: dict[str, dict[str, str]] = {
         "strategy": "保持定力，确保持续可用并等待提示词触发。",
     },
 }
-ANALYSIS_GROUP_META: dict[str, dict[str, str]] = {
-    "brand_q1": {
-        "title": "我方阵地：坚如磐石（善因固化）",
-        "description": "第一象限中的我方语料，是品牌在 AI 语境中的稳定根基，应提炼模板与生产规范。",
-        "reason_label": "高置信度归因分析",
-        "action_label": "修我/行动指南",
-    },
-    "competitor_q1": {
-        "title": "竞方阵地：坚如磐石（见贤思齐）",
-        "description": "第一象限中的竞品语料，说明对方已经形成稳定投喂，应客观拆解并对标补齐。",
-        "reason_label": "高置信度归因分析",
-        "action_label": "修我/行动指南",
-    },
-    "brand_q2": {
-        "title": "我方阵地：被引用但置信度不高（发露修缮）",
-        "description": "第二象限中的我方语料虽然已被引用，但底层脆弱，是当前最优先的修缮对象。",
-        "reason_label": "低置信度归因分析",
-        "action_label": "修我/行动指南",
-    },
-    "competitor_q2": {
-        "title": "竞方阵地：被引用但置信度不高（法施填补）",
-        "description": "第二象限中的竞品语料通常意味着行业供给不足，可通过更高质量内容实现替代。",
-        "reason_label": "低置信度归因分析",
-        "action_label": "修我/行动指南",
-    },
-}
-
 OFFICIAL_TLDS = (".gov", ".edu", ".org")
 EVERGREEN_HINTS = (
     "guide",
@@ -711,114 +692,6 @@ def _score_text_intent_match(text: str) -> dict[str, Any]:
     return _make_dimension("c7", 3.0, 0.58, "文本偏短，意图匹配证据有限。")
 
 
-def _summarize_top_signals(dimensions: list[dict[str, Any]]) -> list[str]:
-    ranked = sorted(
-        dimensions,
-        key=lambda item: (
-            float(item.get("score", 0.0)) / max(float(item.get("max_score", 1.0)), 1.0),
-            float(item.get("confidence", 0.0)),
-        ),
-        reverse=True,
-    )
-    signals = []
-    for item in ranked:
-        ratio = float(item.get("score", 0.0)) / max(float(item.get("max_score", 1.0)), 1.0)
-        if ratio < 0.74:
-            continue
-        label = str(item.get("label", "") or "").split(":", 1)[0]
-        reasoning = str(item.get("reasoning", "") or "")
-        summary = reasoning.split("。", 1)[0].strip() or "信号较强"
-        signals.append(f"{label} 较强: {summary}")
-        if len(signals) >= 3:
-            break
-    if not signals:
-        return ["整体证据仍偏有限", "建议优先查看低分维度并补强来源证据"]
-    return signals
-
-
-def _build_recommendations(
-    *,
-    input_type: str,
-    dimensions: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    recommendations: list[dict[str, Any]] = []
-
-    def add(title: str, action: str, reason: str) -> None:
-        recommendations.append(
-            {
-                "title": title,
-                "action": action,
-                "reason": reason,
-            }
-        )
-
-    by_key = {str(item["key"]): item for item in dimensions}
-
-    if float(by_key["c9a"]["score"]) <= 6:
-        if input_type == "url":
-            add(
-                "补充语义结构标签",
-                "为页面补齐唯一 H1，并明确使用 main/article/section 等语义标签组织正文。",
-                "C9a 偏低会让页面结构更难被模型稳定理解。",
-            )
-        else:
-            add(
-                "增加文本层次",
-                "把内容拆成小标题 + 段落 + 列表，避免整段堆叠。",
-                "C9a 偏低说明结构层次不够清晰。",
-            )
-
-    if float(by_key["c9b"]["score"]) <= 6:
-        if input_type == "url":
-            add(
-                "补充 Schema.org 标记",
-                "在页面 head 中增加 JSON-LD，例如 Organization / Article / FAQPage 等结构化数据。",
-                "C9b 偏低会削弱模型和搜索系统对页面实体与主题的识别效率。",
-            )
-        else:
-            add(
-                "补充来源元信息",
-                "在文本中明确作者、机构、发布时间和原始来源链接。",
-                "纯文本没有网页 Schema，需要用显式元信息弥补结构化缺口。",
-            )
-
-    if float(by_key["c8"]["score"]) <= 9:
-        add(
-            "补强时效信息",
-            "补充明确发布日期、版本号或最近更新时间；若数据过旧，优先替换为最近 1-2 年的数据。",
-            "C8 偏低会直接影响模型是否采信当前表述。",
-        )
-
-    if float(by_key["c4"]["score"]) <= 6.5:
-        add(
-            "收敛宣传表述",
-            "删除“唯一 / 最强 / 第一 / 100%”等绝对化词汇，改成可归因、可验证的中性描述。",
-            "C4 偏低说明内容宣传性过强，会降低 AI 采信稳定性。",
-        )
-
-    if float(by_key["c3"]["score"]) <= 3.2:
-        add(
-            "增加可核查证据",
-            "补充官方公告、研究报告、财报、标准文档或 DOI 链接，并保留关键数字来源。",
-            "C3 偏低意味着外部验证抓手不足。",
-        )
-
-    if float(by_key["c1"]["score"]) <= 6:
-        add(
-            "强化来源主体",
-            "优先使用官网、政府、教育机构或正式发布渠道作为主链接，并在正文中显式标注来源名称。",
-            "C1 偏低会直接拉低整体可信度。",
-        )
-
-    return recommendations[:3] or [
-        {
-            "title": "继续完善结构化证据",
-            "action": "保留当前中性表达，同时补充来源、日期和结构化信息。",
-            "reason": "整体分数已具备基础采信能力，但仍可通过更强证据链提升稳定性。",
-        }
-    ]
-
-
 def _weighted_confidence(dimensions: list[dict[str, Any]]) -> float:
     total_weight = sum(float(item["max_score"]) for item in dimensions) or 1.0
     weighted = sum(
@@ -841,12 +714,7 @@ def _assemble_scored_item(
         "signal_level": _classify_signal_level(overall_score),
         "overall_score": overall_score,
         "overall_confidence": overall_confidence,
-        "top_signals": _summarize_top_signals(dimensions),
         "dimension_scores": dimensions,
-        "recommendations": _build_recommendations(
-            input_type=str(base_item.get("input_type", "url")),
-            dimensions=dimensions,
-        ),
         "status": "ready",
         "error_message": "",
         "created_at": created_at or _now_iso(),
@@ -951,64 +819,6 @@ def _compute_aice_threshold(items: list[dict[str, Any]]) -> float:
     return round(max(68.0, min(80.0, percentile_60)), 1)
 
 
-def _build_threshold_diagnostics(
-    items: list[dict[str, Any]],
-    *,
-    aice_threshold: float,
-) -> dict[str, Any]:
-    scores = [
-        float(item.get("overall_score", item.get("aice_score", 0.0)) or 0.0)
-        for item in items
-    ]
-    if not scores:
-        return {
-            "current_threshold": round(float(aice_threshold), 1),
-            "fit": "balanced",
-            "note": "当前样本不足，先沿用默认高分阈值。",
-        }
-
-    average_score = round(sum(scores) / len(scores), 1)
-    median_score = round(_compute_percentile(scores, 0.5), 1)
-    percentile_75 = round(_compute_percentile(scores, 0.75), 1)
-    suggested_threshold = _compute_aice_threshold(items)
-    high_score_share = round(
-        len([score for score in scores if score >= float(aice_threshold)]) / len(scores),
-        2,
-    )
-
-    if high_score_share < 0.18:
-        fit = "strict"
-        note = (
-            f"当前平均分 {average_score}，中位数 {median_score}。"
-            f"把高分线放在 {round(float(aice_threshold), 1)} 分会偏严，高分样本占比只有 {round(high_score_share * 100)}%，"
-            f"更适合把展示参考线放在 {suggested_threshold} 分附近。"
-        )
-    elif high_score_share > 0.48:
-        fit = "loose"
-        note = (
-            f"当前平均分 {average_score}，中位数 {median_score}。"
-            f"{round(float(aice_threshold), 1)} 分作为高分线偏松，高分样本占比已到 {round(high_score_share * 100)}%，"
-            f"可考虑上调到 {max(suggested_threshold, percentile_75)} 分附近。"
-        )
-    else:
-        fit = "balanced"
-        note = (
-            f"当前平均分 {average_score}，中位数 {median_score}。"
-            f"{round(float(aice_threshold), 1)} 分作为高分线基本可用，高分样本占比约 {round(high_score_share * 100)}%。"
-        )
-
-    return {
-        "current_threshold": round(float(aice_threshold), 1),
-        "average_score": average_score,
-        "median_score": median_score,
-        "percentile_75_score": percentile_75,
-        "suggested_threshold": suggested_threshold,
-        "high_score_share": high_score_share,
-        "fit": fit,
-        "note": note,
-    }
-
-
 def _classify_entity(
     item: dict[str, Any],
     *,
@@ -1075,230 +885,6 @@ def _extract_item_years(item: dict[str, Any]) -> list[int]:
         ]
     )
     return _extract_years(evidence_text)
-
-
-def _supports_technical_analysis(item: dict[str, Any], *, entity: str, quadrant: str) -> bool:
-    if str(item.get("input_type", "url")) == "text":
-        return False
-    if entity == "brand":
-        return bool(item.get("is_official"))
-    if entity == "competitor" and quadrant == "q2_false_prosperity":
-        return False
-    return quadrant in {"q1_anchor", "q4_sleeping_asset"}
-
-
-def _select_topic_focus(item: dict[str, Any]) -> str:
-    candidates: list[str] = []
-    candidates.extend(str(question).strip() for question in item.get("question_samples", []) or [])
-    candidates.extend(
-        [
-            str(item.get("title", "") or "").strip(),
-            str(item.get("label", "") or "").strip(),
-        ]
-    )
-    for candidate in candidates:
-        if not candidate:
-            continue
-        parts = re.split(r"[|｜\-—:：，,。！？?、/()（）]", candidate)
-        for part in parts:
-            cleaned = _collapse_text(part)
-            if 4 <= len(cleaned) <= 24 and not cleaned.lower().endswith((".com", ".cn", ".net")):
-                return cleaned
-    fallback = _collapse_text(str(item.get("title", "") or item.get("label", "") or "该主题"))
-    return fallback[:24] if fallback else "该主题"
-
-
-def _list_dimension_names(dimensions: list[dict[str, Any]]) -> str:
-    names = [_dimension_plain_label(dimension) for dimension in dimensions]
-    if not names:
-        return "内容质量"
-    if len(names) == 1:
-        return names[0]
-    if len(names) == 2:
-        return f"{names[0]}和{names[1]}"
-    return f"{'、'.join(names[:-1])}和{names[-1]}"
-
-
-def _describe_dimension(item: dict[str, Any], dimension: dict[str, Any]) -> str:
-    key = _dimension_key(dimension)
-    years = _extract_item_years(item)
-    latest_year = max(years) if years else None
-    reasoning = str(dimension.get("reasoning", "") or "").strip()
-    ratio = _dimension_ratio(dimension)
-    positive = ratio >= 0.82
-    domain = str(item.get("domain", "") or "")
-    title = str(item.get("title", "") or item.get("label", "") or "")
-    has_question_match = bool(item.get("question_samples"))
-    if key == "c8":
-        if latest_year is not None:
-            if positive:
-                return f"页面中出现 {latest_year} 年信息，更新较新。"
-            if _now_year() - latest_year <= 3:
-                return f"目前能看到的时间线停留在 {latest_year} 年，需确认是否已有更新版本。"
-            return f"目前主要停留在 {latest_year} 年信息，时效性偏弱。"
-        if positive:
-            return "虽然没有明确日期，但内容更像常青说明型资料。"
-        return "没有看到明确发布日期或年份线索，时效判断偏弱。"
-    if key == "c4":
-        if positive:
-            return "标题和来源表述较克制，宣传痕迹较轻。"
-        return "标题里带有较强营销或绝对化表述，客观度偏弱。"
-    if key == "c3":
-        if positive:
-            return "页面能看到报告、数据或原始来源线索，外部回查相对容易。"
-        return "缺少数据出处、原始链接或公告依据，可核查性不足。"
-    if key == "c1":
-        if positive and domain:
-            return f"来源主体明确，{domain} 的站点身份比较清楚。"
-        if positive:
-            return "来源主体明确，站点公信力较强。"
-        return "来源主体公信力一般，缺少更强的官方或机构背书。"
-    if key == "c5":
-        if positive:
-            return "标题可以直接说明主题，AI 抽取重点的成本较低。"
-        return "标题主题不够集中，AI 不容易一次抓到核心结论。"
-    if key == "c7":
-        if positive and has_question_match:
-            return "标题和被引用问题贴合度较高，容易被模型命中。"
-        if positive:
-            return "内容主题与大众查询场景匹配度较高。"
-        return "内容与用户提问场景的贴合度一般，命中稳定性有限。"
-    if key == "c2":
-        if positive:
-            return "目前没有看到明显自相矛盾的信号。"
-        return "内容主观性偏强，还需要更多外部证据交叉验证。"
-    if key == "c6":
-        http_status = item.get("http_status")
-        if item.get("crawl_readable") is False and http_status is not None:
-            return f"页面抓取失败（HTTP {http_status}），AI 难以稳定读取。"
-        if positive:
-            return "页面可以正常抓取，链接访问稳定。"
-        return "页面访问或抓取稳定性一般，影响模型稳定读取。"
-    if key == "c9a":
-        if positive:
-            return "页面标题层级和正文结构完整，重点位置清楚。"
-        if item.get("crawl_readable"):
-            return "页面结构线索不完整，重点信息容易散在正文里。"
-        return "暂时拿不到足够的页面结构证据，重点定位能力偏弱。"
-    if key == "c9b":
-        schema_types = item.get("schema_types", []) or []
-        if positive and schema_types:
-            return f"页面提供了结构化信息（{', '.join(schema_types[:2])}），主题和实体更容易被识别。"
-        if positive:
-            return "页面具备较明确的结构化元信息。"
-        return "没有看到足够的结构化信息或明确元数据。"
-    clean_reasoning = reasoning.split("。", 1)[0].strip() or "当前是关键观察维度。"
-    clean_reasoning = re.sub(r"\bC\d+[ab]?\b[:：]?\s*", "", clean_reasoning, flags=re.IGNORECASE)
-    return clean_reasoning
-
-
-def _pick_reason_dimensions(
-    item: dict[str, Any],
-    *,
-    entity: str,
-    quadrant: str,
-) -> list[dict[str, Any]]:
-    dimensions = list(item.get("dimension_scores", []) or [])
-    if not dimensions:
-        return []
-
-    supports_technical = _supports_technical_analysis(item, entity=entity, quadrant=quadrant)
-    working_dimensions = (
-        dimensions
-        if supports_technical
-        else [dimension for dimension in dimensions if _dimension_key(dimension) not in TECHNICAL_DIMENSION_KEYS]
-    )
-    if not working_dimensions:
-        working_dimensions = dimensions
-
-    if quadrant in {"q1_anchor", "q4_sleeping_asset"}:
-        ranked = sorted(
-            working_dimensions,
-            key=lambda dimension: (_dimension_ratio(dimension), float(dimension.get("confidence", 0.0))),
-            reverse=True,
-        )
-        strong = [dimension for dimension in ranked if _dimension_ratio(dimension) >= 0.88]
-        return strong[:4] if strong else ranked[:4]
-
-    ranked = sorted(
-        working_dimensions,
-        key=lambda dimension: (_dimension_ratio(dimension), float(dimension.get("confidence", 0.0))),
-    )
-    weak = [dimension for dimension in ranked if _dimension_ratio(dimension) <= 0.72]
-    return weak[:4] if weak else ranked[:4]
-
-
-def _build_primary_reasons(item: dict[str, Any], *, entity: str, quadrant: str) -> list[str]:
-    selected = _pick_reason_dimensions(item, entity=entity, quadrant=quadrant)
-    if not selected:
-        return ["当前尚未返回可解释的维度证据。"]
-    return [f"{_dimension_plain_label(dimension)}：{_describe_dimension(item, dimension)}" for dimension in selected]
-
-
-def _build_repair_action(item: dict[str, Any], *, entity: str, quadrant: str) -> str:
-    selected = _pick_reason_dimensions(item, entity=entity, quadrant=quadrant)
-    topic_focus = _select_topic_focus(item)
-    weakness_names = _list_dimension_names(selected[:3])
-    official_brand_source = entity == "brand" and bool(item.get("is_official"))
-
-    if entity == "brand" and quadrant == "q1_anchor":
-        return f"把这条围绕“{topic_focus}”的页面沉淀成模板，后续同主题内容优先复用它在{weakness_names}上的写法。"
-    if entity == "competitor" and quadrant == "q1_anchor":
-        return f"对标这条竞品内容在{weakness_names}上的做法，在我方围绕“{topic_focus}”补一版同主题标准页。"
-    if entity == "brand" and quadrant == "q2_false_prosperity":
-        if not official_brand_source:
-            return (
-                f"这条被引内容不在我方官网控制范围内，不要把动作放在页面技术细节上。优先在官网围绕“{topic_focus}”补一版可控内容："
-                "去掉主观结论，补充最近时间点、官方数据来源和适用边界，再用清晰标题把核心结论写直。"
-            )
-        technical_gaps = [
-            dimension
-            for dimension in selected
-            if _dimension_key(dimension) in TECHNICAL_DIMENSION_KEYS
-        ]
-        if technical_gaps:
-            return (
-                f"这条官网内容优先同时修内容和结构：围绕“{topic_focus}”补充最新数据、原始来源与适用边界，"
-                "同时整理页面标题层级、正文结构和结构化信息，避免 AI 抽取时丢关键信息。"
-            )
-        return (
-            f"围绕“{topic_focus}”先做内容修缮：补最近时间点、可核查出处和更克制的表述，"
-            "把这条已经被引用的页面转成可持续承接引用的位置。"
-        )
-    if entity == "competitor" and quadrant == "q2_false_prosperity":
-        return (
-            f"竞品这条内容虽然被引用，但在{weakness_names}上仍然偏弱。建议围绕“{topic_focus}”做专项覆盖："
-            "先给出清晰结论，再补官方数据、测试条件、发布时间和适用场景，用更可核查的事实替代这类低置信内容。"
-        )
-    if quadrant == "q3_noise":
-        return "暂不投入专项资源，将资源优先集中到第二象限修缮与第一象限固化。"
-    if entity == "general_knowledge":
-        return f"保持观察，并判断“{topic_focus}”是否值得进入行业共识型解释内容。"
-    return f"围绕“{topic_focus}”保持更新和场景承接，等待更合适的问题触发。"
-
-
-def _determine_analysis_group(entity: str, quadrant: str) -> str:
-    if entity == "brand" and quadrant == "q1_anchor":
-        return "brand_q1"
-    if entity == "competitor" and quadrant == "q1_anchor":
-        return "competitor_q1"
-    if entity == "brand" and quadrant == "q2_false_prosperity":
-        return "brand_q2"
-    if entity == "competitor" and quadrant == "q2_false_prosperity":
-        return "competitor_q2"
-    return "general"
-
-
-def _sort_analysis_items(items: list[dict[str, Any]], quadrant: str) -> list[dict[str, Any]]:
-    reverse_score = quadrant in {"q1_anchor", "q4_sleeping_asset"}
-    return sorted(
-        items,
-        key=lambda item: (
-            -int(item.get("frequency", 1) or 1),
-            (-1 if reverse_score else 1) * float(item.get("aice_score", 0.0) or 0.0),
-            str(item.get("label", "") or ""),
-        ),
-    )
 
 
 def _score_url_item(base_item: dict[str, Any]) -> dict[str, Any]:
@@ -1498,6 +1084,7 @@ def summarize_signal_items(
     )
     return {
         "total_citations": len(auto_items),
+        "auto_evaluated_count": len(auto_items),
         "evaluated_count": evaluated_count,
         "failed_count": failed_count,
         "high_confidence_count": level_counter.get("high", 0),
@@ -1517,54 +1104,282 @@ def summarize_signal_items(
                 if item.get("entity_classification") == "general_knowledge"
             ]
         ),
-        "second_quadrant_count": len(
-            [item for item in all_items if item.get("quadrant") == "q2_false_prosperity"]
-        ),
         "average_score": average_score,
         "average_confidence_score": average_confidence_score,
-        "vulnerable_source_count": len(
-            [item for item in all_items if item.get("quadrant") == "q2_false_prosperity"]
-        ),
         "updated_at": _now_iso(),
     }
 
 
-def build_aggregate_findings(
-    auto_items: list[dict[str, Any]],
-    manual_items: list[dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
-    all_items = auto_items + (manual_items or [])
-    if not all_items:
-        return [
-            {
-                "title": "尚无可评估来源",
-                "description": "当前回答未识别到可用引用链接。你仍可在下方追加链接或文本生成额外评估。",
-            }
-        ]
+def _round_score(value: float) -> float:
+    return round(float(value or 0.0), 1)
 
-    official_count = len([item for item in auto_items if item.get("is_official")])
-    caution_count = len([item for item in all_items if item.get("signal_level") == "caution"])
-    q2_count = len([item for item in all_items if item.get("quadrant") == "q2_false_prosperity"])
-    competitor_q1 = len([item for item in all_items if item.get("analysis_group") == "competitor_q1"])
-    brand_q1 = len([item for item in all_items if item.get("analysis_group") == "brand_q1"])
+
+def _average_score(items: list[dict[str, Any]]) -> float | None:
+    if not items:
+        return None
+    return _round_score(
+        sum(float(item.get("aice_score", item.get("overall_score", 0.0)) or 0.0) for item in items)
+        / len(items)
+    )
+
+
+def _weighted_average_score(items: list[dict[str, Any]]) -> float | None:
+    if not items:
+        return None
+    total_weight = sum(max(1, int(item.get("frequency", item.get("occurrences", 1)) or 1)) for item in items)
+    if total_weight <= 0:
+        return None
+    weighted = sum(
+        float(item.get("aice_score", item.get("overall_score", 0.0)) or 0.0)
+        * max(1, int(item.get("frequency", item.get("occurrences", 1)) or 1))
+        for item in items
+    )
+    return _round_score(weighted / total_weight)
+
+
+def _representative_sources(items: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    ranked = sorted(
+        items,
+        key=lambda item: (
+            -max(1, int(item.get("frequency", item.get("occurrences", 1)) or 1)),
+            -float(item.get("aice_score", item.get("overall_score", 0.0)) or 0.0),
+            str(item.get("label", "") or ""),
+        ),
+    )
     return [
         {
-            "title": "引用生态已形成可诊断结构",
-            "description": f"当前共识别 {len(auto_items)} 个自动引用来源，另有 {len(manual_items or [])} 个手动追加评估项，已可进入阵营与象限分析。",
-        },
-        {
-            "title": "高频低置信区域值得优先处理",
-            "description": f"当前共有 {q2_count} 个来源落在第二象限，说明部分语料虽被引用，却缺少稳定质量支撑。",
-        },
-        {
-            "title": "高质量锚点仍可继续提炼",
-            "description": f"我方第一象限来源共 {brand_q1} 个，官方或官网来源共 {official_count} 个，可优先抽取为后续内容模板。",
-        },
-        {
-            "title": "竞方高质量样本需要持续对标",
-            "description": f"竞方第一象限来源共 {competitor_q1} 个；另有 {caution_count} 个来源整体仍需审慎看待。",
-        },
+            "item_id": item.get("item_id"),
+            "label": item.get("label", ""),
+            "domain": item.get("domain", ""),
+            "url": item.get("url", ""),
+            "score": _round_score(item.get("aice_score", item.get("overall_score", 0.0)) or 0.0),
+            "frequency": max(1, int(item.get("frequency", item.get("occurrences", 1)) or 1)),
+        }
+        for item in ranked[:limit]
     ]
+
+
+def _lowest_dimensions(item: dict[str, Any], limit: int = 2) -> list[dict[str, Any]]:
+    dimensions = [
+        dimension
+        for dimension in (item.get("dimension_scores", []) or [])
+        if isinstance(dimension, dict) and dimension.get("key")
+    ]
+    ranked = sorted(
+        dimensions,
+        key=lambda dimension: (
+            float(dimension.get("score", 0.0)) / max(float(dimension.get("max_score", 1.0) or 1.0), 1.0),
+            str(dimension.get("key", "")),
+        ),
+    )
+    return ranked[:limit]
+
+
+def _suggestion_for_dimension(dimension_key: str, *, controllable: bool) -> str:
+    if dimension_key == "c4":
+        return "减少主观宣传表达，补充更具体的数据、来源和归因。"
+    if dimension_key == "c3":
+        return "增加可核查证据、测试口径、原始来源或外部证明链接。"
+    if dimension_key == "c8":
+        return "补充最新时间点、更新年份或删除已过时的数据表述。"
+    if dimension_key == "c9a":
+        return (
+            "补全 H1 / H2 和正文结构，让核心事实更容易被模型分层理解。"
+            if controllable
+            else "用我方可控页面重新组织同主题内容，避免继续依赖结构混乱的第三方页面。"
+        )
+    if dimension_key == "c9b":
+        return (
+            "补充 Schema.org 结构化数据，明确正文、标题、发布日期和主体。"
+            if controllable
+            else "围绕同主题提供带结构化数据的我方内容，替代结构化不足的外部来源。"
+        )
+    if dimension_key == "c6":
+        return (
+            "提高页面可访问性和可抓取性，避免爬虫抓取失败或正文缺失。"
+            if controllable
+            else "不要依赖不可稳定访问的外部来源，改用我方可稳定访问的页面承载该主题。"
+        )
+    if dimension_key == "c1":
+        return "强化来源主体与权威背书，优先让更可信主体承载该主题事实。"
+    if dimension_key == "c5":
+        return "压缩冗长表述，直接用更清晰的主题句和事实段落组织内容。"
+    if dimension_key == "c7":
+        return "让标题和正文更直接回答用户问题，减少泛化叙事。"
+    return "围绕该维度补强事实表达与结构质量。"
+
+
+def _build_low_confidence_patterns(
+    items: list[dict[str, Any]],
+    *,
+    low_confidence_threshold: float,
+    controllable: bool,
+) -> list[dict[str, Any]]:
+    low_items = [
+        item
+        for item in items
+        if float(item.get("aice_score", item.get("overall_score", 0.0)) or 0.0) < low_confidence_threshold
+    ]
+    pattern_map: dict[str, dict[str, Any]] = {}
+
+    for item in low_items:
+        lowest = _lowest_dimensions(item, limit=2)
+        if not lowest:
+            continue
+        primary = lowest[0]
+        key = str(primary.get("key", "") or "unknown")
+        entry = pattern_map.setdefault(
+            key,
+            {
+                "pattern_key": key,
+                "pattern_label": DIMENSION_PLAIN_LABELS.get(key, key),
+                "items": [],
+                "evidence_examples": [],
+                "affected_dimensions": [],
+            },
+        )
+        entry["items"].append(item)
+        entry["affected_dimensions"] = list({
+            *entry["affected_dimensions"],
+            *[
+                DIMENSION_PLAIN_LABELS.get(str(dimension.get("key", "")), str(dimension.get("label", "")))
+                for dimension in lowest
+                if isinstance(dimension, dict)
+            ],
+        })
+        if len(entry["evidence_examples"]) < 3:
+            reasoning = str(primary.get("reasoning", "") or "").strip()
+            entry["evidence_examples"].append(
+                {
+                    "label": item.get("label", ""),
+                    "domain": item.get("domain", ""),
+                    "score": _round_score(item.get("aice_score", item.get("overall_score", 0.0)) or 0.0),
+                    "evidence": reasoning,
+                }
+            )
+
+    patterns: list[dict[str, Any]] = []
+    for key, entry in pattern_map.items():
+        grouped_items = entry["items"]
+        patterns.append(
+            {
+                "pattern_key": key,
+                "pattern_label": entry["pattern_label"],
+                "sample_count": len(grouped_items),
+                "average_confidence": _average_score(grouped_items),
+                "weighted_average_confidence": _weighted_average_score(grouped_items),
+                "affected_dimensions": entry["affected_dimensions"],
+                "evidence_examples": entry["evidence_examples"],
+                "suggestion": _suggestion_for_dimension(key, controllable=controllable),
+            }
+        )
+
+    return sorted(
+        patterns,
+        key=lambda pattern: (
+            -int(pattern.get("sample_count", 0) or 0),
+            float(pattern.get("average_confidence", 0.0) or 0.0),
+            str(pattern.get("pattern_key", "")),
+        ),
+    )
+
+
+def _build_confidence_overview(
+    items: list[dict[str, Any]],
+    *,
+    entity_label: str,
+    low_confidence_threshold: float,
+) -> dict[str, Any]:
+    low_count = len(
+        [
+            item
+            for item in items
+            if float(item.get("aice_score", item.get("overall_score", 0.0)) or 0.0) < low_confidence_threshold
+        ]
+    )
+    return {
+        "entity_label": entity_label,
+        "average_confidence": _average_score(items),
+        "weighted_average_confidence": _weighted_average_score(items),
+        "source_count": len(items),
+        "low_confidence_source_count": low_count,
+        "representative_sources": _representative_sources(items),
+    }
+
+
+def _build_overall_conclusion(
+    brand_overview: dict[str, Any],
+    competitor_overview: dict[str, Any],
+) -> str:
+    brand_avg = brand_overview.get("weighted_average_confidence")
+    competitor_avg = competitor_overview.get("weighted_average_confidence")
+    brand_count = brand_overview.get("source_count", 0)
+    competitor_count = competitor_overview.get("source_count", 0)
+
+    if brand_count == 0 and competitor_count == 0:
+        return "当前引用来源里没有足够的我方或竞品样本，暂时无法形成稳定的置信度对比结论。"
+    if brand_count == 0:
+        return f"当前引用来源里没有稳定的我方样本，竞品相关来源加权平均置信度为 {format(competitor_avg or 0, '.1f')}。"
+    if competitor_count == 0:
+        return f"当前引用来源里暂无稳定的竞品样本，我方相关来源加权平均置信度为 {format(brand_avg or 0, '.1f')}。"
+
+    delta = float(brand_avg or 0.0) - float(competitor_avg or 0.0)
+    if delta >= 5:
+        return (
+            f"我方相关来源的加权平均置信度为 {brand_avg:.1f}，高于竞品的 {competitor_avg:.1f}，"
+            "说明 AI 在引用我方内容时整体质量更稳。"
+        )
+    if delta <= -5:
+        return (
+            f"竞品相关来源的加权平均置信度为 {competitor_avg:.1f}，高于我方的 {brand_avg:.1f}，"
+            "说明竞品在 AI 引用质量上更具优势。"
+        )
+    return (
+        f"我方与竞品相关来源的加权平均置信度接近（我方 {brand_avg:.1f}，竞品 {competitor_avg:.1f}），"
+        "差距主要取决于低置信样本的结构和事实质量。"
+    )
+
+
+def _build_strategic_recommendations(
+    brand_patterns: list[dict[str, Any]],
+    competitor_patterns: list[dict[str, Any]],
+    brand_overview: dict[str, Any],
+    competitor_overview: dict[str, Any],
+) -> list[dict[str, Any]]:
+    recommendations: list[dict[str, Any]] = []
+
+    if brand_patterns:
+        primary = brand_patterns[0]
+        recommendations.append(
+            {
+                "title": f"优先修补我方的“{primary.get('pattern_label', '低置信问题')}”",
+                "reason": f"当前我方有 {primary.get('sample_count', 0)} 个低置信来源集中出现在该问题上。",
+                "action": primary.get("suggestion", ""),
+            }
+        )
+
+    if competitor_patterns:
+        primary = competitor_patterns[0]
+        recommendations.append(
+            {
+                "title": f"围绕竞品的“{primary.get('pattern_label', '低置信问题')}”做替代性内容覆盖",
+                "reason": f"当前竞品有 {primary.get('sample_count', 0)} 个低置信来源集中出现在该问题上。",
+                "action": primary.get("suggestion", ""),
+            }
+        )
+
+    brand_avg = brand_overview.get("weighted_average_confidence")
+    competitor_avg = competitor_overview.get("weighted_average_confidence")
+    if brand_avg is not None and competitor_avg is not None and float(brand_avg) + 5 < float(competitor_avg):
+        recommendations.append(
+            {
+                "title": "先补我方核心主题页的事实与结构质量",
+                "reason": "当前我方加权平均置信度显著低于竞品，优先补强我方事实源更有效。",
+                "action": "围绕被高频引用的主题，优先补可核查数据、时间信息和结构化组织。",
+            }
+        )
+
+    return recommendations[:3]
 
 
 def _collect_brand_keywords(brand_profile: dict[str, Any] | None) -> list[str]:
@@ -1650,166 +1465,9 @@ def _enrich_semantic_items(
                 "quadrant": quadrant,
                 "quadrant_label": quadrant_meta["label"],
                 "quadrant_description": quadrant_meta["description"],
-                "primary_reasons": _build_primary_reasons(item, entity=entity, quadrant=quadrant),
-                "repair_action": _build_repair_action(item, entity=entity, quadrant=quadrant),
-                "analysis_group": _determine_analysis_group(entity, quadrant),
             }
         )
     return enriched
-
-
-def _build_ecosystem_diagnosis(items: list[dict[str, Any]]) -> str:
-    if not items:
-        return "当前未检测到可进入语境生态分析的引用来源。"
-
-    entity_counter = Counter(str(item.get("entity_classification", "general_knowledge")) for item in items)
-    quadrant_counter = Counter(str(item.get("quadrant", "q3_noise")) for item in items)
-    brand_q1 = len([item for item in items if item.get("analysis_group") == "brand_q1"])
-    competitor_q1 = len([item for item in items if item.get("analysis_group") == "competitor_q1"])
-    brand_q2 = len([item for item in items if item.get("analysis_group") == "brand_q2"])
-    competitor_q2 = len([item for item in items if item.get("analysis_group") == "competitor_q2"])
-
-    parts: list[str] = []
-
-    dominant_entity = entity_counter.most_common(1)[0][0]
-    if dominant_entity == "brand":
-        parts.append("当前引用生态以我方阵营为主")
-    elif dominant_entity == "competitor":
-        parts.append("当前引用生态由竞方阵营占据更强位置")
-    else:
-        parts.append("当前引用生态仍以共业语料充当基础认知框架")
-
-    if competitor_q1 > brand_q1:
-        parts.append("竞方在高频高置信区更强")
-    elif brand_q1 > competitor_q1:
-        parts.append("我方在高频高置信区已有稳定锚点")
-
-    if brand_q2 > 0:
-        parts.append(f"我方仍有 {brand_q2} 个高频低置信来源待优先修缮")
-    if competitor_q2 > 0:
-        parts.append(f"竞方有 {competitor_q2} 个高频低置信来源可作为降维覆盖机会")
-
-    if quadrant_counter.get("q4_sleeping_asset", 0) > 0:
-        parts.append("仍存在高潜伏高质量语料可进一步唤醒")
-
-    return "，".join(parts) + "。"
-
-
-def _build_quadrant_overview(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    overview: list[dict[str, Any]] = []
-    for quadrant in ("q1_anchor", "q2_false_prosperity", "q3_noise", "q4_sleeping_asset"):
-        quadrant_items = [item for item in items if item.get("quadrant") == quadrant]
-        breakdown = Counter(str(item.get("entity_classification", "general_knowledge")) for item in quadrant_items)
-        meta = QUADRANT_META[quadrant]
-        overview.append(
-            {
-                "quadrant": quadrant,
-                "quadrant_label": meta["label"],
-                "description": meta["description"],
-                "strategy": meta["strategy"],
-                "count": len(quadrant_items),
-                "entity_breakdown": {
-                    "brand": breakdown.get("brand", 0),
-                    "competitor": breakdown.get("competitor", 0),
-                    "general_knowledge": breakdown.get("general_knowledge", 0),
-                },
-            }
-        )
-    return overview
-
-
-def _build_analysis_blocks(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    blocks: list[dict[str, Any]] = []
-    for key, meta in ANALYSIS_GROUP_META.items():
-        block_items = [item for item in items if item.get("analysis_group") == key]
-        if not block_items:
-            continue
-        quadrant = "q1_anchor" if key.endswith("q1") else "q2_false_prosperity"
-        sorted_items = _sort_analysis_items(block_items, quadrant)[:5]
-        blocks.append(
-            {
-                "key": key,
-                "title": meta["title"],
-                "description": meta["description"],
-                "reason_label": meta["reason_label"],
-                "action_label": meta["action_label"],
-                "item_count": len(block_items),
-                "items": sorted_items,
-            }
-        )
-    return blocks
-
-
-def _build_general_knowledge_insight(items: list[dict[str, Any]]) -> dict[str, Any]:
-    general_items = [item for item in items if item.get("entity_classification") == "general_knowledge"]
-    if not general_items:
-        return {
-            "summary": "当前这批引用来源中，共业阵营占比有限，AI 主要仍在品牌与竞品语料之间取材。",
-            "top_frequency_items": [],
-            "top_score_items": [],
-            "representative_items": [],
-        }
-
-    top_frequency_items = sorted(
-        general_items,
-        key=lambda item: (-int(item.get("frequency", 1) or 1), str(item.get("label", "") or "")),
-    )[:5]
-    top_score_items = sorted(
-        general_items,
-        key=lambda item: (-float(item.get("aice_score", 0.0) or 0.0), str(item.get("label", "") or "")),
-    )[:5]
-    representative_items: list[dict[str, Any]] = []
-    seen_item_ids: set[str] = set()
-    for candidate in top_frequency_items + top_score_items:
-        item_id = str(candidate.get("item_id", "") or "")
-        if not item_id or item_id in seen_item_ids:
-            continue
-        seen_item_ids.add(item_id)
-        representative_items.append(candidate)
-    return {
-        "summary": "共业阵营代表行业的默认解释框架，说明 AI 当前仍依赖研究、科普与第三方材料来组织基础认知。",
-        "top_frequency_items": top_frequency_items,
-        "top_score_items": top_score_items,
-        "representative_items": representative_items[:8],
-    }
-
-
-def _build_repair_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    brand_q2 = [item for item in items if item.get("analysis_group") == "brand_q2"]
-    q1_items = [item for item in items if item.get("analysis_group") in {"brand_q1", "competitor_q1"}]
-    competitor_q2 = [item for item in items if item.get("analysis_group") == "competitor_q2"]
-    q3_items = [item for item in items if item.get("quadrant") == "q3_noise"]
-
-    return [
-        {
-            "priority": "P0",
-            "title": "立即修缮",
-            "summary": "优先修复我方高频低置信语料，避免当前已有引用基础继续建立在脆弱页面上。",
-            "count": len(brand_q2),
-            "related_item_ids": [str(item.get("item_id", "")) for item in brand_q2[:8]],
-        },
-        {
-            "priority": "P1",
-            "title": "对标固化",
-            "summary": "把第一象限的我方优势内容与竞品优秀样本抽象成模板，沉淀后续内容生产标准。",
-            "count": len(q1_items),
-            "related_item_ids": [str(item.get("item_id", "")) for item in q1_items[:8]],
-        },
-        {
-            "priority": "P2",
-            "title": "降维覆盖",
-            "summary": "针对竞方高频低置信来源，产出更高质量、更可核查的替代内容，争夺后续引用位。",
-            "count": len(competitor_q2),
-            "related_item_ids": [str(item.get("item_id", "")) for item in competitor_q2[:8]],
-        },
-        {
-            "priority": "P3",
-            "title": "战略性忽略",
-            "summary": "对低频低置信的沉寂噪音不投入专项资源，将精力集中到能真正影响 AI 占位的象限。",
-            "count": len(q3_items),
-            "related_item_ids": [str(item.get("item_id", "")) for item in q3_items[:8]],
-        },
-    ]
 
 
 def _compose_report_payload(
@@ -1848,51 +1506,74 @@ def _compose_report_payload(
     )
     all_items = enriched_auto_items + enriched_manual_items
     summary = summarize_signal_items(enriched_auto_items, enriched_manual_items)
-    diagnosis = _build_ecosystem_diagnosis(all_items)
-    threshold_diagnostics = _build_threshold_diagnostics(
-        all_items,
-        aice_threshold=resolved_aice_threshold,
+
+    auto_brand_items = [
+        item for item in enriched_auto_items if item.get("entity_classification") == "brand"
+    ]
+    auto_competitor_items = [
+        item for item in enriched_auto_items if item.get("entity_classification") == "competitor"
+    ]
+    brand_overview = _build_confidence_overview(
+        auto_brand_items,
+        entity_label="我方引用来源",
+        low_confidence_threshold=resolved_aice_threshold,
     )
+    competitor_overview = _build_confidence_overview(
+        auto_competitor_items,
+        entity_label="竞品引用来源",
+        low_confidence_threshold=resolved_aice_threshold,
+    )
+    brand_patterns = _build_low_confidence_patterns(
+        auto_brand_items,
+        low_confidence_threshold=resolved_aice_threshold,
+        controllable=True,
+    )
+    competitor_patterns = _build_low_confidence_patterns(
+        auto_competitor_items,
+        low_confidence_threshold=resolved_aice_threshold,
+        controllable=False,
+    )
+    overall_conclusion = _build_overall_conclusion(brand_overview, competitor_overview)
+    strategic_recommendations = _build_strategic_recommendations(
+        brand_patterns,
+        competitor_patterns,
+        brand_overview,
+        competitor_overview,
+    )
+
     return {
         "report_kind": "confidence_signal",
         "artifact_kind": "confidence_signal",
         "headline": "置信度报告",
-        "subtitle": "评估 AI 回答引用语料的阵营分布、生态位置与修我方向。",
-        "description": "底层继续基于 AICE 9C 维度评分，但交付层升级为阵营分类、语境生态矩阵与修我行动报告。",
+        "subtitle": "",
+        "description": "",
         "brand_name": str((brand_profile or {}).get("brand_name", "") or ""),
         "brand_keywords": semantic_brand_keywords,
         "competitor_names": semantic_competitors,
         "updated_at": summary["updated_at"],
         "metrics": {
-            "引用来源数": summary["total_citations"],
-            "我方阵营": summary["brand_count"],
-            "竞方阵营": summary["competitor_count"],
-            "共业阵营": summary["general_knowledge_count"],
-            "高频低置信来源": summary["vulnerable_source_count"],
-            "平均置信分": summary["average_confidence_score"],
+            "评估来源数": summary["auto_evaluated_count"],
+            "我方平均置信度": brand_overview.get("average_confidence") or 0,
+            "竞品平均置信度": competitor_overview.get("average_confidence") or 0,
+            "额外评估": summary["manual_count"],
         },
         "summary": summary,
-        "matrix_config": {
-            "aice_threshold": resolved_aice_threshold,
-            "frequency_threshold": frequency_threshold,
-            "aice_threshold_mode": "manual" if aice_threshold is not None else "adaptive_p60",
-            "frequency_threshold_mode": "repeat_aware_median",
-            "threshold_diagnostics": threshold_diagnostics,
+        "config": {
+            "low_confidence_threshold": resolved_aice_threshold,
+            "low_confidence_threshold_mode": "manual" if aice_threshold is not None else "adaptive_p60",
         },
-        "ecosystem_matrix": {
-            "title": "语境生态坐标系",
-            "x_axis_label": "AICE 置信度",
-            "y_axis_label": "引用频次",
-            "total_points": len(all_items),
-            "diagnosis": diagnosis,
+        "overall_conclusion": overall_conclusion,
+        "brand_confidence_overview": brand_overview,
+        "competitor_confidence_overview": competitor_overview,
+        "brand_low_confidence_patterns": brand_patterns,
+        "competitor_low_confidence_patterns": competitor_patterns,
+        "strategic_recommendations": strategic_recommendations,
+        "extra_evaluation": {
+            "count": len(enriched_manual_items),
+            "items": enriched_manual_items,
         },
-        "quadrant_overview": _build_quadrant_overview(all_items),
-        "analysis_blocks": _build_analysis_blocks(all_items),
-        "general_knowledge_insight": _build_general_knowledge_insight(all_items),
-        "repair_actions": [],
         "auto_items": enriched_auto_items,
         "manual_items": enriched_manual_items,
-        "aggregate_findings": [],
         "composer": {
             "enabled": True,
             "allowed_input_types": ["url", "text"],
@@ -1903,7 +1584,6 @@ def _compose_report_payload(
             "phase": "ready",
             "message": "AICE 置信度报告已就绪",
         },
-        "diagnosis": diagnosis,
     }
 
 
@@ -2000,7 +1680,7 @@ def append_manual_items(
             for name in list(existing_report.get("competitor_names", []) or [])
         ],
         aice_threshold=float(
-            ((existing_report.get("matrix_config", {}) or {}).get("aice_threshold") or DEFAULT_AICE_THRESHOLD)
+            ((existing_report.get("config", {}) or {}).get("low_confidence_threshold") or DEFAULT_AICE_THRESHOLD)
         ),
     )
     updated["status"] = {
@@ -2059,7 +1739,7 @@ async def append_manual_items_async(
             for name in list(existing_report.get("competitor_names", []) or [])
         ],
         aice_threshold=float(
-            ((existing_report.get("matrix_config", {}) or {}).get("aice_threshold") or DEFAULT_AICE_THRESHOLD)
+            ((existing_report.get("config", {}) or {}).get("low_confidence_threshold") or DEFAULT_AICE_THRESHOLD)
         ),
     )
     updated["status"] = {

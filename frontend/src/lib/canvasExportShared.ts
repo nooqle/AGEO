@@ -4,7 +4,6 @@ import type {
   FetchPlatformResult,
   ReportCanvasContent,
   ReportMentionItem,
-  ReportRiskItem,
   ReportV2Metric,
 } from '@/types/canvas';
 import { buildReportViewModel } from '@/adapters/reportV2';
@@ -287,16 +286,6 @@ function buildMentionLine(item: ReportMentionItem): string {
   return joinInline([item.scenario_label, meta, details], ' ｜ ') || item.scenario_label;
 }
 
-function buildRiskLine(item: ReportRiskItem): string {
-  return joinInline([
-    item.scenario_label || item.risk_type,
-    item.severity ? `严重度：${item.severity}` : null,
-    item.reason,
-    item.impact_summary,
-    item.recommended_action_ref ? `建议：${item.recommended_action_ref}` : null,
-  ], ' ｜ ') || '未命名风险';
-}
-
 function buildFetchCitationLine(citation: FetchCitation): string {
   return joinInline([
     `[${citation.index}] ${citation.title}`,
@@ -483,47 +472,6 @@ function buildStandardReportMarkdown(content: ReportCanvasContent, descriptor: E
     view.scenarioCoverage.risk_items || []
   );
 
-  if (view.competitorBattle.summary_cards && view.competitorBattle.summary_cards.length > 0) {
-    lines.push('## 竞品压力概览');
-    for (const item of view.competitorBattle.summary_cards) {
-      lines.push(`- ${joinInline([
-        item.competitor,
-        typeof item.shared_scenarios === 'number' ? `共享场景：${item.shared_scenarios}` : null,
-        typeof item.competitor_only_scenarios === 'number' ? `竞品独占：${item.competitor_only_scenarios}` : null,
-        typeof item.brand_only_scenarios === 'number' ? `我方独占：${item.brand_only_scenarios}` : null,
-        item.pressure_level ? `压力：${item.pressure_level}` : null,
-      ], ' ｜ ') || item.competitor}`);
-    }
-    lines.push('');
-  }
-
-  if (view.competitorBattle.items && view.competitorBattle.items.length > 0) {
-    lines.push(`## ${view.competitorBattle.title || '竞品争夺'}`);
-    if (view.competitorBattle.overview) {
-      lines.push(view.competitorBattle.overview, '');
-    }
-    for (const item of view.competitorBattle.items) {
-      lines.push(`- ${joinInline([
-        item.scenario_label,
-        item.competitors_present && item.competitors_present.length > 0 ? `竞品：${item.competitors_present.join('、')}` : null,
-        item.battle_status ? `态势：${item.battle_status}` : null,
-        item.evidence,
-        item.recommended_focus ? `建议：${item.recommended_focus}` : null,
-      ], ' ｜ ') || item.scenario_label}`);
-    }
-    lines.push('');
-  }
-
-  if (view.risks.items && view.risks.items.length > 0) {
-    lines.push(`## ${view.risks.title || '缺口与风险'}`);
-    if (view.risks.summary) {
-      lines.push(view.risks.summary, '');
-    }
-    for (const item of view.risks.items) {
-      lines.push(`- ${buildRiskLine(item)}`);
-    }
-    lines.push('');
-  }
 
   if (view.sources.citation_analysis?.top_domains && view.sources.citation_analysis.top_domains.length > 0) {
     lines.push(`## ${view.sources.title || '信息源分析'}`);
@@ -559,49 +507,6 @@ function buildStandardReportMarkdown(content: ReportCanvasContent, descriptor: E
     lines.push('');
   }
 
-  if (view.actionQueue.items && view.actionQueue.items.length > 0) {
-    lines.push(`## ${view.actionQueue.title || '行动队列'}`);
-    if (view.actionQueue.summary) {
-      lines.push(view.actionQueue.summary, '');
-    }
-    for (const item of view.actionQueue.items) {
-      lines.push(`- ${joinInline([
-        item.title || item.action || item.scenario_label || '未命名动作',
-        item.priority ? `优先级：${item.priority}` : null,
-        item.target ? `目标：${item.target}` : null,
-        item.expected_impact ? `预期影响：${item.expected_impact}` : null,
-        item.difficulty ? `难度：${item.difficulty}` : null,
-        item.timeline ? `周期：${item.timeline}` : null,
-      ], ' ｜ ')}`);
-    }
-    lines.push('');
-  }
-
-  if (view.insights.strengths && view.insights.strengths.length > 0) {
-    lines.push('## 优势洞察');
-    for (const item of view.insights.strengths) {
-      lines.push(`- ${joinInline([
-        item.title,
-        item.scenario ? `场景：${item.scenario}` : null,
-        item.evidence,
-        item.improvement_hint ? `延展：${item.improvement_hint}` : null,
-      ], ' ｜ ') || item.title}`);
-    }
-    lines.push('');
-  }
-
-  if (view.insights.weaknesses && view.insights.weaknesses.length > 0) {
-    lines.push('## 待修复洞察');
-    for (const item of view.insights.weaknesses) {
-      lines.push(`- ${joinInline([
-        item.title,
-        item.scenario ? `场景：${item.scenario}` : null,
-        item.evidence,
-        item.improvement_hint ? `修复建议：${item.improvement_hint}` : null,
-      ], ' ｜ ') || item.title}`);
-    }
-    lines.push('');
-  }
 
   return lines.join('\n');
 }
