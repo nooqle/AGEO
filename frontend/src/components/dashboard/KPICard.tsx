@@ -8,12 +8,43 @@ interface KPICardProps {
   value: string | number;
   subtitle: string;
   trend: { value: number; isPositive: boolean; unit?: string } | null;
+  sparklineData?: number[];
   tooltip?: string;
   actionLabel?: string;
   onClick?: () => void;
 }
 
-export function KPICard({ title, value, subtitle, trend, tooltip, actionLabel, onClick }: KPICardProps) {
+function Sparkline({ data }: { data: number[] }) {
+  if (data.length < 2) return null;
+
+  const width = 72;
+  const height = 22;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const points = data
+    .map((point, index) => {
+      const x = (index / Math.max(data.length - 1, 1)) * width;
+      const y = height - ((point - min) / range) * (height - 3) - 1.5;
+      return `${x},${y}`;
+    })
+    .join(' ');
+
+  return (
+    <svg width={width} height={height} className="flex-shrink-0">
+      <polyline
+        points={points}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function KPICard({ title, value, subtitle, trend, sparklineData = [], tooltip, actionLabel, onClick }: KPICardProps) {
   const [showTooltip, setShowTooltip] = useState(false);
   const isInteractive = typeof onClick === 'function';
   const Container = isInteractive ? 'button' : 'div';
@@ -67,20 +98,27 @@ export function KPICard({ title, value, subtitle, trend, tooltip, actionLabel, o
           </span>
         )}
       </div>
-      <div className="flex items-end gap-2 mb-2">
-        <span className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-          {value}
-        </span>
-        {trend && (
-          <span
-            className="flex items-center text-xs font-medium"
-            style={{ color: trend.isPositive ? 'var(--status-success)' : 'var(--status-error)' }}
-          >
-            {trend.isPositive ? <RiArrowUpLine className="w-3 h-3" /> : <RiArrowDownLine className="w-3 h-3" />}
-            {trend.unit === '%' ? Math.abs(trend.value).toFixed(1) : Number.isInteger(trend.value) ? Math.abs(trend.value).toString() : Math.abs(trend.value).toFixed(1)}
-            {trend.unit ?? ''}
+      <div className="mb-2 flex items-end justify-between gap-3">
+        <div className="flex items-end gap-2">
+          <span className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
+            {value}
           </span>
-        )}
+          {trend && (
+            <span
+              className="flex items-center text-xs font-medium"
+              style={{ color: trend.isPositive ? 'var(--status-success)' : 'var(--status-error)' }}
+            >
+              {trend.isPositive ? <RiArrowUpLine className="w-3 h-3" /> : <RiArrowDownLine className="w-3 h-3" />}
+              {trend.unit === '%' ? Math.abs(trend.value).toFixed(1) : Number.isInteger(trend.value) ? Math.abs(trend.value).toString() : Math.abs(trend.value).toFixed(1)}
+              {trend.unit ?? ''}
+            </span>
+          )}
+        </div>
+        {sparklineData.length >= 2 ? (
+          <div className="text-[var(--color-primary)]">
+            <Sparkline data={sparklineData} />
+          </div>
+        ) : null}
       </div>
       <div className="text-xs leading-5" style={{ color: 'var(--text-tertiary)' }}>
         {subtitle}

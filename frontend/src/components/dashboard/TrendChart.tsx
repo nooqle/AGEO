@@ -21,7 +21,7 @@ import { cn } from '@/lib/cn';
 // =========================================================================
 
 /** Dimension keys used for UI toggling and API metric mapping */
-type DimensionKey = 'mention_rate' | 'bwvs_index' | 'sentiment_score' | 'coverage_score' | 'citation_score';
+type DimensionKey = 'mention_rate' | 'bwvs_index' | 'sentiment_score' | 'coverage_score' | 'content_citation_rate';
 
 interface DimensionConfig {
   key: DimensionKey;
@@ -57,10 +57,10 @@ const DIMENSIONS: DimensionConfig[] = [
     formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
   },
   {
-    key: 'citation_score',
-    label: '引用质量',
+    key: 'content_citation_rate',
+    label: '内容引用率',
     color: chart.colors.yellow,
-    formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
+    formatValue: (v) => (v != null ? `${(v * 100).toFixed(1)}%` : '--'),
   },
 ];
 
@@ -186,7 +186,7 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
         bwvs_index: 'bwvs',
         sentiment_score: 'sentiment',
         coverage_score: 'coverage',
-        citation_score: 'citation',
+        content_citation_rate: 'citation',
       };
       onDimensionChange?.(apiDimMap[key]);
     },
@@ -195,7 +195,9 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
 
   const formatYAxis = useCallback(
     (value: number) => {
-      if (activeDimension === 'mention_rate') return `${(value * 100).toFixed(0)}%`;
+      if (activeDimension === 'mention_rate' || activeDimension === 'content_citation_rate') {
+        return `${(value * 100).toFixed(0)}%`;
+      }
       return value.toFixed(0);
     },
     [activeDimension]
@@ -330,7 +332,9 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
               }}
             >
               {summary.change_absolute > 0 ? '+' : ''}
-              {summary.change_absolute.toFixed(1)}
+              {(activeDimension === 'mention_rate' || activeDimension === 'content_citation_rate')
+                ? `${(summary.change_absolute * 100).toFixed(1)}%`
+                : summary.change_absolute.toFixed(1)}
               {summary.change_percentage != null && (
                 <span className="ml-1">
                   ({summary.change_percentage > 0 ? '+' : ''}

@@ -73,7 +73,7 @@ export function MetricDeltaCard({ metric, className }: MetricDeltaCardProps) {
 
   const formattedValue = useMemo(() => {
     if (metric.current_value == null) return '--';
-    if (metric.metric_key === 'mention_rate') {
+    if (metric.metric_key === 'mention_rate' || metric.metric_key === 'content_citation_rate') {
       return `${(metric.current_value * 100).toFixed(1)}%`;
     }
     return metric.current_value.toFixed(1);
@@ -82,7 +82,7 @@ export function MetricDeltaCard({ metric, className }: MetricDeltaCardProps) {
   const formattedDelta = useMemo(() => {
     if (metric.delta == null) return null;
     const prefix = metric.delta > 0 ? '+' : '';
-    if (metric.metric_key === 'mention_rate') {
+    if (metric.metric_key === 'mention_rate' || metric.metric_key === 'content_citation_rate') {
       return `${prefix}${(metric.delta * 100).toFixed(1)}%`;
     }
     return `${prefix}${metric.delta.toFixed(1)}`;

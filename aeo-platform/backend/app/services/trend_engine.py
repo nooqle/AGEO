@@ -32,6 +32,12 @@ CORE_METRICS = [
     "citation_score",
 ]
 
+DERIVED_METRICS = [
+    "content_citation_rate",
+]
+
+SUPPORTED_METRICS = CORE_METRICS + DERIVED_METRICS
+
 
 class TrendDirection(str, Enum):
     """Overall trend direction for a metric."""
@@ -117,15 +123,15 @@ class TrendEngine:
         - 2 points: delta, direction=STABLE (insufficient for trend)
         - 3+ points: Full trend analysis with direction classification
         """
-        metrics = metric_names or CORE_METRICS
+        metrics = metric_names or SUPPORTED_METRICS
         snapshots = await self._get_snapshots(entity_id)
         summaries: dict[str, TrendSummary] = {}
 
         for metric in metrics:
             values = [
-                getattr(snap, metric)
+                value
                 for snap in snapshots
-                if getattr(snap, metric, None) is not None
+                if (value := self._get_metric_value(snap, metric)) is not None
             ]
             n = len(values)
 
@@ -184,9 +190,9 @@ class TrendEngine:
         previous = snapshots[-2]
         deltas: dict[str, MetricDelta] = {}
 
-        for metric in CORE_METRICS:
-            cur = getattr(latest, metric, None)
-            prev = getattr(previous, metric, None)
+        for metric in SUPPORTED_METRICS:
+            cur = self._get_metric_value(latest, metric)
+            prev = self._get_metric_value(previous, metric)
             if cur is not None and prev is not None:
                 deltas[metric] = self._compute_delta(cur, prev)
 
@@ -199,13 +205,17 @@ class TrendEngine:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Get time series data points for chart rendering."""
+        if metric_name not in SUPPORTED_METRICS:
+            logger.warning("Unsupported trend metric requested: %s", metric_name)
+            return []
+
         snapshots = await self._get_snapshots(entity_id, limit=limit)
 
         data_points: list[dict[str, Any]] = []
         prev_value: float | None = None
 
         for snap in snapshots:
-            value = getattr(snap, metric_name, None)
+            value = self._get_metric_value(snap, metric_name)
             is_significant = False
 
             if value is not None and prev_value is not None:
@@ -250,8 +260,8 @@ class TrendEngine:
         changes: list[dict[str, Any]] = []
 
         for metric in CORE_METRICS:
-            cur = getattr(latest, metric, None)
-            prev = getattr(previous, metric, None)
+            cur = self._get_metric_value(latest, metric)
+            prev = self._get_metric_value(previous, metric)
             if cur is None or prev is None:
                 continue
 
@@ -330,6 +340,31 @@ class TrendEngine:
             return TrendDirection.DECLINING
         else:
             return TrendDirection.STABLE
+
+    @staticmethod
+    def _get_metric_value(
+        snapshot: AnalysisSnapshot,
+        metric_name: str,
+    ) -> float | None:
+        """Read a metric from either independent columns or persisted raw_data summary."""
+        if metric_name in CORE_METRICS:
+            value = getattr(snapshot, metric_name, None)
+            return float(value) if value is not None else None
+
+        if metric_name == "content_citation_rate":
+            raw_data = snapshot.raw_data or {}
+            metrics = raw_data.get("metrics", {}) if isinstance(raw_data, dict) else {}
+            summary_metrics = (
+                metrics.get("summary_metrics", {}) if isinstance(metrics, dict) else {}
+            )
+            value = (
+                summary_metrics.get("content_citation_rate")
+                if isinstance(summary_metrics, dict)
+                else None
+            )
+            return float(value) if value is not None else None
+
+        return None
 
     @staticmethod
     def calculate_moving_average(

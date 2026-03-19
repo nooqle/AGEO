@@ -1,4 +1,5 @@
-﻿import type {
+import type {
+  DashboardBoardTrend,
   DashboardHomeData,
   DashboardMentionBoard,
   DashboardMentionItem,
@@ -11,8 +12,19 @@
   DashboardSourceContent,
   DashboardSourcePlatformStat,
 } from '@/types/dashboard';
+import type { TrendDataPoint, TrendMetricSummary, TrendSummaryResponse } from '@/types/monitoring';
 
 type UnknownRecord = Record<string, unknown>;
+type HomeTrendMetricKey = 'mention_rate' | 'content_citation_rate' | 'bwvs_index';
+
+const HOME_TREND_META: Record<
+  HomeTrendMetricKey,
+  { label: string; format: DashboardBoardTrend['value_format'] }
+> = {
+  mention_rate: { label: '监测提及率', format: 'percent' },
+  content_citation_rate: { label: '监测内容引用率', format: 'percent' },
+  bwvs_index: { label: '监测整体可见度', format: 'score' },
+};
 
 function toNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -113,6 +125,7 @@ function normalizeMentionBoard(value: unknown): DashboardMentionBoard {
     mention_rate: toNumber(row.mentionRate),
     headline: String(row.headline ?? ''),
     sentiment_summary: normalizeSentimentSummary(row.sentimentSummary),
+    trend: null,
     leading_competitors: Array.isArray(row.leadingCompetitors)
       ? row.leadingCompetitors.map((item) => {
           const competitor = item && typeof item === 'object' ? (item as UnknownRecord) : {};
@@ -141,6 +154,7 @@ function normalizeSourceBoard(value: unknown): DashboardSourceBoard {
     cited_answer_count: Number(row.citedAnswerCount ?? 0),
     cited_content_count: Number(row.citedContentCount ?? 0),
     headline: String(row.headline ?? ''),
+    trend: null,
     report: {
       official_cases: Array.isArray(report.officialCases) ? report.officialCases.map(normalizeSourceCase) : [],
       non_official_cases: Array.isArray(report.nonOfficialCases) ? report.nonOfficialCases.map(normalizeSourceCase) : [],
@@ -168,6 +182,7 @@ function normalizeRadarBoard(value: unknown): DashboardRadarBoard {
     headline: String(row.headline ?? ''),
     strongest_dimension: String(row.strongestDimension ?? ''),
     weakest_dimension: String(row.weakestDimension ?? ''),
+    trend: null,
     dimensions: Array.isArray(row.dimensions)
       ? row.dimensions.map((item) => {
           const dimension = item && typeof item === 'object' ? (item as UnknownRecord) : {};
@@ -191,6 +206,40 @@ function normalizeMonitoringEntry(value: unknown): DashboardMonitoringEntry {
   };
 }
 
+function buildBoardTrend(
+  metricKey: HomeTrendMetricKey,
+  summary: TrendMetricSummary | undefined,
+  points: TrendDataPoint[] | undefined,
+): DashboardBoardTrend | null {
+  const normalizedPoints = (points || []).map((point) => ({
+    date: point.date,
+    value: point.value,
+  }));
+
+  if (!summary && normalizedPoints.length === 0) {
+    return null;
+  }
+
+  const meta = HOME_TREND_META[metricKey];
+  const previousValue = summary?.period_delta
+    ? (summary.current_value ?? 0) - summary.period_delta.absolute
+    : null;
+
+  return {
+    metric_key: metricKey,
+    metric_label: meta.label,
+    value_format: meta.format,
+    current_value: summary?.current_value ?? normalizedPoints.at(-1)?.value ?? null,
+    previous_value: previousValue,
+    change_absolute: summary?.period_delta?.absolute ?? null,
+    change_percentage: summary?.period_delta?.percentage ?? null,
+    direction: summary?.direction ?? null,
+    data_point_count: summary?.data_points ?? normalizedPoints.length,
+    period_label: summary?.time_range_days ? `${summary.time_range_days}天` : `${normalizedPoints.length}次监测`,
+    points: normalizedPoints,
+  };
+}
+
 export function buildDashboardHomeData(value: unknown): DashboardHomeData | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
@@ -205,5 +254,50 @@ export function buildDashboardHomeData(value: unknown): DashboardHomeData | unde
     source_board: normalizeSourceBoard(row.sourceBoard),
     radar_board: normalizeRadarBoard(row.radarBoard),
     monitoring_entry: normalizeMonitoringEntry(row.monitoringEntry),
+  };
+}
+
+export function enrichDashboardHomeWithMonitoringTrends(
+  home: DashboardHomeData | undefined,
+  trendSummary: TrendSummaryResponse | undefined,
+  trendSeries: Partial<Record<HomeTrendMetricKey, TrendDataPoint[] | undefined>>,
+): DashboardHomeData | undefined {
+  if (!home) {
+    return undefined;
+  }
+
+  const mentionTrend = buildBoardTrend(
+    'mention_rate',
+    trendSummary?.summaries?.mention_rate,
+    trendSeries.mention_rate,
+  );
+  const sourceTrend = buildBoardTrend(
+    'content_citation_rate',
+    trendSummary?.summaries?.content_citation_rate,
+    trendSeries.content_citation_rate,
+  );
+  const radarTrend = buildBoardTrend(
+    'bwvs_index',
+    trendSummary?.summaries?.bwvs_index,
+    trendSeries.bwvs_index,
+  );
+
+  return {
+    ...home,
+    mention_board: {
+      ...home.mention_board,
+      mention_rate: mentionTrend?.current_value ?? home.mention_board.mention_rate,
+      trend: mentionTrend,
+    },
+    source_board: {
+      ...home.source_board,
+      content_citation_rate:
+        sourceTrend?.current_value ?? home.source_board.content_citation_rate,
+      trend: sourceTrend,
+    },
+    radar_board: {
+      ...home.radar_board,
+      trend: radarTrend,
+    },
   };
 }

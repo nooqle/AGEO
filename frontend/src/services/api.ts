@@ -1,9 +1,9 @@
 import type { Session, Message, Output, AgentControlResponse, ConfirmationResponse } from '@/types/api';
 import type { DashboardData } from '@/types/dashboard';
 import { buildDashboardV2Data } from '@/adapters/dashboardV2';
-import { buildDashboardHomeData } from '@/adapters/dashboardHome';
+import { buildDashboardHomeData, enrichDashboardHomeWithMonitoringTrends } from '@/adapters/dashboardHome';
 import { normalizeEntity } from '@/types/entity';
-import type { Entity, CreateEntityInput, UpdateEntityInput } from '@/types/entity';
+import type { CreateEntityInput, UpdateEntityInput } from '@/types/entity';
 import type { TouchpointTree } from '@/types/touchpoint';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import type { SessionListResponse } from '@/types/session';
@@ -264,7 +264,7 @@ class ApiService {
   }
 
   async getAnalyticsAll(brandId?: string, dateRange: string = 'month'): Promise<DashboardData> {
-    const [overview, visibility, platforms, sources, aeo, sentiment, competitors, overviewV2, scenariosV2, competitorBattlesV2, sourcesV2, risksActionsV2, homeV2] = await Promise.allSettled([
+    const [overview, visibility, platforms, sources, aeo, sentiment, competitors, overviewV2, scenariosV2, competitorBattlesV2, sourcesV2, risksActionsV2, homeV2, monitoringTrendSummary, mentionTrend, contentCitationTrend, bwvsTrend] = await Promise.allSettled([
       this.getAnalyticsOverview(brandId, dateRange),
       this.getAnalyticsVisibility(brandId, dateRange),
       this.getAnalyticsPlatforms(brandId),
@@ -278,6 +278,10 @@ class ApiService {
       this.getAnalyticsSourcesV2(brandId),
       this.getAnalyticsRisksActionsV2(brandId),
       this.getAnalyticsDashboardHomeV2(brandId),
+      brandId ? this.getMonitoringTrendSummary(brandId) : Promise.resolve(undefined),
+      brandId ? this.getMonitoringTrend(brandId, 'mention_rate', 8) : Promise.resolve(undefined),
+      brandId ? this.getMonitoringTrend(brandId, 'content_citation_rate', 8) : Promise.resolve(undefined),
+      brandId ? this.getMonitoringTrend(brandId, 'bwvs_index', 8) : Promise.resolve(undefined),
     ]);
 
     const ensure = <T,>(result: PromiseSettledResult<T>, fallback: T): T =>
@@ -293,7 +297,15 @@ class ApiService {
       risksActions: optional(risksActionsV2),
     });
     if (v2) {
-      v2.home = buildDashboardHomeData(optional(homeV2));
+      v2.home = enrichDashboardHomeWithMonitoringTrends(
+        buildDashboardHomeData(optional(homeV2)),
+        optional(monitoringTrendSummary),
+        {
+          mention_rate: optional(mentionTrend)?.trend,
+          content_citation_rate: optional(contentCitationTrend)?.trend,
+          bwvs_index: optional(bwvsTrend)?.trend,
+        },
+      );
     }
 
     return {

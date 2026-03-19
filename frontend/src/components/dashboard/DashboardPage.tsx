@@ -206,6 +206,10 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     setDialogOpen(true);
   };
 
+  const handleOpenMonitoring = () => {
+    router.push('/dashboard?tab=monitoring');
+  };
+
   const allSources = data?.sources || [];
   const sourceTotalCount = allSources.reduce((sum, item) => sum + item.count, 0);
   const officialSourceCount = allSources
@@ -442,7 +446,11 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           {hasData && hasSelectedBrandAnalysis && !isMonitoringMode && home && (
             <div className="space-y-6">
               {selectedBrand && <DashboardBrandOverview entity={selectedBrand} archive={brandArchive} />}
-              <DashboardHomeBoards home={home} onSelectBoard={handleSelectBoard} />
+              <DashboardHomeBoards
+                home={home}
+                onSelectBoard={handleSelectBoard}
+                onOpenMonitoring={handleOpenMonitoring}
+              />
               <DashboardBoardDialog open={dialogOpen} board={activeBoard} home={home} onClose={() => setDialogOpen(false)} />
             </div>
           )}

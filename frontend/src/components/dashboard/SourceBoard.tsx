@@ -1,6 +1,7 @@
 import { RiBookMarkedLine } from '@remixicon/react';
 import type { DashboardSourceBoard } from '@/types/dashboard';
 import { getSourceLabel } from '@/lib/sourceLabel';
+import { DashboardBoardTrendStrip } from './DashboardBoardTrendStrip';
 
 interface SourceBoardProps {
   data: DashboardSourceBoard;
@@ -37,6 +38,8 @@ export function SourceBoard({ data, onClick }: SourceBoardProps) {
           <div className="text-[46px] font-semibold leading-none tracking-[-0.06em] text-[var(--text-primary)]">{citationRate}</div>
           <div className="pb-1 text-[13px] leading-6 text-[var(--text-secondary)]">被引用内容 {data.cited_content_count} 条</div>
         </div>
+
+        <DashboardBoardTrendStrip trend={data.trend} accentColor="#b67e38" />
 
         <div className="mt-5 grid grid-cols-3 gap-3">
           <div className="rounded-[18px] border px-3 py-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--bg-tertiary) 80%, #edf4f0 20%)' }}>

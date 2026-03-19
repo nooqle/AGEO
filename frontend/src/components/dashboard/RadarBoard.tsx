@@ -2,6 +2,7 @@ import { RiRadarLine } from '@remixicon/react';
 import { PolarAngleAxis, PolarGrid, Radar, RadarChart, ResponsiveContainer } from 'recharts';
 import type { DashboardRadarBoard } from '@/types/dashboard';
 import { chart } from '@/styles/chart-theme';
+import { DashboardBoardTrendStrip } from './DashboardBoardTrendStrip';
 
 interface RadarBoardProps {
   data: DashboardRadarBoard;
@@ -31,6 +32,7 @@ export function RadarBoard({ data, onClick }: RadarBoardProps) {
         <div className="mt-6 grid gap-5 md:grid-cols-[1fr_200px] md:items-center">
           <div>
             <div className="text-[13px] leading-7 text-[var(--text-secondary)]">{data.headline}</div>
+            <DashboardBoardTrendStrip trend={data.trend} accentColor="#568874" />
             <div className="mt-4 space-y-2.5 text-[12px] leading-7 text-[var(--text-secondary)]">
               <div>
                 <span className="text-[var(--text-tertiary)]">当前最大优势：</span>

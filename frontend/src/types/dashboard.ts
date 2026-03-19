@@ -220,10 +220,30 @@ export interface DashboardScenarioInsight {
   platforms?: string[];
 }
 
+export interface DashboardBoardTrendPoint {
+  date: string;
+  value: number | null;
+}
+
+export interface DashboardBoardTrend {
+  metric_key: string;
+  metric_label: string;
+  value_format: 'percent' | 'score';
+  current_value: number | null;
+  previous_value: number | null;
+  change_absolute: number | null;
+  change_percentage: number | null;
+  direction: string | null;
+  data_point_count: number;
+  period_label: string;
+  points: DashboardBoardTrendPoint[];
+}
+
 export interface DashboardMentionBoard {
   mention_rate: number | null;
   headline: string;
   sentiment_summary: DashboardSentimentSummary;
+  trend?: DashboardBoardTrend | null;
   leading_competitors: Array<{
     competitor: string;
     pressure_level: 'high' | 'medium' | 'low' | string;
@@ -277,6 +297,7 @@ export interface DashboardSourceBoard {
   cited_answer_count: number;
   cited_content_count: number;
   headline: string;
+  trend?: DashboardBoardTrend | null;
   report: {
     official_cases: DashboardSourceCitationCase[];
     non_official_cases: DashboardSourceCitationCase[];
@@ -304,6 +325,7 @@ export interface DashboardRadarBoard {
   strongest_dimension: string;
   weakest_dimension: string;
   dimensions: DashboardRadarDimension[];
+  trend?: DashboardBoardTrend | null;
 }
 
 export interface DashboardMonitoringEntry {

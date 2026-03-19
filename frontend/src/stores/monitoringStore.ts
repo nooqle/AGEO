@@ -21,9 +21,17 @@ const DIMENSION_TO_METRIC: Record<string, string> = {
   sentiment_score: 'sentiment_score',
   coverage: 'coverage_score',
   coverage_score: 'coverage_score',
-  citation: 'citation_score',
-  citation_score: 'citation_score',
+  citation: 'content_citation_rate',
+  content_citation_rate: 'content_citation_rate',
 };
+
+const DISPLAY_METRIC_ORDER = [
+  'bwvs_index',
+  'mention_rate',
+  'sentiment_score',
+  'coverage_score',
+  'content_citation_rate',
+] as const;
 
 /** Map metric names to display labels for MetricDelta cards */
 const METRIC_LABELS: Record<string, string> = {
@@ -31,7 +39,7 @@ const METRIC_LABELS: Record<string, string> = {
   mention_rate: '提及率',
   sentiment_score: '情感倾向',
   coverage_score: '平台覆盖',
-  citation_score: '引用质量',
+  content_citation_rate: '内容引用率',
 };
 
 /** Convert a TrendMetricSummary to a MetricDelta for UI rendering */
@@ -245,9 +253,12 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
     try {
       // Derive metric deltas from trend summary (no separate backend endpoint)
       const resp = await api.getMonitoringTrendSummary(entityId);
-      const deltas: MetricDelta[] = Object.entries(resp.summaries).map(
-        ([name, s]) => summaryToMetricDelta(name, s)
-      );
+      const deltas: MetricDelta[] = DISPLAY_METRIC_ORDER
+        .map((metricKey) => {
+          const summary = resp.summaries[metricKey];
+          return summary ? summaryToMetricDelta(metricKey, summary) : null;
+        })
+        .filter((item): item is MetricDelta => item != null);
 
       // Fetch sparkline data (last 5 data points) for each metric in parallel
       const sparklinePromises = deltas.map(async (delta) => {

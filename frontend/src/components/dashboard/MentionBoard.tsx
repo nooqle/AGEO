@@ -1,5 +1,6 @@
 import { RiChatQuoteLine } from '@remixicon/react';
 import type { DashboardMentionBoard } from '@/types/dashboard';
+import { DashboardBoardTrendStrip } from './DashboardBoardTrendStrip';
 
 interface MentionBoardProps {
   data: DashboardMentionBoard;
@@ -39,6 +40,8 @@ export function MentionBoard({ data, onClick }: MentionBoardProps) {
           <div className="text-[46px] font-semibold leading-none tracking-[-0.06em] text-[var(--text-primary)]">{mentionRate}</div>
           <div className="pb-1 text-[13px] leading-6 text-[var(--text-secondary)]">涉及问题 {mentionedQuestionCount} 个</div>
         </div>
+
+        <DashboardBoardTrendStrip trend={data.trend} accentColor="var(--color-primary)" />
 
         <div className="mt-5 grid grid-cols-3 gap-3">
           {(['positive', 'neutral', 'negative'] as const).map((key) => (
