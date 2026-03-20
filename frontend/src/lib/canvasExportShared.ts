@@ -91,13 +91,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function toTextList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter(isNonEmptyString).map((item) => item.trim());
-}
-
 function formatMetricValue(metric: ReportV2Metric): string {
   if (metric.value === undefined || metric.value === null || metric.value === '') {
     return '--';
@@ -515,49 +508,55 @@ function buildConfidenceItemLine(item: NonNullable<ReturnType<typeof buildConfid
   return joinInline([
     item.label,
     item.entity_label || item.entity_classification,
-    item.quadrant_label || item.quadrant,
     typeof item.frequency === 'number' ? `频次：${item.frequency}` : null,
     typeof item.aice_score === 'number' ? `AICE：${formatScore(item.aice_score)}` : null,
-    item.repair_action ? `动作：${item.repair_action}` : null,
   ], ' ｜ ') || item.label;
 }
 
-function buildConfidenceQuadrantLine(item: NonNullable<ReturnType<typeof buildConfidenceExportViewModel>['quadrantOverview']>[number]): string {
+function buildConfidenceActionLine(item: NonNullable<ReturnType<typeof buildConfidenceExportViewModel>['strategicRecommendations']>[number]): string {
   return joinInline([
-    item.quadrant_label || item.quadrant,
-    typeof item.count === 'number' ? `数量：${item.count}` : null,
-    item.strategy ? `策略：${item.strategy}` : null,
-    item.description,
-  ], ' ｜ ') || item.quadrant;
-}
-
-function buildConfidenceActionLine(item: NonNullable<ReturnType<typeof buildConfidenceExportViewModel>['repairActions']>[number]): string {
-  return joinInline([
-    item.priority,
     item.title,
-    item.summary,
-    typeof item.count === 'number' ? `涉及样本：${item.count}` : null,
+    item.reason,
+    item.action ? `动作：${item.action}` : null,
   ], ' ｜ ') || item.title || '未命名动作';
 }
 
-function pushConfidenceBlock(
+function pushConfidencePattern(
   lines: string[],
-  block: NonNullable<ReturnType<typeof buildConfidenceExportViewModel>['analysisBlocks']>[number]
+  pattern: NonNullable<ReturnType<typeof buildConfidenceExportViewModel>['brandLowConfidencePatterns']>[number]
 ) {
-  if (!block.items || block.items.length === 0) {
+  const title = pattern.pattern_label || pattern.pattern_key;
+  if (!title) {
     return;
   }
 
-  lines.push(`## ${block.title || block.key}`);
-  if (block.description) {
-    lines.push(block.description, '');
+  lines.push(`### ${title}`);
+  const meta = joinInline([
+    typeof pattern.sample_count === 'number' ? `样本：${pattern.sample_count}` : null,
+    typeof pattern.average_confidence === 'number' ? `平均置信度：${formatScore(pattern.average_confidence)}` : null,
+    typeof pattern.weighted_average_confidence === 'number'
+      ? `加权平均：${formatScore(pattern.weighted_average_confidence)}`
+      : null,
+    pattern.affected_dimensions && pattern.affected_dimensions.length > 0
+      ? `维度：${pattern.affected_dimensions.join('、')}`
+      : null,
+  ], ' ｜ ');
+  if (meta) {
+    lines.push(meta);
   }
-  for (const item of block.items) {
-    lines.push(`- ${buildConfidenceItemLine(item)}`);
-    const reasons = toTextList(item.primary_reasons || item.top_signals);
-    if (reasons.length > 0) {
-      lines.push(`  - ${block.reason_label || '原因'}：${reasons.slice(0, 3).join('；')}`);
-    }
+
+  const examples = pattern.evidence_examples || [];
+  for (const example of examples) {
+    lines.push(`- ${joinInline([
+      example.label,
+      example.domain,
+      typeof example.score === 'number' ? `置信度：${formatScore(example.score)}` : null,
+      example.evidence,
+    ], ' ｜ ') || '未命名样例'}`);
+  }
+
+  if (pattern.suggestion) {
+    lines.push(`- 建议：${pattern.suggestion}`);
   }
   lines.push('');
 }
@@ -566,10 +565,12 @@ function buildConfidenceReportMarkdown(content: ReportCanvasContent, descriptor:
   const view = buildConfidenceExportViewModel(content);
   const summary = view.summary;
   const findings = view.findings;
-  const quadrantOverview = view.quadrantOverview;
-  const analysisBlocks = view.analysisBlocks;
-  const repairActions = view.repairActions;
-  const generalKnowledgeInsight = view.generalKnowledgeInsight;
+  const brandOverview = view.brandConfidenceOverview;
+  const competitorOverview = view.competitorConfidenceOverview;
+  const brandPatterns = view.brandLowConfidencePatterns;
+  const competitorPatterns = view.competitorLowConfidencePatterns;
+  const recommendations = view.strategicRecommendations;
+  const extraEvaluation = view.extraEvaluation;
 
   const lines: string[] = [
     `# ${view.title || descriptor.deliverableName}`,
@@ -578,16 +579,24 @@ function buildConfidenceReportMarkdown(content: ReportCanvasContent, descriptor:
     '',
   ];
 
-  pushSection(lines, '报告摘要', view.subtitle || view.diagnosis);
+  pushSection(lines, '报告摘要', view.subtitle || view.overallConclusion);
 
   if (summary) {
     lines.push('## 核心指标');
-    lines.push(`- 总引用来源：${summary.evaluated_count ?? 0}`);
-    lines.push(`- 我方阵营：${summary.brand_count ?? 0}`);
-    lines.push(`- 竞方阵营：${summary.competitor_count ?? 0}`);
-    lines.push(`- 共业阵营：${summary.general_knowledge_count ?? 0}`);
-    lines.push(`- 第二象限：${summary.second_quadrant_count ?? 0}`);
-    lines.push(`- 平均 AICE：${formatScore(summary.average_score)}`);
+    lines.push(`- 评估来源：${summary.auto_evaluated_count ?? summary.evaluated_count ?? 0}`);
+    lines.push(`- 额外评估：${summary.manual_count ?? extraEvaluation?.count ?? 0}`);
+    lines.push(`- 平均置信分：${formatScore(summary.average_confidence_score ?? summary.average_score)}`);
+    lines.push('');
+  }
+
+  if (brandOverview || competitorOverview) {
+    lines.push('## 品牌 vs 竞品置信度对比');
+    if (brandOverview) {
+      lines.push(`- 我方平均置信度：${formatScore(brandOverview.average_confidence ?? undefined)} ｜ 加权平均：${formatScore(brandOverview.weighted_average_confidence ?? undefined)} ｜ 样本数：${brandOverview.source_count ?? 0} ｜ 低置信来源：${brandOverview.low_confidence_source_count ?? 0}`);
+    }
+    if (competitorOverview) {
+      lines.push(`- 竞品平均置信度：${formatScore(competitorOverview.average_confidence ?? undefined)} ｜ 加权平均：${formatScore(competitorOverview.weighted_average_confidence ?? undefined)} ｜ 样本数：${competitorOverview.source_count ?? 0} ｜ 低置信来源：${competitorOverview.low_confidence_source_count ?? 0}`);
+    }
     lines.push('');
   }
 
@@ -599,37 +608,32 @@ function buildConfidenceReportMarkdown(content: ReportCanvasContent, descriptor:
     lines.push('');
   }
 
-  if (quadrantOverview.length > 0) {
-    lines.push('## 象限概览');
-    for (const item of quadrantOverview) {
-      lines.push(`- ${buildConfidenceQuadrantLine(item)}`);
+  if (brandPatterns.length > 0) {
+    lines.push('## 我方低置信内容共性');
+    for (const pattern of brandPatterns) {
+      pushConfidencePattern(lines, pattern);
+    }
+  }
+
+  if (competitorPatterns.length > 0) {
+    lines.push('## 竞品低置信内容共性');
+    for (const pattern of competitorPatterns) {
+      pushConfidencePattern(lines, pattern);
+    }
+  }
+
+  if (recommendations.length > 0) {
+    lines.push('## 补位建议');
+    for (const item of recommendations) {
+      lines.push(`- ${buildConfidenceActionLine(item)}`);
     }
     lines.push('');
   }
 
-  for (const block of analysisBlocks) {
-    pushConfidenceBlock(lines, block);
-  }
-
-  if (generalKnowledgeInsight?.summary) {
-    pushSection(lines, '共业阵营观察', generalKnowledgeInsight.summary);
-  }
-
-  pushBulletSection(
-    lines,
-    '共业高频来源',
-    (generalKnowledgeInsight?.top_frequency_items || []).map((item) => buildConfidenceItemLine(item))
-  );
-  pushBulletSection(
-    lines,
-    '共业高分来源',
-    (generalKnowledgeInsight?.top_score_items || []).map((item) => buildConfidenceItemLine(item))
-  );
-
-  if (repairActions.length > 0) {
-    lines.push('## 修我行动清单');
-    for (const item of repairActions) {
-      lines.push(`- ${buildConfidenceActionLine(item)}`);
+  if (extraEvaluation?.items && extraEvaluation.items.length > 0) {
+    lines.push('## 额外评估结果');
+    for (const item of extraEvaluation.items) {
+      lines.push(`- ${buildConfidenceItemLine(item)}`);
     }
     lines.push('');
   }

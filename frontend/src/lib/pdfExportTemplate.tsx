@@ -7,7 +7,6 @@ import {
 import { buildReportViewModel } from '@/adapters/reportV2';
 import type {
   CanvasContent,
-  ConfidenceQuadrant,
   ReportCanvasContent,
   ReportV2Metric,
 } from '@/types/canvas';
@@ -15,18 +14,6 @@ import {
   buildCanvasContentTextFromDescriptor,
   type ExportDescriptor,
 } from '@/lib/canvasExportShared';
-
-type MatrixPoint = {
-  itemId: string;
-  label: string;
-  entityLabel: string;
-  entityClass: string;
-  quadrantLabel: string;
-  score: number;
-  frequency: number;
-  x: number;
-  y: number;
-};
 
 export const PDF_CSS = `
   @page {
@@ -468,60 +455,6 @@ function extractHostname(url: string) {
   }
 }
 
-function getEntityMeta(entity?: string) {
-  if (entity === 'brand') return { label: '我方阵营', color: '#1d4ed8' };
-  if (entity === 'competitor') return { label: '竞方阵营', color: '#e11d48' };
-  return { label: '共业阵营', color: '#64748b' };
-}
-
-function getQuadrantMeta(quadrant?: ConfidenceQuadrant) {
-  switch (quadrant) {
-    case 'q1_anchor':
-      return { className: 'quad-card quad-q1', label: '定海神针' };
-    case 'q2_false_prosperity':
-      return { className: 'quad-card quad-q2', label: '虚假繁荣' };
-    case 'q4_sleeping_asset':
-      return { className: 'quad-card quad-q4', label: '高潜伏藏' };
-    default:
-      return { className: 'quad-card quad-q3', label: '沉寂噪音' };
-  }
-}
-
-function getConfidenceItems(content: ReportCanvasContent) {
-  return buildConfidenceExportViewModel(content).items;
-}
-
-function buildMatrixPoints(content: ReportCanvasContent): MatrixPoint[] {
-  const items = getConfidenceItems(content)
-    .filter((item) => typeof item.aice_score === 'number' && typeof item.frequency === 'number');
-
-  const confidenceView = buildConfidenceExportViewModel(content);
-  const thresholdFrequency = confidenceView.matrixConfig?.frequency_threshold ?? 3;
-  const maxFrequency = Math.max(thresholdFrequency + 1, ...items.map((item) => item.frequency || 0), 4);
-  const chart = { width: 440, height: 300, left: 48, top: 16, right: 16, bottom: 34 };
-  const innerWidth = chart.width - chart.left - chart.right;
-  const innerHeight = chart.height - chart.top - chart.bottom;
-
-  return items.map((item) => {
-    const entityMeta = getEntityMeta(item.entity_classification);
-    const score = item.aice_score || 0;
-    const frequency = item.frequency || 0;
-    const x = chart.left + (score / 100) * innerWidth;
-    const y = chart.height - chart.bottom - (frequency / maxFrequency) * innerHeight;
-    return {
-      itemId: item.item_id,
-      label: item.label,
-      entityLabel: item.entity_label || entityMeta.label,
-      entityClass: entityMeta.color,
-      quadrantLabel: item.quadrant_label || getQuadrantMeta(item.quadrant).label,
-      score,
-      frequency,
-      x,
-      y,
-    };
-  });
-}
-
 function DocumentFrame({
   descriptor,
   title,
@@ -871,129 +804,111 @@ function FetchPdfDocument({ content, descriptor }: { content: Extract<CanvasCont
   );
 }
 
-function ConfidenceMatrix({ content }: { content: ReportCanvasContent }) {
-  const confidenceView = buildConfidenceExportViewModel(content);
-  const points = buildMatrixPoints(content);
-  const thresholdScore = confidenceView.matrixConfig?.aice_threshold ?? 70;
-  const thresholdFrequency = confidenceView.matrixConfig?.frequency_threshold ?? 3;
-  const matrixTitle = confidenceView.ecosystemMatrix?.title || '置信度象限矩阵';
-  const maxFrequency = Math.max(thresholdFrequency + 1, ...points.map((item) => item.frequency), 4);
-  const chart = { width: 440, height: 300, left: 48, top: 16, right: 16, bottom: 34 };
-  const innerWidth = chart.width - chart.left - chart.right;
-  const innerHeight = chart.height - chart.top - chart.bottom;
-  const thresholdX = chart.left + (thresholdScore / 100) * innerWidth;
-  const thresholdY = chart.height - chart.bottom - (thresholdFrequency / maxFrequency) * innerHeight;
-
-  return (
-    <div className="matrix-wrap">
-      <div className="info-card">
-        <div className="metric-label">{matrixTitle}</div>
-        <svg width="100%" viewBox={`0 0 ${chart.width} ${chart.height}`} aria-label={matrixTitle} style={{ marginTop: 10 }}>
-          <rect x={chart.left} y={chart.top} width={thresholdX - chart.left} height={thresholdY - chart.top} fill="#e9eef3" />
-          <rect x={thresholdX} y={chart.top} width={chart.width - chart.right - thresholdX} height={thresholdY - chart.top} fill="#dff4eb" />
-          <rect x={chart.left} y={thresholdY} width={thresholdX - chart.left} height={chart.height - chart.bottom - thresholdY} fill="#fdf0cf" />
-          <rect x={thresholdX} y={thresholdY} width={chart.width - chart.right - thresholdX} height={chart.height - chart.bottom - thresholdY} fill="#dff1fb" />
-          <line x1={chart.left} y1={chart.height - chart.bottom} x2={chart.width - chart.right} y2={chart.height - chart.bottom} stroke="#8fa0b8" strokeWidth="1.3" />
-          <line x1={chart.left} y1={chart.top} x2={chart.left} y2={chart.height - chart.bottom} stroke="#8fa0b8" strokeWidth="1.3" />
-          <line x1={thresholdX} y1={chart.top} x2={thresholdX} y2={chart.height - chart.bottom} stroke="#64748b" strokeDasharray="5 4" strokeWidth="1.1" />
-          <line x1={chart.left} y1={thresholdY} x2={chart.width - chart.right} y2={thresholdY} stroke="#64748b" strokeDasharray="5 4" strokeWidth="1.1" />
-          <text x={chart.width / 2} y={chart.height - 6} textAnchor="middle" fontSize="11" fill="#5f6b85">AICE 分数</text>
-          <text x="14" y={chart.height / 2} textAnchor="middle" fontSize="11" fill="#5f6b85" transform={`rotate(-90 14 ${chart.height / 2})`}>出现频次</text>
-          <text x={chart.left + 10} y={chart.top + 16} fontSize="11" fill="#5f6b85">Q3 沉寂噪音</text>
-          <text x={thresholdX + 10} y={chart.top + 16} fontSize="11" fill="#2f5d52">Q1 定海神针</text>
-          <text x={chart.left + 10} y={thresholdY + 18} fontSize="11" fill="#8a631a">Q2 虚假繁荣</text>
-          <text x={thresholdX + 10} y={thresholdY + 18} fontSize="11" fill="#24628c">Q4 高潜伏藏</text>
-          {points.map((point) => (
-            <g key={point.itemId}>
-              <circle cx={point.x} cy={point.y} r="5" fill={point.entityClass} fillOpacity="0.92" />
-              <title>{`${point.label} | ${point.entityLabel} | ${point.quadrantLabel} | AICE ${point.score.toFixed(1)} | 频次 ${point.frequency}`}</title>
-            </g>
-          ))}
-        </svg>
-      </div>
-      <div className="legend">
-        <div className="info-card">
-          <div className="metric-label">图例</div>
-          <div style={{ marginTop: 10 }} className="legend">
-            {[
-              { label: '我方阵营', color: '#1d4ed8' },
-              { label: '竞方阵营', color: '#e11d48' },
-              { label: '共业阵营', color: '#64748b' },
-            ].map((item) => (
-              <div key={item.label} className="legend-item">
-                <span className="swatch" style={{ background: item.color }} />
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="small-list">
-            <div className="small-item">AICE 阈值：{formatScore(thresholdScore)}</div>
-            <div className="small-item">频次阈值：{thresholdFrequency}</div>
-            <div className="small-item">评估点位：{points.length}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ConfidencePdfDocument({ content, descriptor }: { content: ReportCanvasContent; descriptor: ExportDescriptor }) {
   const view = buildConfidenceExportViewModel(content);
   const summary = view.summary;
   const findings = view.findings;
-  const quadrantOverview = view.quadrantOverview;
-  const blocks = view.analysisBlocks;
-  const repairActions = view.repairActions;
-  const generalKnowledge = view.generalKnowledgeInsight;
+  const brandOverview = view.brandConfidenceOverview;
+  const competitorOverview = view.competitorConfidenceOverview;
+  const brandPatterns = view.brandLowConfidencePatterns;
+  const competitorPatterns = view.competitorLowConfidencePatterns;
+  const recommendations = view.strategicRecommendations;
+  const extraEvaluation = view.extraEvaluation;
   const items = view.items;
 
   return (
     <DocumentFrame
       descriptor={descriptor}
       title={view.title || descriptor.deliverableName}
-      subtitle={view.subtitle || view.diagnosis}
-      extraMeta={[`样本数：${summary?.evaluated_count ?? items.length}`, `平均 AICE：${formatScore(summary?.average_score)}`]}
+      subtitle={view.subtitle || view.overallConclusion}
+      extraMeta={[
+        `样本数：${summary?.auto_evaluated_count ?? summary?.evaluated_count ?? items.length}`,
+        `额外评估：${summary?.manual_count ?? extraEvaluation?.count ?? 0}`,
+      ]}
     >
       {summary ? (
-        <Section title="核心指标" subtitle="先看阵营分布与整体风险态势">
-          <div className="grid grid-3">
+        <Section title="核心指标" subtitle="先看我方与竞品引用内容的平均置信度">
+          <div className="grid grid-2">
             {[
-              { label: '总引用来源', value: String(summary.evaluated_count ?? 0) },
-              { label: '我方阵营', value: String(summary.brand_count ?? 0) },
-              { label: '竞方阵营', value: String(summary.competitor_count ?? 0) },
-              { label: '共业阵营', value: String(summary.general_knowledge_count ?? 0) },
-              { label: '第二象限', value: String(summary.second_quadrant_count ?? 0) },
-              { label: '平均 AICE', value: formatScore(summary.average_score) },
+              {
+                label: '我方平均置信度',
+                value: formatScore(brandOverview?.average_confidence ?? undefined),
+                note: joinInline([
+                  `加权平均 ${formatScore(brandOverview?.weighted_average_confidence ?? undefined)}`,
+                  `样本数 ${brandOverview?.source_count ?? 0}`,
+                  `低置信 ${brandOverview?.low_confidence_source_count ?? 0}`,
+                ]),
+              },
+              {
+                label: '竞品平均置信度',
+                value: formatScore(competitorOverview?.average_confidence ?? undefined),
+                note: joinInline([
+                  `加权平均 ${formatScore(competitorOverview?.weighted_average_confidence ?? undefined)}`,
+                  `样本数 ${competitorOverview?.source_count ?? 0}`,
+                  `低置信 ${competitorOverview?.low_confidence_source_count ?? 0}`,
+                ]),
+              },
+              {
+                label: '评估来源',
+                value: String(summary.auto_evaluated_count ?? summary.evaluated_count ?? 0),
+                note: joinInline([
+                  `总引用 ${summary.total_citations ?? 0}`,
+                  `额外评估 ${summary.manual_count ?? extraEvaluation?.count ?? 0}`,
+                ]),
+              },
+              {
+                label: '平均置信分',
+                value: formatScore(summary.average_confidence_score ?? summary.average_score),
+                note: summary.updated_at ? `最近更新 ${summary.updated_at}` : undefined,
+              },
             ].map((metric) => (
               <div key={metric.label} className="metric-card">
                 <div className="metric-label">{metric.label}</div>
                 <div className="metric-value">{metric.value}</div>
+                {metric.note ? <div className="metric-note">{metric.note}</div> : null}
               </div>
             ))}
           </div>
         </Section>
       ) : null}
 
-      <Section title="象限矩阵" subtitle="用专用打印图把高频 / 高分关系固定下来">
-        <ConfidenceMatrix content={content} />
-      </Section>
-
-      {quadrantOverview.length > 0 ? (
-        <Section title="象限概览" subtitle="每个象限代表不同的修复优先级">
-          <div className="grid grid-2">
-            {quadrantOverview.map((item) => {
-              const meta = getQuadrantMeta(item.quadrant);
-              return (
-                <div key={item.quadrant} className={meta.className}>
-                  <div className="list-title">{item.quadrant_label || meta.label}</div>
-                  <div className="list-meta">{joinInline([`数量 ${item.count ?? 0}`, item.strategy])}</div>
-                  {item.description ? <div className="list-body">{item.description}</div> : null}
+      <Section title="品牌 vs 竞品置信度对比" subtitle="重点看我方与竞品被引用时的整体质量差异">
+        <div className="grid grid-2">
+          {[
+            { title: '我方引用来源', overview: brandOverview },
+            { title: '竞品引用来源', overview: competitorOverview },
+          ].map((item) => (
+            <div key={item.title} className="info-card">
+              <div className="metric-label">{item.title}</div>
+              <div className="metric-value" style={{ marginTop: 10 }}>
+                {formatScore(item.overview?.average_confidence ?? undefined)}
+              </div>
+              <div className="metric-note">
+                {joinInline([
+                  `加权平均 ${formatScore(item.overview?.weighted_average_confidence ?? undefined)}`,
+                  `样本数 ${item.overview?.source_count ?? 0}`,
+                  `低置信 ${item.overview?.low_confidence_source_count ?? 0}`,
+                ]) || '暂无概览'}
+              </div>
+              {item.overview?.representative_sources && item.overview.representative_sources.length > 0 ? (
+                <div className="small-list">
+                  {item.overview.representative_sources.slice(0, 3).map((source, index) => (
+                    <div key={`${item.title}-${source.label || source.domain || index}`} className="small-item">
+                      <strong>{source.label || source.domain || '未命名来源'}</strong>
+                      <br />
+                      {joinInline([
+                        source.domain,
+                        typeof source.score === 'number' ? `置信度 ${formatScore(source.score)}` : undefined,
+                        typeof source.frequency === 'number' ? `频次 ${source.frequency}` : undefined,
+                      ])}
+                    </div>
+                  ))}
                 </div>
-              );
-            })}
-          </div>
-        </Section>
-      ) : null}
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </Section>
 
       {findings.length > 0 ? (
         <Section title="关键发现" subtitle="给 PM、运营、内容团队看的结论层">
@@ -1008,88 +923,112 @@ function ConfidencePdfDocument({ content, descriptor }: { content: ReportCanvasC
         </Section>
       ) : null}
 
-      {blocks.map((block) => (
-        block.items && block.items.length > 0 ? (
-          <Section key={block.key} title={block.title || block.key} subtitle={block.description}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th style={{ width: '26%' }}>样本</th>
-                  <th style={{ width: '16%' }}>阵营</th>
-                  <th style={{ width: '16%' }}>象限</th>
-                  <th style={{ width: '10%' }}>频次</th>
-                  <th style={{ width: '10%' }}>AICE</th>
-                  <th>主要原因 / 动作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {block.items.map((item) => (
-                  <tr key={item.item_id}>
-                    <td>{item.label}</td>
-                    <td>{item.entity_label || getEntityMeta(item.entity_classification).label}</td>
-                    <td>{item.quadrant_label || getQuadrantMeta(item.quadrant).label}</td>
-                    <td>{item.frequency ?? '--'}</td>
-                    <td>{formatScore(item.aice_score)}</td>
-                    <td>{joinInline([item.primary_reasons?.slice(0, 2).join('；'), item.repair_action], ' ｜ ') || '--'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Section>
-        ) : null
-      ))}
-
-      {(generalKnowledge?.summary || generalKnowledge?.top_frequency_items?.length || generalKnowledge?.top_score_items?.length) ? (
-        <Section title="共业阵营观察" subtitle={generalKnowledge?.summary}>
-          <div className="grid grid-2">
-            {generalKnowledge?.top_frequency_items && generalKnowledge.top_frequency_items.length > 0 ? (
-              <div className="info-card">
-                <div className="metric-label">高频来源</div>
-                <div className="list" style={{ marginTop: 8 }}>
-                  {generalKnowledge.top_frequency_items.map((item) => (
-                    <div key={item.item_id} className="list-item">
-                      <div className="list-title">{item.label}</div>
-                      <div className="list-meta">{joinInline([`频次 ${item.frequency ?? '--'}`, `AICE ${formatScore(item.aice_score)}`])}</div>
-                    </div>
-                  ))}
+      {brandPatterns.length > 0 ? (
+        <Section title="我方低置信内容共性" subtitle="只保留真实低分样本中重复出现的问题模式">
+          <div className="list">
+            {brandPatterns.map((pattern, index) => (
+              <div key={`${pattern.pattern_key || pattern.pattern_label}-${index}`} className="list-item">
+                <div className="list-title">{pattern.pattern_label || `模式 ${index + 1}`}</div>
+                <div className="list-meta">
+                  {joinInline([
+                    typeof pattern.sample_count === 'number' ? `样本 ${pattern.sample_count}` : undefined,
+                    typeof pattern.average_confidence === 'number'
+                      ? `平均置信度 ${formatScore(pattern.average_confidence ?? undefined)}`
+                      : undefined,
+                    pattern.affected_dimensions?.length ? `维度 ${pattern.affected_dimensions.join('、')}` : undefined,
+                  ])}
                 </div>
+                {pattern.suggestion ? <div className="list-body">建议：{pattern.suggestion}</div> : null}
+                {pattern.evidence_examples && pattern.evidence_examples.length > 0 ? (
+                  <div className="small-list">
+                    {pattern.evidence_examples.slice(0, 3).map((example, exampleIndex) => (
+                      <div key={`${pattern.pattern_key || pattern.pattern_label}-${example.label || exampleIndex}`} className="small-item">
+                        <strong>{example.label || '未命名样例'}</strong>
+                        <br />
+                        {joinInline([
+                          example.domain,
+                          typeof example.score === 'number' ? `置信度 ${formatScore(example.score)}` : undefined,
+                          example.evidence,
+                        ])}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-            {generalKnowledge?.top_score_items && generalKnowledge.top_score_items.length > 0 ? (
-              <div className="info-card">
-                <div className="metric-label">高分来源</div>
-                <div className="list" style={{ marginTop: 8 }}>
-                  {generalKnowledge.top_score_items.map((item) => (
-                    <div key={item.item_id} className="list-item">
-                      <div className="list-title">{item.label}</div>
-                      <div className="list-meta">{joinInline([`频次 ${item.frequency ?? '--'}`, `AICE ${formatScore(item.aice_score)}`])}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+            ))}
           </div>
         </Section>
       ) : null}
 
-      {repairActions.length > 0 ? (
-        <Section title="修我行动清单" subtitle="把高风险来源对应到明确动作">
+      {competitorPatterns.length > 0 ? (
+        <Section title="竞品低置信内容共性" subtitle="重点看竞品高频但低质量的重复模式">
+          <div className="list">
+            {competitorPatterns.map((pattern, index) => (
+              <div key={`${pattern.pattern_key || pattern.pattern_label}-${index}`} className="list-item">
+                <div className="list-title">{pattern.pattern_label || `模式 ${index + 1}`}</div>
+                <div className="list-meta">
+                  {joinInline([
+                    typeof pattern.sample_count === 'number' ? `样本 ${pattern.sample_count}` : undefined,
+                    typeof pattern.average_confidence === 'number'
+                      ? `平均置信度 ${formatScore(pattern.average_confidence ?? undefined)}`
+                      : undefined,
+                    pattern.affected_dimensions?.length ? `维度 ${pattern.affected_dimensions.join('、')}` : undefined,
+                  ])}
+                </div>
+                {pattern.suggestion ? <div className="list-body">建议：{pattern.suggestion}</div> : null}
+                {pattern.evidence_examples && pattern.evidence_examples.length > 0 ? (
+                  <div className="small-list">
+                    {pattern.evidence_examples.slice(0, 3).map((example, exampleIndex) => (
+                      <div key={`${pattern.pattern_key || pattern.pattern_label}-${example.label || exampleIndex}`} className="small-item">
+                        <strong>{example.label || '未命名样例'}</strong>
+                        <br />
+                        {joinInline([
+                          example.domain,
+                          typeof example.score === 'number' ? `置信度 ${formatScore(example.score)}` : undefined,
+                          example.evidence,
+                        ])}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
+      {recommendations.length > 0 ? (
+        <Section title="补位建议" subtitle="建议必须来自真实低置信模式，而不是规则层脑补">
+          <div className="list">
+            {recommendations.map((item, index) => (
+              <div key={`${item.title || 'recommendation'}-${index}`} className="list-item">
+                <div className="list-title">{item.title || `建议 ${index + 1}`}</div>
+                {item.reason ? <div className="list-meta">{item.reason}</div> : null}
+                {item.action ? <div className="list-body">{item.action}</div> : null}
+              </div>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
+      {extraEvaluation?.items && extraEvaluation.items.length > 0 ? (
+        <Section title="额外评估结果" subtitle="保留追加评估的单条结果，便于追溯">
           <table className="table">
             <thead>
               <tr>
-                <th style={{ width: '14%' }}>优先级</th>
-                <th style={{ width: '28%' }}>动作</th>
+                <th style={{ width: '36%' }}>来源</th>
+                <th style={{ width: '14%' }}>置信度</th>
+                <th style={{ width: '14%' }}>频次</th>
                 <th>说明</th>
-                <th style={{ width: '14%' }}>样本数</th>
               </tr>
             </thead>
             <tbody>
-              {repairActions.map((item, index) => (
-                <tr key={`${item.title}-${index}`}>
-                  <td>{item.priority || '--'}</td>
-                  <td>{item.title || '--'}</td>
-                  <td>{item.summary || '--'}</td>
-                  <td>{item.count ?? '--'}</td>
+              {extraEvaluation.items.map((item, index) => (
+                <tr key={`${item.item_id || item.label}-${index}`}>
+                  <td>{item.label}</td>
+                  <td>{formatScore(item.aice_score ?? item.overall_confidence)}</td>
+                  <td>{item.frequency ?? item.occurrences ?? '--'}</td>
+                  <td>{joinInline([item.domain, item.site_name, item.error_message], ' ｜ ') || '--'}</td>
                 </tr>
               ))}
             </tbody>

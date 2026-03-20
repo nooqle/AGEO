@@ -269,10 +269,6 @@ export function DashboardBrandOverview({ entity, archive }: DashboardBrandOvervi
           >
             <TitleWithIcon icon={RiLeafLine}>竞品分类</TitleWithIcon>
 
-            <div className="mt-3 text-[14px] leading-7 text-[var(--text-secondary)]">
-              这里直接使用品牌竞品分析产物中的竞品分类结果，按直接竞争、间接竞争和潜在竞争展示，不再额外编造图谱。
-            </div>
-
             <div className="mt-5 space-y-3">
               {(['直接竞争', '间接竞争', '潜在竞争'] as CompetitorGroupKey[]).map((group) => {
                 const items = groupedCompetitors[group];
