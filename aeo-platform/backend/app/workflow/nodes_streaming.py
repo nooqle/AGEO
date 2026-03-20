@@ -4,6 +4,7 @@ This module provides streaming LLM calls with real-time TPAOR event emission.
 """
 
 import asyncio
+from time import perf_counter
 from typing import Any, AsyncGenerator, Callable, Generator
 
 from app.workflow.events import send_tpaor_event, send_progress_event, send_thought_event
@@ -198,6 +199,7 @@ async def call_llm_streaming(
     messages: list[dict[str, Any]],
     step: str,
     step_name: str,
+    task_id: str | None = None,
     progress_start: float = 0.0,
     progress_end: float = 1.0,
     tools: list[dict[str, Any]] | None = None,
@@ -224,6 +226,8 @@ async def call_llm_streaming(
     all_thinking_blocks = []
     all_tool_calls = []
     last_finish_reason: str | None = None
+    last_usage = None
+    started_at = perf_counter()
 
     async for chunk in stream_llm_with_tpaor(
         session_id=session_id,
@@ -244,10 +248,34 @@ async def call_llm_streaming(
             all_tool_calls.extend(chunk.tool_calls)
         if chunk.finish_reason:
             last_finish_reason = chunk.finish_reason
+        if chunk.usage:
+            last_usage = chunk.usage
 
-    return LLMResponse(
+    response = LLMResponse(
         content=full_content,
         thinking_blocks=all_thinking_blocks,
         tool_calls=all_tool_calls,
+        usage=last_usage,
         finish_reason=last_finish_reason,
+        latency_ms=max(int((perf_counter() - started_at) * 1000), 0),
     )
+
+    if last_usage:
+        from app.services.llm_usage_service import record_llm_usage_async
+
+        await record_llm_usage_async(
+            session_id=session_id,
+            task_id=task_id,
+            step=step,
+            step_name=step_name,
+            model=model,
+            usage=last_usage,
+            latency_ms=response.latency_ms,
+            extra_metadata={
+                "streaming": True,
+                "message_count": len(messages),
+                "tool_count": len(tools or []),
+            },
+        )
+
+    return response

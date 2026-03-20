@@ -13,6 +13,14 @@ export function buildCompletedTask(
     return null;
   }
 
+  const taskData = typeof data.task === 'object' && data.task !== null
+    ? data.task as Record<string, unknown>
+    : data as Record<string, unknown>;
+  const readNumber = (key: string): number | undefined => {
+    const value = taskData[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  };
+
   return {
     ...currentTask,
     status: 'completed',
@@ -20,6 +28,12 @@ export function buildCompletedTask(
     progress_message: '分析完成',
     completed_at: new Date().toISOString(),
     snapshot_id: typeof data.snapshot_id === 'string' ? data.snapshot_id : currentTask.snapshot_id,
+    llm_call_count: readNumber('llm_call_count') ?? currentTask.llm_call_count,
+    llm_prompt_tokens: readNumber('llm_prompt_tokens') ?? currentTask.llm_prompt_tokens,
+    llm_completion_tokens: readNumber('llm_completion_tokens') ?? currentTask.llm_completion_tokens,
+    llm_total_tokens: readNumber('llm_total_tokens') ?? currentTask.llm_total_tokens,
+    llm_total_latency_ms: readNumber('llm_total_latency_ms') ?? currentTask.llm_total_latency_ms,
+    llm_estimated_cost: readNumber('llm_estimated_cost') ?? currentTask.llm_estimated_cost,
   };
 }
 

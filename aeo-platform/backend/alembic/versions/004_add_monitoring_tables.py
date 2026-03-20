@@ -18,15 +18,17 @@ depends_on = None
 
 def upgrade():
     # --- 1. Create ScheduleFrequency and ScheduleStatus enum types ---
-    schedule_frequency_enum = sa.Enum(
+    schedule_frequency_enum = postgresql.ENUM(
         "daily", "weekly", "biweekly", "monthly",
         name="schedulefrequency",
+        create_type=False,
     )
     schedule_frequency_enum.create(op.get_bind(), checkfirst=True)
 
-    schedule_status_enum = sa.Enum(
+    schedule_status_enum = postgresql.ENUM(
         "active", "paused", "completed", "error",
         name="schedulestatus",
+        create_type=False,
     )
     schedule_status_enum.create(op.get_bind(), checkfirst=True)
 
@@ -111,15 +113,17 @@ def upgrade():
     )
 
     # --- 3. Create AlertSeverity and AlertStatus enum types ---
-    alert_severity_enum = sa.Enum(
+    alert_severity_enum = postgresql.ENUM(
         "low", "medium", "high", "critical",
         name="alertseverity",
+        create_type=False,
     )
     alert_severity_enum.create(op.get_bind(), checkfirst=True)
 
-    alert_status_enum = sa.Enum(
+    alert_status_enum = postgresql.ENUM(
         "unread", "read", "dismissed", "actioned",
         name="alertstatus",
+        create_type=False,
     )
     alert_status_enum.create(op.get_bind(), checkfirst=True)
 

@@ -18,9 +18,10 @@ depends_on = None
 
 def upgrade():
     # Create TaskStatus enum type
-    task_status_enum = sa.Enum(
+    task_status_enum = postgresql.ENUM(
         "pending", "running", "completed", "failed", "cancelled",
         name="taskstatus",
+        create_type=False,
     )
     task_status_enum.create(op.get_bind(), checkfirst=True)
 

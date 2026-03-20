@@ -4,6 +4,7 @@ import sys
 import io
 import asyncio
 import json
+import os
 
 # Fix Windows console encoding for Chinese characters
 if sys.platform == "win32":
@@ -63,6 +64,17 @@ app = FastAPI(
 async def on_startup():
     """应用启动时执行的初始化任务"""
     logger.info("应用启动中...")
+    if not settings.REDIS_URL:
+        worker_hint = (
+            os.environ.get("WEB_CONCURRENCY")
+            or os.environ.get("UVICORN_WORKERS")
+            or "1"
+        )
+        logger.warning(
+            "未配置 REDIS_URL，Runtime 共享协调已降级为单进程语义。"
+            "当前建议仅以单 worker 方式运行手动分析链路。"
+            f" worker_hint={worker_hint}"
+        )
 
     # 执行启动检查（包括 Playwright 浏览器安装）
     if not startup_checks():
@@ -93,6 +105,23 @@ async def on_startup():
     except Exception as recovery_err:
         logger.warning(f"孤儿任务恢复失败: {recovery_err}")
 
+    # Runtime shared coordinator background listeners
+    try:
+        from app.services.runtime_coordinator import runtime_coordinator
+
+        await runtime_coordinator.start_background_tasks()
+        logger.info("Runtime coordinator 后台监听已启动")
+    except Exception as runtime_err:
+        logger.warning(f"Runtime coordinator 启动失败: {runtime_err}")
+
+    try:
+        from app.services.session_event_publisher import session_event_publisher
+
+        await session_event_publisher.start_background_tasks()
+        logger.info("Session event publisher 后台监听已启动")
+    except Exception as session_event_err:
+        logger.warning(f"Session event publisher 启动失败: {session_event_err}")
+
     # Cycle 4: Start monitoring scheduler
     try:
         from app.services.scheduler import start_scheduler
@@ -108,6 +137,20 @@ async def on_startup():
 async def on_shutdown():
     """应用关闭时执行的清理任务"""
     logger.info("应用关闭中...")
+    try:
+        from app.services.session_event_publisher import session_event_publisher
+
+        await session_event_publisher.stop_background_tasks()
+        logger.info("Session event publisher 后台监听已停止")
+    except Exception as e:
+        logger.warning(f"Session event publisher 停止失败: {e}")
+    try:
+        from app.services.runtime_coordinator import runtime_coordinator
+
+        await runtime_coordinator.stop_background_tasks()
+        logger.info("Runtime coordinator 后台监听已停止")
+    except Exception as e:
+        logger.warning(f"Runtime coordinator 停止失败: {e}")
     try:
         from app.services.scheduler import stop_scheduler
         await stop_scheduler()

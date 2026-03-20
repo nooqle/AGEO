@@ -1,6 +1,9 @@
 """Celery tasks for answer fetching (A4).
 
-This module contains async tasks for fetching answers from AI platforms.
+Legacy compatibility note:
+The current production A4 path runs inside the LangGraph/manual runtime flow.
+This Celery task is retained for compatibility experiments and is not wired into
+the active TaskRun orchestration path yet.
 """
 
 import asyncio

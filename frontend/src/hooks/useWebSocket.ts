@@ -17,8 +17,27 @@ import { isRecord } from '@/hooks/websocket/canvas';
 import { buildOutputReadyPayload } from '@/hooks/websocket/output';
 import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmation';
 import { isSupersededA5FailureText } from '@/adapters/chatMessage';
+import { api } from '@/services/api';
+import type { AnalysisTask } from '@/types/task';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
+const RUNTIME_STREAM_EVENTS = new Set([
+  'action_log',
+  'artifact_patch',
+  'browser_state',
+  'browser_user_action',
+  'confirmation_request',
+  'error',
+  'execution_complete',
+  'execution_progress',
+  'inline_confirmation',
+  'output_ready',
+  'plan_update',
+  'reply_delta',
+  'stage_result',
+  'system_notice',
+  'thought_delta',
+]);
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -27,6 +46,7 @@ export function useWebSocket(sessionId: string | null) {
   const [isConnected, setIsConnected] = useState(false);
   const agentMessageIdRef = useRef<string | null>(null);
   const pendingMessagesRef = useRef<string[]>([]);
+  const suppressRuntimeStreamRef = useRef(false);
 
   const {
     addMessage,
@@ -94,6 +114,7 @@ export function useWebSocket(sessionId: string | null) {
     const pending = [...pendingMessagesRef.current];
     pendingMessagesRef.current = [];
     pending.forEach((content) => {
+      suppressRuntimeStreamRef.current = false;
       wsRef.current?.send(JSON.stringify({
         event: 'user_message',
         data: { content },
@@ -104,6 +125,14 @@ export function useWebSocket(sessionId: string | null) {
   // Event handler function
   const handleEvent = useCallback((eventName: string, data: WebSocketEventData) => {
     console.log(`[WebSocket] Received event: ${eventName}`, data);
+
+    if (
+      suppressRuntimeStreamRef.current &&
+      RUNTIME_STREAM_EVENTS.has(eventName)
+    ) {
+      console.log(`[WebSocket] Ignoring stale runtime event after stop: ${eventName}`);
+      return;
+    }
 
     switch (eventName) {
       case 'agent_start':
@@ -543,6 +572,19 @@ export function useWebSocket(sessionId: string | null) {
         if (completedTask) {
           setActiveTask(completedTask);
         }
+        const taskId =
+          completedTask?.id ||
+          useConversationStore.getState().activeTask?.id ||
+          (typeof data.task_id === 'string' ? data.task_id : null);
+        if (sessionId && taskId) {
+          void api.getTask(sessionId, taskId).then((latestTask) => {
+            if (latestTask) {
+              setActiveTask(latestTask);
+            }
+          }).catch(() => {
+            // Ignore task refresh errors and keep optimistic completion state.
+          });
+        }
 
         const suggestions = buildFollowUpSuggestions(data);
         if (suggestions.length > 0) {
@@ -552,6 +594,7 @@ export function useWebSocket(sessionId: string | null) {
       }
 
       case 'execution_stopped':
+        suppressRuntimeStreamRef.current = true;
         completePendingActionLogs('（已停止）');
         finalizeCurrentMessage();
         resetStreamingState();
@@ -752,6 +795,16 @@ export function useWebSocket(sessionId: string | null) {
         const taskData = typeof data.task === 'object' && data.task !== null
           ? data.task as Record<string, unknown>
           : data;
+        const hasTaskPayload = typeof taskData.id === 'string';
+        const currentTask = useConversationStore.getState().activeTask;
+
+        if (hasTaskPayload) {
+          setActiveTask({
+            ...(currentTask ?? {}),
+            ...(taskData as unknown as AnalysisTask),
+            status: (taskStatus || taskData.status || currentTask?.status || 'pending') as AnalysisTask['status'],
+          } as AnalysisTask);
+        }
 
         if (taskStatus === 'running') {
           updateActiveTaskProgress(
@@ -769,6 +822,23 @@ export function useWebSocket(sessionId: string | null) {
               progress_message: '分析完成',
               completed_at: typeof taskData.completed_at === 'string' ? taskData.completed_at : new Date().toISOString(),
               snapshot_id: typeof taskData.snapshot_id === 'string' ? taskData.snapshot_id : ct.snapshot_id,
+              llm_call_count: typeof taskData.llm_call_count === 'number' ? taskData.llm_call_count : ct.llm_call_count,
+              llm_prompt_tokens: typeof taskData.llm_prompt_tokens === 'number' ? taskData.llm_prompt_tokens : ct.llm_prompt_tokens,
+              llm_completion_tokens: typeof taskData.llm_completion_tokens === 'number' ? taskData.llm_completion_tokens : ct.llm_completion_tokens,
+              llm_total_tokens: typeof taskData.llm_total_tokens === 'number' ? taskData.llm_total_tokens : ct.llm_total_tokens,
+              llm_total_latency_ms: typeof taskData.llm_total_latency_ms === 'number' ? taskData.llm_total_latency_ms : ct.llm_total_latency_ms,
+              llm_estimated_cost: typeof taskData.llm_estimated_cost === 'number' ? taskData.llm_estimated_cost : ct.llm_estimated_cost,
+            });
+          }
+        } else if (taskStatus === 'cancelled') {
+          suppressRuntimeStreamRef.current = true;
+          const ct = useConversationStore.getState().activeTask;
+          if (ct) {
+            setActiveTask({
+              ...ct,
+              status: 'cancelled',
+              progress_message: typeof taskData.progress_message === 'string' ? taskData.progress_message : '任务已取消',
+              completed_at: typeof taskData.completed_at === 'string' ? taskData.completed_at : new Date().toISOString(),
             });
           }
         } else if (taskStatus === 'failed') {
@@ -777,6 +847,12 @@ export function useWebSocket(sessionId: string | null) {
             setActiveTask({
               ...ft,
               status: 'failed',
+              llm_call_count: typeof taskData.llm_call_count === 'number' ? taskData.llm_call_count : ft.llm_call_count,
+              llm_prompt_tokens: typeof taskData.llm_prompt_tokens === 'number' ? taskData.llm_prompt_tokens : ft.llm_prompt_tokens,
+              llm_completion_tokens: typeof taskData.llm_completion_tokens === 'number' ? taskData.llm_completion_tokens : ft.llm_completion_tokens,
+              llm_total_tokens: typeof taskData.llm_total_tokens === 'number' ? taskData.llm_total_tokens : ft.llm_total_tokens,
+              llm_total_latency_ms: typeof taskData.llm_total_latency_ms === 'number' ? taskData.llm_total_latency_ms : ft.llm_total_latency_ms,
+              llm_estimated_cost: typeof taskData.llm_estimated_cost === 'number' ? taskData.llm_estimated_cost : ft.llm_estimated_cost,
               error_message: typeof taskData.error_message === 'string' ? taskData.error_message : null,
               error_stage: typeof taskData.error_stage === 'string' ? taskData.error_stage : null,
             });
@@ -838,6 +914,7 @@ export function useWebSocket(sessionId: string | null) {
     removeMessage,
     clearStageResults,
     replaceMessageId,
+    sessionId,
   ]);
 
   useEffect(() => {
@@ -998,6 +1075,7 @@ export function useWebSocket(sessionId: string | null) {
       return;
     }
 
+    suppressRuntimeStreamRef.current = false;
     // Reset agent message ref so the next reply_delta creates a NEW message
     // (instead of overwriting the previous agent message)
     agentMessageIdRef.current = null;
@@ -1018,6 +1096,7 @@ export function useWebSocket(sessionId: string | null) {
   const sendConfirmation = useCallback((requestId: string, selection: string | Record<string, unknown>) => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
 
+    suppressRuntimeStreamRef.current = false;
     // Reset agent message ref so the next reply_delta creates a NEW message
     // (instead of overwriting the previous agent message)
     agentMessageIdRef.current = null;

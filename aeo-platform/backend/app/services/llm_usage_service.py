@@ -1,0 +1,391 @@
+"""LLM usage persistence and cost estimation helpers."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import desc, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.core.database import AsyncSessionLocal
+from app.core.llm import BaseLLMModel, LLMUsage
+from app.models.llm_usage import LLMUsageRecord
+from app.models.session import Session as ChatSession
+from app.models.task import AnalysisTask
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_uuid(value: str | None) -> UUID | None:
+    if not value:
+        return None
+    try:
+        return UUID(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _resolve_model_metadata(model: BaseLLMModel) -> tuple[str, str]:
+    config = getattr(model, "config", None)
+    model_name = getattr(config, "model_name", None) or model.__class__.__name__
+    provider = model.__class__.__name__.replace("Model", "").lower()
+    return provider, str(model_name)
+
+
+def estimate_usage_cost(
+    provider: str,
+    model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> float:
+    """Estimate cost using configurable per-million-token prices.
+
+    Pricing is intentionally configuration-driven because public pricing and
+    enterprise contract pricing may differ.
+    """
+    settings = get_settings()
+    model_key = model_name.lower()
+    long_context_threshold = max(
+        int(getattr(settings, "GLM5_LONG_CONTEXT_THRESHOLD_TOKENS", 32000) or 32000),
+        1,
+    )
+    is_long_context = prompt_tokens >= long_context_threshold
+
+    input_price = None
+    output_price = None
+
+    if provider == "glm5model" or provider == "glm5":
+        if model_key.startswith("glm-5-turbo"):
+            if is_long_context:
+                input_price = settings.GLM5_TURBO_PRICE_LONG_INPUT_PER_MTOKENS
+                output_price = settings.GLM5_TURBO_PRICE_LONG_OUTPUT_PER_MTOKENS
+            else:
+                input_price = settings.GLM5_TURBO_PRICE_INPUT_PER_MTOKENS
+                output_price = settings.GLM5_TURBO_PRICE_OUTPUT_PER_MTOKENS
+        elif model_key.startswith("glm-5"):
+            if is_long_context:
+                input_price = settings.GLM5_PRICE_LONG_INPUT_PER_MTOKENS
+                output_price = settings.GLM5_PRICE_LONG_OUTPUT_PER_MTOKENS
+            else:
+                input_price = settings.GLM5_PRICE_INPUT_PER_MTOKENS
+                output_price = settings.GLM5_PRICE_OUTPUT_PER_MTOKENS
+    elif provider == "minimaxmodel" or provider == "minimax":
+        input_price = settings.MINIMAX_PRICE_INPUT_PER_MTOKENS
+        output_price = settings.MINIMAX_PRICE_OUTPUT_PER_MTOKENS
+
+    if input_price is None or output_price is None:
+        return 0.0
+
+    return round(
+        (prompt_tokens / 1_000_000.0) * input_price
+        + (completion_tokens / 1_000_000.0) * output_price,
+        6,
+    )
+
+
+class LLMUsageService:
+    """Persists per-call usage records and updates task aggregates."""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    @staticmethod
+    def _build_scope_conditions(
+        *,
+        user_id: UUID,
+        entity_id: UUID | None = None,
+        since: datetime | None = None,
+    ) -> list[Any]:
+        conditions: list[Any] = [
+            or_(
+                AnalysisTask.user_id == user_id,
+                ChatSession.user_id == user_id,
+            )
+        ]
+        if since is not None:
+            conditions.append(LLMUsageRecord.created_at >= since)
+        if entity_id is not None:
+            conditions.append(
+                func.coalesce(AnalysisTask.entity_id, ChatSession.entity_id) == entity_id
+            )
+        return conditions
+
+    async def record_usage(
+        self,
+        *,
+        session_id: str | None,
+        task_id: str | None,
+        step: str | None,
+        step_name: str | None,
+        model: BaseLLMModel,
+        usage: LLMUsage,
+        latency_ms: int | None = None,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> LLMUsageRecord:
+        provider, model_name = _resolve_model_metadata(model)
+
+        prompt_tokens = int(usage.prompt_tokens or 0)
+        completion_tokens = int(usage.completion_tokens or 0)
+        total_tokens = int(
+            usage.total_tokens
+            or (prompt_tokens + completion_tokens)
+        )
+        normalized_latency_ms = max(int(latency_ms or 0), 0)
+        estimated_cost = estimate_usage_cost(
+            provider=provider,
+            model_name=model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+        session_uuid = _safe_uuid(session_id)
+        task_uuid = _safe_uuid(task_id)
+
+        async with self.db.begin_nested():
+            record = LLMUsageRecord(
+                session_id=session_uuid,
+                task_id=task_uuid,
+                provider=provider,
+                model_name=model_name,
+                step=step,
+                step_name=step_name,
+                raw_session_id=session_id if session_uuid is None else None,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                latency_ms=normalized_latency_ms,
+                estimated_cost=estimated_cost,
+                extra_metadata=extra_metadata,
+            )
+            self.db.add(record)
+
+            if task_uuid is not None:
+                task_stmt = (
+                    select(AnalysisTask)
+                    .where(AnalysisTask.id == task_uuid)
+                    .with_for_update()
+                )
+                task_result = await self.db.execute(task_stmt)
+                task = task_result.scalar_one_or_none()
+                if task is not None:
+                    task.llm_call_count += 1
+                    task.llm_prompt_tokens += prompt_tokens
+                    task.llm_completion_tokens += completion_tokens
+                    task.llm_total_tokens += total_tokens
+                    task.llm_total_latency_ms += normalized_latency_ms
+                    task.llm_estimated_cost = round(
+                        float(task.llm_estimated_cost or 0.0) + estimated_cost,
+                        6,
+                    )
+
+            await self.db.flush()
+
+        await self.db.commit()
+        await self.db.refresh(record)
+        return record
+
+    async def get_observability_snapshot(
+        self,
+        *,
+        user_id: UUID,
+        entity_id: UUID | None = None,
+        days: int = 30,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        window_days = max(days, 1)
+        item_limit = min(max(limit, 1), 100)
+        since = datetime.now(timezone.utc) - timedelta(days=window_days)
+        conditions = self._build_scope_conditions(
+            user_id=user_id,
+            entity_id=entity_id,
+            since=since,
+        )
+
+        summary_stmt = (
+            select(
+                func.count(LLMUsageRecord.id),
+                func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
+                func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
+                func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
+                func.count(func.distinct(LLMUsageRecord.model_name)),
+                func.max(LLMUsageRecord.created_at),
+                func.min(LLMUsageRecord.created_at),
+            )
+            .select_from(LLMUsageRecord)
+            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
+            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
+            .where(*conditions)
+        )
+        summary_row = (await self.db.execute(summary_stmt)).one()
+        total_calls = int(summary_row[0] or 0)
+        total_tokens = int(summary_row[1] or 0)
+        total_cost = round(float(summary_row[2] or 0.0), 6)
+        total_latency_ms = int(summary_row[3] or 0)
+        avg_latency_ms = round(float(summary_row[4] or 0.0), 2)
+        unique_models = int(summary_row[5] or 0)
+        last_call_at = summary_row[6]
+        first_call_at = summary_row[7]
+
+        by_model_stmt = (
+            select(
+                LLMUsageRecord.provider,
+                LLMUsageRecord.model_name,
+                func.count(LLMUsageRecord.id),
+                func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
+                func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
+                func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
+            )
+            .select_from(LLMUsageRecord)
+            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
+            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
+            .where(*conditions)
+            .group_by(LLMUsageRecord.provider, LLMUsageRecord.model_name)
+            .order_by(
+                desc(func.count(LLMUsageRecord.id)),
+                desc(func.sum(LLMUsageRecord.total_tokens)),
+            )
+            .limit(5)
+        )
+        by_model_rows = (await self.db.execute(by_model_stmt)).all()
+
+        by_step_stmt = (
+            select(
+                LLMUsageRecord.step,
+                LLMUsageRecord.step_name,
+                func.count(LLMUsageRecord.id),
+                func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
+                func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
+                func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
+            )
+            .select_from(LLMUsageRecord)
+            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
+            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
+            .where(*conditions)
+            .group_by(LLMUsageRecord.step, LLMUsageRecord.step_name)
+            .order_by(
+                desc(func.count(LLMUsageRecord.id)),
+                desc(func.sum(LLMUsageRecord.total_tokens)),
+            )
+            .limit(6)
+        )
+        by_step_rows = (await self.db.execute(by_step_stmt)).all()
+
+        recent_stmt = (
+            select(
+                LLMUsageRecord,
+                AnalysisTask.brand_name,
+                ChatSession.title,
+            )
+            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
+            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
+            .where(*conditions)
+            .order_by(desc(LLMUsageRecord.created_at))
+            .limit(item_limit)
+        )
+        recent_rows = (await self.db.execute(recent_stmt)).all()
+
+        return {
+            "summary": {
+                "days": window_days,
+                "entity_id": str(entity_id) if entity_id else None,
+                "call_count": total_calls,
+                "total_tokens": total_tokens,
+                "total_cost": total_cost,
+                "total_latency_ms": total_latency_ms,
+                "avg_latency_ms": avg_latency_ms,
+                "unique_models": unique_models,
+                "first_call_at": first_call_at.isoformat() if first_call_at else None,
+                "last_call_at": last_call_at.isoformat() if last_call_at else None,
+            },
+            "by_model": [
+                {
+                    "provider": provider,
+                    "model_name": model_name,
+                    "call_count": int(call_count or 0),
+                    "total_tokens": int(total_tokens or 0),
+                    "total_cost": round(float(total_cost or 0.0), 6),
+                    "total_latency_ms": int(total_latency_ms or 0),
+                    "avg_latency_ms": round(float(avg_latency_ms or 0.0), 2),
+                }
+                for provider, model_name, call_count, total_tokens, total_cost, total_latency_ms, avg_latency_ms in by_model_rows
+            ],
+            "by_step": [
+                {
+                    "step": step,
+                    "step_name": step_name,
+                    "call_count": int(call_count or 0),
+                    "total_tokens": int(total_tokens or 0),
+                    "total_cost": round(float(total_cost or 0.0), 6),
+                    "total_latency_ms": int(total_latency_ms or 0),
+                    "avg_latency_ms": round(float(avg_latency_ms or 0.0), 2),
+                }
+                for step, step_name, call_count, total_tokens, total_cost, total_latency_ms, avg_latency_ms in by_step_rows
+            ],
+            "recent_calls": [
+                {
+                    "id": str(record.id),
+                    "task_id": str(record.task_id) if record.task_id else None,
+                    "session_id": str(record.session_id) if record.session_id else None,
+                    "brand_name": brand_name or session_title or "未关联任务",
+                    "provider": record.provider,
+                    "model_name": record.model_name,
+                    "step": record.step,
+                    "step_name": record.step_name,
+                    "prompt_tokens": record.prompt_tokens,
+                    "completion_tokens": record.completion_tokens,
+                    "total_tokens": record.total_tokens,
+                    "latency_ms": record.latency_ms,
+                    "estimated_cost": record.estimated_cost,
+                    "created_at": record.created_at.isoformat() if record.created_at else None,
+                }
+                for record, brand_name, session_title in recent_rows
+            ],
+        }
+
+
+async def record_llm_usage_async(
+    *,
+    session_id: str | None,
+    task_id: str | None,
+    step: str | None,
+    step_name: str | None,
+    model: BaseLLMModel,
+    usage: LLMUsage | None,
+    latency_ms: int | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> None:
+    """Persist token/cost/latency metrics when the provider produced them."""
+    normalized_usage = usage or LLMUsage()
+    has_any_counter = any(
+        value is not None
+        for value in (
+            normalized_usage.prompt_tokens,
+            normalized_usage.completion_tokens,
+            normalized_usage.total_tokens,
+        )
+    )
+    if not has_any_counter and latency_ms is None:
+        return
+
+    try:
+        async with AsyncSessionLocal() as db:
+            service = LLMUsageService(db)
+            await service.record_usage(
+                session_id=session_id,
+                task_id=task_id,
+                step=step,
+                step_name=step_name,
+                model=model,
+                usage=normalized_usage,
+                latency_ms=latency_ms,
+                extra_metadata=extra_metadata,
+            )
+    except Exception as exc:
+        logger.warning("[LLMUsage] Failed to persist usage: %s", exc)

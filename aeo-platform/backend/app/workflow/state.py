@@ -241,6 +241,7 @@ class AgentState(TypedDict):
     # Task Persistence (Cycle 3, Module 1)
     # =========================================================================
     task_id: str | None  # UUID of the AnalysisTask tracking this execution
+    run_id: str | None   # UUID of the TaskRun tracking this execution attempt
 
     # =========================================================================
     # Multi-Turn Follow-Up (Cycle 3, Module 2)

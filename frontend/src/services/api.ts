@@ -8,7 +8,8 @@ import type { TouchpointTree } from '@/types/touchpoint';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import type { SessionListResponse } from '@/types/session';
 import type { SnapshotSummary, SnapshotTrendPoint, SnapshotCompare } from '@/types/snapshot';
-import type { AnalysisTask } from '@/types/task';
+import type { AnalysisTask, TaskRunRecord } from '@/types/task';
+import type { LLMObservabilitySnapshot } from '@/types/observability';
 import type {
   MonitoringSchedule,
   MonitoringAlert,
@@ -413,9 +414,17 @@ class ApiService {
   // =========================================================================
 
   /** Get tasks for a session */
-  async getSessionTasks(sessionId: string) {
+  async getSessionTasks(
+    sessionId: string,
+    params?: { status?: string; limit?: number; offset?: number }
+  ) {
+    const query = new URLSearchParams();
+    if (params?.status) query.set('status_filter', params.status);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.offset) query.set('offset', String(params.offset));
+    const qs = query.toString();
     return this.request<{ tasks: AnalysisTask[]; total: number }>(
-      `/sessions/${sessionId}/tasks`
+      `/sessions/${sessionId}/tasks${qs ? `?${qs}` : ''}`
     ).catch(() => ({ tasks: [] as AnalysisTask[], total: 0 }));
   }
 
@@ -425,6 +434,23 @@ class ApiService {
       `/sessions/${sessionId}/tasks/active`
     ).catch(() => ({ task: null }));
     return resp.task;
+  }
+
+  async getTask(sessionId: string, taskId: string): Promise<AnalysisTask | null> {
+    const resp = await this.request<{ task: AnalysisTask | null }>(
+      `/sessions/${sessionId}/tasks/${taskId}`
+    ).catch(() => ({ task: null }));
+    return resp.task;
+  }
+
+  async getTaskRuns(
+    sessionId: string,
+    taskId: string,
+    limit: number = 20
+  ): Promise<{ task_id: string; runs: TaskRunRecord[]; limit: number }> {
+    return this.request<{ task_id: string; runs: TaskRunRecord[]; limit: number }>(
+      `/sessions/${sessionId}/tasks/${taskId}/runs?limit=${limit}`
+    );
   }
 
   /** Cancel a running task */
@@ -447,6 +473,19 @@ class ApiService {
     if (params?.offset) query.set('offset', String(params.offset));
     const qs = query.toString();
     return this.request(`/tasks${qs ? `?${qs}` : ''}`);
+  }
+
+  async getTaskObservability(params?: {
+    entityId?: string;
+    days?: number;
+    limit?: number;
+  }): Promise<LLMObservabilitySnapshot> {
+    const query = new URLSearchParams();
+    if (params?.entityId) query.set('entity_id', params.entityId);
+    if (params?.days) query.set('days', String(params.days));
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return this.request<LLMObservabilitySnapshot>(`/tasks/observability${qs ? `?${qs}` : ''}`);
   }
 
   // =========================================================================

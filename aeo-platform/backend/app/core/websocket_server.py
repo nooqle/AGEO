@@ -3,6 +3,8 @@
 import logging
 from fastapi import WebSocket
 
+from app.services.runtime_coordinator import runtime_coordinator
+from app.services.task_event_bus import TaskStatusChangedEvent
 
 # 定义执行步骤模板
 EXECUTION_STEPS = [
@@ -23,6 +25,24 @@ TPAOR_PHASE_MAP = {
 }
 
 logger = logging.getLogger(__name__)
+
+_RUNTIME_GUARDED_EVENTS = {
+    "action_log",
+    "artifact_patch",
+    "browser_state",
+    "browser_user_action",
+    "confirmation_request",
+    "error",
+    "execution_complete",
+    "execution_progress",
+    "inline_confirmation",
+    "output_ready",
+    "plan_update",
+    "reply_delta",
+    "stage_result",
+    "system_notice",
+    "thought_delta",
+}
 
 
 class ConnectionManager:
@@ -60,9 +80,33 @@ class ConnectionManager:
         """Get session ID for a WebSocket connection."""
         return self.ws_to_session.get(websocket)
 
-    async def emit_to_session(self, session_id: str, event: str, data: dict):
+    async def _should_suppress_runtime_event(self, session_id: str, event: str) -> bool:
+        """Return True when a cancelled runtime should stop emitting stream events."""
+
+        if event not in _RUNTIME_GUARDED_EVENTS:
+            return False
+
+        return await runtime_coordinator.is_session_runtime_blocked(session_id)
+
+    async def emit_to_session(
+        self,
+        session_id: str,
+        event: str,
+        data: dict,
+        *,
+        bypass_runtime_guard: bool = False,
+    ):
         """Emit event to all connections in a session."""
         if session_id not in self.session_connections:
+            return
+        if not bypass_runtime_guard and await self._should_suppress_runtime_event(
+            session_id, event
+        ):
+            logger.info(
+                "[WebSocket] Suppressed %s for session %s because runtime is cancelled",
+                event,
+                session_id,
+            )
             return
 
         disconnected = []
@@ -88,6 +132,25 @@ class ConnectionManager:
 
 # Global manager instance
 manager = ConnectionManager()
+
+
+async def _forward_task_status_change(event: TaskStatusChangedEvent) -> None:
+    """Forward task domain events to the session WebSocket transport."""
+
+    if not event.session_id:
+        return
+
+    await manager.emit_to_session(
+        event.session_id,
+        "task_status_change",
+        {
+            "status": event.status,
+            "task": event.task,
+        },
+    )
+
+
+runtime_coordinator.subscribe_task_status(_forward_task_status_change)
 
 
 # ========== Event Handlers ==========
@@ -119,15 +182,9 @@ async def handle_stop(websocket: WebSocket, session_id: str):
     """Handle stop request."""
     logger.info(f"[WebSocket] Stop requested from session {session_id}")
 
-    # TODO: Stop execution through AgentOrchestrator
-    await manager.emit_to_websocket(
-        websocket,
-        "execution_stopped",
-        {
-            "completed_stages": [],
-            "pending_stages": [],
-        },
-    )
+    from app.api.v1.websocket_langgraph import handle_stop_langgraph
+
+    await handle_stop_langgraph(websocket, session_id)
 
 
 async def handle_recall(websocket: WebSocket, session_id: str, data: dict):
@@ -152,11 +209,12 @@ async def handle_browser_action_resolution(
     websocket: WebSocket, session_id: str, data: dict
 ):
     """Handle browser handoff completion/skip acknowledgement."""
-    logger.info(f"[WebSocket] browser_action_resolution event from session: {session_id}")
+    logger.info(
+        f"[WebSocket] browser_action_resolution event from session: {session_id}"
+    )
 
     from app.api.v1.websocket_langgraph import (
         handle_browser_action_resolution_langgraph,
     )
 
     await handle_browser_action_resolution_langgraph(websocket, session_id, data)
-
