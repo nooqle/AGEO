@@ -45,6 +45,7 @@ class JobSubmissionService:
         session_id: UUID,
         brand_name: str,
         entity_id: UUID | None = None,
+        trigger_source: TaskTriggerSource = TaskTriggerSource.WEBSOCKET,
     ) -> SubmittedJob:
         return await self._submit(
             user_id=user_id,
@@ -53,7 +54,7 @@ class JobSubmissionService:
             entity_id=entity_id,
             monitoring_schedule_id=None,
             run_kind=TaskRunKind.INITIAL,
-            trigger_source=TaskTriggerSource.WEBSOCKET,
+            trigger_source=trigger_source,
         )
 
     async def submit_follow_up_analysis(
@@ -63,6 +64,7 @@ class JobSubmissionService:
         session_id: UUID,
         brand_name: str,
         entity_id: UUID | None = None,
+        trigger_source: TaskTriggerSource = TaskTriggerSource.WEBSOCKET,
     ) -> SubmittedJob:
         return await self._submit(
             user_id=user_id,
@@ -71,7 +73,7 @@ class JobSubmissionService:
             entity_id=entity_id,
             monitoring_schedule_id=None,
             run_kind=TaskRunKind.FOLLOW_UP,
-            trigger_source=TaskTriggerSource.WEBSOCKET,
+            trigger_source=trigger_source,
         )
 
     async def submit_scheduled_analysis(

@@ -158,7 +158,11 @@ async def _ensure_manual_session_is_idle(
         raise RuntimeError("当前任务仍在执行，请等待完成或先停止后再继续。")
 
 
-async def _submit_resume_run(task_id: str | None) -> str | None:
+async def _submit_resume_run(
+    task_id: str | None,
+    *,
+    trigger_source: str = "websocket",
+) -> str | None:
     """Create and start a new runtime attempt when a paused flow resumes."""
 
     if not task_id:
@@ -175,7 +179,7 @@ async def _submit_resume_run(task_id: str | None) -> str | None:
             submitted = await submission_service.submit_existing_task_run(
                 task_id=UUID(task_id),
                 run_kind=TaskRunKind.RESUME_AFTER_INPUT,
-                trigger_source=TaskTriggerSource.WEBSOCKET,
+                trigger_source=TaskTriggerSource(trigger_source),
             )
             dispatcher = JobDispatcher(db)
             await dispatcher.claim_run(
@@ -231,10 +235,11 @@ async def _submit_manual_task(
     brand_name: str,
     entity_id: str | None,
     run_kind: Literal["initial", "follow_up"],
+    trigger_source: str = "websocket",
 ) -> tuple[str, str]:
     """Create, claim, and start a manual runtime task for the session."""
 
-    from app.models.task_run import TaskRunKind
+    from app.models.task_run import TaskRunKind, TaskTriggerSource
     from app.services.job_dispatcher import JobDispatcher
     from app.services.job_submission_service import JobSubmissionService
     from app.services.task_service import TaskService
@@ -252,6 +257,7 @@ async def _submit_manual_task(
                 session_id=UUID(session_id),
                 brand_name=brand_name,
                 entity_id=UUID(entity_id) if entity_id else None,
+                trigger_source=TaskTriggerSource(trigger_source),
             )
         else:
             submitted = await submission_service.submit_manual_analysis(
@@ -259,6 +265,7 @@ async def _submit_manual_task(
                 session_id=UUID(session_id),
                 brand_name=brand_name,
                 entity_id=UUID(entity_id) if entity_id else None,
+                trigger_source=TaskTriggerSource(trigger_source),
             )
 
         dispatcher = JobDispatcher(db)
@@ -618,7 +625,7 @@ async def rebuild_state_from_db(
 
 
 async def handle_user_message_langgraph(
-    websocket: WebSocket, session_id: str, data: dict
+    websocket: WebSocket | None, session_id: str, data: dict
 ):
     """Handle user message using LangGraph workflow.
 
@@ -631,6 +638,9 @@ async def handle_user_message_langgraph(
     brand_name = data.get("brand_name", "")
     official_website = data.get("official_website", "")
     industry_hint = data.get("industry_hint", "")
+    trigger_source = data.get("trigger_source", "websocket")
+    persist_user_message = bool(data.get("persist_user_message", True))
+    existing_message_id = data.get("message_id")
 
     # Build context-enhanced content for orchestrator
     enhanced_content = content
@@ -667,21 +677,24 @@ async def handle_user_message_langgraph(
     entity_id: str | None = None
     session_user_id: UUID | None = None
     async with AsyncSessionLocal() as db:
-        message_service = MessageService(db)
-        try:
-            saved = await message_service.save_message(
-                session_id=UUID(session_id),
-                role="user",
-                content=content,
-            )
-            # Send DB UUID back so frontend can sync its local message ID
+        if persist_user_message:
+            message_service = MessageService(db)
+            try:
+                saved = await message_service.save_message(
+                    session_id=UUID(session_id),
+                    role="user",
+                    content=content,
+                )
+                existing_message_id = str(saved["id"])
+            except Exception as e:
+                logger.error(f"[LangGraph] Error saving user message: {e}")
+
+        if existing_message_id:
             await ws_session_manager.emit_to_session(
                 session_id,
                 "user_message_ack",
-                {"message_id": str(saved["id"]), "content": content},
+                {"message_id": existing_message_id, "content": content},
             )
-        except Exception as e:
-            logger.error(f"[LangGraph] Error saving user message: {e}")
 
         # Look up session's associated entity to auto-inject brand info
         try:
@@ -772,8 +785,12 @@ async def handle_user_message_langgraph(
                 if _state_is_waiting_for_user(state_values) and await _is_waiting_task_resumable(
                     state_values.get("task_id")
                 ):
+                    resume_kwargs: dict[str, Any] = {}
+                    if trigger_source != "websocket":
+                        resume_kwargs["trigger_source"] = trigger_source
                     resumed_run_id = await _submit_resume_run(
-                        state_values.get("task_id")
+                        state_values.get("task_id"),
+                        **resume_kwargs,
                     )
                     if state_values.get("task_id") and resumed_run_id is None:
                         raise RuntimeError(
@@ -784,12 +801,17 @@ async def handle_user_message_langgraph(
                         raise RuntimeError(
                             "Missing session user context for follow-up task"
                         )
+                    submit_kwargs: dict[str, Any] = {
+                        "user_id": session_user_id,
+                        "session_id": session_id,
+                        "brand_name": follow_up_brand_name,
+                        "entity_id": entity_id or state_values.get("entity_id"),
+                        "run_kind": "follow_up",
+                    }
+                    if trigger_source != "websocket":
+                        submit_kwargs["trigger_source"] = trigger_source
                     follow_up_task_id, resumed_run_id = await _submit_manual_task(
-                        user_id=session_user_id,
-                        session_id=session_id,
-                        brand_name=follow_up_brand_name,
-                        entity_id=entity_id or state_values.get("entity_id"),
-                        run_kind="follow_up",
+                        **submit_kwargs
                     )
                 runtime_task_id = follow_up_task_id
                 runtime_run_id = resumed_run_id or state_values.get("run_id")
@@ -860,8 +882,12 @@ async def handle_user_message_langgraph(
                     if _state_is_waiting_for_user(restored) and await _is_waiting_task_resumable(
                         restored.get("task_id")
                     ):
+                        resume_kwargs = {}
+                        if trigger_source != "websocket":
+                            resume_kwargs["trigger_source"] = trigger_source
                         resumed_run_id = await _submit_resume_run(
-                            restored.get("task_id")
+                            restored.get("task_id"),
+                            **resume_kwargs,
                         )
                         if restored.get("task_id") and resumed_run_id is None:
                             raise RuntimeError(
@@ -872,12 +898,17 @@ async def handle_user_message_langgraph(
                             raise RuntimeError(
                                 "Missing session user context for restored follow-up task"
                             )
+                        submit_kwargs = {
+                            "user_id": session_user_id,
+                            "session_id": session_id,
+                            "brand_name": restored_brand_name,
+                            "entity_id": entity_id or restored.get("entity_id"),
+                            "run_kind": "follow_up",
+                        }
+                        if trigger_source != "websocket":
+                            submit_kwargs["trigger_source"] = trigger_source
                         restored_task_id, resumed_run_id = await _submit_manual_task(
-                            user_id=session_user_id,
-                            session_id=session_id,
-                            brand_name=restored_brand_name,
-                            entity_id=entity_id or restored.get("entity_id"),
-                            run_kind="follow_up",
+                            **submit_kwargs
                         )
                     runtime_task_id = restored_task_id
                     runtime_run_id = resumed_run_id or restored.get("run_id")
@@ -922,12 +953,17 @@ async def handle_user_message_langgraph(
                 await _ensure_manual_session_is_idle(session_id=session_id)
                 if session_user_id is None:
                     raise RuntimeError("Missing session user context for initial task")
+                submit_kwargs = {
+                    "user_id": session_user_id,
+                    "session_id": session_id,
+                    "brand_name": brand_name or content,
+                    "entity_id": entity_id,
+                    "run_kind": "initial",
+                }
+                if trigger_source != "websocket":
+                    submit_kwargs["trigger_source"] = trigger_source
                 created_task_id, created_run_id = await _submit_manual_task(
-                    user_id=session_user_id,
-                    session_id=session_id,
-                    brand_name=brand_name or content,
-                    entity_id=entity_id,
-                    run_kind="initial",
+                    **submit_kwargs
                 )
                 runtime_task_id = created_task_id
                 runtime_run_id = created_run_id
@@ -937,15 +973,23 @@ async def handle_user_message_langgraph(
                     task_err,
                     exc_info=True,
                 )
-                await ws_session_manager.emit_to_websocket(
-                    websocket,
-                    "error",
-                    {
-                        "step": "runtime",
-                        "error": "任务初始化失败，分析未启动，请稍后重试。",
-                        "recoverable": True,
-                    },
-                )
+                error_payload = {
+                    "step": "runtime",
+                    "error": "任务初始化失败，分析未启动，请稍后重试。",
+                    "recoverable": True,
+                }
+                if websocket is not None:
+                    await ws_session_manager.emit_to_websocket(
+                        websocket,
+                        "error",
+                        error_payload,
+                    )
+                else:
+                    await ws_session_manager.emit_to_session(
+                        session_id,
+                        "error",
+                        error_payload,
+                    )
                 return
 
             # New conversation: initialize full state
@@ -1035,15 +1079,23 @@ async def handle_user_message_langgraph(
         )
         traceback.print_exc()
 
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
-            {
-                "step": "workflow",
-                "error": f"处理消息时出错: {error_msg}",
-                "recoverable": True,
-            },
-        )
+        error_payload = {
+            "step": "workflow",
+            "error": f"处理消息时出错: {error_msg}",
+            "recoverable": True,
+        }
+        if websocket is not None:
+            await ws_session_manager.emit_to_websocket(
+                websocket,
+                "error",
+                error_payload,
+            )
+        else:
+            await ws_session_manager.emit_to_session(
+                session_id,
+                "error",
+                error_payload,
+            )
     finally:
         # Always save final agent message, even if astream raised an exception
         if workflow and config and not skip_final_save:

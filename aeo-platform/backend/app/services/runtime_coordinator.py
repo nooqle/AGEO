@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 SESSION_LIVE_LOCK_TTL_SECONDS = 15
 SESSION_BLOCK_TTL_SECONDS = 120
 SESSION_RECALL_TTL_SECONDS = 600
+RUNTIME_TASK_STATUS_CHANNEL = "runtime:task_status"
+RUNTIME_CANCEL_CHANNEL = "runtime:cancel"
 
 
 def _session_live_lock_key(session_id: str) -> str:
@@ -67,6 +69,10 @@ class SessionExecutionPresence:
 
 class RuntimeCoordinator(Protocol):
     """Abstraction for ephemeral runtime coordination concerns."""
+
+    async def start_background_tasks(self) -> None: ...
+
+    async def stop_background_tasks(self) -> None: ...
 
     async def register_local_execution(
         self,
@@ -115,6 +121,12 @@ class LocalRuntimeCoordinator:
 
     def __init__(self) -> None:
         self._recalled_sessions: set[str] = set()
+
+    async def start_background_tasks(self) -> None:
+        return None
+
+    async def stop_background_tasks(self) -> None:
+        return None
 
     async def register_local_execution(
         self,
@@ -192,6 +204,35 @@ class RedisRuntimeCoordinator:
         self._redis = redis_client
         self._fallback = LocalRuntimeCoordinator()
         self._client_lock = asyncio.Lock()
+        self._listener_task: asyncio.Task | None = None
+        self._listener_stop = asyncio.Event()
+
+    async def start_background_tasks(self) -> None:
+        if self._listener_task is not None and not self._listener_task.done():
+            return
+
+        client = await self._get_redis()
+        if client is None:
+            logger.warning(
+                "[RuntimeCoordinator] Redis listener not started because Redis is unavailable"
+            )
+            return
+
+        self._listener_stop.clear()
+        self._listener_task = asyncio.create_task(self._run_pubsub_listener())
+        logger.info("[RuntimeCoordinator] Redis pubsub listener started")
+
+    async def stop_background_tasks(self) -> None:
+        self._listener_stop.set()
+        if self._listener_task is None:
+            return
+        self._listener_task.cancel()
+        try:
+            await self._listener_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._listener_task = None
 
     async def register_local_execution(
         self,
@@ -243,7 +284,14 @@ class RedisRuntimeCoordinator:
         self, session_id: str
     ) -> LocalExecutionBinding | None:
         await self._set_session_blocked(session_id)
-        return await self._fallback.cancel_session_execution(session_id)
+        binding = await self._fallback.cancel_session_execution(session_id)
+        await self._publish_cancel(
+            {
+                "session_id": session_id,
+                "task_id": str(binding.task_id) if binding else None,
+            }
+        )
+        return binding
 
     async def cancel_task_execution(
         self,
@@ -255,6 +303,12 @@ class RedisRuntimeCoordinator:
         target_session_id = session_id or (binding.session_id if binding else None)
         if target_session_id:
             await self._set_session_blocked(target_session_id)
+        await self._publish_cancel(
+            {
+                "session_id": target_session_id,
+                "task_id": str(task_id),
+            }
+        )
         return binding
 
     async def allow_session_runtime_events(self, session_id: str) -> None:
@@ -328,7 +382,24 @@ class RedisRuntimeCoordinator:
             return await self._fallback.consume_recalled_session(session_id)
 
     async def publish_task_status(self, event: TaskStatusChangedEvent) -> None:
-        await self._fallback.publish_task_status(event)
+        client = await self._get_redis()
+        if client is None:
+            await self._fallback.publish_task_status(event)
+            return
+        try:
+            await client.publish(
+                RUNTIME_TASK_STATUS_CHANNEL,
+                json.dumps(
+                    {
+                        "session_id": event.session_id,
+                        "status": event.status,
+                        "task": event.task,
+                    }
+                ),
+            )
+        except Exception:
+            logger.exception("[RuntimeCoordinator] Failed to publish task status event")
+            await self._fallback.publish_task_status(event)
 
     def subscribe_task_status(self, subscriber: TaskStatusSubscriber) -> None:
         self._fallback.subscribe_task_status(subscriber)
@@ -339,6 +410,89 @@ class RedisRuntimeCoordinator:
     async def _get_redis(self) -> Any | None:
         if self._redis is not None:
             return self._redis
+
+    async def _publish_cancel(self, payload: dict[str, Any]) -> None:
+        client = await self._get_redis()
+        if client is None:
+            return
+        try:
+            await client.publish(RUNTIME_CANCEL_CHANNEL, json.dumps(payload))
+        except Exception:
+            logger.exception("[RuntimeCoordinator] Failed to publish cancel signal")
+
+    async def _run_pubsub_listener(self) -> None:
+        client = await self._get_redis()
+        if client is None:
+            return
+
+        pubsub = client.pubsub()
+        try:
+            await pubsub.subscribe(RUNTIME_TASK_STATUS_CHANNEL, RUNTIME_CANCEL_CHANNEL)
+            while not self._listener_stop.is_set():
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True,
+                    timeout=1.0,
+                )
+                if not message:
+                    await asyncio.sleep(0.1)
+                    continue
+                await self._handle_pubsub_message(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("[RuntimeCoordinator] Redis pubsub listener crashed")
+        finally:
+            try:
+                await pubsub.unsubscribe(
+                    RUNTIME_TASK_STATUS_CHANNEL,
+                    RUNTIME_CANCEL_CHANNEL,
+                )
+                await pubsub.close()
+            except Exception:
+                logger.exception("[RuntimeCoordinator] Failed to close Redis pubsub")
+
+    async def _handle_pubsub_message(self, message: dict[str, Any]) -> None:
+        channel = message.get("channel")
+        data = message.get("data")
+        if isinstance(channel, bytes):
+            channel = channel.decode()
+        if isinstance(data, bytes):
+            data = data.decode()
+        if not isinstance(channel, str) or not isinstance(data, str):
+            return
+
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            logger.warning(
+                "[RuntimeCoordinator] Ignoring malformed pubsub payload on %s",
+                channel,
+            )
+            return
+
+        if channel == RUNTIME_TASK_STATUS_CHANNEL:
+            await self._fallback.publish_task_status(
+                TaskStatusChangedEvent(
+                    session_id=payload.get("session_id"),
+                    status=payload.get("status", "pending"),
+                    task=payload.get("task") or {},
+                )
+            )
+            return
+
+        if channel == RUNTIME_CANCEL_CHANNEL:
+            session_id = payload.get("session_id")
+            task_id = payload.get("task_id")
+            if session_id:
+                await self._fallback.cancel_session_execution(session_id)
+            elif task_id:
+                try:
+                    await self._fallback.cancel_task_execution(UUID(task_id))
+                except ValueError:
+                    logger.warning(
+                        "[RuntimeCoordinator] Ignoring malformed cancel task_id %s",
+                        task_id,
+                    )
 
         async with self._client_lock:
             if self._redis is not None:
