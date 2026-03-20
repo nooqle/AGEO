@@ -1677,7 +1677,7 @@ async def handle_browser_action_resolution_langgraph(
         )
         return
 
-    request = get_browser_action_request(request_id)
+    request = await get_browser_action_request(request_id)
     if request is None or request.session_id != session_id:
         await ws_session_manager.emit_to_websocket(
             websocket,
@@ -1686,7 +1686,7 @@ async def handle_browser_action_resolution_langgraph(
         )
         return
 
-    resolve_browser_action_request(request_id, resolution)
+    await resolve_browser_action_request(request_id, resolution)
     await ws_session_manager.emit_to_session(
         session_id,
         "browser_user_action_ack",

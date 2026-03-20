@@ -560,7 +560,7 @@ class BaseBrowserHandler(ABC):
             return None
         if not self.session_id:
             return None
-        request = register_browser_action_request(
+        request = await register_browser_action_request(
             session_id=self.session_id,
             platform=self.PLATFORM.value,
             action_type=action_type,
@@ -587,7 +587,7 @@ class BaseBrowserHandler(ABC):
                 return False
             return await ready_check(ready_timeout)
         finally:
-            clear_browser_action_request(request_id)
+            await clear_browser_action_request(request_id)
 
     async def _check_and_handle_modal(self) -> "BrowserEvent | None":
         """Generic modal/popup check.  Call once after navigation, not per question.

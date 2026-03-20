@@ -1492,7 +1492,7 @@ async def _emit_browser_action_prompt(
     progress: float,
     reply_markdown: str,
 ) -> str:
-    request = register_browser_action_request(
+    request = await register_browser_action_request(
         session_id=session_id,
         platform=platform,
         action_type=action_type,
@@ -1529,7 +1529,7 @@ async def _wait_for_browser_action_resolution(request_id: str, timeout: int = 30
     try:
         return await wait_for_browser_action_resolution(request_id, timeout=timeout)
     finally:
-        clear_browser_action_request(request_id)
+        await clear_browser_action_request(request_id)
 
 
 async def _fetch_from_browser(
@@ -1617,7 +1617,7 @@ async def _fetch_from_browser(
             if event.state == browser_state.COMPLETED and event.data:
                 result_data = event.data
 
-    except Exception as gen_err:
+    except Exception:
         raise
 
     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -1783,7 +1783,7 @@ async def _fetch_from_browser(
                     state="waiting_for_modal",
                     action_type="modal",
                     message=f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
-                    action_hint=f"请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”",
+                    action_hint="请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”",
                     progress=0.35,
                     reply_markdown=(
                         f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
