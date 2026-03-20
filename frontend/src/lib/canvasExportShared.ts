@@ -13,7 +13,7 @@ import {
   isConfidenceCanvasReport,
 } from '@/adapters/exportArtifacts';
 
-export type SupportedExportFormat = 'pdf' | 'md';
+export type SupportedExportFormat = 'pdf' | 'md' | 'csv';
 
 export type SupportedDeliverable =
   | 'AI答案抓取'
@@ -222,6 +222,13 @@ function stringifyTableCell(value: unknown): string {
   return String(value);
 }
 
+function escapeCsvCell(value: string): string {
+  const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const shouldQuote = /[",\n]/.test(normalized);
+  const escaped = normalized.replace(/"/g, '""');
+  return shouldQuote ? `"${escaped}"` : escaped;
+}
+
 function buildDataTableMarkdown(
   content: Extract<CanvasContent, { type: 'dataTable' }>,
   descriptor: ExportDescriptor
@@ -267,6 +274,30 @@ function buildDataTableMarkdown(
     );
   }
   lines.push('');
+  return lines.join('\n');
+}
+
+export function buildDataTableCsv(
+  content: Extract<CanvasContent, { type: 'dataTable' }>
+): string {
+  const columns = content.data.columns || [];
+  const rows = content.data.rows || [];
+
+  if (columns.length === 0) {
+    return '';
+  }
+
+  const header = columns.map((column) => escapeCsvCell(column.label || column.key));
+  const lines = [header.join(',')];
+
+  for (const row of rows) {
+    lines.push(
+      columns
+        .map((column) => escapeCsvCell(stringifyTableCell(row[column.key])))
+        .join(',')
+    );
+  }
+
   return lines.join('\n');
 }
 

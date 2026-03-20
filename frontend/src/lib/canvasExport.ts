@@ -2,6 +2,7 @@
 
 import type { CanvasContent } from '@/types/canvas';
 import {
+  buildDataTableCsv,
   buildExportDescriptor,
   buildExportFileName,
   getCanvasContentText,
@@ -26,6 +27,11 @@ function downloadBlob(blob: Blob, fileName: string) {
 
 async function exportMarkdown(markdown: string, fileName: string) {
   const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+  downloadBlob(blob, fileName);
+}
+
+async function exportCsv(csv: string, fileName: string) {
+  const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' });
   downloadBlob(blob, fileName);
 }
 
@@ -63,6 +69,15 @@ export async function exportCanvasContent(
 
   const markdown = getCanvasContentText(content, allContents);
   const fileName = buildExportFileName(descriptor, format);
+
+  if (format === 'csv') {
+    const activeContent = resolveActiveContent(content);
+    if (activeContent.type !== 'dataTable') {
+      throw new Error('当前交付物暂不支持导出 CSV');
+    }
+    await exportCsv(buildDataTableCsv(activeContent), fileName);
+    return fileName;
+  }
 
   if (format === 'md') {
     await exportMarkdown(markdown, fileName);

@@ -77,6 +77,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const isArtifactActionRunning = confidenceStatus?.phase === 'running';
   const exportable = useMemo(() => isCanvasContentExportable(content), [content]);
   const exportLabel = useMemo(() => getCanvasExportLabel(content), [content]);
+  const canExportCsv = effectiveContent.type === 'dataTable';
 
   // Determine which linkedMessageId to use for "jump to conversation"
   const activeLinkedMessageId = useMemo(() => {
@@ -374,6 +375,19 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                       <span className="text-[11px] font-semibold tracking-[0.08em]">MD</span>
                       导出 MD
                     </button>
+                    {canExportCsv && (
+                      <button
+                        onClick={() => handleExport('csv')}
+                        className={menuItemClass}
+                        style={{ color: 'var(--text-primary)' }}
+                        onMouseEnter={handleMenuItemEnter}
+                        onMouseLeave={handleMenuItemLeave}
+                        disabled={Boolean(exportingFormat)}
+                      >
+                        <span className="text-[11px] font-semibold tracking-[0.08em]">CSV</span>
+                        导出 CSV
+                      </button>
+                    )}
                     <div className="px-3 pb-2 pt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                       文件名：品牌名 + {exportLabel} + 时间 + 版本号
                     </div>
