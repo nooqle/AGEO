@@ -15,6 +15,7 @@ from app.core.database import Base
 
 if TYPE_CHECKING:
     from app.models.task import AnalysisTask
+    from app.models.task_run_child_attempt import TaskRunChildAttempt
 
 
 def _enum_values(enum_cls: type[PyEnum]) -> list[str]:
@@ -169,6 +170,12 @@ class TaskRun(Base):
     task: Mapped["AnalysisTask"] = relationship(
         "AnalysisTask",
         back_populates="task_runs",
+    )
+    child_attempts: Mapped[list["TaskRunChildAttempt"]] = relationship(
+        "TaskRunChildAttempt",
+        back_populates="task_run",
+        cascade="all, delete-orphan",
+        order_by="TaskRunChildAttempt.created_at.desc()",
     )
 
     def __repr__(self) -> str:

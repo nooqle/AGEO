@@ -10,15 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.config import get_settings
+from app.core.database import AsyncSessionLocal
+from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
+from app.services.task_run_child_attempt_service import TaskRunChildAttemptService
 
 
 BrowserActionResolution = Literal["completed", "skip"]
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,6 +37,8 @@ class BrowserActionRequest:
     progress: float
     created_at: float
     event: asyncio.Event | None
+    run_id: str | None = None
+    child_attempt_id: str | None = None
     resolution: BrowserActionResolution | None = None
 
 
@@ -87,7 +94,21 @@ def _purge_expired() -> None:
         if now - request.created_at > _REQUEST_TTL_SECONDS
     ]
     for request_id in expired_ids:
+        request = _requests_by_id.get(request_id)
         clear_browser_action_request_local(request_id)
+        if request is None or request.resolution is not None:
+            continue
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            continue
+        loop.create_task(
+            _finalize_unresolved_child_attempt(
+                request_id,
+                final_status=TaskRunChildAttemptStatus.EXPIRED,
+                error_message="浏览器操作请求已过期",
+            )
+        )
 
 
 def _serialize_request(request: BrowserActionRequest) -> dict[str, Any]:
@@ -100,6 +121,8 @@ def _serialize_request(request: BrowserActionRequest) -> dict[str, Any]:
         "action_hint": request.action_hint,
         "progress": request.progress,
         "created_at": request.created_at,
+        "run_id": request.run_id,
+        "child_attempt_id": request.child_attempt_id,
         "resolution": request.resolution,
     }
 
@@ -110,7 +133,10 @@ def _deserialize_request(payload: dict[str, Any]) -> BrowserActionRequest | None
     platform = payload.get("platform")
     action_type = payload.get("action_type")
     message = payload.get("message")
-    if not all(isinstance(value, str) for value in [request_id, session_id, platform, action_type, message]):
+    if not all(
+        isinstance(value, str)
+        for value in [request_id, session_id, platform, action_type, message]
+    ):
         return None
 
     resolution = payload.get("resolution")
@@ -125,8 +151,12 @@ def _deserialize_request(payload: dict[str, Any]) -> BrowserActionRequest | None
         message=message,
         action_hint=payload.get("action_hint"),
         progress=float(payload.get("progress", 0.0) or 0.0),
-        created_at=float(payload.get("created_at", time.monotonic()) or time.monotonic()),
+        created_at=float(
+            payload.get("created_at", time.monotonic()) or time.monotonic()
+        ),
         event=None,
+        run_id=payload.get("run_id"),
+        child_attempt_id=payload.get("child_attempt_id"),
         resolution=resolution,
     )
 
@@ -149,6 +179,7 @@ async def register_browser_action_request(
     message: str,
     action_hint: str | None,
     progress: float,
+    run_id: str | None = None,
 ) -> BrowserActionRequest:
     _purge_expired()
 
@@ -162,14 +193,19 @@ async def register_browser_action_request(
         progress=progress,
         created_at=time.monotonic(),
         event=asyncio.Event(),
+        run_id=run_id,
     )
+    if run_id:
+        request.child_attempt_id = await _create_child_attempt(request)
     _requests_by_id[request.request_id] = request
     _requests_by_session.setdefault(session_id, set()).add(request.request_id)
 
     client = await _get_redis()
     if client is not None:
         payload = json.dumps(_serialize_request(request))
-        await client.set(_request_key(request.request_id), payload, ex=_REQUEST_TTL_SECONDS)
+        await client.set(
+            _request_key(request.request_id), payload, ex=_REQUEST_TTL_SECONDS
+        )
         await client.sadd(_session_key(session_id), request.request_id)
         await client.expire(_session_key(session_id), _REQUEST_TTL_SECONDS)
 
@@ -236,10 +272,13 @@ async def resolve_browser_action_request(
             except json.JSONDecodeError:
                 payload = {}
             payload["resolution"] = resolution
-            await client.set(_request_key(request_id), json.dumps(payload), ex=_REQUEST_TTL_SECONDS)
+            await client.set(
+                _request_key(request_id), json.dumps(payload), ex=_REQUEST_TTL_SECONDS
+            )
             if request is None:
                 request = _deserialize_request(payload)
 
+    await _resolve_child_attempt(request_id, resolution)
     return request
 
 
@@ -263,27 +302,48 @@ async def get_browser_action_request(request_id: str) -> BrowserActionRequest | 
     return _deserialize_request(payload)
 
 
-async def clear_browser_action_request(request_id: str) -> None:
+async def clear_browser_action_request(
+    request_id: str,
+    *,
+    unresolved_status: TaskRunChildAttemptStatus = TaskRunChildAttemptStatus.EXPIRED,
+    error_message: str | None = "等待用户操作超时或请求已失效",
+) -> None:
     request = _requests_by_id.get(request_id)
     clear_browser_action_request_local(request_id)
 
     client = await _get_redis()
+    if request is None and client is not None:
+        request = await get_browser_action_request(request_id)
+
+    if request is not None and request.resolution is None:
+        await _finalize_unresolved_child_attempt(
+            request_id,
+            final_status=unresolved_status,
+            error_message=error_message,
+        )
+
     if client is None:
         return
-
-    if request is None:
-        remote_request = await get_browser_action_request(request_id)
-        request = remote_request
 
     await client.delete(_request_key(request_id))
     if request is not None:
         await client.srem(_session_key(request.session_id), request_id)
 
 
-async def clear_session_browser_action_requests(session_id: str) -> None:
+async def clear_session_browser_action_requests(
+    session_id: str,
+    *,
+    unresolved_status: TaskRunChildAttemptStatus = TaskRunChildAttemptStatus.CANCELLED,
+    error_message: str | None = "任务已取消",
+) -> None:
     request_ids = list(_requests_by_session.pop(session_id, set()))
     for request_id in request_ids:
         _requests_by_id.pop(request_id, None)
+        await _finalize_unresolved_child_attempt(
+            request_id,
+            final_status=unresolved_status,
+            error_message=error_message,
+        )
 
     client = await _get_redis()
     if client is None:
@@ -296,6 +356,12 @@ async def clear_session_browser_action_requests(session_id: str) -> None:
             pipeline.delete(_request_key(request_id))
             pipeline.srem(_session_key(session_id), request_id)
         await pipeline.execute()
+    for request_id in set(session_ids or []):
+        await _finalize_unresolved_child_attempt(
+            request_id,
+            final_status=unresolved_status,
+            error_message=error_message,
+        )
     await client.delete(_session_key(session_id))
 
 
@@ -341,3 +407,74 @@ async def get_session_browser_action_requests(session_id: str) -> list[dict[str,
         )
 
     return results
+
+
+async def _create_child_attempt(request: BrowserActionRequest) -> str | None:
+    if not request.run_id:
+        return None
+
+    try:
+        run_id = UUID(request.run_id)
+    except ValueError:
+        logger.warning(
+            "[BrowserActionRuntime] Ignoring invalid run_id %s for request %s",
+            request.run_id,
+            request.request_id,
+        )
+        return None
+
+    try:
+        async with AsyncSessionLocal() as db:
+            service = TaskRunChildAttemptService(db)
+            attempt = await service.create_browser_action_attempt(
+                task_run_id=run_id,
+                request_id=request.request_id,
+                platform=request.platform,
+                action_type=request.action_type,
+                message=request.message,
+                action_hint=request.action_hint,
+                progress=request.progress,
+            )
+            return str(attempt.id)
+    except Exception:
+        logger.exception(
+            "[BrowserActionRuntime] Failed to create child attempt for request %s",
+            request.request_id,
+        )
+        return None
+
+
+async def _resolve_child_attempt(
+    request_id: str,
+    resolution: BrowserActionResolution,
+) -> None:
+    try:
+        async with AsyncSessionLocal() as db:
+            service = TaskRunChildAttemptService(db)
+            await service.resolve_by_request_id(request_id, resolution=resolution)
+    except Exception:
+        logger.exception(
+            "[BrowserActionRuntime] Failed to resolve child attempt for request %s",
+            request_id,
+        )
+
+
+async def _finalize_unresolved_child_attempt(
+    request_id: str,
+    *,
+    final_status: TaskRunChildAttemptStatus,
+    error_message: str | None,
+) -> None:
+    try:
+        async with AsyncSessionLocal() as db:
+            service = TaskRunChildAttemptService(db)
+            await service.finalize_unresolved_by_request_id(
+                request_id,
+                final_status=final_status,
+                error_message=error_message,
+            )
+    except Exception:
+        logger.exception(
+            "[BrowserActionRuntime] Failed to finalize child attempt for request %s",
+            request_id,
+        )

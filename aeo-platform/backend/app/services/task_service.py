@@ -20,6 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.task_run import TaskRun, TaskRunStatus, TaskTriggerSource
+from app.models.task_run_child_attempt import TaskRunChildAttempt
 from app.services.runtime_coordinator import runtime_coordinator
 from app.services.task_event_bus import TaskStatusChangedEvent
 
@@ -37,7 +38,11 @@ class TaskService:
 
         stmt = (
             select(AnalysisTask)
-            .options(selectinload(AnalysisTask.task_runs))
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
             .where(AnalysisTask.id == task_id)
         )
         result = await self.db.execute(stmt)
@@ -491,7 +496,11 @@ class TaskService:
         """Get a single task by ID."""
         stmt = (
             select(AnalysisTask)
-            .options(selectinload(AnalysisTask.task_runs))
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
             .where(AnalysisTask.id == task_id)
         )
         result = await self.db.execute(stmt)
@@ -500,9 +509,13 @@ class TaskService:
     async def get_task_run(self, task_id: UUID, run_id: UUID) -> TaskRun | None:
         """Get a single runtime attempt by task/run identity."""
 
-        stmt = select(TaskRun).where(
-            TaskRun.id == run_id,
-            TaskRun.task_id == task_id,
+        stmt = (
+            select(TaskRun)
+            .options(selectinload(TaskRun.child_attempts))
+            .where(
+                TaskRun.id == run_id,
+                TaskRun.task_id == task_id,
+            )
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -511,7 +524,11 @@ class TaskService:
         """Get the active (PENDING/RUNNING) task for a session."""
         stmt = (
             select(AnalysisTask)
-            .options(selectinload(AnalysisTask.task_runs))
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
             .where(
                 AnalysisTask.session_id == session_id,
                 AnalysisTask.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
@@ -557,7 +574,11 @@ class TaskService:
         # Fetch page
         query = (
             select(AnalysisTask)
-            .options(selectinload(AnalysisTask.task_runs))
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
             .where(*conditions)
             .order_by(AnalysisTask.created_at.desc())
             .offset(offset)
@@ -578,6 +599,7 @@ class TaskService:
 
         stmt = (
             select(TaskRun)
+            .options(selectinload(TaskRun.child_attempts))
             .where(TaskRun.task_id == task_id)
             .order_by(TaskRun.submitted_at.desc())
             .limit(limit)
@@ -704,6 +726,7 @@ def task_to_dict(task: AnalysisTask) -> dict[str, Any]:
 def task_run_to_dict(run: TaskRun) -> dict[str, Any]:
     """Convert TaskRun to API-friendly dict."""
 
+    loaded_child_attempts = run.__dict__.get("child_attempts")
     return {
         "id": str(run.id),
         "task_id": str(run.task_id),
@@ -726,4 +749,35 @@ def task_run_to_dict(run: TaskRun) -> dict[str, Any]:
         "submitted_at": run.submitted_at.isoformat() if run.submitted_at else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "child_attempts": (
+            [
+                task_run_child_attempt_to_dict(attempt)
+                for attempt in loaded_child_attempts
+            ]
+            if loaded_child_attempts is not None
+            else None
+        ),
+    }
+
+
+def task_run_child_attempt_to_dict(run: TaskRunChildAttempt) -> dict[str, Any]:
+    """Convert nested runtime attempt to API-friendly dict."""
+
+    return {
+        "id": str(run.id),
+        "task_run_id": str(run.task_run_id),
+        "child_kind": run.child_kind.value,
+        "status": run.status.value,
+        "step": run.step,
+        "platform": run.platform,
+        "action_type": run.action_type,
+        "request_id": run.request_id,
+        "message": run.message,
+        "action_hint": run.action_hint,
+        "progress": run.progress,
+        "resolution": run.resolution,
+        "error_message": run.error_message,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+        "resolved_at": run.resolved_at.isoformat() if run.resolved_at else None,
     }

@@ -16,15 +16,17 @@ from langchain_core.messages import HumanMessage, AIMessage
 from app.workflow.graph import get_compiled_workflow
 from app.workflow.state import AgentState
 from app.core.database import AsyncSessionLocal
-from app.core.websocket_server import manager as ws_session_manager
+from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
 from app.services.message_service import MessageService
 from app.services.entity_service import EntityService
+from app.services.session_event_publisher import session_event_publisher
 from app.models.session import Session
 from app.models.message import Message, MessageType
 from app.workflow.a7.confidence_signal import (
     append_manual_items_async,
 )
 from app.workflow.browser_action_runtime import (
+    clear_session_browser_action_requests,
     get_browser_action_request,
     resolve_browser_action_request,
 )
@@ -33,6 +35,7 @@ from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+ws_session_manager = session_event_publisher
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +72,20 @@ _STEP_PROGRESS: dict[str, float] = {
     "A4": 0.6,
     "A5": 0.9,
 }
+
+
+async def _emit_session_error(
+    session_id: str,
+    payload: dict[str, Any],
+) -> None:
+    """Emit a session-scoped error through the shared event publisher."""
+
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "error",
+        payload,
+        bypass_runtime_guard=True,
+    )
 
 
 def _state_is_waiting_for_user(state_values: dict[str, Any]) -> bool:
@@ -662,7 +679,7 @@ async def handle_user_message_langgraph(
     )
 
     # Immediate acknowledgement — reduce perceived latency
-    await ws_session_manager.emit_to_session(
+    await session_event_publisher.emit_to_session(
         session_id,
         "thought_delta",
         {
@@ -690,7 +707,7 @@ async def handle_user_message_langgraph(
                 logger.error(f"[LangGraph] Error saving user message: {e}")
 
         if existing_message_id:
-            await ws_session_manager.emit_to_session(
+            await session_event_publisher.emit_to_session(
                 session_id,
                 "user_message_ack",
                 {"message_id": existing_message_id, "content": content},
@@ -782,9 +799,9 @@ async def handle_user_message_langgraph(
                 follow_up_brand_name = (
                     brand_name or state_values.get("brand_name") or content
                 )
-                if _state_is_waiting_for_user(state_values) and await _is_waiting_task_resumable(
-                    state_values.get("task_id")
-                ):
+                if _state_is_waiting_for_user(
+                    state_values
+                ) and await _is_waiting_task_resumable(state_values.get("task_id")):
                     resume_kwargs: dict[str, Any] = {}
                     if trigger_source != "websocket":
                         resume_kwargs["trigger_source"] = trigger_source
@@ -879,9 +896,9 @@ async def handle_user_message_langgraph(
                     restored_brand_name = (
                         brand_name or restored.get("brand_name") or content
                     )
-                    if _state_is_waiting_for_user(restored) and await _is_waiting_task_resumable(
-                        restored.get("task_id")
-                    ):
+                    if _state_is_waiting_for_user(
+                        restored
+                    ) and await _is_waiting_task_resumable(restored.get("task_id")):
                         resume_kwargs = {}
                         if trigger_source != "websocket":
                             resume_kwargs["trigger_source"] = trigger_source
@@ -978,18 +995,7 @@ async def handle_user_message_langgraph(
                     "error": "任务初始化失败，分析未启动，请稍后重试。",
                     "recoverable": True,
                 }
-                if websocket is not None:
-                    await ws_session_manager.emit_to_websocket(
-                        websocket,
-                        "error",
-                        error_payload,
-                    )
-                else:
-                    await ws_session_manager.emit_to_session(
-                        session_id,
-                        "error",
-                        error_payload,
-                    )
+                await _emit_session_error(session_id, error_payload)
                 return
 
             # New conversation: initialize full state
@@ -1084,18 +1090,7 @@ async def handle_user_message_langgraph(
             "error": f"处理消息时出错: {error_msg}",
             "recoverable": True,
         }
-        if websocket is not None:
-            await ws_session_manager.emit_to_websocket(
-                websocket,
-                "error",
-                error_payload,
-            )
-        else:
-            await ws_session_manager.emit_to_session(
-                session_id,
-                "error",
-                error_payload,
-            )
+        await _emit_session_error(session_id, error_payload)
     finally:
         # Always save final agent message, even if astream raised an exception
         if workflow and config and not skip_final_save:
@@ -1225,7 +1220,7 @@ async def handle_confirmation_langgraph(
                 role="user",
                 content=user_content,
             )
-            await ws_session_manager.emit_to_session(
+            await session_event_publisher.emit_to_session(
                 session_id,
                 "user_message_ack",
                 {"message_id": str(saved["id"]), "content": user_content},
@@ -1249,18 +1244,13 @@ async def handle_confirmation_langgraph(
         # Get current state
         current_state = workflow.get_state(config)
         if not current_state or not current_state.values:
-            await ws_session_manager.emit_to_websocket(
-                websocket,
-                "error",
-                {"message": "无法获取当前工作流状态"},
-            )
+            await _emit_session_error(session_id, {"message": "无法获取当前工作流状态"})
             return
 
         state_values = dict(current_state.values)
         if not await _is_waiting_task_resumable(state_values.get("task_id")):
-            await ws_session_manager.emit_to_websocket(
-                websocket,
-                "error",
+            await _emit_session_error(
+                session_id,
                 {
                     "message": "当前确认已失效，请重新发起分析。",
                     "recoverable": True,
@@ -1425,9 +1415,8 @@ async def handle_confirmation_langgraph(
         traceback.print_exc()
 
         # Use consistent error format matching events.py send_error_event
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
+        await _emit_session_error(
+            session_id,
             {
                 "step": "confirmation",
                 "error": f"处理确认时出错: {error_msg}",
@@ -1456,9 +1445,7 @@ async def handle_recall_langgraph(
     """
     message_id = data.get("message_id")
     if not message_id:
-        await ws_session_manager.emit_to_websocket(
-            websocket, "error", {"message": "缺少 message_id"}
-        )
+        await _emit_session_error(session_id, {"message": "缺少 message_id"})
         return
 
     # 1. Delete target message and everything after in DB
@@ -1467,9 +1454,8 @@ async def handle_recall_langgraph(
         result = await svc.rollback_from(UUID(session_id), UUID(message_id))
 
     if result.get("status") == "not_found":
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
+        await _emit_session_error(
+            session_id,
             {
                 "message": "回退失败：消息不存在或无权限",
                 "recoverable": True,
@@ -1486,8 +1472,8 @@ async def handle_recall_langgraph(
     await runtime_coordinator.mark_session_recalled(session_id)
 
     # 3. Notify frontend
-    await ws_session_manager.emit_to_websocket(
-        websocket,
+    await session_event_publisher.emit_to_session(
+        session_id,
         "recall_complete",
         {"message_id": message_id, "deleted_count": deleted},
     )
@@ -1512,9 +1498,14 @@ async def handle_stop_langgraph(websocket: WebSocket, session_id: str) -> None:
             )
 
     await runtime_coordinator.cancel_session_execution(session_id)
+    await clear_session_browser_action_requests(
+        session_id,
+        unresolved_status=TaskRunChildAttemptStatus.CANCELLED,
+        error_message="任务已取消",
+    )
 
-    await ws_session_manager.emit_to_websocket(
-        websocket,
+    await session_event_publisher.emit_to_session(
+        session_id,
         "execution_stopped",
         {
             "task_id": str(cancelled_task.id) if cancelled_task else None,
@@ -1587,17 +1578,15 @@ async def handle_artifact_action_langgraph(
     from app.workflow.events import save_and_send_artifact, send_artifact_patch
 
     if not artifact_id:
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
+        await _emit_session_error(
+            session_id,
             {"message": "缺少 artifact_id", "recoverable": True},
         )
         return
 
     if action != "extra_evaluate":
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
+        await _emit_session_error(
+            session_id,
             {"message": "不支持的交付物动作", "recoverable": True},
         )
         return
@@ -1606,17 +1595,15 @@ async def handle_artifact_action_langgraph(
         session_id, artifact_id
     )
     if not existing_report:
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
+        await _emit_session_error(
+            session_id,
             {"message": "未找到对应的置信度信号交付物", "recoverable": True},
         )
         return
 
     if existing_report.get("report_kind") != "confidence_signal":
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
+        await _emit_session_error(
+            session_id,
             {"message": "当前交付物不支持额外评估", "recoverable": True},
         )
         return
@@ -1670,24 +1657,28 @@ async def handle_browser_action_resolution_langgraph(
     resolution = data.get("resolution", "")
 
     if not request_id or resolution not in {"completed", "skip"}:
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
+        await _emit_session_error(
+            session_id,
             {"message": "浏览器操作确认参数无效", "recoverable": True},
         )
         return
 
     request = await get_browser_action_request(request_id)
     if request is None or request.session_id != session_id:
-        await ws_session_manager.emit_to_websocket(
-            websocket,
-            "error",
+        logger.warning(
+            "[LangGraph] Browser action request not found or session mismatch: request_id=%s session_id=%s request_session=%s",
+            request_id,
+            session_id,
+            request.session_id if request is not None else None,
+        )
+        await _emit_session_error(
+            session_id,
             {"message": "未找到对应的浏览器操作请求", "recoverable": True},
         )
         return
 
     await resolve_browser_action_request(request_id, resolution)
-    await ws_session_manager.emit_to_session(
+    await session_event_publisher.emit_to_session(
         session_id,
         "browser_user_action_ack",
         {

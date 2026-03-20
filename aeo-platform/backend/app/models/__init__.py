@@ -21,6 +21,11 @@ from app.models.task_run import (
     TaskRunStatus,
     TaskTriggerSource,
 )
+from app.models.task_run_child_attempt import (
+    TaskRunChildAttempt,
+    TaskRunChildAttemptKind,
+    TaskRunChildAttemptStatus,
+)
 from app.models.user import User
 
 __all__ = [
@@ -40,6 +45,9 @@ __all__ = [
     "TaskRunKind",
     "TaskTriggerSource",
     "ExecutorKind",
+    "TaskRunChildAttempt",
+    "TaskRunChildAttemptKind",
+    "TaskRunChildAttemptStatus",
     "MonitoringSchedule",
     "ScheduleFrequency",
     "ScheduleStatus",

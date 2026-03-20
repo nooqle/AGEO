@@ -19,13 +19,33 @@ from urllib.parse import urlparse
 # CP1252 byte-to-Unicode mappings for the 0x80-0x9F range (where CP1252 differs
 # from ISO-8859-1).  Used by _undo_double_utf8() to reverse double encoding.
 _CP1252_EXTRA: dict[int, int] = {
-    0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84,
-    0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x02C6: 0x88,
-    0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C,
-    0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93,
-    0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
-    0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B,
-    0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F,
+    0x20AC: 0x80,
+    0x201A: 0x82,
+    0x0192: 0x83,
+    0x201E: 0x84,
+    0x2026: 0x85,
+    0x2020: 0x86,
+    0x2021: 0x87,
+    0x02C6: 0x88,
+    0x2030: 0x89,
+    0x0160: 0x8A,
+    0x2039: 0x8B,
+    0x0152: 0x8C,
+    0x017D: 0x8E,
+    0x2018: 0x91,
+    0x2019: 0x92,
+    0x201C: 0x93,
+    0x201D: 0x94,
+    0x2022: 0x95,
+    0x2013: 0x96,
+    0x2014: 0x97,
+    0x02DC: 0x98,
+    0x2122: 0x99,
+    0x0161: 0x9A,
+    0x203A: 0x9B,
+    0x0153: 0x9C,
+    0x017E: 0x9E,
+    0x0178: 0x9F,
 }
 
 
@@ -76,7 +96,7 @@ ReadyCheck = Callable[[int], Awaitable[bool]]
 
 def _is_junk_title(title: str) -> bool:
     """Return True if the title is just numbers, dashes, or punctuation."""
-    return bool(re.fullmatch(r'[-\d\s.\[\]()]+', title))
+    return bool(re.fullmatch(r"[-\d\s.\[\]()]+", title))
 
 
 class BaseBrowserHandler(ABC):
@@ -105,10 +125,12 @@ class BaseBrowserHandler(ABC):
         client: Union[AgentBrowserClient, PlaywrightBrowserClient],
         headed: bool = False,
         session_id: str | None = None,
+        run_id: str | None = None,
     ):
         self.client = client
         self.headed = headed
         self.session_id = session_id
+        self.run_id = run_id
         self._is_playwright = isinstance(client, PlaywrightBrowserClient)
         self._sel_cache: dict = {}
 
@@ -121,6 +143,7 @@ class BaseBrowserHandler(ABC):
     def _refresh_selectors(self):
         """Reload selectors from YAML (called at the start of each fetch)."""
         from app.core.fetchers.browser.selector_config import get_platform_config
+
         self._sel_cache = get_platform_config(self.PLATFORM_KEY)
 
     # ------------------------------------------------------------------ JS builders
@@ -181,7 +204,8 @@ class BaseBrowserHandler(ABC):
             if isinstance(content_sel, list):
                 sels = json.dumps(content_sel, ensure_ascii=False)
                 # Multi-selector: try each in priority order
-                result = await self.client.eval(f"""() => {{
+                result = await self.client.eval(
+                    f"""() => {{
                     const selectors = {sels};
                     for (const sel of selectors) {{
                         const nodes = document.querySelectorAll(sel);
@@ -192,18 +216,21 @@ class BaseBrowserHandler(ABC):
                         }}
                     }}
                     return '';
-                }}""")
+                }}"""
+                )
             else:
                 sel = json.dumps(content_sel, ensure_ascii=False)
                 # Single selector (e.g. DeepSeek's "div.ds-markdown")
-                result = await self.client.eval(f"""() => {{
+                result = await self.client.eval(
+                    f"""() => {{
                     const messages = document.querySelectorAll({sel});
                     const lastMessage = messages[messages.length - 1];
                     if (!lastMessage) return '';
                     const clone = lastMessage.cloneNode(true);
                     clone.querySelectorAll({cite_strip_sel}).forEach(el => el.remove());
                     return clone.innerText;
-                }}""")
+                }}"""
+                )
 
             text = result.get("output", "")
             if text:
@@ -250,14 +277,16 @@ class BaseBrowserHandler(ABC):
                             title = title.removeprefix("www.")
                         except Exception:
                             title = url[:60]
-                    cleaned.append(SearchReference(
-                        index=len(cleaned) + 1,
-                        title=title,
-                        url=url,
-                        snippet=None,
-                        site_name=None,
-                        is_official=False,
-                    ))
+                    cleaned.append(
+                        SearchReference(
+                            index=len(cleaned) + 1,
+                            title=title,
+                            url=url,
+                            snippet=None,
+                            site_name=None,
+                            is_official=False,
+                        )
+                    )
             return cleaned
         except Exception as e:
             logger.debug("[%s] Selector '%s' failed: %s", tag, selector, e)
@@ -278,7 +307,12 @@ class BaseBrowserHandler(ABC):
         for selector in selectors_to_try:
             refs = await self._try_ref_selector(selector)
             if refs:
-                logger.info("[%s] Extracted %d references via selector: %s", tag, len(refs), selector)
+                logger.info(
+                    "[%s] Extracted %d references via selector: %s",
+                    tag,
+                    len(refs),
+                    selector,
+                )
                 return refs
 
         # Phase 2: Try to expand the reference panel, then re-check
@@ -295,22 +329,33 @@ class BaseBrowserHandler(ABC):
         for selector in selectors_to_try:
             refs = await self._try_ref_selector(selector)
             if refs:
-                logger.info("[%s] Extracted %d references (after expand) via: %s", tag, len(refs), selector)
+                logger.info(
+                    "[%s] Extracted %d references (after expand) via: %s",
+                    tag,
+                    len(refs),
+                    selector,
+                )
                 return refs
 
         # Phase 3: Diagnostic
         try:
-            diag = await self.client.eval("""() => {
+            diag = await self.client.eval(
+                """() => {
                 const links = Array.from(document.querySelectorAll('a[href^="http"]'));
                 return JSON.stringify(links.slice(0, 10).map(a => ({
                     url: a.href.slice(0, 80),
                     txt: (a.textContent || '').trim().slice(0, 40),
                     cls: (a.className || '').slice(0, 60),
                 })));
-            }""")
+            }"""
+            )
             link_data = json.loads(diag.get("output", "[]") or "[]")
-            logger.warning("[%s] No references found. Sample http links (%d): %s",
-                           tag, len(link_data), link_data[:5])
+            logger.warning(
+                "[%s] No references found. Sample http links (%d): %s",
+                tag,
+                len(link_data),
+                link_data[:5],
+            )
         except Exception:
             logger.warning("[%s] No references found after trying all selectors", tag)
 
@@ -341,15 +386,28 @@ class BaseBrowserHandler(ABC):
             waited += poll_interval
             result = await self.client.eval(self._content_check_js())
             if "error" in result:
-                logger.warning("[%s] eval error at %ds: %s", tag, waited, result["error"])
+                logger.warning(
+                    "[%s] eval error at %ds: %s", tag, waited, result["error"]
+                )
             cur_len = int(result.get("output", "0") or "0")
-            logger.info("[%s] Poll %ds: content_len=%d (prev=%d, stable=%d)",
-                        tag, waited, cur_len, prev_len, stable_count)
+            logger.info(
+                "[%s] Poll %ds: content_len=%d (prev=%d, stable=%d)",
+                tag,
+                waited,
+                cur_len,
+                prev_len,
+                stable_count,
+            )
 
             if cur_len > 0 and cur_len == prev_len:
                 stable_count += 1
                 if stable_count >= stable_rounds and cur_len >= min_content_len:
-                    logger.info("[%s] Content stable at %d chars after %ds", tag, cur_len, waited)
+                    logger.info(
+                        "[%s] Content stable at %d chars after %ds",
+                        tag,
+                        cur_len,
+                        waited,
+                    )
                     break
             else:
                 stable_count = 0
@@ -357,19 +415,29 @@ class BaseBrowserHandler(ABC):
 
         return prev_len, waited
 
-    async def _dump_page_debug(self, waited: float, extra_keywords: list[str] | None = None) -> None:
+    async def _dump_page_debug(
+        self, waited: float, extra_keywords: list[str] | None = None
+    ) -> None:
         """Dump page structure for diagnostics when no content is found.
 
         Uses Playwright's page.evaluate() for browser-context DOM inspection.
         """
         tag = self.PLATFORM_KEY.capitalize()
-        logger.warning("[%s] No content detected after %ds — dumping page structure", tag, waited)
+        logger.warning(
+            "[%s] No content detected after %ds — dumping page structure", tag, waited
+        )
         try:
             keywords = [
-                'markdown', 'message', 'chat', 'answer', 'content', 'reply',
+                "markdown",
+                "message",
+                "chat",
+                "answer",
+                "content",
+                "reply",
             ] + (extra_keywords or [])
             kw_filter = " || ".join(f"c.includes('{kw}')" for kw in keywords)
-            dump = await self.client.page.evaluate(f"""() => {{
+            dump = await self.client.page.evaluate(
+                f"""() => {{
                 const bodyText = (document.body?.innerText || '').slice(0, 500);
                 const allCls = new Set();
                 document.querySelectorAll('*').forEach(el => {{
@@ -378,8 +446,11 @@ class BaseBrowserHandler(ABC):
                 }});
                 const mdLike = [...allCls].filter(c => {kw_filter}).slice(0, 40);
                 return {{ bodyText, mdLike }};
-            }}""")
-            logger.warning("[%s] Page text: %s", tag, str(dump.get("bodyText", ""))[:300])
+            }}"""
+            )
+            logger.warning(
+                "[%s] Page text: %s", tag, str(dump.get("bodyText", ""))[:300]
+            )
             logger.warning("[%s] Relevant classes: %s", tag, dump.get("mdLike", []))
         except Exception as e:
             logger.warning("[%s] Could not dump page: %s", tag, e)
@@ -405,10 +476,12 @@ class BaseBrowserHandler(ABC):
         if page is None:
             return False
         try:
-            return await page.evaluate(f"""() => {{
+            return await page.evaluate(
+                f"""() => {{
                 const el = document.querySelector('{selector}');
                 return el !== null && el.offsetParent !== null;
-            }}""")
+            }}"""
+            )
         except Exception:
             return False
 
@@ -422,6 +495,7 @@ class BaseBrowserHandler(ABC):
                 return result.get("success", False)
             else:
                 from app.core.fetchers.browser.agent_browser import AgentBrowserClient
+
                 if isinstance(self.client, AgentBrowserClient):
                     result = await self.client.run_command(
                         "is", "visible", check_selector, json_output=True
@@ -479,11 +553,19 @@ class BaseBrowserHandler(ABC):
 
         extra_sels = self._DEFAULTS.get("modal_selectors", [])
         extra_texts = self._DEFAULTS.get("modal_texts", [])
-        all_sels = json.dumps(self._COMMON_MODAL_SELECTORS + (extra_sels if isinstance(extra_sels, list) else []))
-        all_texts = json.dumps(self._COMMON_MODAL_TEXTS + (extra_texts if isinstance(extra_texts, list) else []), ensure_ascii=False)
+        all_sels = json.dumps(
+            self._COMMON_MODAL_SELECTORS
+            + (extra_sels if isinstance(extra_sels, list) else [])
+        )
+        all_texts = json.dumps(
+            self._COMMON_MODAL_TEXTS
+            + (extra_texts if isinstance(extra_texts, list) else []),
+            ensure_ascii=False,
+        )
 
         try:
-            result = await page.evaluate(f"""() => {{
+            result = await page.evaluate(
+                f"""() => {{
                 const sels = {all_sels};
                 const texts = {all_texts};
                 for (const sel of sels) {{
@@ -501,7 +583,8 @@ class BaseBrowserHandler(ABC):
                     if (hasOverlay || hasCloseBtn) return 'modal: ' + sel;
                 }}
                 return '';
-            }}""")
+            }}"""
+            )
             return result or ""
         except Exception as e:
             logger.debug("[%s] Modal detection failed: %s", self.PLATFORM_KEY, e)
@@ -541,7 +624,11 @@ class BaseBrowserHandler(ABC):
             try:
                 await bring_to_front()
             except Exception as e:
-                logger.debug("[%s] bring_to_front failed during user-action reopen: %s", self.PLATFORM_KEY, e)
+                logger.debug(
+                    "[%s] bring_to_front failed during user-action reopen: %s",
+                    self.PLATFORM_KEY,
+                    e,
+                )
 
         await asyncio.sleep(3)
         return True
@@ -567,6 +654,7 @@ class BaseBrowserHandler(ABC):
             message=message,
             action_hint=action_hint,
             progress=progress,
+            run_id=self.run_id,
         )
         return request.request_id
 
@@ -582,7 +670,9 @@ class BaseBrowserHandler(ABC):
             return False
 
         try:
-            resolution = await wait_for_browser_action_resolution(request_id, timeout=timeout)
+            resolution = await wait_for_browser_action_resolution(
+                request_id, timeout=timeout
+            )
             if resolution != "completed":
                 return False
             return await ready_check(ready_timeout)
@@ -603,8 +693,12 @@ class BaseBrowserHandler(ABC):
         if not detected:
             return None
 
-        platform_name = getattr(self, 'PLATFORM', self.PLATFORM_KEY)
-        display_name = str(platform_name.value) if hasattr(platform_name, 'value') else str(platform_name)
+        platform_name = getattr(self, "PLATFORM", self.PLATFORM_KEY)
+        display_name = (
+            str(platform_name.value)
+            if hasattr(platform_name, "value")
+            else str(platform_name)
+        )
         logger.info("[%s] Blocking modal detected: %s", self.PLATFORM_KEY, detected)
 
         event = self._create_event(
@@ -618,12 +712,16 @@ class BaseBrowserHandler(ABC):
         # Reopen as headed browser for user to interact
         opened = await self._open_headed_for_user_action(self.URL)
         if not opened:
-            return self._create_event(BrowserState.ERROR, "打开浏览器窗口失败，请重试", progress=0)
+            return self._create_event(
+                BrowserState.ERROR, "打开浏览器窗口失败，请重试", progress=0
+            )
 
         # Wait for user to dismiss the modal
         modal_cleared = await self._wait_for_modal_clear(timeout=300)
         if not modal_cleared:
-            return self._create_event(BrowserState.ERROR, "弹窗处理超时，请重试", progress=0)
+            return self._create_event(
+                BrowserState.ERROR, "弹窗处理超时，请重试", progress=0
+            )
 
         logger.info("[%s] Modal cleared by user, continuing", self.PLATFORM_KEY)
         return event
@@ -673,7 +771,9 @@ class BaseBrowserHandler(ABC):
         if page is None:
             return None
 
-        result_future: asyncio.Future[ParsedResponse | None] = asyncio.get_running_loop().create_future()
+        result_future: asyncio.Future[ParsedResponse | None] = (
+            asyncio.get_running_loop().create_future()
+        )
         url_re = re.compile(config.url_pattern)
 
         async def on_response(response):
@@ -686,14 +786,22 @@ class BaseBrowserHandler(ABC):
                 if not url_re.search(response.url):
                     return
                 ct = response.headers.get("content-type", "")
-                if config.content_type_contains and config.content_type_contains not in ct:
+                if (
+                    config.content_type_contains
+                    and config.content_type_contains not in ct
+                ):
                     return
 
-                logger.info("[%s] Intercepted response: %s (%s)", tag, response.url[:80], ct)
+                logger.info(
+                    "[%s] Intercepted response: %s (%s)", tag, response.url[:80], ct
+                )
 
                 # Binary Connect protocol needs frame decoding
                 if "connect" in ct or "grpc" in ct:
-                    from app.core.fetchers.browser.parsers.connect import decode_binary_frames
+                    from app.core.fetchers.browser.parsers.connect import (
+                        decode_binary_frames,
+                    )
+
                     body_bytes = await response.body()
                     frames = decode_binary_frames(body_bytes)
                     body = "\n".join(frames)
@@ -712,12 +820,17 @@ class BaseBrowserHandler(ABC):
                             pass
 
                 # Diagnostic: dump body for debugging new/unstable parsers
-                logger.debug("[%s] SSE body (%d chars), first 500: %s",
-                             tag, len(body), body[:500])
+                logger.debug(
+                    "[%s] SSE body (%d chars), first 500: %s",
+                    tag,
+                    len(body),
+                    body[:500],
+                )
                 # Save full body to file for offline analysis (only when DEBUG)
                 if logger.isEnabledFor(logging.DEBUG):
                     try:
                         from pathlib import Path
+
                         dump_dir = Path(__file__).parent / "debug_dumps"
                         dump_dir.mkdir(exist_ok=True)
                         dump_file = dump_dir / f"{tag.lower()}_sse_body.txt"
@@ -740,15 +853,24 @@ class BaseBrowserHandler(ABC):
         try:
             result = await asyncio.wait_for(result_future, timeout=config.timeout)
             if result and result.parse_ok:
-                logger.info("[%s] Network interception success: %d chars, %d refs",
-                            tag, len(result.answer_text), len(result.references))
+                logger.info(
+                    "[%s] Network interception success: %d chars, %d refs",
+                    tag,
+                    len(result.answer_text),
+                    len(result.references),
+                )
             else:
-                logger.info("[%s] Network interception: parse_ok=%s, error=%s",
-                            tag, result.parse_ok if result else "None",
-                            result.error if result else "timeout")
+                logger.info(
+                    "[%s] Network interception: parse_ok=%s, error=%s",
+                    tag,
+                    result.parse_ok if result else "None",
+                    result.error if result else "timeout",
+                )
             return result
         except asyncio.TimeoutError:
-            logger.info("[%s] Network interception timed out after %ds", tag, config.timeout)
+            logger.info(
+                "[%s] Network interception timed out after %ds", tag, config.timeout
+            )
             return None
         except Exception as e:
             logger.warning("[%s] Network interception failed: %s", tag, e)

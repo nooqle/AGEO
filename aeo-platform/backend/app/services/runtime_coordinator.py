@@ -411,6 +411,24 @@ class RedisRuntimeCoordinator:
         if self._redis is not None:
             return self._redis
 
+        async with self._client_lock:
+            if self._redis is not None:
+                return self._redis
+            try:
+                import redis.asyncio as redis_async
+
+                self._redis = redis_async.from_url(
+                    self._redis_url,
+                    decode_responses=True,
+                )
+                await self._redis.ping()
+            except Exception:
+                logger.exception(
+                    "[RuntimeCoordinator] Failed to initialize Redis client"
+                )
+                self._redis = None
+            return self._redis
+
     async def _publish_cancel(self, payload: dict[str, Any]) -> None:
         client = await self._get_redis()
         if client is None:
@@ -493,24 +511,6 @@ class RedisRuntimeCoordinator:
                         "[RuntimeCoordinator] Ignoring malformed cancel task_id %s",
                         task_id,
                     )
-
-        async with self._client_lock:
-            if self._redis is not None:
-                return self._redis
-            try:
-                import redis.asyncio as redis_async
-
-                self._redis = redis_async.from_url(
-                    self._redis_url,
-                    decode_responses=True,
-                )
-                await self._redis.ping()
-            except Exception:
-                logger.exception(
-                    "[RuntimeCoordinator] Failed to initialize Redis client"
-                )
-                self._redis = None
-            return self._redis
 
     async def _set_session_blocked(self, session_id: str) -> None:
         client = await self._get_redis()

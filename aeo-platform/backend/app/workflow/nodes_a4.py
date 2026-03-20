@@ -39,7 +39,9 @@ _log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
 os.makedirs(_log_dir, exist_ok=True)
 _a4_fh = logging.FileHandler(os.path.join(_log_dir, "a4.log"), encoding="utf-8")
 _a4_fh.setLevel(logging.DEBUG)
-_a4_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s — %(message)s"))
+_a4_fh.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(name)s — %(message)s")
+)
 
 # Add to nodes_a4 logger
 if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
@@ -107,7 +109,12 @@ class _ProgressTracker:
     async def record_completion(self, platform: str) -> None:
         """Record one API task completion and emit progress event."""
         self.completed += 1
-        logger.info("[A4] ProgressTracker: %s completed (%d/%d)", platform, self.completed, self.total_tasks)
+        logger.info(
+            "[A4] ProgressTracker: %s completed (%d/%d)",
+            platform,
+            self.completed,
+            self.total_tasks,
+        )
         self._platform_done[platform] = self._platform_done.get(platform, 0) + 1
 
         # Progress: linear interpolation 0.57 → 0.72
@@ -150,6 +157,8 @@ async def _tracked_api_fetch(
 def _get_browser_timeout(platform: str) -> float:
     """Get per-platform browser timeout from constants."""
     return float(PlatformConstants.PLATFORM_TIMEOUTS.get(platform, 200))
+
+
 _platform_semaphores: dict[str, asyncio.Semaphore] = {}
 
 
@@ -168,7 +177,9 @@ async def _throttled_retry_fetch(
     """Per-platform serial execution with inter-request delay to avoid 429."""
     sem = _get_platform_semaphore(platform)
     async with sem:
-        result = await _retry_fetch(fetch_fn, *args, platform=platform, method=method, **kwargs)
+        result = await _retry_fetch(
+            fetch_fn, *args, platform=platform, method=method, **kwargs
+        )
         # Delay before releasing semaphore so the next request to the same
         # platform doesn't fire immediately (prevents 429 rate limiting).
         delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
@@ -274,7 +285,9 @@ async def _retry_fetch(
             }
 
             # --- Classified 429 handling ---
-            is_429 = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
+            is_429 = (
+                isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
+            )
             if is_429:
                 error_type, hint_seconds = _parse_429_error(e.response)
 
@@ -287,10 +300,14 @@ async def _retry_fetch(
 
                 if error_type == "engine_overloaded":
                     overload_retries += 1
-                    if overload_retries > WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES:
+                    if (
+                        overload_retries
+                        > WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES
+                    ):
                         logger.warning(
                             "[A4] %s 429 (engine_overloaded) — exhausted %d overload retries",
-                            platform, WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES,
+                            platform,
+                            WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES,
                         )
                         break
                     wait = (
@@ -300,7 +317,9 @@ async def _retry_fetch(
                     )
                     logger.warning(
                         "[A4] %s 429 (engine_overloaded), waiting %.1fs (overload retry %d/%d)",
-                        platform, wait, overload_retries,
+                        platform,
+                        wait,
+                        overload_retries,
                         WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES,
                     )
                     await asyncio.sleep(wait)
@@ -317,7 +336,10 @@ async def _retry_fetch(
                         )
                         logger.warning(
                             "[A4] %s 429 (burst), slowing down — waiting %.1fs before retry %d/%d",
-                            platform, wait, attempt + 1, MAX_RETRIES,
+                            platform,
+                            wait,
+                            attempt + 1,
+                            MAX_RETRIES,
                         )
                         await asyncio.sleep(wait)
                         attempt += 1
@@ -336,23 +358,33 @@ async def _retry_fetch(
                     )
                     logger.warning(
                         "[A4] %s 429 (%s), waiting %.0fs before retry",
-                        platform, error_type, retry_after,
+                        platform,
+                        error_type,
+                        retry_after,
                     )
                     await asyncio.sleep(retry_after)
                     attempt += 1
                     continue
 
         if attempt < MAX_RETRIES:
-            wait = RETRY_BACKOFF_BASE ** attempt  # 1s, 2s
+            wait = RETRY_BACKOFF_BASE**attempt  # 1s, 2s
             logger.info(
                 "[A4] %s attempt %d failed (%s), retrying in %.1fs",
-                platform, attempt + 1, last_result.get("error", "unknown"), wait,
+                platform,
+                attempt + 1,
+                last_result.get("error", "unknown"),
+                wait,
             )
             await asyncio.sleep(wait)
 
         attempt += 1
 
-    logger.warning("[A4] %s failed after %d attempts: %s", platform, MAX_RETRIES + 1, last_result.get("error"))
+    logger.warning(
+        "[A4] %s failed after %d attempts: %s",
+        platform,
+        MAX_RETRIES + 1,
+        last_result.get("error"),
+    )
     return last_result
 
 
@@ -458,7 +490,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
     logger.info("[A4] fetch_mode=%s, questions=%d", fetch_mode, len(questions))
 
-
     if not questions:
         return Command(
             update={
@@ -485,7 +516,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
     await send_reply_event(session_id, "", is_complete=True)
 
-    mode_label = "完整采集（4平台全浏览器）" if fetch_mode == "full" else "快速采集（豆包、元宝、Kimi API + DeepSeek 浏览器）"
+    mode_label = (
+        "完整采集（4平台全浏览器）"
+        if fetch_mode == "full"
+        else "快速采集（豆包、元宝、Kimi API + DeepSeek 浏览器）"
+    )
     await send_progress_event(
         session_id=session_id,
         step="A4",
@@ -500,6 +535,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             from app.core.database import AsyncSessionLocal
             from app.services.task_service import TaskService
             from uuid import UUID as _UUID
+
             async with AsyncSessionLocal() as db:
                 ts = TaskService(db)
                 await ts.update_progress(
@@ -545,6 +581,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             try:
                 if _pf is None or "kimi" in _pf:
                     from app.core.fetchers.api.kimi_client import KimiClient
+
                     kimi_client = KimiClient()
             except Exception as e:
                 logger.warning("[A4] KimiClient init failed: %s", e)
@@ -553,15 +590,15 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # fast mode: DeepSeek only
         # full mode: all 4 platforms
         from app.core.playwright_installer import ensure_playwright_ready
-        playwright_ok = await ensure_playwright_ready()
 
+        playwright_ok = await ensure_playwright_ready()
 
         # Reset circuit breakers at start of each A4 run so stale OPEN
         # state from a previous execution doesn't block new requests.
         from app.workflow.resilience import get_circuit_breaker as _get_cb
+
         for _p in ["deepseek", "kimi", "hunyuan", "doubao"]:
             _get_cb(_p).reset()
-
 
         # Track all browser clients for cleanup
         browser_clients: list[PlaywrightBrowserClient] = []
@@ -579,47 +616,78 @@ async def a4_fetch_node(state: AgentState) -> Command:
             # DeepSeek browser: always initialized (both modes)
             try:
                 if _pf is None or "deepseek" in _pf:
-                    from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
-                    deepseek_browser_client = PlaywrightBrowserClient(session_name="deepseek")
-                    deepseek_handler = DeepSeekHandler(deepseek_browser_client, session_id=session_id)
+                    from app.core.fetchers.browser.deepseek_handler import (
+                        DeepSeekHandler,
+                    )
+
+                    deepseek_browser_client = PlaywrightBrowserClient(
+                        session_name="deepseek"
+                    )
+                    deepseek_handler = DeepSeekHandler(
+                        deepseek_browser_client,
+                        session_id=session_id,
+                        run_id=state.get("run_id"),
+                    )
                     browser_clients.append(deepseek_browser_client)
                     logger.info("[A4] DeepSeek browser handler initialized")
 
             except Exception as e:
                 logger.warning("[A4] DeepSeek browser init failed: %s", e)
 
-
             # Additional browser handlers (full mode only)
             if fetch_mode == "full":
                 try:
                     if _pf is None or "kimi" in _pf:
                         from app.core.fetchers.browser.kimi_handler import KimiHandler
-                        kimi_browser_client = PlaywrightBrowserClient(session_name="kimi")
-                        kimi_browser_handler = KimiHandler(kimi_browser_client, session_id=session_id)
+
+                        kimi_browser_client = PlaywrightBrowserClient(
+                            session_name="kimi"
+                        )
+                        kimi_browser_handler = KimiHandler(
+                            kimi_browser_client,
+                            session_id=session_id,
+                            run_id=state.get("run_id"),
+                        )
                         browser_clients.append(kimi_browser_client)
                         logger.info("[A4] Kimi browser handler initialized")
 
                 except Exception as e:
                     logger.warning("[A4] Kimi browser init failed: %s", e)
 
-
                 try:
                     if _pf is None or "hunyuan" in _pf:
-                        from app.core.fetchers.browser.yuanbao_handler import YuanbaoHandler
-                        yuanbao_browser_client = PlaywrightBrowserClient(session_name="yuanbao")
-                        yuanbao_handler = YuanbaoHandler(yuanbao_browser_client, session_id=session_id)
+                        from app.core.fetchers.browser.yuanbao_handler import (
+                            YuanbaoHandler,
+                        )
+
+                        yuanbao_browser_client = PlaywrightBrowserClient(
+                            session_name="yuanbao"
+                        )
+                        yuanbao_handler = YuanbaoHandler(
+                            yuanbao_browser_client,
+                            session_id=session_id,
+                            run_id=state.get("run_id"),
+                        )
                         browser_clients.append(yuanbao_browser_client)
                         logger.info("[A4] Yuanbao browser handler initialized")
 
                 except Exception as e:
                     logger.warning("[A4] Yuanbao browser init failed: %s", e)
 
-
                 try:
                     if _pf is None or "doubao" in _pf:
-                        from app.core.fetchers.browser.doubao_handler import DoubaoHandler as DoubaoWebHandler
-                        doubao_browser_client = PlaywrightBrowserClient(session_name="doubao")
-                        doubao_browser_handler = DoubaoWebHandler(doubao_browser_client, session_id=session_id)
+                        from app.core.fetchers.browser.doubao_handler import (
+                            DoubaoHandler as DoubaoWebHandler,
+                        )
+
+                        doubao_browser_client = PlaywrightBrowserClient(
+                            session_name="doubao"
+                        )
+                        doubao_browser_handler = DoubaoWebHandler(
+                            doubao_browser_client,
+                            session_id=session_id,
+                            run_id=state.get("run_id"),
+                        )
                         browser_clients.append(doubao_browser_client)
                         logger.info("[A4] Doubao browser handler initialized")
 
@@ -629,11 +697,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
         else:
             logger.warning("[A4] Playwright not ready, all browser handlers skipped")
 
-
         total = len(questions)
 
         try:
-            question_results: dict[int, list[dict[str, Any]]] = {i: [] for i in range(total)}
+            question_results: dict[int, list[dict[str, Any]]] = {
+                i: [] for i in range(total)
+            }
 
             # =============================================================
             # Phase 1: API calls (fast mode only)
@@ -657,8 +726,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         api_tasks.append(
                             _throttled_retry_fetch(
                                 _fetch_from_doubao,
-                                doubao_client, q_text, brand_profile,
-                                platform="doubao", method="api",
+                                doubao_client,
+                                q_text,
+                                brand_profile,
+                                platform="doubao",
+                                method="api",
                             )
                         )
                         api_task_map.append((idx, "doubao"))
@@ -666,8 +738,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         api_tasks.append(
                             _throttled_retry_fetch(
                                 _fetch_from_hunyuan,
-                                hunyuan_client, q_text, brand_profile,
-                                platform="hunyuan", method="api",
+                                hunyuan_client,
+                                q_text,
+                                brand_profile,
+                                platform="hunyuan",
+                                method="api",
                             )
                         )
                         api_task_map.append((idx, "hunyuan"))
@@ -675,8 +750,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         api_tasks.append(
                             _throttled_retry_fetch(
                                 _fetch_from_kimi,
-                                kimi_client, q_text, brand_profile,
-                                platform="kimi", method="api",
+                                kimi_client,
+                                q_text,
+                                brand_profile,
+                                platform="kimi",
+                                method="api",
                             )
                         )
                         api_task_map.append((idx, "kimi"))
@@ -701,25 +779,35 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     _tracked_api_fetch(task, platform, tracker)
                     for task, (_q_idx, platform) in zip(api_tasks, api_task_map)
                 ]
-                api_all_results = await asyncio.gather(*tracked_tasks, return_exceptions=True)
+                api_all_results = await asyncio.gather(
+                    *tracked_tasks, return_exceptions=True
+                )
 
                 # Organize API results by question index
                 api_success_total = 0
                 for (q_idx, platform), result in zip(api_task_map, api_all_results):
                     if isinstance(result, BaseException):
-                        logger.error("[A4] API %s Q%d exception: %s", platform, q_idx + 1, result)
-                        question_results[q_idx].append({
-                            "platform": platform,
-                            "fetch_method": "api",
-                            "success": False,
-                            "error": str(result),
-                        })
+                        logger.error(
+                            "[A4] API %s Q%d exception: %s", platform, q_idx + 1, result
+                        )
+                        question_results[q_idx].append(
+                            {
+                                "platform": platform,
+                                "fetch_method": "api",
+                                "success": False,
+                                "error": str(result),
+                            }
+                        )
                     else:
                         question_results[q_idx].append(result)
                         if result.get("success"):
                             api_success_total += 1
 
-                logger.info("[A4] Phase 1 (API) done: %d/%d succeeded", api_success_total, len(api_tasks))
+                logger.info(
+                    "[A4] Phase 1 (API) done: %d/%d succeeded",
+                    api_success_total,
+                    len(api_tasks),
+                )
 
                 await send_progress_event(
                     session_id=session_id,
@@ -754,9 +842,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
             _browser_shared_done: dict[str, int] = {}  # platform -> questions done
             # Shared partial results so global timeout can preserve completed work
             _pipeline_partial_results: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+
             # =============================================================
             async def _browser_pipeline(
-                handler, browser_client, platform: str, platform_name: str,
+                handler,
+                browser_client,
+                platform: str,
+                platform_name: str,
             ) -> list[tuple[int, dict[str, Any]]]:
                 """Process all questions through one browser sequentially.
 
@@ -766,9 +858,15 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 from app.workflow.resilience import get_circuit_breaker
 
                 breaker = get_circuit_breaker(platform)
-                logger.info("[A4] %s browser pipeline started (breaker state: %s)", platform_name, breaker.state.value)
+                logger.info(
+                    "[A4] %s browser pipeline started (breaker state: %s)",
+                    platform_name,
+                    breaker.state.value,
+                )
                 results: list[tuple[int, dict[str, Any]]] = []
-                _pipeline_partial_results[platform] = results  # share reference for timeout recovery
+                _pipeline_partial_results[platform] = (
+                    results  # share reference for timeout recovery
+                )
                 for idx, question in enumerate(questions):
                     q_text = question.get("text", "")
 
@@ -779,28 +877,39 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             platform_name,
                             idx + 1,
                         )
-                        results.append((idx, {
-                            "platform": platform,
-                            "platform_name": platform_name,
-                            "fetch_method": "browser",
-                            "success": False,
-                            "error": (
-                                f"平台 {platform_name} 暂时不可用（熔断保护）"
-                            ),
-                            "skipped_by_breaker": True,
-                        }))
+                        results.append(
+                            (
+                                idx,
+                                {
+                                    "platform": platform,
+                                    "platform_name": platform_name,
+                                    "fetch_method": "browser",
+                                    "success": False,
+                                    "error": (
+                                        f"平台 {platform_name} 暂时不可用（熔断保护）"
+                                    ),
+                                    "skipped_by_breaker": True,
+                                },
+                            )
+                        )
                         continue
 
                     # First question uses extended timeout to allow for login flow
-                    question_timeout = 300.0 if idx == 0 else _get_browser_timeout(platform)
+                    question_timeout = (
+                        300.0 if idx == 0 else _get_browser_timeout(platform)
+                    )
                     r = await _browser_fetch_with_timeout(
                         _fetch_from_browser,
-                        handler, q_text, brand_profile,
-                        platform, platform_name, BrowserState,
+                        handler,
+                        q_text,
+                        brand_profile,
+                        platform,
+                        platform_name,
+                        BrowserState,
                         timeout=question_timeout,
                         session_id=session_id,
+                        run_id=state.get("run_id"),
                     )
-
 
                     # Update circuit breaker state — distinguish failure types
                     error_type = r.get("error_type", "")
@@ -808,11 +917,19 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         breaker.record_success()
                     elif error_type == "rate_limit":
                         # Rate limit is not a platform fault — don't trip breaker
-                        logger.warning("[A4] %s rate limited on Q%d, adding 30s cooldown", platform_name, idx + 1)
+                        logger.warning(
+                            "[A4] %s rate limited on Q%d, adding 30s cooldown",
+                            platform_name,
+                            idx + 1,
+                        )
                         await asyncio.sleep(30)
                     elif error_type == "verify":
                         # CAPTCHA/verify challenge — stop this platform entirely
-                        logger.warning("[A4] %s verify challenge on Q%d, stopping platform", platform_name, idx + 1)
+                        logger.warning(
+                            "[A4] %s verify challenge on Q%d, stopping platform",
+                            platform_name,
+                            idx + 1,
+                        )
                         if session_id:
                             await send_browser_state_event(
                                 session_id=session_id,
@@ -843,7 +960,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                     # Delay between browser questions to avoid rate limiting
                     if idx < len(questions) - 1:
-                        browser_delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
+                        browser_delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(
+                            platform, 3.0
+                        )
                         await asyncio.sleep(browser_delay)
 
                     # Update shared progress counter across all pipelines
@@ -851,7 +970,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     total_browser_done = sum(_browser_shared_done.values())
                     # Total work = questions × number of active browser pipelines
                     total_browser_work = total * max(len(_browser_shared_done), 1)
-                    combined_progress = _browser_progress_base + (total_browser_done / total_browser_work) * _browser_progress_range
+                    combined_progress = (
+                        _browser_progress_base
+                        + (total_browser_done / total_browser_work)
+                        * _browser_progress_range
+                    )
                     await send_progress_event(
                         session_id=session_id,
                         step="A4",
@@ -866,12 +989,17 @@ async def a4_fetch_node(state: AgentState) -> Command:
             pipeline_timeout = float(PlatformConstants.BROWSER_PIPELINE_TIMEOUT)
 
             async def _pipeline_with_global_timeout(
-                handler, browser_client, platform: str, platform_name: str,
+                handler,
+                browser_client,
+                platform: str,
+                platform_name: str,
             ) -> list[tuple[int, dict[str, Any]]]:
                 """Run _browser_pipeline capped at BROWSER_PIPELINE_TIMEOUT seconds total."""
                 try:
                     return await asyncio.wait_for(
-                        _browser_pipeline(handler, browser_client, platform, platform_name),
+                        _browser_pipeline(
+                            handler, browser_client, platform, platform_name
+                        ),
                         timeout=pipeline_timeout,
                     )
                 except asyncio.TimeoutError:
@@ -881,18 +1009,27 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     completed_ok = sum(1 for _, r in partial if r.get("success"))
                     logger.warning(
                         "[A4] %s pipeline hit global timeout (%.0fs), preserving %d/%d completed (%d success)",
-                        platform_name, pipeline_timeout, len(partial), total, completed_ok,
+                        platform_name,
+                        pipeline_timeout,
+                        len(partial),
+                        total,
+                        completed_ok,
                     )
                     # Add failures only for questions not yet processed
                     for i in range(total):
                         if i not in completed_indices:
-                            partial.append((i, {
-                                "platform": platform,
-                                "platform_name": platform_name,
-                                "fetch_method": "browser",
-                                "success": False,
-                                "error": f"平台整体超时（{pipeline_timeout:.0f}s），跳过剩余问题",
-                            }))
+                            partial.append(
+                                (
+                                    i,
+                                    {
+                                        "platform": platform,
+                                        "platform_name": platform_name,
+                                        "fetch_method": "browser",
+                                        "success": False,
+                                        "error": f"平台整体超时（{pipeline_timeout:.0f}s），跳过剩余问题",
+                                    },
+                                )
+                            )
                     return partial
 
             browser_tasks = []
@@ -902,48 +1039,84 @@ async def a4_fetch_node(state: AgentState) -> Command:
             if deepseek_handler is not None and deepseek_browser_client is not None:
                 logger.info("[A4] Phase 2: DeepSeek browser pipeline queued")
                 browser_tasks.append(
-                    _pipeline_with_global_timeout(deepseek_handler, deepseek_browser_client, "deepseek", "DeepSeek")
+                    _pipeline_with_global_timeout(
+                        deepseek_handler,
+                        deepseek_browser_client,
+                        "deepseek",
+                        "DeepSeek",
+                    )
                 )
                 browser_task_platforms.append("deepseek")
             else:
-                logger.warning("[A4] Phase 2: DeepSeek skipped (handler=%s, client=%s)",
-                               deepseek_handler, deepseek_browser_client)
+                logger.warning(
+                    "[A4] Phase 2: DeepSeek skipped (handler=%s, client=%s)",
+                    deepseek_handler,
+                    deepseek_browser_client,
+                )
 
             # Additional browsers (full mode only)
             if fetch_mode == "full":
                 if kimi_browser_handler is not None and kimi_browser_client is not None:
                     logger.info("[A4] Phase 2: Kimi browser pipeline queued")
                     browser_tasks.append(
-                        _pipeline_with_global_timeout(kimi_browser_handler, kimi_browser_client, "kimi", "Kimi")
+                        _pipeline_with_global_timeout(
+                            kimi_browser_handler, kimi_browser_client, "kimi", "Kimi"
+                        )
                     )
                     browser_task_platforms.append("kimi")
 
                 if yuanbao_handler is not None and yuanbao_browser_client is not None:
                     logger.info("[A4] Phase 2: Yuanbao browser pipeline queued")
                     browser_tasks.append(
-                        _pipeline_with_global_timeout(yuanbao_handler, yuanbao_browser_client, "hunyuan", "元宝")
+                        _pipeline_with_global_timeout(
+                            yuanbao_handler, yuanbao_browser_client, "hunyuan", "元宝"
+                        )
                     )
                     browser_task_platforms.append("hunyuan")
 
-                if doubao_browser_handler is not None and doubao_browser_client is not None:
+                if (
+                    doubao_browser_handler is not None
+                    and doubao_browser_client is not None
+                ):
                     logger.info("[A4] Phase 2: Doubao browser pipeline queued")
                     browser_tasks.append(
-                        _pipeline_with_global_timeout(doubao_browser_handler, doubao_browser_client, "doubao", "豆包")
+                        _pipeline_with_global_timeout(
+                            doubao_browser_handler,
+                            doubao_browser_client,
+                            "doubao",
+                            "豆包",
+                        )
                     )
                     browser_task_platforms.append("doubao")
 
-
             if browser_tasks:
-                logger.info("[A4] Phase 2: Starting %d browser pipeline(s)...", len(browser_tasks))
+                logger.info(
+                    "[A4] Phase 2: Starting %d browser pipeline(s)...",
+                    len(browser_tasks),
+                )
 
-                browser_all_results = await asyncio.gather(*browser_tasks, return_exceptions=True)
+                browser_all_results = await asyncio.gather(
+                    *browser_tasks, return_exceptions=True
+                )
 
                 for i, br in enumerate(browser_all_results):
                     if isinstance(br, BaseException):
-                        logger.error("[A4] Pipeline[%d] %s: %s: %s", i, browser_task_platforms[i], type(br).__name__, br)
+                        logger.error(
+                            "[A4] Pipeline[%d] %s: %s: %s",
+                            i,
+                            browser_task_platforms[i],
+                            type(br).__name__,
+                            br,
+                        )
                     else:
                         ok = sum(1 for _, r in br if r.get("success"))
-                        logger.info("[A4] Pipeline[%d] %s: %d/%d success", i, browser_task_platforms[i], ok, len(br))
+                        logger.info(
+                            "[A4] Pipeline[%d] %s: %d/%d success",
+                            i,
+                            browser_task_platforms[i],
+                            ok,
+                            len(br),
+                        )
             else:
                 logger.warning("[A4] Phase 2: No browser tasks to run")
 
@@ -951,23 +1124,31 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             # Merge browser results into question_results
             browser_success_total = 0
-            for browser_batch, platform in zip(browser_all_results, browser_task_platforms):
+            for browser_batch, platform in zip(
+                browser_all_results, browser_task_platforms
+            ):
                 if isinstance(browser_batch, BaseException):
-                    logger.warning("[A4] Browser %s pipeline failed: %s", platform, browser_batch)
+                    logger.warning(
+                        "[A4] Browser %s pipeline failed: %s", platform, browser_batch
+                    )
                     for idx in range(total):
-                        question_results[idx].append({
-                            "platform": platform,
-                            "fetch_method": "browser",
-                            "success": False,
-                            "error": str(browser_batch),
-                        })
+                        question_results[idx].append(
+                            {
+                                "platform": platform,
+                                "fetch_method": "browser",
+                                "success": False,
+                                "error": str(browser_batch),
+                            }
+                        )
                 else:
                     for q_idx, r in browser_batch:
                         question_results[q_idx].append(r)
                         if r.get("success"):
                             browser_success_total += 1
 
-            logger.info("[A4] Phase 2 (Browser) done: %d succeeded", browser_success_total)
+            logger.info(
+                "[A4] Phase 2 (Browser) done: %d succeeded", browser_success_total
+            )
 
             # Build final fetch_results list
             for idx, question in enumerate(questions):
@@ -975,12 +1156,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 question_text = question.get("text", "")
                 platform_results = question_results[idx]
                 q_success = sum(1 for r in platform_results if r.get("success"))
-                logger.info("[A4] Q%d/%d: %d platforms succeeded", idx + 1, total, q_success)
-                fetch_results.append({
-                    "question_id": question_id,
-                    "question_text": question_text,
-                    "platform_results": platform_results,
-                })
+                logger.info(
+                    "[A4] Q%d/%d: %d platforms succeeded", idx + 1, total, q_success
+                )
+                fetch_results.append(
+                    {
+                        "question_id": question_id,
+                        "question_text": question_text,
+                        "platform_results": platform_results,
+                    }
+                )
 
         finally:
             for bc in browser_clients:
@@ -1009,7 +1194,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
             for p in r["platform_results"]:
                 pname = p.get("platform", "unknown")
                 if pname not in platform_fetch_stats:
-                    platform_fetch_stats[pname] = {"completed": 0, "total": 0, "mentions": 0}
+                    platform_fetch_stats[pname] = {
+                        "completed": 0,
+                        "total": 0,
+                        "mentions": 0,
+                    }
                 platform_fetch_stats[pname]["total"] += 1
                 if p.get("success"):
                     platform_fetch_stats[pname]["completed"] += 1
@@ -1020,17 +1209,25 @@ async def a4_fetch_node(state: AgentState) -> Command:
         for pname, pstats in platform_fetch_stats.items():
             p_status = "success" if pstats["completed"] > 0 else "failed"
             await send_stage_result(
-                session_id, "A4", "数据抓取",
+                session_id,
+                "A4",
+                "数据抓取",
                 result_type="platform_status",
                 data={
-                    "platforms": [{
-                        "platform": pname,
-                        "status": p_status,
-                        "questions_completed": pstats["completed"],
-                        "questions_total": pstats["total"],
-                        "mention_count": pstats["mentions"],
-                        "error": None if p_status == "success" else f"{pname} 部分抓取失败",
-                    }],
+                    "platforms": [
+                        {
+                            "platform": pname,
+                            "status": p_status,
+                            "questions_completed": pstats["completed"],
+                            "questions_total": pstats["total"],
+                            "mention_count": pstats["mentions"],
+                            "error": (
+                                None
+                                if p_status == "success"
+                                else f"{pname} 部分抓取失败"
+                            ),
+                        }
+                    ],
                 },
             )
 
@@ -1056,8 +1253,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # When platform_filter is active (selective_refetch), adjust the minimum
         # threshold to the number of requested platforms (min 1), so that a
         # single-platform refetch doesn't trigger a spurious degradation notice.
-        effective_min = min(MIN_PLATFORMS_REQUIRED, len(platform_filter)) if platform_filter else MIN_PLATFORMS_REQUIRED
-
+        effective_min = (
+            min(MIN_PLATFORMS_REQUIRED, len(platform_filter))
+            if platform_filter
+            else MIN_PLATFORMS_REQUIRED
+        )
 
         if len(successful_platforms) < effective_min:
             logger.warning(
@@ -1132,8 +1332,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         platform_summary = []
         for platform, stats in platform_stats.items():
-            success_rate = (stats["success"] / stats["total"] * 100) if stats["total"] > 0 else 0
-            platform_summary.append(f"- **{platform}**: {stats['success']}/{stats['total']} 成功 ({success_rate:.0f}%)")
+            success_rate = (
+                (stats["success"] / stats["total"] * 100) if stats["total"] > 0 else 0
+            )
+            platform_summary.append(
+                f"- **{platform}**: {stats['success']}/{stats['total']} 成功 ({success_rate:.0f}%)"
+            )
 
         detailed_response = f"""✅ **答案抓取完成**
 
@@ -1159,12 +1363,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
 答案抓取已完成。我会基于当前抓取结果立即继续生成分析报告。报告生成后，您可以再决定是否继续做引用内容置信度评估或进入后续画像分析。"""
 
         from app.workflow.events import send_tpaor_event
+
         await send_tpaor_event(
             session_id, "response", detailed_response, is_complete=True
         )
 
         # Save and send artifact to Canvas
         from app.workflow.events import save_and_send_artifact
+
         await save_and_send_artifact(
             session_id=session_id,
             output_type="fetchResults",
@@ -1194,11 +1400,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     # Combine: new platform results + baseline platform results
                     old_pr = baseline_map.pop(qid).get("platform_results", [])
                     combined_pr = new_pr + old_pr
-                    merged.append({
-                        "question_id": qid,
-                        "question_text": fr.get("question_text", ""),
-                        "platform_results": combined_pr,
-                    })
+                    merged.append(
+                        {
+                            "question_id": qid,
+                            "question_text": fr.get("question_text", ""),
+                            "platform_results": combined_pr,
+                        }
+                    )
                 else:
                     merged.append(fr)
 
@@ -1209,7 +1417,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
             final_fetch_results = merged
             logger.info(
                 "[A4] Merged %d new + %d baseline = %d total results",
-                len(fetch_results), len(baseline), len(final_fetch_results),
+                len(fetch_results),
+                len(baseline),
+                len(final_fetch_results),
             )
 
         # Task milestone: A4 completed (Cycle 3, Module 1)
@@ -1218,22 +1428,28 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
+
                 async with AsyncSessionLocal() as db:
                     ts = TaskService(db)
                     await ts.update_progress(
-                        _UUID(task_id), stage="A4", progress=0.60,
+                        _UUID(task_id),
+                        stage="A4",
+                        progress=0.60,
                         message=f"抓取完成: {successful_fetches}/{total_fetches} 成功",
                     )
-                    await ts.append_stage_result(_UUID(task_id), {
-                        "stage": "A4",
-                        "stage_name": "数据抓取",
-                        "result_type": "platform_status",
-                        "data": {
-                            "total_fetches": total_fetches,
-                            "successful_fetches": successful_fetches,
-                            "platforms": list(successful_platforms),
+                    await ts.append_stage_result(
+                        _UUID(task_id),
+                        {
+                            "stage": "A4",
+                            "stage_name": "数据抓取",
+                            "result_type": "platform_status",
+                            "data": {
+                                "total_fetches": total_fetches,
+                                "successful_fetches": successful_fetches,
+                                "platforms": list(successful_platforms),
+                            },
                         },
-                    })
+                    )
             except Exception as te:
                 logger.warning("[A4] TaskService milestone failed: %s", te)
 
@@ -1268,6 +1484,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
+
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
                     await task_svc.fail_task(
@@ -1303,7 +1520,9 @@ async def _fetch_from_doubao(
         answer_text = response.answer_text
 
         if not answer_text or not answer_text.strip():
-            logger.warning("[A4] doubao returned empty answer for question: %s", question[:60])
+            logger.warning(
+                "[A4] doubao returned empty answer for question: %s", question[:60]
+            )
             return {
                 "platform": "doubao",
                 "platform_name": "豆包",
@@ -1321,9 +1540,7 @@ async def _fetch_from_doubao(
             "answer": {
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
-                "has_brand_mention": _check_brand_mention(
-                    answer_text, brand_profile
-                ),
+                "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
@@ -1332,8 +1549,12 @@ async def _fetch_from_doubao(
         if e.response.status_code == 429:
             raise  # Let _retry_fetch handle 429 with proper backoff
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-        logger.warning("[A4] doubao exception: %s(%s) for question: %s",
-                       type(e).__name__, e, question[:60])
+        logger.warning(
+            "[A4] doubao exception: %s(%s) for question: %s",
+            type(e).__name__,
+            e,
+            question[:60],
+        )
         return {
             "platform": "doubao",
             "platform_name": "豆包",
@@ -1344,8 +1565,12 @@ async def _fetch_from_doubao(
         }
     except Exception as e:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-        logger.warning("[A4] doubao exception: %s(%s) for question: %s",
-                       type(e).__name__, e, question[:60])
+        logger.warning(
+            "[A4] doubao exception: %s(%s) for question: %s",
+            type(e).__name__,
+            e,
+            question[:60],
+        )
         return {
             "platform": "doubao",
             "platform_name": "豆包",
@@ -1368,7 +1593,9 @@ async def _fetch_from_hunyuan(
         answer_text = response.answer_text
 
         if not answer_text or not answer_text.strip():
-            logger.warning("[A4] hunyuan returned empty answer for question: %s", question[:60])
+            logger.warning(
+                "[A4] hunyuan returned empty answer for question: %s", question[:60]
+            )
             return {
                 "platform": "hunyuan",
                 "platform_name": "元宝",
@@ -1386,9 +1613,7 @@ async def _fetch_from_hunyuan(
             "answer": {
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
-                "has_brand_mention": _check_brand_mention(
-                    answer_text, brand_profile
-                ),
+                "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
@@ -1429,7 +1654,9 @@ async def _fetch_from_kimi(
         answer_text = response.answer_text
 
         if not answer_text or not answer_text.strip():
-            logger.warning("[A4] kimi returned empty answer for question: %s", question[:60])
+            logger.warning(
+                "[A4] kimi returned empty answer for question: %s", question[:60]
+            )
             return {
                 "platform": "kimi",
                 "platform_name": "Kimi",
@@ -1447,9 +1674,7 @@ async def _fetch_from_kimi(
             "answer": {
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
-                "has_brand_mention": _check_brand_mention(
-                    answer_text, brand_profile
-                ),
+                "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
@@ -1458,8 +1683,12 @@ async def _fetch_from_kimi(
         if e.response.status_code == 429:
             raise
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-        logger.warning("[A4] kimi exception: %s(%s) for question: %s",
-                       type(e).__name__, e, question[:60])
+        logger.warning(
+            "[A4] kimi exception: %s(%s) for question: %s",
+            type(e).__name__,
+            e,
+            question[:60],
+        )
         return {
             "platform": "kimi",
             "platform_name": "Kimi",
@@ -1470,8 +1699,12 @@ async def _fetch_from_kimi(
         }
     except Exception as e:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-        logger.warning("[A4] kimi exception: %s(%s) for question: %s",
-                       type(e).__name__, e, question[:60])
+        logger.warning(
+            "[A4] kimi exception: %s(%s) for question: %s",
+            type(e).__name__,
+            e,
+            question[:60],
+        )
         return {
             "platform": "kimi",
             "platform_name": "Kimi",
@@ -1491,6 +1724,7 @@ async def _emit_browser_action_prompt(
     action_hint: str,
     progress: float,
     reply_markdown: str,
+    run_id: str | None = None,
 ) -> str:
     request = await register_browser_action_request(
         session_id=session_id,
@@ -1499,6 +1733,7 @@ async def _emit_browser_action_prompt(
         message=message,
         action_hint=action_hint,
         progress=progress,
+        run_id=run_id,
     )
     await send_browser_state_event(
         session_id=session_id,
@@ -1525,7 +1760,9 @@ async def _emit_browser_action_prompt(
     return request.request_id
 
 
-async def _wait_for_browser_action_resolution(request_id: str, timeout: int = 300) -> str | None:
+async def _wait_for_browser_action_resolution(
+    request_id: str, timeout: int = 300
+) -> str | None:
     try:
         return await wait_for_browser_action_resolution(request_id, timeout=timeout)
     finally:
@@ -1540,6 +1777,7 @@ async def _fetch_from_browser(
     platform_name: str,
     browser_state,
     session_id: str = "",
+    run_id: str | None = None,
     _is_retry: bool = False,
     _verify_recovery_count: int = 0,
 ) -> dict[str, Any]:
@@ -1577,7 +1815,9 @@ async def _fetch_from_browser(
                     f"请在浏览器窗口中完成登录。"
                     f"完成后点击下方“我已完成”，我会继续接管抓取。"
                 )
-                await send_reply_event(session_id, login_msg, is_delta=True, is_new_round=True)
+                await send_reply_event(
+                    session_id, login_msg, is_delta=True, is_new_round=True
+                )
                 await send_reply_event(session_id, "", is_complete=True)
 
             if event.state == browser_state.WAITING_FOR_MODAL and session_id:
@@ -1606,7 +1846,9 @@ async def _fetch_from_browser(
                     f"请在浏览器中关闭弹窗或同意协议。"
                     f"完成后点击下方“我已完成”，我会继续接管抓取。"
                 )
-                await send_reply_event(session_id, modal_msg, is_delta=True, is_new_round=True)
+                await send_reply_event(
+                    session_id, modal_msg, is_delta=True, is_new_round=True
+                )
                 await send_reply_event(session_id, "", is_complete=True)
 
             if event.state == browser_state.ERROR:
@@ -1622,7 +1864,11 @@ async def _fetch_from_browser(
 
     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
-    if result_data and result_data.answer_text and len(result_data.answer_text.strip()) >= 10:
+    if (
+        result_data
+        and result_data.answer_text
+        and len(result_data.answer_text.strip()) >= 10
+    ):
         answer_text = result_data.answer_text
         return {
             "platform": platform,
@@ -1632,128 +1878,151 @@ async def _fetch_from_browser(
             "answer": {
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
-                "has_brand_mention": _check_brand_mention(
-                    answer_text, brand_profile
-                ),
+                "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in result_data.search_references],
             "duration": duration,
         }
 
     # -- Failure path: try platform-specific recovery first --
-    if error_type == "rate_limit" and not _is_retry and platform == "doubao" and hasattr(handler, "recover_after_rate_limit"):
-            logger.info("[A4] %s rate limited, attempting one automatic recovery", platform_name)
-            if session_id:
-                await send_browser_state_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state="waiting_response",
-                    message=f"{platform_name} 触发限流，正在冷却后自动重试",
-                    progress=0.7,
-                    requires_action=False,
-                )
-            recovered = await handler.recover_after_rate_limit()
-            if recovered:
-                return await _fetch_from_browser(
-                    handler, question, brand_profile,
-                    platform, platform_name, browser_state,
-                    session_id=session_id, _is_retry=True,
-                )
-
-    if error_type == "verify" and platform == "doubao" and hasattr(handler, "recover_after_verify"):
-            if _verify_recovery_count >= max_verify_recoveries:
-                logger.warning(
-                    "[A4] %s verify challenge exceeded max recoveries (%d), giving up on current question",
-                    platform_name,
-                    max_verify_recoveries,
-                )
-                if session_id:
-                    await send_browser_state_event(
-                        session_id=session_id,
-                        platform=platform,
-                        state="error",
-                        message=f"{platform_name} 连续触发安全验证，本轮已跳过该平台并继续其他平台",
-                        progress=0.7,
-                        requires_action=False,
-                    )
-                    await send_reply_event(
-                        session_id,
-                        (
-                            f"**{platform_name}** 连续多次触发安全验证，"
-                            "本轮无法继续自动抓取该平台。我会继续完成其他平台采集，"
-                            "并在后续报告中基于已成功的平台生成结果。"
-                        ),
-                        is_delta=True,
-                        is_new_round=True,
-                    )
-                    await send_reply_event(session_id, "", is_complete=True)
-                return {
-                    "platform": platform,
-                    "platform_name": platform_name,
-                    "fetch_method": "browser",
-                    "success": False,
-                    "error": error_message or "安全验证未通过",
-                    "error_type": error_type,
-                    "duration": duration,
-                }
-
-            logger.info(
-                "[A4] %s verify challenge detected, waiting for user to clear it (attempt %d/%d)",
+    if (
+        error_type == "rate_limit"
+        and not _is_retry
+        and platform == "doubao"
+        and hasattr(handler, "recover_after_rate_limit")
+    ):
+        logger.info(
+            "[A4] %s rate limited, attempting one automatic recovery", platform_name
+        )
+        if session_id:
+            await send_browser_state_event(
+                session_id=session_id,
+                platform=platform,
+                state="waiting_response",
+                message=f"{platform_name} 触发限流，正在冷却后自动重试",
+                progress=0.7,
+                requires_action=False,
+            )
+        recovered = await handler.recover_after_rate_limit()
+        if recovered:
+            return await _fetch_from_browser(
+                handler,
+                question,
+                brand_profile,
+                platform,
                 platform_name,
-                _verify_recovery_count + 1,
+                browser_state,
+                session_id=session_id,
+                run_id=run_id,
+                _is_retry=True,
+            )
+
+    if (
+        error_type == "verify"
+        and platform == "doubao"
+        and hasattr(handler, "recover_after_verify")
+    ):
+        if _verify_recovery_count >= max_verify_recoveries:
+            logger.warning(
+                "[A4] %s verify challenge exceeded max recoveries (%d), giving up on current question",
+                platform_name,
                 max_verify_recoveries,
             )
-            if session_id:
-                recovered = False
-                if await handler._open_headed_for_user_action(handler.URL):
-                    request_id = await _emit_browser_action_prompt(
-                        session_id=session_id,
-                        platform=platform,
-                        state="waiting_for_login",
-                        action_type="verify",
-                        message=f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
-                        action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证，完成后点击“我已完成”",
-                        progress=0.35,
-                        reply_markdown=(
-                            f"**{platform_name}** 触发了安全验证\n\n"
-                            f"请在浏览器窗口中完成验证。完成后点击下方“我已完成”，我会继续接管当前问题。"
-                        ),
-                    )
-                    resolution = await _wait_for_browser_action_resolution(request_id, timeout=300)
-                    if resolution == "completed":
-                        recovered = await handler.recover_after_verify(prepare_window=False)
-                    elif resolution == "skip":
-                        recovered = False
-                else:
-                    recovered = False
-            else:
-                recovered = await handler.recover_after_verify()
-            if recovered:
-                if session_id:
-                    await send_browser_state_event(
-                        session_id=session_id,
-                        platform=platform,
-                        state="waiting_response",
-                        message=f"{platform_name} 验证已完成，正在继续抓取当前问题",
-                        progress=0.45,
-                        requires_action=False,
-                    )
-                return await _fetch_from_browser(
-                    handler, question, brand_profile,
-                    platform, platform_name, browser_state,
-                    session_id=session_id,
-                    _is_retry=True,
-                    _verify_recovery_count=_verify_recovery_count + 1,
-                )
             if session_id:
                 await send_browser_state_event(
                     session_id=session_id,
                     platform=platform,
                     state="error",
-                    message=f"{platform_name} 验证未完成或等待超时，本轮将跳过该平台",
-                    progress=0.35,
+                    message=f"{platform_name} 连续触发安全验证，本轮已跳过该平台并继续其他平台",
+                    progress=0.7,
                     requires_action=False,
                 )
+                await send_reply_event(
+                    session_id,
+                    (
+                        f"**{platform_name}** 连续多次触发安全验证，"
+                        "本轮无法继续自动抓取该平台。我会继续完成其他平台采集，"
+                        "并在后续报告中基于已成功的平台生成结果。"
+                    ),
+                    is_delta=True,
+                    is_new_round=True,
+                )
+                await send_reply_event(session_id, "", is_complete=True)
+            return {
+                "platform": platform,
+                "platform_name": platform_name,
+                "fetch_method": "browser",
+                "success": False,
+                "error": error_message or "安全验证未通过",
+                "error_type": error_type,
+                "duration": duration,
+            }
+
+        logger.info(
+            "[A4] %s verify challenge detected, waiting for user to clear it (attempt %d/%d)",
+            platform_name,
+            _verify_recovery_count + 1,
+            max_verify_recoveries,
+        )
+        if session_id:
+            recovered = False
+            if await handler._open_headed_for_user_action(handler.URL):
+                request_id = await _emit_browser_action_prompt(
+                    session_id=session_id,
+                    platform=platform,
+                    state="waiting_for_login",
+                    action_type="verify",
+                    message=f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
+                    action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证，完成后点击“我已完成”",
+                    progress=0.35,
+                    reply_markdown=(
+                        f"**{platform_name}** 触发了安全验证\n\n"
+                        f"请在浏览器窗口中完成验证。完成后点击下方“我已完成”，我会继续接管当前问题。"
+                    ),
+                    run_id=run_id,
+                )
+                resolution = await _wait_for_browser_action_resolution(
+                    request_id, timeout=300
+                )
+                if resolution == "completed":
+                    recovered = await handler.recover_after_verify(prepare_window=False)
+                elif resolution == "skip":
+                    recovered = False
+            else:
+                recovered = False
+        else:
+            recovered = await handler.recover_after_verify()
+        if recovered:
+            if session_id:
+                await send_browser_state_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state="waiting_response",
+                    message=f"{platform_name} 验证已完成，正在继续抓取当前问题",
+                    progress=0.45,
+                    requires_action=False,
+                )
+            return await _fetch_from_browser(
+                handler,
+                question,
+                brand_profile,
+                platform,
+                platform_name,
+                browser_state,
+                session_id=session_id,
+                run_id=run_id,
+                _is_retry=True,
+                _verify_recovery_count=_verify_recovery_count + 1,
+            )
+        if session_id:
+            await send_browser_state_event(
+                session_id=session_id,
+                platform=platform,
+                state="error",
+                message=f"{platform_name} 验证未完成或等待超时，本轮将跳过该平台",
+                progress=0.35,
+                requires_action=False,
+            )
 
     # -- Failure path: diagnose if a blocking modal caused the failure --
     if not _is_retry:
@@ -1763,16 +2032,23 @@ async def _fetch_from_browser(
             detected = ""
 
         if detected:
-            logger.info("[A4] %s fetch failed, modal detected: %s — alerting user",
-                        platform_name, detected)
+            logger.info(
+                "[A4] %s fetch failed, modal detected: %s — alerting user",
+                platform_name,
+                detected,
+            )
             opened = await handler._open_headed_for_user_action(handler.URL)
             if not opened:
                 return {
-                    "platform": platform, "platform_name": platform_name,
-                    "fetch_method": "browser", "success": False,
+                    "platform": platform,
+                    "platform_name": platform_name,
+                    "fetch_method": "browser",
+                    "success": False,
                     "error": "打开浏览器窗口失败，请稍后重试",
                     "error_type": "modal_reopen_failed",
-                    "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
+                    "duration": (
+                        datetime.now(timezone.utc) - start_time
+                    ).total_seconds(),
                 }
 
             modal_cleared = False
@@ -1789,25 +2065,43 @@ async def _fetch_from_browser(
                         f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
                         f"请在浏览器中关闭弹窗或同意协议。完成后点击下方“我已完成”，我会继续接管抓取。"
                     ),
+                    run_id=run_id,
                 )
-                resolution = await _wait_for_browser_action_resolution(request_id, timeout=300)
-                modal_cleared = resolution == "completed" and await handler._wait_for_modal_clear(timeout=45)
+                resolution = await _wait_for_browser_action_resolution(
+                    request_id, timeout=300
+                )
+                modal_cleared = (
+                    resolution == "completed"
+                    and await handler._wait_for_modal_clear(timeout=45)
+                )
             else:
                 modal_cleared = await handler._wait_for_modal_clear(timeout=300)
             if modal_cleared:
-                logger.info("[A4] %s modal cleared by user, retrying fetch", platform_name)
+                logger.info(
+                    "[A4] %s modal cleared by user, retrying fetch", platform_name
+                )
                 return await _fetch_from_browser(
-                    handler, question, brand_profile,
-                    platform, platform_name, browser_state,
-                    session_id=session_id, _is_retry=True,
+                    handler,
+                    question,
+                    brand_profile,
+                    platform,
+                    platform_name,
+                    browser_state,
+                    session_id=session_id,
+                    run_id=run_id,
+                    _is_retry=True,
                 )
             else:
                 return {
-                    "platform": platform, "platform_name": platform_name,
-                    "fetch_method": "browser", "success": False,
+                    "platform": platform,
+                    "platform_name": platform_name,
+                    "fetch_method": "browser",
+                    "success": False,
                     "error": "弹窗处理超时",
                     "error_type": "modal_timeout",
-                    "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
+                    "duration": (
+                        datetime.now(timezone.utc) - start_time
+                    ).total_seconds(),
                 }
 
     return {
