@@ -19,7 +19,8 @@ export type SupportedDeliverable =
   | 'AI答案抓取'
   | '基线全景分析'
   | '用户场景细分分析'
-  | '置信度报告';
+  | '置信度报告'
+  | '历史知识导出';
 
 export type ExportDescriptor = {
   brandName: string;
@@ -155,6 +156,10 @@ export function getDeliverableName(content: CanvasContent): SupportedDeliverable
     return 'AI答案抓取';
   }
 
+  if (content.type === 'dataTable') {
+    return '历史知识导出';
+  }
+
   if (content.type !== 'report') {
     return null;
   }
@@ -172,6 +177,10 @@ export function getDeliverableName(content: CanvasContent): SupportedDeliverable
 
 export function inferBrandName(content: CanvasContent, allContents: CanvasContent[]): string {
   const active = resolveActiveContent(content);
+
+  if (active.type === 'dataTable' && isNonEmptyString(active.data.brand_name)) {
+    return active.data.brand_name.trim();
+  }
 
   if (active.type === 'report' && isNonEmptyString(active.data.brand_name)) {
     return active.data.brand_name.trim();
@@ -198,6 +207,67 @@ export function inferBrandName(content: CanvasContent, allContents: CanvasConten
   }
 
   return 'brand';
+}
+
+function stringifyTableCell(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyTableCell(item)).join('、');
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function buildDataTableMarkdown(
+  content: Extract<CanvasContent, { type: 'dataTable' }>,
+  descriptor: ExportDescriptor
+): string {
+  const columns = content.data.columns || [];
+  const rows = content.data.rows || [];
+  const lines: string[] = [
+    `# ${content.data.export_title || descriptor.title || descriptor.deliverableName}`,
+    '',
+    ...createMetadataLines(descriptor),
+    '',
+  ];
+
+  if (content.data.analysis_period) {
+    lines.push(`- 范围：${content.data.analysis_period}`, '');
+  }
+
+  if (content.data.truncated) {
+    lines.push(
+      `- 说明：当前仅导出前 ${content.data.export_limit || rows.length} 条记录，请缩小筛选范围以获取完整结果。`,
+      ''
+    );
+  }
+
+  if (content.data.description) {
+    lines.push(content.data.description, '');
+  }
+
+  if (columns.length === 0) {
+    lines.push('暂无可导出的表格列。');
+    return lines.join('\n');
+  }
+
+  lines.push(
+    `| ${columns.map((column) => column.label || column.key).join(' | ')} |`,
+    `| ${columns.map(() => '---').join(' | ')} |`
+  );
+  for (const row of rows) {
+    lines.push(
+      `| ${columns
+        .map((column) => stringifyTableCell(row[column.key]).replace(/\|/g, '\\|'))
+        .join(' | ')} |`
+    );
+  }
+  lines.push('');
+  return lines.join('\n');
 }
 
 export function buildExportDescriptor(content: CanvasContent, allContents: CanvasContent[]): ExportDescriptor | null {
@@ -664,6 +734,10 @@ export function buildCanvasContentTextFromDescriptor(
 
   if (active.type === 'report') {
     return buildStandardReportMarkdown(active, descriptor);
+  }
+
+  if (active.type === 'dataTable') {
+    return buildDataTableMarkdown(active, descriptor);
   }
 
   return JSON.stringify(active.data, null, 2);

@@ -515,6 +515,26 @@ async def a1_brand_node(state: AgentState) -> Command:
             except Exception as ent_err:
                 logger.warning(f"[A1] Failed to resolve entity_id: {ent_err}")
 
+        # Write A1 materials into Knowledge Workspace for future retrieval.
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.services.knowledge_workspace_service import (
+                KnowledgeWorkspaceService,
+            )
+
+            async with AsyncSessionLocal() as db:
+                knowledge_service = KnowledgeWorkspaceService(db)
+                await knowledge_service.ingest_a1_facts(
+                    entity_id=resolved_entity_id,
+                    session_id=session_id,
+                    task_id=task_id,
+                    run_id=state.get("run_id"),
+                    brand_profile=data["brand_profile"],
+                    competitors=data["competitors"],
+                )
+        except Exception as knowledge_err:
+            logger.warning("[A1] Knowledge write-back failed: %s", knowledge_err)
+
         return Command(
             update={
                 "brand_profile": data["brand_profile"],

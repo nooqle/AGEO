@@ -64,7 +64,12 @@ class Settings(BaseSettings):
     BOCHA_API_KEY: str | None = None
 
     # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3010",
+        "http://127.0.0.1:3010",
+    ]
 
     # Browser
     PLAYWRIGHT_BROWSERS_PATH: str = "0"

@@ -306,6 +306,13 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
   if (type === 'dataTable') {
     return {
       ...preview,
+      artifact_kind: typeof data.artifact_kind === 'string' ? data.artifact_kind : undefined,
+      brand_name: typeof data.brand_name === 'string' ? data.brand_name : undefined,
+      analysis_period: typeof data.analysis_period === 'string' ? data.analysis_period : undefined,
+      export_title: typeof data.export_title === 'string' ? data.export_title : undefined,
+      truncated: typeof data.truncated === 'boolean' ? data.truncated : undefined,
+      has_more_records: typeof data.has_more_records === 'boolean' ? data.has_more_records : undefined,
+      export_limit: typeof data.export_limit === 'number' ? data.export_limit : undefined,
       columns: Array.isArray(data.columns)
         ? (data.columns as CanvasContentDataMap['dataTable']['columns'])
         : undefined,

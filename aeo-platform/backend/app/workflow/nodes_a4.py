@@ -1422,6 +1422,26 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 len(final_fetch_results),
             )
 
+        # Write A4 materials into Knowledge Workspace for future retrieval.
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.services.knowledge_workspace_service import (
+                KnowledgeWorkspaceService,
+            )
+
+            async with AsyncSessionLocal() as db:
+                knowledge_service = KnowledgeWorkspaceService(db)
+                await knowledge_service.ingest_a4_facts(
+                    entity_id=state.get("entity_id"),
+                    session_id=session_id,
+                    task_id=task_id,
+                    run_id=state.get("run_id"),
+                    brand_profile=brand_profile,
+                    fetch_results=final_fetch_results,
+                )
+        except Exception as knowledge_err:
+            logger.warning("[A4] Knowledge write-back failed: %s", knowledge_err)
+
         # Task milestone: A4 completed (Cycle 3, Module 1)
         if task_id:
             try:

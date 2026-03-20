@@ -681,6 +681,13 @@ export type TableColumn = {
   format?: (value: unknown, row: TableRow) => unknown;
 };
 export type DataTableCanvasData = CanvasPreviewData & {
+  artifact_kind?: string;
+  brand_name?: string;
+  analysis_period?: string;
+  export_title?: string;
+  truncated?: boolean;
+  has_more_records?: boolean;
+  export_limit?: number;
   columns?: TableColumn[];
   rows?: TableRow[];
 };

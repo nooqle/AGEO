@@ -20,6 +20,12 @@ from app.workflow.nodes_followup import (
     compare_snapshots_node,
     selective_refetch_node,
 )
+from app.workflow.nodes_knowledge import (
+    knowledge_aggregate_node,
+    knowledge_compare_node,
+    knowledge_export_node,
+    knowledge_lookup_node,
+)
 from app.workflow.nodes_monitoring import create_monitoring_node
 
 logger = logging.getLogger(__name__)
@@ -56,6 +62,10 @@ def build_workflow() -> StateGraph:
     workflow.add_node("a5_analytics", a5_analytics_node)
     workflow.add_node("a7_confidence_signal", a7_confidence_signal_node)
     workflow.add_node("wait_for_user", wait_for_user_node)
+    workflow.add_node("knowledge_lookup", knowledge_lookup_node)
+    workflow.add_node("knowledge_aggregate", knowledge_aggregate_node)
+    workflow.add_node("knowledge_compare", knowledge_compare_node)
+    workflow.add_node("knowledge_export", knowledge_export_node)
 
     # Follow-up nodes (Cycle 3, Module 2)
     workflow.add_node("drill_down", drill_down_node)
@@ -80,7 +90,15 @@ def build_workflow() -> StateGraph:
         workflow.add_edge(node, "orchestrator")
 
     # Follow-up nodes and monitoring node return to orchestrator
-    for node in ["drill_down", "compare_snapshots", "create_monitoring"]:
+    for node in [
+        "drill_down",
+        "compare_snapshots",
+        "create_monitoring",
+        "knowledge_lookup",
+        "knowledge_aggregate",
+        "knowledge_compare",
+        "knowledge_export",
+    ]:
         workflow.add_edge(node, "orchestrator")
 
     # selective_refetch routes to a4_fetch (not back to orchestrator)
@@ -119,8 +137,7 @@ async def init_checkpointer() -> None:
 
         # 将 SQLAlchemy URL 格式转为 psycopg3 格式
         conn_string = (
-            db_url
-            .replace("postgresql+asyncpg://", "postgresql://")
+            db_url.replace("postgresql+asyncpg://", "postgresql://")
             .replace("postgresql+psycopg2://", "postgresql://")
             .replace("postgresql+psycopg://", "postgresql://")
         )
@@ -147,7 +164,9 @@ async def init_checkpointer() -> None:
         logger.info("[Checkpointer] AsyncPostgresSaver 初始化成功")
 
     except ImportError:
-        logger.error("[Checkpointer] langgraph-checkpoint-postgres 未安装，降级为 MemorySaver")
+        logger.error(
+            "[Checkpointer] langgraph-checkpoint-postgres 未安装，降级为 MemorySaver"
+        )
         _fallback_to_memory_saver()
     except Exception as e:
         logger.error("[Checkpointer] 初始化失败: %s，降级为 MemorySaver", e)
@@ -184,7 +203,9 @@ async def get_compiled_workflow():
     """
     global _compiled_workflow
     if _compiled_workflow is None:
-        logger.warning("[Checkpointer] get_compiled_workflow 在 init 前被调用，触发降级初始化")
+        logger.warning(
+            "[Checkpointer] get_compiled_workflow 在 init 前被调用，触发降级初始化"
+        )
         _fallback_to_memory_saver()
     return _compiled_workflow
 

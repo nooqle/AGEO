@@ -361,7 +361,7 @@ async def _finalize_cancelled_runtime_if_requested(
 
 
 async def _sync_runtime_after_stream(workflow, config: dict[str, Any]) -> None:
-    """Persist waiting-input runtime state after a stream run finishes."""
+    """Persist runtime state after a stream run finishes."""
 
     try:
         current_state = workflow.get_state(config)
@@ -369,26 +369,31 @@ async def _sync_runtime_after_stream(workflow, config: dict[str, Any]) -> None:
             return
 
         state_values = dict(current_state.values)
-        if not _state_is_waiting_for_user(state_values):
-            return
+        from app.services.task_service import TaskService
 
         task_id = state_values.get("task_id")
         run_id = state_values.get("run_id")
         if not task_id or not run_id:
             return
 
-        from app.services.task_service import TaskService
-
         async with AsyncSessionLocal() as db:
             task_service = TaskService(db)
-            await task_service.mark_waiting_for_input(
-                UUID(task_id),
-                run_id=UUID(run_id),
-                checkpoint_stage=state_values.get("current_step"),
-                progress_message=_build_waiting_input_message(state_values),
-            )
+            if _state_is_waiting_for_user(state_values):
+                await task_service.mark_waiting_for_input(
+                    UUID(task_id),
+                    run_id=UUID(run_id),
+                    checkpoint_stage=state_values.get("current_step"),
+                    progress_message=_build_waiting_input_message(state_values),
+                )
+                return
+
+            if state_values.get("execution_status") == "completed":
+                await task_service.complete_task(
+                    UUID(task_id),
+                    run_id=UUID(run_id),
+                )
     except Exception as exc:
-        logger.warning("[LangGraph] Failed to sync waiting-input runtime: %s", exc)
+        logger.warning("[LangGraph] Failed to sync final runtime state: %s", exc)
 
 
 async def rebuild_state_from_db(

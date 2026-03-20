@@ -53,6 +53,12 @@ export function DataTableContent({ content }: DataTableContentProps) {
         <p className="text-sm text-[var(--text-secondary)] mb-4">{data.description}</p>
       )}
 
+      {data.truncated && (
+        <div className="mb-4 rounded-xl border border-amber-300/50 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          当前结果较多，表格仅展示前 {data.export_limit ?? rows.length} 条记录。若需要完整导出，请缩小筛选范围后再次生成。
+        </div>
+      )}
+
       {/* 表格 */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">

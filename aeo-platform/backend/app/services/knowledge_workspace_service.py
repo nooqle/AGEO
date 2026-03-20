@@ -1,0 +1,1342 @@
+"""Knowledge Workspace service."""
+
+from __future__ import annotations
+
+import re
+from calendar import monthrange
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any, Iterable
+from uuid import UUID
+
+from sqlalchemy import delete, desc, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.utils import extract_domain
+from app.models.knowledge import KnowledgeRecord, KnowledgeSegment
+
+
+def _id_or_none(value: str | UUID | None) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, UUID):
+        return str(value)
+    return str(value)
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _join_non_empty(parts: Iterable[Any], sep: str = "\n") -> str:
+    return sep.join(part for part in (_text(p) for p in parts) if part)
+
+
+def _extract_query_terms(query: str) -> list[str]:
+    terms = []
+    semantic_keywords = [
+        "品牌",
+        "竞品",
+        "答案",
+        "引用",
+        "官网",
+        "来源",
+        "平台",
+        "问题",
+        "抓取",
+        "分析",
+        "导出",
+        "汇总",
+        "统计",
+        "盘点",
+        "变化",
+        "差距",
+        "历史",
+        "清单",
+        "deepseek",
+        "kimi",
+        "doubao",
+        "hunyuan",
+    ]
+    for match in re.findall(r"[A-Za-z0-9_.-]+|[\u4e00-\u9fff]{2,}", query):
+        item = match.strip().lower()
+        if len(item) >= 2:
+            terms.append(item)
+            for keyword in semantic_keywords:
+                if keyword in item:
+                    terms.append(keyword)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for term in terms:
+        if term not in seen:
+            seen.add(term)
+            deduped.append(term)
+    return deduped
+
+
+def _chunk_text(content: str, max_chars: int = 900) -> list[str]:
+    text = _text(content)
+    if not text:
+        return []
+
+    paragraphs = [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
+    if not paragraphs:
+        paragraphs = [text]
+
+    chunks: list[str] = []
+    current = ""
+    for para in paragraphs:
+        if not current:
+            current = para
+            continue
+        if len(current) + 2 + len(para) <= max_chars:
+            current = f"{current}\n\n{para}"
+            continue
+        chunks.append(current)
+        current = para
+
+    if current:
+        chunks.append(current)
+
+    normalized: list[str] = []
+    for chunk in chunks:
+        if len(chunk) <= max_chars:
+            normalized.append(chunk)
+            continue
+        start = 0
+        while start < len(chunk):
+            normalized.append(chunk[start : start + max_chars])
+            start += max_chars - 120
+    return normalized
+
+
+def _infer_month_range(query: str) -> tuple[str | None, str | None]:
+    text = _text(query)
+    if not text:
+        return (None, None)
+
+    match = re.search(r"(?:(\d{4})年)?\s*(1[0-2]|0?[1-9])月", text)
+    if not match:
+        return (None, None)
+
+    year = int(match.group(1) or datetime.now(timezone.utc).year)
+    month = int(match.group(2))
+    last_day = monthrange(year, month)[1]
+    start = f"{year:04d}-{month:02d}-01"
+    end = f"{year:04d}-{month:02d}-{last_day:02d}"
+    return (start, end)
+
+
+def _source_type_label(source_type: str) -> str:
+    return {
+        "brand_profile": "品牌档案",
+        "competitor_profile": "竞品档案",
+        "fetch_answer": "历史答案",
+        "fetch_citation": "历史引用",
+    }.get(source_type, source_type)
+
+
+class KnowledgeWorkspaceService:
+    """Persist and retrieve retrieval-friendly evidence objects."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def ingest_a1_facts(
+        self,
+        *,
+        entity_id: str | UUID | None,
+        session_id: str | UUID | None,
+        task_id: str | UUID | None,
+        run_id: str | UUID | None,
+        brand_profile: dict[str, Any],
+        competitors: list[dict[str, Any]],
+        occurred_at: datetime | None = None,
+    ) -> None:
+        brand_name = _text(brand_profile.get("brand_name"))
+        occurred_at = occurred_at or datetime.now(timezone.utc)
+
+        await self._upsert_record(
+            dedupe_key=(
+                f"a1:brand_profile:{task_id or session_id or brand_name}:{brand_name}"
+            ),
+            entity_id=entity_id,
+            session_id=session_id,
+            task_id=task_id,
+            run_id=run_id,
+            source_type="brand_profile",
+            brand_name=brand_name,
+            title=f"{brand_name} 品牌档案" if brand_name else "品牌档案",
+            occurred_at=occurred_at,
+            search_text=self._build_brand_search_text(brand_profile),
+            payload=brand_profile,
+            extra_metadata={
+                "industry": brand_profile.get("industry"),
+                "official_website": brand_profile.get("official_website"),
+            },
+            segments=self._build_brand_segments(brand_profile),
+        )
+
+        for index, competitor in enumerate(competitors):
+            competitor_name = _text(competitor.get("name"))
+            if not competitor_name:
+                continue
+            await self._upsert_record(
+                dedupe_key=(
+                    f"a1:competitor:{task_id or session_id or brand_name}:{index}:{competitor_name}"
+                ),
+                entity_id=entity_id,
+                session_id=session_id,
+                task_id=task_id,
+                run_id=run_id,
+                source_type="competitor_profile",
+                brand_name=brand_name,
+                title=f"{competitor_name} 竞品档案",
+                competitor_name=competitor_name,
+                occurred_at=occurred_at,
+                search_text=self._build_competitor_search_text(brand_name, competitor),
+                payload=competitor,
+                extra_metadata={
+                    "competition_type": competitor.get("competition_type"),
+                    "relevance_score": competitor.get("relevance_score"),
+                },
+                segments=self._build_competitor_segments(brand_name, competitor),
+            )
+
+        await self.db.commit()
+
+    async def ingest_a4_facts(
+        self,
+        *,
+        entity_id: str | UUID | None,
+        session_id: str | UUID | None,
+        task_id: str | UUID | None,
+        run_id: str | UUID | None,
+        brand_profile: dict[str, Any],
+        fetch_results: list[dict[str, Any]],
+        occurred_at: datetime | None = None,
+    ) -> None:
+        brand_name = _text(brand_profile.get("brand_name"))
+        occurred_at = occurred_at or datetime.now(timezone.utc)
+
+        for question_index, question_result in enumerate(fetch_results):
+            question_id = (
+                _text(question_result.get("question_id")) or f"q{question_index + 1}"
+            )
+            question_text = _text(question_result.get("question_text"))
+            for platform_result in question_result.get("platform_results", []):
+                platform = _text(platform_result.get("platform"))
+                answer = platform_result.get("answer") or {}
+                answer_text = _text(answer.get("content"))
+                answer_payload = {
+                    "question_id": question_id,
+                    "question_text": question_text,
+                    "platform": platform,
+                    "fetch_method": platform_result.get("fetch_method"),
+                    "success": platform_result.get("success", False),
+                    "answer": answer,
+                    "citations": platform_result.get("citations", []),
+                    "duration": platform_result.get("duration"),
+                }
+                await self._upsert_record(
+                    dedupe_key=(
+                        f"a4:answer:{task_id or session_id or brand_name}:{question_id}:{platform}"
+                    ),
+                    entity_id=entity_id,
+                    session_id=session_id,
+                    task_id=task_id,
+                    run_id=run_id,
+                    source_type="fetch_answer",
+                    brand_name=brand_name,
+                    title=f"{platform} - {question_text[:80]}",
+                    platform=platform,
+                    question_id=question_id,
+                    question_text=question_text,
+                    occurred_at=occurred_at,
+                    search_text=self._build_answer_search_text(
+                        brand_name,
+                        question_text,
+                        platform,
+                        answer_text,
+                    ),
+                    payload=answer_payload,
+                    extra_metadata={
+                        "fetch_method": platform_result.get("fetch_method"),
+                        "success": platform_result.get("success", False),
+                        "has_brand_mention": answer.get("has_brand_mention", False),
+                        "citation_count": len(platform_result.get("citations", [])),
+                    },
+                    segments=self._build_answer_segments(
+                        brand_name,
+                        question_text,
+                        platform,
+                        answer_text,
+                    ),
+                )
+
+                citations = platform_result.get("citations", []) or []
+                for citation_index, citation in enumerate(citations):
+                    url = _text(citation.get("url"))
+                    title = (
+                        _text(citation.get("title"))
+                        or url
+                        or f"citation-{citation_index + 1}"
+                    )
+                    domain = _text(citation.get("domain")) or extract_domain(url)
+                    site_name = _text(
+                        citation.get("site_name") or citation.get("source")
+                    )
+                    is_official = bool(
+                        domain
+                        and extract_domain(_text(brand_profile.get("official_website")))
+                        == domain
+                    )
+                    citation_payload = {
+                        "question_id": question_id,
+                        "question_text": question_text,
+                        "platform": platform,
+                        "citation": citation,
+                        "is_official": is_official,
+                    }
+                    await self._upsert_record(
+                        dedupe_key=(
+                            f"a4:citation:{task_id or session_id or brand_name}:{question_id}:{platform}:{url or title}:{citation_index}"
+                        ),
+                        entity_id=entity_id,
+                        session_id=session_id,
+                        task_id=task_id,
+                        run_id=run_id,
+                        source_type="fetch_citation",
+                        brand_name=brand_name,
+                        title=title[:255],
+                        platform=platform,
+                        question_id=question_id,
+                        question_text=question_text,
+                        domain=domain or None,
+                        occurred_at=occurred_at,
+                        search_text=self._build_citation_search_text(
+                            brand_name,
+                            question_text,
+                            platform,
+                            title,
+                            url,
+                            site_name,
+                            domain,
+                        ),
+                        payload=citation_payload,
+                        extra_metadata={
+                            "url": url,
+                            "site_name": site_name,
+                            "is_official": is_official,
+                        },
+                        segments=self._build_citation_segments(
+                            question_text,
+                            platform,
+                            title,
+                            url,
+                            site_name,
+                            domain,
+                            is_official,
+                        ),
+                    )
+
+        await self.db.commit()
+
+    async def get_manifest(
+        self,
+        *,
+        entity_id: str | UUID | None = None,
+        brand_name: str | None = None,
+    ) -> dict[str, Any]:
+        if _id_or_none(entity_id) is None and not brand_name:
+            return {
+                "available_sources": {
+                    "brand_profile": False,
+                    "competitor_profile": False,
+                    "fetch_answer": False,
+                    "fetch_citation": False,
+                },
+                "counts": {},
+                "history": {"latest_analysis_at": None},
+                "coverage": {"platform_count": 0, "question_count": 0},
+            }
+
+        stmt = select(
+            KnowledgeRecord.source_type,
+            func.count(KnowledgeRecord.id),
+            func.max(KnowledgeRecord.occurred_at),
+        )
+        stmt = stmt.where(
+            *self._scope_conditions(entity_id=entity_id, brand_name=brand_name)
+        )
+        stmt = stmt.group_by(KnowledgeRecord.source_type)
+        result = await self.db.execute(stmt)
+        rows = result.all()
+
+        counts: dict[str, int] = defaultdict(int)
+        latest = None
+        for source_type, count, latest_at in rows:
+            counts[source_type] = int(count or 0)
+            if latest_at is not None and (latest is None or latest_at > latest):
+                latest = latest_at
+
+        platform_stmt = select(
+            func.count(func.distinct(KnowledgeRecord.platform))
+        ).where(
+            *self._scope_conditions(entity_id=entity_id, brand_name=brand_name),
+            KnowledgeRecord.platform.is_not(None),
+        )
+        question_stmt = select(
+            func.count(func.distinct(KnowledgeRecord.question_id))
+        ).where(
+            *self._scope_conditions(entity_id=entity_id, brand_name=brand_name),
+            KnowledgeRecord.question_id.is_not(None),
+        )
+
+        platform_count = int((await self.db.execute(platform_stmt)).scalar() or 0)
+        question_count = int((await self.db.execute(question_stmt)).scalar() or 0)
+        history_rows = (
+            await self.db.execute(
+                select(
+                    KnowledgeRecord.task_id,
+                    KnowledgeRecord.run_id,
+                    KnowledgeRecord.session_id,
+                    KnowledgeRecord.occurred_at,
+                )
+                .where(
+                    *self._scope_conditions(entity_id=entity_id, brand_name=brand_name)
+                )
+                .order_by(desc(KnowledgeRecord.occurred_at))
+                .limit(1000)
+            )
+        ).all()
+
+        analysis_labels: set[str] = set()
+        recent_months: list[str] = []
+        for task_id, run_id, session_id, occurred_at in history_rows:
+            label = None
+            if task_id:
+                label = f"task:{task_id}"
+            elif run_id:
+                label = f"run:{run_id}"
+            elif session_id:
+                label = f"session:{session_id}"
+            elif occurred_at:
+                label = f"date:{occurred_at.strftime('%Y-%m-%d')}"
+            if label:
+                analysis_labels.add(label)
+
+            month_label = occurred_at.strftime("%Y-%m")
+            if month_label not in recent_months:
+                recent_months.append(month_label)
+            if len(recent_months) >= 6:
+                break
+
+        return {
+            "available_sources": {
+                "brand_profile": counts.get("brand_profile", 0) > 0,
+                "competitor_profile": counts.get("competitor_profile", 0) > 0,
+                "fetch_answer": counts.get("fetch_answer", 0) > 0,
+                "fetch_citation": counts.get("fetch_citation", 0) > 0,
+            },
+            "counts": dict(counts),
+            "history": {
+                "latest_analysis_at": latest.isoformat() if latest else None,
+                "analysis_window_count": len(analysis_labels),
+                "recent_months": recent_months,
+            },
+            "coverage": {
+                "platform_count": platform_count,
+                "question_count": question_count,
+            },
+        }
+
+    async def lookup(
+        self,
+        *,
+        query: str,
+        entity_id: str | UUID | None = None,
+        brand_name: str | None = None,
+        source_types: list[str] | None = None,
+        platform: str | None = None,
+        competitor_name: str | None = None,
+        domain: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        if _id_or_none(entity_id) is None and not brand_name:
+            return {
+                "status": "miss",
+                "query": query,
+                "matches": [],
+                "reason": "missing_scope",
+            }
+
+        terms = _extract_query_terms(query)
+        stmt = (
+            select(KnowledgeSegment, KnowledgeRecord)
+            .join(KnowledgeRecord, KnowledgeSegment.record_id == KnowledgeRecord.id)
+            .where(*self._scope_conditions(entity_id=entity_id, brand_name=brand_name))
+        )
+        if source_types:
+            stmt = stmt.where(KnowledgeRecord.source_type.in_(source_types))
+        if platform:
+            stmt = stmt.where(KnowledgeRecord.platform == platform)
+        if competitor_name:
+            stmt = stmt.where(KnowledgeRecord.competitor_name == competitor_name)
+        if domain:
+            stmt = stmt.where(KnowledgeRecord.domain == domain)
+        if terms:
+            term_conditions = [
+                KnowledgeSegment.search_text.ilike(f"%{term}%") for term in terms
+            ]
+            stmt = stmt.where(or_(*term_conditions))
+        stmt = stmt.order_by(desc(KnowledgeRecord.occurred_at)).limit(
+            max(limit * 8, 40)
+        )
+
+        rows = (await self.db.execute(stmt)).all()
+        ranked: list[dict[str, Any]] = []
+        for segment, record in rows:
+            score = self._score_match(
+                query=query, terms=terms, record=record, segment=segment
+            )
+            ranked.append(
+                {
+                    "score": score,
+                    "record_id": str(record.id),
+                    "source_type": record.source_type,
+                    "title": record.title,
+                    "brand_name": record.brand_name,
+                    "platform": record.platform,
+                    "question_id": record.question_id,
+                    "question_text": record.question_text,
+                    "competitor_name": record.competitor_name,
+                    "domain": record.domain,
+                    "occurred_at": record.occurred_at.isoformat(),
+                    "snippet": segment.content[:320],
+                    "payload": record.payload,
+                    "metadata": record.extra_metadata,
+                }
+            )
+
+        ranked.sort(key=lambda item: (item["score"], item["occurred_at"]), reverse=True)
+        matches = ranked[:limit]
+        return {
+            "status": "hit" if matches else "miss",
+            "query": query,
+            "matches": matches,
+        }
+
+    async def aggregate(
+        self,
+        *,
+        query: str = "",
+        entity_id: str | UUID | None = None,
+        brand_name: str | None = None,
+        source_types: list[str] | None = None,
+        group_by: str = "source_type",
+        platform: str | None = None,
+        competitor_name: str | None = None,
+        domain: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if _id_or_none(entity_id) is None and not brand_name:
+            return {
+                "status": "miss",
+                "groups": [],
+                "reason": "missing_scope",
+            }
+
+        inferred_start, inferred_end = _infer_month_range(query)
+        start_date = start_date or inferred_start
+        end_date = end_date or inferred_end
+
+        records = await self._fetch_records(
+            query=query,
+            entity_id=entity_id,
+            brand_name=brand_name,
+            source_types=source_types,
+            platform=platform,
+            competitor_name=competitor_name,
+            domain=domain,
+            start_date=start_date,
+            end_date=end_date,
+            max_records=max(limit * 20, 200),
+        )
+
+        grouped: dict[str, list[KnowledgeRecord]] = defaultdict(list)
+        for record in records:
+            key = self._aggregate_key(record, group_by)
+            if key is None:
+                continue
+            grouped[key].append(record)
+
+        groups: list[dict[str, Any]] = []
+        for key, items in grouped.items():
+            groups.append(
+                {
+                    "group_key": key,
+                    "count": len(items),
+                    "source_types": sorted(
+                        {item.source_type for item in items if item.source_type}
+                    ),
+                    "sample_titles": [
+                        title
+                        for title in [
+                            _text(item.title) for item in items[: min(len(items), 3)]
+                        ]
+                        if title
+                    ],
+                    "record_ids": [
+                        str(item.id) for item in items[: min(len(items), 5)]
+                    ],
+                    "sample_records": [
+                        self._serialize_record_summary(item)
+                        for item in items[: min(len(items), 3)]
+                    ],
+                }
+            )
+
+        groups.sort(key=lambda item: (item["count"], item["group_key"]), reverse=True)
+        return {
+            "status": "hit" if groups else "miss",
+            "group_by": group_by,
+            "query": query,
+            "total_records": len(records),
+            "groups": groups[:limit],
+        }
+
+    async def compare(
+        self,
+        *,
+        entity_id: str | UUID | None = None,
+        brand_name: str | None = None,
+        compare_by: str = "platform",
+        source_types: list[str] | None = None,
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        if _id_or_none(entity_id) is None and not brand_name:
+            return {
+                "status": "miss",
+                "comparisons": [],
+                "reason": "missing_scope",
+            }
+
+        records = await self._fetch_records(
+            query="",
+            entity_id=entity_id,
+            brand_name=brand_name,
+            source_types=source_types,
+            platform=None,
+            competitor_name=None,
+            domain=None,
+            start_date=None,
+            end_date=None,
+            max_records=1000,
+        )
+
+        analysis_groups: dict[str, list[KnowledgeRecord]] = defaultdict(list)
+        for record in records:
+            label = self._analysis_group_label(record)
+            analysis_groups[label].append(record)
+
+        ordered_groups = sorted(
+            analysis_groups.items(),
+            key=lambda item: max(r.occurred_at for r in item[1]),
+            reverse=True,
+        )
+        if len(ordered_groups) < 2:
+            return {
+                "status": "miss",
+                "comparisons": [],
+                "reason": "insufficient_history",
+            }
+
+        latest_label, latest_records = ordered_groups[0]
+        previous_label, previous_records = ordered_groups[1]
+
+        latest_counts = self._aggregate_counts(latest_records, compare_by)
+        previous_counts = self._aggregate_counts(previous_records, compare_by)
+        latest_grouped = self._group_records(latest_records, compare_by)
+        previous_grouped = self._group_records(previous_records, compare_by)
+
+        all_keys = set(latest_counts) | set(previous_counts)
+        comparisons: list[dict[str, Any]] = []
+        for key in all_keys:
+            latest_count = latest_counts.get(key, 0)
+            previous_count = previous_counts.get(key, 0)
+            comparisons.append(
+                {
+                    "group_key": key,
+                    "latest_count": latest_count,
+                    "previous_count": previous_count,
+                    "delta": latest_count - previous_count,
+                    "latest_examples": [
+                        self._serialize_record_summary(record)
+                        for record in latest_grouped.get(key, [])[:2]
+                    ],
+                    "previous_examples": [
+                        self._serialize_record_summary(record)
+                        for record in previous_grouped.get(key, [])[:2]
+                    ],
+                }
+            )
+
+        comparisons.sort(
+            key=lambda item: (
+                abs(item["delta"]),
+                item["latest_count"],
+                item["group_key"],
+            ),
+            reverse=True,
+        )
+
+        return {
+            "status": "hit",
+            "compare_by": compare_by,
+            "latest_label": latest_label,
+            "previous_label": previous_label,
+            "comparisons": comparisons[:limit],
+        }
+
+    async def export_table(
+        self,
+        *,
+        query: str = "",
+        entity_id: str | UUID | None = None,
+        brand_name: str | None = None,
+        source_types: list[str] | None = None,
+        platform: str | None = None,
+        competitor_name: str | None = None,
+        domain: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if _id_or_none(entity_id) is None and not brand_name:
+            return {
+                "status": "miss",
+                "reason": "missing_scope",
+                "columns": [],
+                "rows": [],
+            }
+
+        inferred_start, inferred_end = _infer_month_range(query)
+        start_date = start_date or inferred_start
+        end_date = end_date or inferred_end
+
+        effective_limit = max(min(limit, 500), 1)
+        records = await self._fetch_records(
+            query=query,
+            entity_id=entity_id,
+            brand_name=brand_name,
+            source_types=source_types,
+            platform=platform,
+            competitor_name=competitor_name,
+            domain=domain,
+            start_date=start_date,
+            end_date=end_date,
+            max_records=effective_limit + 1,
+        )
+        truncated = len(records) > effective_limit
+        visible_records = records[:effective_limit]
+        rows = [self._serialize_export_row(record) for record in visible_records]
+        if not rows:
+            return {
+                "status": "miss",
+                "reason": "no_records",
+                "columns": self._export_columns(),
+                "rows": [],
+            }
+
+        effective_brand = (
+            brand_name
+            or next(
+                (
+                    _text(record.brand_name)
+                    for record in visible_records
+                    if _text(record.brand_name)
+                ),
+                "",
+            )
+            or "品牌"
+        )
+        source_set = sorted(
+            {
+                _text(record.source_type)
+                for record in visible_records
+                if _text(record.source_type)
+            }
+        )
+        platforms = sorted(
+            {
+                _text(record.platform)
+                for record in visible_records
+                if _text(record.platform)
+            }
+        )
+        description_parts = []
+        if query:
+            description_parts.append(f"主题：{query}")
+        if start_date or end_date:
+            period = " 至 ".join(part for part in [start_date, end_date] if part)
+            description_parts.append(f"时间范围：{period}")
+        if platform:
+            description_parts.append(f"平台：{platform}")
+        if competitor_name:
+            description_parts.append(f"竞品：{competitor_name}")
+        if domain:
+            description_parts.append(f"域名：{domain}")
+        if truncated:
+            description_parts.append(
+                f"当前结果较多，已仅展示前 {effective_limit} 条，请缩小筛选范围以导出完整结果"
+            )
+
+        return {
+            "status": "hit",
+            "title": f"{effective_brand} 历史知识导出",
+            "brand_name": effective_brand,
+            "description": "；".join(description_parts)
+            or "基于历史知识材料整理的数据表",
+            "columns": self._export_columns(),
+            "rows": rows,
+            "item_count": len(rows),
+            "truncated": truncated,
+            "has_more_records": truncated,
+            "export_limit": effective_limit,
+            "source_types": source_set,
+            "platforms": platforms,
+            "analysis_period": (
+                " 至 ".join(part for part in [start_date, end_date] if part)
+                if start_date or end_date
+                else "跨历史分析"
+            ),
+            "summary_metrics": {
+                "导出条数": len(rows),
+                "来源类型": len(source_set),
+                "覆盖平台数": len(platforms),
+                "结果截断": "是" if truncated else "否",
+            },
+        }
+
+    def _scope_conditions(
+        self,
+        *,
+        entity_id: str | UUID | None,
+        brand_name: str | None,
+    ) -> list[Any]:
+        conditions: list[Any] = []
+        entity_uuid = _id_or_none(entity_id)
+        if entity_uuid is not None:
+            conditions.append(KnowledgeRecord.entity_id == entity_uuid)
+        elif brand_name:
+            conditions.append(KnowledgeRecord.brand_name == brand_name)
+        return conditions
+
+    async def _fetch_records(
+        self,
+        *,
+        query: str,
+        entity_id: str | UUID | None,
+        brand_name: str | None,
+        source_types: list[str] | None,
+        platform: str | None,
+        competitor_name: str | None,
+        domain: str | None,
+        start_date: str | None,
+        end_date: str | None,
+        max_records: int,
+    ) -> list[KnowledgeRecord]:
+        stmt = select(KnowledgeRecord).where(
+            *self._scope_conditions(entity_id=entity_id, brand_name=brand_name)
+        )
+        if source_types:
+            stmt = stmt.where(KnowledgeRecord.source_type.in_(source_types))
+        if platform:
+            stmt = stmt.where(KnowledgeRecord.platform == platform)
+        if competitor_name:
+            stmt = stmt.where(KnowledgeRecord.competitor_name == competitor_name)
+        if domain:
+            stmt = stmt.where(KnowledgeRecord.domain == domain)
+
+        if start_date:
+            parsed_start = self._parse_date(start_date, end_of_day=False)
+            if parsed_start is not None:
+                stmt = stmt.where(KnowledgeRecord.occurred_at >= parsed_start)
+        if end_date:
+            parsed_end = self._parse_date(end_date, end_of_day=True)
+            if parsed_end is not None:
+                stmt = stmt.where(KnowledgeRecord.occurred_at <= parsed_end)
+
+        terms = _extract_query_terms(query)
+        if terms:
+            term_conditions = [
+                KnowledgeRecord.search_text.ilike(f"%{term}%") for term in terms
+            ]
+            stmt = stmt.where(or_(*term_conditions))
+
+        stmt = stmt.order_by(desc(KnowledgeRecord.occurred_at)).limit(max_records)
+        return list((await self.db.execute(stmt)).scalars())
+
+    def _aggregate_key(self, record: KnowledgeRecord, group_by: str) -> str | None:
+        if group_by == "platform":
+            return _text(record.platform) or None
+        if group_by == "competitor":
+            return _text(record.competitor_name) or None
+        if group_by == "domain":
+            return _text(record.domain) or None
+        if group_by == "question":
+            return _text(record.question_text) or _text(record.question_id) or None
+        if group_by == "month":
+            return record.occurred_at.strftime("%Y-%m")
+        return _text(record.source_type) or "unknown_source"
+
+    def _analysis_group_label(self, record: KnowledgeRecord) -> str:
+        if record.task_id:
+            return f"task:{record.task_id}"
+        if record.run_id:
+            return f"run:{record.run_id}"
+        if record.session_id:
+            return f"session:{record.session_id}"
+        return f"date:{record.occurred_at.strftime('%Y-%m-%d')}"
+
+    def _aggregate_counts(
+        self,
+        records: list[KnowledgeRecord],
+        compare_by: str,
+    ) -> dict[str, int]:
+        counts: dict[str, int] = defaultdict(int)
+        for record in records:
+            key = self._aggregate_key(record, compare_by)
+            if key is None:
+                continue
+            counts[key] += 1
+        return counts
+
+    def _group_records(
+        self,
+        records: list[KnowledgeRecord],
+        group_by: str,
+    ) -> dict[str, list[KnowledgeRecord]]:
+        grouped: dict[str, list[KnowledgeRecord]] = defaultdict(list)
+        for record in records:
+            key = self._aggregate_key(record, group_by)
+            if key is None:
+                continue
+            grouped[key].append(record)
+        return grouped
+
+    def _parse_date(
+        self,
+        value: str,
+        *,
+        end_of_day: bool,
+    ) -> datetime | None:
+        value = _text(value)
+        if not value:
+            return None
+        try:
+            if len(value) == 7:
+                base = datetime.strptime(value, "%Y-%m")
+                if end_of_day:
+                    last_day = monthrange(base.year, base.month)[1]
+                    return base.replace(
+                        day=last_day,
+                        hour=23,
+                        minute=59,
+                        second=59,
+                        tzinfo=timezone.utc,
+                    )
+                return base.replace(tzinfo=timezone.utc)
+            base = datetime.strptime(value, "%Y-%m-%d")
+            if end_of_day:
+                return base.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            return base.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    async def _upsert_record(
+        self,
+        *,
+        dedupe_key: str,
+        entity_id: str | UUID | None,
+        session_id: str | UUID | None,
+        task_id: str | UUID | None,
+        run_id: str | UUID | None,
+        source_type: str,
+        brand_name: str | None,
+        title: str | None,
+        occurred_at: datetime,
+        search_text: str,
+        payload: dict[str, Any] | None,
+        extra_metadata: dict[str, Any] | None,
+        segments: list[dict[str, Any]],
+        platform: str | None = None,
+        question_id: str | None = None,
+        question_text: str | None = None,
+        competitor_name: str | None = None,
+        domain: str | None = None,
+    ) -> KnowledgeRecord:
+        stmt = select(KnowledgeRecord).where(KnowledgeRecord.dedupe_key == dedupe_key)
+        existing = (await self.db.execute(stmt)).scalar_one_or_none()
+        if existing is None:
+            existing = KnowledgeRecord(
+                dedupe_key=dedupe_key,
+                source_type=source_type,
+            )
+            self.db.add(existing)
+            await self.db.flush()
+
+        existing.entity_id = _id_or_none(entity_id)
+        existing.session_id = _id_or_none(session_id)
+        existing.task_id = _id_or_none(task_id)
+        existing.run_id = _id_or_none(run_id)
+        existing.brand_name = brand_name
+        existing.title = title
+        existing.platform = platform
+        existing.question_id = question_id
+        existing.question_text = question_text
+        existing.competitor_name = competitor_name
+        existing.domain = domain
+        existing.occurred_at = occurred_at
+        existing.search_text = search_text
+        existing.payload = payload
+        existing.extra_metadata = extra_metadata
+
+        await self.db.flush()
+        await self.db.execute(
+            delete(KnowledgeSegment).where(KnowledgeSegment.record_id == existing.id)
+        )
+        for index, segment in enumerate(segments):
+            self.db.add(
+                KnowledgeSegment(
+                    record_id=existing.id,
+                    segment_index=index,
+                    content=_text(segment.get("content")),
+                    search_text=_text(
+                        segment.get("search_text") or segment.get("content")
+                    ),
+                    extra_metadata=segment.get("metadata"),
+                )
+            )
+        await self.db.flush()
+        return existing
+
+    def _score_match(
+        self,
+        *,
+        query: str,
+        terms: list[str],
+        record: KnowledgeRecord,
+        segment: KnowledgeSegment,
+    ) -> int:
+        haystack = " ".join(
+            part.lower()
+            for part in [
+                _text(record.title),
+                _text(record.question_text),
+                _text(record.competitor_name),
+                _text(record.domain),
+                _text(segment.search_text),
+            ]
+            if part
+        )
+        score = 0
+        if query and query.lower() in haystack:
+            score += 6
+        for term in terms:
+            if term in haystack:
+                score += 2
+        if record.source_type in {"fetch_answer", "fetch_citation"}:
+            score += 1
+        return score
+
+    def _export_columns(self) -> list[dict[str, Any]]:
+        return [
+            {"key": "occurred_at", "label": "时间", "sortable": True},
+            {"key": "source_type", "label": "来源类型", "sortable": True},
+            {"key": "platform", "label": "平台", "sortable": True},
+            {"key": "competitor_name", "label": "竞品", "sortable": True},
+            {"key": "question_text", "label": "问题", "sortable": False},
+            {"key": "title", "label": "标题", "sortable": False},
+            {"key": "domain", "label": "域名", "sortable": True},
+            {"key": "site_name", "label": "站点", "sortable": True},
+            {"key": "is_official", "label": "官网", "sortable": True},
+            {"key": "snippet", "label": "摘要", "sortable": False},
+            {"key": "url", "label": "链接", "sortable": False},
+        ]
+
+    def _build_brand_search_text(self, brand_profile: dict[str, Any]) -> str:
+        return _join_non_empty(
+            [
+                brand_profile.get("brand_name"),
+                brand_profile.get("brand_name_en"),
+                brand_profile.get("industry"),
+                brand_profile.get("description"),
+                "核心产品：" + "、".join(brand_profile.get("core_products", []) or []),
+                "品牌关键词："
+                + "、".join(brand_profile.get("brand_keywords", []) or []),
+                "品牌定位：" + _text(brand_profile.get("brand_positioning")),
+                "目标受众：" + _text(brand_profile.get("target_audience")),
+                "价格定位：" + _text(brand_profile.get("price_positioning")),
+            ]
+        )
+
+    def _build_brand_segments(
+        self, brand_profile: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        segments = [
+            {
+                "content": _join_non_empty(
+                    [
+                        f"品牌：{brand_profile.get('brand_name')}",
+                        f"英文名：{brand_profile.get('brand_name_en')}",
+                        f"行业：{brand_profile.get('industry')}",
+                        f"官网：{brand_profile.get('official_website')}",
+                        f"描述：{brand_profile.get('description')}",
+                    ]
+                )
+            },
+            {
+                "content": _join_non_empty(
+                    [
+                        f"品牌定位：{brand_profile.get('brand_positioning')}",
+                        f"目标受众：{brand_profile.get('target_audience')}",
+                        f"价格定位：{brand_profile.get('price_positioning')}",
+                        f"成立年份：{brand_profile.get('founded_year')}",
+                    ]
+                )
+            },
+            {
+                "content": _join_non_empty(
+                    [
+                        "核心产品："
+                        + "、".join(brand_profile.get("core_products", []) or []),
+                        "品牌关键词："
+                        + "、".join(brand_profile.get("brand_keywords", []) or []),
+                    ]
+                )
+            },
+        ]
+        return [segment for segment in segments if _text(segment.get("content"))]
+
+    def _build_competitor_search_text(
+        self,
+        brand_name: str,
+        competitor: dict[str, Any],
+    ) -> str:
+        return _join_non_empty(
+            [
+                f"品牌：{brand_name}",
+                f"竞品：{competitor.get('name')}",
+                f"描述：{competitor.get('description')}",
+                f"竞争类型：{competitor.get('competition_type')}",
+                f"相关度：{competitor.get('relevance_score')}",
+                "核心产品：" + "、".join(competitor.get("core_products", []) or []),
+                f"竞争优势：{competitor.get('competitive_advantage')}",
+            ]
+        )
+
+    def _build_competitor_segments(
+        self,
+        brand_name: str,
+        competitor: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "content": _join_non_empty(
+                    [
+                        f"品牌：{brand_name}",
+                        f"竞品：{competitor.get('name')}",
+                        f"描述：{competitor.get('description')}",
+                        f"竞争类型：{competitor.get('competition_type')}",
+                        f"相关度：{competitor.get('relevance_score')}",
+                    ]
+                )
+            },
+            {
+                "content": _join_non_empty(
+                    [
+                        "核心产品："
+                        + "、".join(competitor.get("core_products", []) or []),
+                        f"竞争优势：{competitor.get('competitive_advantage')}",
+                    ]
+                )
+            },
+        ]
+
+    def _build_answer_search_text(
+        self,
+        brand_name: str,
+        question_text: str,
+        platform: str,
+        answer_text: str,
+    ) -> str:
+        return _join_non_empty(
+            [
+                "类型：历史答案",
+                "抓取结果",
+                f"品牌：{brand_name}",
+                f"平台：{platform}",
+                f"问题：{question_text}",
+                f"答案：{answer_text}",
+            ]
+        )
+
+    def _build_answer_segments(
+        self,
+        brand_name: str,
+        question_text: str,
+        platform: str,
+        answer_text: str,
+    ) -> list[dict[str, Any]]:
+        chunks = _chunk_text(answer_text)
+        if not chunks:
+            chunks = [""]
+        return [
+            {
+                "content": _join_non_empty(
+                    [
+                        "类型：历史答案",
+                        "抓取结果",
+                        f"品牌：{brand_name}",
+                        f"平台：{platform}",
+                        f"问题：{question_text}",
+                        chunk,
+                    ]
+                )
+            }
+            for chunk in chunks
+        ]
+
+    def _build_citation_search_text(
+        self,
+        brand_name: str,
+        question_text: str,
+        platform: str,
+        title: str,
+        url: str,
+        site_name: str,
+        domain: str,
+    ) -> str:
+        return _join_non_empty(
+            [
+                "类型：历史引用",
+                "引用来源",
+                "抓取结果",
+                f"品牌：{brand_name}",
+                f"平台：{platform}",
+                f"问题：{question_text}",
+                f"标题：{title}",
+                f"站点：{site_name}",
+                f"域名：{domain}",
+                f"链接：{url}",
+            ]
+        )
+
+    def _build_citation_segments(
+        self,
+        question_text: str,
+        platform: str,
+        title: str,
+        url: str,
+        site_name: str,
+        domain: str,
+        is_official: bool,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "content": _join_non_empty(
+                    [
+                        "类型：历史引用",
+                        "引用来源",
+                        "抓取结果",
+                        f"平台：{platform}",
+                        f"问题：{question_text}",
+                        f"标题：{title}",
+                        f"站点：{site_name}",
+                        f"域名：{domain}",
+                        f"链接：{url}",
+                        f"是否官网：{'是' if is_official else '否'}",
+                    ]
+                )
+            }
+        ]
+
+    def _serialize_record_summary(self, record: KnowledgeRecord) -> dict[str, Any]:
+        snippet = ""
+        if record.segments:
+            snippet = _text(record.segments[0].content)[:180]
+        return {
+            "record_id": str(record.id),
+            "source_type": record.source_type,
+            "title": record.title,
+            "platform": record.platform,
+            "question_text": record.question_text,
+            "competitor_name": record.competitor_name,
+            "domain": record.domain,
+            "occurred_at": record.occurred_at.isoformat(),
+            "snippet": snippet,
+        }
+
+    def _serialize_export_row(self, record: KnowledgeRecord) -> dict[str, Any]:
+        payload = record.payload if isinstance(record.payload, dict) else {}
+        metadata = (
+            record.extra_metadata if isinstance(record.extra_metadata, dict) else {}
+        )
+        citation = (
+            payload.get("citation") if isinstance(payload.get("citation"), dict) else {}
+        )
+
+        snippet = _compact_for_export(record.search_text, 220)
+        if record.source_type == "fetch_answer":
+            answer = (
+                payload.get("answer") if isinstance(payload.get("answer"), dict) else {}
+            )
+            snippet = _compact_for_export(
+                answer.get("content") or record.search_text, 220
+            )
+        elif record.source_type == "fetch_citation":
+            snippet = _compact_for_export(
+                _join_non_empty(
+                    [
+                        payload.get("question_text"),
+                        citation.get("title"),
+                        citation.get("summary"),
+                        citation.get("snippet"),
+                    ]
+                )
+                or record.search_text,
+                220,
+            )
+
+        return {
+            "occurred_at": record.occurred_at.strftime("%Y-%m-%d %H:%M"),
+            "source_type": _source_type_label(record.source_type),
+            "platform": _text(record.platform),
+            "competitor_name": _text(record.competitor_name),
+            "question_text": _text(record.question_text),
+            "title": _text(record.title),
+            "domain": _text(record.domain),
+            "site_name": _text(
+                metadata.get("site_name")
+                or citation.get("site_name")
+                or citation.get("source")
+            ),
+            "is_official": (
+                "是"
+                if bool(metadata.get("is_official") or payload.get("is_official"))
+                else "否"
+            ),
+            "snippet": snippet,
+            "url": _text(metadata.get("url") or citation.get("url")),
+        }
+
+
+def _compact_for_export(value: Any, limit: int = 220) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"

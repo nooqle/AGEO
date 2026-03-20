@@ -8,13 +8,16 @@ import json
 import logging
 from datetime import datetime
 from time import perf_counter
+from types import SimpleNamespace
 from typing import Any
 
 from langgraph.graph import END
 from langgraph.types import Command
 
 from app.workflow.state import AgentState
+from app.core.database import AsyncSessionLocal
 from app.core.llm import get_llm_model
+from app.services.knowledge_workspace_service import KnowledgeWorkspaceService
 from app.services.session_event_publisher import session_event_publisher
 from app.workflow.events import (
     send_reply_event,
@@ -143,6 +146,216 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": ["baseline", "persona"],
                     "description": "报告类型：baseline=行业基线报告, persona=场景分析报告（默认）",
+                },
+            },
+        },
+    },
+    {
+        "name": "knowledge_lookup",
+        "description": (
+            "查询同一品牌跨历史分析中已经沉淀的事实材料。"
+            "适用于品牌信息、竞品信息、历史抓取答案、历史引用来源、"
+            "以及基于已有材料的问答、分析和导出任务。"
+            "这是低成本优先路径：当用户问题明显围绕历史材料展开时，应优先尝试此工具。"
+            "如果返回 miss 或证据不足，再考虑 brand_analysis、answer_fetch 或 ask_user。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "要查询的历史事实、分析主题或导出主题",
+                },
+                "source_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "brand_profile",
+                            "competitor_profile",
+                            "fetch_answer",
+                            "fetch_citation",
+                        ],
+                    },
+                    "description": "限制知识来源类型（可选）",
+                },
+                "platform": {
+                    "type": "string",
+                    "description": "限制平台（可选）",
+                },
+                "competitor_name": {
+                    "type": "string",
+                    "description": "限制竞品名称（可选）",
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "限制引用域名（可选）",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返回多少条命中（默认 8）",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "knowledge_aggregate",
+        "description": (
+            "按时间、平台、竞品、问题或域名聚合历史事实材料。"
+            "适用于导出、汇总、盘点和基于历史材料的结构化分析。"
+            "当用户要求导出某一时间范围内的信息、统计某类材料、或按某个维度做历史汇总时优先使用。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "聚合主题或筛选提示（可为空）",
+                },
+                "source_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "brand_profile",
+                            "competitor_profile",
+                            "fetch_answer",
+                            "fetch_citation",
+                        ],
+                    },
+                    "description": "限制知识来源类型（可选）",
+                },
+                "group_by": {
+                    "type": "string",
+                    "enum": [
+                        "source_type",
+                        "platform",
+                        "competitor",
+                        "domain",
+                        "question",
+                        "month",
+                    ],
+                    "description": "聚合维度",
+                },
+                "platform": {
+                    "type": "string",
+                    "description": "限制平台（可选）",
+                },
+                "competitor_name": {
+                    "type": "string",
+                    "description": "限制竞品名称（可选）",
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "限制域名（可选）",
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "开始日期，支持 YYYY-MM 或 YYYY-MM-DD（可选）",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "结束日期，支持 YYYY-MM 或 YYYY-MM-DD（可选）",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返回多少个分组（默认 20）",
+                },
+            },
+        },
+    },
+    {
+        "name": "knowledge_compare",
+        "description": (
+            "对同一品牌最近两次历史材料窗口做对比。"
+            "适用于跨历史分析、变化解释、平台差异和对比汇总。"
+            "当用户要求比较最近两轮分析、看哪些平台/竞品/域名变化最大时优先使用。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "compare_by": {
+                    "type": "string",
+                    "enum": [
+                        "source_type",
+                        "platform",
+                        "competitor",
+                        "domain",
+                        "question",
+                    ],
+                    "description": "对比维度",
+                },
+                "source_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "brand_profile",
+                            "competitor_profile",
+                            "fetch_answer",
+                            "fetch_citation",
+                        ],
+                    },
+                    "description": "限制知识来源类型（可选）",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返回多少条变化项（默认 12）",
+                },
+            },
+        },
+    },
+    {
+        "name": "knowledge_export",
+        "description": (
+            "把历史知识材料整理成可交付的数据表 artifact。"
+            "适用于用户明确要求导出、下载、生成文件、拉清单或交付历史材料。"
+            "执行后会生成一个可在前端继续导出为 md/pdf 的数据表。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "导出主题或筛选提示（可为空）",
+                },
+                "source_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "brand_profile",
+                            "competitor_profile",
+                            "fetch_answer",
+                            "fetch_citation",
+                        ],
+                    },
+                    "description": "限制知识来源类型（可选）",
+                },
+                "platform": {
+                    "type": "string",
+                    "description": "限制平台（可选）",
+                },
+                "competitor_name": {
+                    "type": "string",
+                    "description": "限制竞品名称（可选）",
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "限制域名（可选）",
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "开始日期，支持 YYYY-MM 或 YYYY-MM-DD（可选）",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "结束日期，支持 YYYY-MM 或 YYYY-MM-DD（可选）",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多导出多少条记录（默认 200，最大 500）",
                 },
             },
         },
@@ -334,6 +547,357 @@ def build_agent_tools() -> list[dict[str, Any]]:
 # =============================================================================
 
 
+def _compact_text(value: Any, limit: int = 140) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def _format_knowledge_lookup_match(match: dict[str, Any]) -> str:
+    parts = [f"类型={match.get('source_type', 'unknown')}"]
+    if match.get("platform"):
+        parts.append(f"平台={match['platform']}")
+    if match.get("competitor_name"):
+        parts.append(f"竞品={match['competitor_name']}")
+    if match.get("domain"):
+        parts.append(f"域名={match['domain']}")
+    if match.get("question_text"):
+        parts.append(f"问题={_compact_text(match['question_text'], 48)}")
+    snippet = _compact_text(match.get("snippet"), 120)
+    title = _compact_text(match.get("title"), 48)
+    return f"- {title}（{'，'.join(parts)}）: {snippet}"
+
+
+def _format_knowledge_group(group: dict[str, Any]) -> str:
+    sample_titles = list(group.get("sample_titles") or [])
+    if not sample_titles:
+        sample_titles = [
+            item.get("title", "")
+            for item in (group.get("sample_records") or [])[:2]
+            if item.get("title")
+        ]
+    samples = "；".join(_compact_text(item, 32) for item in sample_titles[:2])
+    sample_suffix = f"；样例={samples}" if samples else ""
+    return (
+        f"- {group.get('group_key', 'unknown')}：{group.get('count', 0)} 条"
+        f"；来源={','.join(group.get('source_types') or [])}{sample_suffix}"
+    )
+
+
+def _format_knowledge_comparison(item: dict[str, Any]) -> str:
+    examples = [
+        example.get("title", "")
+        for example in (item.get("latest_examples") or [])[:1]
+        if example.get("title")
+    ]
+    example_suffix = f"；最新样例={_compact_text(examples[0], 28)}" if examples else ""
+    return (
+        f"- {item.get('group_key', 'unknown')}：最新 {item.get('latest_count', 0)}，"
+        f"上次 {item.get('previous_count', 0)}，变化 {item.get('delta', 0):+d}"
+        f"{example_suffix}"
+    )
+
+
+def _build_recent_knowledge_context(state: AgentState) -> str:
+    """Expose the latest knowledge tool output back to the orchestrator.
+
+    Only surface this when the orchestrator is resuming immediately after a tool
+    run. On a brand-new user turn we avoid carrying stale evidence into the
+    system prompt and instead rely on history + fresh planning.
+    """
+    history = state.get("orchestrator_history") or []
+    if history and history[-1].get("role") == "user":
+        return ""
+
+    lookup_result = state.get("knowledge_lookup_result") or {}
+    if lookup_result.get("status") == "hit":
+        matches = lookup_result.get("matches") or []
+        lines = [_format_knowledge_lookup_match(match) for match in matches[:3]]
+        if lines:
+            return "\n最近一次历史检索结果:\n" + "\n".join(lines)
+
+    aggregate_result = state.get("knowledge_aggregate_result") or {}
+    if aggregate_result.get("status") == "hit":
+        groups = aggregate_result.get("groups") or []
+        lines = [_format_knowledge_group(group) for group in groups[:4]]
+        if lines:
+            return (
+                "\n最近一次历史聚合结果"
+                f"（group_by={aggregate_result.get('group_by', 'source_type')}）:\n"
+                + "\n".join(lines)
+            )
+
+    export_result = state.get("knowledge_export_result") or {}
+    if export_result.get("status") == "hit":
+        return (
+            "\n最近一次历史导出结果:\n"
+            f"- 标题={export_result.get('title', '历史知识导出')}；"
+            f"记录数={export_result.get('item_count', 0)}；"
+            f"artifact={export_result.get('artifact_id', 'unknown')}"
+        )
+
+    compare_result = state.get("knowledge_compare_result") or {}
+    if compare_result.get("status") == "hit":
+        comparisons = compare_result.get("comparisons") or []
+        lines = [_format_knowledge_comparison(item) for item in comparisons[:4]]
+        if lines:
+            return (
+                "\n最近一次历史对比结果"
+                f"（{compare_result.get('previous_label', 'previous')} -> "
+                f"{compare_result.get('latest_label', 'latest')}）:\n"
+                + "\n".join(lines)
+            )
+
+    return ""
+
+
+def _get_latest_user_message(state: AgentState) -> str:
+    history = state.get("orchestrator_history") or []
+    for item in reversed(history):
+        if item.get("role") == "user":
+            return str(item.get("content") or "")
+    return ""
+
+
+def _build_knowledge_planning_hint(state: AgentState) -> str:
+    """Provide a lightweight planning hint without hard-forcing tool choice."""
+    latest_user_message = _get_latest_user_message(state)
+    if not latest_user_message:
+        return ""
+
+    manifest = state.get("knowledge_manifest") or {}
+    available_sources = manifest.get("available_sources") or {}
+    history_info = manifest.get("history") or {}
+    has_materials = any(bool(value) for value in available_sources.values())
+    if not has_materials:
+        return ""
+
+    text = latest_user_message.lower()
+    compare_keywords = [
+        "对比",
+        "比较",
+        "变化",
+        "趋势",
+        "最近两次",
+        "上次",
+        "这次",
+    ]
+    export_keywords = [
+        "导出",
+        "下载",
+        "文件",
+        "表格",
+        "清单",
+        "csv",
+        "excel",
+        "pdf",
+        "md",
+    ]
+    aggregate_keywords = [
+        "汇总",
+        "统计",
+        "盘点",
+        "列表",
+        "所有",
+        "全部",
+        "按平台",
+        "按月份",
+        "3月",
+        "4月",
+        "5月",
+    ]
+    lookup_keywords = [
+        "品牌",
+        "竞品",
+        "答案",
+        "引用",
+        "官网",
+        "来源",
+        "历史",
+        "差距",
+        "为什么",
+    ]
+
+    if int(history_info.get("analysis_window_count") or 0) >= 2 and any(
+        keyword in text for keyword in compare_keywords
+    ):
+        return (
+            "\n当前用户请求明显属于“历史对比/变化解释”任务。"
+            "优先考虑 knowledge_compare；若结果不足，再决定是否补抓。"
+        )
+
+    if any(keyword in text for keyword in export_keywords):
+        return (
+            "\n当前用户请求明显属于“历史材料导出/交付”任务。"
+            "优先考虑 knowledge_export；必要时再用 knowledge_lookup 或 knowledge_aggregate 补证据。"
+        )
+
+    if any(keyword in text for keyword in aggregate_keywords):
+        return (
+            "\n当前用户请求明显属于“历史汇总/导出/盘点”任务。"
+            "优先考虑 knowledge_aggregate；必要时再结合 knowledge_lookup 补证据。"
+        )
+
+    if any(keyword in text for keyword in lookup_keywords):
+        return (
+            "\n当前用户请求明显围绕“历史事实/答案/引用”展开。"
+            "优先考虑 knowledge_lookup；如果命中不足，再决定是否调用 brand_analysis 或 answer_fetch。"
+        )
+
+    return ""
+
+
+def _infer_knowledge_fallback_tool(
+    state: AgentState,
+) -> tuple[str, dict[str, Any]] | None:
+    """Fallback only when LLM produced no tool call for a clear history task."""
+    latest_user_message = _get_latest_user_message(state)
+    if not latest_user_message:
+        return None
+
+    manifest = state.get("knowledge_manifest") or {}
+    available_sources = manifest.get("available_sources") or {}
+    history_info = manifest.get("history") or {}
+    has_materials = any(bool(value) for value in available_sources.values())
+    if not has_materials:
+        return None
+
+    text = latest_user_message.lower()
+    compare_keywords = ["对比", "比较", "变化", "趋势", "最近两次", "上次", "这次"]
+    export_keywords = [
+        "导出",
+        "下载",
+        "文件",
+        "表格",
+        "清单",
+        "csv",
+        "excel",
+        "pdf",
+        "md",
+    ]
+    aggregate_keywords = [
+        "汇总",
+        "统计",
+        "盘点",
+        "列表",
+        "所有",
+        "全部",
+        "按平台",
+        "按月份",
+        "3月",
+        "4月",
+        "5月",
+    ]
+    lookup_keywords = [
+        "品牌",
+        "竞品",
+        "答案",
+        "引用",
+        "官网",
+        "来源",
+        "历史",
+        "差距",
+        "为什么",
+    ]
+
+    if int(history_info.get("analysis_window_count") or 0) >= 2 and any(
+        keyword in text for keyword in compare_keywords
+    ):
+        compare_by = "platform"
+        if "竞品" in latest_user_message:
+            compare_by = "competitor"
+        elif "引用" in latest_user_message or "域名" in latest_user_message:
+            compare_by = "domain"
+        elif "问题" in latest_user_message:
+            compare_by = "question"
+        return ("knowledge_compare", {"compare_by": compare_by, "limit": 8})
+
+    if any(keyword in text for keyword in export_keywords):
+        return (
+            "knowledge_export",
+            {
+                "query": latest_user_message,
+                "limit": 200,
+            },
+        )
+
+    if any(keyword in text for keyword in aggregate_keywords):
+        group_by = "source_type"
+        if "平台" in latest_user_message:
+            group_by = "platform"
+        elif "竞品" in latest_user_message:
+            group_by = "competitor"
+        elif (
+            "引用" in latest_user_message
+            or "域名" in latest_user_message
+            or "官网" in latest_user_message
+            or "来源" in latest_user_message
+        ):
+            group_by = "domain"
+        elif "问题" in latest_user_message:
+            group_by = "question"
+        elif any(
+            month in latest_user_message
+            for month in [
+                "1月",
+                "2月",
+                "3月",
+                "4月",
+                "5月",
+                "6月",
+                "7月",
+                "8月",
+                "9月",
+                "10月",
+                "11月",
+                "12月",
+            ]
+        ):
+            group_by = "month"
+        return (
+            "knowledge_aggregate",
+            {
+                "query": latest_user_message,
+                "group_by": group_by,
+                "limit": 12,
+            },
+        )
+
+    if any(keyword in text for keyword in lookup_keywords):
+        source_types = None
+        if "竞品" in latest_user_message:
+            source_types = ["competitor_profile", "fetch_answer"]
+        elif "品牌" in latest_user_message:
+            source_types = ["brand_profile", "competitor_profile"]
+        elif (
+            "引用" in latest_user_message
+            or "官网" in latest_user_message
+            or "来源" in latest_user_message
+        ):
+            source_types = ["fetch_citation", "fetch_answer"]
+        elif "答案" in latest_user_message:
+            source_types = ["fetch_answer"]
+        args: dict[str, Any] = {
+            "query": latest_user_message,
+            "limit": 8,
+        }
+        if source_types:
+            args["source_types"] = source_types
+        return ("knowledge_lookup", args)
+
+    return None
+
+
+def _should_stream_thoughts(state: AgentState) -> bool:
+    """Mute low-value reasoning streams for obvious history-export tasks."""
+
+    fallback = _infer_knowledge_fallback_tool(state)
+    if fallback and fallback[0] == "knowledge_export":
+        return False
+    return True
+
+
 def _build_context_summary(state: AgentState) -> str:
     """Build a summary of what data exists in the current session.
 
@@ -343,6 +907,7 @@ def _build_context_summary(state: AgentState) -> str:
     parts = []
     available_tools = []
     unavailable_tools = []
+    manifest = state.get("knowledge_manifest") or {}
 
     if state.get("brand_profile"):
         brand = state["brand_profile"]
@@ -378,6 +943,44 @@ def _build_context_summary(state: AgentState) -> str:
         unavailable_tools.append("compare_snapshots (尚无品牌实体)")
         unavailable_tools.append("create_monitoring_schedule (尚无品牌实体)")
 
+    if manifest:
+        counts = manifest.get("counts", {})
+        available_sources = manifest.get("available_sources", {})
+        history_info = manifest.get("history", {})
+        available_labels = [
+            label
+            for key, label in [
+                ("brand_profile", "品牌档案"),
+                ("competitor_profile", "竞品档案"),
+                ("fetch_answer", "历史答案"),
+                ("fetch_citation", "历史引用"),
+            ]
+            if available_sources.get(key)
+        ]
+        if available_labels:
+            recent_months = history_info.get("recent_months") or []
+            month_suffix = (
+                f"，覆盖月份：{'、'.join(recent_months[:3])}" if recent_months else ""
+            )
+            parts.append(
+                "- 历史材料: "
+                + "、".join(available_labels)
+                + f"（共 {sum(int(v or 0) for v in counts.values())} 条）"
+                + month_suffix
+            )
+            available_tools.append("knowledge_lookup (可查询跨历史事实材料)")
+            available_tools.append("knowledge_aggregate (可汇总历史材料)")
+            available_tools.append("knowledge_export (可导出历史材料数据表)")
+            if int(history_info.get("analysis_window_count") or 0) >= 2:
+                available_tools.append("knowledge_compare (可对比最近历史变化)")
+            else:
+                unavailable_tools.append("knowledge_compare (历史轮次不足，暂不可对比)")
+        else:
+            unavailable_tools.append("knowledge_lookup (当前尚无历史材料可复用)")
+            unavailable_tools.append("knowledge_aggregate (当前尚无历史材料可汇总)")
+            unavailable_tools.append("knowledge_export (当前尚无历史材料可导出)")
+            unavailable_tools.append("knowledge_compare (当前尚无历史材料可对比)")
+
     if not parts:
         summary = "\n当前会话数据: 尚无分析数据。"
     else:
@@ -392,6 +995,14 @@ def _build_context_summary(state: AgentState) -> str:
         summary += "\n\n不可用的工具（缺少前置数据）:\n" + "\n".join(
             f"  - {t}" for t in unavailable_tools
         )
+
+    recent_knowledge_context = _build_recent_knowledge_context(state)
+    if recent_knowledge_context:
+        summary += recent_knowledge_context
+
+    planning_hint = _build_knowledge_planning_hint(state)
+    if planning_hint:
+        summary += planning_hint
 
     return summary
 
@@ -631,9 +1242,24 @@ ask_user 只允许在以下场景使用，其他任何场景都【禁止】调�
 - 【重要】"完整模式"/"full模式"/"完整采集" 指 answer_fetch(fetch_mode="full") 的参数，不是重新生成问题。question_simulation 成功后，绝不再次调用 question_simulation，必须先调用 answer_fetch 或 ask_user。
 - 如果某个Agent执行后返回"未获取到有效数据"，友好地告知用户该步骤未成功，说明可能原因，并提供建设性的替代选项。如果用户要求重试，可以再次调用同一个Agent。
 
+历史材料优先规则（重要）：
+- 当用户的问题围绕品牌信息、竞品信息、历史抓取答案、历史引用来源、基于已有抓取结果的分析、或导出历史抓取信息时，优先尝试 knowledge_lookup
+- 当用户要求按时间范围、平台、竞品、域名、问题等维度汇总历史材料时，优先尝试 knowledge_aggregate
+- 当用户明确要求导出、下载、生成文件、拉清单或交付历史材料时，优先尝试 knowledge_export
+- 当用户要求比较最近两轮历史结果、看变化最大的维度时，优先尝试 knowledge_compare
+- knowledge_lookup 是低成本历史材料工具，不需要 ask_user
+- knowledge_aggregate、knowledge_compare 和 knowledge_export 也是低成本历史材料工具，不需要 ask_user
+- 如果 knowledge_lookup 命中，优先基于返回证据继续回答、分析、导出或规划下一步
+- 如果 knowledge_export 成功，优先向用户说明交付物已生成，并简要总结导出的范围和内容
+- 如果知识类工具返回 miss，或证据不足以完成任务，再考虑调用 brand_analysis、answer_fetch 或 ask_user
+- 典型示例：
+  - “3月所有竞品抓取信息导出一下” → 先 knowledge_export
+  - “最近抓回来的答案里，我们和竞品有什么差距” → 先 knowledge_lookup 或 knowledge_aggregate
+  - “最近两次哪些平台变化最大” → 先 knowledge_compare
+
 绝对禁止（违反这些规则会导致严重错误）：
 - 你没有实时数据，不要自行编造品牌信息、竞品数据或用户画像
-- 当用户提供品牌名称时，你必须调用 brand_analysis 工具获取真实数据
+- 当用户首次提供品牌名称且系统没有足够历史事实时，你必须调用 brand_analysis 工具获取真实数据
 - 不要在回复中直接给出"品牌分析结果"——所有分析数据必须通过工具获取
 - 如果你不确定该做什么，用自然语言向用户提问澄清，不要调用 ask_user
 - 不要在回复中编造具体的时间估计（如"约15秒"、"大约3分钟"、"第3/4步"等）。如需提及耗时，仅使用工具描述中给出的时间范围（如answer_fetch约8-12分钟）。其他步骤不要预估时间，使用"请稍候"即可
@@ -775,6 +1401,87 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             return summary + DIRECTIVE_A5_PERSONA_NEXT
         return "数据分析完成，但未获取到有效数据。"
 
+    if tool_name == "knowledge_lookup":
+        result = state.get("knowledge_lookup_result") or {}
+        matches = result.get("matches", [])
+        if matches:
+            top = matches[0]
+            evidence_lines = "\n".join(
+                _format_knowledge_lookup_match(match) for match in matches[:3]
+            )
+            return (
+                f"历史知识检索完成，共命中 {len(matches)} 条材料。"
+                f"最高相关来源类型：{top.get('source_type', 'unknown')}。"
+                "\n可直接使用的证据如下：\n"
+                f"{evidence_lines}\n"
+                "请优先基于这些证据继续回答、分析、导出；"
+                "只有当证据仍然不足时，再决定是否调用 brand_analysis / answer_fetch。"
+            )
+        return (
+            "历史知识检索未命中足够材料。"
+            "如果用户的问题仍需真实数据，请根据问题类型决定是否调用 brand_analysis 或 answer_fetch；"
+            "如果该动作链路较长或模式不明确，再使用 ask_user。"
+        )
+
+    if tool_name == "knowledge_aggregate":
+        result = state.get("knowledge_aggregate_result") or {}
+        groups = result.get("groups", [])
+        if groups:
+            top = groups[0]
+            group_lines = "\n".join(
+                _format_knowledge_group(group) for group in groups[:5]
+            )
+            return (
+                f"历史知识聚合完成，共统计 {result.get('total_records', 0)} 条材料，"
+                f"得到 {len(groups)} 个分组。"
+                f"当前最大分组是 {top.get('group_key', 'unknown')}，数量 {top.get('count', 0)}。"
+                "\n关键分组如下：\n"
+                f"{group_lines}\n"
+                "请基于这些分组继续汇总、分析、导出或生成交付结果。"
+            )
+        return (
+            "历史知识聚合未得到有效分组。"
+            "如果用户仍需要结果，请判断是缩小筛选条件、改用 knowledge_lookup，"
+            "还是通过 brand_analysis / answer_fetch 先补齐缺失材料。"
+        )
+
+    if tool_name == "knowledge_export":
+        result = state.get("knowledge_export_result") or {}
+        if result.get("status") == "hit":
+            return (
+                f"历史知识导出已完成，共整理 {result.get('item_count', 0)} 条记录。"
+                f"交付物标题：{result.get('title', '历史知识导出')}。"
+                "数据表 artifact 已经生成，请向用户说明已可查看并继续导出为 md/pdf，"
+                "同时用 1-2 句话概括本次导出的范围。"
+            )
+        return (
+            "历史知识导出未生成有效结果。"
+            "请判断是缩小导出范围、先用 knowledge_lookup / knowledge_aggregate 查看材料，"
+            "还是先通过 brand_analysis / answer_fetch 补齐缺失材料。"
+        )
+
+    if tool_name == "knowledge_compare":
+        result = state.get("knowledge_compare_result") or {}
+        comparisons = result.get("comparisons", [])
+        if comparisons:
+            top = comparisons[0]
+            comparison_lines = "\n".join(
+                _format_knowledge_comparison(item) for item in comparisons[:5]
+            )
+            return (
+                f"历史知识对比完成。"
+                f"已比较 {result.get('latest_label', 'latest')} 与 {result.get('previous_label', 'previous')}。"
+                f"变化最大项是 {top.get('group_key', 'unknown')}，增量 {top.get('delta', 0)}。"
+                "\n关键变化如下：\n"
+                f"{comparison_lines}\n"
+                "请基于这些变化继续解释趋势、给出分析结论或建议下一步动作。"
+            )
+        return (
+            "历史知识对比未得到有效变化结果。"
+            "如果是因为历史轮次不足，请直接向用户说明；"
+            "如果是因为材料不足，请考虑先补齐 brand_analysis 或 answer_fetch。"
+        )
+
     if tool_name == "citation_confidence_analysis":
         return (
             "引用内容置信度评估已完成。"
@@ -804,6 +1511,39 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         return f"monitoring schedule creation completed: {reply[:200]}"
 
     return f"工具 {tool_name} 执行完成。"
+
+
+def _build_knowledge_export_completion_reply(result: dict[str, Any]) -> str:
+    """Build a deterministic close-out reply for successful knowledge exports."""
+
+    item_count = int(result.get("item_count") or 0)
+    period = str(result.get("analysis_period") or "").strip()
+    description = str(result.get("description") or "").strip()
+    summary_metrics = result.get("summary_metrics") or {}
+    platform_count = summary_metrics.get("覆盖平台数")
+    source_type_count = summary_metrics.get("来源类型")
+
+    detail_parts: list[str] = []
+    if period:
+        detail_parts.append(f"范围覆盖 {period}")
+    if platform_count:
+        detail_parts.append(f"{platform_count} 个平台")
+    if source_type_count:
+        detail_parts.append(f"{source_type_count} 类材料")
+    detail_text = "，".join(detail_parts)
+
+    reply = f"已完成导出，当前数据表共整理 {item_count} 条记录。"
+    if detail_text:
+        reply += f" 本次{detail_text}。"
+    if description:
+        reply += f" {description}"
+    if result.get("truncated"):
+        reply += (
+            f" 当前结果较多，仅展示前 {int(result.get('export_limit') or item_count)} 条记录，"
+            "如需完整导出请缩小筛选范围后重试。"
+        )
+    reply += " 您可以直接在右侧继续导出为 md 或 pdf。"
+    return reply
 
 
 def _get_tool_name_from_node(node_name: str) -> str | None:
@@ -1027,6 +1767,30 @@ def build_orchestrator_messages(state: AgentState) -> list[dict[str, Any]]:
     return messages
 
 
+async def _hydrate_knowledge_manifest(state: AgentState) -> dict[str, Any] | None:
+    """Load a lightweight history-availability summary for planning."""
+
+    brand_name = (
+        (state.get("brand_profile") or {}).get("brand_name")
+        or state.get("brand_name")
+        or None
+    )
+    entity_id = state.get("entity_id")
+    if not entity_id and not brand_name:
+        return None
+
+    try:
+        async with AsyncSessionLocal() as db:
+            service = KnowledgeWorkspaceService(db)
+            return await service.get_manifest(
+                entity_id=entity_id,
+                brand_name=brand_name,
+            )
+    except Exception as exc:
+        logger.warning("[Orchestrator] Failed to load knowledge manifest: %s", exc)
+        return None
+
+
 # =============================================================================
 # Tool Call → Node Mapping
 # =============================================================================
@@ -1037,6 +1801,10 @@ TOOL_TO_NODE: dict[str, str] = {
     "question_simulation": "a3_question",
     "answer_fetch": "a4_fetch",
     "data_analytics": "a5_analytics",
+    "knowledge_lookup": "knowledge_lookup",
+    "knowledge_aggregate": "knowledge_aggregate",
+    "knowledge_compare": "knowledge_compare",
+    "knowledge_export": "knowledge_export",
     "citation_confidence_analysis": "a7_confidence_signal",
     # Follow-up tools (Cycle 3)
     "drill_down_analysis": "drill_down",
@@ -1052,6 +1820,10 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "question_simulation": "问题模拟生成",
     "answer_fetch": "AI答案抓取",
     "data_analytics": "数据分析报告",
+    "knowledge_lookup": "历史知识检索",
+    "knowledge_aggregate": "历史知识聚合",
+    "knowledge_compare": "历史知识对比",
+    "knowledge_export": "历史知识导出",
     "citation_confidence_analysis": "引用内容置信度评估",
     # Follow-up tools (Cycle 3)
     "drill_down_analysis": "深入分析",
@@ -1335,9 +2107,45 @@ async def orchestrator_node(state: AgentState) -> Command:
             current_retry_counts=current_retry_counts,
         )
 
+    if last_tool == "knowledge_export":
+        export_result = state.get("knowledge_export_result") or {}
+        if export_result.get("status") == "hit" and export_result.get("artifact_id"):
+            completion_reply = _build_knowledge_export_completion_reply(export_result)
+            history_with_reply = list(state.get("orchestrator_history", []) or [])
+            history_with_reply.append(
+                {"role": "assistant", "content": completion_reply}
+            )
+
+            from app.workflow.events import send_execution_complete
+
+            await send_reply_event(
+                session_id,
+                completion_reply,
+                is_delta=False,
+                is_new_round=True,
+            )
+            await send_reply_event(session_id, "", is_complete=True)
+            await send_execution_complete(session_id, "历史知识导出完成")
+
+            return Command(
+                goto=END,
+                update={
+                    "execution_status": "completed",
+                    "awaiting_user": False,
+                    "pending_confirmation": None,
+                    "orchestrator_reply": completion_reply,
+                    "orchestrator_history": history_with_reply,
+                },
+            )
+
+    working_state = state
+    manifest = await _hydrate_knowledge_manifest(state)
+    if manifest is not None:
+        working_state = {**state, "knowledge_manifest": manifest}
+
     # Build orchestrator call
-    system_prompt = build_orchestrator_system_prompt(state)
-    messages = build_orchestrator_messages(state)
+    system_prompt = build_orchestrator_system_prompt(working_state)
+    messages = build_orchestrator_messages(working_state)
     tools = build_agent_tools()
 
     # Stream LLM response
@@ -1350,6 +2158,7 @@ async def orchestrator_node(state: AgentState) -> Command:
     last_finish_reason: str | None = None
     last_usage = None
     stream_started_at = perf_counter()
+    stream_thoughts = _should_stream_thoughts(working_state)
 
     try:
         async for chunk in async_wrap_sync_gen(
@@ -1403,13 +2212,16 @@ async def orchestrator_node(state: AgentState) -> Command:
             if chunk.thinking_blocks:
                 for block in chunk.thinking_blocks:
                     if block.text:
-                        thinking_text += block.text
-                        await send_thought_event(session_id, block.text, is_delta=True)
+                        if stream_thoughts:
+                            thinking_text += block.text
+                            await send_thought_event(
+                                session_id, block.text, is_delta=True
+                            )
 
         # Mark reply as complete
         await send_reply_event(session_id, "", is_complete=True)
 
-        if thinking_text:
+        if stream_thoughts and thinking_text:
             await send_thought_event(session_id, "", is_complete=True)
 
         logger.warning(
@@ -1485,6 +2297,26 @@ async def orchestrator_node(state: AgentState) -> Command:
         if tool_call_result:
             return await _handle_tool_call(
                 state, session_id, tool_call_result, reply_text, new_history
+            )
+
+        knowledge_fallback = _infer_knowledge_fallback_tool(working_state)
+        if knowledge_fallback is not None:
+            fallback_tool_name, fallback_tool_args = knowledge_fallback
+            logger.warning(
+                "[Orchestrator] No tool call for clear history task; forcing %s with args=%s",
+                fallback_tool_name,
+                fallback_tool_args,
+            )
+            return await _handle_tool_call(
+                state,
+                session_id,
+                SimpleNamespace(
+                    name=fallback_tool_name,
+                    arguments=fallback_tool_args,
+                    id=f"fallback_{fallback_tool_name}_{int(datetime.now().timestamp() * 1000)}",
+                ),
+                reply_text,
+                new_history,
             )
 
         user_decisions = dict(state.get("user_decisions", {}))
@@ -1607,6 +2439,30 @@ async def _handle_tool_call(
 
     # F8: Extract retry counts once; propagate through all return paths
     current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
+
+    preferred_knowledge_tool = _infer_knowledge_fallback_tool(state)
+    if (
+        tool_name
+        in {
+            "knowledge_lookup",
+            "knowledge_aggregate",
+            "knowledge_compare",
+            "knowledge_export",
+        }
+        and preferred_knowledge_tool is not None
+        and preferred_knowledge_tool[0] != tool_name
+    ):
+        logger.warning(
+            "[Orchestrator] Realigning knowledge tool %s -> %s for clearer intent match",
+            tool_name,
+            preferred_knowledge_tool[0],
+        )
+        tool_name, tool_args = preferred_knowledge_tool
+        tool_call = SimpleNamespace(
+            name=tool_name,
+            arguments=tool_args,
+            id=tool_call.id,
+        )
 
     logger.info(f"[Orchestrator] Tool call: {tool_name}, args: {tool_args}")
 

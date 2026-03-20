@@ -196,8 +196,12 @@ class AgentState(TypedDict):
     # =========================================================================
     # Execution Control
     # =========================================================================
-    current_step: Annotated[str, _last_value]  # "A1", "A2", "A3", "A4", "A5", "complete"
-    execution_status: Annotated[str, _last_value]  # "running", "paused", "completed", "error"
+    current_step: Annotated[
+        str, _last_value
+    ]  # "A1", "A2", "A3", "A4", "A5", "complete"
+    execution_status: Annotated[
+        str, _last_value
+    ]  # "running", "paused", "completed", "error"
 
     # =========================================================================
     # Human-in-Loop
@@ -234,32 +238,45 @@ class AgentState(TypedDict):
     awaiting_user: bool  # Whether waiting for user input
     tool_call_args: dict | None  # Arguments passed to Agent from tool call
     tool_call_id: str | None  # ID of the current tool call (for tool result)
-    agent_retry_counts: dict  # {tool_name: int} — tracks how many times each tool was called
-    fetch_mode: str | None  # "fast" (API+DeepSeek browser) or "full" (4 platforms all browser)
+    agent_retry_counts: (
+        dict  # {tool_name: int} — tracks how many times each tool was called
+    )
+    fetch_mode: (
+        str | None
+    )  # "fast" (API+DeepSeek browser) or "full" (4 platforms all browser)
+    knowledge_manifest: dict | None  # Lightweight history availability summary
+    knowledge_lookup_result: dict | None  # Latest retrieval result for orchestrator
+    knowledge_aggregate_result: dict | None  # Latest aggregation result
+    knowledge_compare_result: dict | None  # Latest compare result
+    knowledge_export_result: dict | None  # Latest export artifact result
 
     # =========================================================================
     # Task Persistence (Cycle 3, Module 1)
     # =========================================================================
     task_id: str | None  # UUID of the AnalysisTask tracking this execution
-    run_id: str | None   # UUID of the TaskRun tracking this execution attempt
+    run_id: str | None  # UUID of the TaskRun tracking this execution attempt
 
     # =========================================================================
     # Multi-Turn Follow-Up (Cycle 3, Module 2)
     # =========================================================================
     platform_filter: list | None  # Platform names to re-fetch (selective_refetch)
-    preserved_fetch_results: list | None  # Unselected platform results to preserve during selective_refetch
+    preserved_fetch_results: (
+        list | None
+    )  # Unselected platform results to preserve during selective_refetch
     auto_trigger_a5: bool  # True when A4 completed a selective_refetch, signals orchestrator to call A5
 
     # =========================================================================
     # Headless Execution (Cycle 4 — Scheduler)
     # =========================================================================
-    headless_mode: Annotated[bool, _last_bool]  # True when running from scheduler without user interaction
+    headless_mode: Annotated[
+        bool, _last_bool
+    ]  # True when running from scheduler without user interaction
 
     # =========================================================================
     # Baseline Analysis (Issue #4, Phase 4a)
     # =========================================================================
-    analysis_mode: str | None           # "baseline" / "persona" — 当前 A3→A4→A5 执行的模式
-    baseline_questions: list | None     # A3 baseline_dynamic 输出的问题列表
-    baseline_fetch_results: list | None # A4 基线抓取结果
-    baseline_metrics: dict | None       # A5 基线指标
-    baseline_report: dict | None        # A5 基线报告
+    analysis_mode: str | None  # "baseline" / "persona" — 当前 A3→A4→A5 执行的模式
+    baseline_questions: list | None  # A3 baseline_dynamic 输出的问题列表
+    baseline_fetch_results: list | None  # A4 基线抓取结果
+    baseline_metrics: dict | None  # A5 基线指标
+    baseline_report: dict | None  # A5 基线报告
