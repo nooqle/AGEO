@@ -69,6 +69,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "http://localhost:3010",
         "http://127.0.0.1:3010",
+        "http://localhost:3011",
+        "http://127.0.0.1:3011",
     ]
 
     # Browser
@@ -86,7 +88,9 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 
     # Development mode settings
-    DEV_MODE_ENABLED: bool = False  # Enable development mode features (set True in .env.local)
+    DEV_MODE_ENABLED: bool = (
+        False  # Enable development mode features (set True in .env.local)
+    )
     DEV_TOKEN: str = "dev-token"  # Default token for development
     DEV_USER_EMAIL: str = "dev@test.com"  # Default test user email
     DEV_USER_NAME: str = "Development User"  # Default test user name

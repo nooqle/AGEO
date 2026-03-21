@@ -119,6 +119,7 @@ class LLMUsageService:
         *,
         session_id: str | None,
         task_id: str | None,
+        skill_key: str | None,
         step: str | None,
         step_name: str | None,
         model: BaseLLMModel,
@@ -151,6 +152,7 @@ class LLMUsageService:
                 task_id=task_uuid,
                 provider=provider,
                 model_name=model_name,
+                skill_key=skill_key,
                 step=step,
                 step_name=step_name,
                 raw_session_id=session_id if session_uuid is None else None,
@@ -277,6 +279,29 @@ class LLMUsageService:
         )
         by_step_rows = (await self.db.execute(by_step_stmt)).all()
 
+        by_skill_stmt = (
+            select(
+                LLMUsageRecord.skill_key,
+                func.count(LLMUsageRecord.id),
+                func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
+                func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
+                func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
+            )
+            .select_from(LLMUsageRecord)
+            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
+            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
+            .where(*conditions)
+            .where(LLMUsageRecord.skill_key.is_not(None))
+            .group_by(LLMUsageRecord.skill_key)
+            .order_by(
+                desc(func.count(LLMUsageRecord.id)),
+                desc(func.sum(LLMUsageRecord.total_tokens)),
+            )
+            .limit(6)
+        )
+        by_skill_rows = (await self.db.execute(by_skill_stmt)).all()
+
         recent_stmt = (
             select(
                 LLMUsageRecord,
@@ -328,6 +353,17 @@ class LLMUsageService:
                 }
                 for step, step_name, call_count, total_tokens, total_cost, total_latency_ms, avg_latency_ms in by_step_rows
             ],
+            "by_skill": [
+                {
+                    "skill_key": skill_key,
+                    "call_count": int(call_count or 0),
+                    "total_tokens": int(total_tokens or 0),
+                    "total_cost": round(float(total_cost or 0.0), 6),
+                    "total_latency_ms": int(total_latency_ms or 0),
+                    "avg_latency_ms": round(float(avg_latency_ms or 0.0), 2),
+                }
+                for skill_key, call_count, total_tokens, total_cost, total_latency_ms, avg_latency_ms in by_skill_rows
+            ],
             "recent_calls": [
                 {
                     "id": str(record.id),
@@ -336,6 +372,7 @@ class LLMUsageService:
                     "brand_name": brand_name or session_title or "未关联任务",
                     "provider": record.provider,
                     "model_name": record.model_name,
+                    "skill_key": record.skill_key,
                     "step": record.step,
                     "step_name": record.step_name,
                     "prompt_tokens": record.prompt_tokens,
@@ -354,6 +391,7 @@ async def record_llm_usage_async(
     *,
     session_id: str | None,
     task_id: str | None,
+    skill_key: str | None,
     step: str | None,
     step_name: str | None,
     model: BaseLLMModel,
@@ -380,6 +418,7 @@ async def record_llm_usage_async(
             await service.record_usage(
                 session_id=session_id,
                 task_id=task_id,
+                skill_key=skill_key,
                 step=step,
                 step_name=step_name,
                 model=model,

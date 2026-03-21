@@ -238,6 +238,13 @@ class AgentState(TypedDict):
     awaiting_user: bool  # Whether waiting for user input
     tool_call_args: dict | None  # Arguments passed to Agent from tool call
     tool_call_id: str | None  # ID of the current tool call (for tool result)
+    current_skill: str | None  # Currently executing public skill key
+    current_skill_profile: str | None  # Optional selected Skill profile/variant key
+    current_skill_prompt_overlay: (
+        str | None
+    )  # Optional prompt overlay resolved from selected profile
+    last_skill_result: dict | None  # Latest skill execution result summary
+    skill_history: list  # [{skill_key, tool_name, status, summary, ...}]
     agent_retry_counts: (
         dict  # {tool_name: int} — tracks how many times each tool was called
     )

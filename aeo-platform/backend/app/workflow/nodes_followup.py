@@ -17,9 +17,17 @@ from langgraph.types import Command
 from app.workflow.state import AgentState
 from app.workflow.events import send_reply_event
 from app.workflow.nodes_streaming import call_llm_streaming
+from app.workflow.skill_state import build_skill_result_update
 from app.core.llm import get_llm_model
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_skill_prompt_overlay(state: AgentState, prompt: str) -> str:
+    overlay = str(state.get("current_skill_prompt_overlay") or "").strip()
+    if not overlay:
+        return prompt
+    return f"{prompt}\n\n[Skill Profile Overlay]\n{overlay}"
 
 
 # =============================================================================
@@ -50,9 +58,7 @@ async def drill_down_node(state: AgentState) -> Command:
         error_msg = (
             "当前会话中没有分析数据，请先完成一次完整的品牌分析后再进行深入分析。"
         )
-        await send_reply_event(
-            session_id, error_msg, is_delta=False, is_complete=True
-        )
+        await send_reply_event(session_id, error_msg, is_delta=False, is_complete=True)
         return Command(
             update={
                 "orchestrator_reply": error_msg,
@@ -67,18 +73,35 @@ async def drill_down_node(state: AgentState) -> Command:
 
     # Generate focused analysis via LLM
     analysis = await _generate_drill_down(
-        session_id, brand_profile, filtered_data, focus_dimension, focus_value
+        state,
+        session_id,
+        brand_profile,
+        filtered_data,
+        focus_dimension,
+        focus_value,
+        skill_key=state.get("current_skill"),
     )
 
     # Send as chat reply (not Canvas artifact)
-    await send_reply_event(
-        session_id, analysis, is_delta=False, is_complete=True
-    )
+    await send_reply_event(session_id, analysis, is_delta=False, is_complete=True)
 
     return Command(
         update={
             "orchestrator_reply": analysis,
             "execution_status": "completed",
+            **build_skill_result_update(
+                state,
+                skill_key=state.get("current_skill"),
+                tool_name="post_analysis_skill",
+                status="completed",
+                summary=f"后续分析 Skill 已完成，本次执行为 drill_down（{focus_dimension}:{focus_value or '全部'}）。",
+                executor_ref="post_analysis_executor",
+                metadata={
+                    "analysis_mode": "drill_down",
+                    "focus_dimension": focus_dimension,
+                    "focus_value": focus_value,
+                },
+            ),
         }
     )
 
@@ -111,14 +134,17 @@ def _filter_by_dimension(
         # Filter platform_results to only the specified platform
         for fr in fetch_results:
             platform_results = [
-                pr for pr in fr.get("platform_results", [])
+                pr
+                for pr in fr.get("platform_results", [])
                 if not focus_lower or pr.get("platform", "").lower() == focus_lower
             ]
             if platform_results:
-                filtered["results"].append({
-                    "question_text": fr.get("question_text", ""),
-                    "platform_results": platform_results,
-                })
+                filtered["results"].append(
+                    {
+                        "question_text": fr.get("question_text", ""),
+                        "platform_results": platform_results,
+                    }
+                )
         # Platform-level metrics
         pb = metrics.get("platform_breakdown", {})
         if focus_lower and focus_lower in pb:
@@ -134,17 +160,23 @@ def _filter_by_dimension(
                 # Match question variants
                 variants = sq.get("question_variants", {})
                 for var_key, var_data in variants.items():
-                    q_text = var_data.get("question", "") if isinstance(var_data, dict) else ""
+                    q_text = (
+                        var_data.get("question", "")
+                        if isinstance(var_data, dict)
+                        else ""
+                    )
                     if q_text:
                         matching_question_ids.add(q_text)
                 core_q = sq.get("core_question", "")
                 if core_q:
                     matching_question_ids.add(core_q)
-                filtered["question_context"].append({
-                    "category": sq.get("category", ""),
-                    "subcategory": sq.get("subcategory", ""),
-                    "core_question": core_q,
-                })
+                filtered["question_context"].append(
+                    {
+                        "category": sq.get("category", ""),
+                        "subcategory": sq.get("subcategory", ""),
+                        "core_question": core_q,
+                    }
+                )
 
         for fr in fetch_results:
             q_text = fr.get("question_text", "")
@@ -160,14 +192,20 @@ def _filter_by_dimension(
                 if not pr.get("success"):
                     continue
                 answer = pr.get("answer", {})
-                content = answer.get("content", "") if isinstance(answer, dict) else str(answer)
+                content = (
+                    answer.get("content", "")
+                    if isinstance(answer, dict)
+                    else str(answer)
+                )
                 if focus_lower and focus_lower in content.lower():
                     relevant_results.append(pr)
             if relevant_results:
-                filtered["results"].append({
-                    "question_text": fr.get("question_text", ""),
-                    "platform_results": relevant_results,
-                })
+                filtered["results"].append(
+                    {
+                        "question_text": fr.get("question_text", ""),
+                        "platform_results": relevant_results,
+                    }
+                )
 
     elif focus_dimension == "sentiment":
         # Filter by sentiment (positive/negative/neutral)
@@ -179,15 +217,21 @@ def _filter_by_dimension(
                 if not pr.get("success"):
                     continue
                 answer = pr.get("answer", {})
-                content = answer.get("content", "") if isinstance(answer, dict) else str(answer)
+                content = (
+                    answer.get("content", "")
+                    if isinstance(answer, dict)
+                    else str(answer)
+                )
                 sentiment = _analyze_sentiment(content)
                 if not focus_lower or sentiment == focus_lower:
                     relevant_results.append({**pr, "_sentiment": sentiment})
             if relevant_results:
-                filtered["results"].append({
-                    "question_text": fr.get("question_text", ""),
-                    "platform_results": relevant_results,
-                })
+                filtered["results"].append(
+                    {
+                        "question_text": fr.get("question_text", ""),
+                        "platform_results": relevant_results,
+                    }
+                )
 
     else:
         # Fallback: include all results
@@ -198,11 +242,14 @@ def _filter_by_dimension(
 
 
 async def _generate_drill_down(
+    state: AgentState,
     session_id: str,
     brand_profile: dict,
     filtered_data: dict,
     focus_dimension: str,
     focus_value: str,
+    *,
+    skill_key: str | None = None,
 ) -> str:
     """Use LLM to generate a focused drill-down analysis."""
     dimension_labels = {
@@ -221,13 +268,21 @@ async def _generate_drill_down(
         pr_summary = []
         for pr in r.get("platform_results", [])[:4]:
             answer = pr.get("answer", {})
-            content = answer.get("content", "") if isinstance(answer, dict) else str(answer)
-            pr_summary.append({
-                "platform": pr.get("platform", ""),
-                "has_mention": answer.get("has_brand_mention", False) if isinstance(answer, dict) else False,
-                "excerpt": content[:200],
-                "sentiment": pr.get("_sentiment", ""),
-            })
+            content = (
+                answer.get("content", "") if isinstance(answer, dict) else str(answer)
+            )
+            pr_summary.append(
+                {
+                    "platform": pr.get("platform", ""),
+                    "has_mention": (
+                        answer.get("has_brand_mention", False)
+                        if isinstance(answer, dict)
+                        else False
+                    ),
+                    "excerpt": content[:200],
+                    "sentiment": pr.get("_sentiment", ""),
+                }
+            )
         results_summary.append({"question": q_text, "results": pr_summary})
 
     system_prompt = f"""你是 Specta AI 的数据分析专家。用户正在深入分析品牌「{brand_name}」在 AI 平台中的表现。
@@ -240,6 +295,7 @@ async def _generate_drill_down(
 4. 给出针对性优化建议（2-3条）
 5. 总字数 300-500 字
 6. 语言简洁、有洞察力"""
+    system_prompt = _apply_skill_prompt_overlay(state, system_prompt)
 
     user_content = f"""## 分析维度
 - 维度: {dim_label}
@@ -269,6 +325,7 @@ async def _generate_drill_down(
             ],
             step="drill_down",
             step_name="深入分析",
+            skill_key=skill_key,
             progress_start=0.0,
             progress_end=1.0,
             max_tokens=4096,
@@ -303,9 +360,7 @@ async def compare_snapshots_node(state: AgentState) -> Command:
 
     if not entity_id:
         msg = "当前会话中没有关联的品牌实体，请先完成一次完整的品牌分析。"
-        await send_reply_event(
-            session_id, msg, is_delta=False, is_complete=True
-        )
+        await send_reply_event(session_id, msg, is_delta=False, is_complete=True)
         return Command(update={"execution_status": "completed"})
 
     from app.core.database import AsyncSessionLocal
@@ -319,9 +374,7 @@ async def compare_snapshots_node(state: AgentState) -> Command:
         snapshots = snapshot_list.get("snapshots", [])
         if len(snapshots) < 2:
             msg = "目前只有一次分析记录，至少需要两次分析才能进行对比。请再次运行分析后重试。"
-            await send_reply_event(
-                session_id, msg, is_delta=False, is_complete=True
-            )
+            await send_reply_event(session_id, msg, is_delta=False, is_complete=True)
             return Command(update={"execution_status": "completed"})
 
         # Load full snapshot data (Review T6: use get_snapshot for raw_data)
@@ -330,40 +383,50 @@ async def compare_snapshots_node(state: AgentState) -> Command:
 
     if not snapshot_new or not snapshot_old:
         msg = "无法加载快照数据，请稍后重试。"
-        await send_reply_event(
-            session_id, msg, is_delta=False, is_complete=True
-        )
+        await send_reply_event(session_id, msg, is_delta=False, is_complete=True)
         return Command(update={"execution_status": "completed"})
 
     # Generate comparison via LLM
     comparison = await _generate_comparison(
+        state,
         session_id,
         snapshot_old.raw_data or {},
         snapshot_new.raw_data or {},
         state.get("brand_profile") or {},
         old_meta=snapshots[1],
         new_meta=snapshots[0],
+        skill_key=state.get("current_skill"),
     )
 
-    await send_reply_event(
-        session_id, comparison, is_delta=False, is_complete=True
-    )
+    await send_reply_event(session_id, comparison, is_delta=False, is_complete=True)
 
     return Command(
         update={
             "orchestrator_reply": comparison,
             "execution_status": "completed",
+            **build_skill_result_update(
+                state,
+                skill_key=state.get("current_skill"),
+                tool_name="post_analysis_skill",
+                status="completed",
+                summary="后续分析 Skill 已完成，本次执行为快照对比。",
+                executor_ref="post_analysis_executor",
+                metadata={"analysis_mode": "compare_snapshots"},
+            ),
         }
     )
 
 
 async def _generate_comparison(
+    state: AgentState,
     session_id: str,
     old_data: dict,
     new_data: dict,
     brand_profile: dict,
     old_meta: dict | None = None,
     new_meta: dict | None = None,
+    *,
+    skill_key: str | None = None,
 ) -> str:
     """Use LLM to generate a snapshot comparison analysis."""
     brand_name = brand_profile.get("brand_name", "品牌")
@@ -387,6 +450,7 @@ async def _generate_comparison(
 4. 平台表现变化
 5. 给出趋势判断和建议
 6. 总字数 300-500 字"""
+    system_prompt = _apply_skill_prompt_overlay(state, system_prompt)
 
     old_date = old_meta.get("created_at", "N/A")[:10] if old_meta else "N/A"
     new_date = new_meta.get("created_at", "N/A")[:10] if new_meta else "N/A"
@@ -427,6 +491,7 @@ async def _generate_comparison(
             ],
             step="compare",
             step_name="快照对比",
+            skill_key=skill_key,
             progress_start=0.0,
             progress_end=1.0,
             max_tokens=4096,
@@ -479,9 +544,7 @@ async def selective_refetch_node(state: AgentState) -> Command:
             "当前会话中没有分析数据，请先完成一次完整的品牌分析后再进行选择性重新抓取。"
         )
         logger.warning("[selective_refetch] PRECONDITION FAILED — returning early")
-        await send_reply_event(
-            session_id, error_msg, is_delta=False, is_complete=True
-        )
+        await send_reply_event(session_id, error_msg, is_delta=False, is_complete=True)
         return Command(
             update={
                 "orchestrator_reply": error_msg,
@@ -493,7 +556,6 @@ async def selective_refetch_node(state: AgentState) -> Command:
     # Snapshot raw_data only contains summaries, not full platform results,
     # so DB lookup is unnecessary here. If entity-level baseline is needed
     # in the future, implement proper raw_data storage first.
-    entity_id = state.get("entity_id")
     current_fetch = state.get("fetch_results") or []
     platforms_lower = [p.lower() for p in platforms]
 
@@ -501,15 +563,18 @@ async def selective_refetch_node(state: AgentState) -> Command:
     unselected_results = []
     for fr in current_fetch:
         kept_pr = [
-            pr for pr in fr.get("platform_results", [])
+            pr
+            for pr in fr.get("platform_results", [])
             if pr.get("platform", "").lower() not in platforms_lower
         ]
         if kept_pr:
-            unselected_results.append({
-                "question_id": fr.get("question_id", ""),
-                "question_text": fr.get("question_text", ""),
-                "platform_results": kept_pr,
-            })
+            unselected_results.append(
+                {
+                    "question_id": fr.get("question_id", ""),
+                    "question_text": fr.get("question_text", ""),
+                    "platform_results": kept_pr,
+                }
+            )
 
     await send_reply_event(
         session_id,
@@ -522,7 +587,8 @@ async def selective_refetch_node(state: AgentState) -> Command:
     fetch_mode = tool_args.get("fetch_mode") or state.get("fetch_mode") or "fast"
     logger.info(
         "[selective_refetch] routing to a4_fetch: platforms=%s, fetch_mode=%s",
-        platforms_lower, fetch_mode,
+        platforms_lower,
+        fetch_mode,
     )
 
     return Command(
@@ -531,7 +597,43 @@ async def selective_refetch_node(state: AgentState) -> Command:
             "preserved_fetch_results": unselected_results,
             "fetch_mode": fetch_mode,
             "execution_status": "running",
+            "current_skill": state.get("current_skill") or "post_analysis_skill",
+            "last_skill_result": {
+                "skill_key": state.get("current_skill") or "post_analysis_skill",
+                "tool_name": "post_analysis_skill",
+                "status": "running",
+                "summary": f"后续分析 Skill 已进入 selective_refetch，准备重抓平台：{', '.join(platforms_lower)}。",
+                "executor_ref": "post_analysis_executor",
+                "metadata": {
+                    "analysis_mode": "selective_refetch",
+                    "platforms": platforms_lower,
+                    "fetch_mode": fetch_mode,
+                },
+            },
         },
         goto="a4_fetch",
     )
 
+
+async def post_analysis_executor_node(state: AgentState) -> Command:
+    """Route coarse-grained post-analysis skill to existing follow-up nodes."""
+
+    tool_args = state.get("tool_call_args") or {}
+    requested_mode = str(tool_args.get("analysis_mode") or "").strip().lower()
+    if requested_mode not in {"drill_down", "compare_snapshots", "selective_refetch"}:
+        if tool_args.get("platforms"):
+            requested_mode = "selective_refetch"
+        elif tool_args.get("focus_dimension") or tool_args.get("focus_value"):
+            requested_mode = "drill_down"
+        else:
+            requested_mode = "compare_snapshots"
+
+    logger.info(
+        "[post_analysis_skill] Routed to %s with args=%s", requested_mode, tool_args
+    )
+
+    if requested_mode == "drill_down":
+        return await drill_down_node(state)
+    if requested_mode == "selective_refetch":
+        return await selective_refetch_node(state)
+    return await compare_snapshots_node(state)

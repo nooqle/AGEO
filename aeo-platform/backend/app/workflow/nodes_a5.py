@@ -5,13 +5,14 @@ and generating comprehensive reports with BWVS metrics.
 """
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Any
 
 from langgraph.types import Command
 
 from app.core.utils import extract_domain
+from app.workflow.brand_mentions import content_mentions_brand
+
 # A5 is being split by responsibility: scenario/report contracts, prompt assembly,
 # user-facing sanitization, and persistence are kept in dedicated modules.
 from app.workflow.a5 import contract as a5_contract
@@ -22,21 +23,20 @@ from app.workflow.a5 import postprocess as a5_postprocess
 from app.workflow.a5 import sanitizer as a5_sanitizer
 from app.workflow.a5 import sentiment as a5_sentiment
 from app.workflow.a5.persistence import build_report_artifact_data
-from app.workflow.nodes_a4 import PLATFORMS
-
-logger = logging.getLogger(__name__)
-
-# Shared BWVS weights and sentiment helpers now live in app.workflow.a5.metrics.
-
-from app.workflow.state import AgentState
 from app.workflow.events import (
     send_progress_event,
     send_stage_result,
 )
-from app.workflow.brand_mentions import content_mentions_brand
 from app.workflow.nodes import get_llm_model_compat, parse_llm_response
+from app.workflow.nodes_a4 import PLATFORMS
 from app.workflow.nodes_streaming import call_llm_streaming
+from app.workflow.skill_state import build_skill_result_update
+from app.workflow.state import AgentState
 from app.workflow.summaries import generate_a5_summary
+
+logger = logging.getLogger(__name__)
+
+# Shared BWVS weights and sentiment helpers now live in app.workflow.a5.metrics.
 
 
 async def a5_analytics_node(state: AgentState) -> Command:
@@ -75,7 +75,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
         # Precompute fact-layer structures before the LLM call so the agent can
         # generate the report directly from scenarios, mentions, and sources.
-        source_overview = a5_contract._build_source_overview(metrics.get("citation_analysis", {}))
+        source_overview = a5_contract._build_source_overview(
+            metrics.get("citation_analysis", {})
+        )
         mention_sentiment_analysis = a5_sentiment.build_mention_sentiment_analysis(
             fetch_results,
             brand_profile,
@@ -117,7 +119,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
             "total_questions": metrics.get("total_questions", 0),
         }
         await send_stage_result(
-            session_id, "A5", "数据分析",
+            session_id,
+            "A5",
+            "数据分析",
             result_type="metrics_preview",
             data=metrics_preview_data,
         )
@@ -129,14 +133,18 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
+
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
-                    await task_svc.append_stage_result(_UUID(task_id), {
-                        "stage": "A5",
-                        "result_type": "metrics_preview",
-                        "data": metrics_preview_data,
-                        "stage_name": "数据分析",
-                    })
+                    await task_svc.append_stage_result(
+                        _UUID(task_id),
+                        {
+                            "stage": "A5",
+                            "result_type": "metrics_preview",
+                            "data": metrics_preview_data,
+                            "stage_name": "数据分析",
+                        },
+                    )
             except Exception as e:
                 logger.warning("[A5] Failed to persist stage_result: %s", e)
 
@@ -146,6 +154,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             try:
                 from app.core.database import AsyncSessionLocal
                 from app.services.snapshot_service import SnapshotService
+
                 async with AsyncSessionLocal() as db:
                     snap_service = SnapshotService(db)
                     prev_snap = await snap_service.get_previous_snapshot(
@@ -154,7 +163,11 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     )
                     if prev_snap and prev_snap.bwvs_index is not None:
                         previous_snapshot_data = {
-                            "date": prev_snap.created_at.strftime("%Y-%m-%d") if prev_snap.created_at else "N/A",
+                            "date": (
+                                prev_snap.created_at.strftime("%Y-%m-%d")
+                                if prev_snap.created_at
+                                else "N/A"
+                            ),
                             "bwvs_index": prev_snap.bwvs_index,
                             "mention_rate": prev_snap.mention_rate,
                             "sentiment_score": prev_snap.sentiment_score,
@@ -170,7 +183,10 @@ async def a5_analytics_node(state: AgentState) -> Command:
         report_data = None
         try:
             user_content = a5_prompt._build_a5_user_content(
-                brand_profile, metrics, fetch_results, competitors,
+                brand_profile,
+                metrics,
+                fetch_results,
+                competitors,
                 marketing_personas=marketing_personas,
                 previous_snapshot=previous_snapshot_data,
                 competitor_metrics=competitor_metrics,
@@ -186,6 +202,15 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
             # --- Call 1: Core report sections ---
             core_prompt = a5_prompt._get_a5_core_prompt(report_type=analysis_mode)
+            skill_prompt_overlay = str(
+                state.get("current_skill_prompt_overlay") or ""
+            ).strip()
+            if skill_prompt_overlay:
+                core_prompt = (
+                    f"{core_prompt}\n\n"
+                    "[Skill Profile Overlay]\n"
+                    f"{skill_prompt_overlay}"
+                )
             response1 = await call_llm_streaming(
                 session_id=session_id,
                 model=model,
@@ -196,6 +221,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 step="data_analytics",
                 step_name="数据分析报告（核心章节）",
                 task_id=state.get("task_id"),
+                skill_key=state.get("current_skill"),
                 progress_start=0.82,
                 progress_end=0.90,
                 max_tokens=8192,
@@ -227,11 +253,19 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     if not isinstance(report_v2, dict):
                         missing.append("report_v2")
                     else:
-                        for field in ("summary", "scenarioCoverage", "mentions", "sources"):
+                        for field in (
+                            "summary",
+                            "scenarioCoverage",
+                            "mentions",
+                            "sources",
+                        ):
                             if not report_v2.get(field):
                                 missing.append(f"report_v2.{field}")
                     if missing:
-                        logger.warning("[A5] Report partial: missing sections: %s", ", ".join(missing))
+                        logger.warning(
+                            "[A5] Report partial: missing sections: %s",
+                            ", ".join(missing),
+                        )
 
         except Exception as llm_err:
             logger.warning(
@@ -240,16 +274,16 @@ async def a5_analytics_node(state: AgentState) -> Command:
             )
 
         if not report_data:
-            report_data = a5_postprocess.generate_fallback_report(metrics, brand_profile)
+            report_data = a5_postprocess.generate_fallback_report(
+                metrics, brand_profile
+            )
             report_data["_degraded"] = True
             report_data["_degradation_note"] = (
                 "本报告基于原始数据自动生成，未经 AI 深度分析"
             )
             from app.workflow.resilience import DegradationRegistry
 
-            await DegradationRegistry.send_degradation_notice(
-                session_id, "A5"
-            )
+            await DegradationRegistry.send_degradation_notice(session_id, "A5")
 
         # Normalize report data: ensure all new fields have safe defaults
         report_data = a5_sanitizer._normalize_report_data(report_data)
@@ -269,8 +303,13 @@ async def a5_analytics_node(state: AgentState) -> Command:
         summary = generate_a5_summary(metrics, report_data)
 
         from app.workflow.events import send_action_log_event
+
         await send_action_log_event(
-            session_id, "agent_summary", summary, step="data_analytics", is_complete=True
+            session_id,
+            "agent_summary",
+            summary,
+            step="data_analytics",
+            is_complete=True,
         )
 
         # Build fetch_results summary for analytics service
@@ -278,18 +317,32 @@ async def a5_analytics_node(state: AgentState) -> Command:
         recovered_brand_mentions = 0
         for fr in fetch_results:
             for pr in fr.get("platform_results", []):
-                answer_payload = pr.get("answer", {}) if isinstance(pr.get("answer"), dict) else {}
-                answer_content = answer_payload.get("content", "") if isinstance(answer_payload, dict) else ""
-                stored_has_brand_mention = bool(answer_payload.get("has_brand_mention", False)) if isinstance(answer_payload, dict) else False
-                computed_has_brand_mention = content_mentions_brand(answer_content, brand_profile)
+                answer_payload = (
+                    pr.get("answer", {}) if isinstance(pr.get("answer"), dict) else {}
+                )
+                answer_content = (
+                    answer_payload.get("content", "")
+                    if isinstance(answer_payload, dict)
+                    else ""
+                )
+                stored_has_brand_mention = (
+                    bool(answer_payload.get("has_brand_mention", False))
+                    if isinstance(answer_payload, dict)
+                    else False
+                )
+                computed_has_brand_mention = content_mentions_brand(
+                    answer_content, brand_profile
+                )
                 if not stored_has_brand_mention and computed_has_brand_mention:
                     recovered_brand_mentions += 1
-                fetch_results_summary.append({
-                    "platform": pr.get("platform", "unknown"),
-                    "success": pr.get("success", False),
-                    "has_brand_mention": computed_has_brand_mention,
-                    "citations": pr.get("citations", []),
-                })
+                fetch_results_summary.append(
+                    {
+                        "platform": pr.get("platform", "unknown"),
+                        "success": pr.get("success", False),
+                        "has_brand_mention": computed_has_brand_mention,
+                        "citations": pr.get("citations", []),
+                    }
+                )
 
         if recovered_brand_mentions:
             logger.info(
@@ -328,6 +381,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             try:
                 from app.core.database import AsyncSessionLocal
                 from app.services.snapshot_service import SnapshotService
+
                 async with AsyncSessionLocal() as db:
                     snap_service = SnapshotService(db)
                     snapshot = await snap_service.create_completed_snapshot(
@@ -340,7 +394,11 @@ async def a5_analytics_node(state: AgentState) -> Command:
                         is_degraded=is_degraded,
                         snapshot_type="baseline" if is_baseline else "persona",
                     )
-                    logger.info("[A5] Snapshot created: id=%s, bwvs=%.1f", snapshot.id, snapshot.bwvs_index or 0)
+                    logger.info(
+                        "[A5] Snapshot created: id=%s, bwvs=%.1f",
+                        snapshot.id,
+                        snapshot.bwvs_index or 0,
+                    )
 
                     # Query previous snapshot for delta in the same session
                     previous = await snap_service.get_previous_snapshot(
@@ -360,24 +418,33 @@ async def a5_analytics_node(state: AgentState) -> Command:
                                 "delta": round(delta_value, 2),
                                 "percentage": round(delta_pct, 1),
                                 "direction": (
-                                    "up" if delta_value > 0
-                                    else "down" if delta_value < 0
-                                    else "stable"
+                                    "up"
+                                    if delta_value > 0
+                                    else "down" if delta_value < 0 else "stable"
                                 ),
                             },
-                            "previous_date": previous.created_at.strftime("%Y-%m-%d") if previous.created_at else None,
+                            "previous_date": (
+                                previous.created_at.strftime("%Y-%m-%d")
+                                if previous.created_at
+                                else None
+                            ),
                             "previous_snapshot_id": str(previous.id),
                         }
             except Exception as snap_err:
-                logger.error("[A5] Failed to create snapshot or compute delta: %s", snap_err, exc_info=True)
+                logger.error(
+                    "[A5] Failed to create snapshot or compute delta: %s",
+                    snap_err,
+                    exc_info=True,
+                )
 
         # Save and send artifact to Canvas
         from app.workflow.events import save_and_send_artifact
+
         report_output_type = "report_baseline" if is_baseline else "report"
         report_title = "基线全景分析报告" if is_baseline else "AI 可见性分析报告"
         report_category = "baseline" if is_baseline else "scenario"
         report_artifact_data = build_report_artifact_data(
-            brand_name=brand_profile.get('brand_name', '品牌'),
+            brand_name=brand_profile.get("brand_name", "品牌"),
             is_baseline=is_baseline,
             metrics=metrics,
             report_data=report_data,
@@ -402,7 +469,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
         _ca = metrics.get("citation_analysis", {})
         logger.info(
             "[A5][Artifact] citation_analysis in artifact: total=%s, domains=%s",
-            _ca.get("total_citations", "MISSING"), _ca.get("unique_domains", "MISSING"),
+            _ca.get("total_citations", "MISSING"),
+            _ca.get("unique_domains", "MISSING"),
         )
 
         # touchpointMap removed — metrics data is included in the report artifact
@@ -413,6 +481,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             try:
                 from app.core.database import AsyncSessionLocal
                 from app.services.entity_service import EntityService
+
                 async with AsyncSessionLocal() as db:
                     entity_service = EntityService(db)
                     await entity_service.update_entity(
@@ -422,7 +491,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
                             "last_analyzed": datetime.now(timezone.utc),
                         },
                     )
-                    logger.info(f"[A5] Updated entity {entity_id}: status=active, last_analyzed=now()")
+                    logger.info(
+                        f"[A5] Updated entity {entity_id}: status=active, last_analyzed=now()"
+                    )
             except Exception as e:
                 logger.error(f"[A5] Failed to update entity {entity_id}: {e}")
 
@@ -433,6 +504,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
+
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
                     snapshot_uuid = snapshot.id if snapshot else None
@@ -449,6 +521,21 @@ async def a5_analytics_node(state: AgentState) -> Command:
             "current_step": "A5",
             "progress": 1.0,
         }
+        update_dict.update(
+            build_skill_result_update(
+                state,
+                skill_key=state.get("current_skill"),
+                tool_name="analysis_report_skill",
+                status="completed",
+                summary="分析报告 Skill 已完成，报告与关键指标已更新。",
+                executor_ref="a5_data_analytics",
+                metadata={
+                    "analysis_mode": analysis_mode,
+                    "mention_rate": metrics.get("mention_rate"),
+                    "report_type": report_data.get("report_type"),
+                },
+            )
+        )
         # Baseline mode: also write to baseline_* fields for long-term storage
         if is_baseline:
             update_dict["baseline_metrics"] = metrics
@@ -472,6 +559,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         if "artifact persistence failed" in error_text.lower():
             error_category = "system_persistence"
         from app.workflow.events import send_error_event
+
         await send_error_event(session_id, "A5", str(e), recoverable=True)
         await send_progress_event(
             session_id=session_id,
@@ -489,6 +577,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
+
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
                     await task_svc.fail_task(
@@ -531,9 +620,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                 "coverage_score": 0.0,
                 "citation_score": 50.0,
                 "weights": dict(a5_metrics.BWVS_WEIGHTS),
-                "formula": (
-                    "BWVS = 40%*提及率 + 25%*情感 + 20%*覆盖度 + 15%*引用质量"
-                ),
+                "formula": ("BWVS = 40%*提及率 + 25%*情感 + 20%*覆盖度 + 15%*引用质量"),
             },
             "sentiment_distribution": {
                 "positive": 0,
@@ -618,14 +705,10 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                     total_citations += 1
                     answer_citation_count += 1
                     citation_url = (
-                        citation.get("url", "")
-                        if isinstance(citation, dict)
-                        else ""
+                        citation.get("url", "") if isinstance(citation, dict) else ""
                     )
                     citation_title = (
-                        citation.get("title", "")
-                        if isinstance(citation, dict)
-                        else ""
+                        citation.get("title", "") if isinstance(citation, dict) else ""
                     )
                     citation_domain = extract_domain(citation_url)
 
@@ -661,17 +744,19 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                         answer_official_count += 1
 
                 # Update platform citation stats
-                platform_citation_stats[platform]["total_citations"] += answer_citation_count
-                platform_citation_stats[platform]["official_count"] += answer_official_count
+                platform_citation_stats[platform][
+                    "total_citations"
+                ] += answer_citation_count
+                platform_citation_stats[platform][
+                    "official_count"
+                ] += answer_official_count
                 if answer_citation_count > 0:
                     platform_citation_stats[platform]["answers_with_citations"] += 1
 
     # ---- Dimension 1: Mention score ----
     total_platform_results = sum(p["total"] for p in platform_stats.values())
     mention_rate = (
-        total_mentions / total_platform_results
-        if total_platform_results > 0
-        else 0
+        total_mentions / total_platform_results if total_platform_results > 0 else 0
     )
     # Amplification factor 1.2: 83.3% mention rate = full score
     mention_score = min(100.0, mention_rate * 120)
@@ -718,9 +803,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
         "coverage_score": round(coverage_score, 2),
         "citation_score": round(citation_score, 2),
         "weights": dict(a5_metrics.BWVS_WEIGHTS),
-        "formula": (
-            "BWVS = 40%*提及率 + 25%*情感 + 20%*覆盖度 + 15%*引用质量"
-        ),
+        "formula": ("BWVS = 40%*提及率 + 25%*情感 + 20%*覆盖度 + 15%*引用质量"),
     }
     if citation_note:
         breakdown["citation_note"] = citation_note
@@ -728,7 +811,10 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
     # ---- Citation analysis aggregation ----
     logger.info(
         "[A5][Citations] TOTAL: citations=%d, official=%d, unique_domains=%d, brand_domain='%s'",
-        total_citations, official_citations, len(domain_stats), brand_domain,
+        total_citations,
+        official_citations,
+        len(domain_stats),
+        brand_domain,
     )
     sorted_domains = sorted(
         domain_stats.items(), key=lambda x: x[1]["count"], reverse=True
@@ -760,7 +846,9 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
     }
 
     # ---- Keyword analysis (TF-IDF word cloud) ----
-    keyword_analysis = a5_keywords.extract_keyword_analysis(fetch_results, brand_profile)
+    keyword_analysis = a5_keywords.extract_keyword_analysis(
+        fetch_results, brand_profile
+    )
     if keyword_analysis:
         logger.info(
             "[A5][Keywords] Extracted %d keywords across %d platforms",
@@ -808,7 +896,8 @@ def _calculate_competitor_metrics(
 
     # Count total successful answers for mention_rate denominator
     total_answers = sum(
-        1 for r in fetch_results
+        1
+        for r in fetch_results
         for pr in r.get("platform_results", [])
         if pr.get("success")
     )
@@ -831,14 +920,16 @@ def _calculate_competitor_metrics(
     for c in competitors:
         name = c.get("name", "")
         if not name:
-            competitor_metrics.append({
-                "name": name,
-                "relevance_score": c.get("relevance_score", 0),
-                "mention_rate": 0,
-                "avg_ranking": 0,
-                "sentiment": 0,
-                "appeared_in": [],
-            })
+            competitor_metrics.append(
+                {
+                    "name": name,
+                    "relevance_score": c.get("relevance_score", 0),
+                    "mention_rate": 0,
+                    "avg_ranking": 0,
+                    "sentiment": 0,
+                    "appeared_in": [],
+                }
+            )
             continue
 
         mentions = 0
@@ -859,10 +950,12 @@ def _calculate_competitor_metrics(
                 if content and name.lower() in content.lower():
                     mentions += 1
                     sentiment_scores.append(a5_metrics.analyze_sentiment(content))
-                    appeared_questions.append({
-                        "question": question_text[:60],
-                        "platform": pr.get("platform", ""),
-                    })
+                    appeared_questions.append(
+                        {
+                            "question": question_text[:60],
+                            "platform": pr.get("platform", ""),
+                        }
+                    )
 
         mention_rate = mentions / total_answers
         mention_counts.append((mentions, name))
@@ -870,24 +963,24 @@ def _calculate_competitor_metrics(
         sentiment_value = 0.0
         if sentiment_scores:
             score_map = {"positive": 1.0, "neutral": 0.0, "negative": -1.0}
-            sentiment_value = sum(
-                score_map[s] for s in sentiment_scores
-            ) / len(sentiment_scores)
+            sentiment_value = sum(score_map[s] for s in sentiment_scores) / len(
+                sentiment_scores
+            )
 
-        competitor_metrics.append({
-            "name": name,
-            "relevance_score": c.get("relevance_score", 0),
-            "mention_rate": round(mention_rate, 4),
-            "avg_ranking": 0,
-            "sentiment": round(sentiment_value, 2),
-            "appeared_in": appeared_questions[:5],
-        })
+        competitor_metrics.append(
+            {
+                "name": name,
+                "relevance_score": c.get("relevance_score", 0),
+                "mention_rate": round(mention_rate, 4),
+                "avg_ranking": 0,
+                "sentiment": round(sentiment_value, 2),
+                "appeared_in": appeared_questions[:5],
+            }
+        )
 
     # Ranking by mention frequency (more mentions = better rank)
     mention_counts.sort(key=lambda x: x[0], reverse=True)
-    name_to_rank = {
-        name: rank + 1 for rank, (_, name) in enumerate(mention_counts)
-    }
+    name_to_rank = {name: rank + 1 for rank, (_, name) in enumerate(mention_counts)}
     for cm in competitor_metrics:
         if cm["name"] in name_to_rank:
             cm["avg_ranking"] = name_to_rank[cm["name"]]

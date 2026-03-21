@@ -14,6 +14,17 @@ from app.models.monitoring_schedule import (
 )
 from app.models.session import Session
 from app.models.snapshot import AnalysisSnapshot, SnapshotStatus
+from app.models.skill import (
+    BuiltinSkillSpec,
+    SkillAssignment,
+    SkillConfirmationPolicy,
+    SkillCostClass,
+    SkillDefinition,
+    SkillExecutorKind,
+    SkillLatencyClass,
+    SkillScopeKind,
+    SkillVersion,
+)
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.task_run import (
     ExecutorKind,
@@ -41,6 +52,15 @@ __all__ = [
     "LLMUsageRecord",
     "AnalysisSnapshot",
     "SnapshotStatus",
+    "BuiltinSkillSpec",
+    "SkillDefinition",
+    "SkillVersion",
+    "SkillAssignment",
+    "SkillExecutorKind",
+    "SkillCostClass",
+    "SkillLatencyClass",
+    "SkillConfirmationPolicy",
+    "SkillScopeKind",
     "AnalysisTask",
     "TaskStatus",
     "TaskRun",

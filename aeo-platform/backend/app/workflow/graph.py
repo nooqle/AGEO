@@ -16,6 +16,7 @@ from app.workflow.nodes_a4 import a4_fetch_node
 from app.workflow.nodes_a5 import a5_analytics_node
 from app.workflow.nodes_a7 import a7_confidence_signal_node
 from app.workflow.nodes_followup import (
+    post_analysis_executor_node,
     drill_down_node,
     compare_snapshots_node,
     selective_refetch_node,
@@ -66,6 +67,7 @@ def build_workflow() -> StateGraph:
     workflow.add_node("knowledge_aggregate", knowledge_aggregate_node)
     workflow.add_node("knowledge_compare", knowledge_compare_node)
     workflow.add_node("knowledge_export", knowledge_export_node)
+    workflow.add_node("post_analysis_executor", post_analysis_executor_node)
 
     # Follow-up nodes (Cycle 3, Module 2)
     workflow.add_node("drill_down", drill_down_node)
@@ -86,6 +88,7 @@ def build_workflow() -> StateGraph:
         "a4_fetch",
         "a5_analytics",
         "a7_confidence_signal",
+        "post_analysis_executor",
     ]:
         workflow.add_edge(node, "orchestrator")
 

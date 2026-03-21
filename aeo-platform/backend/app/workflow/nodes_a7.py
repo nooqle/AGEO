@@ -13,6 +13,7 @@ from langgraph.types import Command
 
 from app.workflow.a7.confidence_signal import generate_confidence_signal_artifact
 from app.workflow.events import send_error_event, send_progress_event
+from app.workflow.skill_state import build_skill_result_update
 from app.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,15 @@ async def a7_confidence_signal_node(state: AgentState) -> Command:
             update={
                 "error_info": None,
                 "progress": 1.0,
+                **build_skill_result_update(
+                    state,
+                    skill_key=state.get("current_skill"),
+                    tool_name="confidence_signal_skill",
+                    status="completed",
+                    summary="引用置信度 Skill 已完成，结果已写入画布 artifact。",
+                    executor_ref="a7_confidence_signal",
+                    metadata={"fetch_result_count": len(fetch_results)},
+                ),
             }
         )
     except Exception as exc:

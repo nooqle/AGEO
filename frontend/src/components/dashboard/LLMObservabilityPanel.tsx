@@ -114,7 +114,7 @@ function BreakdownList({
     cost: number;
     latency: number;
   }>;
-  mode: 'model' | 'step';
+  mode: 'model' | 'step' | 'skill';
 }) {
   return (
     <div
@@ -292,6 +292,18 @@ export function LLMObservabilityPanel({
       })),
     [snapshot?.by_step]
   );
+  const skillItems = useMemo(
+    () =>
+      (snapshot?.by_skill || []).map((item) => ({
+        key: item.skill_key || 'unknown-skill',
+        label: item.skill_key || '未归类 Skill',
+        calls: item.call_count,
+        tokens: item.total_tokens,
+        cost: item.total_cost,
+        latency: item.avg_latency_ms,
+      })),
+    [snapshot?.by_skill]
+  );
 
   if (!entityId) return null;
 
@@ -405,7 +417,7 @@ export function LLMObservabilityPanel({
             />
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid gap-4 xl:grid-cols-3">
             <BreakdownList
               title="模型分布"
               emptyText="当前窗口没有模型分布数据。"
@@ -417,6 +429,12 @@ export function LLMObservabilityPanel({
               emptyText="当前窗口没有步骤分布数据。"
               items={stepItems}
               mode="step"
+            />
+            <BreakdownList
+              title="Skill 分布"
+              emptyText="当前窗口没有 Skill 分布数据。"
+              items={skillItems}
+              mode="skill"
             />
           </div>
 
@@ -452,8 +470,20 @@ export function LLMObservabilityPanel({
                         <div className="font-medium" style={{ color: 'var(--text-primary)' }}>
                           {call.step_name || call.step || '未命名步骤'}
                         </div>
-                        <div className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                          {call.brand_name}
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                          <span>{call.brand_name}</span>
+                          {call.skill_key ? (
+                            <span
+                              className="rounded-full px-2 py-0.5"
+                              style={{
+                                border: '1px solid var(--border-subtle)',
+                                backgroundColor: 'var(--bg-secondary)',
+                                color: 'var(--text-secondary)',
+                              }}
+                            >
+                              {call.skill_key}
+                            </span>
+                          ) : null}
                         </div>
                       </td>
                       <td className="px-5 py-3 align-top">

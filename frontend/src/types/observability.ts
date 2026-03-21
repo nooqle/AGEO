@@ -16,6 +16,7 @@ export interface LLMObservabilityBreakdown {
   model_name?: string | null;
   step?: string | null;
   step_name?: string | null;
+  skill_key?: string | null;
   call_count: number;
   total_tokens: number;
   total_cost: number;
@@ -30,6 +31,7 @@ export interface LLMObservabilityCall {
   brand_name: string;
   provider: string;
   model_name: string;
+  skill_key: string | null;
   step: string | null;
   step_name: string | null;
   prompt_tokens: number;
@@ -44,5 +46,6 @@ export interface LLMObservabilitySnapshot {
   summary: LLMObservabilitySummary;
   by_model: LLMObservabilityBreakdown[];
   by_step: LLMObservabilityBreakdown[];
+  by_skill: LLMObservabilityBreakdown[];
   recent_calls: LLMObservabilityCall[];
 }

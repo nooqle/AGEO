@@ -11,6 +11,13 @@ import type { SnapshotSummary, SnapshotTrendPoint, SnapshotCompare } from '@/typ
 import type { AnalysisTask, TaskRunRecord } from '@/types/task';
 import type { LLMObservabilitySnapshot } from '@/types/observability';
 import type {
+  CreateSkillInput,
+  PublishSkillResponse,
+  SkillDefinition,
+  SkillVersion,
+  UpdateSkillInput,
+} from '@/types/skill';
+import type {
   MonitoringSchedule,
   MonitoringAlert,
   BaselineData,
@@ -486,6 +493,39 @@ class ApiService {
     if (params?.limit) query.set('limit', String(params.limit));
     const qs = query.toString();
     return this.request<LLMObservabilitySnapshot>(`/tasks/observability${qs ? `?${qs}` : ''}`);
+  }
+
+  // =========================================================================
+  // Skill Registry API
+  // =========================================================================
+
+  async getSkills(): Promise<SkillDefinition[]> {
+    const response = await this.request<{ skills: SkillDefinition[] }>('/skills');
+    return response.skills;
+  }
+
+  async createSkill(data: CreateSkillInput): Promise<SkillDefinition> {
+    return this.request<SkillDefinition>('/skills', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateSkill(skillId: string, data: UpdateSkillInput): Promise<SkillDefinition> {
+    return this.request<SkillDefinition>(`/skills/${skillId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getSkillVersions(skillId: string): Promise<SkillVersion[]> {
+    return this.request<SkillVersion[]>(`/skills/${skillId}/versions`);
+  }
+
+  async publishSkill(skillId: string): Promise<PublishSkillResponse> {
+    return this.request<PublishSkillResponse>(`/skills/${skillId}/publish`, {
+      method: 'POST',
+    });
   }
 
   // =========================================================================

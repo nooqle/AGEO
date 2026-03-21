@@ -200,6 +200,7 @@ async def call_llm_streaming(
     step: str,
     step_name: str,
     task_id: str | None = None,
+    skill_key: str | None = None,
     progress_start: float = 0.0,
     progress_end: float = 1.0,
     tools: list[dict[str, Any]] | None = None,
@@ -266,6 +267,7 @@ async def call_llm_streaming(
         await record_llm_usage_async(
             session_id=session_id,
             task_id=task_id,
+            skill_key=skill_key,
             step=step,
             step_name=step_name,
             model=model,

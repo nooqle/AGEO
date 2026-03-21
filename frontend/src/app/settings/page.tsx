@@ -8,6 +8,7 @@ import {
   RiCheckLine,
   RiDatabase2Line,
   RiFileTextLine,
+  RiFlashlightLine,
   RiNotification3Line,
   RiSettings4Line,
   RiTeamLine,
@@ -22,6 +23,12 @@ import { useDashboardStore } from '@/stores/dashboardStore';
 import { useEntityStore } from '@/stores/entityStore';
 import { useMonitoringStore } from '@/stores/monitoringStore';
 import { FREQUENCY_LABELS, type MonitoringSchedule, type ScheduleFrequency } from '@/types/monitoring';
+import type {
+  CreateSkillInput,
+  SkillDefinition,
+  SkillTemplateKey,
+  SkillVersion,
+} from '@/types/skill';
 import { PLATFORM_DISPLAY_NAMES, getPlatformDisplayName } from '@/lib/platformLabel';
 import { cn, formatDateTime, formatRelativeTime } from '@/lib/utils';
 
@@ -31,6 +38,7 @@ const SECTIONS = [
   { id: 'monitoring', label: '监测与通知', hint: '真实后端能力' },
   { id: 'exports', label: '数据与导出', hint: '导出预设' },
   { id: 'collection', label: '采集偏好', hint: 'AEO 运行偏好' },
+  { id: 'skills', label: 'Skills', hint: '轻量控制面' },
   { id: 'account', label: '账户与工作区', hint: '主题与默认品牌' },
   { id: 'legal', label: '法务与数据说明', hint: '合规入口' },
 ] as const;
@@ -58,6 +66,37 @@ interface MonitoringFormState {
   alertThresholdBwvs: number;
 }
 
+interface SkillFormState {
+  templateSkillKey: SkillTemplateKey;
+  displayName: string;
+  description: string;
+  defaultParamsText: string;
+  promptOverlay: string;
+  enabled: boolean;
+}
+
+const SKILL_TEMPLATE_OPTIONS: Array<{
+  value: SkillTemplateKey;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'analysis_report_skill',
+    label: '完整分析报告',
+    description: '基于 A5 executor 生成完整分析报告与总结。',
+  },
+  {
+    value: 'confidence_signal_skill',
+    label: '引用置信度评估',
+    description: '基于 A7 executor 评估引用来源与结构化质量。',
+  },
+  {
+    value: 'post_analysis_skill',
+    label: '后续分析与重抓',
+    description: '基于 Follow-up executor 做深挖、对比或局部重抓。',
+  },
+];
+
 const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
   exportFormat: 'pdf',
   exportScope: 'full',
@@ -66,6 +105,15 @@ const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
   preferredPlatforms: ['doubao', 'kimi', 'deepseek'],
   browserFirst: true,
   defaultEntityId: null,
+};
+
+const DEFAULT_SKILL_FORM: SkillFormState = {
+  templateSkillKey: 'analysis_report_skill',
+  displayName: '',
+  description: '',
+  defaultParamsText: '{\n  "report_type": "persona"\n}',
+  promptOverlay: '',
+  enabled: true,
 };
 
 function getDefaultTimezone() {
@@ -138,6 +186,42 @@ function getStatusTone(status: MonitoringSchedule['status'] | 'inactive') {
     return { border: 'rgba(239,68,68,0.34)', bg: 'rgba(239,68,68,0.12)', text: 'var(--error)' };
   }
   return { border: 'var(--border-subtle)', bg: 'var(--bg-tertiary)', text: 'var(--text-secondary)' };
+}
+
+function formatJsonForEditor(value: Record<string, unknown> | null | undefined, fallback: string) {
+  if (!value || Object.keys(value).length === 0) return fallback;
+  return JSON.stringify(value, null, 2);
+}
+
+function parseSkillParams(value: string): Record<string, unknown> | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('默认参数必须是 JSON 对象');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function buildSkillFormState(skill?: SkillDefinition | null): SkillFormState {
+  if (!skill) return DEFAULT_SKILL_FORM;
+  return {
+    templateSkillKey:
+      (skill.template_skill_key as SkillTemplateKey | null) ||
+      (skill.skill_key as SkillTemplateKey),
+    displayName: skill.display_name,
+    description: skill.description,
+    defaultParamsText: formatJsonForEditor(skill.default_params, '{\n}'),
+    promptOverlay: skill.prompt_overlay || '',
+    enabled: skill.enabled,
+  };
+}
+
+function formatSkillExecutorLabel(skill: SkillDefinition) {
+  if (skill.executor_ref === 'a5_data_analytics') return 'A5';
+  if (skill.executor_ref === 'a7_confidence_signal') return 'A7';
+  if (skill.executor_ref === 'post_analysis_executor') return 'Post Analysis';
+  return skill.executor_ref;
 }
 
 function SectionCard({
@@ -303,6 +387,15 @@ export default function SettingsPage() {
   const [isSavingExport, setIsSavingExport] = useState(false);
   const [isSavingCollection, setIsSavingCollection] = useState(false);
   const [isSavingWorkspace, setIsSavingWorkspace] = useState(false);
+  const [skills, setSkills] = useState<SkillDefinition[]>([]);
+  const [skillVersions, setSkillVersions] = useState<Record<string, SkillVersion[]>>({});
+  const [expandedSkillId, setExpandedSkillId] = useState<string | null>(null);
+  const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
+  const [skillForm, setSkillForm] = useState<SkillFormState>(DEFAULT_SKILL_FORM);
+  const [isSkillsLoading, setIsSkillsLoading] = useState(false);
+  const [isSkillFormSaving, setIsSkillFormSaving] = useState(false);
+  const [savingSkillId, setSavingSkillId] = useState<string | null>(null);
+  const [publishingSkillId, setPublishingSkillId] = useState<string | null>(null);
 
   const selectedEntity = useMemo(
     () => entities.find((entity) => entity.id === selectedEntityId) || null,
@@ -313,6 +406,7 @@ export default function SettingsPage() {
     const settings = readLocalSettings();
     setLocalSettings(settings);
 
+    void loadSkills();
     void Promise.allSettled([
       fetchEntities(),
       fetchUnreadCount(),
@@ -442,6 +536,128 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadSkills(options?: { preserveExpanded?: boolean }) {
+    setIsSkillsLoading(true);
+    try {
+      const nextSkills = await api.getSkills();
+      setSkills(nextSkills);
+      if (!options?.preserveExpanded) {
+        setExpandedSkillId(null);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '读取 Skills 失败');
+    } finally {
+      setIsSkillsLoading(false);
+    }
+  }
+
+  async function handleToggleSkill(skill: SkillDefinition) {
+    setSavingSkillId(skill.id);
+    try {
+      const updated = await api.updateSkill(skill.id, { enabled: !skill.enabled });
+      setSkills((current) => current.map((item) => (item.id === skill.id ? updated : item)));
+      toast.success(updated.enabled ? 'Skill 已启用' : 'Skill 已停用');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '更新 Skill 状态失败');
+    } finally {
+      setSavingSkillId(null);
+    }
+  }
+
+  async function handleToggleVersions(skill: SkillDefinition) {
+    if (expandedSkillId === skill.id) {
+      setExpandedSkillId(null);
+      return;
+    }
+
+    setExpandedSkillId(skill.id);
+    if (skillVersions[skill.id]) return;
+
+    setSavingSkillId(skill.id);
+    try {
+      const versions = await api.getSkillVersions(skill.id);
+      setSkillVersions((current) => ({ ...current, [skill.id]: versions }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '读取 Skill 版本失败');
+    } finally {
+      setSavingSkillId(null);
+    }
+  }
+
+  function handleEditSkill(skill: SkillDefinition) {
+    setEditingSkillId(skill.id);
+    setSkillForm(buildSkillFormState(skill));
+  }
+
+  function handleCancelSkillEdit() {
+    setEditingSkillId(null);
+    setSkillForm(DEFAULT_SKILL_FORM);
+  }
+
+  async function handlePublishSkill(skill: SkillDefinition) {
+    setPublishingSkillId(skill.id);
+    try {
+      const response = await api.publishSkill(skill.id);
+      setSkills((current) => current.map((item) => (item.id === skill.id ? response.skill : item)));
+      setSkillVersions((current) => ({
+        ...current,
+        [skill.id]: [response.published_version, ...(current[skill.id] || [])],
+      }));
+      toast.success(`已发布 Skill v${response.published_version.version}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '发布 Skill 失败');
+    } finally {
+      setPublishingSkillId(null);
+    }
+  }
+
+  async function handleSubmitSkillForm() {
+    setIsSkillFormSaving(true);
+    try {
+      const payload = {
+        template_skill_key: skillForm.templateSkillKey,
+        display_name: skillForm.displayName.trim(),
+        description: skillForm.description.trim(),
+        default_params: parseSkillParams(skillForm.defaultParamsText),
+        prompt_overlay: skillForm.promptOverlay.trim() || null,
+        enabled: skillForm.enabled,
+      } satisfies CreateSkillInput;
+
+      if (!payload.display_name) {
+        toast.error('Skill 名称不能为空');
+        return;
+      }
+
+      if (editingSkillId) {
+        const updated = await api.updateSkill(editingSkillId, {
+          display_name: payload.display_name,
+          description: payload.description,
+          default_params: payload.default_params,
+          prompt_overlay: payload.prompt_overlay,
+          enabled: payload.enabled,
+        });
+        setSkills((current) => current.map((item) => (item.id === editingSkillId ? updated : item)));
+        setSkillForm(buildSkillFormState(updated));
+        toast.success('Skill 配置已更新');
+      } else {
+        const created = await api.createSkill(payload);
+        setSkills((current) =>
+          [...current.filter((item) => item.is_builtin), created, ...current.filter((item) => !item.is_builtin)]
+            .sort((a, b) => {
+              if (a.is_builtin !== b.is_builtin) return a.is_builtin ? -1 : 1;
+              return a.display_name.localeCompare(b.display_name, 'zh-CN');
+            })
+        );
+        setSkillForm(DEFAULT_SKILL_FORM);
+        toast.success('Skill 已创建');
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '保存 Skill 失败');
+    } finally {
+      setIsSkillFormSaving(false);
+    }
+  }
+
   const summaryCards = [
     {
       icon: RiTeamLine,
@@ -468,6 +684,14 @@ export default function SettingsPage() {
       meta: localSettings.browserFirst ? '优先浏览器采集' : '优先接口采集',
     },
   ];
+  const builtinSkills = useMemo(
+    () => skills.filter((skill) => skill.is_builtin),
+    [skills]
+  );
+  const customSkills = useMemo(
+    () => skills.filter((skill) => !skill.is_builtin),
+    [skills]
+  );
 
   return (
     <div className="dashboard-page-bg min-h-screen" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -841,6 +1065,275 @@ export default function SettingsPage() {
                       </div>
                       <div className="mt-5 rounded-2xl border border-dashed px-4 py-4 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
                         失败重试策略暂不外露，避免把高级调试参数过早塞进主设置页。
+                      </div>
+                    </div>
+                  </div>
+                </SectionCard>
+
+                <SectionCard
+                  id="skills"
+                  tone="violet"
+                  eyebrow="P0 / Skill Control"
+                  title="Skills"
+                  description="这里先放轻量版 Skill 控制面。第一阶段只允许基于现有 executor 模板创建配置化 Skill，让主 Agent 在不暴露内部 node 的前提下掌握更多粗粒度能力。"
+                  actions={
+                    <div className="flex gap-2">
+                      {editingSkillId ? (
+                        <Button variant="ghost" size="md" onClick={handleCancelSkillEdit}>
+                          取消编辑
+                        </Button>
+                      ) : null}
+                      <Button variant="secondary" size="md" onClick={() => void loadSkills({ preserveExpanded: true })} isLoading={isSkillsLoading}>
+                        刷新 Skills
+                      </Button>
+                    </div>
+                  }
+                >
+                  <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                    <div className="space-y-5">
+                      <div className="rounded-3xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>当前 Public Skill Families</div>
+                            <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
+                              builtin 负责稳定能力，custom profile 只允许基于模板做 prompt / 默认参数覆盖，不会直接膨胀 orchestrator 的 public tool 面。
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <span className="rounded-full px-2.5 py-1 text-xs" style={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                              builtin {builtinSkills.length}
+                            </span>
+                            <span className="rounded-full px-2.5 py-1 text-xs" style={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                              profile {customSkills.length}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {isSkillsLoading ? (
+                        <div className="rounded-3xl border border-dashed px-5 py-8 text-center text-sm" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                          正在读取 Skill 列表...
+                        </div>
+                      ) : (
+                        skills.map((skill) => (
+                          <div
+                            key={skill.id}
+                            className="rounded-3xl border px-5 py-5"
+                            style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}
+                          >
+                            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <div className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                                    {skill.display_name}
+                                  </div>
+                                  <span className="rounded-full px-2 py-0.5 text-[11px]" style={{ backgroundColor: skill.is_builtin ? 'rgba(99,102,241,0.12)' : 'rgba(245,158,11,0.12)', color: skill.is_builtin ? 'var(--brand-primary)' : 'var(--warning)' }}>
+                                    {skill.is_builtin ? 'builtin' : 'profile'}
+                                  </span>
+                                  <span className="rounded-full px-2 py-0.5 text-[11px]" style={{ backgroundColor: skill.effective_enabled ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.12)', color: skill.effective_enabled ? 'var(--success)' : 'var(--text-tertiary)' }}>
+                                    {skill.effective_enabled ? '启用中' : '已停用'}
+                                  </span>
+                                </div>
+                                <div className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+                                  {skill.description}
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                                  <span className="rounded-full px-2 py-0.5" style={{ border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+                                    {skill.skill_key}
+                                  </span>
+                                  <span className="rounded-full px-2 py-0.5" style={{ border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+                                    executor: {formatSkillExecutorLabel(skill)}
+                                  </span>
+                                  <span className="rounded-full px-2 py-0.5" style={{ border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+                                    v{skill.version}
+                                  </span>
+                                  <span className="rounded-full px-2 py-0.5" style={{ border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+                                    confirm: {skill.confirmation_policy}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => void handleToggleSkill(skill)}
+                                  isLoading={savingSkillId === skill.id}
+                                >
+                                  {skill.enabled ? '停用' : '启用'}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => void handleToggleVersions(skill)}
+                                  isLoading={savingSkillId === skill.id && expandedSkillId !== skill.id}
+                                >
+                                  {expandedSkillId === skill.id ? '收起版本' : '查看版本'}
+                                </Button>
+                                {!skill.is_builtin ? (
+                                  <>
+                                    <Button variant="ghost" size="sm" onClick={() => handleEditSkill(skill)}>
+                                      编辑
+                                    </Button>
+                                    <Button
+                                      variant="secondary"
+                                      size="sm"
+                                      onClick={() => void handlePublishSkill(skill)}
+                                      isLoading={publishingSkillId === skill.id}
+                                    >
+                                      发布
+                                    </Button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div className="mt-4 grid gap-3 md:grid-cols-2">
+                              <div>
+                                <div className="text-xs font-medium uppercase tracking-[0.14em]" style={{ color: 'var(--text-tertiary)' }}>
+                                  意图信号
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {skill.intent_signals.map((item) => (
+                                    <span key={item} className="rounded-full px-2.5 py-1 text-xs" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                                      {item}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-xs font-medium uppercase tracking-[0.14em]" style={{ color: 'var(--text-tertiary)' }}>
+                                  Artifact 类型
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {skill.artifact_types.map((item) => (
+                                    <span key={item} className="rounded-full px-2.5 py-1 text-xs" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                                      {item}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+
+                            {expandedSkillId === skill.id ? (
+                              <div className="mt-5 rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}>
+                                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                                  版本记录
+                                </div>
+                                <div className="mt-3 space-y-3">
+                                  {(skillVersions[skill.id] || []).length === 0 ? (
+                                    <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                      还没有额外版本记录。
+                                    </div>
+                                  ) : (
+                                    skillVersions[skill.id].map((version) => (
+                                      <div key={version.id} className="rounded-2xl border px-4 py-3" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
+                                        <div className="flex items-center justify-between gap-4">
+                                          <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                                            v{version.version}
+                                          </div>
+                                          <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                                            {formatDateTime(version.created_at)}
+                                          </div>
+                                        </div>
+                                        <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-xl border px-3 py-3 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}>
+                                          {JSON.stringify(version.config_payload, null, 2)}
+                                        </pre>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <div className="rounded-3xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
+                      <div className="flex items-center gap-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                        <RiFlashlightLine className="h-4 w-4" />
+                        {editingSkillId ? '编辑 Skill Profile' : 'Create Skill Profile'}
+                      </div>
+                      <div className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+                        第一阶段只允许基于现有 executor 模板创建配置化 Skill Profile，不支持自由代码和自由 graph。
+                      </div>
+
+                      <div className="mt-5 space-y-5">
+                        <div>
+                          <FieldLabel label="模板" hint="模板决定底层 executor，当前只开放 3 个粗粒度 public skill。" />
+                          <div className="grid gap-3">
+                            {SKILL_TEMPLATE_OPTIONS.map((option) => (
+                              <PillOption
+                                key={option.value}
+                                active={skillForm.templateSkillKey === option.value}
+                                label={option.label}
+                                description={option.description}
+                                onClick={() => setSkillForm((current) => ({ ...current, templateSkillKey: option.value }))}
+                              />
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <FieldLabel label="Profile 名称" hint="这是某个 public skill family 下的配置化变体名称。" />
+                          <input
+                            value={skillForm.displayName}
+                            onChange={(event) => setSkillForm((current) => ({ ...current, displayName: event.target.value }))}
+                            className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel label="说明" hint="告诉 orchestrator 在选择对应 skill family 时，何时适合使用这个 profile。" />
+                          <textarea
+                            value={skillForm.description}
+                            onChange={(event) => setSkillForm((current) => ({ ...current, description: event.target.value }))}
+                            rows={4}
+                            className="w-full rounded-2xl border px-3 py-3 text-sm outline-none"
+                            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel label="默认参数 JSON" hint="只允许覆盖模板支持的默认参数，例如 report_type、analysis_mode 等。" />
+                          <textarea
+                            value={skillForm.defaultParamsText}
+                            onChange={(event) => setSkillForm((current) => ({ ...current, defaultParamsText: event.target.value }))}
+                            rows={8}
+                            className="w-full rounded-2xl border px-3 py-3 font-mono text-sm outline-none"
+                            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel label="Prompt Overlay" hint="用于轻量覆盖模板提示词；对没有 LLM 提示词的模板当前只作预留。" />
+                          <textarea
+                            value={skillForm.promptOverlay}
+                            onChange={(event) => setSkillForm((current) => ({ ...current, promptOverlay: event.target.value }))}
+                            rows={5}
+                            className="w-full rounded-2xl border px-3 py-3 text-sm outline-none"
+                            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
+                          />
+                        </div>
+
+                        <ToggleRow
+                          label="创建后立即启用"
+                          description="关闭后 Profile 仍会保存，但不会作为对应 skill family 的可选 profile 被 orchestrator 使用。"
+                          checked={skillForm.enabled}
+                          onChange={() => setSkillForm((current) => ({ ...current, enabled: !current.enabled }))}
+                        />
+
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="primary" size="md" onClick={() => void handleSubmitSkillForm()} isLoading={isSkillFormSaving}>
+                            {editingSkillId ? '保存 Skill Profile' : 'Create Skill Profile'}
+                          </Button>
+                          {editingSkillId ? (
+                            <Button variant="ghost" size="md" onClick={handleCancelSkillEdit}>
+                              放弃修改
+                            </Button>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
                   </div>

@@ -12,6 +12,7 @@ from app.api.v1 import (
     monitoring,
     outputs,
     sessions,
+    skills,
     snapshots,
     tasks,
     touchpoints,
@@ -33,3 +34,4 @@ api_router.include_router(tasks.router)
 api_router.include_router(global_tasks_router)
 api_router.include_router(monitoring.router)
 api_router.include_router(alerts.router)
+api_router.include_router(skills.router)

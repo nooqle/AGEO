@@ -18,6 +18,10 @@ from app.workflow.state import AgentState
 from app.core.database import AsyncSessionLocal
 from app.core.llm import get_llm_model
 from app.services.knowledge_workspace_service import KnowledgeWorkspaceService
+from app.services.skill_registry_service import (
+    SkillRegistryService,
+    build_builtin_skill_tool_definitions,
+)
 from app.services.session_event_publisher import session_event_publisher
 from app.workflow.events import (
     send_reply_event,
@@ -30,6 +34,40 @@ from app.workflow.nodes_streaming import async_wrap_sync_gen
 from app.core.constants import PlatformConstants
 
 logger = logging.getLogger(__name__)
+
+SKILLIZED_TOOL_NAMES = {
+    "data_analytics",
+    "citation_confidence_analysis",
+    "drill_down_analysis",
+    "compare_snapshots",
+    "selective_refetch",
+}
+
+SKILL_EXECUTOR_TO_NODE: dict[str, str] = {
+    "a5_data_analytics": "a5_analytics",
+    "a7_confidence_signal": "a7_confidence_signal",
+    "post_analysis_executor": "post_analysis_executor",
+}
+
+LEGACY_SKILL_TOOL_ALIASES: dict[str, dict[str, Any]] = {
+    "data_analytics": {"skill_key": "analysis_report_skill", "extra_args": {}},
+    "citation_confidence_analysis": {
+        "skill_key": "confidence_signal_skill",
+        "extra_args": {},
+    },
+    "drill_down_analysis": {
+        "skill_key": "post_analysis_skill",
+        "extra_args": {"analysis_mode": "drill_down"},
+    },
+    "compare_snapshots": {
+        "skill_key": "post_analysis_skill",
+        "extra_args": {"analysis_mode": "compare_snapshots"},
+    },
+    "selective_refetch": {
+        "skill_key": "post_analysis_skill",
+        "extra_args": {"analysis_mode": "selective_refetch"},
+    },
+}
 
 
 # =============================================================================
@@ -537,9 +575,25 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
 ]
 
 
-def build_agent_tools() -> list[dict[str, Any]]:
-    """Build LLM tools format from AGENT_REGISTRY."""
-    return [{"type": "function", "function": agent} for agent in AGENT_REGISTRY]
+async def build_agent_tools() -> list[dict[str, Any]]:
+    """Build LLM tools format from static tools + dynamic public skills."""
+    base_tools = [
+        agent for agent in AGENT_REGISTRY if agent["name"] not in SKILLIZED_TOOL_NAMES
+    ]
+    skill_tools: list[dict[str, Any]] = []
+    try:
+        async with AsyncSessionLocal() as db:
+            service = SkillRegistryService(db)
+            skill_tools = await service.get_tool_definitions()
+    except Exception as exc:
+        logger.warning(
+            "[Orchestrator] Failed to load dynamic skill tools, falling back to builtins: %s",
+            exc,
+        )
+        skill_tools = build_builtin_skill_tool_definitions()
+    return [
+        {"type": "function", "function": agent} for agent in [*base_tools, *skill_tools]
+    ]
 
 
 # =============================================================================
@@ -920,11 +974,11 @@ def _build_context_summary(state: AgentState) -> str:
 
     if state.get("fetch_results"):
         parts.append(f"- 抓取结果: {len(state['fetch_results'])} 组问题")
-        available_tools.append("drill_down_analysis (可深入分析已有结果)")
-        available_tools.append("selective_refetch (可重新抓取指定平台)")
+        available_tools.append(
+            "post_analysis_skill (可对已有结果做深挖、对比或局部重抓)"
+        )
     else:
-        unavailable_tools.append("drill_down_analysis (尚无抓取结果)")
-        unavailable_tools.append("selective_refetch (尚无先前分析)")
+        unavailable_tools.append("post_analysis_skill (尚无先前分析结果)")
 
     if state.get("metrics"):
         m = state["metrics"]
@@ -937,10 +991,8 @@ def _build_context_summary(state: AgentState) -> str:
 
     if state.get("entity_id"):
         parts.append(f"- 品牌实体ID: {state['entity_id']} (有历史快照)")
-        available_tools.append("compare_snapshots (可与历史分析对比)")
         available_tools.append("create_monitoring_schedule (可创建定时监测计划)")
     else:
-        unavailable_tools.append("compare_snapshots (尚无品牌实体)")
         unavailable_tools.append("create_monitoring_schedule (尚无品牌实体)")
 
     if manifest:
@@ -1131,7 +1183,7 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
         # Only warn about pending baseline if personas haven't been generated yet.
         # Once A2 has produced personas, the user has moved past the baseline stage.
         data_status.append(
-            "⚠ 基线分析待执行 — 必须先执行基线分析流程（question_simulation mode=baseline_dynamic → answer_fetch → data_analytics report_type=baseline）"
+            "⚠ 基线分析待执行 — 必须先执行基线分析流程（question_simulation mode=baseline_dynamic → answer_fetch → analysis_report_skill report_type=baseline）"
         )
     if state.get("metrics"):
         summary_metrics = (
@@ -1179,7 +1231,7 @@ A1 完成后的流程（最高优先级）：
 用户确认品牌信息后，必须按以下顺序执行基线分析，不可跳过：
   1. question_simulation(mode="baseline_dynamic") 生成行业全景问题
   2. answer_fetch 抓取AI平台回答
-  3. data_analytics(report_type="baseline") 生成基线报告
+  3. analysis_report_skill(report_type="baseline") 生成基线报告
 基线分析全部完成后，在消息中用自然语言列出编号选项（包含简要说明），然后调用 ask_user 等待回复，不传 options：
   1. 做一次引用内容置信度评估（可选）— 进一步检查当前引用来源的可信度、结构化质量与可核查性
   2. 开始场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现
@@ -1194,9 +1246,10 @@ A1 完成后的流程（最高优先级）：
   3. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现
   4. 直接提问 — 针对已有数据自由提问，深入了解特定方面
 
-场景细化流程：用户选择"场景细化"时：persona_generation → 用户选择画像 → question_simulation(mode="persona_focused") → answer_fetch → data_analytics(report_type="persona")
-重跑基线流程：用户说"重跑基线"时：跳过A1，直接 question_simulation(mode="baseline_dynamic") → answer_fetch → data_analytics(report_type="baseline")
-引用内容置信度评估流程：用户在报告后明确表示要检查引用可信度时：citation_confidence_analysis
+场景细化流程：用户选择"场景细化"时：persona_generation → 用户选择画像 → question_simulation(mode="persona_focused") → answer_fetch → analysis_report_skill(report_type="persona")
+重跑基线流程：用户说"重跑基线"时：跳过A1，直接 question_simulation(mode="baseline_dynamic") → answer_fetch → analysis_report_skill(report_type="baseline")
+引用内容置信度评估流程：用户在报告后明确表示要检查引用可信度时：confidence_signal_skill
+后续分析流程：用户在已有结果基础上要求深入分析、历史对比、局部重抓时：post_analysis_skill
 直接提问流程：用户选择"直接提问"时，【禁止】再次调用 ask_user 给子选项。直接用自然语言回复，告诉用户可以在输入框中自由提问，并举几个他们可能感兴趣的方向作为启发（不是按钮选项）。例如：
 "没问题！您可以直接在输入框中提问，比如：某个具体平台上品牌表现如何？竞品在 AI 平台中的优势是什么？某类用户场景下的推荐逻辑是怎样的？——任何和品牌 AEO 相关的问题我都可以为您深入分析。"
 
@@ -1208,7 +1261,7 @@ A1 完成后的流程（最高优先级）：
   - 品牌分析（A1）完成后：见上方"A1 完成后的流程"
   - 用户画像（A2）完成后：必须调用 ask_user 引导用户在画布管道图中选择画像，不可自行决定，不可直接调用 question_simulation
   - 问题模拟（A3）完成后：必须调用 ask_user 让用户选择采集模式（快速/完整/重新生成），用户选择后根据其选择调用 answer_fetch(fetch_mode=对应模式)，不可直接调用
-  - AI答案抓取（A4）完成后：不要 ask_user，不要等待用户确认，必须立即调用 data_analytics 生成报告
+  - AI答案抓取（A4）完成后：不要 ask_user，不要等待用户确认，必须立即调用 analysis_report_skill 生成报告
   - 数据分析报告（A5）完成后：必须调用 ask_user 让用户决定是否做引用内容置信度评估，或继续后续分析
   - 其他步骤：直接建议或执行下一步
 - 如果用户的请求不明确，用自然语言追问，不要调用 ask_user
@@ -1347,19 +1400,19 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             return (
                 f"AI答案抓取完成。共抓取 {len(fr)} 组问题结果。"
                 f"【强制操作】不要调用 ask_user，不要等待用户确认。"
-                f"你必须立即调用 data_analytics(report_type='{report_type}') 生成{report_label}。"
+                f"你必须立即调用 analysis_report_skill(report_type='{report_type}') 生成{report_label}。"
             )
         return (
             "AI答案抓取完成，但未获取到有效数据。"
             "【强制操作】你必须使用 ask_user 向用户说明抓取失败，并提供以下选项："
             "1) 重新尝试抓取（可换模式，如 fast→full）；"
-            "2) 仅重试部分平台（selective_refetch）；"
+            "2) 仅重试部分平台（通过 post_analysis_skill 执行 selective_refetch）；"
             "3) 手动提供问题重新抓取。"
             "【绝对禁止】不要调用 question_simulation 重新生成问题。"
             "问题已经在之前的步骤中生成，无需重新生成。"
         )
 
-    if tool_name == "data_analytics":
+    if tool_name in {"data_analytics", "analysis_report_skill"}:
         current_mode = state.get("analysis_mode", "persona")
         if current_mode == "baseline":
             metrics = state.get("baseline_metrics") or state.get("metrics")
@@ -1482,29 +1535,30 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             "如果是因为材料不足，请考虑先补齐 brand_analysis 或 answer_fetch。"
         )
 
-    if tool_name == "citation_confidence_analysis":
+    if tool_name in {"citation_confidence_analysis", "confidence_signal_skill"}:
         return (
             "引用内容置信度评估已完成。"
             "结果已经展示在画布中，您可以继续查看各引用来源的可信度、结构化质量和可核查性差异。"
         )
 
-    if tool_name == "drill_down_analysis":
+    if tool_name in {
+        "post_analysis_skill",
+        "drill_down_analysis",
+        "compare_snapshots",
+        "selective_refetch",
+    }:
+        last_skill_result = state.get("last_skill_result") or {}
+        if last_skill_result.get("summary"):
+            return str(last_skill_result["summary"])
         reply = state.get("orchestrator_reply", "")
-        return f"drill_down completed: {reply[:200]}"
+        return f"后续分析 Skill 已完成。{reply[:200]}"
 
-    if tool_name == "compare_snapshots":
-        reply = state.get("orchestrator_reply", "")
-        return f"snapshot comparison completed: {reply[:200]}"
-
-    if tool_name == "selective_refetch":
-        fr = state.get("fetch_results", [])
-        platforms = state.get("platform_filter") or []
-        return (
-            f"selective refetch completed for platforms: {', '.join(platforms)}. "
-            f"{len(fr)} questions re-fetched. "
-            "IMPORTANT: You MUST now call a5_analytics to re-analyze the updated "
-            "data and generate a new report. Do not ask the user - proceed directly."
-        )
+    current_skill = state.get("current_skill")
+    last_skill_result = state.get("last_skill_result") or {}
+    if current_skill and tool_name == current_skill:
+        summary = str(last_skill_result.get("summary") or "").strip()
+        if summary:
+            return summary
 
     if tool_name == "create_monitoring_schedule":
         reply = state.get("orchestrator_reply", "")
@@ -1548,6 +1602,13 @@ def _build_knowledge_export_completion_reply(result: dict[str, Any]) -> str:
 
 def _get_tool_name_from_node(node_name: str) -> str | None:
     """Reverse lookup: node name → tool name."""
+    preferred = {
+        "a5_analytics": "analysis_report_skill",
+        "a7_confidence_signal": "confidence_signal_skill",
+        "post_analysis_executor": "post_analysis_skill",
+    }
+    if node_name in preferred:
+        return preferred[node_name]
     node_to_tool = {v: k for k, v in TOOL_TO_NODE.items()}
     return node_to_tool.get(node_name)
 
@@ -1598,14 +1659,14 @@ def _build_ask_user_fallback_reply(
             "报告出来后您再决定是否继续做引用内容置信度评估或进入后续分析。"
         )
 
-    if tool_name == "data_analytics":
+    if tool_name in {"data_analytics", "analysis_report_skill"}:
         return (
             "分析报告已生成。"
             "您现在可以选择继续做一次引用内容置信度评估，"
             "或者基于当前报告进入下一步画像分析、深入分析或直接提问。"
         )
 
-    if tool_name == "citation_confidence_analysis":
+    if tool_name in {"citation_confidence_analysis", "confidence_signal_skill"}:
         return (
             "引用内容置信度评估已完成。"
             "您现在可以继续基于这份评估追问具体来源问题，"
@@ -1791,6 +1852,32 @@ async def _hydrate_knowledge_manifest(state: AgentState) -> dict[str, Any] | Non
         return None
 
 
+async def _resolve_skill_tool(
+    tool_name: str,
+    *,
+    requested_profile_key: str | None = None,
+) -> dict[str, Any] | None:
+    """Resolve a tool call into an enabled public skill definition."""
+
+    resolved_name = tool_name
+    alias = LEGACY_SKILL_TOOL_ALIASES.get(tool_name)
+    if alias:
+        resolved_name = alias["skill_key"]
+
+    try:
+        async with AsyncSessionLocal() as db:
+            service = SkillRegistryService(db)
+            return await service.resolve_tool_to_skill(
+                resolved_name,
+                requested_profile_key=requested_profile_key,
+            )
+    except Exception as exc:
+        logger.warning(
+            "[Orchestrator] Failed to resolve skill tool %s: %s", tool_name, exc
+        )
+        return None
+
+
 # =============================================================================
 # Tool Call → Node Mapping
 # =============================================================================
@@ -1800,13 +1887,15 @@ TOOL_TO_NODE: dict[str, str] = {
     "persona_generation": "a2_persona",
     "question_simulation": "a3_question",
     "answer_fetch": "a4_fetch",
+    "analysis_report_skill": "a5_analytics",
     "data_analytics": "a5_analytics",
     "knowledge_lookup": "knowledge_lookup",
     "knowledge_aggregate": "knowledge_aggregate",
     "knowledge_compare": "knowledge_compare",
     "knowledge_export": "knowledge_export",
+    "confidence_signal_skill": "a7_confidence_signal",
     "citation_confidence_analysis": "a7_confidence_signal",
-    # Follow-up tools (Cycle 3)
+    "post_analysis_skill": "post_analysis_executor",
     "drill_down_analysis": "drill_down",
     "compare_snapshots": "compare_snapshots",
     "selective_refetch": "selective_refetch",
@@ -1819,13 +1908,15 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "persona_generation": "用户画像生成",
     "question_simulation": "问题模拟生成",
     "answer_fetch": "AI答案抓取",
+    "analysis_report_skill": "完整分析报告 Skill",
     "data_analytics": "数据分析报告",
     "knowledge_lookup": "历史知识检索",
     "knowledge_aggregate": "历史知识聚合",
     "knowledge_compare": "历史知识对比",
     "knowledge_export": "历史知识导出",
+    "confidence_signal_skill": "引用置信度评估 Skill",
     "citation_confidence_analysis": "引用内容置信度评估",
-    # Follow-up tools (Cycle 3)
+    "post_analysis_skill": "后续分析 Skill",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
     "selective_refetch": "选择性重新抓取",
@@ -1893,7 +1984,9 @@ def _matches_failed_step(tool_name: str, failed_step: str) -> bool:
         "persona_generation": "A2",
         "question_simulation": "A3",
         "answer_fetch": "A4",
+        "analysis_report_skill": "A5",
         "data_analytics": "A5",
+        "confidence_signal_skill": "A7",
         "citation_confidence_analysis": "A7",
     }
     expected_step = step_id_map.get(tool_name, "")
@@ -2146,7 +2239,7 @@ async def orchestrator_node(state: AgentState) -> Command:
     # Build orchestrator call
     system_prompt = build_orchestrator_system_prompt(working_state)
     messages = build_orchestrator_messages(working_state)
-    tools = build_agent_tools()
+    tools = await build_agent_tools()
 
     # Stream LLM response
     model = get_llm_model()
@@ -2239,6 +2332,7 @@ async def orchestrator_node(state: AgentState) -> Command:
             await record_llm_usage_async(
                 session_id=session_id,
                 task_id=state.get("task_id"),
+                skill_key=None,
                 step="orchestrator",
                 step_name="编排决策",
                 model=model,
@@ -2609,13 +2703,51 @@ async def _handle_tool_call(
             },
         )
 
-    node_name = TOOL_TO_NODE.get(tool_name)
-    if node_name:
-        display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+    requested_skill_profile = (
+        str((tool_args or {}).get("skill_profile") or "").strip() or None
+    )
+    resolved_skill = await _resolve_skill_tool(
+        tool_name,
+        requested_profile_key=requested_skill_profile,
+    )
+    effective_tool_name = tool_name
+    skill_key = None
+    selected_skill_profile = None
+    selected_skill_prompt_overlay = None
+    display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+    merged_tool_args = dict(tool_args or {})
 
+    if resolved_skill is not None:
+        skill_key = resolved_skill["skill_key"]
+        effective_tool_name = skill_key
+        display_name = resolved_skill["display_name"]
+        selected_skill_profile = resolved_skill.get("selected_profile_key")
+        selected_skill_prompt_overlay = resolved_skill.get(
+            "selected_profile_prompt_overlay"
+        )
+        if selected_skill_profile and resolved_skill.get(
+            "selected_profile_display_name"
+        ):
+            display_name = (
+                f"{display_name} · {resolved_skill['selected_profile_display_name']}"
+            )
+        node_name = SKILL_EXECUTOR_TO_NODE.get(resolved_skill["executor_ref"])
+        merged_tool_args = dict(resolved_skill.get("default_params") or {})
+        alias = LEGACY_SKILL_TOOL_ALIASES.get(tool_name)
+        if alias:
+            merged_tool_args.update(alias.get("extra_args") or {})
+        merged_tool_args.update(tool_args or {})
+        merged_tool_args.pop("skill_profile", None)
+        tool_args = merged_tool_args
+    else:
+        node_name = TOOL_TO_NODE.get(tool_name)
+
+    if node_name:
         # Hard block: when simulated_questions already exist, block re-invocation
         # unless the user just triggered a retry (retry_counts reset to 0).
-        if tool_name == "question_simulation" and state.get("simulated_questions"):
+        if effective_tool_name == "question_simulation" and state.get(
+            "simulated_questions"
+        ):
             is_fresh_retry = current_retry_counts.get("question_simulation", 0) == 0
             if not is_fresh_retry:
                 logger.warning(
@@ -2645,10 +2777,11 @@ async def _handle_tool_call(
 
         # Check retry count — block if same tool called >= 2 times
         retry_counts = dict(state.get("agent_retry_counts", {}) or {})
-        current_count = retry_counts.get(tool_name, 0)
+        retry_key = skill_key or effective_tool_name
+        current_count = retry_counts.get(retry_key, 0)
         if current_count >= 2:
             logger.warning(
-                f"[Orchestrator] Tool {tool_name} already called {current_count} times, blocking retry"
+                f"[Orchestrator] Tool {retry_key} already called {current_count} times, blocking retry"
             )
             # Inject a tool_result error into history so LLM knows to offer alternatives
             error_msg = (
@@ -2676,7 +2809,7 @@ async def _handle_tool_call(
             )
 
         # Increment retry count
-        retry_counts[tool_name] = current_count + 1
+        retry_counts[retry_key] = current_count + 1
 
         # Send progress event with steps
         from app.workflow.events import send_progress_event
@@ -2686,10 +2819,17 @@ async def _handle_tool_call(
             "persona_generation": "A2",
             "question_simulation": "A3",
             "answer_fetch": "A4",
+            "analysis_report_skill": "A5",
             "data_analytics": "A5",
+            "confidence_signal_skill": "A7",
         }
         workflow_steps = _build_workflow_steps(state)
-        current_step_id = tool_to_step_id.get(tool_name)
+        current_step_id = tool_to_step_id.get(effective_tool_name)
+        if current_step_id is None and resolved_skill is not None:
+            current_step_id = {
+                "a5_data_analytics": "A5",
+                "a7_confidence_signal": "A7",
+            }.get(resolved_skill["executor_ref"])
         for s in workflow_steps:
             if s["id"] == current_step_id:
                 s["status"] = "in_progress"
@@ -2697,7 +2837,7 @@ async def _handle_tool_call(
         total_count = len(workflow_steps)
         await send_progress_event(
             session_id,
-            step=tool_name,
+            step=effective_tool_name,
             step_name=display_name,
             progress=completed_count / total_count,
             message=f"正在执行：{display_name}",
@@ -2714,7 +2854,7 @@ async def _handle_tool_call(
             )
             _current_fetch_mode = (
                 tool_args.get("fetch_mode", "fast")
-                if tool_name == "answer_fetch"
+                if effective_tool_name == "answer_fetch"
                 else state.get("fetch_mode", "fast")
             )
             if _current_fetch_mode == "full":
@@ -2743,12 +2883,20 @@ async def _handle_tool_call(
                 "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
                 "question_simulation": "正在模拟真实用户可能在 AI 平台中提出的问题，请稍候...",
                 "answer_fetch": _fetch_fallback,
+                "analysis_report_skill": "正在整理场景、风险与优先动作建议，请稍候…",
                 "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
+                "confidence_signal_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
                 "citation_confidence_analysis": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
+                "post_analysis_skill": "正在基于已有结果执行后续分析，请稍候...",
             }
-            fallback_text = FALLBACK_TEXTS.get(
-                tool_name, f"正在执行：{display_name}，请稍候..."
-            )
+            fallback_text = FALLBACK_TEXTS.get(effective_tool_name)
+            if fallback_text is None and resolved_skill is not None:
+                fallback_text = {
+                    "a5_data_analytics": FALLBACK_TEXTS["analysis_report_skill"],
+                    "a7_confidence_signal": FALLBACK_TEXTS["confidence_signal_skill"],
+                    "post_analysis_executor": FALLBACK_TEXTS["post_analysis_skill"],
+                }.get(resolved_skill["executor_ref"])
+            fallback_text = fallback_text or f"正在执行：{display_name}，请稍候..."
             await send_reply_event(
                 session_id, fallback_text, is_delta=True, is_new_round=True
             )
@@ -2765,17 +2913,17 @@ async def _handle_tool_call(
             session_id,
             "agent_call",
             f"调用 {display_name}...",
-            step=tool_name,
+            step=effective_tool_name,
             is_complete=False,
         )
 
         # Pass brand_name from tool_args if brand_analysis
         extra_updates: dict[str, Any] = {}
-        if tool_name == "brand_analysis" and tool_args.get("brand_name"):
+        if effective_tool_name == "brand_analysis" and tool_args.get("brand_name"):
             extra_updates["brand_name"] = tool_args["brand_name"]
 
         # Store user_decisions for a3 mode
-        if tool_name == "question_simulation":
+        if effective_tool_name == "question_simulation":
             user_decisions = dict(state.get("user_decisions", {}))
             # Reset fetch_mode guard flags when re-running A3
             user_decisions.pop("fetch_mode_confirmed", None)
@@ -2867,7 +3015,7 @@ async def _handle_tool_call(
             extra_updates["user_decisions"] = user_decisions
 
         # Pass fetch_mode for A4 + custom_questions + ask_user guard
-        if tool_name == "answer_fetch":
+        if effective_tool_name == "answer_fetch":
             extra_updates["fetch_mode"] = tool_args.get("fetch_mode", "fast")
 
             # Fix 2B: Inject custom_questions into state as questions
@@ -2988,7 +3136,10 @@ async def _handle_tool_call(
                 extra_updates["user_decisions"] = user_decisions
 
         # Pass report_type as analysis_mode for A5
-        if tool_name == "data_analytics":
+        if effective_tool_name in {"data_analytics", "analysis_report_skill"} or (
+            resolved_skill is not None
+            and resolved_skill["executor_ref"] == "a5_data_analytics"
+        ):
             report_type = tool_args.get("report_type", "persona")
             extra_updates["analysis_mode"] = report_type
 
@@ -3000,6 +3151,9 @@ async def _handle_tool_call(
                 "orchestrator_history": new_history,
                 "tool_call_args": tool_args,
                 "tool_call_id": tool_call.id or "call_1",
+                "current_skill": skill_key,
+                "current_skill_profile": selected_skill_profile,
+                "current_skill_prompt_overlay": selected_skill_prompt_overlay,
                 "agent_retry_counts": retry_counts,
                 "error_info": None,
                 **extra_updates,

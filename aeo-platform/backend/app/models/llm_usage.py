@@ -43,6 +43,7 @@ class LLMUsageRecord(Base):
 
     provider: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    skill_key: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     step: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     step_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     raw_session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

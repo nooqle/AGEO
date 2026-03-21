@@ -84,6 +84,15 @@ async def on_startup():
     models.__all__
     await init_db()
 
+    try:
+        from app.services.skill_registry_service import SkillRegistryService
+
+        async with AsyncSessionLocal() as db:
+            await SkillRegistryService(db).ensure_builtin_skills()
+        logger.info("Skill registry 内置能力已同步")
+    except Exception as skill_err:
+        logger.warning(f"Skill registry 初始化失败: {skill_err}")
+
     # LangGraph checkpointer 初始化
     try:
         from app.workflow.graph import init_checkpointer

@@ -68,6 +68,7 @@ async def analyze_brand_competition(
     await record_llm_usage_async(
         session_id=session_id,
         task_id=task_id,
+        skill_key=None,
         step=step,
         step_name=step_name,
         model=model,
