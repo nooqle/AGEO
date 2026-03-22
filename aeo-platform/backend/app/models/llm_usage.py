@@ -43,7 +43,9 @@ class LLMUsageRecord(Base):
 
     provider: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    skill_key: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    skill_key: Mapped[str | None] = mapped_column(
+        String(120), nullable=True, index=True
+    )
     step: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     step_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     raw_session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -51,8 +53,17 @@ class LLMUsageRecord(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cached_prompt_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    billable_prompt_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
     latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     estimated_cost: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    estimated_cost_cache_aware: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False
+    )
     currency: Mapped[str] = mapped_column(String(10), default="CNY", nullable=False)
 
     extra_metadata: Mapped[dict | None] = mapped_column(JSONText, nullable=True)

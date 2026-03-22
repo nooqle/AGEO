@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (Boolean, DateTime, Enum, Float, ForeignKey, Integer,
+                        String, Text)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -86,9 +87,7 @@ class AnalysisTask(Base):
         nullable=False,
         index=True,
     )
-    current_stage: Mapped[str] = mapped_column(
-        String(10), default="", nullable=False
-    )
+    current_stage: Mapped[str] = mapped_column(String(10), default="", nullable=False)
 
     # Progress tracking
     progress: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
@@ -99,10 +98,25 @@ class AnalysisTask(Base):
     # LLM usage aggregate
     llm_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     llm_prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    llm_completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    llm_completion_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
     llm_total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    llm_total_latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    llm_estimated_cost: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    llm_cached_prompt_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    llm_billable_prompt_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    llm_total_latency_ms: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    llm_estimated_cost: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False
+    )
+    llm_estimated_cost_cache_aware: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False
+    )
 
     # Stage results snapshot (for reconnection replay)
     #
@@ -115,9 +129,7 @@ class AnalysisTask(Base):
     #       )
     #       # modify stage_results_cache
     #       await db.flush()
-    stage_results_cache: Mapped[dict | None] = mapped_column(
-        JSONText, nullable=True
-    )
+    stage_results_cache: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
 
     # Result references
     snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -159,9 +171,7 @@ class AnalysisTask(Base):
     session: Mapped["Session | None"] = relationship(
         "Session", backref="analysis_tasks"
     )
-    entity: Mapped["Entity | None"] = relationship(
-        "Entity", backref="analysis_tasks"
-    )
+    entity: Mapped["Entity | None"] = relationship("Entity", backref="analysis_tasks")
     schedule: Mapped["MonitoringSchedule | None"] = relationship(
         "MonitoringSchedule",
         back_populates="tasks",

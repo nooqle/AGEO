@@ -33,6 +33,11 @@ function formatTokens(value: number) {
   return formatInteger(value);
 }
 
+function formatPercent(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0%';
+  return `${(value * 100).toFixed(value >= 0.1 ? 1 : 2)}%`;
+}
+
 function formatCost(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '¥0';
   return `¥${value >= 1 ? value.toFixed(2) : value.toFixed(4)}`;
@@ -112,6 +117,10 @@ function BreakdownList({
     calls: number;
     tokens: number;
     cost: number;
+    rawCost: number;
+    savings: number;
+    cacheHitRatio: number;
+    cachedTokens: number;
     latency: number;
   }>;
   mode: 'model' | 'step' | 'skill';
@@ -142,13 +151,19 @@ function BreakdownList({
                     {item.label}
                   </div>
                   <div className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                    {item.calls} 次调用 / {formatTokens(item.tokens)} 令牌
+                    {item.calls} 次调用 / {formatTokens(item.tokens)} 令牌 / 缓存 {formatPercent(item.cacheHitRatio)}
                   </div>
                 </div>
                 <div className="text-right text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
                   <div>{formatLatency(item.latency)}</div>
                   <div>{formatCost(item.cost)}</div>
+                  <div style={{ color: 'var(--text-tertiary)' }}>
+                    节省 {formatCost(item.savings)}
+                  </div>
                 </div>
+              </div>
+              <div className="mt-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                命中缓存 {formatTokens(item.cachedTokens)}，原始估算 {formatCost(item.rawCost)}
               </div>
             </div>
           ))}
@@ -275,7 +290,11 @@ export function LLMObservabilityPanel({
         label: item.model_name || item.provider || '未命名模型',
         calls: item.call_count,
         tokens: item.total_tokens,
-        cost: item.total_cost,
+        cost: item.total_cost_cache_aware,
+        rawCost: item.total_cost,
+        savings: item.estimated_savings,
+        cacheHitRatio: item.cache_hit_ratio,
+        cachedTokens: item.cached_prompt_tokens,
         latency: item.avg_latency_ms,
       })),
     [snapshot?.by_model]
@@ -287,7 +306,11 @@ export function LLMObservabilityPanel({
         label: item.step_name || item.step || '未命名步骤',
         calls: item.call_count,
         tokens: item.total_tokens,
-        cost: item.total_cost,
+        cost: item.total_cost_cache_aware,
+        rawCost: item.total_cost,
+        savings: item.estimated_savings,
+        cacheHitRatio: item.cache_hit_ratio,
+        cachedTokens: item.cached_prompt_tokens,
         latency: item.avg_latency_ms,
       })),
     [snapshot?.by_step]
@@ -299,7 +322,11 @@ export function LLMObservabilityPanel({
         label: item.skill_key || '未归类 Skill',
         calls: item.call_count,
         tokens: item.total_tokens,
-        cost: item.total_cost,
+        cost: item.total_cost_cache_aware,
+        rawCost: item.total_cost,
+        savings: item.estimated_savings,
+        cacheHitRatio: item.cache_hit_ratio,
+        cachedTokens: item.cached_prompt_tokens,
         latency: item.avg_latency_ms,
       })),
     [snapshot?.by_skill]
@@ -322,10 +349,10 @@ export function LLMObservabilityPanel({
             大模型可观测性
           </div>
           <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.02em]" style={{ color: 'var(--text-primary)' }}>
-            {brandName ? `${brandName} 的令牌消耗 / 成本 / 时延` : '当前品牌的大模型观测'}
+            {brandName ? `${brandName} 的令牌消耗 / 缓存 / 成本 / 时延` : '当前品牌的大模型观测'}
           </h2>
           <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-            这里展示当前品牌在最近时间窗口内的模型调用量、令牌消耗、估算成本和响应时延，用于判断分析链路是否稳定、是否有异常放大。
+            这里展示当前品牌在最近时间窗口内的模型调用量、令牌消耗、缓存命中、估算成本和响应时延，用于判断分析链路是否稳定、缓存是否真正带来了成本收益。
           </p>
           <p className="mt-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
             页面保持可见时会自动刷新，也可以手动拉取最新观测结果。
@@ -365,8 +392,8 @@ export function LLMObservabilityPanel({
       </div>
 
       {isLoading ? (
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, index) => (
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, index) => (
             <div key={index} className="h-[128px] rounded-[24px] animate-shimmer" />
           ))}
         </div>
@@ -386,11 +413,11 @@ export function LLMObservabilityPanel({
           className="mt-6 rounded-[22px] border border-dashed px-5 py-5 text-sm leading-7"
           style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
         >
-            当前窗口内还没有可用的大模型调用记录。完成一次品牌分析后，这里会出现模型、步骤和最近调用明细。
+          当前窗口内还没有可用的大模型调用记录。完成一次品牌分析后，这里会出现模型、步骤和最近调用明细。
         </div>
       ) : (
         <div className="mt-6 space-y-6">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <SummaryCard
               label="总调用量"
               value={formatInteger(summary?.call_count || 0)}
@@ -400,13 +427,19 @@ export function LLMObservabilityPanel({
             <SummaryCard
               label="总令牌消耗"
               value={formatTokens(summary?.total_tokens || 0)}
-              meta={`最近 ${summary?.days || days} 天累计`}
+              meta={`输入 ${formatTokens(summary?.prompt_tokens || 0)} / 输出 ${formatTokens(summary?.completion_tokens || 0)}`}
               icon={RiFlashlightLine}
             />
             <SummaryCard
-              label="估算成本"
-              value={formatCost(summary?.total_cost || 0)}
-              meta={summary?.last_call_at ? `最近调用 ${formatRelativeTime(summary.last_call_at)}` : '暂无最近调用'}
+              label="缓存命中率"
+              value={formatPercent(summary?.cache_hit_ratio || 0)}
+              meta={`命中 ${formatTokens(summary?.cached_prompt_tokens || 0)} / 输入 ${formatTokens(summary?.prompt_tokens || 0)}`}
+              icon={RiRefreshLine}
+            />
+            <SummaryCard
+              label="缓存后成本"
+              value={formatCost(summary?.total_cost_cache_aware || 0)}
+              meta={`较原始估算节省 ${formatCost(summary?.estimated_savings || 0)}`}
               icon={RiCoinsLine}
             />
             <SummaryCard
@@ -456,6 +489,7 @@ export function LLMObservabilityPanel({
                     <th className="px-5 py-3 font-medium">步骤</th>
                     <th className="px-5 py-3 font-medium">模型</th>
                     <th className="px-5 py-3 font-medium">令牌</th>
+                    <th className="px-5 py-3 font-medium">缓存</th>
                     <th className="px-5 py-3 font-medium">时延</th>
                     <th className="px-5 py-3 font-medium">成本</th>
                   </tr>
@@ -498,10 +532,19 @@ export function LLMObservabilityPanel({
                         {formatInteger(call.total_tokens)}
                       </td>
                       <td className="px-5 py-3 align-top" style={{ color: 'var(--text-secondary)' }}>
+                        <div>{formatInteger(call.cached_prompt_tokens)}</div>
+                        <div className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                          {formatPercent(call.cache_hit_ratio)}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 align-top" style={{ color: 'var(--text-secondary)' }}>
                         {formatLatency(call.latency_ms)}
                       </td>
                       <td className="px-5 py-3 align-top" style={{ color: 'var(--text-secondary)' }}>
-                        {formatCost(call.estimated_cost)}
+                        <div>{formatCost(call.estimated_cost_cache_aware)}</div>
+                        <div className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                          节省 {formatCost(call.estimated_savings)}
+                        </div>
                       </td>
                     </tr>
                   ))}
