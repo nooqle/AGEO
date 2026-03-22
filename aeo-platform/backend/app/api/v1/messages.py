@@ -24,7 +24,7 @@ async def get_messages(
 ):
     """Get message list."""
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user.id)
+    session = await session_service.get_session(session_id, current_user)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = MessageService(db)
@@ -46,7 +46,7 @@ async def send_message(
     Real-time progress is still delivered via WebSocket when a client is connected.
     """
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user.id)
+    session = await session_service.get_session(session_id, current_user)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -95,7 +95,7 @@ async def rollback_to_message(
     Rollback: delete all content after specified message.
     """
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user.id)
+    session = await session_service.get_session(session_id, current_user)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = MessageService(db)

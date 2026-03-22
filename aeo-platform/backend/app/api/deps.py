@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.security import decode_access_token
+from app.models.user import UserRole, UserStatus
 from app.services.user_service import UserService
 
 
@@ -46,6 +47,17 @@ async def get_current_user(
     return user
 
 
+async def get_current_internal_admin_user(
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != UserRole.INTERNAL_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="仅内部管理员可执行该操作",
+        )
+    return current_user
+
+
 async def get_user_from_token(
     token: str,
     db: AsyncSession,
@@ -62,6 +74,11 @@ async def get_user_from_token(
         if not user_id:
             return None
         service = UserService(db)
-        return await service.get_user_by_id(UUID(user_id))
+        user = await service.get_user_by_id(UUID(user_id))
+        if user is None:
+            return None
+        if not user.is_active or user.status != UserStatus.ACTIVE:
+            return None
+        return user
     except Exception:
         return None

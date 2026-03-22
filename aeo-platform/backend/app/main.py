@@ -8,8 +8,8 @@ import os
 
 # Fix Windows console encoding for Chinese characters
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Fix: uvicorn --reload sets WindowsSelectorEventLoopPolicy on Windows,
 # but SelectorEventLoop does NOT support asyncio.create_subprocess_exec().
@@ -19,6 +19,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     try:
         import uvicorn.loops.asyncio as _uv_asyncio
+
         _uv_asyncio.asyncio_setup = lambda use_subprocess=False: None
     except ImportError:
         pass
@@ -43,8 +44,8 @@ from app.core.websocket_server import (
     handle_recall,
 )
 import app.models as models
-from app.models.session import Session
 from app.services.user_service import UserService
+from app.services.session_service import SessionService
 from app.startup_checks import startup_checks
 
 # Configure logging after imports
@@ -96,6 +97,7 @@ async def on_startup():
     # LangGraph checkpointer 初始化
     try:
         from app.workflow.graph import init_checkpointer
+
         await init_checkpointer()
         logger.info("LangGraph checkpointer 已初始化")
     except Exception as cp_err:
@@ -104,6 +106,7 @@ async def on_startup():
     # Cycle 3: Orphan Task Recovery (Review C6/T9)
     try:
         from app.services.task_service import TaskService
+
         async with AsyncSessionLocal() as db:
             service = TaskService(db)
             # timeout_minutes=0: on process restart ALL running tasks are
@@ -134,6 +137,7 @@ async def on_startup():
     # Cycle 4: Start monitoring scheduler
     try:
         from app.services.scheduler import start_scheduler
+
         await start_scheduler()
         logger.info("监测调度器已启动")
     except Exception as scheduler_err:
@@ -162,17 +166,20 @@ async def on_shutdown():
         logger.warning(f"Runtime coordinator 停止失败: {e}")
     try:
         from app.services.scheduler import stop_scheduler
+
         await stop_scheduler()
         logger.info("监测调度器已停止")
     except Exception as e:
         logger.warning(f"监测调度器停止失败: {e}")
     try:
         from app.workflow.graph import cleanup_checkpointer
+
         await cleanup_checkpointer()
         logger.info("Checkpointer 已清理")
     except Exception as e:
         logger.warning(f"Checkpointer 清理失败: {e}")
     logger.info("应用关闭完成")
+
 
 # CORS
 app.add_middleware(
@@ -197,6 +204,7 @@ async def health_check():
 async def scheduler_health():
     """Scheduler health check endpoint."""
     from app.services.scheduler import get_scheduler_status
+
     return get_scheduler_status()
 
 
@@ -218,15 +226,23 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket connection handler."""
     logger.info("=" * 80)
     logger.info(f"[WebSocket] 🔌 New connection request for session: {session_id}")
-    logger.info(f"[WebSocket] 📋 Client host: {websocket.client.host if websocket.client else 'unknown'}")
-    logger.info(f"[WebSocket] 📋 Client port: {websocket.client.port if websocket.client else 'unknown'}")
+    logger.info(
+        f"[WebSocket] 📋 Client host: {websocket.client.host if websocket.client else 'unknown'}"
+    )
+    logger.info(
+        f"[WebSocket] 📋 Client port: {websocket.client.port if websocket.client else 'unknown'}"
+    )
     logger.info(f"[WebSocket] 📋 Headers: {dict(websocket.headers)}")
     logger.info(f"[WebSocket] 📋 Query params: {dict(websocket.query_params)}")
 
     token = websocket.query_params.get("token")
     logger.info(f"[WebSocket] 🔑 Token received: {'Yes' if token else 'No'}")
     if token:
-        logger.info(f"[WebSocket] 🔑 Token value: {token[:10]}..." if len(token) > 10 else f"[WebSocket] 🔑 Token value: {token}")
+        logger.info(
+            f"[WebSocket] 🔑 Token value: {token[:10]}..."
+            if len(token) > 10
+            else f"[WebSocket] 🔑 Token value: {token}"
+        )
 
     # Development mode: Allow connection with dev-token
     is_dev_mode = settings.DEBUG and settings.DEV_MODE_ENABLED
@@ -236,11 +252,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     if not token:
         if is_dev_mode:
-            logger.warning("[WebSocket] ⚠️  DEVELOPMENT MODE: No token provided, using dev-token")
+            logger.warning(
+                "[WebSocket] ⚠️  DEVELOPMENT MODE: No token provided, using dev-token"
+            )
             token = settings.DEV_TOKEN
             is_dev_token = True
         else:
-            logger.error("[WebSocket] ❌ No token provided and not in dev mode, closing connection")
+            logger.error(
+                "[WebSocket] ❌ No token provided and not in dev mode, closing connection"
+            )
             await websocket.close(code=1008, reason="Unauthorized")
             return
 
@@ -266,32 +286,28 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 email=settings.DEV_USER_EMAIL,
                 name=settings.DEV_USER_NAME,
             )
-            logger.info(f"[WebSocket] ✅ Dev user retrieved: {user.email} (ID: {user.id})")
+            logger.info(
+                f"[WebSocket] ✅ Dev user retrieved: {user.email} (ID: {user.id})"
+            )
         else:
             logger.info("[WebSocket] 🔍 Getting user from token...")
             user = await get_user_from_token(token, db)
             if not user:
-                logger.error("[WebSocket] ❌ User not found for token, closing connection")
+                logger.error(
+                    "[WebSocket] ❌ User not found for token, closing connection"
+                )
                 await websocket.close(code=1008, reason="Unauthorized")
                 return
             logger.info(f"[WebSocket] ✅ User retrieved: {user.email} (ID: {user.id})")
 
         logger.info("[WebSocket] 🔍 Checking session access...")
-        session = await db.get(Session, session_uuid)
+        session_service = SessionService(db)
+        session = await session_service.get_session(session_uuid, user)
         if not session:
             logger.error(f"[WebSocket] ❌ Session not found: {session_uuid}")
             await websocket.close(code=1008, reason="Session not found")
             return
-
-        logger.info(f"[WebSocket] ✅ Session found: {session.id}")
-        logger.info(f"[WebSocket] 🔍 Session user_id: {session.user_id}, Current user_id: {user.id}")
-
-        if session.user_id != user.id:
-            logger.error("[WebSocket] ❌ Session user mismatch, closing connection")
-            await websocket.close(code=1008, reason="Access denied")
-            return
-
-        logger.info("[WebSocket] ✅ Session access verified")
+        logger.info(f"[WebSocket] ✅ Session access verified: {session_id}")
 
     logger.info("[WebSocket] 🤝 Accepting WebSocket connection...")
     await websocket.accept()
@@ -302,9 +318,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     logger.info("=" * 80)
 
     # Start heartbeat task
-    heartbeat_task = asyncio.create_task(
-        _websocket_heartbeat(websocket, session_id)
-    )
+    heartbeat_task = asyncio.create_task(_websocket_heartbeat(websocket, session_id))
 
     # Track running agent task so we don't block the WS receive loop
     agent_task: asyncio.Task | None = None
@@ -320,11 +334,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             logger.error(f"[WebSocket] Agent task error: {exc}")
             # Notify frontend about the unhandled error so it doesn't hang
             asyncio.create_task(
-                manager.emit_to_websocket(websocket, "error", {
-                    "step": "system",
-                    "error": f"任务异常终止: {exc}",
-                    "recoverable": True,
-                })
+                manager.emit_to_websocket(
+                    websocket,
+                    "error",
+                    {
+                        "step": "system",
+                        "error": f"任务异常终止: {exc}",
+                        "recoverable": True,
+                    },
+                )
             )
 
     try:
@@ -333,7 +351,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             try:
                 raw_text = await asyncio.wait_for(
                     websocket.receive_text(),
-                    timeout=30.0  # 30 second timeout for receive
+                    timeout=30.0,  # 30 second timeout for receive
                 )
                 message = json.loads(raw_text)
             except asyncio.TimeoutError:
@@ -355,11 +373,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             # so the WS loop stays responsive to pings
             if event == "user_message":
                 if agent_task and not agent_task.done():
-                    logger.warning("[WebSocket] Agent already running, ignoring message")
-                    await manager.emit_to_websocket(websocket, "error", {
-                        "message": "正在执行中，请等待当前任务完成",
-                        "recoverable": True,
-                    })
+                    logger.warning(
+                        "[WebSocket] Agent already running, ignoring message"
+                    )
+                    await manager.emit_to_websocket(
+                        websocket,
+                        "error",
+                        {
+                            "message": "正在执行中，请等待当前任务完成",
+                            "recoverable": True,
+                        },
+                    )
                 else:
                     agent_task = asyncio.create_task(
                         handle_user_message(websocket, session_id, data)
@@ -370,15 +394,23 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if _running and not _running.done():
                     # Race condition: agent_task may still be running _save_final_message
                     # after sending inline_confirmation. Wait for it to finish.
-                    logger.info("[WebSocket] Agent task still running, waiting for completion before handling confirmation...")
+                    logger.info(
+                        "[WebSocket] Agent task still running, waiting for completion before handling confirmation..."
+                    )
                     try:
                         await asyncio.wait_for(_running, timeout=60)
                     except asyncio.TimeoutError:
-                        logger.warning("[WebSocket] Agent task did not complete in 60s, ignoring confirmation")
-                        await manager.emit_to_websocket(websocket, "error", {
-                            "message": "当前任务未能及时完成，请稍后重试",
-                            "recoverable": True,
-                        })
+                        logger.warning(
+                            "[WebSocket] Agent task did not complete in 60s, ignoring confirmation"
+                        )
+                        await manager.emit_to_websocket(
+                            websocket,
+                            "error",
+                            {
+                                "message": "当前任务未能及时完成，请稍后重试",
+                                "recoverable": True,
+                            },
+                        )
                         continue
                 agent_task = asyncio.create_task(
                     handle_confirmation(websocket, session_id, data)
@@ -387,14 +419,20 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             elif event == "stop":
                 if agent_task and not agent_task.done():
                     agent_task.cancel()
-                    logger.info(f"[WebSocket] Cancelled agent task for session {session_id}")
+                    logger.info(
+                        f"[WebSocket] Cancelled agent task for session {session_id}"
+                    )
                 await handle_stop(websocket, session_id)
             elif event == "recall":
                 if agent_task and not agent_task.done():
-                    await manager.emit_to_websocket(websocket, "error", {
-                        "message": "正在执行中，请等待当前任务完成后再回退",
-                        "recoverable": True,
-                    })
+                    await manager.emit_to_websocket(
+                        websocket,
+                        "error",
+                        {
+                            "message": "正在执行中，请等待当前任务完成后再回退",
+                            "recoverable": True,
+                        },
+                    )
                 else:
                     agent_task = asyncio.create_task(
                         handle_recall(websocket, session_id, data)
@@ -402,10 +440,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     agent_task.add_done_callback(_on_agent_done)
             elif event == "artifact_action":
                 if agent_task and not agent_task.done():
-                    await manager.emit_to_websocket(websocket, "error", {
-                        "message": "正在执行中，请等待当前任务完成",
-                        "recoverable": True,
-                    })
+                    await manager.emit_to_websocket(
+                        websocket,
+                        "error",
+                        {
+                            "message": "正在执行中，请等待当前任务完成",
+                            "recoverable": True,
+                        },
+                    )
                 else:
                     agent_task = asyncio.create_task(
                         handle_artifact_action(websocket, session_id, data)
@@ -446,7 +488,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             try:
                 await asyncio.wait_for(_pending, timeout=30.0)
             except asyncio.TimeoutError:
-                logger.warning("[WebSocket] Agent task timed out after disconnect, cancelling")
+                logger.warning(
+                    "[WebSocket] Agent task timed out after disconnect, cancelling"
+                )
                 _pending.cancel()
                 try:
                     await _pending
@@ -472,7 +516,9 @@ async def _websocket_heartbeat(websocket: WebSocket, session_id: str):
                 logger.debug(f"[WebSocket] Heartbeat sent to session: {session_id}")
             except Exception:
                 # Connection is dead, exit heartbeat loop
-                logger.warning(f"[WebSocket] Heartbeat failed for session: {session_id}")
+                logger.warning(
+                    f"[WebSocket] Heartbeat failed for session: {session_id}"
+                )
                 break
     except asyncio.CancelledError:
         logger.debug(f"[WebSocket] Heartbeat cancelled for session: {session_id}")

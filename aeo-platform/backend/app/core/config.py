@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "dev-secret-change-me"
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    VERIFICATION_CODE_EXPIRE_MINUTES: int = 10
+    VERIFICATION_SEND_COOLDOWN_SECONDS: int = 60
+    VERIFICATION_MAX_ATTEMPTS: int = 5
+    VERIFICATION_EMAIL_PROVIDER: str = "console"
+    VERIFICATION_SMS_PROVIDER: str = "console"
+    VERIFICATION_EMAIL_FROM_ADDRESS: str | None = None
+    VERIFICATION_EMAIL_FROM_NAME: str = "Specta AI"
+    VERIFICATION_EMAIL_SUBJECT_PREFIX: str = "【Specta AI】"
+    VERIFICATION_SMTP_HOST: str | None = None
+    VERIFICATION_SMTP_PORT: int = 587
+    VERIFICATION_SMTP_USERNAME: str | None = None
+    VERIFICATION_SMTP_PASSWORD: str | None = None
+    VERIFICATION_SMTP_USE_TLS: bool = True
+    VERIFICATION_SMTP_USE_SSL: bool = False
 
     # Development mode settings
     DEV_MODE_ENABLED: bool = (

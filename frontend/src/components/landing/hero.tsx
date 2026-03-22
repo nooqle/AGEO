@@ -11,7 +11,7 @@ export function HeroSection() {
           品牌声量智能分析平台 - 洞察品牌在 AI 平台中的可见性
         </p>
         <Link
-          href="/dashboard"
+          href="/auth"
           className="inline-block px-8 py-3 bg-[#6366F1] text-white rounded-lg font-medium hover:bg-[#4F46E5] transition-colors"
         >
           开始分析

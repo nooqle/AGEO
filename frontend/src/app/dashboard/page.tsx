@@ -4,12 +4,14 @@ import { Suspense, useState, useCallback } from 'react';
 import { DashboardTopBar } from '@/components/layout/DashboardTopBar';
 import { DashboardPage } from '@/components/dashboard/DashboardPage';
 import { EntityFormDialog } from '@/components/dashboard/EntityFormDialog';
+import { RequireAuth } from '@/components/auth/RequireAuth';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import type { CreateEntityInput } from '@/types/entity';
+import type { AuthUser } from '@/types/auth';
 
-function DashboardContent() {
+function DashboardContent({ currentUser }: { currentUser: AuthUser }) {
   const [entityFormOpen, setEntityFormOpen] = useState(false);
   const addEntity = useEntityStore((s) => s.addEntity);
   const entities = useEntityStore((s) => s.entities);
@@ -53,6 +55,7 @@ function DashboardContent() {
           }
         }}
         onSubmit={handleCreateBrand}
+        allowOrganizationScope={Boolean(currentUser.organization_id)}
       />
     </div>
   );
@@ -61,7 +64,9 @@ function DashboardContent() {
 export default function Dashboard() {
   return (
     <Suspense>
-      <DashboardContent />
+      <RequireAuth>
+        {({ currentUser }) => <DashboardContent currentUser={currentUser} />}
+      </RequireAuth>
     </Suspense>
   );
 }

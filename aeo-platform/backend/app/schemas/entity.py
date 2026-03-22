@@ -10,6 +10,9 @@ class EntityBase(BaseModel):
     domain: str = Field(..., min_length=1, max_length=500)
     industry: str = Field(..., min_length=1, max_length=200)
     description: str = ""
+    visibility_scope: str = Field(
+        default="personal", pattern="^(personal|organization)$"
+    )
 
 
 class EntityCreate(EntityBase):
@@ -22,10 +25,16 @@ class EntityUpdate(BaseModel):
     domain: str | None = None
     industry: str | None = None
     description: str | None = None
+    visibility_scope: str | None = Field(
+        default=None,
+        pattern="^(personal|organization)$",
+    )
 
 
 class EntityResponse(EntityBase):
     id: str
+    owner_user_id: str | None = None
+    organization_id: str | None = None
     last_analyzed: datetime | None = None
     status: str = "pending"
     created_at: datetime
