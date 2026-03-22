@@ -178,6 +178,10 @@ class EntityService:
             entity = await self.get_entity_model(entity_id, viewer)
             if not entity:
                 return None
+            if viewer is not None and not AccessScopeService.can_manage_entity(
+                entity, viewer
+            ):
+                raise PermissionError("仅品牌创建者或内部管理员可修改品牌")
             try:
                 if "name" in data and data["name"] is not None:
                     entity.name = data["name"]
@@ -245,6 +249,10 @@ class EntityService:
             entity = await self.get_entity_model(entity_id, viewer)
             if not entity:
                 return False
+            if viewer is not None and not AccessScopeService.can_manage_entity(
+                entity, viewer
+            ):
+                raise PermissionError("仅品牌创建者或内部管理员可删除品牌")
             try:
                 name = entity.name
                 uid = UUID(entity_id)

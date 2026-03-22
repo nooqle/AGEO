@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     VERIFICATION_SMTP_PASSWORD: str | None = None
     VERIFICATION_SMTP_USE_TLS: bool = True
     VERIFICATION_SMTP_USE_SSL: bool = False
+    TENCENT_SES_SECRET_ID: str | None = None
+    TENCENT_SES_SECRET_KEY: str | None = None
+    TENCENT_SES_REGION: str = "ap-guangzhou"
+    TENCENT_SES_FROM_EMAIL_ADDRESS: str | None = None
+    TENCENT_SES_REPLY_TO_ADDRESS: str | None = None
+    TENCENT_SES_TEMPLATE_ID: int | None = None
+    TENCENT_SES_TEMPLATE_VARIABLES: str = "code"
 
     # Development mode settings
     DEV_MODE_ENABLED: bool = (
@@ -123,3 +130,28 @@ class Settings(BaseSettings):
 # Global settings instance
 settings = Settings()
 settings.DATABASE_URL = _resolve_sqlite_url(settings.DATABASE_URL)
+
+
+def _require_settings() -> None:
+    is_dev = settings.DEBUG or settings.DEV_MODE_ENABLED
+    if not is_dev and settings.JWT_SECRET == "dev-secret-change-me":
+        raise RuntimeError("生产环境禁止使用默认 JWT_SECRET，请在环境变量中显式配置")
+
+    email_provider = settings.VERIFICATION_EMAIL_PROVIDER.strip().lower()
+    if email_provider == "tencent_ses_api":
+        missing: list[str] = []
+        if not settings.TENCENT_SES_SECRET_ID:
+            missing.append("TENCENT_SES_SECRET_ID")
+        if not settings.TENCENT_SES_SECRET_KEY:
+            missing.append("TENCENT_SES_SECRET_KEY")
+        if not settings.TENCENT_SES_FROM_EMAIL_ADDRESS:
+            missing.append("TENCENT_SES_FROM_EMAIL_ADDRESS")
+        if not settings.TENCENT_SES_TEMPLATE_ID:
+            missing.append("TENCENT_SES_TEMPLATE_ID")
+        if missing:
+            raise RuntimeError(
+                "腾讯云 SES 邮件 provider 缺少必填配置: " + ", ".join(missing)
+            )
+
+
+_require_settings()

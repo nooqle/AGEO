@@ -105,9 +105,10 @@ class ApiService {
     return this.request<RegistrationApplication[]>('/auth/registration-applications');
   }
 
-  async approveRegistrationApplication(applicationId: string) {
+  async approveRegistrationApplication(applicationId: string, organizationId?: string | null) {
     return this.request<RegistrationApplication>(`/auth/registration-applications/${applicationId}/approve`, {
       method: 'POST',
+      body: JSON.stringify({ organization_id: organizationId ?? null }),
     });
   }
 

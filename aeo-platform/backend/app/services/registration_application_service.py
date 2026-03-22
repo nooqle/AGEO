@@ -13,6 +13,7 @@ from app.models.registration_application import (
 )
 from app.models.user import User, UserRole, UserStatus
 from app.models.verification_challenge import VerificationChannel, VerificationPurpose
+from app.services.identity_normalization_service import normalize_email, normalize_phone
 from app.services.user_service import UserService
 from app.services.verification_service import VerificationService
 
@@ -35,6 +36,8 @@ class RegistrationApplicationService:
         job_title: str,
         applicant_name: str | None = None,
     ) -> RegistrationApplication:
+        normalized_email = normalize_email(email)
+        normalized_phone = normalize_phone(phone)
         purpose = VerificationPurpose.REGISTRATION
         verified = await self.verification.verify_code(
             channel=verification_channel,
@@ -46,24 +49,24 @@ class RegistrationApplicationService:
         if verified is None:
             raise ValueError("验证码无效或已过期")
 
-        if email:
-            existing = await self.users.get_user_by_email(email)
+        if normalized_email:
+            existing = await self.users.get_user_by_email(normalized_email)
             if existing is not None:
                 raise ValueError("该邮箱已注册")
-        if phone:
-            existing = await self.users.get_user_by_phone(phone)
+        if normalized_phone:
+            existing = await self.users.get_user_by_phone(normalized_phone)
             if existing is not None:
                 raise ValueError("该手机号已注册")
         duplicate_application = await self.get_pending_application(
-            email=email,
-            phone=phone,
+            email=normalized_email,
+            phone=normalized_phone,
         )
         if duplicate_application is not None:
             raise ValueError("已存在待审核申请，请勿重复提交")
 
         application = RegistrationApplication(
-            email=email,
-            phone=phone,
+            email=normalized_email,
+            phone=normalized_phone,
             organization_name=organization_name.strip(),
             job_title=job_title.strip(),
             applicant_name=applicant_name.strip() if applicant_name else None,
@@ -79,6 +82,8 @@ class RegistrationApplicationService:
         email: str | None = None,
         phone: str | None = None,
     ) -> RegistrationApplication | None:
+        email = normalize_email(email)
+        phone = normalize_phone(phone)
         filters = []
         if email:
             filters.append(RegistrationApplication.email == email)
@@ -106,10 +111,12 @@ class RegistrationApplicationService:
         target: str,
     ) -> RegistrationApplication | None:
         target = (
-            target.strip().lower()
+            normalize_email(target)
             if channel == VerificationChannel.EMAIL
-            else target.strip()
+            else normalize_phone(target)
         )
+        if not target:
+            return None
         condition = (
             RegistrationApplication.email == target
             if channel == VerificationChannel.EMAIL

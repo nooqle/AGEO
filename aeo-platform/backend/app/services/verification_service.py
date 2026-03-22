@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import hash_password, verify_password
+from app.services.identity_normalization_service import normalize_email, normalize_phone
 from app.services.verification_delivery_service import (
     VerificationDeliveryError,
     VerificationDeliveryService,
@@ -39,10 +40,9 @@ class VerificationService:
         return datetime.now(timezone.utc)
 
     def _normalize_target(self, channel: VerificationChannel, target: str) -> str:
-        normalized = target.strip()
         if channel == VerificationChannel.EMAIL:
-            return normalized.lower()
-        return normalized
+            return normalize_email(target) or ""
+        return normalize_phone(target) or ""
 
     def _is_expired(self, expires_at: datetime) -> bool:
         if expires_at.tzinfo is None:

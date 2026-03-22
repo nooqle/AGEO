@@ -6,10 +6,12 @@ import { RiArrowLeftLine, RiShieldUserLine } from '@remixicon/react';
 
 import { RequireAuth } from '@/components/auth/RequireAuth';
 import { DashboardTopBar } from '@/components/layout/DashboardTopBar';
+import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { toast } from '@/components/ui/toast';
 import { api } from '@/services/api';
-import type { AuthUser } from '@/types/auth';
+import type { OrganizationRecord } from '@/types/accountAdmin';
+import type { AuthUser, RegistrationApplication } from '@/types/auth';
 import type { ControlPlaneCustomerSummary } from '@/types/controlPlane';
 import { formatRelativeTime } from '@/lib/utils';
 
@@ -28,8 +30,68 @@ export default function ControlPlanePage() {
 function ControlPlaneContent() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [customers, setCustomers] = useState<ControlPlaneCustomerSummary[]>([]);
+  const [organizations, setOrganizations] = useState<OrganizationRecord[]>([]);
+  const [registrationApplications, setRegistrationApplications] = useState<RegistrationApplication[]>([]);
+  const [reviewSelections, setReviewSelections] = useState<Record<string, string>>({});
+  const [reviewingApplicationId, setReviewingApplicationId] = useState<string | null>(null);
   const [days, setDays] = useState(7);
   const [loading, setLoading] = useState(true);
+  const [isApplicationsLoading, setIsApplicationsLoading] = useState(false);
+
+  function buildDefaultReviewSelections(
+    apps: RegistrationApplication[],
+    orgs: OrganizationRecord[]
+  ) {
+    const next: Record<string, string> = {};
+    apps.forEach((application) => {
+      const matchedOrganization = orgs.find(
+        (organization) => organization.legal_name === application.organization_name
+      );
+      if (matchedOrganization) {
+        next[application.id] = matchedOrganization.id;
+      }
+    });
+    return next;
+  }
+
+  async function loadApplicationsAndOrganizations() {
+    setIsApplicationsLoading(true);
+    try {
+      const [orgs, applications] = await Promise.all([
+        api.getOrganizations(),
+        api.listRegistrationApplications(),
+      ]);
+      setOrganizations(orgs);
+      setRegistrationApplications(applications);
+      setReviewSelections(buildDefaultReviewSelections(applications, orgs));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '加载审核数据失败');
+    } finally {
+      setIsApplicationsLoading(false);
+    }
+  }
+
+  async function handleReviewApplication(applicationId: string, action: 'approve' | 'reject') {
+    setReviewingApplicationId(applicationId);
+    try {
+      if (action === 'approve') {
+        await api.approveRegistrationApplication(
+          applicationId,
+          reviewSelections[applicationId] || null
+        );
+        toast.success('账号申请已审核通过');
+      } else {
+        await api.rejectRegistrationApplication(applicationId);
+        toast.success('账号申请已拒绝');
+      }
+      await Promise.all([api.getControlPlaneCustomers(days), loadApplicationsAndOrganizations()])
+        .then(([summaries]) => setCustomers(summaries));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '审核操作失败');
+    } finally {
+      setReviewingApplicationId(null);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -41,11 +103,20 @@ function ControlPlaneContent() {
         setCurrentUser(user);
         if (user.role !== 'internal_admin') {
           setCustomers([]);
+          setOrganizations([]);
+          setRegistrationApplications([]);
           return;
         }
-        const summaries = await api.getControlPlaneCustomers(days);
+        const [summaries, orgs, applications] = await Promise.all([
+          api.getControlPlaneCustomers(days),
+          api.getOrganizations(),
+          api.listRegistrationApplications(),
+        ]);
         if (!active) return;
         setCustomers(summaries);
+        setOrganizations(orgs);
+        setRegistrationApplications(applications);
+        setReviewSelections(buildDefaultReviewSelections(applications, orgs));
       } catch (error) {
         if (!active) return;
         toast.error(error instanceof Error ? error.message : '加载运营控制台失败');
@@ -133,6 +204,93 @@ function ControlPlaneContent() {
               <SummaryCard title={`最近 ${days} 天费用`} value={formatCost(summary.cost)} />
               <SummaryCard title="运行中任务" value={summary.activeTasks.toString()} />
             </div>
+
+            <section className="rounded-[28px] border px-5 py-5 md:px-6 md:py-6" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                    待审核注册申请
+                  </div>
+                  <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
+                    审核通过时可直接选择并入已有组织，或保持“创建新组织”。
+                  </div>
+                </div>
+                <Button variant="ghost" size="md" onClick={() => void loadApplicationsAndOrganizations()} isLoading={isApplicationsLoading}>
+                  刷新申请
+                </Button>
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {registrationApplications.filter((item) => item.status === 'pending_review').length === 0 ? (
+                  <div className="rounded-2xl border border-dashed px-4 py-4 text-sm" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                    当前没有待审核注册申请。
+                  </div>
+                ) : (
+                  registrationApplications
+                    .filter((item) => item.status === 'pending_review')
+                    .map((application) => (
+                      <div
+                        key={application.id}
+                        className="rounded-2xl border px-4 py-4"
+                        style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-tertiary)' }}
+                      >
+                        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px_auto] lg:items-start">
+                          <div className="text-xs leading-6" style={{ color: 'var(--text-secondary)' }}>
+                            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                              {application.organization_name}
+                            </div>
+                            账号：{application.email || application.phone || '--'}<br />
+                            职位：{application.job_title}<br />
+                            申请人：{application.applicant_name || '--'}<br />
+                            提交时间：{formatRelativeTime(application.created_at)}
+                          </div>
+                          <div>
+                            <div className="mb-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                              审核归属
+                            </div>
+                            <select
+                              value={reviewSelections[application.id] || ''}
+                              onChange={(event) =>
+                                setReviewSelections((current) => ({
+                                  ...current,
+                                  [application.id]: event.target.value,
+                                }))
+                              }
+                              className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                              style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}
+                            >
+                              <option value="">创建新组织</option>
+                              {organizations.map((organization) => (
+                                <option key={organization.id} value={organization.id}>
+                                  {organization.legal_name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              variant="secondary"
+                              size="md"
+                              onClick={() => void handleReviewApplication(application.id, 'reject')}
+                              isLoading={reviewingApplicationId === application.id}
+                            >
+                              拒绝
+                            </Button>
+                            <Button
+                              variant="primary"
+                              size="md"
+                              onClick={() => void handleReviewApplication(application.id, 'approve')}
+                              isLoading={reviewingApplicationId === application.id}
+                            >
+                              审核通过
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                )}
+              </div>
+            </section>
 
             <section className="rounded-[28px] border px-5 py-5 md:px-6 md:py-6" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}>
               <div className="flex items-center justify-between gap-4">

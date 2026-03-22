@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from sqlalchemy import and_, false, or_
+from sqlalchemy import and_, false, or_, true
 
 from app.models.entity import Entity, EntityVisibilityScope
 from app.models.monitoring_schedule import MonitoringSchedule
 from app.models.session import Session
 from app.models.task import AnalysisTask
-from app.models.user import User
+from app.models.user import User, UserRole
 
 
 class AccessScopeService:
@@ -14,6 +14,8 @@ class AccessScopeService:
 
     @staticmethod
     def entity_visibility_filter(user: User):
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return true()
         filters = [
             Entity.owner_user_id == user.id,
             Entity.sessions.any(Session.user_id == user.id),
@@ -29,6 +31,8 @@ class AccessScopeService:
 
     @staticmethod
     def session_visibility_filter(user: User):
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return true()
         filters = [Session.user_id == user.id]
         if user.organization_id:
             filters.append(
@@ -43,6 +47,8 @@ class AccessScopeService:
 
     @staticmethod
     def task_visibility_filter(user: User):
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return true()
         filters = [AnalysisTask.user_id == user.id]
         if user.organization_id:
             filters.append(
@@ -57,6 +63,8 @@ class AccessScopeService:
 
     @staticmethod
     def schedule_visibility_filter(user: User):
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return true()
         filters = [MonitoringSchedule.user_id == user.id]
         if user.organization_id:
             filters.append(
@@ -73,6 +81,8 @@ class AccessScopeService:
     def can_access_entity(entity: Entity | None, user: User) -> bool:
         if entity is None:
             return False
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return True
         if entity.owner_user_id == user.id:
             return True
         if (
@@ -84,9 +94,19 @@ class AccessScopeService:
         return False
 
     @staticmethod
+    def can_manage_entity(entity: Entity | None, user: User) -> bool:
+        if entity is None:
+            return False
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return True
+        return entity.owner_user_id == user.id
+
+    @staticmethod
     def can_access_session(session: Session | None, user: User) -> bool:
         if session is None:
             return False
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return True
         if session.user_id == user.id:
             return True
         return AccessScopeService.can_access_entity(session.entity, user)
@@ -95,6 +115,8 @@ class AccessScopeService:
     def can_access_task(task: AnalysisTask | None, user: User) -> bool:
         if task is None:
             return False
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return True
         if task.user_id == user.id:
             return True
         return AccessScopeService.can_access_entity(task.entity, user)
@@ -103,6 +125,16 @@ class AccessScopeService:
     def can_access_schedule(schedule: MonitoringSchedule | None, user: User) -> bool:
         if schedule is None:
             return False
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return True
         if schedule.user_id == user.id:
             return True
         return AccessScopeService.can_access_entity(schedule.entity, user)
+
+    @staticmethod
+    def can_manage_schedule(schedule: MonitoringSchedule | None, user: User) -> bool:
+        if schedule is None:
+            return False
+        if user.role == UserRole.INTERNAL_ADMIN:
+            return True
+        return schedule.user_id == user.id
