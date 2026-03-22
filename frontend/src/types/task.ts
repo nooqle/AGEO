@@ -46,8 +46,11 @@ export interface AnalysisTask {
   llm_prompt_tokens?: number;
   llm_completion_tokens?: number;
   llm_total_tokens?: number;
+  llm_cached_prompt_tokens?: number;
+  llm_billable_prompt_tokens?: number;
   llm_total_latency_ms?: number;
   llm_estimated_cost?: number;
+  llm_estimated_cost_cache_aware?: number;
   snapshot_id: string | null;
   session_id: string;
   entity_id: string | null;

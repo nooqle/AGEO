@@ -78,10 +78,13 @@ class Settings(BaseSettings):
     GLM5_TURBO_PRICE_OUTPUT_PER_MTOKENS: float | None = None
     GLM5_TURBO_PRICE_LONG_INPUT_PER_MTOKENS: float | None = None
     GLM5_TURBO_PRICE_LONG_OUTPUT_PER_MTOKENS: float | None = None
+    GLM5_CACHE_HIT_PRICE_FACTOR: float = 0.5
+    GLM5_TURBO_CACHE_HIT_PRICE_FACTOR: float = 0.5
 
     # MiniMax cost config (optional)
     MINIMAX_PRICE_INPUT_PER_MTOKENS: float | None = None
     MINIMAX_PRICE_OUTPUT_PER_MTOKENS: float | None = None
+    MINIMAX_CACHE_HIT_PRICE_FACTOR: float = 1.0
 
     # Doubao API
     DOUBAO_API_KEY: str | None = None

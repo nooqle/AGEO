@@ -3,7 +3,14 @@ export interface LLMObservabilitySummary {
   entity_id: string | null;
   call_count: number;
   total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_prompt_tokens: number;
+  billable_prompt_tokens: number;
+  cache_hit_ratio: number;
   total_cost: number;
+  total_cost_cache_aware: number;
+  estimated_savings: number;
   total_latency_ms: number;
   avg_latency_ms: number;
   unique_models: number;
@@ -19,7 +26,12 @@ export interface LLMObservabilityBreakdown {
   skill_key?: string | null;
   call_count: number;
   total_tokens: number;
+  prompt_tokens: number;
+  cached_prompt_tokens: number;
+  cache_hit_ratio: number;
   total_cost: number;
+  total_cost_cache_aware: number;
+  estimated_savings: number;
   total_latency_ms: number;
   avg_latency_ms: number;
 }
@@ -37,8 +49,13 @@ export interface LLMObservabilityCall {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cached_prompt_tokens: number;
+  billable_prompt_tokens: number;
+  cache_hit_ratio: number;
   latency_ms: number;
   estimated_cost: number;
+  estimated_cost_cache_aware: number;
+  estimated_savings: number;
   created_at: string | null;
 }
 

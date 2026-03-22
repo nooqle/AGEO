@@ -46,9 +46,11 @@ class LLMUsage:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    cached_prompt_tokens: int | None = None
     reasoning_tokens: int | None = None
     image_tokens: int | None = None
     video_tokens: int | None = None
+    prompt_tokens_details: dict[str, Any] | None = None
     raw: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,9 +58,11 @@ class LLMUsage:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
+            "cached_prompt_tokens": self.cached_prompt_tokens,
             "reasoning_tokens": self.reasoning_tokens,
             "image_tokens": self.image_tokens,
             "video_tokens": self.video_tokens,
+            "prompt_tokens_details": self.prompt_tokens_details,
             "raw": self.raw,
         }
 
@@ -83,7 +87,6 @@ class LLMResponse:
             "usage": self.usage.to_dict() if self.usage else None,
             "latency_ms": self.latency_ms,
         }
-
 
 
 class BaseLLMConfig(ABC):
@@ -115,9 +118,7 @@ class BaseLLMModel(ABC):
         allowed = self.ALLOWED_KWARGS
         return {k: v for k, v in kwargs.items() if k in allowed}
 
-    def _build_messages(
-        self, messages: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _build_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Format messages for OpenAI-compatible API calls."""
         formatted_messages = []
         for msg in messages:
@@ -152,6 +153,7 @@ class BaseLLMModel(ABC):
                     "prompt_tokens",
                     "completion_tokens",
                     "total_tokens",
+                    "prompt_tokens_details",
                     "reasoning_tokens",
                     "image_tokens",
                     "video_tokens",
@@ -162,14 +164,38 @@ class BaseLLMModel(ABC):
         if not data:
             return None
 
+        prompt_tokens_details = data.get("prompt_tokens_details")
+        if prompt_tokens_details is not None and not isinstance(
+            prompt_tokens_details, dict
+        ):
+            if hasattr(prompt_tokens_details, "model_dump"):
+                prompt_tokens_details = prompt_tokens_details.model_dump()
+            elif hasattr(prompt_tokens_details, "dict"):
+                prompt_tokens_details = prompt_tokens_details.dict()
+            else:
+                prompt_tokens_details = {
+                    key: getattr(prompt_tokens_details, key)
+                    for key in ("cached_tokens",)
+                    if hasattr(prompt_tokens_details, key)
+                }
+
+        cached_prompt_tokens = None
+        if isinstance(prompt_tokens_details, dict):
+            cached_prompt_tokens = prompt_tokens_details.get("cached_tokens")
+
+        normalized_raw = dict(data)
+        normalized_raw["prompt_tokens_details"] = prompt_tokens_details
+
         return LLMUsage(
             prompt_tokens=data.get("prompt_tokens"),
             completion_tokens=data.get("completion_tokens"),
             total_tokens=data.get("total_tokens"),
+            cached_prompt_tokens=cached_prompt_tokens,
             reasoning_tokens=data.get("reasoning_tokens"),
             image_tokens=data.get("image_tokens"),
             video_tokens=data.get("video_tokens"),
-            raw=data,
+            prompt_tokens_details=prompt_tokens_details,
+            raw=normalized_raw,
         )
 
     @abstractmethod
@@ -178,8 +204,7 @@ class BaseLLMModel(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> LLMResponse:
-        ...
+    ) -> LLMResponse: ...
 
     @abstractmethod
     def stream(
@@ -187,8 +212,7 @@ class BaseLLMModel(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> Generator[LLMResponse, None, None]:
-        ...
+    ) -> Generator[LLMResponse, None, None]: ...
 
     async def async_call(
         self,
@@ -211,14 +235,16 @@ class BaseLLMModel(ABC):
         """Format tools to AgentScope compatible format."""
         formatted = []
         for tool in tools:
-            formatted.append({
-                "type": "function",
-                "function": {
-                    "name": tool.get("name", ""),
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {"type": "object"}),
-                },
-            })
+            formatted.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.get("name", ""),
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("parameters", {"type": "object"}),
+                    },
+                }
+            )
         return formatted
 
     def create_tool_result_message(

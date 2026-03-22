@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -18,6 +19,20 @@ from app.models.session import Session as ChatSession
 from app.models.task import AnalysisTask
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class UsageCostBreakdown:
+    """Normalized token counters and estimated costs for one LLM call."""
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cached_prompt_tokens: int
+    billable_prompt_tokens: int
+    estimated_cost: float
+    estimated_cost_cache_aware: float
+    estimated_cost_savings: float
 
 
 def _safe_uuid(value: str | None) -> UUID | None:
@@ -36,17 +51,12 @@ def _resolve_model_metadata(model: BaseLLMModel) -> tuple[str, str]:
     return provider, str(model_name)
 
 
-def estimate_usage_cost(
+def _resolve_pricing(
     provider: str,
     model_name: str,
     prompt_tokens: int,
-    completion_tokens: int,
-) -> float:
-    """Estimate cost using configurable per-million-token prices.
-
-    Pricing is intentionally configuration-driven because public pricing and
-    enterprise contract pricing may differ.
-    """
+) -> tuple[float | None, float | None, float | None]:
+    """Resolve standard and cache-hit pricing for a provider/model pair."""
     settings = get_settings()
     model_key = model_name.lower()
     long_context_threshold = max(
@@ -57,9 +67,13 @@ def estimate_usage_cost(
 
     input_price = None
     output_price = None
+    cache_hit_factor = 1.0
 
     if provider == "glm5model" or provider == "glm5":
         if model_key.startswith("glm-5-turbo"):
+            cache_hit_factor = float(
+                getattr(settings, "GLM5_TURBO_CACHE_HIT_PRICE_FACTOR", 0.5) or 0.5
+            )
             if is_long_context:
                 input_price = settings.GLM5_TURBO_PRICE_LONG_INPUT_PER_MTOKENS
                 output_price = settings.GLM5_TURBO_PRICE_LONG_OUTPUT_PER_MTOKENS
@@ -67,6 +81,9 @@ def estimate_usage_cost(
                 input_price = settings.GLM5_TURBO_PRICE_INPUT_PER_MTOKENS
                 output_price = settings.GLM5_TURBO_PRICE_OUTPUT_PER_MTOKENS
         elif model_key.startswith("glm-5"):
+            cache_hit_factor = float(
+                getattr(settings, "GLM5_CACHE_HIT_PRICE_FACTOR", 0.5) or 0.5
+            )
             if is_long_context:
                 input_price = settings.GLM5_PRICE_LONG_INPUT_PER_MTOKENS
                 output_price = settings.GLM5_PRICE_LONG_OUTPUT_PER_MTOKENS
@@ -76,15 +93,98 @@ def estimate_usage_cost(
     elif provider == "minimaxmodel" or provider == "minimax":
         input_price = settings.MINIMAX_PRICE_INPUT_PER_MTOKENS
         output_price = settings.MINIMAX_PRICE_OUTPUT_PER_MTOKENS
+        cache_hit_factor = float(
+            getattr(settings, "MINIMAX_CACHE_HIT_PRICE_FACTOR", 1.0) or 1.0
+        )
 
     if input_price is None or output_price is None:
-        return 0.0
+        return None, None, None
 
-    return round(
-        (prompt_tokens / 1_000_000.0) * input_price
-        + (completion_tokens / 1_000_000.0) * output_price,
+    cached_input_price = input_price * max(cache_hit_factor, 0.0)
+    return input_price, output_price, cached_input_price
+
+
+def estimate_usage_costs(
+    provider: str,
+    model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_prompt_tokens: int = 0,
+) -> UsageCostBreakdown:
+    """Estimate both legacy and cache-aware costs for one usage event."""
+    normalized_prompt_tokens = max(int(prompt_tokens or 0), 0)
+    normalized_completion_tokens = max(int(completion_tokens or 0), 0)
+    normalized_total_tokens = normalized_prompt_tokens + normalized_completion_tokens
+    normalized_cached_prompt_tokens = min(
+        max(int(cached_prompt_tokens or 0), 0),
+        normalized_prompt_tokens,
+    )
+    billable_prompt_tokens = normalized_prompt_tokens - normalized_cached_prompt_tokens
+
+    input_price, output_price, cached_input_price = _resolve_pricing(
+        provider=provider,
+        model_name=model_name,
+        prompt_tokens=normalized_prompt_tokens,
+    )
+    if input_price is None or output_price is None or cached_input_price is None:
+        return UsageCostBreakdown(
+            prompt_tokens=normalized_prompt_tokens,
+            completion_tokens=normalized_completion_tokens,
+            total_tokens=normalized_total_tokens,
+            cached_prompt_tokens=normalized_cached_prompt_tokens,
+            billable_prompt_tokens=billable_prompt_tokens,
+            estimated_cost=0.0,
+            estimated_cost_cache_aware=0.0,
+            estimated_cost_savings=0.0,
+        )
+
+    estimated_cost = round(
+        (normalized_prompt_tokens / 1_000_000.0) * input_price
+        + (normalized_completion_tokens / 1_000_000.0) * output_price,
         6,
     )
+    estimated_cost_cache_aware = round(
+        (billable_prompt_tokens / 1_000_000.0) * input_price
+        + (normalized_cached_prompt_tokens / 1_000_000.0) * cached_input_price
+        + (normalized_completion_tokens / 1_000_000.0) * output_price,
+        6,
+    )
+    estimated_cost_savings = round(
+        max(estimated_cost - estimated_cost_cache_aware, 0.0),
+        6,
+    )
+
+    return UsageCostBreakdown(
+        prompt_tokens=normalized_prompt_tokens,
+        completion_tokens=normalized_completion_tokens,
+        total_tokens=normalized_total_tokens,
+        cached_prompt_tokens=normalized_cached_prompt_tokens,
+        billable_prompt_tokens=billable_prompt_tokens,
+        estimated_cost=estimated_cost,
+        estimated_cost_cache_aware=estimated_cost_cache_aware,
+        estimated_cost_savings=estimated_cost_savings,
+    )
+
+
+def estimate_usage_cost(
+    provider: str,
+    model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> float:
+    """Backward-compatible legacy cost estimate without cache discount."""
+    return estimate_usage_costs(
+        provider=provider,
+        model_name=model_name,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    ).estimated_cost
+
+
+def _cache_hit_ratio(prompt_tokens: int, cached_prompt_tokens: int) -> float:
+    if prompt_tokens <= 0:
+        return 0.0
+    return round(cached_prompt_tokens / prompt_tokens, 4)
 
 
 class LLMUsageService:
@@ -110,7 +210,8 @@ class LLMUsageService:
             conditions.append(LLMUsageRecord.created_at >= since)
         if entity_id is not None:
             conditions.append(
-                func.coalesce(AnalysisTask.entity_id, ChatSession.entity_id) == entity_id
+                func.coalesce(AnalysisTask.entity_id, ChatSession.entity_id)
+                == entity_id
             )
         return conditions
 
@@ -128,23 +229,36 @@ class LLMUsageService:
         extra_metadata: dict[str, Any] | None = None,
     ) -> LLMUsageRecord:
         provider, model_name = _resolve_model_metadata(model)
-
-        prompt_tokens = int(usage.prompt_tokens or 0)
-        completion_tokens = int(usage.completion_tokens or 0)
-        total_tokens = int(
-            usage.total_tokens
-            or (prompt_tokens + completion_tokens)
-        )
-        normalized_latency_ms = max(int(latency_ms or 0), 0)
-        estimated_cost = estimate_usage_cost(
+        cost_breakdown = estimate_usage_costs(
             provider=provider,
             model_name=model_name,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            prompt_tokens=int(usage.prompt_tokens or 0),
+            completion_tokens=int(usage.completion_tokens or 0),
+            cached_prompt_tokens=int(usage.cached_prompt_tokens or 0),
         )
+        prompt_tokens = cost_breakdown.prompt_tokens
+        completion_tokens = cost_breakdown.completion_tokens
+        total_tokens = int(usage.total_tokens or cost_breakdown.total_tokens)
+        cached_prompt_tokens = min(cost_breakdown.cached_prompt_tokens, prompt_tokens)
+        billable_prompt_tokens = min(
+            cost_breakdown.billable_prompt_tokens,
+            prompt_tokens,
+        )
+        normalized_latency_ms = max(int(latency_ms or 0), 0)
+        estimated_cost = cost_breakdown.estimated_cost
+        estimated_cost_cache_aware = cost_breakdown.estimated_cost_cache_aware
 
         session_uuid = _safe_uuid(session_id)
         task_uuid = _safe_uuid(task_id)
+
+        normalized_extra_metadata = dict(extra_metadata or {})
+        if usage.prompt_tokens_details:
+            normalized_extra_metadata.setdefault(
+                "prompt_tokens_details",
+                usage.prompt_tokens_details,
+            )
+        if usage.raw:
+            normalized_extra_metadata.setdefault("provider_usage", usage.raw)
 
         async with self.db.begin_nested():
             record = LLMUsageRecord(
@@ -159,9 +273,12 @@ class LLMUsageService:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
+                cached_prompt_tokens=cached_prompt_tokens,
+                billable_prompt_tokens=billable_prompt_tokens,
                 latency_ms=normalized_latency_ms,
                 estimated_cost=estimated_cost,
-                extra_metadata=extra_metadata,
+                estimated_cost_cache_aware=estimated_cost_cache_aware,
+                extra_metadata=normalized_extra_metadata or None,
             )
             self.db.add(record)
 
@@ -178,9 +295,16 @@ class LLMUsageService:
                     task.llm_prompt_tokens += prompt_tokens
                     task.llm_completion_tokens += completion_tokens
                     task.llm_total_tokens += total_tokens
+                    task.llm_cached_prompt_tokens += cached_prompt_tokens
+                    task.llm_billable_prompt_tokens += billable_prompt_tokens
                     task.llm_total_latency_ms += normalized_latency_ms
                     task.llm_estimated_cost = round(
                         float(task.llm_estimated_cost or 0.0) + estimated_cost,
+                        6,
+                    )
+                    task.llm_estimated_cost_cache_aware = round(
+                        float(task.llm_estimated_cost_cache_aware or 0.0)
+                        + estimated_cost_cache_aware,
                         6,
                     )
 
@@ -211,7 +335,12 @@ class LLMUsageService:
             select(
                 func.count(LLMUsageRecord.id),
                 func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.prompt_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.completion_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.cached_prompt_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.billable_prompt_tokens), 0),
                 func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
+                func.coalesce(func.sum(LLMUsageRecord.estimated_cost_cache_aware), 0.0),
                 func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
                 func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
                 func.count(func.distinct(LLMUsageRecord.model_name)),
@@ -226,12 +355,25 @@ class LLMUsageService:
         summary_row = (await self.db.execute(summary_stmt)).one()
         total_calls = int(summary_row[0] or 0)
         total_tokens = int(summary_row[1] or 0)
-        total_cost = round(float(summary_row[2] or 0.0), 6)
-        total_latency_ms = int(summary_row[3] or 0)
-        avg_latency_ms = round(float(summary_row[4] or 0.0), 2)
-        unique_models = int(summary_row[5] or 0)
-        last_call_at = summary_row[6]
-        first_call_at = summary_row[7]
+        total_prompt_tokens = int(summary_row[2] or 0)
+        total_completion_tokens = int(summary_row[3] or 0)
+        total_cached_prompt_tokens = int(summary_row[4] or 0)
+        total_billable_prompt_tokens = int(summary_row[5] or 0)
+        total_cost = round(float(summary_row[6] or 0.0), 6)
+        total_cost_cache_aware = round(float(summary_row[7] or 0.0), 6)
+        total_latency_ms = int(summary_row[8] or 0)
+        avg_latency_ms = round(float(summary_row[9] or 0.0), 2)
+        unique_models = int(summary_row[10] or 0)
+        last_call_at = summary_row[11]
+        first_call_at = summary_row[12]
+        cache_hit_ratio = _cache_hit_ratio(
+            total_prompt_tokens,
+            total_cached_prompt_tokens,
+        )
+        estimated_savings = round(
+            max(total_cost - total_cost_cache_aware, 0.0),
+            6,
+        )
 
         by_model_stmt = (
             select(
@@ -239,7 +381,10 @@ class LLMUsageService:
                 LLMUsageRecord.model_name,
                 func.count(LLMUsageRecord.id),
                 func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.prompt_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.cached_prompt_tokens), 0),
                 func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
+                func.coalesce(func.sum(LLMUsageRecord.estimated_cost_cache_aware), 0.0),
                 func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
                 func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
             )
@@ -262,7 +407,10 @@ class LLMUsageService:
                 LLMUsageRecord.step_name,
                 func.count(LLMUsageRecord.id),
                 func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.prompt_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.cached_prompt_tokens), 0),
                 func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
+                func.coalesce(func.sum(LLMUsageRecord.estimated_cost_cache_aware), 0.0),
                 func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
                 func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
             )
@@ -284,7 +432,10 @@ class LLMUsageService:
                 LLMUsageRecord.skill_key,
                 func.count(LLMUsageRecord.id),
                 func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.prompt_tokens), 0),
+                func.coalesce(func.sum(LLMUsageRecord.cached_prompt_tokens), 0),
                 func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
+                func.coalesce(func.sum(LLMUsageRecord.estimated_cost_cache_aware), 0.0),
                 func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
                 func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
             )
@@ -322,7 +473,14 @@ class LLMUsageService:
                 "entity_id": str(entity_id) if entity_id else None,
                 "call_count": total_calls,
                 "total_tokens": total_tokens,
+                "prompt_tokens": total_prompt_tokens,
+                "completion_tokens": total_completion_tokens,
+                "cached_prompt_tokens": total_cached_prompt_tokens,
+                "billable_prompt_tokens": total_billable_prompt_tokens,
+                "cache_hit_ratio": cache_hit_ratio,
                 "total_cost": total_cost,
+                "total_cost_cache_aware": total_cost_cache_aware,
+                "estimated_savings": estimated_savings,
                 "total_latency_ms": total_latency_ms,
                 "avg_latency_ms": avg_latency_ms,
                 "unique_models": unique_models,
@@ -335,11 +493,40 @@ class LLMUsageService:
                     "model_name": model_name,
                     "call_count": int(call_count or 0),
                     "total_tokens": int(total_tokens or 0),
+                    "prompt_tokens": int(prompt_tokens or 0),
+                    "cached_prompt_tokens": int(cached_prompt_tokens or 0),
+                    "cache_hit_ratio": _cache_hit_ratio(
+                        int(prompt_tokens or 0),
+                        int(cached_prompt_tokens or 0),
+                    ),
                     "total_cost": round(float(total_cost or 0.0), 6),
+                    "total_cost_cache_aware": round(
+                        float(total_cost_cache_aware or 0.0),
+                        6,
+                    ),
+                    "estimated_savings": round(
+                        max(
+                            float(total_cost or 0.0)
+                            - float(total_cost_cache_aware or 0.0),
+                            0.0,
+                        ),
+                        6,
+                    ),
                     "total_latency_ms": int(total_latency_ms or 0),
                     "avg_latency_ms": round(float(avg_latency_ms or 0.0), 2),
                 }
-                for provider, model_name, call_count, total_tokens, total_cost, total_latency_ms, avg_latency_ms in by_model_rows
+                for (
+                    provider,
+                    model_name,
+                    call_count,
+                    total_tokens,
+                    prompt_tokens,
+                    cached_prompt_tokens,
+                    total_cost,
+                    total_cost_cache_aware,
+                    total_latency_ms,
+                    avg_latency_ms,
+                ) in by_model_rows
             ],
             "by_step": [
                 {
@@ -347,22 +534,79 @@ class LLMUsageService:
                     "step_name": step_name,
                     "call_count": int(call_count or 0),
                     "total_tokens": int(total_tokens or 0),
+                    "prompt_tokens": int(prompt_tokens or 0),
+                    "cached_prompt_tokens": int(cached_prompt_tokens or 0),
+                    "cache_hit_ratio": _cache_hit_ratio(
+                        int(prompt_tokens or 0),
+                        int(cached_prompt_tokens or 0),
+                    ),
                     "total_cost": round(float(total_cost or 0.0), 6),
+                    "total_cost_cache_aware": round(
+                        float(total_cost_cache_aware or 0.0),
+                        6,
+                    ),
+                    "estimated_savings": round(
+                        max(
+                            float(total_cost or 0.0)
+                            - float(total_cost_cache_aware or 0.0),
+                            0.0,
+                        ),
+                        6,
+                    ),
                     "total_latency_ms": int(total_latency_ms or 0),
                     "avg_latency_ms": round(float(avg_latency_ms or 0.0), 2),
                 }
-                for step, step_name, call_count, total_tokens, total_cost, total_latency_ms, avg_latency_ms in by_step_rows
+                for (
+                    step,
+                    step_name,
+                    call_count,
+                    total_tokens,
+                    prompt_tokens,
+                    cached_prompt_tokens,
+                    total_cost,
+                    total_cost_cache_aware,
+                    total_latency_ms,
+                    avg_latency_ms,
+                ) in by_step_rows
             ],
             "by_skill": [
                 {
                     "skill_key": skill_key,
                     "call_count": int(call_count or 0),
                     "total_tokens": int(total_tokens or 0),
+                    "prompt_tokens": int(prompt_tokens or 0),
+                    "cached_prompt_tokens": int(cached_prompt_tokens or 0),
+                    "cache_hit_ratio": _cache_hit_ratio(
+                        int(prompt_tokens or 0),
+                        int(cached_prompt_tokens or 0),
+                    ),
                     "total_cost": round(float(total_cost or 0.0), 6),
+                    "total_cost_cache_aware": round(
+                        float(total_cost_cache_aware or 0.0),
+                        6,
+                    ),
+                    "estimated_savings": round(
+                        max(
+                            float(total_cost or 0.0)
+                            - float(total_cost_cache_aware or 0.0),
+                            0.0,
+                        ),
+                        6,
+                    ),
                     "total_latency_ms": int(total_latency_ms or 0),
                     "avg_latency_ms": round(float(avg_latency_ms or 0.0), 2),
                 }
-                for skill_key, call_count, total_tokens, total_cost, total_latency_ms, avg_latency_ms in by_skill_rows
+                for (
+                    skill_key,
+                    call_count,
+                    total_tokens,
+                    prompt_tokens,
+                    cached_prompt_tokens,
+                    total_cost,
+                    total_cost_cache_aware,
+                    total_latency_ms,
+                    avg_latency_ms,
+                ) in by_skill_rows
             ],
             "recent_calls": [
                 {
@@ -378,9 +622,26 @@ class LLMUsageService:
                     "prompt_tokens": record.prompt_tokens,
                     "completion_tokens": record.completion_tokens,
                     "total_tokens": record.total_tokens,
+                    "cached_prompt_tokens": record.cached_prompt_tokens,
+                    "billable_prompt_tokens": record.billable_prompt_tokens,
+                    "cache_hit_ratio": _cache_hit_ratio(
+                        record.prompt_tokens,
+                        record.cached_prompt_tokens,
+                    ),
                     "latency_ms": record.latency_ms,
                     "estimated_cost": record.estimated_cost,
-                    "created_at": record.created_at.isoformat() if record.created_at else None,
+                    "estimated_cost_cache_aware": record.estimated_cost_cache_aware,
+                    "estimated_savings": round(
+                        max(
+                            float(record.estimated_cost or 0.0)
+                            - float(record.estimated_cost_cache_aware or 0.0),
+                            0.0,
+                        ),
+                        6,
+                    ),
+                    "created_at": (
+                        record.created_at.isoformat() if record.created_at else None
+                    ),
                 }
                 for record, brand_name, session_title in recent_rows
             ],
