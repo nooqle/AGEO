@@ -30,7 +30,11 @@ from app.workflow.events import (
 from app.workflow.nodes import get_llm_model_compat, parse_llm_response
 from app.workflow.nodes_a4 import PLATFORMS
 from app.workflow.nodes_streaming import call_llm_streaming
-from app.workflow.skill_state import build_skill_result_update
+from app.workflow.skill_state import (
+    apply_skill_prompt_context,
+    build_skill_result_update,
+)
+from app.workflow.skill_fact_snapshot import build_skill_fact_snapshot
 from app.workflow.state import AgentState
 from app.workflow.summaries import generate_a5_summary
 
@@ -49,11 +53,12 @@ async def a5_analytics_node(state: AgentState) -> Command:
     """
     session_id = state["session_id"]
     entity_id = state.get("entity_id")
-    brand_profile = state.get("brand_profile") or {}
-    fetch_results = state.get("fetch_results") or []
-    competitors = state.get("competitors") or []
+    facts = build_skill_fact_snapshot(state)
+    brand_profile = facts.brand_profile
+    fetch_results = facts.fetch_results
+    competitors = facts.competitors
     marketing_personas = state.get("marketing_personas")
-    analysis_mode = state.get("analysis_mode") or "persona"
+    analysis_mode = facts.analysis_mode or "persona"
     is_baseline = analysis_mode == "baseline"
 
     step_message = "开始基线全景分析..." if is_baseline else "开始分析抓取数据..."
@@ -202,15 +207,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
             # --- Call 1: Core report sections ---
             core_prompt = a5_prompt._get_a5_core_prompt(report_type=analysis_mode)
-            skill_prompt_overlay = str(
-                state.get("current_skill_prompt_overlay") or ""
-            ).strip()
-            if skill_prompt_overlay:
-                core_prompt = (
-                    f"{core_prompt}\n\n"
-                    "[Skill Profile Overlay]\n"
-                    f"{skill_prompt_overlay}"
-                )
+            core_prompt = apply_skill_prompt_context(state, core_prompt)
             response1 = await call_llm_streaming(
                 session_id=session_id,
                 model=model,

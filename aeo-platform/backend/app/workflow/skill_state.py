@@ -24,7 +24,9 @@ def build_skill_result_update(
     history = list(state.get("skill_history") or [])
     entry = {
         "skill_key": skill_key,
-        "skill_profile": state.get("current_skill_profile"),
+        "skill_family": state.get("current_skill_family") or skill_key,
+        "skill_package_key": state.get("current_skill_package_key"),
+        "skill_package_name": state.get("current_skill_package_name"),
         "tool_name": tool_name,
         "status": status,
         "summary": summary,
@@ -39,3 +41,20 @@ def build_skill_result_update(
         "last_skill_result": entry,
         "skill_history": history,
     }
+
+
+def apply_skill_prompt_context(state: AgentState, prompt: str) -> str:
+    """Append package guidance and profile overlay to an executor prompt."""
+
+    sections: list[str] = []
+    package_context = str(state.get("current_skill_package_context") or "").strip()
+    if package_context:
+        sections.append(f"[Skill Package]\n{package_context}")
+
+    profile_overlay = str(state.get("current_skill_prompt_overlay") or "").strip()
+    if profile_overlay:
+        sections.append(f"[Skill Profile Overlay]\n{profile_overlay}")
+
+    if not sections:
+        return prompt
+    return f"{prompt}\n\n" + "\n\n".join(sections)

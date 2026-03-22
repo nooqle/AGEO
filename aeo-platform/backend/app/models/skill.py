@@ -8,7 +8,15 @@ from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -44,6 +52,8 @@ class SkillConfirmationPolicy(str, PyEnum):
 
 class SkillScopeKind(str, PyEnum):
     GLOBAL = "global"
+    WORKSPACE = "workspace"
+    ENTITY = "entity"
 
 
 @dataclass(frozen=True)
@@ -73,26 +83,40 @@ class SkillDefinition(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    skill_key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
+    skill_key: Mapped[str] = mapped_column(
+        String(120), unique=True, nullable=False, index=True
+    )
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     executor_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     executor_ref: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     template_skill_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    intent_signals: Mapped[list[str]] = mapped_column(JSONText, default=list, nullable=False)
-    prerequisites: Mapped[list[str]] = mapped_column(JSONText, default=list, nullable=False)
-    artifact_types: Mapped[list[str]] = mapped_column(JSONText, default=list, nullable=False)
+    intent_signals: Mapped[list[str]] = mapped_column(
+        JSONText, default=list, nullable=False
+    )
+    prerequisites: Mapped[list[str]] = mapped_column(
+        JSONText, default=list, nullable=False
+    )
+    artifact_types: Mapped[list[str]] = mapped_column(
+        JSONText, default=list, nullable=False
+    )
     default_params: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
     prompt_overlay: Mapped[str | None] = mapped_column(Text, nullable=True)
-    cost_class: Mapped[str] = mapped_column(String(16), default=SkillCostClass.MEDIUM.value, nullable=False)
-    latency_class: Mapped[str] = mapped_column(String(16), default=SkillLatencyClass.MEDIUM.value, nullable=False)
+    cost_class: Mapped[str] = mapped_column(
+        String(16), default=SkillCostClass.MEDIUM.value, nullable=False
+    )
+    latency_class: Mapped[str] = mapped_column(
+        String(16), default=SkillLatencyClass.MEDIUM.value, nullable=False
+    )
     confirmation_policy: Mapped[str] = mapped_column(
         String(16),
         default=SkillConfirmationPolicy.OPTIONAL.value,
         nullable=False,
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    is_builtin: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -150,7 +174,9 @@ class SkillVersion(Base):
         nullable=False,
     )
 
-    skill: Mapped["SkillDefinition"] = relationship("SkillDefinition", back_populates="versions")
+    skill: Mapped["SkillDefinition"] = relationship(
+        "SkillDefinition", back_populates="versions"
+    )
 
 
 class SkillAssignment(Base):
@@ -194,4 +220,6 @@ class SkillAssignment(Base):
         nullable=False,
     )
 
-    skill: Mapped["SkillDefinition"] = relationship("SkillDefinition", back_populates="assignments")
+    skill: Mapped["SkillDefinition"] = relationship(
+        "SkillDefinition", back_populates="assignments"
+    )

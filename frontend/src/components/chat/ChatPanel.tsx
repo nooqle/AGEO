@@ -42,8 +42,11 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const autoStartBrand = searchParams.get('brand');
+  const autoStartDraft = searchParams.get('draft');
+  const shouldAutoSendDraft = searchParams.get('autosend') === '1';
   const autoSentRef = useRef(false);
-  const [isAutoStartingBrand, setIsAutoStartingBrand] = useState(Boolean(searchParams.get('brand')));
+  const [isAutoStartingPrompt, setIsAutoStartingPrompt] = useState(Boolean(autoStartBrand || autoStartDraft));
   const safeToLeaveShownRef = useRef(false);
   const [showSafeToLeave, setShowSafeToLeave] = useState(false);
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
@@ -456,23 +459,18 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
   // Auto-send brand name when navigating from Dashboard with ?brand= param
   useEffect(() => {
-    const brand = searchParams.get('brand');
+    const draft = autoStartDraft?.trim() || '';
+    const brand = autoStartBrand?.trim() || '';
+    const autoMessage = draft || brand;
+    const shouldAutoSendExistingDraft = Boolean(draft && shouldAutoSendDraft && messages.length > 0);
 
-    if (!brand) {
-      setIsAutoStartingBrand(false);
-      return;
-    }
-
-    if (messages.length > 0) {
-      setIsAutoStartingBrand(false);
-      if (autoSentRef.current) {
-        router.replace(`/chat/${sessionId}`);
-      }
+    if (!autoMessage) {
+      setIsAutoStartingPrompt(false);
       return;
     }
 
     if (isLoadingHistory) {
-      setIsAutoStartingBrand(true);
+      setIsAutoStartingPrompt(true);
       return;
     }
 
@@ -480,13 +478,31 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       return;
     }
 
-    setIsAutoStartingBrand(true);
+    if (messages.length > 0 && !shouldAutoSendExistingDraft) {
+      setIsAutoStartingPrompt(false);
+      if (draft) {
+        setInputValue(draft);
+      }
+      if (autoSentRef.current || draft) {
+        router.replace(`/chat/${sessionId}`);
+      }
+      return;
+    }
+
+    if (draft && !shouldAutoSendDraft && messages.length === 0) {
+      setInputValue(draft);
+      setIsAutoStartingPrompt(false);
+      router.replace(`/chat/${sessionId}`);
+      return;
+    }
+
+    setIsAutoStartingPrompt(true);
 
     if (!isConnected) {
       const fallbackTimer = setTimeout(() => {
         if (!autoSentRef.current) {
-          setIsAutoStartingBrand(false);
-          setInputValue(brand);
+          setIsAutoStartingPrompt(false);
+          setInputValue(autoMessage);
           router.replace(`/chat/${sessionId}`);
           toast.error('自动启动分析失败，请点击发送后重试');
         }
@@ -496,13 +512,23 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     autoSentRef.current = true;
     const timer = setTimeout(() => {
-      handleSendMessage(brand);
-      setIsAutoStartingBrand(false);
+      handleSendMessage(autoMessage);
+      setIsAutoStartingPrompt(false);
       router.replace(`/chat/${sessionId}`);
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [searchParams, messages.length, isConnected, isLoadingHistory, handleSendMessage, router, sessionId]);
+  }, [
+    autoStartBrand,
+    autoStartDraft,
+    shouldAutoSendDraft,
+    messages.length,
+    isConnected,
+    isLoadingHistory,
+    handleSendMessage,
+    router,
+    sessionId,
+  ]);
 
   // Handle stopping execution
   const handleStopExecution = useCallback(() => {
@@ -621,8 +647,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
   // Determine if we should show the empty state with example brands
   // Skip welcome screen when: loading history, has ?brand= param (auto-starting), or already executing
-  const hasBrandParam = !!searchParams.get('brand');
-  const showExampleBrands = messages.length === 0 && !isAgentExecuting && !isLoadingHistory && !isAutoStartingBrand && !hasBrandParam;
+  const hasAutoStartParam = Boolean(autoStartBrand || autoStartDraft);
+  const showExampleBrands = messages.length === 0 && !isAgentExecuting && !isLoadingHistory && !isAutoStartingPrompt && !hasAutoStartParam;
 
   const inputDisabled = Boolean(!isConnected);
 
@@ -782,14 +808,18 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           )}
 
           {/* Loading state when entering from brand card */}
-          {messages.length === 0 && (isLoadingHistory || isAutoStartingBrand) && !showExampleBrands && (
+          {messages.length === 0 && (isLoadingHistory || isAutoStartingPrompt) && !showExampleBrands && (
             <div className="flex flex-col items-center justify-center py-20">
               <div
                 className="animate-spin rounded-full h-8 w-8 border-2 mb-4"
                 style={{ borderColor: 'var(--border-subtle)', borderTopColor: 'var(--color-primary)' }}
               />
               <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                {hasBrandParam ? `正在为「${searchParams.get('brand')}」启动分析...` : '加载对话历史...'}
+                {autoStartDraft
+                  ? '正在为当前看板准备 AI 解读...'
+                  : autoStartBrand
+                  ? `正在为「${autoStartBrand}」启动分析...`
+                  : '加载对话历史...'}
               </p>
             </div>
           )}

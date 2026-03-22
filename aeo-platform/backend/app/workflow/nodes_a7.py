@@ -13,6 +13,7 @@ from langgraph.types import Command
 
 from app.workflow.a7.confidence_signal import generate_confidence_signal_artifact
 from app.workflow.events import send_error_event, send_progress_event
+from app.workflow.skill_fact_snapshot import build_skill_fact_snapshot
 from app.workflow.skill_state import build_skill_result_update
 from app.workflow.state import AgentState
 
@@ -22,7 +23,8 @@ logger = logging.getLogger(__name__)
 async def a7_confidence_signal_node(state: AgentState) -> Command:
     """Generate a confidence-signal artifact from existing fetch results."""
     session_id = state["session_id"]
-    fetch_results = state.get("fetch_results") or state.get("baseline_fetch_results") or []
+    facts = build_skill_fact_snapshot(state)
+    fetch_results = facts.confidence_fetch_results
 
     if not fetch_results:
         message = "当前会话中还没有可评估的引用数据，请先完成答案抓取或分析报告生成。"
@@ -49,8 +51,8 @@ async def a7_confidence_signal_node(state: AgentState) -> Command:
         await generate_confidence_signal_artifact(
             session_id=session_id,
             fetch_results=fetch_results,
-            brand_profile=state.get("brand_profile"),
-            competitors=state.get("competitors"),
+            brand_profile=facts.brand_profile,
+            competitors=facts.competitors,
         )
 
         await send_progress_event(

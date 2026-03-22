@@ -33,6 +33,8 @@ class SkillAssignmentResponse(BaseModel):
 class SkillResponse(BaseModel):
     id: str
     skill_key: str
+    family_skill_key: str
+    family_display_name: str
     display_name: str
     description: str
     executor_kind: str
@@ -50,7 +52,12 @@ class SkillResponse(BaseModel):
     assignment_enabled: bool
     effective_enabled: bool
     is_builtin: bool
+    is_profile: bool
     version: int
+    package_key: str | None = None
+    package_display_name: str | None = None
+    package_description: str | None = None
+    package_path: str | None = None
     created_at: datetime
     updated_at: datetime
     assignments: list[SkillAssignmentResponse] = Field(default_factory=list)
@@ -67,6 +74,8 @@ class SkillCreateRequest(BaseModel):
     default_params: dict[str, Any] | None = None
     prompt_overlay: str | None = Field(default=None, max_length=8000)
     enabled: bool = True
+    assignment_scope_kind: str = Field(default="global", max_length=16)
+    assignment_scope_ref: str | None = Field(default=None, max_length=120)
 
 
 class SkillUpdateRequest(BaseModel):
@@ -75,9 +84,10 @@ class SkillUpdateRequest(BaseModel):
     default_params: dict[str, Any] | None = None
     prompt_overlay: str | None = Field(default=None, max_length=8000)
     enabled: bool | None = None
+    assignment_scope_kind: str | None = Field(default=None, max_length=16)
+    assignment_scope_ref: str | None = Field(default=None, max_length=120)
 
 
 class SkillPublishResponse(BaseModel):
     skill: SkillResponse
     published_version: SkillVersionResponse
-

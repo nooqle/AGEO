@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,6 +22,10 @@ from app.models.skill import (
     SkillLatencyClass,
     SkillScopeKind,
     SkillVersion,
+)
+from app.services.skill_package_service import (
+    SkillPackageManifest,
+    skill_package_service,
 )
 
 
@@ -90,14 +95,29 @@ BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
 BUILTIN_SKILL_KEY_SET = {item.skill_key for item in BUILTIN_SKILL_SPECS}
 _BUILTIN_MAP = {item.skill_key: item for item in BUILTIN_SKILL_SPECS}
 
+_SCOPE_PRIORITY = {
+    SkillScopeKind.GLOBAL.value: 0,
+    SkillScopeKind.WORKSPACE.value: 1,
+    SkillScopeKind.ENTITY.value: 2,
+}
+
+
+@dataclass(frozen=True)
+class SkillScopeContext:
+    workspace_ref: str | None = None
+    entity_ref: str | None = None
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _serialize_config(skill: SkillDefinition) -> dict[str, Any]:
+    family_skill_key = _family_key_for_skill(skill)
+    package = skill_package_service.resolve_family_package(family_skill_key)
     return {
         "skill_key": skill.skill_key,
+        "family_skill_key": family_skill_key,
         "display_name": skill.display_name,
         "description": skill.description,
         "executor_kind": skill.executor_kind,
@@ -113,22 +133,129 @@ def _serialize_config(skill: SkillDefinition) -> dict[str, Any]:
         "confirmation_policy": skill.confirmation_policy,
         "enabled": bool(skill.enabled),
         "is_builtin": bool(skill.is_builtin),
+        "package_key": package.package_key if package else None,
+        "package_display_name": package.display_name if package else None,
         "version": int(skill.version or 1),
     }
 
 
-def _assignment_enabled(skill: SkillDefinition) -> bool:
+def _family_key_for_skill(skill: SkillDefinition) -> str:
+    return skill.template_skill_key or skill.skill_key
+
+
+def _normalize_scope_kind(scope_kind: str | None) -> str:
+    value = str(scope_kind or SkillScopeKind.GLOBAL.value).strip().lower()
+    if value not in _SCOPE_PRIORITY:
+        raise ValueError(f"Unsupported assignment_scope_kind: {scope_kind}")
+    return value
+
+
+def _normalize_scope_ref(scope_kind: str, scope_ref: str | None) -> str | None:
+    if scope_kind == SkillScopeKind.GLOBAL.value:
+        return None
+    normalized = str(scope_ref or "").strip()
+    if not normalized:
+        raise ValueError(
+            f"assignment_scope_ref is required when scope_kind={scope_kind}"
+        )
+    return normalized
+
+
+def _matches_scope(
+    assignment: SkillAssignment,
+    scope_context: SkillScopeContext | None,
+) -> bool:
+    if assignment.scope_kind == SkillScopeKind.GLOBAL.value:
+        return True
+    if scope_context is None:
+        return False
+    if assignment.scope_kind == SkillScopeKind.WORKSPACE.value:
+        return bool(
+            scope_context.workspace_ref
+            and assignment.scope_ref == scope_context.workspace_ref
+        )
+    if assignment.scope_kind == SkillScopeKind.ENTITY.value:
+        return bool(
+            scope_context.entity_ref
+            and assignment.scope_ref == scope_context.entity_ref
+        )
+    return False
+
+
+def _resolve_assignment(
+    skill: SkillDefinition,
+    scope_context: SkillScopeContext | None,
+) -> SkillAssignment | None:
     assignments = skill.assignments or []
     if not assignments:
-        return False
-    return any(assignment.enabled for assignment in assignments)
+        return None
+    if scope_context is None:
+        enabled_assignments = [
+            assignment for assignment in assignments if assignment.enabled
+        ]
+        if not enabled_assignments:
+            return None
+        return max(
+            enabled_assignments,
+            key=lambda assignment: (
+                _SCOPE_PRIORITY.get(assignment.scope_kind, -1),
+                assignment.updated_at or assignment.created_at,
+            ),
+        )
+    matched = [
+        assignment
+        for assignment in assignments
+        if _matches_scope(assignment, scope_context)
+    ]
+    if not matched:
+        return None
+    return max(
+        matched,
+        key=lambda assignment: (
+            _SCOPE_PRIORITY.get(assignment.scope_kind, -1),
+            assignment.updated_at or assignment.created_at,
+        ),
+    )
+
+
+def _assignment_enabled(
+    skill: SkillDefinition,
+    scope_context: SkillScopeContext | None = None,
+) -> bool:
+    resolved = _resolve_assignment(skill, scope_context)
+    return bool(resolved and resolved.enabled)
+
+
+def _profile_sort_key(
+    skill: SkillDefinition,
+    scope_context: SkillScopeContext | None = None,
+) -> tuple[int, datetime, str]:
+    assignment = _resolve_assignment(skill, scope_context)
+    updated_at = skill.updated_at or skill.created_at or _utcnow()
+    if assignment is not None:
+        updated_at = assignment.updated_at or assignment.created_at or updated_at
+    priority = (
+        _SCOPE_PRIORITY.get(assignment.scope_kind, -1) if assignment is not None else -1
+    )
+    return (
+        priority,
+        updated_at,
+        skill.display_name or skill.skill_key,
+    )
 
 
 def _serialize_skill(skill: SkillDefinition) -> dict[str, Any]:
+    family_skill_key = _family_key_for_skill(skill)
+    family_spec = _BUILTIN_MAP.get(family_skill_key)
+    package = skill_package_service.resolve_family_package(family_skill_key)
     assignment_enabled = _assignment_enabled(skill)
     return {
         "id": str(skill.id),
         "skill_key": skill.skill_key,
+        "family_skill_key": family_skill_key,
+        "family_display_name": (
+            family_spec.display_name if family_spec else skill.display_name
+        ),
         "display_name": skill.display_name,
         "description": skill.description,
         "executor_kind": skill.executor_kind,
@@ -146,7 +273,12 @@ def _serialize_skill(skill: SkillDefinition) -> dict[str, Any]:
         "assignment_enabled": assignment_enabled,
         "effective_enabled": bool(skill.enabled and assignment_enabled),
         "is_builtin": bool(skill.is_builtin),
+        "is_profile": not bool(skill.is_builtin),
         "version": int(skill.version or 1),
+        "package_key": package.package_key if package else None,
+        "package_display_name": package.display_name if package else None,
+        "package_description": package.description if package else None,
+        "package_path": package.skill_md_path if package else None,
         "created_at": skill.created_at,
         "updated_at": skill.updated_at,
         "assignments": [
@@ -176,19 +308,24 @@ def _profile_parameter(profiles: list[SkillDefinition]) -> dict[str, Any]:
     }
 
 
+def _with_package_hint(
+    description: str,
+    package: SkillPackageManifest | None,
+) -> str:
+    if package is None or not package.tool_hint:
+        return description
+    return f"{description} 运行时会按需加载 Package：{package.display_name}。{package.tool_hint}"
+
+
 def _build_analysis_report_tool(
-    skill: SkillDefinition,
+    skill: SkillDefinition | BuiltinSkillSpec,
     *,
     profiles: list[SkillDefinition] | None = None,
+    package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
-    description = skill.description
+    description = _with_package_hint(skill.description, package)
     if skill.prompt_overlay:
         description = f"{description} 当前策略补充：{skill.prompt_overlay}"
-    if profiles:
-        description = (
-            f"{description} 当前存在 {len(profiles)} 个可选 Skill Profile，"
-            "如需使用配置化变体，请填写 skill_profile。"
-        )
     properties: dict[str, Any] = {
         "report_focus": {
             "type": "string",
@@ -200,8 +337,6 @@ def _build_analysis_report_tool(
             "description": "报告类型：baseline=行业基线报告, persona=场景分析报告（默认）",
         },
     }
-    if profiles:
-        properties["skill_profile"] = _profile_parameter(profiles)
     return {
         "name": skill.skill_key,
         "description": description,
@@ -213,44 +348,33 @@ def _build_analysis_report_tool(
 
 
 def _build_confidence_tool(
-    skill: SkillDefinition,
+    skill: SkillDefinition | BuiltinSkillSpec,
     *,
     profiles: list[SkillDefinition] | None = None,
+    package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
-    description = skill.description
+    description = _with_package_hint(skill.description, package)
     if skill.prompt_overlay:
         description = f"{description} 当前策略补充：{skill.prompt_overlay}"
-    if profiles:
-        description = (
-            f"{description} 当前存在 {len(profiles)} 个可选 Skill Profile，"
-            "如需使用配置化变体，请填写 skill_profile。"
-        )
-    properties: dict[str, Any] = {}
-    if profiles:
-        properties["skill_profile"] = _profile_parameter(profiles)
     return {
         "name": skill.skill_key,
         "description": description,
         "parameters": {
             "type": "object",
-            "properties": properties,
+            "properties": {},
         },
     }
 
 
 def _build_post_analysis_tool(
-    skill: SkillDefinition,
+    skill: SkillDefinition | BuiltinSkillSpec,
     *,
     profiles: list[SkillDefinition] | None = None,
+    package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
-    description = skill.description
+    description = _with_package_hint(skill.description, package)
     if skill.prompt_overlay:
         description = f"{description} 当前策略补充：{skill.prompt_overlay}"
-    if profiles:
-        description = (
-            f"{description} 当前存在 {len(profiles)} 个可选 Skill Profile，"
-            "如需使用配置化变体，请填写 skill_profile。"
-        )
     properties: dict[str, Any] = {
         "analysis_mode": {
             "type": "string",
@@ -280,8 +404,6 @@ def _build_post_analysis_tool(
             "description": "局部重抓时的采集模式（默认 fast）",
         },
     }
-    if profiles:
-        properties["skill_profile"] = _profile_parameter(profiles)
     return {
         "name": skill.skill_key,
         "description": description,
@@ -293,26 +415,51 @@ def _build_post_analysis_tool(
 
 
 def build_skill_tool_definition(
-    skill: SkillDefinition,
+    skill: SkillDefinition | BuiltinSkillSpec,
     *,
     profiles: list[SkillDefinition] | None = None,
+    package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
     if skill.executor_ref == "a5_data_analytics":
-        return _build_analysis_report_tool(skill, profiles=profiles)
+        return _build_analysis_report_tool(skill, profiles=profiles, package=package)
     if skill.executor_ref == "a7_confidence_signal":
-        return _build_confidence_tool(skill, profiles=profiles)
+        return _build_confidence_tool(skill, profiles=profiles, package=package)
     if skill.executor_ref == "post_analysis_executor":
-        return _build_post_analysis_tool(skill, profiles=profiles)
+        return _build_post_analysis_tool(skill, profiles=profiles, package=package)
     raise ValueError(f"Unsupported skill executor_ref: {skill.executor_ref}")
 
 
 def build_builtin_skill_tool_definitions() -> list[dict[str, Any]]:
-    return [build_skill_tool_definition(spec) for spec in BUILTIN_SKILL_SPECS]
+    definitions: list[dict[str, Any]] = []
+    for spec in BUILTIN_SKILL_SPECS:
+        package = skill_package_service.resolve_family_package(spec.skill_key)
+        definitions.append(build_skill_tool_definition(spec, package=package))
+    return definitions
 
 
 class SkillRegistryService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def _replace_assignments(
+        self,
+        skill: SkillDefinition,
+        *,
+        scope_kind: str,
+        scope_ref: str | None,
+        enabled: bool,
+    ) -> None:
+        assignments = list(skill.assignments or [])
+        for assignment in assignments:
+            await self.db.delete(assignment)
+        replacement = SkillAssignment(
+            skill_id=skill.id,
+            scope_kind=scope_kind,
+            scope_ref=scope_ref,
+            enabled=enabled,
+        )
+        skill.assignments = [replacement]
+        self.db.add(replacement)
 
     async def ensure_builtin_skills(self) -> None:
         for spec in BUILTIN_SKILL_SPECS:
@@ -421,7 +568,11 @@ class SkillRegistryService:
 
         await self.db.commit()
 
-    async def list_skills(self) -> list[dict[str, Any]]:
+    async def list_skills(
+        self,
+        *,
+        builtin_only: bool = True,
+    ) -> list[dict[str, Any]]:
         await self.ensure_builtin_skills()
         stmt = (
             select(SkillDefinition)
@@ -433,11 +584,16 @@ class SkillRegistryService:
                 SkillDefinition.is_builtin.desc(), SkillDefinition.display_name.asc()
             )
         )
+        if builtin_only:
+            stmt = stmt.where(SkillDefinition.is_builtin.is_(True))
         result = await self.db.execute(stmt)
         skills = result.scalars().all()
         return [_serialize_skill(skill) for skill in skills]
 
-    async def list_enabled_public_skills(self) -> list[SkillDefinition]:
+    async def list_enabled_public_skills(
+        self,
+        scope_context: SkillScopeContext | None = None,
+    ) -> list[SkillDefinition]:
         await self.ensure_builtin_skills()
         stmt = (
             select(SkillDefinition)
@@ -449,13 +605,21 @@ class SkillRegistryService:
         )
         result = await self.db.execute(stmt)
         skills = result.scalars().all()
-        return [
-            skill for skill in skills if skill.enabled and _assignment_enabled(skill)
+        filtered = [
+            skill
+            for skill in skills
+            if skill.enabled and _assignment_enabled(skill, scope_context)
         ]
+        return sorted(
+            filtered,
+            key=lambda item: _profile_sort_key(item, scope_context),
+            reverse=True,
+        )
 
     async def list_enabled_profiles_for_template(
         self,
         template_skill_key: str,
+        scope_context: SkillScopeContext | None = None,
     ) -> list[SkillDefinition]:
         stmt = (
             select(SkillDefinition)
@@ -469,17 +633,20 @@ class SkillRegistryService:
         result = await self.db.execute(stmt)
         skills = result.scalars().all()
         return [
-            skill for skill in skills if skill.enabled and _assignment_enabled(skill)
+            skill
+            for skill in skills
+            if skill.enabled and _assignment_enabled(skill, scope_context)
         ]
 
-    async def get_tool_definitions(self) -> list[dict[str, Any]]:
-        skills = await self.list_enabled_public_skills()
+    async def get_tool_definitions(
+        self,
+        scope_context: SkillScopeContext | None = None,
+    ) -> list[dict[str, Any]]:
+        skills = await self.list_enabled_public_skills(scope_context)
         tool_definitions: list[dict[str, Any]] = []
         for skill in skills:
-            profiles = await self.list_enabled_profiles_for_template(skill.skill_key)
-            tool_definitions.append(
-                build_skill_tool_definition(skill, profiles=profiles)
-            )
+            package = skill_package_service.resolve_family_package(skill.skill_key)
+            tool_definitions.append(build_skill_tool_definition(skill, package=package))
         return tool_definitions
 
     async def get_skill_by_id(self, skill_id: uuid.UUID) -> SkillDefinition | None:
@@ -537,12 +704,28 @@ class SkillRegistryService:
         default_params: dict[str, Any] | None,
         prompt_overlay: str | None,
         enabled: bool,
+        assignment_scope_kind: str = SkillScopeKind.GLOBAL.value,
+        assignment_scope_ref: str | None = None,
         created_by_user_id: uuid.UUID | None,
     ) -> dict[str, Any]:
         await self.ensure_builtin_skills()
         template = _BUILTIN_MAP.get(template_skill_key)
         if template is None:
             raise ValueError(f"Unknown template_skill_key: {template_skill_key}")
+        normalized_scope_kind = _normalize_scope_kind(assignment_scope_kind)
+        if (
+            normalized_scope_kind == SkillScopeKind.WORKSPACE.value
+            and (
+                assignment_scope_ref is None
+                or assignment_scope_ref == "current-workspace"
+            )
+            and created_by_user_id is not None
+        ):
+            assignment_scope_ref = str(created_by_user_id)
+        normalized_scope_ref = _normalize_scope_ref(
+            normalized_scope_kind,
+            assignment_scope_ref,
+        )
 
         skill = SkillDefinition(
             skill_key=self._generate_custom_skill_key(template_skill_key),
@@ -573,8 +756,8 @@ class SkillRegistryService:
         )
         assignment = SkillAssignment(
             skill_id=skill.id,
-            scope_kind=SkillScopeKind.GLOBAL.value,
-            scope_ref=None,
+            scope_kind=normalized_scope_kind,
+            scope_ref=normalized_scope_ref,
             enabled=enabled,
         )
         self.db.add(version)
@@ -590,13 +773,14 @@ class SkillRegistryService:
         *,
         skill_id: uuid.UUID,
         updates: dict[str, Any],
+        acting_user_id: uuid.UUID | None = None,
     ) -> dict[str, Any] | None:
         skill = await self.get_skill_by_id(skill_id)
         if skill is None:
             return None
 
         if skill.is_builtin:
-            allowed_keys = {"enabled"}
+            allowed_keys = {"enabled", "assignment_scope_kind", "assignment_scope_ref"}
         else:
             allowed_keys = {
                 "display_name",
@@ -604,17 +788,42 @@ class SkillRegistryService:
                 "default_params",
                 "prompt_overlay",
                 "enabled",
+                "assignment_scope_kind",
+                "assignment_scope_ref",
             }
+
+        normalized_scope_kind: str | None = None
+        normalized_scope_ref: str | None = None
+        if "assignment_scope_kind" in updates or "assignment_scope_ref" in updates:
+            normalized_scope_kind = _normalize_scope_kind(
+                updates.get("assignment_scope_kind")
+                or (skill.assignments[0].scope_kind if skill.assignments else None)
+                or SkillScopeKind.GLOBAL.value
+            )
+            requested_scope_ref = (
+                updates.get("assignment_scope_ref")
+                if "assignment_scope_ref" in updates
+                else (skill.assignments[0].scope_ref if skill.assignments else None)
+            )
+            if (
+                normalized_scope_kind == SkillScopeKind.WORKSPACE.value
+                and (
+                    requested_scope_ref is None
+                    or requested_scope_ref == "current-workspace"
+                )
+                and acting_user_id is not None
+            ):
+                requested_scope_ref = str(acting_user_id)
+            normalized_scope_ref = _normalize_scope_ref(
+                normalized_scope_kind,
+                requested_scope_ref,
+            )
 
         for key, value in updates.items():
             if key not in allowed_keys:
                 continue
             if key == "enabled":
                 skill.enabled = bool(value)
-                for assignment in skill.assignments or []:
-                    if assignment.scope_kind == SkillScopeKind.GLOBAL.value:
-                        assignment.enabled = bool(value)
-                        assignment.updated_at = _utcnow()
             elif key == "display_name" and value:
                 skill.display_name = str(value)
             elif key == "description" and value is not None:
@@ -623,6 +832,18 @@ class SkillRegistryService:
                 skill.default_params = dict(value or {})
             elif key == "prompt_overlay":
                 skill.prompt_overlay = str(value).strip() if value else None
+
+        if normalized_scope_kind is not None:
+            await self._replace_assignments(
+                skill,
+                scope_kind=normalized_scope_kind,
+                scope_ref=normalized_scope_ref,
+                enabled=bool(skill.enabled),
+            )
+        elif "enabled" in updates:
+            for assignment in skill.assignments or []:
+                assignment.enabled = bool(skill.enabled)
+                assignment.updated_at = _utcnow()
 
         skill.updated_at = _utcnow()
         await self.db.commit()
@@ -689,7 +910,7 @@ class SkillRegistryService:
         self,
         tool_name: str,
         *,
-        requested_profile_key: str | None = None,
+        scope_context: SkillScopeContext | None = None,
     ) -> dict[str, Any] | None:
         await self.ensure_builtin_skills()
         skill = await self.get_skill_by_key(tool_name)
@@ -697,37 +918,19 @@ class SkillRegistryService:
             skill is None
             or not skill.is_builtin
             or not skill.enabled
-            or not _assignment_enabled(skill)
+            or not _assignment_enabled(skill, scope_context)
         ):
             return None
-        selected_profile: SkillDefinition | None = None
-        if requested_profile_key:
-            candidate = await self.get_skill_by_key(requested_profile_key)
-            if (
-                candidate is not None
-                and not candidate.is_builtin
-                and candidate.template_skill_key == skill.skill_key
-                and candidate.enabled
-                and _assignment_enabled(candidate)
-            ):
-                selected_profile = candidate
-
-        profiles = await self.list_enabled_profiles_for_template(skill.skill_key)
-        tool_definition = build_skill_tool_definition(skill, profiles=profiles)
-        merged_default_params = dict(skill.default_params or {})
-        selected_profile_key = None
-        selected_profile_display_name = None
-        selected_profile_prompt_overlay = None
-        if selected_profile is not None:
-            merged_default_params.update(selected_profile.default_params or {})
-            selected_profile_key = selected_profile.skill_key
-            selected_profile_display_name = selected_profile.display_name
-            selected_profile_prompt_overlay = selected_profile.prompt_overlay
+        package = skill_package_service.resolve_family_package(skill.skill_key)
+        tool_definition = build_skill_tool_definition(skill, package=package)
         return {
             **_serialize_skill(skill),
-            "default_params": merged_default_params,
-            "selected_profile_key": selected_profile_key,
-            "selected_profile_display_name": selected_profile_display_name,
-            "selected_profile_prompt_overlay": selected_profile_prompt_overlay,
+            "default_params": dict(skill.default_params or {}),
+            "family_skill_key": skill.skill_key,
+            "package_key": package.package_key if package else None,
+            "package_display_name": package.display_name if package else None,
+            "package_description": package.description if package else None,
+            "package_path": package.skill_md_path if package else None,
+            "package_body": package.body if package else None,
             "tool_definition": tool_definition,
         }

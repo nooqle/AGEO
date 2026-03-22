@@ -410,6 +410,7 @@ async def rebuild_state_from_db(
     """
     state: dict[str, Any] = {
         "session_id": session_id,
+        "user_id": None,
         "entity_id": entity_id,
         "messages": [],
         "brand_name": "",
@@ -866,6 +867,11 @@ async def handle_user_message_langgraph(
                     "awaiting_user": False,
                     "pending_confirmation": None,
                     "execution_status": "running",
+                    "user_id": (
+                        str(session_user_id)
+                        if session_user_id
+                        else state_values.get("user_id")
+                    ),
                     "messages": list(state_values.get("messages", []))
                     + [HumanMessage(content=enhanced_content)],
                     "task_id": follow_up_task_id,
@@ -1006,6 +1012,7 @@ async def handle_user_message_langgraph(
             # New conversation: initialize full state
             initial_state: AgentState = {
                 "session_id": session_id,
+                "user_id": str(session_user_id) if session_user_id else None,
                 "entity_id": entity_id,
                 "messages": [HumanMessage(content=enhanced_content)],
                 "brand_name": brand_name or content,
@@ -1390,6 +1397,7 @@ async def handle_confirmation_langgraph(
             "awaiting_user": False,
             "pending_confirmation": None,
             "execution_status": "running",
+            "user_id": state_values.get("user_id"),
             "run_id": resumed_run_id or state_values.get("run_id"),
         }
         if state_values.get("fetch_mode"):

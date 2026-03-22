@@ -16,18 +16,15 @@ from langgraph.types import Command
 
 from app.workflow.state import AgentState
 from app.workflow.events import send_reply_event
+from app.workflow.skill_fact_snapshot import build_skill_fact_snapshot
 from app.workflow.nodes_streaming import call_llm_streaming
-from app.workflow.skill_state import build_skill_result_update
+from app.workflow.skill_state import (
+    apply_skill_prompt_context,
+    build_skill_result_update,
+)
 from app.core.llm import get_llm_model
 
 logger = logging.getLogger(__name__)
-
-
-def _apply_skill_prompt_overlay(state: AgentState, prompt: str) -> str:
-    overlay = str(state.get("current_skill_prompt_overlay") or "").strip()
-    if not overlay:
-        return prompt
-    return f"{prompt}\n\n[Skill Profile Overlay]\n{overlay}"
 
 
 # =============================================================================
@@ -48,9 +45,10 @@ async def drill_down_node(state: AgentState) -> Command:
     focus_dimension = tool_args.get("focus_dimension", "platform")
     focus_value = tool_args.get("focus_value", "")
 
-    fetch_results = state.get("fetch_results") or []
-    metrics = state.get("metrics") or {}
-    brand_profile = state.get("brand_profile") or {}
+    facts = build_skill_fact_snapshot(state)
+    fetch_results = facts.fetch_results
+    metrics = facts.metrics
+    brand_profile = facts.brand_profile
     simulated_questions = state.get("simulated_questions") or {}
 
     # Precondition check (Review T5)
@@ -295,7 +293,7 @@ async def _generate_drill_down(
 4. 给出针对性优化建议（2-3条）
 5. 总字数 300-500 字
 6. 语言简洁、有洞察力"""
-    system_prompt = _apply_skill_prompt_overlay(state, system_prompt)
+    system_prompt = apply_skill_prompt_context(state, system_prompt)
 
     user_content = f"""## 分析维度
 - 维度: {dim_label}
@@ -450,7 +448,7 @@ async def _generate_comparison(
 4. 平台表现变化
 5. 给出趋势判断和建议
 6. 总字数 300-500 字"""
-    system_prompt = _apply_skill_prompt_overlay(state, system_prompt)
+    system_prompt = apply_skill_prompt_context(state, system_prompt)
 
     old_date = old_meta.get("created_at", "N/A")[:10] if old_meta else "N/A"
     new_date = new_meta.get("created_at", "N/A")[:10] if new_meta else "N/A"

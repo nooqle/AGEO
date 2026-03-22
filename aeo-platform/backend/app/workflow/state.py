@@ -40,6 +40,7 @@ class AgentState(TypedDict):
     # Session & Message Management
     # =========================================================================
     session_id: str
+    user_id: str | None  # Current workspace/user scope for runtime skill resolution
     entity_id: str | None  # Associated brand entity ID
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
@@ -239,7 +240,13 @@ class AgentState(TypedDict):
     tool_call_args: dict | None  # Arguments passed to Agent from tool call
     tool_call_id: str | None  # ID of the current tool call (for tool result)
     current_skill: str | None  # Currently executing public skill key
-    current_skill_profile: str | None  # Optional selected Skill profile/variant key
+    current_skill_family: str | None  # Stable public skill family key
+    current_skill_package_key: (
+        str | None
+    )  # Resolved package key for current skill family
+    current_skill_package_name: str | None  # Human-readable package name
+    current_skill_package_path: str | None  # Filesystem path to SKILL.md
+    current_skill_package_context: str | None  # Loaded package guidance body
     current_skill_prompt_overlay: (
         str | None
     )  # Optional prompt overlay resolved from selected profile

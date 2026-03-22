@@ -19,8 +19,13 @@ from app.core.database import AsyncSessionLocal
 from app.core.llm import get_llm_model
 from app.services.knowledge_workspace_service import KnowledgeWorkspaceService
 from app.services.skill_registry_service import (
-    SkillRegistryService,
     build_builtin_skill_tool_definitions,
+    SkillScopeContext,
+)
+from app.services.skill_registry_service import SkillRegistryService
+from app.services.skill_invocation_service import (
+    SkillInvocationPlan,
+    SkillInvocationService,
 )
 from app.services.session_event_publisher import session_event_publisher
 from app.workflow.events import (
@@ -41,32 +46,6 @@ SKILLIZED_TOOL_NAMES = {
     "drill_down_analysis",
     "compare_snapshots",
     "selective_refetch",
-}
-
-SKILL_EXECUTOR_TO_NODE: dict[str, str] = {
-    "a5_data_analytics": "a5_analytics",
-    "a7_confidence_signal": "a7_confidence_signal",
-    "post_analysis_executor": "post_analysis_executor",
-}
-
-LEGACY_SKILL_TOOL_ALIASES: dict[str, dict[str, Any]] = {
-    "data_analytics": {"skill_key": "analysis_report_skill", "extra_args": {}},
-    "citation_confidence_analysis": {
-        "skill_key": "confidence_signal_skill",
-        "extra_args": {},
-    },
-    "drill_down_analysis": {
-        "skill_key": "post_analysis_skill",
-        "extra_args": {"analysis_mode": "drill_down"},
-    },
-    "compare_snapshots": {
-        "skill_key": "post_analysis_skill",
-        "extra_args": {"analysis_mode": "compare_snapshots"},
-    },
-    "selective_refetch": {
-        "skill_key": "post_analysis_skill",
-        "extra_args": {"analysis_mode": "selective_refetch"},
-    },
 }
 
 
@@ -575,7 +554,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
 ]
 
 
-async def build_agent_tools() -> list[dict[str, Any]]:
+async def build_agent_tools(state: AgentState | None = None) -> list[dict[str, Any]]:
     """Build LLM tools format from static tools + dynamic public skills."""
     base_tools = [
         agent for agent in AGENT_REGISTRY if agent["name"] not in SKILLIZED_TOOL_NAMES
@@ -584,7 +563,21 @@ async def build_agent_tools() -> list[dict[str, Any]]:
     try:
         async with AsyncSessionLocal() as db:
             service = SkillRegistryService(db)
-            skill_tools = await service.get_tool_definitions()
+            scope_context = SkillScopeContext(
+                workspace_ref=(
+                    str(state.get("user_id"))
+                    if state and state.get("user_id")
+                    else None
+                ),
+                entity_ref=(
+                    str(state.get("entity_id"))
+                    if state and state.get("entity_id")
+                    else None
+                ),
+            )
+            skill_tools = await service.get_tool_definitions(
+                scope_context=scope_context
+            )
     except Exception as exc:
         logger.warning(
             "[Orchestrator] Failed to load dynamic skill tools, falling back to builtins: %s",
@@ -1855,21 +1848,30 @@ async def _hydrate_knowledge_manifest(state: AgentState) -> dict[str, Any] | Non
 async def _resolve_skill_tool(
     tool_name: str,
     *,
-    requested_profile_key: str | None = None,
-) -> dict[str, Any] | None:
+    tool_args: dict[str, Any] | None = None,
+    state: AgentState | None = None,
+) -> SkillInvocationPlan | None:
     """Resolve a tool call into an enabled public skill definition."""
-
-    resolved_name = tool_name
-    alias = LEGACY_SKILL_TOOL_ALIASES.get(tool_name)
-    if alias:
-        resolved_name = alias["skill_key"]
 
     try:
         async with AsyncSessionLocal() as db:
-            service = SkillRegistryService(db)
-            return await service.resolve_tool_to_skill(
-                resolved_name,
-                requested_profile_key=requested_profile_key,
+            service = SkillInvocationService(db)
+            scope_context = SkillScopeContext(
+                workspace_ref=(
+                    str(state.get("user_id"))
+                    if state and state.get("user_id")
+                    else None
+                ),
+                entity_ref=(
+                    str(state.get("entity_id"))
+                    if state and state.get("entity_id")
+                    else None
+                ),
+            )
+            return await service.resolve_invocation(
+                tool_name=tool_name,
+                tool_args=dict(tool_args or {}),
+                scope_context=scope_context,
             )
     except Exception as exc:
         logger.warning(
@@ -2239,7 +2241,7 @@ async def orchestrator_node(state: AgentState) -> Command:
     # Build orchestrator call
     system_prompt = build_orchestrator_system_prompt(working_state)
     messages = build_orchestrator_messages(working_state)
-    tools = await build_agent_tools()
+    tools = await build_agent_tools(working_state)
 
     # Stream LLM response
     model = get_llm_model()
@@ -2703,42 +2705,33 @@ async def _handle_tool_call(
             },
         )
 
-    requested_skill_profile = (
-        str((tool_args or {}).get("skill_profile") or "").strip() or None
-    )
     resolved_skill = await _resolve_skill_tool(
         tool_name,
-        requested_profile_key=requested_skill_profile,
+        tool_args=tool_args,
+        state=state,
     )
     effective_tool_name = tool_name
     skill_key = None
-    selected_skill_profile = None
+    skill_family_key = None
+    selected_skill_package_key = None
+    selected_skill_package_name = None
+    selected_skill_package_path = None
+    selected_skill_package_context = None
     selected_skill_prompt_overlay = None
     display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
-    merged_tool_args = dict(tool_args or {})
 
     if resolved_skill is not None:
-        skill_key = resolved_skill["skill_key"]
-        effective_tool_name = skill_key
-        display_name = resolved_skill["display_name"]
-        selected_skill_profile = resolved_skill.get("selected_profile_key")
-        selected_skill_prompt_overlay = resolved_skill.get(
-            "selected_profile_prompt_overlay"
-        )
-        if selected_skill_profile and resolved_skill.get(
-            "selected_profile_display_name"
-        ):
-            display_name = (
-                f"{display_name} · {resolved_skill['selected_profile_display_name']}"
-            )
-        node_name = SKILL_EXECUTOR_TO_NODE.get(resolved_skill["executor_ref"])
-        merged_tool_args = dict(resolved_skill.get("default_params") or {})
-        alias = LEGACY_SKILL_TOOL_ALIASES.get(tool_name)
-        if alias:
-            merged_tool_args.update(alias.get("extra_args") or {})
-        merged_tool_args.update(tool_args or {})
-        merged_tool_args.pop("skill_profile", None)
-        tool_args = merged_tool_args
+        skill_key = resolved_skill.skill_key
+        skill_family_key = resolved_skill.family_skill_key or skill_key
+        effective_tool_name = resolved_skill.effective_tool_name
+        display_name = resolved_skill.display_name
+        selected_skill_package_key = resolved_skill.package_key
+        selected_skill_package_name = resolved_skill.package_display_name
+        selected_skill_package_path = resolved_skill.package_path
+        selected_skill_package_context = resolved_skill.package_body
+        selected_skill_prompt_overlay = resolved_skill.prompt_overlay
+        node_name = resolved_skill.node_name
+        tool_args = dict(resolved_skill.merged_tool_args)
     else:
         node_name = TOOL_TO_NODE.get(tool_name)
 
@@ -2829,7 +2822,7 @@ async def _handle_tool_call(
             current_step_id = {
                 "a5_data_analytics": "A5",
                 "a7_confidence_signal": "A7",
-            }.get(resolved_skill["executor_ref"])
+            }.get(resolved_skill.executor_ref)
         for s in workflow_steps:
             if s["id"] == current_step_id:
                 s["status"] = "in_progress"
@@ -2895,7 +2888,7 @@ async def _handle_tool_call(
                     "a5_data_analytics": FALLBACK_TEXTS["analysis_report_skill"],
                     "a7_confidence_signal": FALLBACK_TEXTS["confidence_signal_skill"],
                     "post_analysis_executor": FALLBACK_TEXTS["post_analysis_skill"],
-                }.get(resolved_skill["executor_ref"])
+                }.get(resolved_skill.executor_ref)
             fallback_text = fallback_text or f"正在执行：{display_name}，请稍候..."
             await send_reply_event(
                 session_id, fallback_text, is_delta=True, is_new_round=True
@@ -3138,7 +3131,7 @@ async def _handle_tool_call(
         # Pass report_type as analysis_mode for A5
         if effective_tool_name in {"data_analytics", "analysis_report_skill"} or (
             resolved_skill is not None
-            and resolved_skill["executor_ref"] == "a5_data_analytics"
+            and resolved_skill.executor_ref == "a5_data_analytics"
         ):
             report_type = tool_args.get("report_type", "persona")
             extra_updates["analysis_mode"] = report_type
@@ -3152,7 +3145,11 @@ async def _handle_tool_call(
                 "tool_call_args": tool_args,
                 "tool_call_id": tool_call.id or "call_1",
                 "current_skill": skill_key,
-                "current_skill_profile": selected_skill_profile,
+                "current_skill_family": skill_family_key,
+                "current_skill_package_key": selected_skill_package_key,
+                "current_skill_package_name": selected_skill_package_name,
+                "current_skill_package_path": selected_skill_package_path,
+                "current_skill_package_context": selected_skill_package_context,
                 "current_skill_prompt_overlay": selected_skill_prompt_overlay,
                 "agent_retry_counts": retry_counts,
                 "error_info": None,

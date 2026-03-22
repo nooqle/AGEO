@@ -1,8 +1,3 @@
-export type SkillTemplateKey =
-  | 'analysis_report_skill'
-  | 'confidence_signal_skill'
-  | 'post_analysis_skill';
-
 export interface SkillAssignment {
   id: string;
   skill_id: string;
@@ -24,6 +19,8 @@ export interface SkillVersion {
 export interface SkillDefinition {
   id: string;
   skill_key: string;
+  family_skill_key: string;
+  family_display_name: string;
   display_name: string;
   description: string;
   executor_kind: string;
@@ -41,19 +38,15 @@ export interface SkillDefinition {
   assignment_enabled: boolean;
   effective_enabled: boolean;
   is_builtin: boolean;
+  is_profile: boolean;
   version: number;
+  package_key: string | null;
+  package_display_name: string | null;
+  package_description: string | null;
+  package_path: string | null;
   created_at: string;
   updated_at: string;
   assignments: SkillAssignment[];
-}
-
-export interface CreateSkillInput {
-  template_skill_key: SkillTemplateKey;
-  display_name: string;
-  description: string;
-  default_params: Record<string, unknown> | null;
-  prompt_overlay: string | null;
-  enabled: boolean;
 }
 
 export interface UpdateSkillInput {
@@ -62,9 +55,6 @@ export interface UpdateSkillInput {
   default_params?: Record<string, unknown> | null;
   prompt_overlay?: string | null;
   enabled?: boolean;
-}
-
-export interface PublishSkillResponse {
-  skill: SkillDefinition;
-  published_version: SkillVersion;
+  assignment_scope_kind?: string;
+  assignment_scope_ref?: string | null;
 }
