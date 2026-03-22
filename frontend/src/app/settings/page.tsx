@@ -13,6 +13,7 @@ import {
   RiSettings4Line,
   RiTeamLine,
 } from '@remixicon/react';
+import { RequireAuth } from '@/components/auth/RequireAuth';
 import { DashboardTopBar } from '@/components/layout/DashboardTopBar';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -23,6 +24,7 @@ import { useDashboardStore } from '@/stores/dashboardStore';
 import { useEntityStore } from '@/stores/entityStore';
 import { useMonitoringStore } from '@/stores/monitoringStore';
 import { FREQUENCY_LABELS, type MonitoringSchedule, type ScheduleFrequency } from '@/types/monitoring';
+import type { AuthUser, RegistrationApplication } from '@/types/auth';
 import type {
   SkillDefinition,
   SkillVersion,
@@ -375,6 +377,10 @@ export default function SettingsPage() {
   const [isSkillsLoading, setIsSkillsLoading] = useState(false);
   const [isSkillFormSaving, setIsSkillFormSaving] = useState(false);
   const [savingSkillId, setSavingSkillId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [registrationApplications, setRegistrationApplications] = useState<RegistrationApplication[]>([]);
+  const [isApplicationsLoading, setIsApplicationsLoading] = useState(false);
+  const [reviewingApplicationId, setReviewingApplicationId] = useState<string | null>(null);
 
   const selectedEntity = useMemo(
     () => entities.find((entity) => entity.id === selectedEntityId) || null,
@@ -384,6 +390,36 @@ export default function SettingsPage() {
     () => skills.find((skill) => skill.id === editingSkillId) || null,
     [editingSkillId, skills]
   );
+
+  async function loadRegistrationApplications() {
+    setIsApplicationsLoading(true);
+    try {
+      const applications = await api.listRegistrationApplications();
+      setRegistrationApplications(applications);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '加载注册申请失败');
+    } finally {
+      setIsApplicationsLoading(false);
+    }
+  }
+
+  async function handleReviewApplication(applicationId: string, action: 'approve' | 'reject') {
+    setReviewingApplicationId(applicationId);
+    try {
+      if (action === 'approve') {
+        await api.approveRegistrationApplication(applicationId);
+        toast.success('账号申请已审核通过');
+      } else {
+        await api.rejectRegistrationApplication(applicationId);
+        toast.success('账号申请已拒绝');
+      }
+      await loadRegistrationApplications();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '审核操作失败');
+    } finally {
+      setReviewingApplicationId(null);
+    }
+  }
 
   useEffect(() => {
     if (!selectedEntityId) return;
@@ -403,6 +439,20 @@ export default function SettingsPage() {
     void Promise.allSettled([
       fetchEntities(),
       fetchUnreadCount(),
+      api
+        .getMe()
+        .then((user) => {
+          setCurrentUser(user);
+          if (user.role === 'internal_admin') {
+            return loadRegistrationApplications();
+          }
+          setRegistrationApplications([]);
+          return undefined;
+        })
+        .catch(() => {
+          setCurrentUser(null);
+          setRegistrationApplications([]);
+        }),
       api
         .getSchedulerHealth()
         .then((health) => setSchedulerRunning(health.running))
@@ -655,6 +705,7 @@ export default function SettingsPage() {
   );
 
   return (
+    <RequireAuth>
     <div className="dashboard-page-bg min-h-screen" style={{ backgroundColor: 'var(--bg-primary)' }}>
       <DashboardTopBar />
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 md:px-6 lg:px-8">
@@ -1303,7 +1354,7 @@ export default function SettingsPage() {
                   tone="violet"
                   eyebrow="P1 / Workspace"
                   title="账户与工作区"
-                  description="账户资料、安全和团队体系暂未成型，因此这里只放已经真实存在的主题能力，以及默认品牌工作区的设置入口。"
+                  description="账号体系已切到验证码注册申请 + 人工审核开通。这里承载当前账户信息、默认品牌工作区，以及内部管理员进入运营控制台与审核入口。"
                   actions={<Button variant="secondary" size="md" onClick={handleSaveWorkspace} isLoading={isSavingWorkspace}>保存工作区偏好</Button>}
                 >
                   <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
@@ -1326,18 +1377,101 @@ export default function SettingsPage() {
                           ))}
                         </select>
                       </div>
+
+                      {currentUser?.role === 'internal_admin' ? (
+                        <div className="rounded-3xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
+                          <div className="flex items-center justify-between gap-4">
+                            <div>
+                              <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>待审核注册申请</div>
+                              <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
+                                内部管理员在这里快速审核邮箱 / 手机验证码注册申请，打通客户开通前的最小链路。
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Link
+                                href="/control-plane"
+                                className="inline-flex h-10 items-center rounded-full border px-4 text-sm font-medium"
+                                style={{
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'var(--bg-elevated)',
+                                  color: 'var(--text-primary)',
+                                }}
+                              >
+                                进入运营控制台
+                              </Link>
+                              <Button variant="ghost" size="md" onClick={() => void loadRegistrationApplications()} isLoading={isApplicationsLoading}>
+                                刷新
+                              </Button>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 space-y-3">
+                            {registrationApplications.length === 0 ? (
+                              <div className="rounded-2xl border border-dashed px-4 py-4 text-sm" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
+                                当前没有待处理注册申请。
+                              </div>
+                            ) : registrationApplications.map((application) => (
+                              <div
+                                key={application.id}
+                                className="rounded-2xl border px-4 py-4"
+                                style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-secondary)' }}
+                              >
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                  <div className="space-y-2">
+                                    <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                                      {application.organization_name}
+                                    </div>
+                                    <div className="text-xs leading-6" style={{ color: 'var(--text-secondary)' }}>
+                                      账号：{application.email || application.phone || '--'}<br />
+                                      职位：{application.job_title}<br />
+                                      申请人：{application.applicant_name || '--'}<br />
+                                      状态：{application.status}<br />
+                                      提交时间：{formatDateTime(application.created_at)}
+                                    </div>
+                                  </div>
+                                  {application.status === 'pending_review' ? (
+                                    <div className="flex flex-wrap gap-2">
+                                      <Button
+                                        variant="secondary"
+                                        size="md"
+                                        onClick={() => void handleReviewApplication(application.id, 'reject')}
+                                        isLoading={reviewingApplicationId === application.id}
+                                      >
+                                        拒绝
+                                      </Button>
+                                      <Button
+                                        variant="primary"
+                                        size="md"
+                                        onClick={() => void handleReviewApplication(application.id, 'approve')}
+                                        isLoading={reviewingApplicationId === application.id}
+                                      >
+                                        审核通过
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <div className="rounded-full px-3 py-1 text-xs" style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
+                                      已处理
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="rounded-3xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
                       <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>当前账户状态</div>
                       <div className="mt-4 space-y-3 text-sm" style={{ color: 'var(--text-secondary)' }}>
                         <div className="flex justify-between gap-4"><span>默认品牌</span><span style={{ color: 'var(--text-primary)' }}>{entities.find((entity) => entity.id === workspaceEntityId)?.name || '--'}</span></div>
-                        <div className="flex justify-between gap-4"><span>主题能力</span><span style={{ color: 'var(--text-primary)' }}>已启用</span></div>
-                        <div className="flex justify-between gap-4"><span>资料编辑</span><span style={{ color: 'var(--text-primary)' }}>待身份体系接入</span></div>
-                        <div className="flex justify-between gap-4"><span>团队与权限</span><span style={{ color: 'var(--text-primary)' }}>暂不外露</span></div>
+                        <div className="flex justify-between gap-4"><span>登录账号</span><span style={{ color: 'var(--text-primary)' }}>{currentUser?.email || currentUser?.phone || '--'}</span></div>
+                        <div className="flex justify-between gap-4"><span>账户状态</span><span style={{ color: 'var(--text-primary)' }}>{currentUser?.status || '--'}</span></div>
+                        <div className="flex justify-between gap-4"><span>组织归属</span><span style={{ color: 'var(--text-primary)' }}>{currentUser?.organization_name || (currentUser?.organization_id ? '已加入组织' : '个人账号')}</span></div>
+                        <div className="flex justify-between gap-4"><span>职位信息</span><span style={{ color: 'var(--text-primary)' }}>{currentUser?.job_title || '--'}</span></div>
                       </div>
                       <div className="mt-5 rounded-2xl border border-dashed px-4 py-4 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
-                        团队管理和 API Key 管理不再出现在主设置页里。前者要等 RBAC 成熟，后者只适合未来的管理员高级设置。
+                        当前阶段账号体系已支持验证码登录、人工审核、个人 / 组织空间归属。换绑邮箱、换绑手机号、组织信息编辑与客户列表运营已收口到运营控制台。
                       </div>
                     </div>
                   </div>
@@ -1384,5 +1518,6 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
+    </RequireAuth>
   );
 }

@@ -20,7 +20,7 @@ async def get_outputs(
 ):
     """Get all outputs."""
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user.id)
+    session = await session_service.get_session(session_id, current_user)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = OutputService(db)
@@ -37,7 +37,7 @@ async def get_output(
 ):
     """Get single output details."""
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user.id)
+    session = await session_service.get_session(session_id, current_user)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = OutputService(db)
@@ -57,7 +57,7 @@ async def export_output(
 ):
     """Export output."""
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user.id)
+    session = await session_service.get_session(session_id, current_user)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = OutputService(db)

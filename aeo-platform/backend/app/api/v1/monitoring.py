@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.models.monitoring_schedule import ScheduleFrequency, ScheduleStatus
+from app.services.entity_service import EntityService
 from app.services.monitoring_service import MonitoringService
 from app.services.task_service import task_to_dict
 
@@ -104,16 +105,12 @@ def schedule_to_dict(schedule) -> dict[str, Any]:
         "last_run_at": (
             schedule.last_run_at.isoformat() if schedule.last_run_at else None
         ),
-        "last_task_id": (
-            str(schedule.last_task_id) if schedule.last_task_id else None
-        ),
+        "last_task_id": (str(schedule.last_task_id) if schedule.last_task_id else None),
         "total_runs": schedule.total_runs,
         "consecutive_failures": schedule.consecutive_failures,
         "max_failures": schedule.max_failures,
         "max_runs": schedule.max_runs,
-        "end_date": (
-            schedule.end_date.isoformat() if schedule.end_date else None
-        ),
+        "end_date": (schedule.end_date.isoformat() if schedule.end_date else None),
         "created_at": (
             schedule.created_at.isoformat() if schedule.created_at else None
         ),
@@ -136,20 +133,17 @@ async def create_schedule(
 ):
     """Create a new monitoring schedule."""
     entity_id = _parse_uuid(body.entity_id, "entity_id")
-
-    # Verify entity exists and belongs to current user
-    from app.models.entity import Entity
-
-    entity = await db.get(Entity, entity_id)
+    entity_service = EntityService(db)
+    entity = await entity_service.get_entity(str(entity_id), current_user)
     if entity is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Entity not found",
         )
-    if entity.user_id != current_user.id:
+    if entity.get("owner_user_id") != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not own this entity",
+            detail="仅品牌创建者可创建监测计划",
         )
 
     try:
@@ -205,8 +199,8 @@ async def list_schedules(
             )
 
     service = MonitoringService(db)
-    schedules, total = await service.list_schedules(
-        user_id=current_user.id,
+    schedules, total = await service.list_schedules_for_viewer(
+        viewer=current_user,
         entity_id=eid,
         status=sched_status,
         limit=limit,
@@ -233,9 +227,16 @@ async def get_schedules_by_entity(
     the entity detail page.
     """
     eid = _parse_uuid(entity_id, "entity_id")
+    entity_service = EntityService(db)
+    entity = await entity_service.get_entity(str(eid), current_user)
+    if entity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entity not found",
+        )
     service = MonitoringService(db)
-    schedules, total = await service.list_schedules(
-        user_id=current_user.id,
+    schedules, total = await service.list_schedules_for_viewer(
+        viewer=current_user,
         entity_id=eid,
         limit=100,
         offset=0,
@@ -255,16 +256,11 @@ async def get_schedule(
     """Get a monitoring schedule by ID."""
     sid = _parse_uuid(schedule_id, "schedule_id")
     service = MonitoringService(db)
-    schedule = await service.get_schedule(sid)
+    schedule = await service.get_schedule_for_viewer(sid, current_user)
     if schedule is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Schedule not found",
-        )
-    if schedule.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
         )
     return {"schedule": schedule_to_dict(schedule)}
 
@@ -289,7 +285,7 @@ async def update_schedule(
     if schedule.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
+            detail="仅计划创建者可修改监测计划",
         )
 
     update_kwargs: dict[str, Any] = {}
@@ -308,9 +304,7 @@ async def update_schedule(
     if body.platforms is not None:
         update_kwargs["platforms"] = body.platforms
     if body.alert_on_significant_change is not None:
-        update_kwargs["alert_on_significant_change"] = (
-            body.alert_on_significant_change
-        )
+        update_kwargs["alert_on_significant_change"] = body.alert_on_significant_change
     if body.alert_threshold_bwvs is not None:
         update_kwargs["alert_threshold_bwvs"] = body.alert_threshold_bwvs
 
@@ -357,7 +351,7 @@ async def delete_schedule(
     if schedule.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
+            detail="仅计划创建者可删除监测计划",
         )
 
     await service.delete_schedule(sid)
@@ -383,7 +377,7 @@ async def pause_schedule(
     if schedule.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
+            detail="仅计划创建者可暂停监测计划",
         )
 
     try:
@@ -415,7 +409,7 @@ async def resume_schedule(
     if schedule.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
+            detail="仅计划创建者可恢复监测计划",
         )
 
     try:
@@ -439,16 +433,11 @@ async def get_schedule_history(
     sid = _parse_uuid(schedule_id, "schedule_id")
 
     service = MonitoringService(db)
-    schedule = await service.get_schedule(sid)
+    schedule = await service.get_schedule_for_viewer(sid, current_user)
     if schedule is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Schedule not found",
-        )
-    if schedule.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
         )
 
     tasks = await service.get_run_history(sid, limit=limit)
@@ -477,16 +466,11 @@ async def get_baseline(
     sid = _parse_uuid(schedule_id, "schedule_id")
 
     service = MonitoringService(db)
-    schedule = await service.get_schedule(sid)
+    schedule = await service.get_schedule_for_viewer(sid, current_user)
     if schedule is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Schedule not found",
-        )
-    if schedule.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
         )
 
     baseline = schedule.baseline_data
@@ -522,7 +506,7 @@ async def clear_baseline(
     if schedule.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
+            detail="仅计划创建者可清除 baseline",
         )
 
     await service.clear_baseline(sid)

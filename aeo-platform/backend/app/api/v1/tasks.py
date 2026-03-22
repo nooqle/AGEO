@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.models.task import TaskStatus
+from app.services.access_scope_service import AccessScopeService
 from app.services.llm_usage_service import LLMUsageService
 from app.services.runtime_coordinator import runtime_coordinator
 from app.services.task_service import TaskService, task_run_to_dict, task_to_dict
@@ -50,8 +51,8 @@ async def list_session_tasks(
                 detail=f"Invalid status: {status_filter}",
             )
 
-    tasks, total = await service.list_tasks(
-        user_id=current_user.id,
+    tasks, total = await service.list_tasks_for_viewer(
+        viewer=current_user,
         session_id=sid,
         status=task_status,
         limit=limit,
@@ -77,8 +78,7 @@ async def get_active_task(
     task = await service.get_session_active_task(sid)
     if task is None:
         return {"task": None}
-    # Verify ownership
-    if task.user_id != current_user.id:
+    if not AccessScopeService.can_access_task(task, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -97,14 +97,9 @@ async def get_task(
     sid = _parse_uuid(session_id, "session_id")
     tid = _parse_uuid(task_id, "task_id")
     service = TaskService(db)
-    task = await service.get_task(tid)
+    task = await service.get_task_for_viewer(tid, current_user)
     if not task or str(task.session_id) != str(sid):
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
-        )
     return {"task": task_to_dict(task)}
 
 
@@ -121,14 +116,9 @@ async def get_task_runs(
     sid = _parse_uuid(session_id, "session_id")
     tid = _parse_uuid(task_id, "task_id")
     service = TaskService(db)
-    task = await service.get_task(tid)
+    task = await service.get_task_for_viewer(tid, current_user)
     if not task or str(task.session_id) != str(sid):
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
-        )
 
     runs = await service.get_task_runs(tid, limit=limit)
     return {
@@ -180,8 +170,8 @@ async def list_user_tasks(
     elif triggered_by == "manual":
         scheduled_filter = False
 
-    tasks, total = await service.list_tasks(
-        user_id=current_user.id,
+    tasks, total = await service.list_tasks_for_viewer(
+        viewer=current_user,
         status=task_status,
         is_scheduled=scheduled_filter,
         limit=limit,
@@ -227,7 +217,7 @@ async def cancel_task(
     _parse_uuid(session_id, "session_id")
     tid = _parse_uuid(task_id, "task_id")
     service = TaskService(db)
-    task = await service.get_task(tid)
+    task = await service.get_task_for_viewer(tid, current_user)
     if task is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -236,7 +226,7 @@ async def cancel_task(
     if task.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
+            detail="仅任务发起人可取消任务",
         )
     if task.status not in (TaskStatus.PENDING, TaskStatus.RUNNING):
         raise HTTPException(

@@ -11,6 +11,25 @@ import type { SnapshotSummary, SnapshotTrendPoint, SnapshotCompare } from '@/typ
 import type { AnalysisTask, TaskRunRecord } from '@/types/task';
 import type { LLMObservabilitySnapshot } from '@/types/observability';
 import type {
+  AuthUser,
+  OtpLoginInput,
+  RegistrationApplication,
+  RegistrationApplicationCreateInput,
+  TokenResponse,
+  VerificationSendCodeInput,
+  VerificationSendCodeResponse,
+} from '@/types/auth';
+import type {
+  AdminUserRecord,
+  AdminUserUpdateInput,
+  OrganizationRecord,
+  OrganizationUpdateInput,
+} from '@/types/accountAdmin';
+import type {
+  ControlPlaneCustomerDetail,
+  ControlPlaneCustomerSummary,
+} from '@/types/controlPlane';
+import type {
   SkillDefinition,
   SkillVersion,
   UpdateSkillInput,
@@ -26,13 +45,13 @@ import type {
   UpdateScheduleInput,
   SchedulerHealth,
 } from '@/types/monitoring';
+import { getStoredAccessToken } from '@/lib/auth-storage';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001/api/v1';
 
 class ApiService {
   private getAuthToken() {
-    if (typeof window === 'undefined') return null;
-    const token = window.localStorage.getItem('access_token');
+    const token = getStoredAccessToken();
     if (token) return token;
     if (process.env.NODE_ENV === 'development') return 'dev-token';
     return null;
@@ -65,6 +84,85 @@ class ApiService {
     }
 
     return response.json();
+  }
+
+  // Auth
+  async sendVerificationCode(payload: VerificationSendCodeInput) {
+    return this.request<VerificationSendCodeResponse>('/auth/verification/send-code', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async createRegistrationApplication(payload: RegistrationApplicationCreateInput) {
+    return this.request<RegistrationApplication>('/auth/registration-applications', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async listRegistrationApplications() {
+    return this.request<RegistrationApplication[]>('/auth/registration-applications');
+  }
+
+  async approveRegistrationApplication(applicationId: string) {
+    return this.request<RegistrationApplication>(`/auth/registration-applications/${applicationId}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  async rejectRegistrationApplication(applicationId: string, reviewNote?: string) {
+    return this.request<RegistrationApplication>(`/auth/registration-applications/${applicationId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ review_note: reviewNote ?? null }),
+    });
+  }
+
+  async loginWithOtp(payload: OtpLoginInput) {
+    return this.request<TokenResponse>('/auth/login/otp', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getMe() {
+    return this.request<AuthUser>('/auth/me');
+  }
+
+  async getAdminUsers() {
+    return this.request<AdminUserRecord[]>('/account-admin/users');
+  }
+
+  async updateAdminUser(userId: string, payload: AdminUserUpdateInput) {
+    return this.request<AdminUserRecord>(`/account-admin/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getOrganizations() {
+    return this.request<OrganizationRecord[]>('/account-admin/organizations');
+  }
+
+  async updateOrganization(organizationId: string, payload: OrganizationUpdateInput) {
+    return this.request<OrganizationRecord>(`/account-admin/organizations/${organizationId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getControlPlaneCustomers(days: number = 7) {
+    return this.request<ControlPlaneCustomerSummary[]>(`/control-plane/customers?days=${days}`);
+  }
+
+  async getControlPlaneCustomerDetail(organizationId: string, options?: { days?: number; recentTaskLimit?: number }) {
+    const query = new URLSearchParams();
+    if (options?.days) query.set('days', String(options.days));
+    if (options?.recentTaskLimit) query.set('recent_task_limit', String(options.recentTaskLimit));
+    const qs = query.toString();
+    return this.request<ControlPlaneCustomerDetail>(
+      `/control-plane/customers/${organizationId}${qs ? `?${qs}` : ''}`
+    );
   }
 
   // Session management
@@ -344,7 +442,14 @@ class ApiService {
   async createEntity(data: CreateEntityInput) {
     const raw = await this.request<Record<string, unknown>>('/entities/', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        name: data.name,
+        aliases: data.aliases,
+        domain: data.domain,
+        industry: data.industry,
+        description: data.description,
+        visibility_scope: data.visibilityScope,
+      }),
     });
     return normalizeEntity(raw);
   }
@@ -352,7 +457,14 @@ class ApiService {
   async updateEntity(entityId: string, data: UpdateEntityInput) {
     const raw = await this.request<Record<string, unknown>>(`/entities/${entityId}`, {
       method: 'PUT',
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.aliases !== undefined ? { aliases: data.aliases } : {}),
+        ...(data.domain !== undefined ? { domain: data.domain } : {}),
+        ...(data.industry !== undefined ? { industry: data.industry } : {}),
+        ...(data.description !== undefined ? { description: data.description } : {}),
+        ...(data.visibilityScope !== undefined ? { visibility_scope: data.visibilityScope } : {}),
+      }),
     });
     return normalizeEntity(raw);
   }

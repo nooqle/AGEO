@@ -16,6 +16,8 @@ from app.models.monitoring_schedule import (
     ScheduleStatus,
 )
 from app.models.task import AnalysisTask
+from app.models.user import User
+from app.services.access_scope_service import AccessScopeService
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +81,7 @@ class MonitoringService:
                 "Pause or delete the existing schedule first."
             )
 
-        next_run = self.calculate_next_run(
-            frequency, preferred_hour, timezone_str
-        )
+        next_run = self.calculate_next_run(frequency, preferred_hour, timezone_str)
 
         schedule = MonitoringSchedule(
             user_id=user_id,
@@ -104,7 +104,10 @@ class MonitoringService:
         logger.info(
             "[MonitoringService] Created schedule %s for entity %s "
             "(freq=%s, next_run=%s)",
-            schedule.id, entity_id, frequency.value, next_run,
+            schedule.id,
+            entity_id,
+            frequency.value,
+            next_run,
         )
         return schedule
 
@@ -150,9 +153,7 @@ class MonitoringService:
             conditions.append(MonitoringSchedule.status == status)
 
         count_stmt = (
-            select(func.count())
-            .select_from(MonitoringSchedule)
-            .where(*conditions)
+            select(func.count()).select_from(MonitoringSchedule).where(*conditions)
         )
         count_result = await self.db.execute(count_stmt)
         total = count_result.scalar() or 0
@@ -168,6 +169,55 @@ class MonitoringService:
         result = await self.db.execute(query)
         schedules = list(result.scalars().all())
         return schedules, total
+
+    async def list_schedules_for_viewer(
+        self,
+        viewer: User,
+        *,
+        entity_id: UUID | None = None,
+        status: ScheduleStatus | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[MonitoringSchedule], int]:
+        conditions = [AccessScopeService.schedule_visibility_filter(viewer)]
+        if entity_id is not None:
+            conditions.append(MonitoringSchedule.entity_id == entity_id)
+        if status is not None:
+            conditions.append(MonitoringSchedule.status == status)
+
+        count_stmt = (
+            select(func.count()).select_from(MonitoringSchedule).where(*conditions)
+        )
+        count_result = await self.db.execute(count_stmt)
+        total = count_result.scalar() or 0
+
+        query = (
+            select(MonitoringSchedule)
+            .options(selectinload(MonitoringSchedule.entity))
+            .where(*conditions)
+            .order_by(MonitoringSchedule.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        schedules = list(result.scalars().all())
+        return schedules, total
+
+    async def get_schedule_for_viewer(
+        self,
+        schedule_id: UUID,
+        viewer: User,
+    ) -> MonitoringSchedule | None:
+        stmt = (
+            select(MonitoringSchedule)
+            .options(selectinload(MonitoringSchedule.entity))
+            .where(
+                MonitoringSchedule.id == schedule_id,
+                AccessScopeService.schedule_visibility_filter(viewer),
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def update_schedule(
         self,
@@ -265,9 +315,7 @@ class MonitoringService:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def record_run_started(
-        self, schedule_id: UUID, task_id: UUID
-    ) -> None:
+    async def record_run_started(self, schedule_id: UUID, task_id: UUID) -> None:
         """Record that a scheduled run has started."""
         now = datetime.now(timezone.utc)
         schedule = await self.get_schedule(schedule_id)
@@ -292,7 +340,8 @@ class MonitoringService:
             schedule.next_run_at = None
             logger.info(
                 "[MonitoringService] Schedule %s completed (max_runs=%d reached)",
-                schedule_id, schedule.max_runs,
+                schedule_id,
+                schedule.max_runs,
             )
         elif schedule.end_date and now >= schedule.end_date:
             schedule.status = ScheduleStatus.COMPLETED
@@ -333,7 +382,8 @@ class MonitoringService:
             schedule.next_run_at = None
             logger.warning(
                 "[MonitoringService] Schedule %s set to ERROR after %d consecutive failures",
-                schedule_id, schedule.consecutive_failures,
+                schedule_id,
+                schedule.consecutive_failures,
             )
 
         await self.db.commit()
@@ -360,9 +410,7 @@ class MonitoringService:
     # Maximum questions to keep in baseline
     MAX_BASELINE_QUESTIONS = 50
 
-    async def save_baseline(
-        self, schedule_id: UUID, baseline: dict
-    ) -> None:
+    async def save_baseline(self, schedule_id: UUID, baseline: dict) -> None:
         """Save baseline data extracted from first successful pipeline run.
 
         The baseline contains A1 brand profile + A3 simulated questions so
@@ -384,7 +432,8 @@ class MonitoringService:
         if len(questions) > self.MAX_BASELINE_QUESTIONS:
             logger.warning(
                 "[MonitoringService] Truncating baseline questions from %d to %d",
-                len(questions), self.MAX_BASELINE_QUESTIONS,
+                len(questions),
+                self.MAX_BASELINE_QUESTIONS,
             )
             baseline["questions"] = questions[: self.MAX_BASELINE_QUESTIONS]
 
@@ -394,7 +443,8 @@ class MonitoringService:
             logger.warning(
                 "[MonitoringService] Baseline too large (%d bytes > %d), "
                 "stripping simulated_questions detail",
-                len(serialized), self.MAX_BASELINE_SIZE,
+                len(serialized),
+                self.MAX_BASELINE_SIZE,
             )
             # Keep only essentials: questions (flat) + brand_profile + competitors
             baseline.pop("simulated_questions", None)
@@ -447,9 +497,7 @@ class MonitoringService:
     # Helpers
     # =========================================================================
 
-    async def _count_active_schedules(
-        self, user_id: UUID | None = None
-    ) -> int:
+    async def _count_active_schedules(self, user_id: UUID | None = None) -> int:
         """Count active schedules, optionally for a specific user."""
         conditions = [
             MonitoringSchedule.status == ScheduleStatus.ACTIVE,
@@ -457,11 +505,7 @@ class MonitoringService:
         if user_id is not None:
             conditions.append(MonitoringSchedule.user_id == user_id)
 
-        stmt = (
-            select(func.count())
-            .select_from(MonitoringSchedule)
-            .where(*conditions)
-        )
+        stmt = select(func.count()).select_from(MonitoringSchedule).where(*conditions)
         result = await self.db.execute(stmt)
         return result.scalar() or 0
 
@@ -496,9 +540,7 @@ class MonitoringService:
         utc_hour = (preferred_hour - offset_hours) % 24
 
         # Calculate today's target time at the preferred UTC hour
-        base = now.replace(
-            hour=utc_hour, minute=0, second=0, microsecond=0
-        )
+        base = now.replace(hour=utc_hour, minute=0, second=0, microsecond=0)
 
         if frequency == ScheduleFrequency.DAILY:
             delta = timedelta(days=1)

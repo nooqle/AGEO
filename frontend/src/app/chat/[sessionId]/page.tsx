@@ -7,6 +7,7 @@ import { ChatPanel } from '@/components/chat';
 import { CanvasPanel } from '@/components/canvas/CanvasPanel';
 import { ChatSidebar } from '@/components/layout/ChatSidebar';
 import { TaskNotificationPoller } from '@/components/chat/TaskNotificationPoller';
+import { RequireAuth } from '@/components/auth/RequireAuth';
 import { api } from '@/services/api';
 
 function ChatPageContent() {
@@ -80,7 +81,9 @@ function ChatPageContent() {
 export default function ChatPage() {
   return (
     <Suspense>
-      <ChatPageContent />
+      <RequireAuth>
+        <ChatPageContent />
+      </RequireAuth>
     </Suspense>
   );
 }

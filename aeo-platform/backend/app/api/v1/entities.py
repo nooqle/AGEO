@@ -17,7 +17,7 @@ async def list_entities(
 ):
     """List all brand entities."""
     service = EntityService(db)
-    return await service.list_entities()
+    return await service.list_entities(current_user)
 
 
 @router.get("/{entity_id}")
@@ -28,7 +28,7 @@ async def get_entity(
 ):
     """Get entity by ID."""
     service = EntityService(db)
-    entity = await service.get_entity(entity_id)
+    entity = await service.get_entity(entity_id, current_user)
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
@@ -42,7 +42,10 @@ async def create_entity(
 ):
     """Create a new brand entity."""
     service = EntityService(db)
-    return await service.create_entity(data.model_dump())
+    try:
+        return await service.create_entity(data.model_dump(), current_user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/{entity_id}")
@@ -55,7 +58,10 @@ async def update_entity(
     """Update an existing entity."""
     service = EntityService(db)
     updates = data.model_dump(exclude_none=True)
-    entity = await service.update_entity(entity_id, updates)
+    try:
+        entity = await service.update_entity(entity_id, updates, current_user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
@@ -69,6 +75,6 @@ async def delete_entity(
 ):
     """Delete an entity."""
     service = EntityService(db)
-    deleted = await service.delete_entity(entity_id)
+    deleted = await service.delete_entity(entity_id, current_user)
     if not deleted:
         raise HTTPException(status_code=404, detail="Entity not found")

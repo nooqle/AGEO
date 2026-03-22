@@ -11,6 +11,7 @@ interface EntityFormDialogProps {
   onClose: () => void;
   onSubmit: (data: CreateEntityInput) => void;
   entity?: Entity | null;
+  allowOrganizationScope?: boolean;
 }
 
 export function EntityFormDialog({
@@ -18,6 +19,7 @@ export function EntityFormDialog({
   onClose,
   onSubmit,
   entity,
+  allowOrganizationScope = false,
 }: EntityFormDialogProps) {
   if (!open) return null;
 
@@ -27,6 +29,7 @@ export function EntityFormDialog({
       entity={entity}
       onClose={onClose}
       onSubmit={onSubmit}
+      allowOrganizationScope={allowOrganizationScope}
     />
   );
 }
@@ -35,22 +38,27 @@ function EntityFormDialogInner({
   entity,
   onClose,
   onSubmit,
+  allowOrganizationScope,
 }: {
   entity?: Entity | null;
   onClose: () => void;
   onSubmit: (data: CreateEntityInput) => void;
+  allowOrganizationScope: boolean;
 }) {
   const [name, setName] = useState(entity?.name ?? '');
   const [aliases, setAliases] = useState<string[]>(entity?.aliases ?? []);
   const [domain, setDomain] = useState(entity?.domain ?? '');
   const [industry, setIndustry] = useState(entity?.industry ?? '');
   const [description, setDescription] = useState(entity?.description ?? '');
+  const [visibilityScope, setVisibilityScope] = useState<CreateEntityInput['visibilityScope']>(
+    entity?.visibilityScope ?? 'personal'
+  );
 
   const isEdit = !!entity;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit({ name, aliases, domain, industry, description });
+    onSubmit({ name, aliases, domain, industry, description, visibilityScope });
   };
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -180,6 +188,56 @@ function EntityFormDialogInner({
               }}
               placeholder="简要描述品牌信息..."
             />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              归属空间
+            </label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setVisibilityScope('personal')}
+                className="rounded-xl border px-4 py-3 text-left transition-colors"
+                style={{
+                  borderColor: visibilityScope === 'personal' ? 'var(--color-primary)' : 'var(--border-subtle)',
+                  backgroundColor: visibilityScope === 'personal' ? 'color-mix(in srgb, var(--color-primary) 10%, var(--bg-primary) 90%)' : 'var(--bg-primary)',
+                }}
+              >
+                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                  个人空间
+                </div>
+                <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
+                  仅你自己可见，适合个人试验和私有采集。
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (allowOrganizationScope) {
+                    setVisibilityScope('organization');
+                  }
+                }}
+                disabled={!allowOrganizationScope}
+                className="rounded-xl border px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                style={{
+                  borderColor: visibilityScope === 'organization' ? 'var(--color-primary)' : 'var(--border-subtle)',
+                  backgroundColor: visibilityScope === 'organization' ? 'color-mix(in srgb, var(--color-primary) 10%, var(--bg-primary) 90%)' : 'var(--bg-primary)',
+                }}
+              >
+                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                  组织空间
+                </div>
+                <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
+                  同组织账号可共享查看品牌历史采集和分析结果。
+                </div>
+                {!allowOrganizationScope && (
+                  <div className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    账号加入组织后才可使用。
+                  </div>
+                )}
+              </button>
+            </div>
           </div>
 
           {/* Actions */}

@@ -27,7 +27,7 @@ async def list_sessions(
     """获取会话列表。"""
     service = SessionService(db)
     return await service.list_sessions(
-        user_id=current_user.id,
+        viewer=current_user,
         limit=limit,
         offset=offset,
         status=status,
@@ -41,21 +41,15 @@ async def get_session_by_entity(
     current_user=Depends(get_current_user),
 ):
     """查询品牌实体关联的 Session（1:1 映射）。"""
-    stmt = (
-        select(SessionModel)
-        .where(
-            SessionModel.entity_id == entity_id,
-            SessionModel.user_id == current_user.id,
-        )
-        .order_by(SessionModel.updated_at.desc())
-        .limit(1)
-    )
-    result = await db.execute(stmt)
-    session = result.scalar_one_or_none()
+    entity_service = EntityService(db)
+    entity = await entity_service.get_entity(str(entity_id), current_user)
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    service = SessionService(db)
+    session = await service.get_latest_session_by_entity(entity_id, current_user)
     if not session:
         raise HTTPException(status_code=404, detail="No session found for this entity")
-    service = SessionService(db)
-    return service._session_to_dict(session)
+    return session
 
 
 @router.post("")
@@ -68,15 +62,19 @@ async def create_session(
     # Validate entity_id exists if provided
     if entity_id:
         entity_service = EntityService(db)
-        entity = await entity_service.get_entity(str(entity_id))
+        entity = await entity_service.get_entity(str(entity_id), current_user)
         if not entity:
             raise HTTPException(status_code=404, detail="Entity not found")
 
         # 1:1 唯一性检查：如果 entity_id 已有 Session 则返回 409
-        existing_stmt = select(SessionModel.id).where(
-            SessionModel.entity_id == entity_id,
-            SessionModel.user_id == current_user.id,
-        )
+        existing_conditions = [SessionModel.entity_id == entity_id]
+        if entity.get("visibility_scope") == "organization":
+            existing_stmt = select(SessionModel.id).where(*existing_conditions)
+        else:
+            existing_stmt = select(SessionModel.id).where(
+                *existing_conditions,
+                SessionModel.user_id == current_user.id,
+            )
         existing = await db.execute(existing_stmt)
         if existing.scalar_one_or_none():
             raise HTTPException(
@@ -85,7 +83,7 @@ async def create_session(
             )
 
     service = SessionService(db)
-    session = await service.create_session(current_user.id, entity_id=entity_id)
+    session = await service.create_session(current_user, entity_id=entity_id)
     return session
 
 
@@ -97,7 +95,7 @@ async def get_session(
 ):
     """Get session details."""
     service = SessionService(db)
-    session = await service.get_session(session_id, current_user.id)
+    session = await service.get_session(session_id, current_user)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -111,5 +109,5 @@ async def delete_session(
 ):
     """Delete session."""
     service = SessionService(db)
-    await service.delete_session(session_id, current_user.id)
+    await service.delete_session(session_id, current_user)
     return {"status": "deleted"}

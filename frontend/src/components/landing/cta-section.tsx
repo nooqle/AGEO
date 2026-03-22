@@ -11,7 +11,7 @@ export function CTASection() {
           立即体验 Specta AI，洞察您的品牌在AI时代的可见性
         </p>
         <Link
-          href="/dashboard"
+          href="/auth"
           className="inline-block px-8 py-3 bg-[#6366F1] text-white rounded-lg font-medium hover:bg-[#4F46E5] transition-colors"
         >
           免费开始

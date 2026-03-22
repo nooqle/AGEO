@@ -21,6 +21,8 @@ from sqlalchemy.orm import selectinload
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.task_run import TaskRun, TaskRunStatus, TaskTriggerSource
 from app.models.task_run_child_attempt import TaskRunChildAttempt
+from app.models.user import User
+from app.services.access_scope_service import AccessScopeService
 from app.services.runtime_coordinator import runtime_coordinator
 from app.services.task_event_bus import TaskStatusChangedEvent
 
@@ -506,6 +508,26 @@ class TaskService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_task_for_viewer(
+        self,
+        task_id: UUID,
+        viewer: User,
+    ) -> AnalysisTask | None:
+        stmt = (
+            select(AnalysisTask)
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
+            .where(
+                AnalysisTask.id == task_id,
+                AccessScopeService.task_visibility_filter(viewer),
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_task_run(self, task_id: UUID, run_id: UUID) -> TaskRun | None:
         """Get a single runtime attempt by task/run identity."""
 
@@ -587,6 +609,46 @@ class TaskService:
         result = await self.db.execute(query)
         tasks = list(result.scalars().all())
 
+        return tasks, total
+
+    async def list_tasks_for_viewer(
+        self,
+        viewer: User,
+        *,
+        session_id: UUID | None = None,
+        status: TaskStatus | None = None,
+        is_scheduled: bool | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[AnalysisTask], int]:
+        conditions = [AccessScopeService.task_visibility_filter(viewer)]
+        if session_id is not None:
+            conditions.append(AnalysisTask.session_id == session_id)
+        if status is not None:
+            conditions.append(AnalysisTask.status == status)
+        if is_scheduled is True:
+            conditions.append(AnalysisTask.monitoring_schedule_id.isnot(None))
+        elif is_scheduled is False:
+            conditions.append(AnalysisTask.monitoring_schedule_id.is_(None))
+
+        count_stmt = select(func.count()).select_from(AnalysisTask).where(*conditions)
+        count_result = await self.db.execute(count_stmt)
+        total = count_result.scalar() or 0
+
+        query = (
+            select(AnalysisTask)
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
+            .where(*conditions)
+            .order_by(AnalysisTask.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        tasks = list(result.scalars().all())
         return tasks, total
 
     async def get_task_runs(

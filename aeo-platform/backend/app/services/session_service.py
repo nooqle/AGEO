@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.message import Message, MessageRole
 from app.models.session import Session, SessionStatus
+from app.models.user import User
+from app.services.access_scope_service import AccessScopeService
 
 
 class SessionService:
@@ -24,7 +26,7 @@ class SessionService:
 
     async def list_sessions(
         self,
-        user_id: UUID,
+        viewer: User,
         limit: int = 20,
         offset: int = 0,
         status: SessionStatus | None = None,
@@ -41,7 +43,7 @@ class SessionService:
             包含 sessions 列表和 total 的字典
         """
         # 基础过滤条件
-        base_filter = [Session.user_id == user_id]
+        base_filter = [AccessScopeService.session_visibility_filter(viewer)]
         if status is not None:
             base_filter.append(Session.status == status)
 
@@ -76,9 +78,7 @@ class SessionService:
             .group_by(Message.session_id)
         )
         msg_count_result = await self.db.execute(msg_count_stmt)
-        msg_counts = {
-            row.session_id: row.message_count for row in msg_count_result
-        }
+        msg_counts = {row.session_id: row.message_count for row in msg_count_result}
 
         # 子查询：每个 session 的最新消息（ROW_NUMBER 避免同时间戳重复行）
         latest_msg_subq = (
@@ -99,9 +99,7 @@ class SessionService:
             latest_msg_subq.c.session_id, latest_msg_subq.c.content
         ).where(latest_msg_subq.c.rn == 1)
         latest_msg_result = await self.db.execute(latest_msg_stmt)
-        latest_msgs = {
-            row.session_id: row.content for row in latest_msg_result
-        }
+        latest_msgs = {row.session_id: row.content for row in latest_msg_result}
 
         # 子查询：每个 session 的第一条 user 消息（ROW_NUMBER 避免同时间戳重复行）
         first_user_msg_subq = (
@@ -125,9 +123,7 @@ class SessionService:
             first_user_msg_subq.c.session_id, first_user_msg_subq.c.content
         ).where(first_user_msg_subq.c.rn == 1)
         first_user_msg_result = await self.db.execute(first_user_msg_stmt)
-        first_user_msgs = {
-            row.session_id: row.content for row in first_user_msg_result
-        }
+        first_user_msgs = {row.session_id: row.content for row in first_user_msg_result}
 
         # 组装结果
         items = []
@@ -185,7 +181,7 @@ class SessionService:
         return None
 
     async def create_session(
-        self, user_id: UUID, entity_id: UUID | None = None
+        self, viewer: User, entity_id: UUID | None = None
     ) -> dict[str, Any]:
         """Create new session.
 
@@ -197,7 +193,7 @@ class SessionService:
             Session data
         """
         session = Session(
-            user_id=user_id,
+            user_id=viewer.id,
             status="active",
             entity_id=entity_id,
         )
@@ -206,8 +202,28 @@ class SessionService:
         await self.db.refresh(session)
         return self._session_to_dict(session)
 
+    async def get_latest_session_by_entity(
+        self,
+        entity_id: UUID,
+        viewer: User,
+    ) -> dict[str, Any] | None:
+        stmt = (
+            select(Session)
+            .where(
+                Session.entity_id == entity_id,
+                AccessScopeService.session_visibility_filter(viewer),
+            )
+            .order_by(Session.updated_at.desc())
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        session = result.scalar_one_or_none()
+        if not session:
+            return None
+        return self._session_to_dict(session)
+
     async def get_session(
-        self, session_id: UUID, user_id: UUID
+        self, session_id: UUID, viewer: User
     ) -> dict[str, Any] | None:
         """Get session details.
 
@@ -218,14 +234,17 @@ class SessionService:
             Session data or None
         """
         result = await self.db.execute(
-            select(Session).where(Session.id == session_id, Session.user_id == user_id)
+            select(Session).where(
+                Session.id == session_id,
+                AccessScopeService.session_visibility_filter(viewer),
+            )
         )
         session = result.scalar_one_or_none()
         if not session:
             return None
         return self._session_to_dict(session)
 
-    async def delete_session(self, session_id: UUID, user_id: UUID) -> bool:
+    async def delete_session(self, session_id: UUID, viewer: User) -> bool:
         """Delete session.
 
         Args:
@@ -235,7 +254,9 @@ class SessionService:
             True if deleted
         """
         result = await self.db.execute(
-            select(Session).where(Session.id == session_id, Session.user_id == user_id)
+            select(Session).where(
+                Session.id == session_id, Session.user_id == viewer.id
+            )
         )
         session = result.scalar_one_or_none()
         if not session:

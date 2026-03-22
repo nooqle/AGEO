@@ -5,6 +5,9 @@ export interface Entity {
   domain: string;
   industry: string;
   description: string;
+  visibilityScope: 'personal' | 'organization';
+  ownerUserId: string | null;
+  organizationId: string | null;
   lastAnalyzed: string | null;
   status: 'active' | 'pending' | 'inactive';
   createdAt: string;
@@ -17,6 +20,7 @@ export interface CreateEntityInput {
   domain: string;
   industry: string;
   description: string;
+  visibilityScope: 'personal' | 'organization';
 }
 
 export interface UpdateEntityInput {
@@ -25,6 +29,7 @@ export interface UpdateEntityInput {
   domain?: string;
   industry?: string;
   description?: string;
+  visibilityScope?: 'personal' | 'organization';
 }
 
 /**
@@ -38,6 +43,9 @@ export function normalizeEntity(raw: Record<string, unknown>): Entity {
     domain: String(raw.domain ?? ''),
     industry: String(raw.industry ?? ''),
     description: String(raw.description ?? ''),
+    visibilityScope: (raw.visibility_scope ?? raw.visibilityScope ?? 'personal') as Entity['visibilityScope'],
+    ownerUserId: (raw.owner_user_id ?? raw.ownerUserId ?? null) as string | null,
+    organizationId: (raw.organization_id ?? raw.organizationId ?? null) as string | null,
     lastAnalyzed: (raw.last_analyzed ?? raw.lastAnalyzed ?? null) as string | null,
     status: (raw.status || 'pending') as Entity['status'],
     createdAt: String(raw.created_at ?? raw.createdAt ?? new Date().toISOString()),

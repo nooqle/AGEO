@@ -79,8 +79,16 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
         </div>
 
         <div className="mt-2.5 min-w-0">
-          <div className="truncate text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-            {entity.name}
+          <div className="flex items-center gap-2">
+            <div className="truncate text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+              {entity.name}
+            </div>
+            <span
+              className="inline-flex flex-shrink-0 rounded-full border px-2 py-0.5 text-[10px]"
+              style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-tertiary)' }}
+            >
+              {entity.visibilityScope === 'organization' ? '组织空间' : '个人空间'}
+            </span>
           </div>
           {entity.domain && (
             <div className="mt-0.5 truncate text-[11px]" style={{ color: 'var(--text-tertiary)' }}>

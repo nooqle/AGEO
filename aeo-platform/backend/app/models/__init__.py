@@ -1,7 +1,7 @@
 """Database models."""
 
 from app.models.brand import BrandProfile
-from app.models.entity import Entity
+from app.models.entity import Entity, EntityVisibilityScope
 from app.models.file_metadata import FileMetadata
 from app.models.knowledge import KnowledgeRecord, KnowledgeSegment
 from app.models.llm_usage import LLMUsageRecord
@@ -11,6 +11,11 @@ from app.models.monitoring_schedule import (
     MonitoringSchedule,
     ScheduleFrequency,
     ScheduleStatus,
+)
+from app.models.organization import Organization, OrganizationStatus
+from app.models.registration_application import (
+    RegistrationApplication,
+    RegistrationApplicationStatus,
 )
 from app.models.session import Session
 from app.models.snapshot import AnalysisSnapshot, SnapshotStatus
@@ -38,14 +43,29 @@ from app.models.task_run_child_attempt import (
     TaskRunChildAttemptKind,
     TaskRunChildAttemptStatus,
 )
-from app.models.user import User
+from app.models.user import User, UserRole, UserStatus
+from app.models.verification_challenge import (
+    VerificationChallenge,
+    VerificationChannel,
+    VerificationPurpose,
+)
 
 __all__ = [
     "Session",
     "Message",
     "BrandProfile",
     "User",
+    "UserStatus",
+    "UserRole",
+    "Organization",
+    "OrganizationStatus",
+    "RegistrationApplication",
+    "RegistrationApplicationStatus",
+    "VerificationChallenge",
+    "VerificationChannel",
+    "VerificationPurpose",
     "Entity",
+    "EntityVisibilityScope",
     "FileMetadata",
     "KnowledgeRecord",
     "KnowledgeSegment",
