@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.organization import Organization, OrganizationStatus
 from app.models.user import User, UserRole, UserStatus
+from app.services.identity_normalization_service import normalize_email, normalize_phone
 
 
 class AccountAdminService:
@@ -42,8 +43,9 @@ class AccountAdminService:
             raise ValueError("用户不存在")
 
         if "email" in changes:
-            email = changes["email"]
-            normalized_email = str(email).strip().lower() if email else None
+            normalized_email = normalize_email(
+                str(changes["email"]) if changes["email"] is not None else None
+            )
             if normalized_email:
                 result = await self.db.execute(
                     select(User).where(
@@ -56,8 +58,9 @@ class AccountAdminService:
             user.email = normalized_email
 
         if "phone" in changes:
-            phone = changes["phone"]
-            normalized_phone = str(phone).strip() if phone else None
+            normalized_phone = normalize_phone(
+                str(changes["phone"]) if changes["phone"] is not None else None
+            )
             if normalized_phone:
                 result = await self.db.execute(
                     select(User).where(

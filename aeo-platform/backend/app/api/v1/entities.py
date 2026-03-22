@@ -60,6 +60,8 @@ async def update_entity(
     updates = data.model_dump(exclude_none=True)
     try:
         entity = await service.update_entity(entity_id, updates, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not entity:
@@ -75,6 +77,9 @@ async def delete_entity(
 ):
     """Delete an entity."""
     service = EntityService(db)
-    deleted = await service.delete_entity(entity_id, current_user)
+    try:
+        deleted = await service.delete_entity(entity_id, current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Entity not found")

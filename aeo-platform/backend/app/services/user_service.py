@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
 from app.models.user import User, UserRole, UserStatus
+from app.services.identity_normalization_service import normalize_email, normalize_phone
 
 
 class UserService:
@@ -12,15 +13,24 @@ class UserService:
         self.db = db
 
     async def get_user_by_email(self, email: str) -> User | None:
-        result = await self.db.execute(select(User).where(User.email == email))
+        normalized_email = normalize_email(email)
+        if normalized_email is None:
+            return None
+        result = await self.db.execute(
+            select(User).where(User.email == normalized_email)
+        )
         return result.scalar_one_or_none()
 
     async def get_user_by_phone(self, phone: str) -> User | None:
-        result = await self.db.execute(select(User).where(User.phone == phone))
+        normalized_phone = normalize_phone(phone)
+        if normalized_phone is None:
+            return None
+        result = await self.db.execute(
+            select(User).where(User.phone == normalized_phone)
+        )
         return result.scalar_one_or_none()
 
     async def get_user_by_identity(self, *, channel: str, target: str) -> User | None:
-        target = target.strip()
         if channel == "email":
             return await self.get_user_by_email(target)
         if channel == "phone":
@@ -33,7 +43,7 @@ class UserService:
 
     async def create_user(self, email: str, password: str) -> User:
         user = User(
-            email=email,
+            email=normalize_email(email),
             hashed_password=hash_password(password),
             is_active=True,
             status=UserStatus.ACTIVE,

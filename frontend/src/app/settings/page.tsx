@@ -380,7 +380,6 @@ export default function SettingsPage() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [registrationApplications, setRegistrationApplications] = useState<RegistrationApplication[]>([]);
   const [isApplicationsLoading, setIsApplicationsLoading] = useState(false);
-  const [reviewingApplicationId, setReviewingApplicationId] = useState<string | null>(null);
 
   const selectedEntity = useMemo(
     () => entities.find((entity) => entity.id === selectedEntityId) || null,
@@ -400,24 +399,6 @@ export default function SettingsPage() {
       toast.error(error instanceof Error ? error.message : '加载注册申请失败');
     } finally {
       setIsApplicationsLoading(false);
-    }
-  }
-
-  async function handleReviewApplication(applicationId: string, action: 'approve' | 'reject') {
-    setReviewingApplicationId(applicationId);
-    try {
-      if (action === 'approve') {
-        await api.approveRegistrationApplication(applicationId);
-        toast.success('账号申请已审核通过');
-      } else {
-        await api.rejectRegistrationApplication(applicationId);
-        toast.success('账号申请已拒绝');
-      }
-      await loadRegistrationApplications();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '审核操作失败');
-    } finally {
-      setReviewingApplicationId(null);
     }
   }
 
@@ -1384,7 +1365,7 @@ export default function SettingsPage() {
                             <div>
                               <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>待审核注册申请</div>
                               <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
-                                内部管理员在这里快速审核邮箱 / 手机验证码注册申请，打通客户开通前的最小链路。
+                                当前设置页只展示申请摘要。实际审批、组织归属选择和账号开通统一在运营控制台完成。
                               </div>
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
@@ -1430,24 +1411,17 @@ export default function SettingsPage() {
                                     </div>
                                   </div>
                                   {application.status === 'pending_review' ? (
-                                    <div className="flex flex-wrap gap-2">
-                                      <Button
-                                        variant="secondary"
-                                        size="md"
-                                        onClick={() => void handleReviewApplication(application.id, 'reject')}
-                                        isLoading={reviewingApplicationId === application.id}
-                                      >
-                                        拒绝
-                                      </Button>
-                                      <Button
-                                        variant="primary"
-                                        size="md"
-                                        onClick={() => void handleReviewApplication(application.id, 'approve')}
-                                        isLoading={reviewingApplicationId === application.id}
-                                      >
-                                        审核通过
-                                      </Button>
-                                    </div>
+                                    <Link
+                                      href="/control-plane"
+                                      className="inline-flex h-10 items-center rounded-full border px-4 text-sm font-medium"
+                                      style={{
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--bg-elevated)',
+                                        color: 'var(--text-primary)',
+                                      }}
+                                    >
+                                      去运营控制台审核
+                                    </Link>
                                   ) : (
                                     <div className="rounded-full px-3 py-1 text-xs" style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
                                       已处理

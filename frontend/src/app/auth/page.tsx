@@ -6,9 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   RiArrowLeftLine,
   RiBuildingLine,
-  RiMailLine,
   RiPassValidLine,
-  RiPhoneLine,
   RiShieldCheckLine,
 } from '@remixicon/react';
 import { api } from '@/services/api';
@@ -17,6 +15,7 @@ import { toast } from '@/components/ui/toast';
 import type { VerificationChannel } from '@/types/auth';
 
 type AuthMode = 'login' | 'register';
+const EMAIL_CHANNEL: VerificationChannel = 'email';
 
 function normalizeTarget(channel: VerificationChannel, value: string) {
   const trimmed = value.trim();
@@ -34,7 +33,6 @@ function AuthPageContent() {
   const nextPath = useMemo(() => searchParams.get('next') || '/dashboard', [searchParams]);
 
   const [mode, setMode] = useState<AuthMode>('login');
-  const [channel, setChannel] = useState<VerificationChannel>('email');
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [countdown, setCountdown] = useState(0);
@@ -71,23 +69,21 @@ function AuthPageContent() {
 
   const activeTarget = mode === 'login'
     ? loginTarget
-    : channel === 'email'
-      ? registrationEmail
-      : registrationPhone;
+    : registrationEmail;
 
-  const canSendCode = normalizeTarget(channel, activeTarget).length > 0 && countdown === 0 && !isSendingCode;
+  const canSendCode = normalizeTarget(EMAIL_CHANNEL, activeTarget).length > 0 && countdown === 0 && !isSendingCode;
 
   const handleSendCode = async () => {
-    const normalizedTarget = normalizeTarget(channel, activeTarget);
+    const normalizedTarget = normalizeTarget(EMAIL_CHANNEL, activeTarget);
     if (!normalizedTarget) {
-      toast.error(channel === 'email' ? '请先输入邮箱地址' : '请先输入手机号');
+      toast.error('请先输入邮箱地址');
       return;
     }
     setIsSendingCode(true);
     setDebugCode(null);
     try {
       const response = await api.sendVerificationCode({
-        channel,
+        channel: EMAIL_CHANNEL,
         purpose: mode === 'login' ? 'login' : 'registration',
         target: normalizedTarget,
       });
@@ -103,7 +99,7 @@ function AuthPageContent() {
 
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
-    const normalizedTarget = normalizeTarget(channel, loginTarget);
+    const normalizedTarget = normalizeTarget(EMAIL_CHANNEL, loginTarget);
     if (!normalizedTarget || !loginCode.trim()) {
       toast.error('请先填写账号和验证码');
       return;
@@ -112,7 +108,7 @@ function AuthPageContent() {
     setPendingReviewMessage(null);
     try {
       const response = await api.loginWithOtp({
-        channel,
+        channel: EMAIL_CHANNEL,
         target: normalizedTarget,
         verification_code: loginCode.trim(),
       });
@@ -132,10 +128,7 @@ function AuthPageContent() {
 
   const handleRegister = async (event: React.FormEvent) => {
     event.preventDefault();
-    const normalizedTarget = normalizeTarget(
-      channel,
-      channel === 'email' ? registrationEmail : registrationPhone
-    );
+    const normalizedTarget = normalizeTarget(EMAIL_CHANNEL, registrationEmail);
     if (!normalizedTarget || !registrationCode.trim() || !organizationName.trim() || !jobTitle.trim()) {
       toast.error('请先完整填写注册信息');
       return;
@@ -145,7 +138,7 @@ function AuthPageContent() {
       await api.createRegistrationApplication({
         email: registrationEmail.trim() ? registrationEmail.trim().toLowerCase() : null,
         phone: registrationPhone.trim() || null,
-        verification_channel: channel,
+        verification_channel: EMAIL_CHANNEL,
         verification_target: normalizedTarget,
         verification_code: registrationCode.trim(),
         organization_name: organizationName.trim(),
@@ -191,7 +184,7 @@ function AuthPageContent() {
                   先提交身份与组织信息，再进入品牌分析工作台。
                 </h1>
                 <p className="mt-4 max-w-2xl text-sm leading-7 lg:text-[15px]" style={{ color: 'var(--text-secondary)' }}>
-                  这一版账号体系采用验证码登录和人工审核开通。组织空间下的品牌资料可在同组织账号之间共享，个人空间数据仍保持私有。
+                  这一版账号体系采用邮箱验证码登录和人工审核开通。组织空间下的品牌资料可在同组织账号之间共享，个人空间数据仍保持私有。
                 </p>
               </div>
             </div>
@@ -261,45 +254,21 @@ function AuthPageContent() {
                 ))}
               </div>
 
-              <div className="mt-5 grid grid-cols-2 gap-2 rounded-[18px] border p-1" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)' }}>
-                {[
-                  { key: 'email', label: '邮箱验证码', icon: <RiMailLine className="h-4 w-4" /> },
-                  { key: 'phone', label: '手机号验证码', icon: <RiPhoneLine className="h-4 w-4" /> },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => {
-                      setChannel(item.key as VerificationChannel);
-                      setDebugCode(null);
-                    }}
-                    className="inline-flex items-center justify-center gap-2 rounded-[14px] px-4 py-3 text-sm font-medium transition-colors"
-                    style={{
-                      backgroundColor: channel === item.key ? 'var(--bg-secondary)' : 'transparent',
-                      color: channel === item.key ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    }}
-                  >
-                    {item.icon}
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-
               <div className="mt-4 rounded-[20px] border px-4 py-3 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-                当前前端已接入邮箱/手机号 OTP 流程；验证码如果处于开发环境，会直接展示调试码，便于联调审核与登录链路。
+                当前前端已接入邮箱验证码流程；手机号目前只作为可选联系资料保存，暂不参与登录或验证码发送。
               </div>
 
               {mode === 'login' ? (
                 <form className="mt-6 space-y-4" onSubmit={handleLogin}>
                   <div>
                     <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                      {channel === 'email' ? '邮箱地址' : '手机号'}
+                      邮箱地址
                     </label>
                     <input
-                      type={channel === 'email' ? 'email' : 'tel'}
+                      type="email"
                       value={loginTarget}
                       onChange={(event) => setLoginTarget(event.target.value)}
-                      placeholder={channel === 'email' ? 'you@company.com' : '13800000000'}
+                      placeholder="you@company.com"
                       className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
                       style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                     />
@@ -371,7 +340,7 @@ function AuthPageContent() {
                     </div>
                     <div>
                       <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                        手机号
+                        手机号（选填）
                       </label>
                       <input
                         type="tel"
@@ -429,7 +398,7 @@ function AuthPageContent() {
 
                   <div>
                     <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                      {channel === 'email' ? '邮箱验证码' : '短信验证码'}
+                      邮箱验证码
                     </label>
                     <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
                       <input
@@ -477,11 +446,11 @@ function AuthPageContent() {
                 </form>
               )}
 
-              <div className="mt-6 rounded-[20px] border px-4 py-3 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-                {mode === 'login'
-                  ? '如果账号还没有被审核开通，登录会直接提示“待审核开通”。'
-                  : '注册申请提交后不会自动开通。内部管理员审核通过后，你才能使用验证码登录进入系统。'}
-              </div>
+                <div className="mt-6 rounded-[20px] border px-4 py-3 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
+                  {mode === 'login'
+                    ? '如果账号还没有被审核开通，登录会直接提示“待审核开通”。'
+                    : '注册申请提交后不会自动开通。内部管理员审核通过后，你才能使用邮箱验证码登录进入系统。'}
+                </div>
             </div>
           </section>
         </div>

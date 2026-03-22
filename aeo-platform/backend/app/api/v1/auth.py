@@ -11,7 +11,7 @@ from app.api.deps import (
 from app.core.security import create_access_token
 from app.models.registration_application import RegistrationApplicationStatus
 from app.models.user import UserStatus
-from app.models.verification_challenge import VerificationPurpose
+from app.models.verification_challenge import VerificationChannel, VerificationPurpose
 from app.schemas.auth import (
     LoginRequest,
     OtpLoginRequest,
@@ -25,12 +25,21 @@ from app.schemas.auth import (
 )
 from app.schemas.user import UserCreate, UserResponse
 from app.services.registration_application_service import RegistrationApplicationService
+from app.services.identity_normalization_service import normalize_email, normalize_phone
 from app.services.user_service import UserService
 from app.services.verification_service import VerificationService
 from app.services.verification_service import VerificationThrottleError
 from app.services.verification_delivery_service import VerificationDeliveryError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _ensure_email_only(channel: VerificationChannel, action: str) -> None:
+    if channel != VerificationChannel.EMAIL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"当前阶段仅支持邮箱验证码{action}",
+        )
 
 
 @router.post("/register", status_code=status.HTTP_410_GONE)
@@ -46,11 +55,18 @@ async def send_verification_code(
     payload: VerificationSendCodeRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_email_only(payload.channel, "发送")
+    target = normalize_email(payload.target)
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请输入有效的邮箱地址",
+        )
     service = VerificationService(db)
     try:
         response = await service.send_code(
             channel=payload.channel,
-            target=payload.target.strip(),
+            target=target,
             purpose=payload.purpose,
         )
     except VerificationDeliveryError as exc:
@@ -75,13 +91,20 @@ async def create_registration_application(
     payload: RegistrationApplicationCreateRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_email_only(payload.verification_channel, "注册")
+    verification_target = normalize_email(payload.verification_target)
+    if not verification_target:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请输入有效的验证码目标邮箱",
+        )
     service = RegistrationApplicationService(db)
     try:
         application = await service.create_application(
-            email=payload.email.strip().lower() if payload.email else None,
-            phone=payload.phone.strip() if payload.phone else None,
+            email=normalize_email(payload.email),
+            phone=normalize_phone(payload.phone),
             verification_channel=payload.verification_channel,
-            verification_target=payload.verification_target.strip(),
+            verification_target=verification_target,
             verification_code=payload.verification_code.strip(),
             organization_name=payload.organization_name.strip(),
             job_title=payload.job_title.strip(),
@@ -167,12 +190,14 @@ async def login(_: LoginRequest):
 
 @router.post("/login/otp", response_model=TokenResponse)
 async def otp_login(payload: OtpLoginRequest, db: AsyncSession = Depends(get_db)):
+    _ensure_email_only(payload.channel, "登录")
+    target = normalize_email(payload.target) or ""
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请输入有效的邮箱地址",
+        )
     verification = VerificationService(db)
-    target = (
-        payload.target.strip().lower()
-        if payload.channel.value == "email"
-        else payload.target.strip()
-    )
     challenge = await verification.verify_code(
         channel=payload.channel,
         target=target,

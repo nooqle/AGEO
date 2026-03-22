@@ -14,6 +14,7 @@ from app.api.deps import get_current_user, get_db
 from app.models.monitoring_schedule import ScheduleFrequency, ScheduleStatus
 from app.services.entity_service import EntityService
 from app.services.monitoring_service import MonitoringService
+from app.services.access_scope_service import AccessScopeService
 from app.services.task_service import task_to_dict
 
 logger = logging.getLogger(__name__)
@@ -140,10 +141,11 @@ async def create_schedule(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Entity not found",
         )
-    if entity.get("owner_user_id") != str(current_user.id):
+    entity_model = await entity_service.get_entity_model(str(entity_id), current_user)
+    if not AccessScopeService.can_manage_entity(entity_model, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="仅品牌创建者可创建监测计划",
+            detail="仅品牌创建者或内部管理员可创建监测计划",
         )
 
     try:
@@ -282,10 +284,10 @@ async def update_schedule(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Schedule not found",
         )
-    if schedule.user_id != current_user.id:
+    if not AccessScopeService.can_manage_schedule(schedule, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="仅计划创建者可修改监测计划",
+            detail="仅计划创建者或内部管理员可修改监测计划",
         )
 
     update_kwargs: dict[str, Any] = {}
@@ -348,10 +350,10 @@ async def delete_schedule(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Schedule not found",
         )
-    if schedule.user_id != current_user.id:
+    if not AccessScopeService.can_manage_schedule(schedule, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="仅计划创建者可删除监测计划",
+            detail="仅计划创建者或内部管理员可删除监测计划",
         )
 
     await service.delete_schedule(sid)
@@ -374,10 +376,10 @@ async def pause_schedule(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Schedule not found",
         )
-    if schedule.user_id != current_user.id:
+    if not AccessScopeService.can_manage_schedule(schedule, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="仅计划创建者可暂停监测计划",
+            detail="仅计划创建者或内部管理员可暂停监测计划",
         )
 
     try:
@@ -406,10 +408,10 @@ async def resume_schedule(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Schedule not found",
         )
-    if schedule.user_id != current_user.id:
+    if not AccessScopeService.can_manage_schedule(schedule, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="仅计划创建者可恢复监测计划",
+            detail="仅计划创建者或内部管理员可恢复监测计划",
         )
 
     try:
@@ -503,10 +505,10 @@ async def clear_baseline(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Schedule not found",
         )
-    if schedule.user_id != current_user.id:
+    if not AccessScopeService.can_manage_schedule(schedule, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="仅计划创建者可清除 baseline",
+            detail="仅计划创建者或内部管理员可清除 baseline",
         )
 
     await service.clear_baseline(sid)
