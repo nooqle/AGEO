@@ -111,9 +111,9 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
           </button>
         </div>
       ) : entities.length === 0 ? (
-        <p className="mb-4 text-[13px] leading-7" style={{ color: 'var(--text-tertiary)' }}>
-          创建第一个品牌后，这里会出现对话分析入口和持续监测入口。
-        </p>
+          <p className="mb-4 text-[13px] leading-7" style={{ color: 'var(--text-tertiary)' }}>
+            创建品牌后可使用对话分析和持续监测。
+          </p>
       ) : null}
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">

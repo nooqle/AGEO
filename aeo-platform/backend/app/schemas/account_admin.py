@@ -58,6 +58,8 @@ class ControlPlaneCustomerSummary(BaseModel):
     primary_account: str | None = None
     member_count: int
     brand_count: int
+    organization_brand_count: int = 0
+    personal_brand_count: int = 0
     tokens_7d: int
     cost_7d: float
     active_task_count: int
@@ -66,9 +68,13 @@ class ControlPlaneCustomerSummary(BaseModel):
 
 class ControlPlaneTaskSummary(BaseModel):
     task_id: UUID
+    organization_id: UUID | None = None
+    customer_name: str | None = None
     brand_name: str
     session_id: UUID | None
     entity_id: UUID | None
+    visibility_scope: str | None = None
+    initiator_account: str | None = None
     status: str
     llm_total_tokens: int
     llm_estimated_cost: float
@@ -80,6 +86,7 @@ class ControlPlaneEntitySummary(BaseModel):
     id: UUID
     name: str
     visibility_scope: str
+    owner_account: str | None = None
     last_analyzed: datetime | None
     updated_at: datetime
 
@@ -90,3 +97,74 @@ class ControlPlaneCustomerDetail(BaseModel):
     users: list[AdminUserResponse]
     entities: list[ControlPlaneEntitySummary]
     recent_tasks: list[ControlPlaneTaskSummary]
+
+
+class ControlPlaneObservabilitySummary(BaseModel):
+    days: int
+    call_count: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cached_prompt_tokens: int
+    billable_prompt_tokens: int
+    cache_hit_ratio: float
+    total_cost: float
+    total_cost_cache_aware: float
+    estimated_savings: float
+    total_latency_ms: int
+    avg_latency_ms: float
+    unique_models: int
+    first_call_at: datetime | None = None
+    last_call_at: datetime | None = None
+
+
+class ControlPlaneCostBreakdown(BaseModel):
+    organization_id: UUID | None = None
+    customer_name: str | None = None
+    brand_name: str | None = None
+    provider: str | None = None
+    model_name: str | None = None
+    step: str | None = None
+    step_name: str | None = None
+    call_count: int
+    total_tokens: int
+    prompt_tokens: int
+    cached_prompt_tokens: int
+    cache_hit_ratio: float
+    total_cost: float
+    total_cost_cache_aware: float
+    estimated_savings: float
+    total_latency_ms: int
+    avg_latency_ms: float
+
+
+class ControlPlaneRecentCall(BaseModel):
+    id: UUID
+    task_id: UUID | None = None
+    session_id: UUID | None = None
+    organization_id: UUID | None = None
+    customer_name: str | None = None
+    brand_name: str
+    provider: str
+    model_name: str
+    step: str | None = None
+    step_name: str | None = None
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cached_prompt_tokens: int
+    billable_prompt_tokens: int
+    cache_hit_ratio: float
+    latency_ms: int
+    estimated_cost: float
+    estimated_cost_cache_aware: float
+    estimated_savings: float
+    created_at: datetime | None = None
+
+
+class ControlPlaneObservabilitySnapshot(BaseModel):
+    summary: ControlPlaneObservabilitySummary
+    by_customer_brand: list[ControlPlaneCostBreakdown]
+    by_model: list[ControlPlaneCostBreakdown]
+    by_step: list[ControlPlaneCostBreakdown]
+    recent_calls: list[ControlPlaneRecentCall]

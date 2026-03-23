@@ -41,7 +41,7 @@ export function ActionQueueSection({ data }: ActionQueueSectionProps) {
           {data?.title || '下一步优化'}
         </h2>
         <p className="text-sm text-[var(--text-secondary)]">
-          {data?.description || '优先处理这些动作，才能改善接下来的战况。'}
+          {data?.description || '建议优先处理的动作列表。'}
         </p>
       </div>
 

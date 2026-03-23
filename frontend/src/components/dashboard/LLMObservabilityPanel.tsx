@@ -351,9 +351,9 @@ export function LLMObservabilityPanel({
           <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.02em]" style={{ color: 'var(--text-primary)' }}>
             {brandName ? `${brandName} 的令牌消耗 / 缓存 / 成本 / 时延` : '当前品牌的大模型观测'}
           </h2>
-          <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-            这里展示当前品牌在最近时间窗口内的模型调用量、令牌消耗、缓存命中、估算成本和响应时延，用于判断分析链路是否稳定、缓存是否真正带来了成本收益。
-          </p>
+            <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+              展示当前品牌在最近时间窗口内的模型调用量、令牌消耗、缓存命中、估算成本和响应时延。
+            </p>
           <p className="mt-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
             页面保持可见时会自动刷新，也可以手动拉取最新观测结果。
           </p>
@@ -413,7 +413,7 @@ export function LLMObservabilityPanel({
           className="mt-6 rounded-[22px] border border-dashed px-5 py-5 text-sm leading-7"
           style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
         >
-          当前窗口内还没有可用的大模型调用记录。完成一次品牌分析后，这里会出现模型、步骤和最近调用明细。
+          当前窗口内暂无模型调用记录。
         </div>
       ) : (
         <div className="mt-6 space-y-6">

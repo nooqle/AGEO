@@ -579,7 +579,7 @@ function AppendixSection({ content, descriptor }: { content: CanvasContent; desc
     <div className="page-break-before">
       <Section
         title="完整导出附录"
-        subtitle="主报告负责阅读体验，附录保留完整文本内容，避免关键模块在导出中缺失。"
+        subtitle="附录保留完整文本内容。"
         kicker="Appendix"
       >
         <div className="appendix-section">
@@ -609,7 +609,7 @@ function ReportPdfDocument({ content, descriptor }: { content: ReportCanvasConte
       extraMeta={platforms}
     >
       {view.summary.metrics && view.summary.metrics.length > 0 ? (
-        <Section title="核心指标" subtitle="先看这份交付物最重要的判断指标">
+        <Section title="核心指标" subtitle="本次交付的关键指标">
           <div className="grid grid-3">
             {view.summary.metrics.map((metric) => (
               <div key={metric.id} className="metric-card">
@@ -827,7 +827,7 @@ function ConfidencePdfDocument({ content, descriptor }: { content: ReportCanvasC
       ]}
     >
       {summary ? (
-        <Section title="核心指标" subtitle="先看我方与竞品引用内容的平均置信度">
+        <Section title="核心指标" subtitle="我方与竞品引用内容的平均置信度">
           <div className="grid grid-2">
             {[
               {
@@ -924,7 +924,7 @@ function ConfidencePdfDocument({ content, descriptor }: { content: ReportCanvasC
       ) : null}
 
       {brandPatterns.length > 0 ? (
-        <Section title="我方低置信内容共性" subtitle="只保留真实低分样本中重复出现的问题模式">
+        <Section title="我方低置信内容共性" subtitle="低置信内容中的重复问题模式">
           <div className="list">
             {brandPatterns.map((pattern, index) => (
               <div key={`${pattern.pattern_key || pattern.pattern_label}-${index}`} className="list-item">

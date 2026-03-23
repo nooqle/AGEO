@@ -6,11 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_internal_admin_user, get_db
+from app.models.task import TaskStatus
 from app.schemas.account_admin import (
     AdminUserResponse,
+    ControlPlaneCostBreakdown,
     ControlPlaneCustomerDetail,
     ControlPlaneCustomerSummary,
     ControlPlaneEntitySummary,
+    ControlPlaneObservabilitySnapshot,
+    ControlPlaneObservabilitySummary,
+    ControlPlaneRecentCall,
     ControlPlaneTaskSummary,
     OrganizationResponse,
 )
@@ -59,6 +64,92 @@ async def list_customers(
     ]
 
 
+@router.get("/tasks", response_model=list[ControlPlaneTaskSummary])
+async def list_control_plane_tasks(
+    days: int = Query(default=7, ge=1, le=90),
+    status_filter: TaskStatus | None = Query(default=None, alias="status"),
+    organization_id: UUID | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=300),
+    _: UserResponse = Depends(get_current_internal_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = ControlPlaneService(db)
+    tasks = await service.list_tasks(
+        days=days,
+        status=status_filter,
+        organization_id=organization_id,
+        limit=limit,
+    )
+    return [
+        ControlPlaneTaskSummary(
+            task_id=task.id,
+            organization_id=(
+                task.user.organization_id if task.user is not None else None
+            ),
+            customer_name=(
+                task.user.organization.legal_name
+                if task.user is not None and task.user.organization is not None
+                else None
+            ),
+            brand_name=task.brand_name,
+            session_id=task.session_id,
+            entity_id=task.entity_id,
+            visibility_scope=(
+                task.entity.visibility_scope.value
+                if task.entity is not None and task.entity.visibility_scope is not None
+                else None
+            ),
+            initiator_account=(
+                (task.user.email or task.user.phone) if task.user is not None else None
+            ),
+            status=task.status.value,
+            llm_total_tokens=task.llm_total_tokens,
+            llm_estimated_cost=task.llm_estimated_cost,
+            llm_total_latency_ms=task.llm_total_latency_ms,
+            updated_at=task.updated_at,
+        )
+        for task in tasks
+    ]
+
+
+@router.get(
+    "/observability",
+    response_model=ControlPlaneObservabilitySnapshot,
+)
+async def get_control_plane_observability(
+    days: int = Query(default=30, ge=1, le=90),
+    organization_id: UUID | None = Query(default=None),
+    limit: int = Query(default=12, ge=1, le=50),
+    _: UserResponse = Depends(get_current_internal_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = ControlPlaneService(db)
+    payload = await service.get_observability_snapshot(
+        days=days,
+        organization_id=organization_id,
+        limit=limit,
+    )
+    return ControlPlaneObservabilitySnapshot(
+        summary=ControlPlaneObservabilitySummary.model_validate(payload["summary"]),
+        by_customer_brand=[
+            ControlPlaneCostBreakdown.model_validate(item)
+            for item in payload["by_customer_brand"]
+        ],
+        by_model=[
+            ControlPlaneCostBreakdown.model_validate(item)
+            for item in payload["by_model"]
+        ],
+        by_step=[
+            ControlPlaneCostBreakdown.model_validate(item)
+            for item in payload["by_step"]
+        ],
+        recent_calls=[
+            ControlPlaneRecentCall.model_validate(item)
+            for item in payload["recent_calls"]
+        ],
+    )
+
+
 @router.get(
     "/customers/{organization_id}",
     response_model=ControlPlaneCustomerDetail,
@@ -93,6 +184,11 @@ async def get_customer_detail(
                     "id": entity.id,
                     "name": entity.name,
                     "visibility_scope": entity.visibility_scope.value,
+                    "owner_account": (
+                        (entity.owner.email or entity.owner.phone)
+                        if entity.owner is not None
+                        else None
+                    ),
                     "last_analyzed": entity.last_analyzed,
                     "updated_at": entity.updated_at,
                 }
@@ -102,9 +198,28 @@ async def get_customer_detail(
         recent_tasks=[
             ControlPlaneTaskSummary(
                 task_id=task.id,
+                organization_id=(
+                    task.user.organization_id if task.user is not None else None
+                ),
+                customer_name=(
+                    task.user.organization.legal_name
+                    if task.user is not None and task.user.organization is not None
+                    else None
+                ),
                 brand_name=task.brand_name,
                 session_id=task.session_id,
                 entity_id=task.entity_id,
+                visibility_scope=(
+                    task.entity.visibility_scope.value
+                    if task.entity is not None
+                    and task.entity.visibility_scope is not None
+                    else None
+                ),
+                initiator_account=(
+                    (task.user.email or task.user.phone)
+                    if task.user is not None
+                    else None
+                ),
                 status=task.status.value,
                 llm_total_tokens=task.llm_total_tokens,
                 llm_estimated_cost=task.llm_estimated_cost,

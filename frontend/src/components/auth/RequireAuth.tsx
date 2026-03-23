@@ -15,14 +15,19 @@ export function RequireAuth({ children }: RequireAuthProps) {
   const pathname = usePathname();
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [isChecking, setIsChecking] = useState(true);
+  const isControlPlanePath = pathname?.startsWith('/control-plane');
 
   useEffect(() => {
     let cancelled = false;
     const token = getStoredAccessToken();
     const allowDevBypass = process.env.NODE_ENV === 'development';
+    const nextPath = pathname || '/dashboard';
+    const loginPath = isControlPlanePath
+      ? `/control-plane/login?next=${encodeURIComponent(nextPath)}`
+      : `/auth?next=${encodeURIComponent(nextPath)}`;
 
-    if (!token && !allowDevBypass) {
-      router.replace(`/auth?next=${encodeURIComponent(pathname || '/dashboard')}`);
+    if (!token && (!allowDevBypass || isControlPlanePath)) {
+      router.replace(loginPath);
       return;
     }
 
@@ -35,13 +40,13 @@ export function RequireAuth({ children }: RequireAuthProps) {
       .catch(() => {
         if (cancelled) return;
         clearStoredAccessToken();
-        router.replace(`/auth?next=${encodeURIComponent(pathname || '/dashboard')}`);
+        router.replace(loginPath);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [pathname, router]);
+  }, [isControlPlanePath, pathname, router]);
 
   if (isChecking || !currentUser) {
     return (

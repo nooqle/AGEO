@@ -504,7 +504,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
               <EmptyState
                 icon={RiRobot2Line}
                 title={`${selectedBrand.name} 尚未开始分析`}
-                description="这个品牌还没有形成首页看板。先进入对话分析，完成首次采集后，这里才会出现提及率、内容引用率和五维雷达。"
+                description="完成首次分析后可查看首页指标。"
                 action={{
                   label: '进入首次分析',
                   onClick: () => {
@@ -557,7 +557,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
                   <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">兼容模式</div>
                   <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">当前显示历史诊断面板</h2>
                   <p className="mt-2 max-w-3xl text-[14px] leading-7 text-[var(--text-secondary)]">
-                    这个品牌已有历史分析结果，但首页三看板数据暂未就绪，所以先回退到旧版 dashboard 视图，避免页面空白。
+                    首页核心指标暂未生成，当前显示基础看板。
                   </p>
                 </div>
               </section>

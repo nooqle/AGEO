@@ -390,7 +390,7 @@ function createSummaryMetrics(
       label: '品牌提及率',
       value: brandMentionRate,
       unit: brandMentionRate !== undefined ? '%' : undefined,
-      description: '回答里直接提到品牌的占比，先看品牌有没有进场。',
+      description: '回答里直接提到品牌的占比。',
       status:
         brandMentionRate === undefined ? 'neutral' : brandMentionRate >= 50 ? 'good' : brandMentionRate >= 20 ? 'warning' : 'risk',
     },
@@ -413,7 +413,7 @@ function createSummaryMetrics(
       id: 'scenario_coverage_count',
       label: '场景覆盖数',
       value: scenarioCoverageCount,
-      description: '品牌已经进入回答的问题数，先看品牌在哪些购车场景里已经进场。',
+      description: '品牌进入回答的问题数。',
       status:
         scenarioCoverageCount === undefined
           ? 'neutral'

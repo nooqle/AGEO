@@ -28,6 +28,8 @@ import type {
 import type {
   ControlPlaneCustomerDetail,
   ControlPlaneCustomerSummary,
+  ControlPlaneObservabilitySnapshot,
+  ControlPlaneTaskSummary,
 } from '@/types/controlPlane';
 import type {
   SkillDefinition,
@@ -47,7 +49,8 @@ import type {
 } from '@/types/monitoring';
 import { getStoredAccessToken } from '@/lib/auth-storage';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001/api/v1';
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
 
 class ApiService {
   private getAuthToken() {
@@ -156,6 +159,21 @@ class ApiService {
     return this.request<ControlPlaneCustomerSummary[]>(`/control-plane/customers?days=${days}`);
   }
 
+  async getControlPlaneTasks(options?: {
+    days?: number;
+    status?: string;
+    organizationId?: string;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (options?.days) query.set('days', String(options.days));
+    if (options?.status) query.set('status', options.status);
+    if (options?.organizationId) query.set('organization_id', options.organizationId);
+    if (options?.limit) query.set('limit', String(options.limit));
+    const qs = query.toString();
+    return this.request<ControlPlaneTaskSummary[]>(`/control-plane/tasks${qs ? `?${qs}` : ''}`);
+  }
+
   async getControlPlaneCustomerDetail(organizationId: string, options?: { days?: number; recentTaskLimit?: number }) {
     const query = new URLSearchParams();
     if (options?.days) query.set('days', String(options.days));
@@ -163,6 +181,21 @@ class ApiService {
     const qs = query.toString();
     return this.request<ControlPlaneCustomerDetail>(
       `/control-plane/customers/${organizationId}${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  async getControlPlaneObservability(options?: {
+    days?: number;
+    organizationId?: string;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (options?.days) query.set('days', String(options.days));
+    if (options?.organizationId) query.set('organization_id', options.organizationId);
+    if (options?.limit) query.set('limit', String(options.limit));
+    const qs = query.toString();
+    return this.request<ControlPlaneObservabilitySnapshot>(
+      `/control-plane/observability${qs ? `?${qs}` : ''}`
     );
   }
 

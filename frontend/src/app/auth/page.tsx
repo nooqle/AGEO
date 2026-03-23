@@ -181,10 +181,10 @@ function AuthPageContent() {
                   SPECTA ACCESS
                 </div>
                 <h1 className="mt-5 text-4xl font-semibold tracking-[-0.04em] lg:text-5xl" style={{ color: 'var(--text-primary)' }}>
-                  先提交身份与组织信息，再进入品牌分析工作台。
+                  提交身份与组织信息
                 </h1>
                 <p className="mt-4 max-w-2xl text-sm leading-7 lg:text-[15px]" style={{ color: 'var(--text-secondary)' }}>
-                  这一版账号体系采用邮箱验证码登录和人工审核开通。组织空间下的品牌资料可在同组织账号之间共享，个人空间数据仍保持私有。
+                    使用邮箱验证码登录。注册申请审核通过后开通账号；组织空间与个人空间数据彼此隔离。
                 </p>
               </div>
             </div>
@@ -193,8 +193,8 @@ function AuthPageContent() {
               {[
                 {
                   icon: <RiPassValidLine className="h-4 w-4" />,
-                  title: '注册先审核',
-                  description: '注册后不会立刻开通。后台审核通过后，账号才能进入工作台使用分析、追问和导出能力。',
+                    title: '人工审核开通',
+                    description: '注册申请审核通过后开通账号。',
                 },
                 {
                   icon: <RiBuildingLine className="h-4 w-4" />,
@@ -255,7 +255,7 @@ function AuthPageContent() {
               </div>
 
               <div className="mt-4 rounded-[20px] border px-4 py-3 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-                当前前端已接入邮箱验证码流程；手机号目前只作为可选联系资料保存，暂不参与登录或验证码发送。
+                当前支持邮箱验证码登录；手机号仅作为联系信息保存。
               </div>
 
               {mode === 'login' ? (
@@ -448,8 +448,8 @@ function AuthPageContent() {
 
                 <div className="mt-6 rounded-[20px] border px-4 py-3 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
                   {mode === 'login'
-                    ? '如果账号还没有被审核开通，登录会直接提示“待审核开通”。'
-                    : '注册申请提交后不会自动开通。内部管理员审核通过后，你才能使用邮箱验证码登录进入系统。'}
+                    ? '未开通账号会提示“待审核开通”。'
+                    : '注册申请提交后需等待审核通过。'}
                 </div>
             </div>
           </section>
