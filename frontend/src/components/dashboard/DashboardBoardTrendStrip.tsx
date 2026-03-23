@@ -66,9 +66,9 @@ export function DashboardBoardTrendStrip({ trend, accentColor }: DashboardBoardT
         }}
       >
         <div className="text-[11px] tracking-[0.08em] text-[var(--text-tertiary)]">监测趋势</div>
-        <div className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">
-          开启连续监测并积累至少 2 次结果后，这里会显示首页趋势曲线。
-        </div>
+          <div className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">
+            连续监测结果达到 2 次后可显示趋势曲线。
+          </div>
       </div>
     );
   }

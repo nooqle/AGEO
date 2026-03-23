@@ -703,7 +703,7 @@ export default function SettingsPage() {
                     设置中心
                   </h1>
                   <p className="mt-3 max-w-2xl text-sm leading-7 md:text-base" style={{ color: 'var(--text-secondary)' }}>
-                    把自动监测、告警通知、导出规则和 AEO 采集偏好集中管理。优先展示已经落地的系统能力，未接后端的能力只作为本地预设。
+                    管理自动监测、告警通知、导出规则和 AEO 采集偏好。
                   </p>
                 </div>
 
@@ -771,7 +771,7 @@ export default function SettingsPage() {
                   {entities.length === 0 && !isEntityLoading ? (
                     <div className="rounded-3xl border border-dashed px-5 py-8 text-center" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
                       <div className="text-base font-medium" style={{ color: 'var(--text-primary)' }}>还没有可配置的品牌</div>
-                      <div className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>先在控制台创建品牌实体，再为它设置自动监测和告警策略。</div>
+                        <div className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>请先创建品牌实体。</div>
                       <div className="mt-4">
                         <Link
                           href="/dashboard"
@@ -893,7 +893,7 @@ export default function SettingsPage() {
                           <div className="flex items-center justify-between gap-3">
                             <div>
                               <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>最近站内告警</div>
-                              <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>这里直接读取现有 alerts API，并保持和右上角通知中心一致。</div>
+                              <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>与站内通知中心同步。</div>
                             </div>
                             <span className="rounded-full px-2.5 py-1 text-xs" style={{ backgroundColor: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>未读 {unreadCount}</span>
                           </div>
@@ -940,13 +940,13 @@ export default function SettingsPage() {
                   tone="amber"
                   eyebrow="P1 / Export"
                   title="数据与导出"
-                  description="当前后端已有输出导出接口，但还没有全局导出设置。这里先把格式、范围和命名规则做成稳定预设。"
+                    description="配置默认导出格式、范围和命名规则。"
                   actions={<Button variant="secondary" size="md" onClick={handleSaveExportPreferences} isLoading={isSavingExport}>保存导出偏好</Button>}
                 >
                   <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
                     <div className="space-y-6">
                       <div>
-                        <FieldLabel label="默认导出格式" hint="当前真实支持 PDF 与 Excel。JSON 先不暴露，避免出现无效选项。" />
+                         <FieldLabel label="默认导出格式" hint="支持 PDF 与 Excel。" />
                         <div className="grid gap-3 sm:grid-cols-2">
                           <PillOption active={localSettings.exportFormat === 'pdf'} label="PDF" description="适合分享汇报与正式交付。" onClick={() => setLocalSettings((current) => ({ ...current, exportFormat: 'pdf' }))} />
                           <PillOption active={localSettings.exportFormat === 'excel'} label="Excel" description="适合继续分析和做二次整理。" onClick={() => setLocalSettings((current) => ({ ...current, exportFormat: 'excel' }))} />
@@ -954,9 +954,9 @@ export default function SettingsPage() {
                       </div>
 
                       <div>
-                        <FieldLabel label="导出内容范围" hint="当前先作为导出预填规则，供后续输出面板复用。" />
+                         <FieldLabel label="导出内容范围" hint="用于导出预填规则。" />
                         <div className="grid gap-3 md:grid-cols-3">
-                          <PillOption active={localSettings.exportScope === 'overview'} label="首页指标" description="只保留总览 KPI 与核心结论。" onClick={() => setLocalSettings((current) => ({ ...current, exportScope: 'overview' }))} />
+                            <PillOption active={localSettings.exportScope === 'overview'} label="首页指标" description="总览 KPI 与核心结论。" onClick={() => setLocalSettings((current) => ({ ...current, exportScope: 'overview' }))} />
                           <PillOption active={localSettings.exportScope === 'full'} label="完整报告" description="导出完整分析结论、证据与建议。" onClick={() => setLocalSettings((current) => ({ ...current, exportScope: 'full' }))} />
                           <PillOption active={localSettings.exportScope === 'trend'} label="监测趋势" description="聚焦连续监测的变化与预警。" onClick={() => setLocalSettings((current) => ({ ...current, exportScope: 'trend' }))} />
                         </div>
@@ -982,7 +982,7 @@ export default function SettingsPage() {
                         <div className="flex justify-between gap-4"><span>目标品牌</span><span style={{ color: 'var(--text-primary)' }}>{selectedEntity?.name || '--'}</span></div>
                       </div>
                       <div className="mt-5 rounded-2xl border border-dashed px-4 py-4 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
-                        自动导出、定时投递和 JSON 导出暂未接后端，这里先沉淀稳定偏好，不再展示“即将推出”空卡片。
+                        自动导出、定时投递和 JSON 导出暂未开放。
                       </div>
                     </div>
                   </div>
@@ -1032,7 +1032,7 @@ export default function SettingsPage() {
 
                       <ToggleRow
                         label="优先使用浏览器采集"
-                        description="优先使用真实浏览器路径做抓取，适合提高平台兼容性与页面稳定性。"
+                         description="使用真实浏览器路径抓取。"
                         checked={localSettings.browserFirst}
                         onChange={() => setLocalSettings((current) => ({ ...current, browserFirst: !current.browserFirst }))}
                       />
@@ -1047,7 +1047,7 @@ export default function SettingsPage() {
                         {localSettings.collectionMode === 'full' ? '全面型' : '轻量型'}
                       </div>
                       <div className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-                        {localSettings.collectionMode === 'full' ? '用于核心品牌和正式交付，默认保留更完整的平台与证据覆盖。' : '用于日常巡检和问题排查，优先获取变化信号。'}
+                         {localSettings.collectionMode === 'full' ? '适用于完整采集。' : '适用于快速巡检。'}
                       </div>
                       <div className="mt-5 flex flex-wrap gap-2">
                         {localSettings.preferredPlatforms.map((platform) => (
@@ -1057,7 +1057,7 @@ export default function SettingsPage() {
                         ))}
                       </div>
                       <div className="mt-5 rounded-2xl border border-dashed px-4 py-4 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
-                        失败重试策略暂不外露，避免把高级调试参数过早塞进主设置页。
+                         失败重试策略由系统统一管理。
                       </div>
                     </div>
                   </div>
@@ -1068,7 +1068,7 @@ export default function SettingsPage() {
                   tone="violet"
                   eyebrow="P0 / Skill Control"
                   title="Skills"
-                  description="这里先只保留 3 个固定业务 Skill Family 的控制面。当前版本不开放自定义 Skill，避免把 orchestrator 和配置面做得过重。"
+                   description="管理 Skill Family 的启用状态与生效范围。"
                   actions={
                     <div className="flex gap-2">
                       {editingSkillId ? (
@@ -1089,7 +1089,7 @@ export default function SettingsPage() {
                           <div>
                             <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>当前固定 Skill Families</div>
                             <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
-                              当前生产版本固定为 3 个业务 Skill Family。这里只配置启用状态与生效范围，不开放创建额外 Skill 或 Profile。
+                               当前提供 3 个 Skill Family。
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-2">
@@ -1335,7 +1335,7 @@ export default function SettingsPage() {
                   tone="violet"
                   eyebrow="P1 / Workspace"
                   title="账户与工作区"
-                  description="账号体系已切到验证码注册申请 + 人工审核开通。这里承载当前账户信息、默认品牌工作区，以及内部管理员进入运营控制台与审核入口。"
+                   description="管理账户信息、默认品牌工作区和运营入口。"
                   actions={<Button variant="secondary" size="md" onClick={handleSaveWorkspace} isLoading={isSavingWorkspace}>保存工作区偏好</Button>}
                 >
                   <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
@@ -1365,7 +1365,7 @@ export default function SettingsPage() {
                             <div>
                               <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>待审核注册申请</div>
                               <div className="mt-1 text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
-                                当前设置页只展示申请摘要。实际审批、组织归属选择和账号开通统一在运营控制台完成。
+                                审批与组织归属选择请在运营控制台处理。
                               </div>
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
@@ -1445,7 +1445,7 @@ export default function SettingsPage() {
                         <div className="flex justify-between gap-4"><span>职位信息</span><span style={{ color: 'var(--text-primary)' }}>{currentUser?.job_title || '--'}</span></div>
                       </div>
                       <div className="mt-5 rounded-2xl border border-dashed px-4 py-4 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>
-                        当前阶段账号体系已支持验证码登录、人工审核、个人 / 组织空间归属。换绑邮箱、换绑手机号、组织信息编辑与客户列表运营已收口到运营控制台。
+                        账户运营入口位于运营控制台。
                       </div>
                     </div>
                   </div>
@@ -1456,7 +1456,7 @@ export default function SettingsPage() {
                   tone="amber"
                   eyebrow="P0 / Compliance"
                   title="法务与数据说明"
-                  description="这部分不再伪装成可调参数，而是作为设置页底部的合规与说明入口，明确当前版本会保存哪些数据、如何用于持续监测。"
+                   description="查看数据保存与使用说明。"
                 >
                   <div className="grid gap-4 lg:grid-cols-3">
                     <div className="rounded-3xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>

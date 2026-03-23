@@ -161,9 +161,9 @@ export function DashboardBrandOverview({ entity, archive }: DashboardBrandOvervi
         <div
           className="dashboard-inner-panel rounded-[22px] px-4 py-4 text-[14px] leading-7"
           style={{ color: 'var(--text-secondary)' }}
-        >
-          已默认收起品牌档案与竞品分类，避免首页首屏被占满；需要时可手动展开查看 {displayName} 的品牌档案、定位和竞品分类。
-        </div>
+          >
+            品牌档案与竞品分类已收起，可按需展开查看 {displayName} 的品牌信息与竞品分类。
+          </div>
       ) : (
         <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
           <div

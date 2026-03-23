@@ -69,7 +69,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
               用首页判断层快速看清品牌是否被提到、内容是否进入答案，以及整体战况。
             </h1>
             <p className="max-w-2xl text-[14px] leading-8" style={{ color: 'var(--text-secondary)' }}>
-              先创建品牌，再进入对话分析。完成采集后，首页会自动生成提及率、内容引用率和五维雷达三张判断卡。
+              创建品牌并完成首次分析后，可查看提及率、内容引用率和五维雷达。
             </p>
             <div className="flex flex-wrap items-center gap-3 pt-1">
               <button

@@ -21,7 +21,7 @@ const SECTION_META = {
   },
   risk: {
     title: '高风险场景',
-    description: '只保留两类高风险：答案里同时正向出现 3 个及以上竞品，或我方品牌出现了负向提及。',
+    description: '满足高风险判定条件的场景。',
     tone: 'bg-rose-500/10 text-rose-700 border-rose-500/20',
     itemTone: 'bg-rose-500/10 text-rose-700',
   },
