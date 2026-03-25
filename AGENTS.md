@@ -124,6 +124,27 @@ Required API keys: MiniMax API key, optionally DashScope for backup LLM.
 - Do not make broad unrelated changes in one go.
 - Prefer minimal, focused edits and verify with relevant lint/tests.
 
+## Workspace / Worktree Protocol (Important)
+
+- Treat `D:\AGEO-main` as the only stable `main` baseline directory.
+- Do **not** develop new features directly inside `D:\AGEO-main`; use it only to inspect `main`, update `main`, and create new feature worktrees.
+- Treat `D:\AGEO` as a legacy worktree. Do **not** start new tasks or new Codex implementation work from this directory.
+- Before starting implementation work in this repo, always check:
+  1. current directory
+  2. current branch
+  3. whether the task belongs to an existing feature worktree or requires a new one
+- For every new task, create a dedicated feature worktree from `D:\AGEO-main` with a `codex/` branch name, for example:
+  - `git worktree add D:\AGEO-worktrees\<task-name> -b codex/<task-name> origin/main`
+- Use `D:\AGEO-worktrees\<task-name>` as the actual development directory for that task.
+- If the user asks to continue an existing task, prefer its existing feature worktree instead of creating another one.
+- Before coding in any AGEO worktree, verify:
+  - `git branch --show-current`
+  - `git status --short --branch`
+- If the current directory is `D:\AGEO`, stop and switch to either:
+  - `D:\AGEO-main` for baseline inspection, or
+  - the correct feature worktree for implementation
+- Do not commit feature work directly on `main` unless the user explicitly requests a main-branch hotfix workflow.
+
 
 ## Encoding Safety Rule (Important)
 
