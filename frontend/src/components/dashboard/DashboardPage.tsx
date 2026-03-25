@@ -11,7 +11,6 @@ import { OverviewTab } from './AEOTab';
 import { OptimizationTab } from './OptimizationTab';
 import { MonitoringTab } from './MonitoringTab';
 import { HeroSection } from './HeroSection';
-import { LLMObservabilityPanel } from './LLMObservabilityPanel';
 import { BrandCards } from './BrandCards';
 import { CompetitorTable } from './CompetitorTable';
 import { DashboardBrandOverview, type DashboardBrandArchiveData } from './DashboardBrandOverview';
@@ -540,7 +539,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           {hasData && hasSelectedBrandAnalysis && !isMonitoringMode && home && (
             <div className="space-y-6">
               {selectedBrand && <DashboardBrandOverview entity={selectedBrand} archive={brandArchive} />}
-              <LLMObservabilityPanel entityId={selectedBrandId} brandName={selectedBrandName} />
               <DashboardHomeBoards
                 home={home}
                 onSelectBoard={handleSelectBoard}
@@ -588,8 +586,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
                   ))}
                 </div>
               </div>
-
-              <LLMObservabilityPanel entityId={selectedBrandId} brandName={selectedBrandName} />
 
               <div className="flex flex-wrap gap-2">
                 {TABS.filter((tab) => tab.id !== 'monitoring').map((tab) => (

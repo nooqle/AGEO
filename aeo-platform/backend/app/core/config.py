@@ -138,6 +138,20 @@ def _require_settings() -> None:
         raise RuntimeError("生产环境禁止使用默认 JWT_SECRET，请在环境变量中显式配置")
 
     email_provider = settings.VERIFICATION_EMAIL_PROVIDER.strip().lower()
+    if email_provider == "smtp":
+        missing: list[str] = []
+        if not settings.VERIFICATION_SMTP_HOST:
+            missing.append("VERIFICATION_SMTP_HOST")
+        if not settings.VERIFICATION_SMTP_PORT:
+            missing.append("VERIFICATION_SMTP_PORT")
+        if not settings.VERIFICATION_SMTP_PASSWORD:
+            missing.append("VERIFICATION_SMTP_PASSWORD")
+        if not settings.VERIFICATION_EMAIL_FROM_ADDRESS:
+            missing.append("VERIFICATION_EMAIL_FROM_ADDRESS")
+        if missing:
+            raise RuntimeError(
+                "SMTP 邮件 provider 缺少必填配置: " + ", ".join(missing)
+            )
     if email_provider == "tencent_ses_api":
         missing: list[str] = []
         if not settings.TENCENT_SES_SECRET_ID:

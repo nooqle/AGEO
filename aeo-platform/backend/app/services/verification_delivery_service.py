@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import smtplib
+import time
 from email.message import EmailMessage
 
 from app.core.config import settings
@@ -136,7 +137,7 @@ class SmtpEmailVerificationProvider(BaseEmailVerificationProvider):
         if not host:
             raise VerificationDeliveryError("未配置 SMTP 主机")
         port = settings.VERIFICATION_SMTP_PORT
-        username = settings.VERIFICATION_SMTP_USERNAME
+        username = settings.VERIFICATION_SMTP_USERNAME or settings.VERIFICATION_EMAIL_FROM_ADDRESS
         password = settings.VERIFICATION_SMTP_PASSWORD
         use_ssl = settings.VERIFICATION_SMTP_USE_SSL
         use_tls = settings.VERIFICATION_SMTP_USE_TLS
@@ -173,6 +174,10 @@ class SmtpEmailVerificationProvider(BaseEmailVerificationProvider):
 
 
 class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
+    def __init__(self) -> None:
+        self._template_status: int | None = None
+        self._template_status_checked_at: float = 0.0
+
     def _build_template_data(
         self,
         *,
@@ -202,6 +207,65 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
                 )
         return json.dumps(data, ensure_ascii=False)
 
+    @staticmethod
+    def _build_client():
+        secret_id = _sanitize_optional_env(settings.TENCENT_SES_SECRET_ID)
+        secret_key = _sanitize_optional_env(settings.TENCENT_SES_SECRET_KEY)
+        if not secret_id or not secret_key:
+            raise VerificationDeliveryError("未配置腾讯云 SES SecretId / SecretKey")
+
+        try:
+            from tencentcloud.common import credential
+            from tencentcloud.ses.v20201002 import ses_client
+        except Exception as exc:
+            raise VerificationDeliveryError(
+                "缺少腾讯云 SDK，请先安装 tencentcloud-sdk-python"
+            ) from exc
+
+        cred = credential.Credential(secret_id, secret_key)
+        return ses_client.SesClient(cred, settings.TENCENT_SES_REGION)
+
+    def _fetch_template_status_sync(self, client, template_id: int) -> int | None:
+        try:
+            from tencentcloud.common.exception.tencent_cloud_sdk_exception import (
+                TencentCloudSDKException,
+            )
+            from tencentcloud.ses.v20201002 import models
+        except Exception:
+            return None
+
+        try:
+            request = models.GetEmailTemplateRequest()
+            request.TemplateID = template_id
+            response = client.GetEmailTemplate(request)
+            status = getattr(response, "TemplateStatus", None)
+            if isinstance(status, int):
+                return status
+        except TencentCloudSDKException:
+            return None
+        except Exception:
+            return None
+        return None
+
+    def _ensure_template_ready_sync(self, client, template_id: int) -> None:
+        now = time.time()
+        ttl_seconds = 300 if self._template_status == 0 else 30
+        if (
+            self._template_status is not None
+            and now - self._template_status_checked_at < ttl_seconds
+        ):
+            status = self._template_status
+        else:
+            status = self._fetch_template_status_sync(client, template_id)
+            if status is not None:
+                self._template_status = status
+                self._template_status_checked_at = now
+
+        if status == 1:
+            raise VerificationDeliveryError("腾讯云 SES 模板仍在审核中，暂不可发送验证码邮件")
+        if status == 2:
+            raise VerificationDeliveryError("腾讯云 SES 模板审核未通过，请先修正模板后重试")
+
     def _send_sync(
         self,
         *,
@@ -223,19 +287,13 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
             raise VerificationDeliveryError("未配置腾讯云 SES TemplateID")
 
         try:
-            from tencentcloud.common import credential
             from tencentcloud.common.exception.tencent_cloud_sdk_exception import (
                 TencentCloudSDKException,
             )
-            from tencentcloud.ses.v20201002 import ses_client, models
-        except Exception as exc:
-            raise VerificationDeliveryError(
-                "缺少腾讯云 SDK，请先安装 tencentcloud-sdk-python"
-            ) from exc
+            from tencentcloud.ses.v20201002 import models
 
-        try:
-            cred = credential.Credential(secret_id, secret_key)
-            client = ses_client.SesClient(cred, settings.TENCENT_SES_REGION)
+            client = self._build_client()
+            self._ensure_template_ready_sync(client, template_id)
             request = models.SendEmailRequest()
             request.FromEmailAddress = from_email
             request.Subject = _build_subject(purpose)
@@ -257,6 +315,15 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
 
             client.SendEmail(request)
         except TencentCloudSDKException as exc:
+            template_status = self._fetch_template_status_sync(client, template_id)
+            if template_status == 1:
+                raise VerificationDeliveryError(
+                    "腾讯云 SES 模板仍在审核中，暂不可发送验证码邮件"
+                ) from exc
+            if template_status == 2:
+                raise VerificationDeliveryError(
+                    "腾讯云 SES 模板审核未通过，请先修正模板后重试"
+                ) from exc
             raise VerificationDeliveryError(f"腾讯云 SES 发送失败: {exc}") from exc
         except VerificationDeliveryError:
             raise
