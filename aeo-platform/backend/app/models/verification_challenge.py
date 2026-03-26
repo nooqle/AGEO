@@ -19,6 +19,7 @@ class VerificationChannel(str, PyEnum):
 class VerificationPurpose(str, PyEnum):
     REGISTRATION = "registration"
     LOGIN = "login"
+    INVITE_ACCESS = "invite_access"
     BIND_EMAIL = "bind_email"
     BIND_PHONE = "bind_phone"
 

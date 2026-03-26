@@ -12,6 +12,7 @@ import type { AnalysisTask, TaskRunRecord } from '@/types/task';
 import type { LLMObservabilitySnapshot } from '@/types/observability';
 import type {
   AuthUser,
+  InvitationRedeemInput,
   OtpLoginInput,
   RegistrationApplication,
   RegistrationApplicationCreateInput,
@@ -104,12 +105,26 @@ class ApiService {
     });
   }
 
+  async redeemInviteCode(payload: InvitationRedeemInput) {
+    return this.request<TokenResponse>('/auth/invite/redeem', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async listRegistrationApplications() {
     return this.request<RegistrationApplication[]>('/auth/registration-applications');
   }
 
   async approveRegistrationApplication(applicationId: string, organizationId?: string | null) {
     return this.request<RegistrationApplication>(`/auth/registration-applications/${applicationId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ organization_id: organizationId ?? null }),
+    });
+  }
+
+  async issueInviteCode(applicationId: string, organizationId?: string | null) {
+    return this.request<RegistrationApplication>(`/auth/registration-applications/${applicationId}/issue-invite`, {
       method: 'POST',
       body: JSON.stringify({ organization_id: organizationId ?? null }),
     });

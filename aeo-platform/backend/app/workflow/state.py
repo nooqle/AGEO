@@ -263,6 +263,10 @@ class AgentState(TypedDict):
     knowledge_aggregate_result: dict | None  # Latest aggregation result
     knowledge_compare_result: dict | None  # Latest compare result
     knowledge_export_result: dict | None  # Latest export artifact result
+    pending_table_intake: Annotated[dict | None, _merge_error_info]
+    table_intake_result: Annotated[dict | None, _merge_error_info]
+    confirmed_import_action: Annotated[dict | None, _merge_error_info]
+    import_source_metadata: Annotated[dict | None, _merge_error_info]
 
     # =========================================================================
     # Task Persistence (Cycle 3, Module 1)

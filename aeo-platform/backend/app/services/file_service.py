@@ -6,6 +6,7 @@ Falls back to in-memory if no DB session provided.
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -23,22 +24,18 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Security: allowed file extensions
 ALLOWED_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".webp",
-    ".pdf", ".txt", ".csv", ".json",
-    ".xlsx", ".xls", ".doc", ".docx",
+    ".csv", ".xlsx",
 }
 
 # Security: allowed MIME types
 ALLOWED_MIME_TYPES = {
-    "image/png", "image/jpeg", "image/gif", "image/webp",
-    "application/pdf", "text/plain", "text/csv", "application/json",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
     "application/vnd.ms-excel",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
+MAX_FILE_SIZE_LABEL = "2MB"
 
 # In-memory fallback
 _files: dict[str, dict[str, Any]] = {}
@@ -59,7 +56,7 @@ class FileService:
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
-                detail=f"File extension '{ext}' is not allowed",
+                detail="仅支持上传 CSV 或 XLSX 表格",
             )
 
         # Security: validate MIME type
@@ -67,7 +64,7 @@ class FileService:
         if content_type not in ALLOWED_MIME_TYPES:
             raise HTTPException(
                 status_code=400,
-                detail=f"MIME type '{content_type}' is not allowed",
+                detail="仅支持上传 CSV 或 XLSX 表格",
             )
 
         safe_name = f"{file_id}{ext}"
@@ -88,7 +85,11 @@ class FileService:
                 break
             total_size += len(chunk)
             if total_size > MAX_FILE_SIZE:
-                raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+                filename = Path(file.filename or "表格").name
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"文件「{filename}」超过 {MAX_FILE_SIZE_LABEL} 限制",
+                )
             chunks.append(chunk)
         content = b"".join(chunks)
 

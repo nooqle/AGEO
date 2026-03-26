@@ -3,9 +3,8 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
-  RiAlarmWarningLine,
+  RiMailSendLine,
   RiArrowRightUpLine,
-  RiCheckDoubleLine,
   RiSearch2Line,
 } from '@remixicon/react';
 
@@ -63,33 +62,33 @@ export function ReviewQueuePanel({
   applications,
   organizations,
   reviewSelections,
-  reviewingApplicationId,
+  issuingApplicationId,
   onSelectionChange,
-  onReview,
+  onIssueInvite,
   compact = false,
   actionSlot,
 }: {
   applications: RegistrationApplication[];
   organizations: OrganizationRecord[];
   reviewSelections: Record<string, string>;
-  reviewingApplicationId: string | null;
+  issuingApplicationId: string | null;
   onSelectionChange: (applicationId: string, organizationId: string) => void;
-  onReview: (applicationId: string, action: 'approve' | 'reject') => void;
+  onIssueInvite: (applicationId: string) => void;
   compact?: boolean;
   actionSlot?: ReactNode;
 }) {
   return (
     <ControlPlanePanel
       id="reviews"
-      title="待处理事项"
+      title="邀请码队列"
       actions={
         actionSlot ?? (
           <div
             className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold"
             style={{ background: '#fff4e8', color: '#b45309' }}
           >
-            <RiAlarmWarningLine className="h-4 w-4" />
-            {applications.length} 个待处理
+            <RiMailSendLine className="h-4 w-4" />
+            待发放 {applications.length} 个
           </div>
         )
       }
@@ -99,7 +98,7 @@ export function ReviewQueuePanel({
           className="rounded-2xl border border-dashed px-4 py-6 text-sm"
           style={{ borderColor: palette.borderStrong, color: palette.muted }}
         >
-          当前没有待审核注册申请。
+          当前没有待发放的邀请码申请。
         </div>
       ) : (
         <div className="space-y-3">
@@ -129,9 +128,17 @@ export function ReviewQueuePanel({
                   <div className="mt-2 text-sm leading-6" style={{ color: palette.muted }}>
                     申请人：{application.applicant_name || '--'}
                     <br />
-                    职位：{application.job_title}
+                    公司规模：{application.company_size || '--'}
+                    <br />
+                    类型：{application.is_agency ? '代理机构' : '品牌方 / 企业'}
                     <br />
                     提交时间：{formatRelativeTime(application.created_at)}
+                    {application.invite_code_sent_at ? (
+                      <>
+                        <br />
+                        最近发放：{formatRelativeTime(application.invite_code_sent_at)}
+                      </>
+                    ) : null}
                   </div>
                 </div>
 
@@ -140,7 +147,7 @@ export function ReviewQueuePanel({
                     className="mb-2 text-xs font-semibold uppercase tracking-[0.16em]"
                     style={{ color: palette.subtle }}
                   >
-                    审核归属
+                    归属组织
                   </div>
                   <select
                     value={reviewSelections[application.id] || ''}
@@ -165,21 +172,13 @@ export function ReviewQueuePanel({
 
                 <div className="flex flex-wrap gap-2 xl:justify-end">
                   <Button
-                    variant="ghost"
-                    size="md"
-                    onClick={() => onReview(application.id, 'reject')}
-                    isLoading={reviewingApplicationId === application.id}
-                  >
-                    拒绝
-                  </Button>
-                  <Button
                     variant="primary"
                     size="md"
-                    onClick={() => onReview(application.id, 'approve')}
-                    isLoading={reviewingApplicationId === application.id}
-                    leftIcon={<RiCheckDoubleLine className="h-4 w-4" />}
+                    onClick={() => onIssueInvite(application.id)}
+                    isLoading={issuingApplicationId === application.id}
+                    leftIcon={<RiMailSendLine className="h-4 w-4" />}
                   >
-                    审核通过
+                    {application.invite_code_sent_at ? '重新发放邀请码' : '发放邀请码'}
                   </Button>
                 </div>
               </div>
@@ -192,7 +191,7 @@ export function ReviewQueuePanel({
                 className="inline-flex items-center gap-1 text-sm font-semibold"
                 style={{ color: palette.accent }}
               >
-                查看全部审核申请
+                查看全部邀请码申请
                 <RiArrowRightUpLine className="h-4 w-4" />
               </Link>
             </div>

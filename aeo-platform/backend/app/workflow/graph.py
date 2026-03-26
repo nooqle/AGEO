@@ -15,6 +15,8 @@ from app.workflow.nodes_a3 import a3_question_node
 from app.workflow.nodes_a4 import a4_fetch_node
 from app.workflow.nodes_a5 import a5_analytics_node
 from app.workflow.nodes_a7 import a7_confidence_signal_node
+from app.workflow.nodes_table_intake import table_intake_node
+from app.workflow.nodes_table_import_apply import table_import_apply_node
 from app.workflow.nodes_followup import (
     post_analysis_executor_node,
     drill_down_node,
@@ -62,6 +64,8 @@ def build_workflow() -> StateGraph:
     workflow.add_node("a4_fetch", a4_fetch_node)
     workflow.add_node("a5_analytics", a5_analytics_node)
     workflow.add_node("a7_confidence_signal", a7_confidence_signal_node)
+    workflow.add_node("table_intake", table_intake_node)
+    workflow.add_node("table_import_apply", table_import_apply_node)
     workflow.add_node("wait_for_user", wait_for_user_node)
     workflow.add_node("knowledge_lookup", knowledge_lookup_node)
     workflow.add_node("knowledge_aggregate", knowledge_aggregate_node)
@@ -88,6 +92,8 @@ def build_workflow() -> StateGraph:
         "a4_fetch",
         "a5_analytics",
         "a7_confidence_signal",
+        "table_intake",
+        "table_import_apply",
         "post_analysis_executor",
     ]:
         workflow.add_edge(node, "orchestrator")

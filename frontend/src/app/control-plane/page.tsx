@@ -44,7 +44,7 @@ function ControlPlaneWorkbench() {
     RegistrationApplication[]
   >([]);
   const [reviewSelections, setReviewSelections] = useState<Record<string, string>>({});
-  const [reviewingApplicationId, setReviewingApplicationId] = useState<string | null>(
+  const [issuingApplicationId, setIssuingApplicationId] = useState<string | null>(
     null
   );
   const [loading, setLoading] = useState(true);
@@ -101,27 +101,16 @@ function ControlPlaneWorkbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleReviewApplication(
-    applicationId: string,
-    action: 'approve' | 'reject'
-  ) {
-    setReviewingApplicationId(applicationId);
+  async function handleIssueInvite(applicationId: string) {
+    setIssuingApplicationId(applicationId);
     try {
-      if (action === 'approve') {
-        await api.approveRegistrationApplication(
-          applicationId,
-          reviewSelections[applicationId] || null
-        );
-        toast.success('账号申请已审核通过');
-      } else {
-        await api.rejectRegistrationApplication(applicationId);
-        toast.success('账号申请已拒绝');
-      }
+      await api.issueInviteCode(applicationId, reviewSelections[applicationId] || null);
+      toast.success('邀请码已发送');
       await loadData(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '审核操作失败');
+      toast.error(error instanceof Error ? error.message : '邀请码发放失败');
     } finally {
-      setReviewingApplicationId(null);
+      setIssuingApplicationId(null);
     }
   }
 
@@ -156,7 +145,7 @@ function ControlPlaneWorkbench() {
   return (
     <ControlPlaneShell
       title="运营工作台"
-      description="处理待审核事项，查看客户组织。"
+      description="发放邀请码，查看客户组织。"
       breadcrumbs={[{ label: '设置', href: '/settings' }, { label: '运营工作台' }]}
       actions={
         <Button
@@ -183,9 +172,9 @@ function ControlPlaneWorkbench() {
         <div className="space-y-6">
           <div className="grid gap-4 xl:grid-cols-3">
             <ControlPlaneStatCard
-              label="待处理申请"
+              label="待发放邀请码"
               value={pendingApplications.length.toString()}
-              hint="待审核"
+              hint="登记队列"
             />
             <ControlPlaneStatCard
               label="客户组织"
@@ -204,22 +193,20 @@ function ControlPlaneWorkbench() {
               applications={pendingApplications}
               organizations={organizations}
               reviewSelections={reviewSelections}
-              reviewingApplicationId={reviewingApplicationId}
+              issuingApplicationId={issuingApplicationId}
               onSelectionChange={(applicationId, organizationId) =>
                 setReviewSelections((current) => ({
                   ...current,
                   [applicationId]: organizationId,
                 }))
               }
-              onReview={(applicationId, action) =>
-                void handleReviewApplication(applicationId, action)
-              }
+              onIssueInvite={(applicationId) => void handleIssueInvite(applicationId)}
               compact
             />
             <ControlPlanePanel title="模块">
               <div className="space-y-2">
                 {[
-                  ['审核中心', '/control-plane/reviews'],
+                  ['邀请码中心', '/control-plane/reviews'],
                   ['客户组织', '/control-plane/customers'],
                   ['任务运营', '/control-plane/tasks'],
                   ['成本观测', '/control-plane/costs'],

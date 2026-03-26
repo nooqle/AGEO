@@ -37,6 +37,67 @@ _MAX_QUESTIONS = WorkflowConstants.MAX_QUESTIONS
 _QUESTIONS_PER_PERSONA = WorkflowConstants.QUESTIONS_PER_PERSONA
 
 
+def _normalize_uploaded_question_payload(
+    questions: list[dict],
+    *,
+    start_index: int = 1,
+) -> tuple[list[dict], list[dict]]:
+    simulated_questions = []
+    flattened_questions = []
+
+    for offset, question in enumerate(questions, start=start_index):
+        question_id = question.get("id") or question.get("question_id") or f"upload_q_{offset:03d}"
+        category = question.get("category") or "上传问题"
+        core_question = question.get("text") or question.get("core_question") or ""
+        if not core_question:
+            continue
+        intent = question.get("intent") or question.get("user_intent") or ""
+        stage = question.get("stage") or question.get("decision_stage") or ""
+
+        simulated_questions.append(
+            {
+                "question_id": question_id,
+                "category": category,
+                "core_question": core_question,
+                "user_intent": intent,
+                "decision_stage": stage,
+                "source": "uploaded_table",
+            }
+        )
+        flattened_questions.append(
+            {
+                "id": question_id,
+                "text": core_question,
+                "category": category,
+                "intent": intent,
+                "stage": stage,
+                "source": "uploaded_table",
+            }
+        )
+
+    return simulated_questions, flattened_questions
+
+
+def _merge_uploaded_questions(
+    existing_questions: list[dict],
+    incoming_questions: list[dict],
+) -> list[dict]:
+    merged_questions: list[dict] = []
+    seen_texts: set[str] = set()
+
+    for question in [*existing_questions, *incoming_questions]:
+        text = str(question.get("text") or question.get("core_question") or "").strip()
+        if not text:
+            continue
+        normalized_text = " ".join(text.lower().split())
+        if normalized_text in seen_texts:
+            continue
+        seen_texts.add(normalized_text)
+        merged_questions.append(question)
+
+    return merged_questions
+
+
 async def a3_question_node(state: AgentState) -> Command:
     """A3: Generate simulated questions.
 
@@ -49,6 +110,8 @@ async def a3_question_node(state: AgentState) -> Command:
 
     logger.info(f"[A3] Starting question generation in '{a3_mode}' mode")
 
+    if a3_mode == "uploaded_list":
+        return await _a3_uploaded_list_mode(state)
     if a3_mode == "baseline_dynamic":
         return await _a3_baseline_dynamic_mode(state)
     elif a3_mode == "persona":
@@ -60,6 +123,138 @@ async def a3_question_node(state: AgentState) -> Command:
 # ============================================================================
 # Brand Panorama Mode (LLM-driven)
 # ============================================================================
+
+
+async def _a3_uploaded_list_mode(state: AgentState) -> Command:
+    """A3 uploaded list mode: convert uploaded table payload into A3 artifact."""
+
+    session_id = state["session_id"]
+    table_intake_result = state.get("table_intake_result") or {}
+    normalized_payload = table_intake_result.get("normalized_payload") or {}
+    uploaded_questions = normalized_payload.get("questions") or []
+    import_intent = table_intake_result.get("import_intent") or {}
+    confirmed_import_action = state.get("confirmed_import_action") or {}
+    import_mode = (
+        confirmed_import_action.get("import_mode")
+        or import_intent.get("mode")
+        or "replace"
+    )
+
+    if not uploaded_questions:
+        message = "上传的问题表未解析到有效问题，无法生成 A3 问题列表。"
+        logger.error("[A3] uploaded_list has no questions")
+        await send_error_event(session_id, "A3", message, recoverable=True)
+        return Command(
+            update={
+                "error_info": {
+                    "step": "A3",
+                    "error": message,
+                    "timestamp": datetime.now().isoformat(),
+                },
+                "execution_status": "error",
+                "questions": [],
+                "simulated_questions": None,
+                "current_step": "A3",
+            }
+        )
+
+    await send_progress_event(
+        session_id=session_id,
+        step="question_simulation",
+        step_name="问题列表导入",
+        progress=0.65,
+        message=f"正在将上传表格映射为 A3 问题列表，共 {len(uploaded_questions)} 条问题...",
+    )
+
+    existing_uploaded_questions = []
+    if import_mode == "merge":
+        existing_uploaded_questions = [
+            question
+            for question in list(state.get("questions") or [])
+            if isinstance(question, dict) and question.get("source") == "uploaded_table"
+        ]
+        uploaded_questions = _merge_uploaded_questions(
+            existing_uploaded_questions,
+            uploaded_questions,
+        )
+
+    simulated_questions, flattened_questions = _normalize_uploaded_question_payload(
+        uploaded_questions,
+        start_index=1,
+    )
+
+    import_mode_label = {
+        "merge": "整合导入",
+        "replace": "替换导入",
+        "create": "首次导入",
+    }.get(import_mode, "替换导入")
+
+    result_payload = {
+        "generation_mode": "uploaded_list",
+        "generation_context": {
+            "source_file": table_intake_result.get("source_file"),
+            "source_table_kind": table_intake_result.get("table_kind"),
+            "warnings": table_intake_result.get("warnings", []),
+            "import_mode": import_mode,
+            "existing_uploaded_question_count": len(existing_uploaded_questions),
+        },
+        "simulated_questions": simulated_questions,
+    }
+    user_decisions = dict(state.get("user_decisions", {}))
+    user_decisions["a3_mode"] = "uploaded_list"
+    user_decisions["table_import_confirmed"] = False
+    user_decisions.pop("confirmed_table_kind", None)
+    user_decisions.pop("question_import_mode", None)
+
+    await save_and_send_artifact(
+        session_id=session_id,
+        output_type="questionList",
+        title="问题列表",
+        data={
+            "simulatedQuestions": result_payload,
+            "questions": flattened_questions,
+            "generationMode": f"上传问题列表（{import_mode_label}）",
+            "sourceFile": table_intake_result.get("source_file"),
+        },
+    )
+
+    stage_result_data = {
+        "count": len(flattened_questions),
+        "categories": list(
+            {q.get("category", "") for q in flattened_questions if q.get("category")}
+        ),
+        "examples": [q.get("text", "")[:50] for q in flattened_questions[:3]],
+        "source": "uploaded_table",
+        "import_mode": import_mode,
+    }
+    await send_stage_result(
+        session_id,
+        "A3",
+        "问题导入",
+        result_type="questions",
+        data=stage_result_data,
+    )
+
+    await send_progress_event(
+        session_id=session_id,
+        step="question_simulation",
+        step_name="问题列表导入",
+        progress=1.0,
+        message=f"已按{import_mode_label}更新 A3 问题列表，共 {len(flattened_questions)} 条问题",
+        status="completed",
+    )
+
+    return Command(
+        update={
+            "simulated_questions": result_payload,
+            "questions": flattened_questions,
+            "current_step": "A3",
+            "progress": 0.5,
+            "error_info": None,
+            "user_decisions": user_decisions,
+            "confirmed_import_action": None,
+        }
+    )
 
 
 async def _a3_brand_panorama_mode(state: AgentState) -> Command:

@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from langgraph.graph import END
 from langgraph.types import Command
 
 from app.core.utils import extract_domain
@@ -24,7 +25,9 @@ from app.workflow.a5 import sanitizer as a5_sanitizer
 from app.workflow.a5 import sentiment as a5_sentiment
 from app.workflow.a5.persistence import build_report_artifact_data
 from app.workflow.events import (
+    send_execution_complete,
     send_progress_event,
+    send_reply_event,
     send_stage_result,
 )
 from app.workflow.nodes import get_llm_model_compat, parse_llm_response
@@ -246,18 +249,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     missing = []
                     if not report_data.get("key_findings"):
                         missing.append("key_findings")
-                    report_v2 = report_data.get("report_v2", {})
-                    if not isinstance(report_v2, dict):
-                        missing.append("report_v2")
-                    else:
-                        for field in (
-                            "summary",
-                            "scenarioCoverage",
-                            "mentions",
-                            "sources",
-                        ):
-                            if not report_v2.get(field):
-                                missing.append(f"report_v2.{field}")
+                    if not report_data.get("report_markdown"):
+                        missing.append("report_markdown")
                     if missing:
                         logger.warning(
                             "[A5] Report partial: missing sections: %s",
@@ -272,7 +265,13 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
         if not report_data:
             report_data = a5_postprocess.generate_fallback_report(
-                metrics, brand_profile
+                metrics,
+                brand_profile,
+                summary_metrics=summary_metrics,
+                scenario_matrix=scenario_matrix,
+                source_overview=source_overview,
+                mention_sentiment_analysis=mention_sentiment_analysis,
+                competitor_metrics=competitor_metrics,
             )
             report_data["_degraded"] = True
             report_data["_degradation_note"] = (
@@ -286,6 +285,16 @@ async def a5_analytics_node(state: AgentState) -> Command:
         report_data = a5_sanitizer._normalize_report_data(report_data)
         report_data = a5_postprocess.enrich_report_data(
             report_data, metrics, competitor_metrics, fetch_results, brand_profile
+        )
+        report_data = a5_postprocess.ensure_report_markdown(
+            report_data,
+            brand_profile=brand_profile,
+            metrics=metrics,
+            summary_metrics=summary_metrics,
+            scenario_matrix=scenario_matrix,
+            source_overview=source_overview,
+            mention_sentiment_analysis=mention_sentiment_analysis,
+            competitor_metrics=competitor_metrics,
         )
         report_data = a5_sanitizer._sanitize_user_facing_report(report_data)
 
@@ -547,8 +556,29 @@ async def a5_analytics_node(state: AgentState) -> Command:
             message="分析完成",
             status="completed",
         )
+        final_message = (
+            f"{summary} 如需继续深入看某个平台、具体问题、竞品表现或引用来源，"
+            "直接在对话里继续问我即可。"
+        )
+        await send_reply_event(
+            session_id,
+            final_message,
+            is_delta=False,
+            is_new_round=True,
+        )
+        await send_reply_event(session_id, "", is_complete=True)
+        await send_execution_complete(session_id, "分析报告已生成")
 
-        return Command(update=update_dict)
+        return Command(
+            goto=END,
+            update={
+                **update_dict,
+                "execution_status": "completed",
+                "awaiting_user": False,
+                "pending_confirmation": None,
+                "orchestrator_reply": final_message,
+            },
+        )
 
     except Exception as e:
         error_text = str(e)

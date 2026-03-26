@@ -101,7 +101,7 @@ function ControlPlaneLoginContent() {
             </span>
             <div>
               <div className="text-xs tracking-[0.2em]" style={{ color: 'var(--text-tertiary)' }}>
-                SPECTA OPS
+                运营后台
               </div>
               <h1 className="mt-1 text-3xl font-semibold tracking-[-0.04em]">
                 运营后台登录
@@ -144,10 +144,6 @@ function ControlPlaneLoginContent() {
             >
               打开统一登录页
             </Link>
-          </div>
-
-          <div className="mt-8 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-            后台地址：/control-plane/login
           </div>
         </div>
       </div>

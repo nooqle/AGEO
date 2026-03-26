@@ -87,27 +87,6 @@ function getKpiActionLabel(targetTab: string | undefined) {
   }
 }
 
-const DASHBOARD_SKILL_ACTIONS = [
-  {
-    id: 'analysis_report',
-    label: '生成完整分析报告',
-    description: '复用完整分析报告 Skill，对当前品牌的历史结果做总结与建议。',
-    draft: '请基于当前品牌已有的历史分析结果，生成一份完整分析报告，并给出最关键的发现与动作建议。',
-  },
-  {
-    id: 'confidence_signal',
-    label: '评估引用可信度',
-    description: '复用引用置信度评估 Skill，检查当前品牌已有抓取结果里的来源质量。',
-    draft: '请基于当前品牌已有的抓取结果，评估引用来源的可信度、来源质量和结构化质量。',
-  },
-  {
-    id: 'post_analysis',
-    label: '解读最近变化',
-    description: '复用后续分析 Skill，对最近两次分析的变化做解释和建议。',
-    draft: '请基于当前品牌最近两次分析结果，解释哪些平台或场景变化最大，并给出后续建议。',
-  },
-] as const;
-
 export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -222,29 +201,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     }
   };
 
-  const handleOpenSkillAction = async (draft: string) => {
-    if (!selectedBrand) return;
-
-    try {
-      const session = await api.getOrCreateSessionByEntity(selectedBrand.id);
-      const activeTask = await api.getActiveTask(session.id).catch(() => null);
-      const shouldAutoSend =
-        !activeTask || ['completed', 'failed', 'cancelled'].includes(activeTask.status);
-
-      if (!shouldAutoSend) {
-        toast.info('当前品牌已有进行中的任务，已为你填入请求，待当前任务结束后可直接发送。');
-      }
-
-      router.push(
-        `/chat/${session.id}?entity_id=${encodeURIComponent(selectedBrand.id)}&draft=${encodeURIComponent(draft)}${
-          shouldAutoSend ? '&autosend=1' : ''
-        }`
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '打开 Skill 对话失败，请稍后重试。');
-    }
-  };
-
   const handleSelectBoard = (board: DashboardBoardId) => {
     setActiveBoard(board);
     setDialogOpen(true);
@@ -253,48 +209,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const handleOpenMonitoring = () => {
     router.push('/dashboard?tab=monitoring');
   };
-
-  const renderSkillConsumerSection = (description: string) => (
-    <section
-      className="rounded-[24px] border bg-[var(--bg-tertiary)] px-6 py-5"
-      style={{ borderColor: 'var(--border-subtle)' }}
-    >
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="max-w-3xl">
-          <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">
-            Skill Consumer
-          </div>
-          <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">
-            在对话中继续解读当前品牌
-          </h2>
-          <p className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">
-            {description}
-          </p>
-        </div>
-      </div>
-      <div className="mt-5 grid gap-3 lg:grid-cols-3">
-        {DASHBOARD_SKILL_ACTIONS.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            onClick={() => void handleOpenSkillAction(action.draft)}
-            className="rounded-2xl border px-4 py-4 text-left transition-transform hover:-translate-y-0.5"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'var(--bg-secondary)',
-            }}
-          >
-            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-              {action.label}
-            </div>
-            <div className="mt-2 text-xs leading-6" style={{ color: 'var(--text-secondary)' }}>
-              {action.description}
-            </div>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
 
   const allSources = data?.sources || [];
   const sourceTotalCount = allSources.reduce((sum, item) => sum + item.count, 0);
@@ -491,13 +405,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
           <BrandCards onAddBrand={onNewAnalysis} />
 
-          {hasData && selectedBrand && !isMonitoringMode &&
-            renderSkillConsumerSection(
-              hasSelectedBrandAnalysis
-                ? 'Dashboard 不单独造一套解释引擎，而是直接复用当前 3 个固定 Skill Family。选择一个入口后，会新开一个带品牌上下文的对话，并自动发起对应请求。'
-                : '即使首页看板数据还不完整，也可以直接把当前品牌交给主 Agent 继续解读。若历史材料不足，Agent 会自动判断是否需要补分析或提示下一步。'
-            )}
-
           {hasData && !hasSelectedBrandAnalysis && selectedBrand && (
             <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
               <EmptyState
@@ -577,7 +484,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
                       key={item.id}
                       title={item.label}
                       value={formatKpiValue(item)}
-                      subtitle={item.subtitle || 'Dashboard V2 指标'}
+                      subtitle={item.subtitle || '首页指标'}
                       tooltip={item.subtitle}
                       trend={item.trend != null ? { value: item.trend, isPositive: item.trend >= 0, unit: item.trendUnit ?? item.unit } : null}
                       actionLabel={getKpiActionLabel(item.targetTab)}

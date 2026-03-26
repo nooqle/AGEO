@@ -7,9 +7,16 @@ import { useFileUpload } from '@/hooks/useFileUpload';
 import { cn } from '@/lib/cn';
 import { INPUT_PLACEHOLDERS } from '@/config/brands';
 import { useContextStore, type ContextTag } from '@/stores/contextStore';
+import { toast } from '@/components/ui/toast';
+
+const TABLE_UPLOAD_HINT_SEEN_KEY = 'specta.table-upload-hint-seen';
 
 interface InputAreaProps {
-  onSend: (content: string, attachments?: { id: string; name: string; url: string }[], context?: ContextTag[]) => void;
+  onSend: (
+    content: string,
+    attachments?: { id: string; name: string; size: number; type: string; url?: string }[],
+    context?: ContextTag[]
+  ) => void;
   onStop: () => void;
   isExecuting: boolean;
   disabled?: boolean;
@@ -39,7 +46,8 @@ export function InputArea({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { attachments, isUploading, inputRef, openFilePicker, removeAttachment, clearAttachments, handleFileChange } = useFileUpload({
-    onError: (msg) => console.warn('[FileUpload]', msg),
+    maxFiles: 1,
+    onError: (msg) => toast.error(msg),
   });
 
   const { contextTags, removeContextTag, clearContextTags } = useContextStore();
@@ -70,12 +78,32 @@ export function InputArea({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isExecuting, onStop]);
 
+  const handleOpenFilePicker = useCallback(() => {
+    try {
+      if (!window.localStorage.getItem(TABLE_UPLOAD_HINT_SEEN_KEY)) {
+        toast.info('可上传 1 个 CSV/XLSX 表格（2MB 内）：问题表可直接启动抓取，品牌或竞品表可补充分析上下文，链接表可用于来源评估。', 5000);
+        window.localStorage.setItem(TABLE_UPLOAD_HINT_SEEN_KEY, '1');
+      }
+    } catch {
+      // Ignore local storage errors and continue opening the picker.
+    }
+
+    openFilePicker();
+  }, [openFilePicker]);
+
   const handleSubmit = () => {
-    if (!content.trim() || isExecuting || disabled) return;
+    const trimmedContent = content.trim();
+    if ((!trimmedContent && attachments.length === 0) || isExecuting || disabled) return;
     const atts = attachments.length > 0
-      ? attachments.map((a) => ({ id: a.id, name: a.name, url: a.url || '' }))
+      ? attachments.map((a) => ({
+          id: a.id,
+          name: a.name,
+          size: a.size,
+          type: a.type,
+          url: a.url || undefined,
+        }))
       : undefined;
-    onSend(content.trim(), atts, contextTags.length > 0 ? [...contextTags] : undefined);
+    onSend(trimmedContent, atts, contextTags.length > 0 ? [...contextTags] : undefined);
     if (onChange) {
       onChange('');
     } else {
@@ -110,7 +138,7 @@ export function InputArea({
         ref={inputRef}
         type="file"
         multiple
-        accept={'.png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.csv,.json,.xlsx,.xls'}
+        accept={'.csv,.xlsx'}
         onChange={handleFileChange}
         className="hidden"
       />
@@ -216,12 +244,12 @@ export function InputArea({
           <div className="flex items-end gap-2">
             {/* 附件按钮 */}
             <button
-              onClick={openFilePicker}
+              onClick={handleOpenFilePicker}
               className="p-2 rounded-xl transition-colors flex-shrink-0"
               style={{ color: 'var(--text-tertiary)' }}
               onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)'; e.currentTarget.style.backgroundColor = 'transparent'; }}
-              title="附件"
+              title="上传表格"
               disabled={isExecuting || disabled || isUploading}
             >
               {isUploading ? (
@@ -268,12 +296,12 @@ export function InputArea({
             {!isExecuting ? (
               <button
                 onClick={handleSubmit}
-                disabled={!content.trim() || disabled}
+                disabled={(!content.trim() && attachments.length === 0) || disabled}
                 className="p-2.5 rounded-xl transition-all flex-shrink-0 hover:opacity-90"
                 style={{
-                  backgroundColor: content.trim() && !disabled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                  color: content.trim() && !disabled ? '#fff' : 'var(--text-muted)',
-                  cursor: content.trim() && !disabled ? 'pointer' : 'not-allowed',
+                  backgroundColor: (content.trim() || attachments.length > 0) && !disabled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                  color: (content.trim() || attachments.length > 0) && !disabled ? '#fff' : 'var(--text-muted)',
+                  cursor: (content.trim() || attachments.length > 0) && !disabled ? 'pointer' : 'not-allowed',
                 }}
               >
                 <RiSendPlaneLine className="w-5 h-5" />
@@ -305,7 +333,7 @@ export function InputArea({
             ) : (
               <span className="flex items-center gap-2 truncate max-w-full" style={{ color: 'var(--warning)' }}>
                 <RiLoader4Line className="w-3 h-3 animate-spin flex-shrink-0" />
-                {progressMessage || 'Agent 正在执行分析任务，请稍候...'}
+                {progressMessage || '系统正在分析，请稍候...'}
               </span>
             )}
           </div>

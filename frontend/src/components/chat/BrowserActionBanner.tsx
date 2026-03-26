@@ -63,7 +63,7 @@ export function BrowserActionBanner({ browserState }: BrowserActionBannerProps) 
             {detail}
           </p>
           <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-            请先在浏览器窗口中完成操作，再点击下方按钮，我会继续接管当前任务。
+            请先在浏览器窗口中完成操作，再点击此提示中的“我已完成”，我会继续当前任务。
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button

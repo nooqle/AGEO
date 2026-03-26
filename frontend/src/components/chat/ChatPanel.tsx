@@ -20,6 +20,7 @@ import type { CanvasContent, CanvasContentDataMap, CanvasContentType } from '@/t
 import type { ContextTag } from '@/stores/contextStore';
 import type { StageResult } from '@/types/snapshot';
 import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
+import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import {
   buildOutputCardsFromApiMessage,
   getSupersededHistoryMessageIds,
@@ -259,6 +260,13 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             id: msg.id || undefined,
             type: role,
             content: msg.content || '',
+            ...(
+              Array.isArray((msg.metadata as Record<string, unknown> | null)?.attachments)
+                ? {
+                    attachments: ((msg.metadata as Record<string, unknown>).attachments as Attachment[]),
+                  }
+                : {}
+            ),
             ...(outputCards ? { outputCards } : {}),
             ...(layers ? { layers } : {}),
           });
@@ -433,8 +441,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     browserActionToastRef.current = nextFingerprints;
   }, [actionableBrowserStates]);
   // Handle sending message
-  const handleSendMessage = useCallback((content: string, _attachments?: unknown[], context?: ContextTag[]) => {
-    if (!content.trim() || isAgentExecuting) return;
+  const handleSendMessage = useCallback((content: string, attachments?: Attachment[], context?: ContextTag[]) => {
+    if ((!content.trim() && (!attachments || attachments.length === 0)) || isAgentExecuting) return;
 
     // If user types while there's a pending confirmation, clear it
     // (user chose to type freely instead of clicking an option)
@@ -446,6 +454,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     addMessage({
       type: 'user',
       content: content.trim(),
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     });
 
     autoScrollEnabledRef.current = true;
@@ -454,7 +463,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     startExecution();
 
     // Send message via WebSocket (with optional context)
-    sendMessage(content.trim(), context);
+    sendMessage(content.trim(), context, attachments);
   }, [addMessage, startExecution, sendMessage, isAgentExecuting, pendingConfirmation, setPendingConfirmation]);
 
   // Auto-send brand name when navigating from Dashboard with ?brand= param
@@ -675,55 +684,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const liveProgressMessage = isAgentExecuting
     ? executionProgress?.details
     : activeTask?.progress_message ?? executionProgress?.details;
-  const shouldShowUsageSummary = Boolean(
-    !isAgentExecuting &&
-    activeTask &&
-    ['completed', 'failed', 'cancelled'].includes(activeTask.status) &&
-    (
-      (activeTask.llm_total_latency_ms ?? 0) > 0 ||
-      (activeTask.llm_total_tokens ?? 0) > 0 ||
-      (activeTask.llm_estimated_cost ?? 0) > 0 ||
-      (activeTask.llm_call_count ?? 0) > 0
-    )
-  );
-  const formatTokenCount = (value?: number): string | null => {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      return null;
-    }
-    return value.toLocaleString('zh-CN');
-  };
-  const formatEstimatedCost = (value?: number): string | null => {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      return null;
-    }
-    const digits = value >= 1 ? 2 : 4;
-    return `¥${value.toFixed(digits)}`;
-  };
-  const formatCallCount = (value?: number): string | null => {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      return null;
-    }
-    return `${value} 次调用`;
-  };
-  const formatTotalLatency = (value?: number): string | null => {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      return null;
-    }
-    if (value < 1000) {
-      return `${Math.round(value)}ms`;
-    }
-    if (value < 60_000) {
-      return `${(value / 1000).toFixed(value >= 10_000 ? 1 : 2)}s`;
-    }
-    const totalSeconds = Math.round(value / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}m ${seconds}s`;
-  };
-  const usageCallCountLabel = formatCallCount(activeTask?.llm_call_count);
-  const usageLatencyLabel = formatTotalLatency(activeTask?.llm_total_latency_ms);
-  const usageTokenLabel = formatTokenCount(activeTask?.llm_total_tokens);
-  const usageCostLabel = formatEstimatedCost(activeTask?.llm_estimated_cost);
 
   return (
     <div className={cn('relative flex flex-col h-full bg-[var(--bg-primary)]', className)}>
@@ -735,23 +695,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         >
           <div className="flex-1" />
           <div className="flex items-center gap-2">
-            {shouldShowUsageSummary && (
-              <div
-                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium whitespace-nowrap"
-                style={{
-                  background: 'rgba(15,23,42,0.04)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                {usageCallCountLabel && <span>{usageCallCountLabel}</span>}
-                {usageCallCountLabel && (usageLatencyLabel || usageTokenLabel || usageCostLabel) && <span aria-hidden="true">/</span>}
-                {usageLatencyLabel && <span>{usageLatencyLabel}</span>}
-                {usageLatencyLabel && (usageTokenLabel || usageCostLabel) && <span aria-hidden="true">/</span>}
-                {usageTokenLabel && <span>{usageTokenLabel} tokens</span>}
-                {usageTokenLabel && usageCostLabel && <span aria-hidden="true">/</span>}
-                {usageCostLabel && <span>估算 {usageCostLabel}</span>}
-              </div>
-            )}
             <TaskStatusBadge
               status={isAgentExecuting ? 'running' : (activeTask?.status ?? 'running')}
               currentStage={liveCurrentStage}

@@ -45,6 +45,8 @@ def _normalize_report_data(report_data: dict[str, Any]) -> dict[str, Any]:
     # Required fields
     if not isinstance(report_data.get("executive_summary"), str) or not report_data.get("executive_summary"):
         report_data["executive_summary"] = "分析已完成。"
+    if not isinstance(report_data.get("report_markdown"), str):
+        report_data["report_markdown"] = ""
 
     list_fields = (
         "key_findings",

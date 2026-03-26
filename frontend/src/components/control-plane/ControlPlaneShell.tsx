@@ -45,7 +45,7 @@ const navItems: NavItem[] = [
     exact: true,
   },
   {
-    label: '审核中心',
+    label: '邀请码中心',
     href: '/control-plane/reviews',
     icon: <RiTimeLine className="h-4 w-4" />,
   },
@@ -109,7 +109,7 @@ export function ControlPlaneShell({
                 <RiApps2Line className="h-5 w-5" />
               </div>
               <div>
-                <div className="text-sm font-semibold">Specta Ops</div>
+                <div className="text-sm font-semibold">Specta AI</div>
                 <div className="text-xs" style={{ color: palette.muted }}>
                   运营后台
                 </div>

@@ -143,7 +143,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
               /* Simple confirmation — no heavy box, just buttons */
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-2">
-                  {message.inlineConfirmation.options.map((option, i) => (
+                  {message.inlineConfirmation.options.map((option) => (
                     <button
                       key={option.id}
                       onClick={() => onConfirmation(option.id)}

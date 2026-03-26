@@ -13,10 +13,12 @@ from app.models.registration_application import RegistrationApplicationStatus
 from app.models.user import UserStatus
 from app.models.verification_challenge import VerificationChannel, VerificationPurpose
 from app.schemas.auth import (
+    InvitationRedeemRequest,
     LoginRequest,
     OtpLoginRequest,
     RegistrationApplicationApproveRequest,
     RegistrationApplicationCreateRequest,
+    RegistrationApplicationIssueInviteRequest,
     RegistrationApplicationResponse,
     RegistrationApplicationReviewRequest,
     TokenResponse,
@@ -32,6 +34,10 @@ from app.services.verification_service import VerificationThrottleError
 from app.services.verification_delivery_service import VerificationDeliveryError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+PENDING_REVIEW_DETAIL = "该邮箱已完成登记，请等待邀请码邮件。"
+INVITE_REQUIRED_DETAIL = "该邮箱已登记，请输入邀请码完成开通。"
+REGISTER_FIRST_DETAIL = "请先填写公司信息并完成邮箱验证。"
+REJECTED_DETAIL = "账号审核未通过，请联系管理员"
 
 
 def _ensure_email_only(channel: VerificationChannel, action: str) -> None:
@@ -46,7 +52,7 @@ def _ensure_email_only(channel: VerificationChannel, action: str) -> None:
 async def register_user(_: UserCreate):
     raise HTTPException(
         status_code=status.HTTP_410_GONE,
-        detail="请改用验证码注册申请流程，注册后需等待后台审核开通",
+        detail="请改用邮箱登记与邀请码流程",
     )
 
 
@@ -111,6 +117,8 @@ async def create_registration_application(
             applicant_name=(
                 payload.applicant_name.strip() if payload.applicant_name else None
             ),
+            company_size=payload.company_size.strip() if payload.company_size else None,
+            is_agency=payload.is_agency,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -152,6 +160,35 @@ async def approve_registration_application(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/registration-applications/{application_id}/issue-invite",
+    response_model=RegistrationApplicationResponse,
+)
+async def issue_registration_application_invite(
+    application_id: UUID,
+    payload: RegistrationApplicationIssueInviteRequest | None = None,
+    current_user: UserResponse = Depends(get_current_internal_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = RegistrationApplicationService(db)
+    try:
+        return await service.issue_invite_code(
+            application_id=application_id,
+            reviewer_user_id=current_user.id,
+            organization_id=payload.organization_id if payload else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except VerificationDeliveryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
 
@@ -215,42 +252,74 @@ async def otp_login(payload: OtpLoginRequest, db: AsyncSession = Depends(get_db)
     user = await users.get_user_by_identity(
         channel=payload.channel.value, target=target
     )
+    application_service = RegistrationApplicationService(db)
     if user is None:
-        application = await RegistrationApplicationService(
-            db
-        ).get_latest_application_by_identity(
+        application = await application_service.get_latest_application_by_identity(
             channel=payload.channel,
             target=target,
         )
+        if application and application.invite_code_sent_at:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=INVITE_REQUIRED_DETAIL,
+            )
         if (
             application
             and application.status == RegistrationApplicationStatus.PENDING_REVIEW
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="账号待审核开通",
+                detail=PENDING_REVIEW_DETAIL,
             )
         if application and application.status == RegistrationApplicationStatus.REJECTED:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="账号审核未通过，请联系管理员",
+                detail=REJECTED_DETAIL,
+            )
+        if application and application.status == RegistrationApplicationStatus.APPROVED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="账号已开通，请重新发送登录验证码后登录。",
             )
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="账号不存在，请先提交注册申请",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                PENDING_REVIEW_DETAIL if application is not None else REGISTER_FIRST_DETAIL
+            ),
         )
 
     if not user.is_active or user.status != UserStatus.ACTIVE:
         if user.status == UserStatus.PENDING_REVIEW:
-            detail = "账号待审核开通"
+            detail = PENDING_REVIEW_DETAIL
         elif user.status == UserStatus.REJECTED:
-            detail = "账号审核未通过，请联系管理员"
+            detail = REJECTED_DETAIL
         else:
             detail = "账号已停用，请联系管理员"
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=detail,
         )
+
+    token = create_access_token(str(user.id), user.email, user.phone)
+    return TokenResponse(access_token=token)
+
+
+@router.post("/invite/redeem", response_model=TokenResponse)
+async def redeem_invite_code(
+    payload: InvitationRedeemRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    service = RegistrationApplicationService(db)
+    try:
+        _, user = await service.redeem_invite_code(
+            email=payload.email,
+            invite_code=payload.invite_code,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
     token = create_access_token(str(user.id), user.email, user.phone)
     return TokenResponse(access_token=token)
