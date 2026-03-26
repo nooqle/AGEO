@@ -266,7 +266,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
           description="当前账号没有内部运营权限，无法访问客户详情。"
         >
           <div className="text-sm leading-6" style={{ color: palette.muted }}>
-            请返回设置页切换内部管理员账号，或让已开通的内部管理员代为处理。
+            请回到平台 Dashboard 切换内部管理员账号，或让已开通的内部管理员代为处理。
           </div>
         </ControlPlanePanel>
       ) : loading || !detail ? (
