@@ -19,6 +19,7 @@ import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmati
 import { isSupersededA5FailureText } from '@/adapters/chatMessage';
 import { api } from '@/services/api';
 import type { AnalysisTask } from '@/types/task';
+import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
 const RUNTIME_STREAM_EVENTS = new Set([
@@ -39,13 +40,32 @@ const RUNTIME_STREAM_EVENTS = new Set([
   'thought_delta',
 ]);
 
+function generateClientMessageId(): string {
+  return `client_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+interface AttachmentRefPayload {
+  file_id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  sheet_hint?: string;
+}
+
+interface QueuedUserMessage {
+  clientMessageId: string;
+  content: string;
+  context?: Array<{ id: string; type: string; label: string }>;
+  attachments?: AttachmentRefPayload[];
+}
+
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCountRef = useRef(0);
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const agentMessageIdRef = useRef<string | null>(null);
-  const pendingMessagesRef = useRef<string[]>([]);
+  const pendingMessagesRef = useRef<QueuedUserMessage[]>([]);
   const suppressRuntimeStreamRef = useRef(false);
 
   const {
@@ -113,11 +133,11 @@ export function useWebSocket(sessionId: string | null) {
     if (pendingMessagesRef.current.length === 0) return;
     const pending = [...pendingMessagesRef.current];
     pendingMessagesRef.current = [];
-    pending.forEach((content) => {
+    pending.forEach((payload) => {
       suppressRuntimeStreamRef.current = false;
       wsRef.current?.send(JSON.stringify({
         event: 'user_message',
-        data: { content },
+        data: payload,
       }));
     });
   }, []);
@@ -190,6 +210,11 @@ export function useWebSocket(sessionId: string | null) {
         // Replace the local random ID with the real UUID so recall can work.
         const dbId = data.message_id as string;
         const ackContent = data.content as string;
+        const clientMessageId = data.client_message_id as string | undefined;
+        if (dbId && clientMessageId) {
+          replaceMessageId(clientMessageId, dbId);
+          break;
+        }
         if (dbId && ackContent) {
           const { messages } = useConversationStore.getState();
           // Find the most recent user message with matching content
@@ -474,6 +499,7 @@ export function useWebSocket(sessionId: string | null) {
       case 'output_ready': {
         const payload = buildOutputReadyPayload(data, agentMessageIdRef.current);
         addContent(payload.content);
+        const isFinalReportArtifact = payload.content.type === 'report';
         if (payload.targetMessageId) {
           const state = useConversationStore.getState();
           const msg = state.messages.find((m) => m.id === payload.targetMessageId);
@@ -497,6 +523,23 @@ export function useWebSocket(sessionId: string | null) {
             && payload.targetMessageId === useConversationStore.getState().currentAgentMessageId
           ) {
             useConversationStore.setState({ streamingReply: nextContent });
+          }
+        }
+        if (isFinalReportArtifact && useConversationStore.getState().isAgentExecuting) {
+          const currentProgress = useConversationStore.getState().executionProgress;
+          const stage = String(currentProgress?.stage || '').toLowerCase();
+          const isReportTerminalStage =
+            stage.includes('data_analytics')
+            || stage.includes('a5')
+            || stage.includes('analysis_report');
+          if (isReportTerminalStage || (currentProgress?.progress ?? 0) >= 1) {
+            completePendingActionLogs();
+            finalizeCurrentMessage();
+            resetStreamingState();
+            stopExecution();
+            setExecutionProgress(null);
+            clearBrowserStates();
+            setStopState(null);
           }
         }
         break;
@@ -1069,9 +1112,30 @@ export function useWebSocket(sessionId: string | null) {
   // ========== Send methods ==========
 
   // Send user message
-  const sendMessage = useCallback((content: string, context?: Array<{ id: string; type: string; label: string }>) => {
+  const sendMessage = useCallback((
+    content: string,
+    context?: Array<{ id: string; type: string; label: string }>,
+    attachments?: Attachment[],
+  ) => {
+    const clientMessageId = generateClientMessageId();
+    const payload: QueuedUserMessage = {
+      clientMessageId,
+      content,
+    };
+    if (context && context.length > 0) {
+      payload.context = context;
+    }
+    if (attachments && attachments.length > 0) {
+      payload.attachments = attachments.map((attachment) => ({
+        file_id: attachment.id,
+        name: attachment.name,
+        mime_type: attachment.type,
+        size: attachment.size,
+      }));
+    }
+
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
-      pendingMessagesRef.current.push(content);
+      pendingMessagesRef.current.push(payload);
       return;
     }
 
@@ -1080,11 +1144,6 @@ export function useWebSocket(sessionId: string | null) {
     // (instead of overwriting the previous agent message)
     agentMessageIdRef.current = null;
     resetStreamingState();
-
-    const payload: Record<string, unknown> = { content };
-    if (context && context.length > 0) {
-      payload.context = context;
-    }
 
     wsRef.current.send(JSON.stringify({
       event: 'user_message',

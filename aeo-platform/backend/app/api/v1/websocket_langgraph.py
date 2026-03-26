@@ -7,6 +7,7 @@ Adapted for orchestrator-based dynamic routing (no hardcoded EXECUTION_STEPS).
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any, Literal, TypedDict
 from uuid import UUID
 
@@ -70,6 +71,7 @@ _STEP_PROGRESS: dict[str, float] = {
     "A2": 0.35,
     "A3": 0.5,
     "A4": 0.6,
+    "A7": 0.75,
     "A5": 0.9,
 }
 
@@ -140,6 +142,63 @@ def _has_reusable_runtime_context(state_values: dict[str, Any]) -> bool:
         isinstance(item, dict) and item.get("role") in {"assistant", "agent"}
         for item in history
     )
+
+
+def _normalize_attachment_refs(raw_attachments: Any) -> list[dict[str, Any]]:
+    """Normalize attachment refs from websocket payload."""
+
+    normalized: list[dict[str, Any]] = []
+    if not isinstance(raw_attachments, list):
+        return normalized
+
+    for item in raw_attachments:
+        if not isinstance(item, dict):
+            continue
+        file_id = str(item.get("file_id") or item.get("id") or "").strip()
+        if not file_id:
+            continue
+        normalized.append(
+            {
+                "file_id": file_id,
+                "name": str(item.get("name") or "").strip(),
+                "mime_type": str(item.get("mime_type") or item.get("type") or "").strip(),
+                "size": int(item.get("size") or 0),
+                "sheet_hint": str(item.get("sheet_hint") or "").strip() or None,
+            }
+        )
+    return normalized
+
+
+def _build_attachment_summary(attachments: list[dict[str, Any]]) -> str:
+    if not attachments:
+        return ""
+    names = [attachment.get("name") or "未命名表格" for attachment in attachments]
+    if len(names) == 1:
+        return f"用户上传了表格附件：{names[0]}"
+    return "用户上传了多个表格附件：" + "、".join(names)
+
+
+def _resolve_task_label(
+    *,
+    brand_name: str,
+    content: str,
+    attachments: list[dict[str, Any]],
+) -> str:
+    candidate_brand = brand_name.strip()
+    if candidate_brand:
+        return candidate_brand
+
+    candidate_content = content.strip()
+    if candidate_content:
+        return candidate_content
+
+    if attachments:
+        attachment_name = str(attachments[0].get("name") or "").strip()
+        attachment_stem = Path(attachment_name).stem.strip()
+        if attachment_stem:
+            return f"表格导入：{attachment_stem}"
+
+    return "表格导入任务"
 
 
 async def _ensure_manual_session_is_idle(
@@ -447,6 +506,19 @@ async def rebuild_state_from_db(
         "awaiting_user": False,
         "tool_call_args": None,
         "tool_call_id": None,
+        "current_skill": None,
+        "current_skill_family": None,
+        "current_skill_package_key": None,
+        "current_skill_package_name": None,
+        "current_skill_package_path": None,
+        "current_skill_package_context": None,
+        "current_skill_prompt_overlay": None,
+        "last_skill_result": None,
+        "skill_history": [],
+        "pending_table_intake": None,
+        "table_intake_result": None,
+        "confirmed_import_action": None,
+        "import_source_metadata": None,
         "agent_retry_counts": {},
         # Execution control flags
         "auto_trigger_a5": False,
@@ -505,16 +577,34 @@ async def rebuild_state_from_db(
             logger.warning(f"[Restore] Failed to load active task context: {e}")
 
     highest_step = ""
+    latest_attachment_turn: dict[str, Any] | None = None
+    latest_import_artifact_sequence = 0
 
     for msg in messages:
         role = msg.get("role", "")
         content = msg.get("content", "") or ""
         msg_type = msg.get("type", "text")
+        sequence = int(msg.get("sequence") or 0)
+        metadata = msg.get("metadata") if isinstance(msg.get("metadata"), dict) else {}
 
         # Rebuild orchestrator_history from user/agent text messages
         if role == "user":
-            state["orchestrator_history"].append({"role": "user", "content": content})
-            state["messages"].append(HumanMessage(content=content))
+            attachments = _normalize_attachment_refs(metadata.get("attachments", []))
+            replayed_content = content
+            if attachments:
+                attachment_summary = _build_attachment_summary(attachments)
+                replayed_content = (
+                    f"{content}\n\n{attachment_summary}" if content else attachment_summary
+                )
+                latest_attachment_turn = {
+                    "sequence": sequence,
+                    "attachments": attachments,
+                    "user_message": content,
+                }
+            state["orchestrator_history"].append(
+                {"role": "user", "content": replayed_content}
+            )
+            state["messages"].append(HumanMessage(content=replayed_content))
         elif role == "agent" and msg_type == "text" and content:
             state["orchestrator_history"].append(
                 {"role": "assistant", "content": content}
@@ -557,6 +647,10 @@ async def rebuild_state_from_db(
                 )
                 if personas or mp:
                     state["marketing_personas"] = mp or {"user_personas": personas}
+                if output_data.get("artifact_kind") == "brand_competitor_import":
+                    latest_import_artifact_sequence = max(
+                        latest_import_artifact_sequence, sequence
+                    )
                 # Track highest step
                 if current_step and current_step > highest_step:
                     highest_step = current_step
@@ -573,9 +667,20 @@ async def rebuild_state_from_db(
                 )
                 if sq:
                     state["simulated_questions"] = sq
+                    if sq.get("generation_mode") == "uploaded_list":
+                        latest_import_artifact_sequence = max(
+                            latest_import_artifact_sequence, sequence
+                        )
                 q = output_data.get("questions")
                 if q:
                     state["questions"] = q
+                    if any(
+                        isinstance(item, dict) and item.get("source") == "uploaded_table"
+                        for item in q
+                    ):
+                        latest_import_artifact_sequence = max(
+                            latest_import_artifact_sequence, sequence
+                        )
                 # Baseline mode questions
                 if state.get("analysis_mode") == "baseline":
                     state["baseline_questions"] = q or sq
@@ -619,6 +724,39 @@ async def rebuild_state_from_db(
                 }
                 if "A5" > highest_step:
                     highest_step = "A5"
+
+            elif output_type == "dataTable":
+                if output_data.get("artifact_kind") == "source_link_list":
+                    rows = output_data.get("rows") or []
+                    if isinstance(rows, list):
+                        import_source_metadata = dict(
+                            state.get("import_source_metadata") or {}
+                        )
+                        import_source_metadata["imported_link_list_count"] = len(rows)
+                        import_source_metadata["imported_links"] = rows[:20]
+                        state["import_source_metadata"] = import_source_metadata
+                    latest_import_artifact_sequence = max(
+                        latest_import_artifact_sequence, sequence
+                    )
+                    if not highest_step or highest_step < "A7":
+                        highest_step = "A7"
+
+    if (
+        latest_attachment_turn
+        and latest_import_artifact_sequence < latest_attachment_turn["sequence"]
+        and not state.get("pending_table_intake")
+        and not state.get("confirmed_import_action")
+    ):
+        attachments = latest_attachment_turn.get("attachments") or []
+        if attachments:
+            state["pending_table_intake"] = {
+                "attachments": attachments,
+                "user_message": latest_attachment_turn.get("user_message", ""),
+            }
+            import_source_metadata = dict(state.get("import_source_metadata") or {})
+            import_source_metadata.setdefault("source_type", "uploaded_table")
+            import_source_metadata["attachments"] = attachments
+            state["import_source_metadata"] = import_source_metadata
 
     # Set progress based on highest completed step
     if highest_step:
@@ -664,6 +802,8 @@ async def handle_user_message_langgraph(
     trigger_source = data.get("trigger_source", "websocket")
     persist_user_message = bool(data.get("persist_user_message", True))
     existing_message_id = data.get("message_id")
+    client_message_id = data.get("clientMessageId") or data.get("client_message_id")
+    attachments = _normalize_attachment_refs(data.get("attachments", []))
 
     # Build context-enhanced content for orchestrator
     enhanced_content = content
@@ -678,7 +818,18 @@ async def handle_user_message_langgraph(
             ctx_type = ctx.get("type", "")
             ctx_label = ctx.get("label", "")
             context_parts.append(f"[{type_names.get(ctx_type, ctx_type)}: {ctx_label}]")
-        enhanced_content = content + "\n\n附加上下文: " + " ".join(context_parts)
+        enhanced_content = (enhanced_content + "\n\n" if enhanced_content else "") + "附加上下文: " + " ".join(context_parts)
+    if attachments:
+        attachment_summary = _build_attachment_summary(attachments)
+        if enhanced_content:
+            enhanced_content = f"{enhanced_content}\n\n{attachment_summary}"
+        else:
+            enhanced_content = attachment_summary
+    task_label = _resolve_task_label(
+        brand_name=brand_name,
+        content=content,
+        attachments=attachments,
+    )
 
     logger.info(
         f"[LangGraph] Processing message for session {session_id}: {content[:50]}..."
@@ -707,6 +858,7 @@ async def handle_user_message_langgraph(
                     session_id=UUID(session_id),
                     role="user",
                     content=content,
+                    metadata={"attachments": attachments} if attachments else None,
                 )
                 existing_message_id = str(saved["id"])
             except Exception as e:
@@ -716,7 +868,11 @@ async def handle_user_message_langgraph(
             await session_event_publisher.emit_to_session(
                 session_id,
                 "user_message_ack",
-                {"message_id": existing_message_id, "content": content},
+                {
+                    "message_id": existing_message_id,
+                    "content": content,
+                    "client_message_id": client_message_id,
+                },
             )
 
         # Look up session's associated entity to auto-inject brand info
@@ -877,6 +1033,17 @@ async def handle_user_message_langgraph(
                     "task_id": follow_up_task_id,
                     "run_id": resumed_run_id or state_values.get("run_id"),
                 }
+                if attachments:
+                    update_state["pending_table_intake"] = {
+                        "attachments": attachments,
+                        "user_message": content,
+                    }
+                    update_state["table_intake_result"] = None
+                    update_state["confirmed_import_action"] = None
+                    update_state["import_source_metadata"] = {
+                        "source_type": "uploaded_table",
+                        "attachments": attachments,
+                    }
 
                 # Stream workflow execution from orchestrator
                 async for event in workflow.astream(update_state, config=config):
@@ -967,6 +1134,17 @@ async def handle_user_message_langgraph(
                             c.get("label", "") for c in profile_contexts
                         ]
                         restored["user_decisions"] = user_decisions
+                    if attachments:
+                        restored["pending_table_intake"] = {
+                            "attachments": attachments,
+                            "user_message": content,
+                        }
+                        restored["table_intake_result"] = None
+                        restored["confirmed_import_action"] = None
+                        restored["import_source_metadata"] = {
+                            "source_type": "uploaded_table",
+                            "attachments": attachments,
+                        }
                     async for event in workflow.astream(restored, config=config):
                         await _process_langgraph_event(session_id, event)
                     await _sync_runtime_after_stream(workflow, config)
@@ -984,7 +1162,7 @@ async def handle_user_message_langgraph(
                 submit_kwargs = {
                     "user_id": session_user_id,
                     "session_id": session_id,
-                    "brand_name": brand_name or content,
+                    "brand_name": task_label,
                     "entity_id": entity_id,
                     "run_kind": "initial",
                 }
@@ -1051,6 +1229,33 @@ async def handle_user_message_langgraph(
                 "awaiting_user": False,
                 "tool_call_args": None,
                 "tool_call_id": None,
+                "current_skill": None,
+                "current_skill_family": None,
+                "current_skill_package_key": None,
+                "current_skill_package_name": None,
+                "current_skill_package_path": None,
+                "current_skill_package_context": None,
+                "current_skill_prompt_overlay": None,
+                "last_skill_result": None,
+                "skill_history": [],
+                "pending_table_intake": (
+                    {
+                        "attachments": attachments,
+                        "user_message": content,
+                    }
+                    if attachments
+                    else None
+                ),
+                "table_intake_result": None,
+                "confirmed_import_action": None,
+                "import_source_metadata": (
+                    {
+                        "source_type": "uploaded_table",
+                        "attachments": attachments,
+                    }
+                    if attachments
+                    else None
+                ),
                 # Cycle 3: Task persistence + multi-turn
                 "task_id": created_task_id,
                 "run_id": created_run_id,
@@ -1335,6 +1540,42 @@ async def handle_confirmation_langgraph(
                 user_decisions["fetch_mode_pending"] = False
                 user_decisions["fetch_mode_confirmed"] = False
                 logger.info("[LangGraph] Inline confirmation: regenerate questions")
+            elif opt_id == "table_import_question_list":
+                user_content = "用户确认将表格作为 A3 问题列表导入"
+                user_decisions["table_import_confirmed"] = True
+                user_decisions["confirmed_table_kind"] = "question_list"
+                user_decisions["question_import_mode"] = "replace"
+                logger.info(
+                    "[LangGraph] Inline confirmation: table_import_question_list"
+                )
+            elif opt_id == "table_import_question_list_merge":
+                user_content = "用户确认将表格整合到上一版 A3 问题列表"
+                user_decisions["table_import_confirmed"] = True
+                user_decisions["confirmed_table_kind"] = "question_list"
+                user_decisions["question_import_mode"] = "merge"
+                logger.info(
+                    "[LangGraph] Inline confirmation: table_import_question_list_merge"
+                )
+            elif opt_id == "table_import_question_list_replace":
+                user_content = "用户确认用本次表格替换上一版 A3 问题列表"
+                user_decisions["table_import_confirmed"] = True
+                user_decisions["confirmed_table_kind"] = "question_list"
+                user_decisions["question_import_mode"] = "replace"
+                logger.info(
+                    "[LangGraph] Inline confirmation: table_import_question_list_replace"
+                )
+            elif opt_id == "table_import_brand_info":
+                user_content = "用户确认将表格用于更新品牌/竞品信息"
+                user_decisions["table_import_confirmed"] = True
+                user_decisions["confirmed_table_kind"] = "brand_competitor_info"
+                logger.info(
+                    "[LangGraph] Inline confirmation: table_import_brand_info"
+                )
+            elif opt_id == "table_import_link_list":
+                user_content = "用户确认将表格作为链接清单继续分析"
+                user_decisions["table_import_confirmed"] = True
+                user_decisions["confirmed_table_kind"] = "link_list"
+                logger.info("[LangGraph] Inline confirmation: table_import_link_list")
             else:
                 user_content = selection.get("label", opt_id)
                 logger.info(f"[LangGraph] Inline confirmation: optionId={opt_id}")
@@ -1382,6 +1623,66 @@ async def handle_confirmation_langgraph(
             logger.info(
                 f"[LangGraph] Text confirmation mapped to regenerate: {selection}"
             )
+        elif isinstance(selection, str) and selection in (
+            "作为 A3 问题列表导入",
+            "确认导入问题列表",
+        ):
+            user_decisions["table_import_confirmed"] = True
+            user_decisions["confirmed_table_kind"] = "question_list"
+            user_decisions["question_import_mode"] = "replace"
+            user_content = "用户确认将表格作为 A3 问题列表导入"
+            logger.info(
+                "[LangGraph] Text confirmation mapped to question_list import: %s",
+                selection,
+            )
+        elif isinstance(selection, str) and selection in (
+            "整合导入",
+            "整合到上一版",
+            "追加到上一版",
+        ):
+            user_decisions["table_import_confirmed"] = True
+            user_decisions["confirmed_table_kind"] = "question_list"
+            user_decisions["question_import_mode"] = "merge"
+            user_content = "用户确认将表格整合到上一版 A3 问题列表"
+            logger.info(
+                "[LangGraph] Text confirmation mapped to merge question import: %s",
+                selection,
+            )
+        elif isinstance(selection, str) and selection in (
+            "替换导入",
+            "替换上一版",
+            "只保留这次上传",
+        ):
+            user_decisions["table_import_confirmed"] = True
+            user_decisions["confirmed_table_kind"] = "question_list"
+            user_decisions["question_import_mode"] = "replace"
+            user_content = "用户确认用本次表格替换上一版 A3 问题列表"
+            logger.info(
+                "[LangGraph] Text confirmation mapped to replace question import: %s",
+                selection,
+            )
+        elif isinstance(selection, str) and selection in (
+            "更新品牌/竞品信息",
+            "确认更新品牌信息",
+        ):
+            user_decisions["table_import_confirmed"] = True
+            user_decisions["confirmed_table_kind"] = "brand_competitor_info"
+            user_content = "用户确认将表格用于更新品牌/竞品信息"
+            logger.info(
+                "[LangGraph] Text confirmation mapped to brand_competitor_info import: %s",
+                selection,
+            )
+        elif isinstance(selection, str) and selection in (
+            "作为链接清单继续",
+            "确认使用链接清单",
+        ):
+            user_decisions["table_import_confirmed"] = True
+            user_decisions["confirmed_table_kind"] = "link_list"
+            user_content = "用户确认将表格作为链接清单继续分析"
+            logger.info(
+                "[LangGraph] Text confirmation mapped to link_list import: %s",
+                selection,
+            )
 
         history.append(
             {
@@ -1402,6 +1703,22 @@ async def handle_confirmation_langgraph(
         }
         if state_values.get("fetch_mode"):
             update_state["fetch_mode"] = state_values["fetch_mode"]
+        if user_decisions.get("table_import_confirmed"):
+            table_intake_result = state_values.get("table_intake_result") or {}
+            import_intent = table_intake_result.get("import_intent") or {}
+            update_state["confirmed_import_action"] = {
+                "table_kind": user_decisions.get("confirmed_table_kind"),
+                "target_step": {
+                    "question_list": "A3",
+                    "brand_competitor_info": "A1",
+                    "link_list": "CONFIDENCE_EVAL",
+                }.get(user_decisions.get("confirmed_table_kind"), "UNKNOWN"),
+                "source_file_id": (
+                    (table_intake_result.get("source_file") or {}).get("file_id")
+                ),
+                "import_mode": user_decisions.get("question_import_mode")
+                or import_intent.get("mode"),
+            }
 
         async for event in workflow.astream(update_state, config=config):
             await _process_langgraph_event(session_id, event)

@@ -592,6 +592,8 @@ export type ReportCanvasData = CanvasPreviewData & {
   insights?: ReportInsight[];
   recommendations?: ReportRecommendation[];
   content?: string;
+  executive_summary?: string;
+  report_markdown?: string;
   bwvs_breakdown?: import('@/types/dashboard').BwvsBreakdown;
   brand_name?: string;
   analysis_period?: string;

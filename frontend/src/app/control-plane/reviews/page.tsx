@@ -33,7 +33,7 @@ function ControlPlaneReviewsContent() {
     RegistrationApplication[]
   >([]);
   const [reviewSelections, setReviewSelections] = useState<Record<string, string>>({});
-  const [reviewingApplicationId, setReviewingApplicationId] = useState<string | null>(
+  const [issuingApplicationId, setIssuingApplicationId] = useState<string | null>(
     null
   );
   const [loading, setLoading] = useState(true);
@@ -74,7 +74,7 @@ function ControlPlaneReviewsContent() {
       setRegistrationApplications(applications);
       setReviewSelections(buildDefaultReviewSelections(applications, orgs));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '加载审核中心失败');
+      toast.error(error instanceof Error ? error.message : '加载邀请码中心失败');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -87,27 +87,16 @@ function ControlPlaneReviewsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleReviewApplication(
-    applicationId: string,
-    action: 'approve' | 'reject'
-  ) {
-    setReviewingApplicationId(applicationId);
+  async function handleIssueInvite(applicationId: string) {
+    setIssuingApplicationId(applicationId);
     try {
-      if (action === 'approve') {
-        await api.approveRegistrationApplication(
-          applicationId,
-          reviewSelections[applicationId] || null
-        );
-        toast.success('账号申请已审核通过');
-      } else {
-        await api.rejectRegistrationApplication(applicationId);
-        toast.success('账号申请已拒绝');
-      }
+      await api.issueInviteCode(applicationId, reviewSelections[applicationId] || null);
+      toast.success('邀请码已发送');
       await loadData(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '审核操作失败');
+      toast.error(error instanceof Error ? error.message : '邀请码发放失败');
     } finally {
-      setReviewingApplicationId(null);
+      setIssuingApplicationId(null);
     }
   }
 
@@ -117,12 +106,12 @@ function ControlPlaneReviewsContent() {
 
   return (
     <ControlPlaneShell
-      title="审核中心"
-      description="处理注册申请与组织归属。"
+      title="邀请码中心"
+      description="为已登记邮箱发放邀请码，并确认归属组织。"
       breadcrumbs={[
         { label: '设置', href: '/settings' },
         { label: '运营工作台', href: '/control-plane' },
-        { label: '审核中心' },
+        { label: '邀请码中心' },
       ]}
       actions={
         <div className="flex items-center gap-2">
@@ -134,10 +123,10 @@ function ControlPlaneReviewsContent() {
               background: palette.panel,
               color: palette.muted,
             }}
-          >
-            <RiArrowLeftLine className="h-4 w-4" />
-            返回工作台
-          </Link>
+        >
+          <RiArrowLeftLine className="h-4 w-4" />
+          返回工作台
+        </Link>
           <Button
             variant="outline"
             size="md"
@@ -145,36 +134,34 @@ function ControlPlaneReviewsContent() {
             isLoading={refreshing}
             leftIcon={<RiRefreshLine className="h-4 w-4" />}
           >
-            刷新审核队列
+            刷新邀请码队列
           </Button>
         </div>
       }
     >
       {currentUser?.role !== 'internal_admin' && !loading ? (
         <div className="rounded-2xl border px-4 py-6 text-sm" style={{ borderColor: palette.border, color: palette.muted, background: palette.panel }}>
-          当前账号没有内部运营权限，无法访问审核中心。
+          当前账号没有内部运营权限，无法访问邀请码中心。
         </div>
       ) : (
         <ReviewQueuePanel
           applications={pendingApplications}
           organizations={organizations}
           reviewSelections={reviewSelections}
-          reviewingApplicationId={reviewingApplicationId}
+          issuingApplicationId={issuingApplicationId}
           onSelectionChange={(applicationId, organizationId) =>
             setReviewSelections((current) => ({
               ...current,
               [applicationId]: organizationId,
             }))
           }
-          onReview={(applicationId, action) =>
-            void handleReviewApplication(applicationId, action)
-          }
+          onIssueInvite={(applicationId) => void handleIssueInvite(applicationId)}
           actionSlot={
             <div
               className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold"
               style={{ background: '#fff4e8', color: '#b45309' }}
             >
-              待处理 {pendingApplications.length} 个
+              待发放 {pendingApplications.length} 个
             </div>
           }
         />

@@ -103,8 +103,13 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["brand_panorama", "persona_focused", "baseline_dynamic"],
-                    "description": "生成模式：brand_panorama=品牌全景, persona_focused=画像聚焦, baseline_dynamic=行业基线全景",
+                    "enum": [
+                        "brand_panorama",
+                        "persona_focused",
+                        "baseline_dynamic",
+                        "uploaded_list",
+                    ],
+                    "description": "生成模式：brand_panorama=品牌全景, persona_focused=画像聚焦, baseline_dynamic=行业基线全景, uploaded_list=导入用户上传的问题列表",
                 },
                 "persona_id": {
                     "type": "string",
@@ -795,6 +800,73 @@ def _build_knowledge_planning_hint(state: AgentState) -> str:
     return ""
 
 
+def _normalize_sentiment_followup_value(text: str) -> str | None:
+    raw = str(text or "").lower()
+    if any(keyword in raw for keyword in ["负向", "负面", "消极", "negative"]):
+        return "negative"
+    if any(keyword in raw for keyword in ["正向", "正面", "积极", "positive"]):
+        return "positive"
+    if any(keyword in raw for keyword in ["中性", "neutral"]):
+        return "neutral"
+    return None
+
+
+def _infer_current_session_followup_tool(
+    state: AgentState,
+) -> tuple[str, dict[str, Any]] | None:
+    latest_user_message = _get_latest_user_message(state)
+    if not latest_user_message:
+        return None
+
+    if not state.get("fetch_results"):
+        return None
+
+    lowered = latest_user_message.lower()
+    history_keywords = [
+        "历史",
+        "上次",
+        "最近两次",
+        "变化",
+        "趋势",
+        "导出",
+        "汇总",
+        "按月",
+        "3月",
+        "4月",
+        "5月",
+    ]
+    if any(keyword in latest_user_message for keyword in history_keywords):
+        return None
+
+    sentiment_value = _normalize_sentiment_followup_value(latest_user_message)
+    if sentiment_value is not None:
+        return (
+            "drill_down_analysis",
+            {
+                "focus_dimension": "sentiment",
+                "focus_value": sentiment_value,
+            },
+        )
+
+    platform_aliases = {
+        "deepseek": ["deepseek", "深度求索"],
+        "kimi": ["kimi"],
+        "doubao": ["豆包"],
+        "hunyuan": ["元宝", "hunyuan", "腾讯元宝"],
+    }
+    for platform_key, aliases in platform_aliases.items():
+        if any(alias.lower() in lowered for alias in aliases):
+            return (
+                "drill_down_analysis",
+                {
+                    "focus_dimension": "platform",
+                    "focus_value": platform_key,
+                },
+            )
+
+    return None
+
+
 def _infer_knowledge_fallback_tool(
     state: AgentState,
 ) -> tuple[str, dict[str, Any]] | None:
@@ -976,6 +1048,10 @@ def _build_context_summary(state: AgentState) -> str:
     if state.get("metrics"):
         m = state["metrics"]
         parts.append(f"- 品牌提及率: {m.get('mention_rate', 'N/A')}")
+        if m.get("mention_sentiment_analysis") or (state.get("report") or {}).get(
+            "mention_sentiment_analysis"
+        ):
+            parts.append("- 当前报告已包含提及情感证据，可直接追问正向/负向提及细节")
 
     if state.get("baseline_metrics"):
         bm = state["baseline_metrics"]
@@ -1151,9 +1227,26 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
             "brand": "品牌全景模式",
             "baseline_dynamic": "基线全景模式",
             "persona": "画像聚焦模式",
+            "uploaded_list": "上传问题列表",
         }.get(a3_mode, "画像聚焦模式")
         data_status.append(
             f"✓ 已生成 {len(qs)} 组模拟问题（{mode_label}）— 用户可要求以不同模式/画像重新生成"
+        )
+    if state.get("pending_table_intake") and not state.get("table_intake_result"):
+        attachments = list(
+            (state.get("pending_table_intake") or {}).get("attachments") or []
+        )
+        data_status.append(
+            f"⚠ 待理解表格附件 {len(attachments)} 个 — 应先调用 table_intake_skill"
+        )
+    if state.get("table_intake_result"):
+        result = state["table_intake_result"] or {}
+        data_status.append(
+            f"✓ 已完成表格理解：{result.get('table_kind', 'unknown')}（置信度 {float(result.get('confidence') or 0):.2f}）"
+        )
+    if (state.get("import_source_metadata") or {}).get("imported_link_list_count"):
+        data_status.append(
+            f"✓ 已导入链接清单 {(state.get('import_source_metadata') or {}).get('imported_link_list_count')} 条"
         )
     if state.get("fetch_results"):
         data_status.append(f"✓ 已抓取 {len(state['fetch_results'])} 条AI回答")
@@ -1216,6 +1309,18 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
 
 {entity_context}
 
+附件导入规则（高优先级）：
+- 当 state 中存在 pending_table_intake 且还没有 table_intake_result 时，必须优先调用 table_intake_skill。
+- table_intake_skill 只负责理解附件，不负责直接推进流程。执行后必须先解释你的判断，再调用 ask_user 请求确认。
+- 如果识别结果是 question_list：
+  - 未确认前：说明这是一份问题列表，将挂接到 A3，然后 ask_user 请求用户确认是否导入。
+  - 用户确认后：必须调用 question_simulation(mode="uploaded_list")，先更新 A3 交付物，再继续 A4 后续流程。
+- 如果识别结果是 brand_competitor_info：先 ask_user 确认是否用于更新 A1 相关上下文，不可自动覆盖。
+- 如果识别结果是 link_list：先 ask_user 确认是否作为链接清单继续分析，不可自动套用到其他流程。
+- 如果用户没有文本消息，只上传了表格：你也要基于 context + table_intake_skill 结果给出初步判断，并 ask_user 确认。
+- 如果 user_decisions.table_import_confirmed=true 且 confirmed_table_kind=question_list，而当前还没有新的 A3 结果，必须立即调用 question_simulation(mode="uploaded_list")。
+- 如果链接清单已经导入并生成交付物：先用自然语言告诉用户链接清单已整理完成、右侧画布已更新，再基于用户后续说明继续；当前不要自动调用 confidence_signal_skill，因为现有 A7 仍主要消费抓取后的 fetch_results。
+
 A1 完成后的流程（最高优先级）：
 品牌分析（A1）完成后，你必须在消息中用自然语言向用户汇报结果并列出编号选项（如 1. 确认 2. 暂不），然后调用 ask_user 等待用户回复，不传 options 参数。
 绝不直接调用 persona_generation 或 question_simulation，必须先 ask_user。之后根据是否已有基线分析决定下一步：
@@ -1261,13 +1366,14 @@ A1 完成后的流程（最高优先级）：
 
 ask_user 使用限制（非常重要）：
 ask_user 只允许在以下场景使用，其他任何场景都【禁止】调用 ask_user：
+  0. table_intake_skill 完成后 → 确认表格用途及是否继续导入
   1. A1 完成后 → 确认开始基线分析
   2. 基线分析完成后 / 已有基线 → 选择下一步路径（置信度评估/场景细化/重跑基线/直接提问）
   3. A2 完成后 → 引导用户选择画像
   4. A3 完成后 → 让用户选择采集模式（快速采集/完整采集/重新生成问题），用户选择后才能调用 answer_fetch(fetch_mode=对应模式)
   5. A5 完成后 → 选择是否做引用内容置信度评估，或继续后续分析
   6. 步骤执行失败 → 提供恢复选项（重试/跳过/手动输入）
-除以上 6 种场景外，所有其他情况（包括闲聊、查询结果、用户提问、不确定时）都必须直接用自然语言回复，绝不调用 ask_user。用户随时可以在输入框中自由打字与你对话，不需要通过选项按钮。
+除以上 7 种场景外，所有其他情况（包括闲聊、查询结果、用户提问、不确定时）都必须直接用自然语言回复，绝不调用 ask_user。用户随时可以在输入框中自由打字与你对话，不需要通过选项按钮。
 - 回复风格要求（非常重要，你的回复代表品牌的专业形象）：
   - 你是一位资深品牌营销顾问，每一句话都应体现专业洞察，而不仅仅是传达状态
   - 开始执行时：先说明分析思路和价值（为什么要做这一步、能带来什么洞察），让用户理解分析的意义
@@ -1287,6 +1393,12 @@ ask_user 只允许在以下场景使用，其他任何场景都【禁止】调�
 - 即使已有模拟问题，如果用户要求以不同画像或模式重新生成，仍然应该再次调用 question_simulation
 - 【重要】"完整模式"/"full模式"/"完整采集" 指 answer_fetch(fetch_mode="full") 的参数，不是重新生成问题。question_simulation 成功后，绝不再次调用 question_simulation，必须先调用 answer_fetch 或 ask_user。
 - 如果某个Agent执行后返回"未获取到有效数据"，友好地告知用户该步骤未成功，说明可能原因，并提供建设性的替代选项。如果用户要求重试，可以再次调用同一个Agent。
+
+当前会话追问优先规则（重要）：
+- 如果当前会话已经有 fetch_results 或 report，且用户是在追问“本次报告/本次抓取”的细节，优先使用 post_analysis_skill / drill_down_analysis，不要先走 knowledge_*。
+- “负向提及/负面提及/正向提及/中性提及是什么” 这类问题，如果当前会话已有报告，优先使用 drill_down_analysis(focus_dimension="sentiment")。
+- “某个平台这次怎么回答的”“Kimi/DeepSeek 这次表现如何” 这类问题，如果当前会话已有抓取结果，优先使用 drill_down_analysis(focus_dimension="platform")。
+- 只有用户明确在问跨历史材料、历史月份、历史导出、最近两次变化时，才优先使用 knowledge_*。
 
 历史材料优先规则（重要）：
 - 当用户的问题围绕品牌信息、竞品信息、历史抓取答案、历史引用来源、基于已有抓取结果的分析、或导出历史抓取信息时，优先尝试 knowledge_lookup
@@ -1359,6 +1471,34 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 f"{DIRECTIVE_A2_ASK_PATH}"
             )
         return "画像未获取到数据，请提供建设性选项帮助用户继续。"
+
+    if tool_name == "table_intake_skill":
+        result = state.get("table_intake_result") or {}
+        table_kind = result.get("table_kind", "unknown")
+        summary = result.get("summary") or "表格理解完成。"
+        if table_kind == "question_list":
+            return (
+                f"{summary}"
+                "【强制操作】请先用自然语言告诉用户你识别到这是一份问题列表，并说明将挂接到 A3。"
+                "然后调用 ask_user，请用户确认是否作为 A3 问题列表导入。"
+                "推荐选项：1. 作为 A3 问题列表导入 2. 暂不导入。"
+            )
+        if table_kind == "brand_competitor_info":
+            return (
+                f"{summary}"
+                "【强制操作】请先说明这份表格更适合作为 A1 的品牌/竞品信息输入，"
+                "然后调用 ask_user，请用户确认是否更新当前品牌/竞品上下文。"
+            )
+        if table_kind == "link_list":
+            return (
+                f"{summary}"
+                "【强制操作】请先说明这是一份链接清单，适合作为来源/链接清单继续分析，"
+                "然后调用 ask_user，请用户确认是否继续。"
+            )
+        return (
+            f"{summary}"
+            "【强制操作】请告诉用户当前无法稳定判断这份表格用途，并调用 ask_user 请求用户重新上传单个 CSV/XLSX 或补充说明。"
+        )
 
     if tool_name == "question_simulation":
         sq = state.get("simulated_questions")
@@ -1645,6 +1785,11 @@ def _build_ask_user_fallback_reply(
             "您现在可以告诉我选择快速采集、完整采集，或要求我重新生成问题。"
         )
 
+    if tool_name == "table_intake_skill":
+        result = state.get("table_intake_result") or {}
+        summary = result.get("summary") or "表格理解完成。"
+        return f"{summary} 请确认是否按我识别的用途继续。"
+
     if tool_name == "answer_fetch":
         return (
             "答案抓取已完成。"
@@ -1758,6 +1903,151 @@ async def _force_fetch_mode_confirmation(
             "pending_confirmation": {
                 "step_id": "orchestrator",
                 "step_name": "选择采集模式",
+                "message": defense_msg,
+                "options": defense_options,
+            },
+            "agent_retry_counts": current_retry_counts,
+        },
+    )
+
+
+async def _force_table_import_confirmation(
+    *,
+    state: AgentState,
+    session_id: str,
+    reply_text: str,
+    new_history: list[dict[str, Any]],
+    request_id: str,
+    current_retry_counts: dict[str, int],
+) -> Command:
+    """Deterministically ask for confirmation after table intake."""
+
+    result = state.get("table_intake_result") or {}
+    table_kind = result.get("table_kind")
+    if table_kind == "question_list":
+        import_intent = (result.get("import_intent") or {}).get("mode")
+        if import_intent == "unspecified":
+            defense_msg = "我识别到这是一份问题列表，且当前会话里已有上传问题。请先确认本次是整合到上一版，还是替换上一版。"
+            defense_options = [
+                {
+                    "id": "table_import_question_list_merge",
+                    "label": "整合导入",
+                    "description": "保留上一版上传问题，并追加本次新问题",
+                },
+                {
+                    "id": "table_import_question_list_replace",
+                    "label": "替换导入",
+                    "description": "放弃上一版上传问题，只保留本次新问题",
+                },
+                {
+                    "id": "table_import_cancel",
+                    "label": "暂不导入",
+                    "description": "保留当前结果，不执行本次导入",
+                },
+            ]
+        else:
+            defense_msg = (
+                "我识别到这是一份问题列表，准备作为 A3 问题列表导入。是否继续？"
+            )
+            defense_options = [
+                {
+                    "id": "table_import_question_list",
+                    "label": "作为 A3 问题列表导入",
+                    "description": "先更新 A3 交付物，再继续后续抓取流程",
+                },
+                {
+                    "id": "table_import_cancel",
+                    "label": "暂不导入",
+                    "description": "保留当前结果，不执行本次导入",
+                },
+            ]
+        step_name = "确认问题列表导入"
+    elif table_kind == "brand_competitor_info":
+        defense_msg = (
+            "我识别到这是一份品牌/竞品信息表，准备更新当前 A1 相关上下文。是否继续？"
+        )
+        defense_options = [
+            {
+                "id": "table_import_brand_info",
+                "label": "更新品牌/竞品信息",
+                "description": "先更新 A1 交付物，再回到后续流程",
+            },
+            {
+                "id": "table_import_cancel",
+                "label": "暂不更新",
+                "description": "保留当前上下文，不执行本次导入",
+            },
+        ]
+        step_name = "确认品牌信息导入"
+    else:
+        defense_msg = "我识别到这是一份链接清单，准备整理为后续来源分析输入。是否继续？"
+        defense_options = [
+            {
+                "id": "table_import_link_list",
+                "label": "作为链接清单继续",
+                "description": "先生成链接清单交付物，再继续后续分析",
+            },
+            {
+                "id": "table_import_cancel",
+                "label": "暂不继续",
+                "description": "保留当前流程，不执行本次导入",
+            },
+        ]
+        step_name = "确认链接清单导入"
+
+    visible_reply = reply_text.strip() or _build_ask_user_fallback_reply(
+        state,
+        "table_intake_skill",
+        defense_msg,
+    )
+    if visible_reply and not reply_text.strip():
+        await send_reply_event(
+            session_id,
+            visible_reply,
+            is_delta=True,
+            is_new_round=True,
+        )
+        await send_reply_event(session_id, "", is_complete=True)
+
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "inline_confirmation",
+        {
+            "message": defense_msg,
+            "options": defense_options,
+            "type": "simple",
+        },
+    )
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "confirmation_request",
+        {
+            "request_id": request_id,
+            "type": "step_confirmation",
+            "message": defense_msg,
+            "options": defense_options,
+            "allow_text_input": True,
+            "step_id": "orchestrator",
+            "step_name": step_name,
+        },
+    )
+
+    new_history.append(
+        {
+            "role": "tool",
+            "content": "等待用户确认表格导入动作...",
+            "tool_call_id": request_id,
+        }
+    )
+    return Command(
+        goto="wait_for_user",
+        update={
+            "awaiting_user": True,
+            "orchestrator_reply": visible_reply,
+            "orchestrator_history": new_history,
+            "pending_confirmation": {
+                "step_id": "orchestrator",
+                "step_name": step_name,
                 "message": defense_msg,
                 "options": defense_options,
             },
@@ -1889,6 +2179,7 @@ TOOL_TO_NODE: dict[str, str] = {
     "persona_generation": "a2_persona",
     "question_simulation": "a3_question",
     "answer_fetch": "a4_fetch",
+    "table_intake_skill": "table_intake",
     "analysis_report_skill": "a5_analytics",
     "data_analytics": "a5_analytics",
     "knowledge_lookup": "knowledge_lookup",
@@ -1910,6 +2201,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "persona_generation": "用户画像生成",
     "question_simulation": "问题模拟生成",
     "answer_fetch": "AI答案抓取",
+    "table_intake_skill": "表格导入理解",
     "analysis_report_skill": "完整分析报告 Skill",
     "data_analytics": "数据分析报告",
     "knowledge_lookup": "历史知识检索",
@@ -2233,6 +2525,29 @@ async def orchestrator_node(state: AgentState) -> Command:
                 },
             )
 
+    confirmed_import_action = dict(state.get("confirmed_import_action") or {})
+    confirmed_table_kind = str(confirmed_import_action.get("table_kind") or "")
+    if confirmed_table_kind == "question_list":
+        uploaded_ready = (state.get("simulated_questions") or {}).get(
+            "generation_mode"
+        ) == "uploaded_list"
+        if not uploaded_ready:
+            user_decisions = dict(state.get("user_decisions", {}))
+            user_decisions["a3_mode"] = "uploaded_list"
+            return Command(
+                goto="a3_question",
+                update={
+                    "next_action": "a3_question",
+                    "analysis_mode": "persona",
+                    "user_decisions": user_decisions,
+                },
+            )
+    elif confirmed_table_kind in {"brand_competitor_info", "link_list"}:
+        return Command(
+            goto="table_import_apply",
+            update={"next_action": "table_import_apply"},
+        )
+
     working_state = state
     manifest = await _hydrate_knowledge_manifest(state)
     if manifest is not None:
@@ -2415,6 +2730,25 @@ async def orchestrator_node(state: AgentState) -> Command:
                 new_history,
             )
 
+        table_result = state.get("table_intake_result") or {}
+        if (
+            last_tool == "table_intake_skill"
+            and table_result.get("table_kind")
+            in {"question_list", "brand_competitor_info", "link_list"}
+            and not dict(state.get("user_decisions", {})).get("table_import_confirmed")
+        ):
+            logger.warning(
+                "[Orchestrator] No tool call after table_intake_skill; forcing import confirmation."
+            )
+            return await _force_table_import_confirmation(
+                state=state,
+                session_id=session_id,
+                reply_text=reply_text,
+                new_history=new_history,
+                request_id=f"defense_table_import_{int(datetime.now().timestamp() * 1000)}",
+                current_retry_counts=current_retry_counts,
+            )
+
         user_decisions = dict(state.get("user_decisions", {}))
         if (
             last_tool == "question_simulation"
@@ -2536,6 +2870,23 @@ async def _handle_tool_call(
     # F8: Extract retry counts once; propagate through all return paths
     current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
 
+    preferred_followup_tool = _infer_current_session_followup_tool(state)
+    if (
+        tool_name in {"knowledge_lookup", "knowledge_aggregate"}
+        and preferred_followup_tool is not None
+    ):
+        logger.warning(
+            "[Orchestrator] Realigning current-session follow-up %s -> %s",
+            tool_name,
+            preferred_followup_tool[0],
+        )
+        tool_name, tool_args = preferred_followup_tool
+        tool_call = SimpleNamespace(
+            name=tool_name,
+            arguments=tool_args,
+            id=tool_call.id,
+        )
+
     preferred_knowledge_tool = _infer_knowledge_fallback_tool(state)
     if (
         tool_name
@@ -2617,6 +2968,73 @@ async def _handle_tool_call(
         waiting_tips = tool_args.get("waiting_tips", [])
         checklist = tool_args.get("checklist", [])
         request_id = tool_call.id or f"ask_user_{id(tool_call)}"
+
+        if (
+            not options
+            and state.get("table_intake_result")
+            and last_tool_name == "table_intake_skill"
+        ):
+            result = state.get("table_intake_result") or {}
+            table_kind = result.get("table_kind")
+            if table_kind == "question_list":
+                import_intent = (result.get("import_intent") or {}).get("mode")
+                if import_intent == "unspecified":
+                    options = [
+                        {
+                            "id": "table_import_question_list_merge",
+                            "label": "整合导入",
+                            "description": "保留上一版上传问题，并追加本次新问题",
+                        },
+                        {
+                            "id": "table_import_question_list_replace",
+                            "label": "替换导入",
+                            "description": "放弃上一版上传问题，只保留本次新问题",
+                        },
+                        {
+                            "id": "table_import_cancel",
+                            "label": "暂不导入",
+                            "description": "保留当前结果，不执行本次导入",
+                        },
+                    ]
+                else:
+                    options = [
+                        {
+                            "id": "table_import_question_list",
+                            "label": "作为 A3 问题列表导入",
+                            "description": "先更新 A3 交付物，再继续后续抓取流程",
+                        },
+                        {
+                            "id": "table_import_cancel",
+                            "label": "暂不导入",
+                            "description": "保留当前结果，不执行本次导入",
+                        },
+                    ]
+            elif table_kind == "brand_competitor_info":
+                options = [
+                    {
+                        "id": "table_import_brand_info",
+                        "label": "更新品牌/竞品信息",
+                        "description": "将表格作为 A1 的结构化补充输入",
+                    },
+                    {
+                        "id": "table_import_cancel",
+                        "label": "暂不更新",
+                        "description": "保留当前上下文，不执行本次导入",
+                    },
+                ]
+            elif table_kind == "link_list":
+                options = [
+                    {
+                        "id": "table_import_link_list",
+                        "label": "作为链接清单继续",
+                        "description": "将表格作为来源/链接清单继续分析",
+                    },
+                    {
+                        "id": "table_import_cancel",
+                        "label": "暂不继续",
+                        "description": "保留当前流程，不执行本次导入",
+                    },
+                ]
 
         if (
             not options
@@ -2736,10 +3154,26 @@ async def _handle_tool_call(
         node_name = TOOL_TO_NODE.get(tool_name)
 
     if node_name:
+        requested_question_mode = tool_args.get("mode", "")
+        if (
+            effective_tool_name == "question_simulation"
+            and state.get("user_decisions", {}).get("table_import_confirmed")
+            and state.get("user_decisions", {}).get("confirmed_table_kind")
+            == "question_list"
+            and requested_question_mode != "uploaded_list"
+        ):
+            logger.info(
+                "[Orchestrator] Overriding question_simulation mode to uploaded_list after confirmed table import"
+            )
+            tool_args = {**tool_args, "mode": "uploaded_list"}
+            requested_question_mode = "uploaded_list"
+
         # Hard block: when simulated_questions already exist, block re-invocation
         # unless the user just triggered a retry (retry_counts reset to 0).
-        if effective_tool_name == "question_simulation" and state.get(
-            "simulated_questions"
+        if (
+            effective_tool_name == "question_simulation"
+            and requested_question_mode != "uploaded_list"
+            and state.get("simulated_questions")
         ):
             is_fresh_retry = current_retry_counts.get("question_simulation", 0) == 0
             if not is_fresh_retry:
@@ -2923,7 +3357,31 @@ async def _handle_tool_call(
             user_decisions.pop("fetch_mode_pending", None)
             mode = tool_args.get("mode", "")
 
-            if mode == "baseline_dynamic":
+            if mode == "uploaded_list":
+                user_decisions["a3_mode"] = "uploaded_list"
+                extra_updates["user_decisions"] = user_decisions
+                extra_updates["analysis_mode"] = "persona"
+                extra_updates["confirmed_import_action"] = {
+                    "target_step": "A3",
+                    "table_kind": "question_list",
+                    "artifact_type": "questionList",
+                    "resume_from": "A3",
+                    "source_file_id": (
+                        (
+                            (state.get("table_intake_result") or {}).get("source_file")
+                            or {}
+                        ).get("file_id")
+                    ),
+                    "import_mode": (
+                        (
+                            (state.get("table_intake_result") or {}).get(
+                                "import_intent"
+                            )
+                            or {}
+                        ).get("mode")
+                    ),
+                }
+            elif mode == "baseline_dynamic":
                 # Baseline mode: set directly, no user confirmation needed
                 user_decisions["a3_mode"] = "baseline_dynamic"
                 extra_updates["user_decisions"] = user_decisions

@@ -5,6 +5,7 @@ import { RiArrowGoBackLine } from '@remixicon/react';
 import { Message } from '@/types/message';
 import { formatTime } from '@/lib/utils';
 import { RecallConfirmation } from './RecallConfirmation';
+import { AttachmentList } from './AttachmentList';
 
 interface UserMessageProps {
   message: Message;
@@ -15,6 +16,7 @@ interface UserMessageProps {
 
 export function UserMessage({ message, onRecall, recallDisabled, messagesAfterCount = 0 }: UserMessageProps) {
   const [showConfirm, setShowConfirm] = useState(false);
+  const hasContent = Boolean(message.content?.trim());
 
   const handleRecallClick = () => {
     if (recallDisabled) return;
@@ -57,10 +59,24 @@ export function UserMessage({ message, onRecall, recallDisabled, messagesAfterCo
         )}
 
         {/* Message bubble */}
-        <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-md px-4 py-3 shadow-sm">
-          <div className="whitespace-pre-wrap break-words">
-            {message.content}
-          </div>
+        <div className="flex flex-col items-end gap-2">
+          {hasContent && (
+            <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-md px-4 py-3 shadow-sm">
+              <div className="whitespace-pre-wrap break-words">
+                {message.content}
+              </div>
+            </div>
+          )}
+          {message.attachments && message.attachments.length > 0 && (
+            <AttachmentList attachments={message.attachments} />
+          )}
+          {!hasContent && (!message.attachments || message.attachments.length === 0) && (
+            <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-md px-4 py-3 shadow-sm">
+              <div className="whitespace-pre-wrap break-words">
+                {message.content}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

@@ -41,6 +41,7 @@ def build_report_artifact_data(
         },
         'content': report_data.get('executive_summary', ''),
         'executive_summary': report_data.get('executive_summary', ''),
+        'report_markdown': report_data.get('report_markdown', ''),
         'key_findings': report_data.get('key_findings', []),
         'fetch_results_summary': fetch_results_summary,
         'competitors': competitor_metrics,

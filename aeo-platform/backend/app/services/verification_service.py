@@ -52,6 +52,11 @@ class VerificationService:
     def _generate_code(self) -> str:
         return f"{random.randint(0, 999999):06d}"
 
+    def _get_expire_minutes(self, purpose: VerificationPurpose) -> int:
+        if purpose == VerificationPurpose.INVITE_ACCESS:
+            return settings.INVITE_CODE_EXPIRE_MINUTES
+        return settings.VERIFICATION_CODE_EXPIRE_MINUTES
+
     async def _get_latest_active_challenge(
         self,
         *,
@@ -91,8 +96,9 @@ class VerificationService:
             purpose=purpose,
         )
         if active_challenge is not None:
+            expire_minutes = self._get_expire_minutes(purpose)
             sent_at = active_challenge.expires_at - timedelta(
-                minutes=settings.VERIFICATION_CODE_EXPIRE_MINUTES
+                minutes=expire_minutes
             )
             elapsed_seconds = int(
                 max(
@@ -106,13 +112,13 @@ class VerificationService:
             active_challenge.consumed_at = self._now()
 
         code = self._generate_code()
+        expire_minutes = self._get_expire_minutes(purpose)
         challenge = VerificationChallenge(
             channel=channel,
             purpose=purpose,
             target=normalized_target,
             code_hash=hash_password(code),
-            expires_at=self._now()
-            + timedelta(minutes=settings.VERIFICATION_CODE_EXPIRE_MINUTES),
+            expires_at=self._now() + timedelta(minutes=expire_minutes),
         )
         self.db.add(challenge)
         await self.db.flush()
@@ -123,7 +129,7 @@ class VerificationService:
                 target=normalized_target,
                 purpose=purpose,
                 code=code,
-                expires_in_minutes=settings.VERIFICATION_CODE_EXPIRE_MINUTES,
+                expires_in_minutes=expire_minutes,
             )
         except VerificationDeliveryError:
             await self.db.rollback()
@@ -147,7 +153,7 @@ class VerificationService:
 
         return {
             "challenge_id": str(challenge.id),
-            "expires_in_seconds": settings.VERIFICATION_CODE_EXPIRE_MINUTES * 60,
+            "expires_in_seconds": expire_minutes * 60,
             "debug_code": (
                 code if (settings.DEBUG or settings.DEV_MODE_ENABLED) else None
             ),

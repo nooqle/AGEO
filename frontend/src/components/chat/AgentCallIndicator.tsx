@@ -25,16 +25,16 @@ interface AgentCallIndicatorProps {
 
 // Agent 名称映射
 const agentNameMap: Record<string, string> = {
-  'A1': '品牌竞品分析 Agent',
-  'A2': '营销画像生成 Agent',
-  'A3': '问题模拟 Agent',
-  'A4': '答案抓取 Agent',
-  'A5': '数据分析 Agent',
-  'BrandCompetitionAgent': '品牌竞品分析 Agent',
-  'MarketingPersonaAgent': '营销画像生成 Agent',
-  'QuestionSimulationAgent': '问题模拟 Agent',
-  'FetchAgent': '答案抓取 Agent',
-  'DataAnalyticsAgent': '数据分析 Agent',
+  'A1': '品牌竞品分析',
+  'A2': '营销画像生成',
+  'A3': '问题模拟',
+  'A4': '答案抓取',
+  'A5': '数据分析',
+  'BrandCompetitionAgent': '品牌竞品分析',
+  'MarketingPersonaAgent': '营销画像生成',
+  'QuestionSimulationAgent': '问题模拟',
+  'FetchAgent': '答案抓取',
+  'DataAnalyticsAgent': '数据分析',
 };
 
 // 状态配置
@@ -181,7 +181,7 @@ interface AgentCallListProps {
 
 export function AgentCallList({
   calls,
-  title = 'Agent 调用',
+  title = '执行步骤',
   className,
 }: AgentCallListProps) {
   const runningCount = calls.filter(c => c.status === 'running').length;

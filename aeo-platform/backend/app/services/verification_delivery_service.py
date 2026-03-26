@@ -21,6 +21,7 @@ def _build_subject(purpose: VerificationPurpose) -> str:
     subject_map = {
         VerificationPurpose.REGISTRATION: "注册验证码",
         VerificationPurpose.LOGIN: "登录验证码",
+        VerificationPurpose.INVITE_ACCESS: "邀请码",
         VerificationPurpose.BIND_EMAIL: "邮箱换绑验证码",
         VerificationPurpose.BIND_PHONE: "手机号换绑验证码",
     }
@@ -32,8 +33,9 @@ def _build_subject(purpose: VerificationPurpose) -> str:
 
 def _build_action(purpose: VerificationPurpose) -> str:
     action_map = {
-        VerificationPurpose.REGISTRATION: "提交注册申请",
+        VerificationPurpose.REGISTRATION: "完成邮箱验证",
         VerificationPurpose.LOGIN: "登录 Specta AI",
+        VerificationPurpose.INVITE_ACCESS: "完成邀请码验证并进入 Specta AI",
         VerificationPurpose.BIND_EMAIL: "换绑邮箱",
         VerificationPurpose.BIND_PHONE: "换绑手机号",
     }
@@ -175,8 +177,22 @@ class SmtpEmailVerificationProvider(BaseEmailVerificationProvider):
 
 class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
     def __init__(self) -> None:
-        self._template_status: int | None = None
-        self._template_status_checked_at: float = 0.0
+        self._template_status: dict[int, int] = {}
+        self._template_status_checked_at: dict[int, float] = {}
+
+    def _resolve_template_config(
+        self,
+        purpose: VerificationPurpose,
+    ) -> tuple[int | None, str]:
+        if purpose == VerificationPurpose.INVITE_ACCESS:
+            return (
+                settings.TENCENT_SES_INVITE_CODE_TEMPLATE_ID,
+                settings.TENCENT_SES_INVITE_CODE_TEMPLATE_VARIABLES,
+            )
+        return (
+            settings.TENCENT_SES_TEMPLATE_ID,
+            settings.TENCENT_SES_TEMPLATE_VARIABLES,
+        )
 
     def _build_template_data(
         self,
@@ -184,11 +200,10 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
         purpose: VerificationPurpose,
         code: str,
         expires_in_minutes: int,
+        template_variables: str,
     ) -> str:
         variables = [
-            item.strip()
-            for item in settings.TENCENT_SES_TEMPLATE_VARIABLES.split(",")
-            if item.strip()
+            item.strip() for item in template_variables.split(",") if item.strip()
         ]
         if not variables:
             variables = ["code"]
@@ -201,6 +216,8 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
                 data[key] = str(expires_in_minutes)
             elif key == "action":
                 data[key] = _build_action(purpose)
+            elif key == "login_url":
+                data[key] = settings.APP_LOGIN_URL
             else:
                 raise VerificationDeliveryError(
                     f"腾讯云 SES 模板变量 {key} 当前未实现映射"
@@ -249,17 +266,18 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
 
     def _ensure_template_ready_sync(self, client, template_id: int) -> None:
         now = time.time()
-        ttl_seconds = 300 if self._template_status == 0 else 30
+        cached_status = self._template_status.get(template_id)
+        ttl_seconds = 300 if cached_status == 0 else 30
         if (
-            self._template_status is not None
-            and now - self._template_status_checked_at < ttl_seconds
+            template_id in self._template_status
+            and now - self._template_status_checked_at.get(template_id, 0) < ttl_seconds
         ):
-            status = self._template_status
+            status = cached_status
         else:
             status = self._fetch_template_status_sync(client, template_id)
             if status is not None:
-                self._template_status = status
-                self._template_status_checked_at = now
+                self._template_status[template_id] = status
+                self._template_status_checked_at[template_id] = now
 
         if status == 1:
             raise VerificationDeliveryError("腾讯云 SES 模板仍在审核中，暂不可发送验证码邮件")
@@ -277,13 +295,15 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
         secret_id = _sanitize_optional_env(settings.TENCENT_SES_SECRET_ID)
         secret_key = _sanitize_optional_env(settings.TENCENT_SES_SECRET_KEY)
         from_email = _sanitize_optional_env(settings.TENCENT_SES_FROM_EMAIL_ADDRESS)
-        template_id = settings.TENCENT_SES_TEMPLATE_ID
+        template_id, template_variables = self._resolve_template_config(purpose)
 
         if not secret_id or not secret_key:
             raise VerificationDeliveryError("未配置腾讯云 SES SecretId / SecretKey")
         if not from_email:
             raise VerificationDeliveryError("未配置腾讯云 SES 发件地址")
         if not template_id:
+            if purpose == VerificationPurpose.INVITE_ACCESS:
+                raise VerificationDeliveryError("未配置腾讯云 SES 邀请码模板 ID")
             raise VerificationDeliveryError("未配置腾讯云 SES TemplateID")
 
         try:
@@ -309,6 +329,7 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
                 purpose=purpose,
                 code=code,
                 expires_in_minutes=expires_in_minutes,
+                template_variables=template_variables,
             )
             request.Template = template
             request.TriggerType = 1
@@ -338,13 +359,26 @@ class TencentSesApiEmailVerificationProvider(BaseEmailVerificationProvider):
         code: str,
         expires_in_minutes: int,
     ) -> None:
-        await asyncio.to_thread(
-            self._send_sync,
-            target=target,
-            purpose=purpose,
-            code=code,
-            expires_in_minutes=expires_in_minutes,
-        )
+        try:
+            await asyncio.to_thread(
+                self._send_sync,
+                target=target,
+                purpose=purpose,
+                code=code,
+                expires_in_minutes=expires_in_minutes,
+            )
+        except VerificationDeliveryError as exc:
+            if purpose == VerificationPurpose.INVITE_ACCESS and (
+                settings.DEBUG or settings.DEV_MODE_ENABLED
+            ):
+                logger.warning(
+                    "[Verification][Email][Fallback] invite_access target=%s code=%s reason=%s",
+                    target,
+                    code,
+                    exc,
+                )
+                return
+            raise
 
 
 class ConsoleSmsVerificationProvider(BaseSmsVerificationProvider):

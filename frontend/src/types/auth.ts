@@ -1,5 +1,5 @@
 export type VerificationChannel = 'email' | 'phone';
-export type VerificationPurpose = 'registration' | 'login' | 'bind_email' | 'bind_phone';
+export type VerificationPurpose = 'registration' | 'login' | 'invite_access' | 'bind_email' | 'bind_phone';
 
 export interface AuthUser {
   id: string;
@@ -33,6 +33,11 @@ export interface OtpLoginInput {
   verification_code: string;
 }
 
+export interface InvitationRedeemInput {
+  email: string;
+  invite_code: string;
+}
+
 export interface RegistrationApplicationCreateInput {
   email?: string | null;
   phone?: string | null;
@@ -40,8 +45,10 @@ export interface RegistrationApplicationCreateInput {
   verification_target: string;
   verification_code: string;
   organization_name: string;
-  job_title: string;
+  job_title?: string;
   applicant_name?: string | null;
+  company_size?: string | null;
+  is_agency?: boolean;
 }
 
 export interface RegistrationApplication {
@@ -51,10 +58,16 @@ export interface RegistrationApplication {
   organization_name: string;
   job_title: string;
   applicant_name: string | null;
+  company_size: string | null;
+  is_agency: boolean;
   status: string;
   review_note: string | null;
   reviewed_by_user_id: string | null;
   approved_user_id: string | null;
+  assigned_organization_id: string | null;
+  invite_code_issued_by_user_id: string | null;
+  invite_code_sent_at: string | null;
+  invite_redeemed_at: string | null;
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;

@@ -32,6 +32,58 @@ def _join_non_empty(parts: Iterable[Any], sep: str = "\n") -> str:
     return sep.join(part for part in (_text(p) for p in parts) if part)
 
 
+def _normalize_query_sentiment(query: str) -> str | None:
+    text = str(query or "").lower()
+    if any(keyword in text for keyword in ["负向", "负面", "消极", "negative"]):
+        return "negative"
+    if any(keyword in text for keyword in ["正向", "正面", "积极", "positive"]):
+        return "positive"
+    if any(keyword in text for keyword in ["中性", "neutral"]):
+        return "neutral"
+    return None
+
+
+def _sentiment_label(sentiment: str) -> str:
+    return {
+        "negative": "负向",
+        "positive": "正向",
+        "neutral": "中性",
+    }.get(str(sentiment or "").lower(), "中性")
+
+
+def _sentiment_terms(sentiment: str, has_brand_mention: bool) -> list[str]:
+    canonical = str(sentiment or "").lower()
+    if canonical == "negative":
+        terms = ["负向", "负面", "消极", "negative"]
+    elif canonical == "positive":
+        terms = ["正向", "正面", "积极", "positive"]
+    else:
+        terms = ["中性", "neutral"]
+    if has_brand_mention:
+        label = _sentiment_label(canonical)
+        terms.extend([f"{label}提及", f"{label}品牌提及"])
+    return terms
+
+
+def _analyze_answer_sentiment(text: str) -> str:
+    from app.workflow.a5.metrics import analyze_sentiment
+
+    return analyze_sentiment(text)
+
+
+def _answer_has_brand_mention(
+    answer: dict[str, Any],
+    answer_text: str,
+    brand_profile: dict[str, Any],
+) -> bool:
+    if bool(answer.get("has_brand_mention", False)):
+        return True
+
+    from app.workflow.brand_mentions import content_mentions_brand
+
+    return content_mentions_brand(answer_text, brand_profile)
+
+
 def _extract_query_terms(query: str) -> list[str]:
     terms = []
     semantic_keywords = [
@@ -53,6 +105,16 @@ def _extract_query_terms(query: str) -> list[str]:
         "差距",
         "历史",
         "清单",
+        "提及",
+        "情感",
+        "负向",
+        "负面",
+        "正向",
+        "正面",
+        "中性",
+        "negative",
+        "positive",
+        "neutral",
         "deepseek",
         "kimi",
         "doubao",
@@ -65,6 +127,9 @@ def _extract_query_terms(query: str) -> list[str]:
             for keyword in semantic_keywords:
                 if keyword in item:
                     terms.append(keyword)
+    query_sentiment = _normalize_query_sentiment(query)
+    if query_sentiment:
+        terms.extend(_sentiment_terms(query_sentiment, has_brand_mention=True))
     seen: set[str] = set()
     deduped: list[str] = []
     for term in terms:
@@ -228,6 +293,12 @@ class KnowledgeWorkspaceService:
                 platform = _text(platform_result.get("platform"))
                 answer = platform_result.get("answer") or {}
                 answer_text = _text(answer.get("content"))
+                has_brand_mention = _answer_has_brand_mention(
+                    answer,
+                    answer_text,
+                    brand_profile,
+                )
+                sentiment = _analyze_answer_sentiment(answer_text)
                 answer_payload = {
                     "question_id": question_id,
                     "question_text": question_text,
@@ -258,19 +329,25 @@ class KnowledgeWorkspaceService:
                         question_text,
                         platform,
                         answer_text,
+                        sentiment,
+                        has_brand_mention,
                     ),
                     payload=answer_payload,
                     extra_metadata={
                         "fetch_method": platform_result.get("fetch_method"),
                         "success": platform_result.get("success", False),
-                        "has_brand_mention": answer.get("has_brand_mention", False),
+                        "has_brand_mention": has_brand_mention,
                         "citation_count": len(platform_result.get("citations", [])),
+                        "sentiment": sentiment,
+                        "sentiment_label": _sentiment_label(sentiment),
                     },
                     segments=self._build_answer_segments(
                         brand_name,
                         question_text,
                         platform,
                         answer_text,
+                        sentiment,
+                        has_brand_mention,
                     ),
                 )
 
@@ -1032,6 +1109,9 @@ class KnowledgeWorkspaceService:
         record: KnowledgeRecord,
         segment: KnowledgeSegment,
     ) -> int:
+        metadata = (
+            record.extra_metadata if isinstance(record.extra_metadata, dict) else {}
+        )
         haystack = " ".join(
             part.lower()
             for part in [
@@ -1049,6 +1129,15 @@ class KnowledgeWorkspaceService:
         for term in terms:
             if term in haystack:
                 score += 2
+        query_sentiment = _normalize_query_sentiment(query)
+        record_sentiment = _text(metadata.get("sentiment")).lower()
+        if query_sentiment and record_sentiment:
+            if record_sentiment == query_sentiment:
+                score += 8
+            else:
+                score -= 2
+        if "提及" in query and bool(metadata.get("has_brand_mention")):
+            score += 2
         if record.source_type in {"fetch_answer", "fetch_citation"}:
             score += 1
         return score
@@ -1173,7 +1262,10 @@ class KnowledgeWorkspaceService:
         question_text: str,
         platform: str,
         answer_text: str,
+        sentiment: str,
+        has_brand_mention: bool,
     ) -> str:
+        sentiment_terms = "、".join(_sentiment_terms(sentiment, has_brand_mention))
         return _join_non_empty(
             [
                 "类型：历史答案",
@@ -1181,6 +1273,9 @@ class KnowledgeWorkspaceService:
                 f"品牌：{brand_name}",
                 f"平台：{platform}",
                 f"问题：{question_text}",
+                f"情感：{_sentiment_label(sentiment)}",
+                f"品牌提及：{'是' if has_brand_mention else '否'}",
+                f"标签：{sentiment_terms}",
                 f"答案：{answer_text}",
             ]
         )
@@ -1191,6 +1286,8 @@ class KnowledgeWorkspaceService:
         question_text: str,
         platform: str,
         answer_text: str,
+        sentiment: str,
+        has_brand_mention: bool,
     ) -> list[dict[str, Any]]:
         chunks = _chunk_text(answer_text)
         if not chunks:
@@ -1204,6 +1301,10 @@ class KnowledgeWorkspaceService:
                         f"品牌：{brand_name}",
                         f"平台：{platform}",
                         f"问题：{question_text}",
+                        f"情感：{_sentiment_label(sentiment)}",
+                        f"品牌提及：{'是' if has_brand_mention else '否'}",
+                        "标签："
+                        + "、".join(_sentiment_terms(sentiment, has_brand_mention)),
                         chunk,
                     ]
                 )

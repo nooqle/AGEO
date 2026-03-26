@@ -11,6 +11,7 @@ from app.services.skill_registry_service import SkillRegistryService, SkillScope
 
 
 SKILL_EXECUTOR_TO_NODE: dict[str, str] = {
+    "table_intake_executor": "table_intake",
     "a5_data_analytics": "a5_analytics",
     "a7_confidence_signal": "a7_confidence_signal",
     "post_analysis_executor": "post_analysis_executor",

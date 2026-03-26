@@ -1,58 +1,363 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ClipboardEvent,
+  type InputHTMLAttributes,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   RiArrowLeftLine,
-  RiBuildingLine,
-  RiPassValidLine,
-  RiShieldCheckLine,
+  RiArrowRightLine,
+  RiMailLine,
+  RiShieldKeyholeLine,
 } from '@remixicon/react';
-import { api } from '@/services/api';
-import { clearStoredAccessToken, getStoredAccessToken, setStoredAccessToken } from '@/lib/auth-storage';
+
 import { toast } from '@/components/ui/toast';
+import {
+  clearStoredAccessToken,
+  getStoredAccessToken,
+  setStoredAccessToken,
+} from '@/lib/auth-storage';
+import { PublicBrand } from '@/components/layout/PublicBrand';
+import { api } from '@/services/api';
 import type { VerificationChannel } from '@/types/auth';
 
-type AuthMode = 'login' | 'register';
 const EMAIL_CHANNEL: VerificationChannel = 'email';
+const CODE_LENGTH = 6;
 
-function normalizeTarget(channel: VerificationChannel, value: string) {
-  const trimmed = value.trim();
-  return channel === 'email' ? trimmed.toLowerCase() : trimmed;
+const companySizeOptions = [
+  '1-10 人',
+  '11-50 人',
+  '51-200 人',
+  '201-500 人',
+  '500 人以上',
+];
+
+type Mode = 'apply' | 'login';
+type Step = 'company' | 'verify' | 'invite' | 'login-email' | 'login-verify';
+
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
 }
 
-function formatCountdown(value: number) {
-  if (value <= 0) return '重新发送验证码';
-  return `${value}s 后可重发`;
+function sanitizeDigits(value: string) {
+  return value.replace(/\D/g, '').slice(0, CODE_LENGTH);
+}
+
+function maskEmail(email: string) {
+  const normalized = normalizeEmail(email);
+  const [localPart = '', domain = ''] = normalized.split('@');
+  if (!localPart || !domain) return normalized;
+  if (localPart.length <= 2) return `${localPart[0] || '*'}***@${domain}`;
+  return `${localPart.slice(0, 2)}***@${domain}`;
+}
+
+function formatCountdown(seconds: number, label: string) {
+  if (seconds <= 0) return label;
+  return `${seconds}s 后可重新发送`;
+}
+
+function PageHeader({
+  mode,
+  onModeChange,
+}: {
+  mode: Mode;
+  onModeChange: (next: Mode) => void;
+}) {
+  return (
+    <header className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex items-center gap-4">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-2 text-sm font-medium text-[#475569]"
+        >
+          <RiArrowLeftLine className="h-4 w-4" />
+          返回首页
+        </Link>
+        <PublicBrand size={34} textSizeClassName="text-[30px]" />
+      </div>
+
+      <div className="inline-flex rounded-full border border-[#e5e7eb] bg-white p-1">
+        <button
+          type="button"
+          onClick={() => onModeChange('apply')}
+          className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
+            mode === 'apply'
+              ? 'bg-[#111827] text-white'
+              : 'text-[#475569]'
+          }`}
+        >
+          申请体验
+        </button>
+        <button
+          type="button"
+          onClick={() => onModeChange('login')}
+          className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
+            mode === 'login'
+              ? 'bg-[#111827] text-white'
+              : 'text-[#475569]'
+          }`}
+        >
+          已有账号
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function StepHeader({
+  mode,
+  step,
+  title,
+  description,
+}: {
+  mode: Mode;
+  step: number;
+  title: string;
+  description: string;
+}) {
+  const total = mode === 'apply' ? 3 : 2;
+  const labels =
+    mode === 'apply'
+      ? ['公司信息', '验证邮箱', '输入邀请码']
+      : ['工作邮箱', '登录验证'];
+  return (
+    <div className="max-w-[720px]">
+      <div className="inline-flex items-center gap-3 rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 text-sm text-[#6b7280]">
+        <span className="font-semibold text-[#111827]">
+          {String(step).padStart(2, '0')}
+        </span>
+        <span>/</span>
+        <span>{String(total).padStart(2, '0')}</span>
+      </div>
+      <div className="mt-5 flex flex-wrap gap-3">
+        {labels.map((label, index) => {
+          const current = index + 1 === step;
+          const completed = index + 1 < step;
+          return (
+            <div
+              key={label}
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium ${
+                current
+                  ? 'border-[#111827] bg-[#111827] text-white'
+                  : completed
+                    ? 'border-[#d7dbe3] bg-white text-[#111827]'
+                    : 'border-[#e5e7eb] bg-white text-[#94a3b8]'
+              }`}
+            >
+              <span className="font-semibold">
+                {String(index + 1).padStart(2, '0')}
+              </span>
+              <span>{label}</span>
+            </div>
+          );
+        })}
+      </div>
+      <h1 className="mt-8 text-[44px] font-semibold leading-[1.02] tracking-[-0.06em] text-[#111827] lg:text-[56px]">
+        {title}
+      </h1>
+      <p className="mt-4 max-w-[620px] text-[18px] leading-8 text-[#6b7280]">
+        {description}
+      </p>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block">
+      <div className="text-[17px] font-semibold text-[#111827]">{label}</div>
+      <div className="mt-4">{children}</div>
+    </label>
+  );
+}
+
+function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`h-[60px] w-full rounded-[18px] border border-[#dde2e8] bg-white px-5 text-[18px] text-[#111827] outline-none transition-colors placeholder:text-[#a0a8b5] focus:border-[#111827] ${props.className || ''}`}
+    />
+  );
+}
+
+function OptionButton({
+  active,
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      {...props}
+      type="button"
+      className={`rounded-[18px] border px-5 py-4 text-left text-[18px] font-semibold transition-colors ${
+        active
+          ? 'border-[#111827] bg-[#f8fafc] text-[#111827]'
+          : 'border-[#dde2e8] bg-white text-[#111827] hover:border-[#c6ccd5]'
+      } ${props.className || ''}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PrimaryButton({
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  children: ReactNode;
+}) {
+  return (
+    <button
+      {...props}
+      className={`inline-flex h-14 w-full items-center justify-center rounded-[18px] bg-[#111827] px-6 text-base font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#eef1f5] disabled:text-[#a0a8b5] ${props.className || ''}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SecondaryAction({
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  children: ReactNode;
+}) {
+  return (
+    <button
+      {...props}
+      type="button"
+      className={`inline-flex items-center justify-center text-sm font-medium text-[#475569] disabled:cursor-not-allowed disabled:text-[#a0a8b5] ${props.className || ''}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function CodeInputRow({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
+
+  const handleInput = (index: number, rawValue: string) => {
+    const digit = rawValue.replace(/\D/g, '').slice(-1);
+    const next = value.split('');
+    next[index] = digit;
+    onChange(next.join('').slice(0, CODE_LENGTH));
+    if (digit && index < CODE_LENGTH - 1) {
+      inputsRef.current[index + 1]?.focus();
+    }
+  };
+
+  const handleKeyDown = (index: number, event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Backspace' && !value[index] && index > 0) {
+      inputsRef.current[index - 1]?.focus();
+    }
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    onChange(sanitizeDigits(event.clipboardData.getData('text')));
+  };
+
+  return (
+    <div className="grid max-w-[660px] grid-cols-6 gap-3" onPaste={handlePaste}>
+      {Array.from({ length: CODE_LENGTH }).map((_, index) => (
+        <input
+          key={index}
+          ref={(node) => {
+            inputsRef.current[index] = node;
+          }}
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          value={value[index] || ''}
+          onChange={(event) => handleInput(index, event.target.value)}
+          onKeyDown={(event) => handleKeyDown(index, event)}
+          className="h-20 rounded-[18px] border border-[#dde2e8] bg-white text-center text-[30px] font-semibold text-[#111827] outline-none transition-colors focus:border-[#111827]"
+        />
+      ))}
+    </div>
+  );
+}
+
+function InfoPanel({
+  icon,
+  title,
+  description,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-[20px] border border-[#e5e7eb] bg-white px-5 py-5">
+      <div className="flex items-start gap-4">
+        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#eef2ff] text-[#4f46e5]">
+          {icon}
+        </div>
+        <div>
+          <div className="text-sm font-semibold text-[#111827]">{title}</div>
+          <div className="mt-2 text-sm leading-7 text-[#6b7280]">{description}</div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AuthPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = useMemo(() => searchParams.get('next') || '/dashboard', [searchParams]);
+  const requestedMode = useMemo<Mode>(
+    () => (searchParams.get('mode') === 'login' ? 'login' : 'apply'),
+    [searchParams]
+  );
 
-  const [mode, setMode] = useState<AuthMode>('login');
+  const [mode, setMode] = useState<Mode>(requestedMode);
+  const [step, setStep] = useState<Step>(
+    requestedMode === 'login' ? 'login-email' : 'company'
+  );
+  const [countdown, setCountdown] = useState(0);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [countdown, setCountdown] = useState(0);
-  const [debugCode, setDebugCode] = useState<string | null>(null);
 
-  const [loginTarget, setLoginTarget] = useState('');
-  const [loginCode, setLoginCode] = useState('');
-
+  const [companyName, setCompanyName] = useState('');
+  const [companySize, setCompanySize] = useState(companySizeOptions[1]);
+  const [isAgency, setIsAgency] = useState(false);
   const [registrationEmail, setRegistrationEmail] = useState('');
-  const [registrationPhone, setRegistrationPhone] = useState('');
   const [registrationCode, setRegistrationCode] = useState('');
-  const [organizationName, setOrganizationName] = useState('');
-  const [jobTitle, setJobTitle] = useState('');
-  const [applicantName, setApplicantName] = useState('');
-  const [pendingReviewMessage, setPendingReviewMessage] = useState<string | null>(null);
+  const [inviteCode, setInviteCode] = useState('');
+
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginCode, setLoginCode] = useState('');
 
   useEffect(() => {
     const storedToken = getStoredAccessToken();
     if (!storedToken) return;
-    api.getMe()
+    api
+      .getMe()
       .then(() => {
         router.replace(nextPath);
       })
@@ -62,33 +367,59 @@ function AuthPageContent() {
   }, [nextPath, router]);
 
   useEffect(() => {
+    setMode(requestedMode);
+    setCountdown(0);
+    setIsSendingCode(false);
+    setIsSubmitting(false);
+    setStep(requestedMode === 'login' ? 'login-email' : 'company');
+  }, [requestedMode]);
+
+  useEffect(() => {
     if (countdown <= 0) return;
-    const timer = window.setTimeout(() => setCountdown((value) => value - 1), 1000);
+    const timer = window.setTimeout(() => setCountdown((current) => current - 1), 1000);
     return () => window.clearTimeout(timer);
   }, [countdown]);
 
-  const activeTarget = mode === 'login'
-    ? loginTarget
-    : registrationEmail;
+  const canSendRegistrationCode =
+    normalizeEmail(registrationEmail).length > 0 &&
+    companyName.trim().length >= 2 &&
+    companySize.length > 0 &&
+    countdown === 0 &&
+    !isSendingCode;
 
-  const canSendCode = normalizeTarget(EMAIL_CHANNEL, activeTarget).length > 0 && countdown === 0 && !isSendingCode;
+  const canSendLoginCode =
+    normalizeEmail(loginEmail).length > 0 && countdown === 0 && !isSendingCode;
 
-  const handleSendCode = async () => {
-    const normalizedTarget = normalizeTarget(EMAIL_CHANNEL, activeTarget);
-    if (!normalizedTarget) {
-      toast.error('请先输入邮箱地址');
+  const changeMode = (next: Mode) => {
+    const query = new URLSearchParams();
+    query.set('mode', next);
+    if (nextPath && nextPath !== '/dashboard') {
+      query.set('next', nextPath);
+    }
+    router.replace(`/auth?${query.toString()}`);
+    setMode(next);
+    setCountdown(0);
+    setIsSendingCode(false);
+    setIsSubmitting(false);
+    setStep(next === 'apply' ? 'company' : 'login-email');
+  };
+
+  const handleSendRegistrationCode = async () => {
+    const email = normalizeEmail(registrationEmail);
+    if (!email || companyName.trim().length < 2 || !companySize) {
+      toast.error('请先填写公司信息和工作邮箱');
       return;
     }
     setIsSendingCode(true);
-    setDebugCode(null);
     try {
       const response = await api.sendVerificationCode({
         channel: EMAIL_CHANNEL,
-        purpose: mode === 'login' ? 'login' : 'registration',
-        target: normalizedTarget,
+        purpose: 'registration',
+        target: email,
       });
       setCountdown(Math.max(30, Math.min(response.expires_in_seconds, 60)));
-      setDebugCode(response.debug_code ?? null);
+      setRegistrationCode('');
+      setStep('verify');
       toast.success('验证码已发送');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '验证码发送失败');
@@ -97,28 +428,34 @@ function AuthPageContent() {
     }
   };
 
-  const handleLogin = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const normalizedTarget = normalizeTarget(EMAIL_CHANNEL, loginTarget);
-    if (!normalizedTarget || !loginCode.trim()) {
-      toast.error('请先填写账号和验证码');
+  const handleVerifyRegistration = async () => {
+    const email = normalizeEmail(registrationEmail);
+    if (!email || registrationCode.length !== CODE_LENGTH) {
+      toast.error('请输入完整验证码');
       return;
     }
     setIsSubmitting(true);
-    setPendingReviewMessage(null);
     try {
-      const response = await api.loginWithOtp({
-        channel: EMAIL_CHANNEL,
-        target: normalizedTarget,
-        verification_code: loginCode.trim(),
+      await api.createRegistrationApplication({
+        email,
+        verification_channel: EMAIL_CHANNEL,
+        verification_target: email,
+        verification_code: registrationCode,
+        organization_name: companyName.trim(),
+        company_size: companySize,
+        is_agency: isAgency,
+        job_title: '体验申请',
       });
-      setStoredAccessToken(response.access_token);
-      toast.success('登录成功');
-      router.replace(nextPath);
+      setInviteCode('');
+      setStep('invite');
+      setCountdown(0);
+      toast.success('登记已完成');
     } catch (error) {
-      const message = error instanceof Error ? error.message : '登录失败';
-      if (message.includes('待审核')) {
-        setPendingReviewMessage(message);
+      const message = error instanceof Error ? error.message : '登记失败';
+      if (message.includes('已开通')) {
+        setMode('login');
+        setStep('login-email');
+        setLoginEmail(email);
       }
       toast.error(message);
     } finally {
@@ -126,333 +463,275 @@ function AuthPageContent() {
     }
   };
 
-  const handleRegister = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const normalizedTarget = normalizeTarget(EMAIL_CHANNEL, registrationEmail);
-    if (!normalizedTarget || !registrationCode.trim() || !organizationName.trim() || !jobTitle.trim()) {
-      toast.error('请先完整填写注册信息');
+  const handleRedeemInvite = async () => {
+    const email = normalizeEmail(registrationEmail);
+    if (!email || inviteCode.length !== CODE_LENGTH) {
+      toast.error('请输入完整邀请码');
       return;
     }
     setIsSubmitting(true);
     try {
-      await api.createRegistrationApplication({
-        email: registrationEmail.trim() ? registrationEmail.trim().toLowerCase() : null,
-        phone: registrationPhone.trim() || null,
-        verification_channel: EMAIL_CHANNEL,
-        verification_target: normalizedTarget,
-        verification_code: registrationCode.trim(),
-        organization_name: organizationName.trim(),
-        job_title: jobTitle.trim(),
-        applicant_name: applicantName.trim() || null,
+      const response = await api.redeemInviteCode({
+        email,
+        invite_code: inviteCode,
       });
-      setPendingReviewMessage('注册申请已提交，请等待后台审核开通后再登录。');
-      setRegistrationCode('');
-      toast.success('注册申请已提交');
+      setStoredAccessToken(response.access_token);
+      toast.success('已进入工作台');
+      router.replace(nextPath);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '提交注册申请失败');
+      toast.error(error instanceof Error ? error.message : '邀请码验证失败');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  return (
-    <main className="min-h-screen overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      <div
-        className="relative min-h-screen"
-        style={{
-          background:
-            'radial-gradient(circle at top left, color-mix(in srgb, var(--color-primary) 16%, transparent) 0%, transparent 38%), radial-gradient(circle at bottom right, rgba(191, 146, 91, 0.14) 0%, transparent 34%), var(--bg-primary)',
-        }}
-      >
-        <div className="mx-auto grid min-h-screen max-w-7xl gap-10 px-4 py-8 lg:grid-cols-[1.05fr_0.95fr] lg:px-8">
-          <section className="flex flex-col justify-between rounded-[32px] border px-6 py-7 lg:px-8 lg:py-9" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'color-mix(in srgb, var(--bg-secondary) 92%, white 8%)' }}>
-            <div>
-              <Link
-                href="/"
-                className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors"
-                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
+  const handleSendLoginCode = async () => {
+    const email = normalizeEmail(loginEmail);
+    if (!email) {
+      toast.error('请先输入邮箱地址');
+      return;
+    }
+    setIsSendingCode(true);
+    try {
+      const response = await api.sendVerificationCode({
+        channel: EMAIL_CHANNEL,
+        purpose: 'login',
+        target: email,
+      });
+      setCountdown(Math.max(30, Math.min(response.expires_in_seconds, 60)));
+      setLoginCode('');
+      setStep('login-verify');
+      toast.success('登录验证码已发送');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '验证码发送失败');
+    } finally {
+      setIsSendingCode(false);
+    }
+  };
+
+  const handleLogin = async () => {
+    const email = normalizeEmail(loginEmail);
+    if (!email || loginCode.length !== CODE_LENGTH) {
+      toast.error('请输入完整验证码');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const response = await api.loginWithOtp({
+        channel: EMAIL_CHANNEL,
+        target: email,
+        verification_code: loginCode,
+      });
+      setStoredAccessToken(response.access_token);
+      toast.success('登录成功');
+      router.replace(nextPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '登录失败';
+      if (message.includes('邀请码')) {
+        setMode('apply');
+        setRegistrationEmail(email);
+        setStep('invite');
+      }
+      toast.error(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const renderApplyCompany = () => (
+    <>
+      <StepHeader
+        mode="apply"
+        step={1}
+        title="介绍一下贵公司"
+        description="这会帮助我们确认团队背景，并把邀请码发送到正确的邮箱。"
+      />
+
+      <div className="mt-12 max-w-[720px] space-y-10">
+        <Field label="公司名称">
+          <TextInput
+            type="text"
+            value={companyName}
+            onChange={(event) => setCompanyName(event.target.value)}
+            placeholder="输入公司名称"
+          />
+        </Field>
+
+        <div>
+          <div className="text-[17px] font-semibold text-[#111827]">贵公司的规模有多大？</div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {companySizeOptions.map((option) => (
+              <OptionButton
+                key={option}
+                active={companySize === option}
+                onClick={() => setCompanySize(option)}
               >
-                <RiArrowLeftLine className="h-3.5 w-3.5" />
-                返回首页
-              </Link>
+                {option}
+              </OptionButton>
+            ))}
+          </div>
+        </div>
 
-              <div className="mt-8 max-w-xl">
-                <div className="inline-flex rounded-full border px-3 py-1 text-[11px] tracking-[0.22em]" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-tertiary)' }}>
-                  SPECTA ACCESS
-                </div>
-                <h1 className="mt-5 text-4xl font-semibold tracking-[-0.04em] lg:text-5xl" style={{ color: 'var(--text-primary)' }}>
-                  提交身份与组织信息
-                </h1>
-                <p className="mt-4 max-w-2xl text-sm leading-7 lg:text-[15px]" style={{ color: 'var(--text-secondary)' }}>
-                    使用邮箱验证码登录。注册申请审核通过后开通账号；组织空间与个人空间数据彼此隔离。
-                </p>
-              </div>
-            </div>
+        <label className="flex items-center gap-3 text-base font-medium text-[#111827]">
+          <input
+            type="checkbox"
+            checked={isAgency}
+            onChange={(event) => setIsAgency(event.target.checked)}
+            className="h-5 w-5 rounded border border-[#d3d9e3]"
+          />
+          我是代理机构
+        </label>
 
-            <div className="grid gap-4 lg:max-w-xl">
-              {[
-                {
-                  icon: <RiPassValidLine className="h-4 w-4" />,
-                    title: '人工审核开通',
-                    description: '注册申请审核通过后开通账号。',
-                },
-                {
-                  icon: <RiBuildingLine className="h-4 w-4" />,
-                  title: '组织空间共享',
-                  description: '同组织账号后续可以共享组织空间下的品牌采集与历史分析资产，减少重复抓取。',
-                },
-                {
-                  icon: <RiShieldCheckLine className="h-4 w-4" />,
-                  title: '个人空间隔离',
-                  description: '个人空间品牌只对本人可见，适合试验性分析和未准备对组织公开的品牌数据。',
-                },
-              ].map((item) => (
-                <div
-                  key={item.title}
-                  className="rounded-[24px] border px-5 py-4"
-                  style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}
-                >
-                  <div className="flex items-center gap-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full" style={{ backgroundColor: 'color-mix(in srgb, var(--color-primary) 12%, var(--bg-primary) 88%)', color: 'var(--color-primary)' }}>
-                      {item.icon}
-                    </span>
-                    {item.title}
-                  </div>
-                  <p className="mt-3 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-                    {item.description}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </section>
+        <Field label="工作邮箱">
+          <TextInput
+            type="email"
+            value={registrationEmail}
+            onChange={(event) => setRegistrationEmail(event.target.value)}
+            placeholder="you@company.com"
+          />
+        </Field>
 
-          <section className="flex items-center justify-center">
-            <div
-              className="w-full max-w-xl rounded-[32px] border p-6 shadow-[0_24px_80px_rgba(35,31,26,0.08)] lg:p-7"
-              style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'color-mix(in srgb, var(--bg-secondary) 95%, white 5%)' }}
-            >
-              <div className="grid grid-cols-2 gap-2 rounded-[20px] border p-1" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)' }}>
-                {[
-                  { key: 'login', label: '验证码登录' },
-                  { key: 'register', label: '注册申请' },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => {
-                      setMode(item.key as AuthMode);
-                      setDebugCode(null);
-                    }}
-                    className="rounded-[16px] px-4 py-3 text-sm font-medium transition-colors"
-                    style={{
-                      backgroundColor: mode === item.key ? 'var(--bg-secondary)' : 'transparent',
-                      color: mode === item.key ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    }}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+        <PrimaryButton onClick={handleSendRegistrationCode} disabled={!canSendRegistrationCode}>
+          {isSendingCode ? '发送中...' : '发送验证码'}
+        </PrimaryButton>
+      </div>
+    </>
+  );
 
-              <div className="mt-4 rounded-[20px] border px-4 py-3 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-                当前支持邮箱验证码登录；手机号仅作为联系信息保存。
-              </div>
+  const renderApplyVerify = () => (
+    <>
+      <StepHeader
+        mode="apply"
+        step={2}
+        title="验证你的邮箱"
+        description={`验证码已发送至 ${maskEmail(registrationEmail)}`}
+      />
 
-              {mode === 'login' ? (
-                <form className="mt-6 space-y-4" onSubmit={handleLogin}>
-                  <div>
-                    <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                      邮箱地址
-                    </label>
-                    <input
-                      type="email"
-                      value={loginTarget}
-                      onChange={(event) => setLoginTarget(event.target.value)}
-                      placeholder="you@company.com"
-                      className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
-                      style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                    />
-                  </div>
+      <div className="mt-12 max-w-[720px]">
+        <CodeInputRow value={registrationCode} onChange={setRegistrationCode} />
+        <div className="mt-6 flex items-center gap-3 text-sm text-[#6b7280]">
+          <SecondaryAction
+            onClick={handleSendRegistrationCode}
+            disabled={!canSendRegistrationCode}
+          >
+            {isSendingCode
+              ? '发送中...'
+              : formatCountdown(countdown, '重新发送验证码')}
+          </SecondaryAction>
+        </div>
+        <PrimaryButton
+          className="mt-12"
+          onClick={handleVerifyRegistration}
+          disabled={isSubmitting || registrationCode.length !== CODE_LENGTH}
+        >
+          {isSubmitting ? '验证中...' : '继续'}
+        </PrimaryButton>
+      </div>
+    </>
+  );
 
-                  <div>
-                    <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                      验证码
-                    </label>
-                    <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                      <input
-                        type="text"
-                        value={loginCode}
-                        onChange={(event) => setLoginCode(event.target.value)}
-                        placeholder="输入 6 位验证码"
-                        className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
-                        style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleSendCode}
-                        disabled={!canSendCode}
-                        className="rounded-[16px] px-4 py-3 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
-                      >
-                        {isSendingCode ? '发送中...' : formatCountdown(countdown)}
-                      </button>
-                    </div>
-                  </div>
+  const renderApplyInvite = () => (
+    <>
+      <StepHeader
+        mode="apply"
+        step={3}
+        title="输入邀请码"
+        description="邀请码会发送至已登记邮箱。收到邀请码后，在这里输入即可进入平台。"
+      />
 
-                  {pendingReviewMessage && (
-                    <div className="rounded-[18px] border px-4 py-3 text-sm leading-6" style={{ borderColor: 'rgba(191, 146, 91, 0.22)', backgroundColor: 'rgba(191, 146, 91, 0.08)', color: 'var(--text-secondary)' }}>
-                      {pendingReviewMessage}
-                    </div>
-                  )}
+      <div className="mt-10 grid max-w-[720px] gap-4">
+        <InfoPanel
+          icon={<RiMailLine className="h-5 w-5" />}
+          title="邀请码发送邮箱"
+          description={normalizeEmail(registrationEmail)}
+        />
+        <InfoPanel
+          icon={<RiShieldKeyholeLine className="h-5 w-5" />}
+          title="如何获得邀请码"
+          description="我们会向已登记邮箱不定期发送邀请码。若暂未收到，请等待邮件通知或联系运营团队。"
+        />
+      </div>
 
-                  {debugCode && (
-                    <div className="rounded-[18px] border px-4 py-3 text-sm" style={{ borderColor: 'rgba(54, 79, 124, 0.22)', backgroundColor: 'rgba(54, 79, 124, 0.08)', color: 'var(--text-primary)' }}>
-                      开发环境验证码：<span className="font-semibold tracking-[0.16em]">{debugCode}</span>
-                    </div>
-                  )}
+      <div className="mt-12 max-w-[720px]">
+        <CodeInputRow value={inviteCode} onChange={setInviteCode} />
+        <PrimaryButton
+          className="mt-12"
+          onClick={handleRedeemInvite}
+          disabled={isSubmitting || inviteCode.length !== CODE_LENGTH}
+        >
+          {isSubmitting ? '验证中...' : '验证邀请码'}
+        </PrimaryButton>
+      </div>
+    </>
+  );
 
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full rounded-[18px] px-4 py-3 text-sm font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-60"
-                    style={{
-                      background: 'linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 88%, #8092ff 12%), color-mix(in srgb, var(--color-primary) 74%, #4458d7 26%))',
-                    }}
-                  >
-                    {isSubmitting ? '登录中...' : '进入工作台'}
-                  </button>
-                </form>
-              ) : (
-                <form className="mt-6 space-y-4" onSubmit={handleRegister}>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                        邮箱
-                      </label>
-                      <input
-                        type="email"
-                        value={registrationEmail}
-                        onChange={(event) => setRegistrationEmail(event.target.value)}
-                        placeholder="you@company.com"
-                        className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
-                        style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                        手机号（选填）
-                      </label>
-                      <input
-                        type="tel"
-                        value={registrationPhone}
-                        onChange={(event) => setRegistrationPhone(event.target.value)}
-                        placeholder="13800000000"
-                        className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
-                        style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                      />
-                    </div>
-                  </div>
+  const renderLoginEmail = () => (
+    <>
+      <StepHeader
+        mode="login"
+        step={1}
+        title="输入你的工作邮箱"
+        description="输入已开通邮箱，我们会发送登录验证码。"
+      />
 
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                        公司 / 组织全称
-                      </label>
-                      <input
-                        type="text"
-                        value={organizationName}
-                        onChange={(event) => setOrganizationName(event.target.value)}
-                        placeholder="例如：上海某某科技有限公司"
-                        className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
-                        style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                        申请人职位
-                      </label>
-                      <input
-                        type="text"
-                        value={jobTitle}
-                        onChange={(event) => setJobTitle(event.target.value)}
-                        placeholder="例如：品牌负责人"
-                        className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
-                        style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                      />
-                    </div>
-                  </div>
+      <div className="mt-12 max-w-[720px]">
+        <Field label="邮箱">
+          <TextInput
+            type="email"
+            value={loginEmail}
+            onChange={(event) => setLoginEmail(event.target.value)}
+            placeholder="you@company.com"
+          />
+        </Field>
 
-                  <div>
-                    <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                      申请人姓名（选填）
-                    </label>
-                    <input
-                      type="text"
-                      value={applicantName}
-                      onChange={(event) => setApplicantName(event.target.value)}
-                      placeholder="例如：张三"
-                      className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
-                      style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                    />
-                  </div>
+        <PrimaryButton className="mt-12" onClick={handleSendLoginCode} disabled={!canSendLoginCode}>
+          {isSendingCode ? '发送中...' : '发送登录验证码'}
+        </PrimaryButton>
+      </div>
+    </>
+  );
 
-                  <div>
-                    <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                      邮箱验证码
-                    </label>
-                    <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                      <input
-                        type="text"
-                        value={registrationCode}
-                        onChange={(event) => setRegistrationCode(event.target.value)}
-                        placeholder="输入 6 位验证码"
-                        className="w-full rounded-[16px] border px-4 py-3 text-sm outline-none transition-colors"
-                        style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleSendCode}
-                        disabled={!canSendCode}
-                        className="rounded-[16px] px-4 py-3 text-sm font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
-                      >
-                        {isSendingCode ? '发送中...' : formatCountdown(countdown)}
-                      </button>
-                    </div>
-                  </div>
+  const renderLoginVerify = () => (
+    <>
+      <StepHeader
+        mode="login"
+        step={2}
+        title="验证你的邮箱"
+        description={`登录验证码已发送至 ${maskEmail(loginEmail)}`}
+      />
 
-                  {pendingReviewMessage && (
-                    <div className="rounded-[18px] border px-4 py-3 text-sm leading-6" style={{ borderColor: 'rgba(54, 79, 124, 0.22)', backgroundColor: 'rgba(54, 79, 124, 0.08)', color: 'var(--text-secondary)' }}>
-                      {pendingReviewMessage}
-                    </div>
-                  )}
+      <div className="mt-12 max-w-[720px]">
+        <CodeInputRow value={loginCode} onChange={setLoginCode} />
+        <div className="mt-6 flex items-center gap-3 text-sm text-[#6b7280]">
+          <SecondaryAction onClick={handleSendLoginCode} disabled={!canSendLoginCode}>
+            {isSendingCode
+              ? '发送中...'
+              : formatCountdown(countdown, '重新发送登录验证码')}
+          </SecondaryAction>
+        </div>
+        <PrimaryButton
+          className="mt-12"
+          onClick={handleLogin}
+          disabled={isSubmitting || loginCode.length !== CODE_LENGTH}
+        >
+          {isSubmitting ? '验证中...' : '登录'}
+          <RiArrowRightLine className="ml-2 h-4 w-4" />
+        </PrimaryButton>
+      </div>
+    </>
+  );
 
-                  {debugCode && (
-                    <div className="rounded-[18px] border px-4 py-3 text-sm" style={{ borderColor: 'rgba(54, 79, 124, 0.22)', backgroundColor: 'rgba(54, 79, 124, 0.08)', color: 'var(--text-primary)' }}>
-                      开发环境验证码：<span className="font-semibold tracking-[0.16em]">{debugCode}</span>
-                    </div>
-                  )}
+  return (
+    <main className="min-h-screen bg-[#fbfbf8] text-[#111827]">
+      <div className="mx-auto max-w-[960px] px-6 py-8 lg:px-10 lg:py-10">
+        <PageHeader mode={mode} onModeChange={changeMode} />
 
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full rounded-[18px] px-4 py-3 text-sm font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-60"
-                    style={{
-                      background: 'linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 88%, #8092ff 12%), color-mix(in srgb, var(--color-primary) 74%, #4458d7 26%))',
-                    }}
-                  >
-                    {isSubmitting ? '提交中...' : '提交注册申请'}
-                  </button>
-                </form>
-              )}
-
-                <div className="mt-6 rounded-[20px] border px-4 py-3 text-xs leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-                  {mode === 'login'
-                    ? '未开通账号会提示“待审核开通”。'
-                    : '注册申请提交后需等待审核通过。'}
-                </div>
-            </div>
-          </section>
+        <div className="mt-16">
+          {mode === 'apply' && step === 'company' ? renderApplyCompany() : null}
+          {mode === 'apply' && step === 'verify' ? renderApplyVerify() : null}
+          {mode === 'apply' && step === 'invite' ? renderApplyInvite() : null}
+          {mode === 'login' && step === 'login-email' ? renderLoginEmail() : null}
+          {mode === 'login' && step === 'login-verify' ? renderLoginVerify() : null}
         </div>
       </div>
     </main>

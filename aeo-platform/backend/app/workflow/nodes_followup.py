@@ -14,6 +14,7 @@ from typing import Any
 
 from langgraph.types import Command
 
+from app.workflow.a5.metrics import analyze_sentiment
 from app.workflow.state import AgentState
 from app.workflow.events import send_reply_event
 from app.workflow.skill_fact_snapshot import build_skill_fact_snapshot
@@ -25,6 +26,21 @@ from app.workflow.skill_state import (
 from app.core.llm import get_llm_model
 
 logger = logging.getLogger(__name__)
+
+
+_SENTIMENT_ALIASES = {
+    "negative": {"negative", "负向", "负面", "消极"},
+    "positive": {"positive", "正向", "正面", "积极"},
+    "neutral": {"neutral", "中性"},
+}
+
+
+def _normalize_sentiment_focus(value: str) -> str:
+    text = str(value or "").strip().lower()
+    for canonical, aliases in _SENTIMENT_ALIASES.items():
+        if text in aliases:
+            return canonical
+    return text
 
 
 # =============================================================================
@@ -48,6 +64,7 @@ async def drill_down_node(state: AgentState) -> Command:
     facts = build_skill_fact_snapshot(state)
     fetch_results = facts.fetch_results
     metrics = facts.metrics
+    report = facts.report
     brand_profile = facts.brand_profile
     simulated_questions = state.get("simulated_questions") or {}
 
@@ -66,7 +83,12 @@ async def drill_down_node(state: AgentState) -> Command:
 
     # Filter data based on focus dimension (Review T4: includes simulated_questions)
     filtered_data = _filter_by_dimension(
-        fetch_results, metrics, simulated_questions, focus_dimension, focus_value
+        fetch_results,
+        metrics,
+        report,
+        simulated_questions,
+        focus_dimension,
+        focus_value,
     )
 
     # Generate focused analysis via LLM
@@ -107,6 +129,7 @@ async def drill_down_node(state: AgentState) -> Command:
 def _filter_by_dimension(
     fetch_results: list,
     metrics: dict,
+    report: dict,
     simulated_questions: dict | list,
     focus_dimension: str,
     focus_value: str,
@@ -206,8 +229,56 @@ def _filter_by_dimension(
                 )
 
     elif focus_dimension == "sentiment":
-        # Filter by sentiment (positive/negative/neutral)
-        from app.workflow.nodes_a5 import _analyze_sentiment
+        normalized_focus = _normalize_sentiment_focus(focus_value)
+        mention_analysis = {}
+        if isinstance(report, dict):
+            mention_analysis = report.get("mention_sentiment_analysis") or {}
+        if not mention_analysis and isinstance(metrics, dict):
+            mention_analysis = metrics.get("mention_sentiment_analysis") or {}
+
+        brand_analysis = (
+            mention_analysis.get("brand", {})
+            if isinstance(mention_analysis, dict)
+            else {}
+        )
+        brand_items = (
+            brand_analysis.get("items", []) if isinstance(brand_analysis, dict) else []
+        )
+        if brand_items:
+            filtered["sentiment_summary"] = (
+                brand_analysis.get("summary", {})
+                if isinstance(brand_analysis, dict)
+                else {}
+            )
+            sentiment_items = [
+                item
+                for item in brand_items
+                if not normalized_focus
+                or str(item.get("sentiment", "")).lower() == normalized_focus
+            ]
+            filtered["sentiment_items"] = sentiment_items
+            for item in sentiment_items:
+                filtered["results"].append(
+                    {
+                        "question_text": item.get("scenario_label", ""),
+                        "platform_results": [
+                            {
+                                "platform": item.get("platform", ""),
+                                "success": True,
+                                "answer": {
+                                    "content": item.get("evidence", ""),
+                                    "has_brand_mention": True,
+                                },
+                                "_sentiment": item.get("sentiment", ""),
+                                "_citation_domains": item.get("citation_domains", []),
+                                "_citation_titles": item.get("citation_titles", []),
+                                "_citation_urls": item.get("citation_urls", []),
+                            }
+                        ],
+                    }
+                )
+            filtered["total_filtered"] = len(filtered["results"])
+            return filtered
 
         for fr in fetch_results:
             relevant_results = []
@@ -220,8 +291,8 @@ def _filter_by_dimension(
                     if isinstance(answer, dict)
                     else str(answer)
                 )
-                sentiment = _analyze_sentiment(content)
-                if not focus_lower or sentiment == focus_lower:
+                sentiment = analyze_sentiment(content)
+                if not normalized_focus or sentiment == normalized_focus:
                     relevant_results.append({**pr, "_sentiment": sentiment})
             if relevant_results:
                 filtered["results"].append(
@@ -261,27 +332,42 @@ async def _generate_drill_down(
 
     # Build compact data summary (avoid sending full content to LLM)
     results_summary = []
-    for r in filtered_data.get("results", [])[:10]:
-        q_text = r.get("question_text", "")[:80]
-        pr_summary = []
-        for pr in r.get("platform_results", [])[:4]:
-            answer = pr.get("answer", {})
-            content = (
-                answer.get("content", "") if isinstance(answer, dict) else str(answer)
-            )
-            pr_summary.append(
+    if focus_dimension == "sentiment" and filtered_data.get("sentiment_items"):
+        for item in filtered_data.get("sentiment_items", [])[:12]:
+            results_summary.append(
                 {
-                    "platform": pr.get("platform", ""),
-                    "has_mention": (
-                        answer.get("has_brand_mention", False)
-                        if isinstance(answer, dict)
-                        else False
-                    ),
-                    "excerpt": content[:200],
-                    "sentiment": pr.get("_sentiment", ""),
+                    "question": str(item.get("scenario_label", ""))[:80],
+                    "platform": item.get("platform", ""),
+                    "sentiment": item.get("sentiment", ""),
+                    "evidence": str(item.get("evidence", ""))[:220],
+                    "citation_domains": item.get("citation_domains", [])[:4],
                 }
             )
-        results_summary.append({"question": q_text, "results": pr_summary})
+    else:
+        for r in filtered_data.get("results", [])[:10]:
+            q_text = r.get("question_text", "")[:80]
+            pr_summary = []
+            for pr in r.get("platform_results", [])[:4]:
+                answer = pr.get("answer", {})
+                content = (
+                    answer.get("content", "")
+                    if isinstance(answer, dict)
+                    else str(answer)
+                )
+                pr_summary.append(
+                    {
+                        "platform": pr.get("platform", ""),
+                        "has_mention": (
+                            answer.get("has_brand_mention", False)
+                            if isinstance(answer, dict)
+                            else False
+                        ),
+                        "excerpt": content[:200],
+                        "sentiment": pr.get("_sentiment", ""),
+                        "citation_domains": pr.get("_citation_domains", [])[:4],
+                    }
+                )
+            results_summary.append({"question": q_text, "results": pr_summary})
 
     system_prompt = f"""你是 Specta AI 的数据分析专家。用户正在深入分析品牌「{brand_name}」在 AI 平台中的表现。
 请基于过滤后的数据，对「{dim_label}: {focus_value or '全部'}」维度进行针对性分析。
@@ -293,6 +379,11 @@ async def _generate_drill_down(
 4. 给出针对性优化建议（2-3条）
 5. 总字数 300-500 字
 6. 语言简洁、有洞察力"""
+    if focus_dimension == "sentiment":
+        system_prompt += (
+            "\n7. 如果用户问的是负向/正向提及，优先解释具体是哪几个问题、哪个平台、证据原句是什么。"
+            "\n8. 不要泛泛而谈，要直接指出负向提及的具体内容。"
+        )
     system_prompt = apply_skill_prompt_context(state, system_prompt)
 
     user_content = f"""## 分析维度
@@ -306,6 +397,9 @@ async def _generate_drill_down(
 
 ## 过滤后的数据
 {json.dumps(results_summary, ensure_ascii=False, indent=2)[:4000]}
+
+## 情感摘要
+{json.dumps(filtered_data.get('sentiment_summary', {}), ensure_ascii=False)}
 
 ## 问题上下文
 {json.dumps(filtered_data.get('question_context', [])[:5], ensure_ascii=False)[:1000]}

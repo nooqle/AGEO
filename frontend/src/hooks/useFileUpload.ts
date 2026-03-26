@@ -4,18 +4,12 @@ import { useState, useCallback, useRef } from 'react';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import { api } from '@/services/api';
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
+const MAX_FILE_SIZE_LABEL = '2MB';
 const ALLOWED_TYPES = [
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  'application/pdf',
-  'text/plain',
   'text/csv',
-  'application/json',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ];
 
 interface UseFileUploadOptions {
@@ -30,6 +24,14 @@ export function useFileUpload({ maxFiles = 5, onError }: UseFileUploadOptions = 
 
   const openFilePicker = useCallback(() => {
     inputRef.current?.click();
+  }, []);
+
+  const isAllowedFile = useCallback((file: File) => {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith('.csv') || lowerName.endsWith('.xlsx')) {
+      return true;
+    }
+    return ALLOWED_TYPES.includes(file.type);
   }, []);
 
   const addFiles = useCallback(
@@ -51,16 +53,16 @@ export function useFileUpload({ maxFiles = 5, onError }: UseFileUploadOptions = 
             });
           });
           if (shouldStop) {
-            onError?.(`Maximum ${maxFiles} files allowed`);
+            onError?.(`一次最多上传 ${maxFiles} 个表格`);
             break;
           }
 
           if (file.size > MAX_FILE_SIZE) {
-            onError?.(`File "${file.name}" exceeds 10MB limit`);
+            onError?.(`文件「${file.name}」超过 ${MAX_FILE_SIZE_LABEL} 限制`);
             continue;
           }
-          if (!ALLOWED_TYPES.includes(file.type)) {
-            onError?.(`File type "${file.type}" is not supported`);
+          if (!isAllowedFile(file)) {
+            onError?.(`仅支持上传 CSV 或 XLSX 表格`);
             continue;
           }
 
@@ -76,23 +78,14 @@ export function useFileUpload({ maxFiles = 5, onError }: UseFileUploadOptions = 
             };
             setAttachments((prev) => [...prev, attachment]);
           } catch (err) {
-            // Fallback to local attachment if upload fails
-            const attachment: Attachment = {
-              id: `file_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-              name: file.name,
-              size: file.size,
-              type: file.type,
-              url: URL.createObjectURL(file),
-            };
-            setAttachments((prev) => [...prev, attachment]);
-            onError?.(err instanceof Error ? err.message : 'Upload failed, using local file');
+            onError?.(err instanceof Error ? err.message : '上传失败，请重试');
           }
         }
       } finally {
         setIsUploading(false);
       }
     },
-    [maxFiles, onError]
+    [isAllowedFile, maxFiles, onError]
   );
 
   const removeAttachment = useCallback((id: string) => {

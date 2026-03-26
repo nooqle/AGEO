@@ -92,6 +92,36 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toStringValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function toNumberValue(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.replace('%', '').replace(/,/g, '').trim();
+    if (!normalized) {
+      return undefined;
+    }
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  if (isRecord(value) && 'value' in value) {
+    return toNumberValue(value.value);
+  }
+  return undefined;
+}
+
 function formatMetricValue(metric: ReportV2Metric): string {
   if (metric.value === undefined || metric.value === null || metric.value === '') {
     return '--';
@@ -380,6 +410,267 @@ function buildMentionLine(item: ReportMentionItem): string {
   return joinInline([item.scenario_label, meta, details], ' ｜ ') || item.scenario_label;
 }
 
+function shortenScenarioLabel(value: string | undefined, limit = 42): string | undefined {
+  if (!isNonEmptyString(value)) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > limit ? `${trimmed.slice(0, limit).trim()}...` : trimmed;
+}
+
+function buildBrandMentionSourcePreferences(mentions: ReportMentionItem[]): string[] {
+  const byPlatform = new Map<string, Map<string, number>>();
+
+  for (const item of mentions) {
+    if (!item.platform || !Array.isArray(item.citation_domains)) {
+      continue;
+    }
+    const platform = item.platform.trim();
+    if (!platform) {
+      continue;
+    }
+    const domainCounter = byPlatform.get(platform) ?? new Map<string, number>();
+    for (const domain of item.citation_domains) {
+      if (!domain || !domain.trim()) {
+        continue;
+      }
+      const normalized = domain.trim();
+      domainCounter.set(normalized, (domainCounter.get(normalized) ?? 0) + 1);
+    }
+    byPlatform.set(platform, domainCounter);
+  }
+
+  return [...byPlatform.entries()]
+    .map(([platform, counter]) => {
+      const topDomains = [...counter.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([domain, count]) => `${domain}（${count}）`);
+      return topDomains.length > 0 ? `在提及品牌的回答里，${platform} 主要引用 ${topDomains.join('、')}` : null;
+    })
+    .filter((item): item is string => Boolean(item));
+}
+
+function buildPlatformSourcePreferences(sourceOverview: Record<string, unknown> | undefined): string[] {
+  if (!sourceOverview || !isRecord(sourceOverview.platform_citation_stats)) {
+    return [];
+  }
+
+  return Object.entries(sourceOverview.platform_citation_stats)
+    .map(([platform, rawStats]) => {
+      if (!isRecord(rawStats)) {
+        return null;
+      }
+      const totalCitations = toNumberValue(rawStats.total_citations);
+      const officialCitations = toNumberValue(rawStats.official_citations);
+      const topDomains = Array.isArray(rawStats.top_domains) ? rawStats.top_domains : [];
+      const domainSummary = topDomains
+        .filter(isRecord)
+        .slice(0, 2)
+        .map((item) => {
+          const domain = toStringValue(item.domain);
+          const count = toNumberValue(item.count);
+          if (!domain) {
+            return null;
+          }
+          return typeof count === 'number' ? `${domain}（${count}）` : domain;
+        })
+        .filter((item): item is string => Boolean(item));
+      return joinInline([
+        `${platform} 总引用 ${typeof totalCitations === 'number' ? totalCitations : '--'} 次`,
+        typeof officialCitations === 'number' ? `官网 ${officialCitations} 次` : null,
+        domainSummary.length > 0 ? `偏好 ${domainSummary.join('、')}` : null,
+      ], '，');
+    })
+    .filter((item): item is string => Boolean(item));
+}
+
+function buildCustomerReportMarkdown(content: ReportCanvasContent): string {
+  const explicitMarkdown =
+    typeof content.data.report_markdown === 'string' && content.data.report_markdown.trim()
+      ? content.data.report_markdown.trim()
+      : '';
+
+  if (explicitMarkdown) {
+    return explicitMarkdown;
+  }
+
+  const view = buildReportViewModel(content);
+  const summaryMetrics = isRecord(content.data.summary_metrics) ? content.data.summary_metrics : undefined;
+  const sourceOverview = isRecord(content.data.source_overview) ? content.data.source_overview : undefined;
+  const brandName =
+    (isNonEmptyString(content.data.brand_name) ? content.data.brand_name.trim() : null) ||
+    inferBrandFromHeadline(content.data.headline) ||
+    '品牌';
+  const mentionRate = formatPercent(
+    toNumberValue(summaryMetrics?.brand_mention_rate) ??
+      toNumberValue((content.data.metrics as Record<string, unknown> | undefined)?.brand_mention_rate)
+  );
+  const scenarioHitCount = toNumberValue(summaryMetrics?.scenario_hit_count);
+  const scenarioTotal = toNumberValue(summaryMetrics?.scenario_total);
+  const officialCitationRate = formatPercent(toNumberValue(sourceOverview?.official_citation_rate));
+  const officialCitations = toNumberValue(sourceOverview?.official_citations);
+  const totalCitations = toNumberValue(sourceOverview?.total_citations);
+  const topDomains = Array.isArray(sourceOverview?.top_domains)
+    ? sourceOverview.top_domains.filter(isRecord)
+    : [];
+
+  const positiveCount = view.mentions.sentiment_summary?.positive ?? 0;
+  const neutralCount = view.mentions.sentiment_summary?.neutral ?? 0;
+  const negativeCount = view.mentions.sentiment_summary?.negative ?? 0;
+  const negativeMentions = (view.mentions.brand_mentions ?? []).filter(
+    (item) => item.sentiment?.toLowerCase() === 'negative'
+  );
+  const negativeTopics = [...new Set(
+    negativeMentions
+      .map((item) => shortenScenarioLabel(item.scenario_label))
+      .filter((item): item is string => Boolean(item))
+  )].slice(0, 4);
+
+  const legacyCompetitors = isRecord(content.data) && Array.isArray((content.data as Record<string, unknown>).competitors)
+    ? ((content.data as Record<string, unknown>).competitors as unknown[])
+    : [];
+  const threatCompetitors = legacyCompetitors
+    .filter(isRecord)
+    .map((item) => {
+      const name = toStringValue(item.name);
+      const mentionRateValue = toNumberValue(item.mention_rate);
+      if (!name || mentionRateValue === undefined) {
+        return null;
+      }
+      return {
+        name,
+        mentionRateValue,
+        mentionRateText: formatPercent(mentionRateValue),
+      };
+    })
+    .filter((item): item is { name: string; mentionRateValue: number; mentionRateText: string } => Boolean(item))
+    .sort((a, b) => b.mentionRateValue - a.mentionRateValue)
+    .filter((item) => {
+      const brandMentionRate = toNumberValue(summaryMetrics?.brand_mention_rate) ?? 0;
+      return item.mentionRateValue >= brandMentionRate * 0.75 || item.mentionRateValue >= brandMentionRate;
+    })
+    .slice(0, 3);
+
+  const scenarioItems = view.scenarioCoverage.items ?? [];
+  const missingItems = view.scenarioCoverage.missing_items ?? [];
+  const riskItems = view.scenarioCoverage.risk_items ?? [];
+  const recommendedTopics = scenarioItems
+    .filter((item) => ['advantage', 'defend'].includes(item.battle_status || ''))
+    .slice(0, 4);
+  const marginalizedTopics = [
+    ...riskItems,
+    ...scenarioItems.filter((item) => item.battle_status === 'contested'),
+  ].slice(0, 4);
+
+  const platformPreferenceLines = buildPlatformSourcePreferences(sourceOverview);
+  const brandMentionSourcePreferenceLines = buildBrandMentionSourcePreferences(view.mentions.brand_mentions ?? []);
+
+  const suggestionLines: string[] = [];
+  if (missingItems.length > 0) {
+    suggestionLines.push(
+      `优先补齐 ${missingItems
+        .slice(0, 2)
+        .map((item) => `“${shortenScenarioLabel(item.scenario_label, 22) || item.scenario_label}”`)
+        .join('、')} 相关的官网 FAQ、参数页和对比页，先解决品牌缺席。`
+    );
+  }
+  if (officialCitations !== undefined && totalCitations !== undefined && officialCitations <= 5) {
+    suggestionLines.push(
+      `官网当前仅被引用 ${officialCitations} 次（总引用 ${totalCitations} 次），需要优先补强官网结构化数据、车型对比页和问答页，提升官方信源进入 AI 引用链的概率。`
+    );
+  }
+  if (threatCompetitors.length > 0) {
+    suggestionLines.push(
+      `围绕 ${threatCompetitors.map((item) => item.name).join('、')} 这些高压竞品，补充“对比型内容 + 场景型证据页”，减少被一比一压制的场景。`
+    );
+  }
+  if (brandMentionSourcePreferenceLines.length > 0) {
+    suggestionLines.push('继续追问具体平台、具体负向提及和具体来源页面，可以进一步定位是内容缺口、引用缺口还是竞品压制。');
+  }
+
+  const lines: string[] = [];
+  lines.push('## 摘要信息');
+  if (isNonEmptyString(content.data.executive_summary)) {
+    lines.push(content.data.executive_summary.trim(), '');
+  } else if (view.summary.summary) {
+    lines.push(view.summary.summary.trim(), '');
+  }
+
+  lines.push('## 一、提及率指标');
+  lines.push(`- ${brandName} 本轮品牌提及率为 ${mentionRate}，进入了 ${scenarioHitCount ?? '--'}/${scenarioTotal ?? '--'} 个问题场景。`);
+  lines.push(`- 品牌提及情绪分布为：正向 ${positiveCount}、中性 ${neutralCount}、负向 ${negativeCount}。`);
+  if (negativeTopics.length > 0) {
+    lines.push(`- 当前负向提及主要集中在：${negativeTopics.join('、')}。`);
+  }
+  if (threatCompetitors.length > 0) {
+    lines.push(
+      `- 当前需要重点关注的竞品包括：${threatCompetitors
+        .map((item) => `${item.name}（提及率 ${item.mentionRateText}）`)
+        .join('、')}。`
+    );
+  }
+  lines.push('');
+
+  lines.push('## 二、答案引用信息分布');
+  lines.push(
+    `- 本轮共识别 ${totalCitations ?? '--'} 次引用，官网被引用 ${officialCitations ?? '--'} 次，官网引用率仅 ${officialCitationRate}。`
+  );
+  if (topDomains.length > 0) {
+    lines.push(
+      `- 整体引用来源主要集中在：${topDomains
+        .slice(0, 5)
+        .map((item) => {
+          const domain = toStringValue(item.domain);
+          const count = toNumberValue(item.count);
+          return domain ? `${domain}${typeof count === 'number' ? `（${count}）` : ''}` : null;
+        })
+        .filter((item): item is string => Boolean(item))
+        .join('、')}。`
+    );
+  }
+  platformPreferenceLines.slice(0, 4).forEach((line) => lines.push(`- ${line}。`));
+  brandMentionSourcePreferenceLines.slice(0, 4).forEach((line) => lines.push(`- ${line}。`));
+  lines.push('');
+
+  lines.push('## 三、业务主题覆盖');
+  lines.push(`- 本次共涉及 ${scenarioTotal ?? '--'} 个业务主题，品牌已进入 ${scenarioHitCount ?? '--'} 个。`);
+  if (recommendedTopics.length > 0) {
+    lines.push(
+      `- 当前优先被推荐的主题包括：${recommendedTopics
+        .map((item) => shortenScenarioLabel(item.scenario_label, 24))
+        .filter((item): item is string => Boolean(item))
+        .join('、')}。`
+    );
+  }
+  if (marginalizedTopics.length > 0) {
+    lines.push(
+      `- 当前被边缘化或竞争激烈的主题包括：${marginalizedTopics
+        .map((item) => shortenScenarioLabel(item.scenario_label, 24))
+        .filter((item): item is string => Boolean(item))
+        .join('、')}。`
+    );
+  }
+  if (missingItems.length > 0) {
+    lines.push(
+      `- 当前完全未出现的主题包括：${missingItems
+        .map((item) => shortenScenarioLabel(item.scenario_label, 24))
+        .filter((item): item is string => Boolean(item))
+        .join('、')}。`
+    );
+  }
+  lines.push('');
+
+  lines.push('## 四、进一步建议');
+  if (suggestionLines.length > 0) {
+    suggestionLines.forEach((line) => lines.push(`- ${line}`));
+  } else {
+    lines.push(`- 建议继续围绕高价值缺席场景、官网引用缺口和竞品压制场景做追问分析，定位更深层的内容和平台问题。`);
+  }
+
+  return lines.join('\n').trim();
+}
+
 function buildFetchCitationLine(citation: FetchCitation): string {
   return joinInline([
     `[${citation.index}] ${citation.title}`,
@@ -491,12 +782,21 @@ function pushScenarioCoverageBlock(
 
 function buildStandardReportMarkdown(content: ReportCanvasContent, descriptor: ExportDescriptor): string {
   const view = buildReportViewModel(content);
+  const reportMarkdown = buildCustomerReportMarkdown(content);
   const lines: string[] = [
     `# ${view.headline || descriptor.title || descriptor.deliverableName}`,
     '',
     ...createMetadataLines(descriptor),
     '',
   ];
+
+  if (reportMarkdown) {
+    if (content.data.subtitle) {
+      lines.push(content.data.subtitle, '');
+    }
+    lines.push(reportMarkdown, '');
+    return lines.join('\n');
+  }
 
   pushSection(lines, '摘要', view.subtitle || content.data.content);
 
@@ -604,6 +904,8 @@ function buildStandardReportMarkdown(content: ReportCanvasContent, descriptor: E
 
   return lines.join('\n');
 }
+
+export { buildCustomerReportMarkdown };
 
 function buildConfidenceItemLine(item: NonNullable<ReturnType<typeof buildConfidenceExportViewModel>['items']>[number]): string {
   return joinInline([

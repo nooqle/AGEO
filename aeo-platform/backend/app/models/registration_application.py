@@ -5,13 +5,14 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.organization import Organization
     from app.models.user import User
 
 
@@ -38,6 +39,8 @@ class RegistrationApplication(Base):
     organization_name: Mapped[str] = mapped_column(String(255), nullable=False)
     job_title: Mapped[str] = mapped_column(String(255), nullable=False)
     applicant_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    company_size: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_agency: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[RegistrationApplicationStatus] = mapped_column(
         Enum(
             RegistrationApplicationStatus,
@@ -56,6 +59,25 @@ class RegistrationApplication(Base):
     approved_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    assigned_organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    invite_code_issued_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    invite_code_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    invite_redeemed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
         nullable=True,
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(
@@ -83,4 +105,14 @@ class RegistrationApplication(Base):
         "User",
         lazy="selectin",
         foreign_keys=[approved_user_id],
+    )
+    assigned_organization: Mapped["Organization | None"] = relationship(
+        "Organization",
+        lazy="selectin",
+        foreign_keys=[assigned_organization_id],
+    )
+    invite_code_issued_by: Mapped["User | None"] = relationship(
+        "User",
+        lazy="selectin",
+        foreign_keys=[invite_code_issued_by_user_id],
     )

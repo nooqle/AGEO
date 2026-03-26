@@ -8,14 +8,11 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.services.file_service import FileService
+from app.services.file_service import FileService, MAX_FILE_SIZE, MAX_FILE_SIZE_LABEL
 
 router = APIRouter(prefix="/files", tags=["files"])
 
 logger = logging.getLogger(__name__)
-
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-
 
 @router.post("/upload")
 async def upload_file(
@@ -25,7 +22,11 @@ async def upload_file(
     """Upload a file attachment."""
     # Quick pre-check if size header is available (full check done in service)
     if file.size is not None and file.size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+        filename = os.path.basename(file.filename or "表格")
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件「{filename}」超过 {MAX_FILE_SIZE_LABEL} 限制",
+        )
 
     service = FileService(db)
     result = await service.save_file(file)

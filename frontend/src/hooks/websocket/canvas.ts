@@ -185,6 +185,8 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
       insights,
       recommendations,
       content: typeof data.content === 'string' ? data.content : undefined,
+      executive_summary: typeof data.executive_summary === 'string' ? data.executive_summary : undefined,
+      report_markdown: typeof data.report_markdown === 'string' ? data.report_markdown : undefined,
       bwvs_breakdown,
       brand_name: typeof data.brand_name === 'string' ? data.brand_name : undefined,
       analysis_period: typeof data.analysis_period === 'string' ? data.analysis_period : undefined,

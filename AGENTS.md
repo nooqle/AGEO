@@ -124,6 +124,24 @@ Required API keys: MiniMax API key, optionally DashScope for backup LLM.
 - Do not make broad unrelated changes in one go.
 - Prefer minimal, focused edits and verify with relevant lint/tests.
 
+## Agent-First Architecture Principle (Important)
+
+- Treat Specta AI as an `Agent + Skills + Context + Memory + Artifact/Version` system first, not as a collection of one-off hardcoded feature branches.
+- For new capabilities, prefer this order:
+  1. reuse an existing skill / node contract
+  2. extend an existing skill / node contract
+  3. add a new coarse-grained skill
+  4. only then add scenario-specific hardcoded flow
+- Let orchestrator own intent understanding, workflow routing, user confirmation strategy, and step-to-step progression.
+- Let code own deterministic mechanics: file parsing, schema validation, normalization, persistence, idempotency, security checks, and artifact/version writes.
+- If new input changes a step's official result, update that step's latest artifact/version first, then resume the workflow from that step's downstream logic.
+- Do not bypass context/memory/artifact systems with temporary side channels for convenience.
+- Avoid scattering business decisions across multiple files with ad-hoc `if/else` branches when the decision should live in orchestrator or a skill contract.
+- Default design question for any new feature:
+  - should this be a new hardcoded feature, or should it be an Agent capability extension?
+- For the full rationale and examples, see:
+  - `docs/architecture-agent-first-extension-principles-2026-03-25.md`
+
 ## Workspace / Worktree Protocol (Important)
 
 - Treat `D:\AGEO-main` as the only stable `main` baseline directory.
@@ -144,6 +162,17 @@ Required API keys: MiniMax API key, optionally DashScope for backup LLM.
   - `D:\AGEO-main` for baseline inspection, or
   - the correct feature worktree for implementation
 - Do not commit feature work directly on `main` unless the user explicitly requests a main-branch hotfix workflow.
+
+## Runtime Reuse Protocol (Important)
+
+- For AGEO branch startup, dev verification, and E2E, prefer reusing the already proven runtime environment from `D:\AGEO\.codex-main-merge` first, then `D:\AGEO`, before creating a fresh local setup.
+- If the current worktree does not have `aeo-platform/backend/.env.local`, first inspect `D:\AGEO\.codex-main-merge\aeo-platform\backend\.env.local`; only if needed, fall back to `D:\AGEO\aeo-platform\backend\.env.local`.
+- Preferred order:
+  1. reuse an already running AGEO service from `D:\AGEO\.codex-main-merge` if it matches the task
+  2. reuse `.codex-main-merge` shared env and run the current worktree on alternate ports
+  3. if `.codex-main-merge` is unavailable, reuse `D:\AGEO` shared env
+  4. only then create a fully separate branch runtime
+- When real GLM5 credentials are available in the shared AGEO env, do not replace real runtime/E2E with a fake LLM path by default.
 
 
 ## Encoding Safety Rule (Important)

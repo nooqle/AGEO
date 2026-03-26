@@ -31,6 +31,24 @@ from app.services.skill_package_service import (
 
 BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
     BuiltinSkillSpec(
+        skill_key="table_intake_skill",
+        display_name="表格导入理解",
+        description=(
+            "理解用户上传的 CSV/XLSX 表格用途，输出结构化判断结果。"
+            "只做识别和标准化，不直接修改业务状态或推进流程。"
+        ),
+        executor_kind=SkillExecutorKind.BUILTIN,
+        executor_ref="table_intake_executor",
+        intent_signals=["上传表格", "问题列表", "竞品表", "链接清单", "导入问题"],
+        prerequisites=[],
+        artifact_types=["chat_reply"],
+        default_params={},
+        prompt_overlay=None,
+        cost_class=SkillCostClass.LOW,
+        latency_class=SkillLatencyClass.LOW,
+        confirmation_policy=SkillConfirmationPolicy.REQUIRED,
+    ),
+    BuiltinSkillSpec(
         skill_key="analysis_report_skill",
         display_name="完整分析报告",
         description=(
@@ -347,6 +365,25 @@ def _build_analysis_report_tool(
     }
 
 
+def _build_table_intake_tool(
+    skill: SkillDefinition | BuiltinSkillSpec,
+    *,
+    profiles: list[SkillDefinition] | None = None,
+    package: SkillPackageManifest | None = None,
+) -> dict[str, Any]:
+    description = _with_package_hint(skill.description, package)
+    if skill.prompt_overlay:
+        description = f"{description} 当前策略补充：{skill.prompt_overlay}"
+    return {
+        "name": skill.skill_key,
+        "description": description,
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    }
+
+
 def _build_confidence_tool(
     skill: SkillDefinition | BuiltinSkillSpec,
     *,
@@ -420,6 +457,8 @@ def build_skill_tool_definition(
     profiles: list[SkillDefinition] | None = None,
     package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
+    if skill.executor_ref == "table_intake_executor":
+        return _build_table_intake_tool(skill, profiles=profiles, package=package)
     if skill.executor_ref == "a5_data_analytics":
         return _build_analysis_report_tool(skill, profiles=profiles, package=package)
     if skill.executor_ref == "a7_confidence_signal":

@@ -35,6 +35,11 @@ class OtpLoginRequest(BaseModel):
     verification_code: str = Field(min_length=4, max_length=12)
 
 
+class InvitationRedeemRequest(BaseModel):
+    email: EmailStr
+    invite_code: str = Field(min_length=4, max_length=12)
+
+
 class RegistrationApplicationCreateRequest(BaseModel):
     email: EmailStr | None = None
     phone: str | None = Field(default=None, min_length=6, max_length=32)
@@ -42,8 +47,10 @@ class RegistrationApplicationCreateRequest(BaseModel):
     verification_target: str = Field(min_length=3, max_length=255)
     verification_code: str = Field(min_length=4, max_length=12)
     organization_name: str = Field(min_length=2, max_length=255)
-    job_title: str = Field(min_length=2, max_length=255)
+    job_title: str = Field(default="体验申请", min_length=2, max_length=255)
     applicant_name: str | None = Field(default=None, max_length=255)
+    company_size: str | None = Field(default=None, max_length=64)
+    is_agency: bool = False
 
     @model_validator(mode="after")
     def validate_identity_and_channel(self) -> "RegistrationApplicationCreateRequest":
@@ -71,10 +78,16 @@ class RegistrationApplicationResponse(BaseModel):
     organization_name: str
     job_title: str
     applicant_name: str | None
+    company_size: str | None
+    is_agency: bool
     status: RegistrationApplicationStatus
     review_note: str | None
     reviewed_by_user_id: UUID | None
     approved_user_id: UUID | None
+    assigned_organization_id: UUID | None
+    invite_code_issued_by_user_id: UUID | None
+    invite_code_sent_at: datetime | None
+    invite_redeemed_at: datetime | None
     reviewed_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -85,4 +98,8 @@ class RegistrationApplicationReviewRequest(BaseModel):
 
 
 class RegistrationApplicationApproveRequest(BaseModel):
+    organization_id: UUID | None = None
+
+
+class RegistrationApplicationIssueInviteRequest(BaseModel):
     organization_id: UUID | None = None
