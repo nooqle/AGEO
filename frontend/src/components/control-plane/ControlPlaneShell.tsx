@@ -10,7 +10,6 @@ import {
   RiCoinsLine,
   RiDashboardLine,
   RiFileList3Line,
-  RiSettings4Line,
   RiTimeLine,
 } from '@remixicon/react';
 
@@ -154,7 +153,7 @@ export function ControlPlaneShell({
 
           <div className="mt-8 space-y-3">
             <Link
-              href="/settings"
+              href="/dashboard"
               className="flex items-center gap-3 rounded-2xl border px-3 py-3 text-sm"
               style={{
                 borderColor: palette.border,
@@ -162,8 +161,8 @@ export function ControlPlaneShell({
                 color: palette.muted,
               }}
             >
-              <RiSettings4Line className="h-4 w-4" />
-              返回设置
+              <RiDashboardLine className="h-4 w-4" />
+              回到平台 Dashboard
             </Link>
             {asideMeta ? (
               <div

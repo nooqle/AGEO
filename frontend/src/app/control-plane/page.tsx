@@ -165,7 +165,7 @@ function ControlPlaneWorkbench() {
           description="当前账号没有内部运营权限，无法访问控制台。"
         >
           <div className="text-sm leading-6" style={{ color: palette.muted }}>
-            请使用内部管理员账号访问，或返回设置页确认当前账号状态。
+            请使用内部管理员账号访问，或回到平台 Dashboard 切换账号后重试。
           </div>
         </ControlPlanePanel>
       ) : (
