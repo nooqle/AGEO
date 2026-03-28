@@ -696,6 +696,7 @@ export type DataTableCanvasData = CanvasPreviewData & {
 
 export type PipelineCanvasData = CanvasPreviewData & {
   pipeline?: import('./touchpoint').PipelineData;
+  requestId?: string;
   maxSelection?: number;
   minSelection?: number;
 };
@@ -761,6 +762,7 @@ export type WorkflowSelectionItem = {
 
 export type WorkflowSelectionData = {
   personas?: WorkflowSelectionItem[];
+  requestId?: string;
   maxSelection?: number;
   minSelection?: number;
   description?: string;

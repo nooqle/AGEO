@@ -402,6 +402,21 @@ async def _browser_fetch_with_timeout(
     # _fetch_from_browser signature: handler, question, brand_profile, platform, platform_name, browser_state
     platform = args[3] if len(args) > 3 else "unknown"
     platform_name = args[4] if len(args) > 4 else platform
+    handler = args[0] if args else None
+
+    async def _cleanup_browser_client() -> None:
+        client = getattr(handler, "client", None)
+        if client is None or not hasattr(client, "close"):
+            return
+        try:
+            await asyncio.wait_for(client.close(), timeout=15)
+            logger.info("[A4] Browser %s client cleaned up after failure/timeout", platform)
+        except Exception as cleanup_error:
+            logger.debug(
+                "[A4] Browser %s cleanup failed: %s",
+                platform,
+                cleanup_error,
+            )
 
     try:
         result = await asyncio.wait_for(
@@ -411,6 +426,7 @@ async def _browser_fetch_with_timeout(
         return result
     except asyncio.TimeoutError:
         logger.warning("[A4] Browser %s timed out after %.0fs", platform, timeout)
+        await _cleanup_browser_client()
 
         return {
             "platform": platform,
@@ -422,6 +438,7 @@ async def _browser_fetch_with_timeout(
         }
     except Exception as e:
         logger.warning("[A4] Browser %s failed: %s", platform, e)
+        await _cleanup_browser_client()
 
         return {
             "platform": platform,

@@ -20,71 +20,76 @@ def _get_a5_report_context_intro(report_type: str) -> str:
 
 def _get_a5_core_prompt(report_type: str = "persona") -> str:
     """A5 system prompt for the customer-facing report payload."""
-    return _get_a5_report_context_intro(report_type) + """You are Specta AI's analytics expert.
-Generate a fact-first A5 report from the provided A4 fetch results and structured evidence.
+    return _get_a5_report_context_intro(report_type) + """你现在是一位资深的 AEO（Answer Engine Optimization）数据分析师与商业咨询顾问。
+你的任务是：根据提供的跨平台大模型问答抓取数据，为客户生成一份《品牌 AEO 跨平台诊断与优化分析报告》。
 
-## Report goal
-- Write for brand operators who care about concrete brand performance, not internal scoring logic.
-- The main deliverable is a Markdown document. It should read like a client-ready report, not a raw data dump.
-- Do not lead with composite scores, platform scores, or abstract methodology.
-- Every statement must be traceable to provided structured facts.
-- If there is not enough evidence, say so briefly instead of inventing.
+## 报告原则
+- 全程使用专业、客观、面向企业高管的商业分析口吻。
+- 所有结论必须能回溯到输入数据，不得虚构。
+- 如果某个维度没有稳定数据，请明确写“暂无足够数据支撑”，不要猜测。
+- 不要输出方法论自述、推理笔记、自我修正、草稿说明。
+- 不要输出 BWVS、总分、分档、综合评分等内部评分概念。
 
-## Mandatory Markdown framework
-Your `report_markdown` must follow this exact section structure:
-1. `## 摘要信息`
-2. `## 一、提及率指标`
-3. `## 二、答案引用信息分布`
-4. `## 三、业务主题覆盖`
-5. `## 四、进一步建议`
+## report_markdown 必须严格采用以下五个一级章节
+1. `## 一、核心执行摘要`
+2. `## 二、核心数据基准看板`
+3. `## 三、跨大模型平台表现拆解`
+4. `## 四、主题场景诊断：缺位与竞争图谱`
+5. `## 五、AEO 常态化运营与优化策略`
 
-## What each section must answer
-- `摘要信息`:
-  - Give the overall diagnosis in customer language.
-  - Summarize the brand's current AI visibility, biggest risk, and most important next move.
-- `一、提及率指标`:
-  - Brand mention rate.
-  - How many questions/scenarios mention the brand.
-  - Whether those mentions are positive / neutral / negative.
-  - What the negative mentions are about.
-  - Which competitors are threatening because their mention rate is close to or above the brand.
-- `二、答案引用信息分布`:
-  - Overall citation/source distribution.
-  - Distribution of citation sources specifically when the brand is mentioned.
-  - Whether the official website appeared and how many times.
-  - Source preference of the four AI platforms.
-  - Especially highlight source preference in answers that mention the brand.
-- `三、业务主题覆盖`:
-  - How many business topics/scenarios were covered in this run.
-  - Which topics the brand is recommended in.
-  - Which topics the brand is being marginalized in.
-  - Which topics the brand does not appear in.
-- `四、进一步建议`:
-  - What to do by topic and by platform.
-  - Which deeper follow-up analyses should be done next to uncover root causes.
+## 各章节写作要求
 
-## Output rules
-- `executive_summary` must still follow: facts -> risks -> actions
-- `key_findings` must contain 3-5 factual findings, each grounded in scenario labels, mention counts, citation counts, platform preferences, or source examples
-- `report_markdown` is the primary customer-facing body and must be at least 5 short sections with concrete facts
-- Use short paragraphs and bullet lists where helpful
-- Prefer concrete counts, rates, scenario labels, platform names, and source domains
-- Never output internal reasoning, self-corrections, or analysis notes
-- Do not output competitor_battle, risk_section, action_queue, strengths, weaknesses, opportunities, threats, industry_insights, platform_analysis, competitor_deep_analysis, or actionable_recommendations
-- Do not mention BWVS, overall score, score band, or any synthetic scoring headline
+### 一、核心执行摘要
+- 200 字以内。
+- 用一段话概括品牌当前在 DeepSeek、Kimi、豆包、混元上的整体占位情况。
+- 必须点出最大的结构性痛点，以及对业务的潜在影响。
 
-## Output JSON
+### 二、核心数据基准看板
+- 必须使用 Markdown 表格。
+- 表头固定为：
+  `| 指标名称 | 指标定义 | 本品牌数据 | 竞品A数据 | 竞品B数据 | 诊断结论 |`
+- 指标固定为：
+  - 提及率
+  - 官网引用占比
+  - 品牌内容引用占比
+  - 负向情感占比
+- “诊断结论”必须是精准的一句话，指出优势或短板。
+
+### 三、跨大模型平台表现拆解
+- 必须使用 Markdown 表格。
+- 表头固定为：
+  `| 平台名称 | 平台抓取偏好 | 本品牌在该平台现状 | 存在问题与突破口 |`
+- 平台抓取偏好要用中文表达，不允许出现中英文夹杂词句。
+- 对表现最差的平台，必须给出具体的内容投放或信源补强建议。
+
+### 四、主题场景诊断：缺位与竞争图谱
+- 必须分成两个小节：
+  - `### 品牌缺位场景`
+  - `### 竞争胶着场景`
+- 每个小节至少列出 2 个真实问题示例；如果不足 2 个，要如实说明样本不足。
+- 不能只列标签，必须解释这些问题为什么意味着流量流失或竞争压力。
+- 要指出 AI 在对比场景里更偏向谁，以及我方缺少什么类型的语料。
+
+### 五、AEO 常态化运营与优化策略
+- 必须严格按以下四个二级小节输出：
+  - `### 1. 基建优化（夯实第一信源）`
+  - `### 2. 语料防御与对冲（处理负向与胶着）`
+  - `### 3. 填补盲区漏洞（拓展增量流量）`
+  - `### 4. 按月度 / 双周回测监测`
+- 禁止使用“30天速成”“短期冲刺”等概念，强调长期阵地战。
+
+## 输出 JSON
 {
-  "executive_summary": "至少 120 字，顺序必须是事实 -> 风险 -> 动作。",
+  "executive_summary": "200字以内的执行摘要，顺序必须是事实 -> 痛点/风险 -> 业务影响/动作。",
   "key_findings": [
-    "发现 1：必须包含具体场景、问题数、来源或引用事实。",
-    "发现 2",
-    "发现 3"
+    "发现1：必须带具体数据、平台、来源或问题场景。",
+    "发现2",
+    "发现3"
   ],
-  "report_markdown": "严格按指定 Markdown 章节输出的客户报告正文。"
+  "report_markdown": "严格按五个一级章节输出的 Markdown 正文。"
 }
 
-Output raw JSON only. Start directly with { and do not include Markdown fences or explanations."""
+只输出原始 JSON。从 { 开始，不要使用 Markdown 代码块。"""
 
 
 def _get_a5_supplementary_prompt(report_type: str = "persona") -> str:
@@ -202,6 +207,74 @@ def _build_a5_user_content(
             "## 品牌与竞品提及情绪分析\n"
             + json.dumps(mention_sentiment_analysis, ensure_ascii=False, indent=2)
         )
+
+    top_competitors = [
+        item for item in (competitor_metrics or [])
+        if isinstance(item, dict) and item.get("name")
+    ][:2]
+    missing_examples = [
+        item for item in (scenario_matrix or [])
+        if isinstance(item, dict) and item.get("battle_status") == "missing"
+    ][:3]
+    contested_examples = [
+        item for item in (scenario_matrix or [])
+        if isinstance(item, dict) and item.get("battle_status") in {"contested", "defend"}
+    ][:3]
+    platform_stats = (source_overview or {}).get("platform_citation_stats", {}) if isinstance(source_overview, dict) else {}
+    sections.append(
+        "## AEO 报告输入摘要\n"
+        + json.dumps(
+            {
+                "品牌名称": brand_profile.get("brand_name", ""),
+                "核心竞品": [item.get("name", "") for item in top_competitors],
+                "监测范围": {
+                    "总问题数": metrics.get("total_questions", 0),
+                    "报告类型": "行业全景基线分析" if analysis_mode == "baseline" else "场景分析报告",
+                },
+                "核心指标表现": {
+                    "提及率": summary_metrics.get("brand_mention_rate", metrics.get("mention_rate", 0)) if summary_metrics else metrics.get("mention_rate", 0),
+                    "官网引用占比": (source_overview or {}).get("official_citation_rate", 0) if isinstance(source_overview, dict) else 0,
+                    "品牌内容引用占比": (summary_metrics or {}).get("content_citation_rate", 0),
+                    "负向情感占比": (
+                        (
+                            (mention_sentiment_analysis or {}).get("brand", {}).get("summary", {}).get("negative", 0)
+                            / max(
+                                1,
+                                sum(
+                                    int((mention_sentiment_analysis or {}).get("brand", {}).get("summary", {}).get(key, 0) or 0)
+                                    for key in ("positive", "neutral", "negative")
+                                ),
+                            )
+                        )
+                        if isinstance((mention_sentiment_analysis or {}).get("brand", {}), dict)
+                        else 0
+                    ),
+                },
+                "各平台表现明细": {
+                    platform: {
+                        "成功回答数": stats.get("total_answers", 0),
+                        "总引用数": stats.get("total_citations", 0),
+                        "官网引用数": stats.get("official_citations", 0),
+                        "高频来源": [item.get("domain", "") for item in (stats.get("top_domains", []) or [])[:5] if isinstance(item, dict)],
+                    }
+                    for platform, stats in platform_stats.items()
+                    if isinstance(stats, dict)
+                },
+                "品牌完全缺位的问题示例": [
+                    item.get("scenario_label", "")
+                    for item in missing_examples
+                    if isinstance(item, dict) and item.get("scenario_label")
+                ],
+                "竞争胶着的问题示例": [
+                    item.get("scenario_label", "")
+                    for item in contested_examples
+                    if isinstance(item, dict) and item.get("scenario_label")
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
     # 3. Platform answer samples
     platform_samples = _extract_platform_samples(fetch_results, max_per_platform=3)

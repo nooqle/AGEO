@@ -7,6 +7,7 @@ import {
   RiLoader4Line,
   RiTimeLine,
 } from '@remixicon/react';
+import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
 import type { RunHistoryEntry, RunStatus } from '@/types/monitoring';
 
 // =========================================================================
@@ -141,6 +142,7 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
             {sortedEntries.map((entry) => {
               const statusConf = STATUS_CONFIG[entry.status];
               const StatusIcon = statusConf.Icon;
+              const stageLabel = getUserFacingStageLabel(entry.current_stage);
 
               return (
                 <tr
@@ -191,12 +193,12 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
                     >
                       {entry.progress != null ? `${Math.round(entry.progress * 100)}%` : '--'}
                     </span>
-                    {entry.current_stage && (
+                    {stageLabel && (
                       <p
                         className="text-[11px] mt-0.5 truncate max-w-[160px]"
                         style={{ color: 'var(--text-muted)' }}
                       >
-                        {entry.current_stage}
+                        {stageLabel}
                       </p>
                     )}
                   </td>

@@ -290,6 +290,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
             report_data,
             brand_profile=brand_profile,
             metrics=metrics,
+            fetch_results=fetch_results,
+            competitors=competitors,
             summary_metrics=summary_metrics,
             scenario_matrix=scenario_matrix,
             source_overview=source_overview,

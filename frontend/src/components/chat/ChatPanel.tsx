@@ -344,7 +344,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           return;
         }
 
-        if (task.status === 'running') {
+        const waitingForInput = task.latest_run?.status === 'waiting_input';
+
+        if (task.status === 'running' && !waitingForInput) {
           // Restore progress UI
           useConversationStore.setState({ isAgentExecuting: true });
           if (task.progress > 0) {
@@ -386,6 +388,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
               }, index * 150);
             });
           }
+        } else if (waitingForInput) {
+          stopExecutionAction();
+          setExecutionProgress(null);
         } else if (task.status === 'completed' || task.status === 'failed') {
           // Show reconnection banner
           setReconnectionTask(task);
@@ -682,6 +687,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return undefined;
   };
 
+  const isWaitingForInput = !isAgentExecuting && activeTask?.latest_run?.status === 'waiting_input';
   const liveCurrentStage = isAgentExecuting
     ? executionProgress?.stage
     : activeTask?.current_stage ?? executionProgress?.stage;
@@ -704,6 +710,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           <div className="flex items-center gap-2">
             <TaskStatusBadge
               status={isAgentExecuting ? 'running' : (activeTask?.status ?? 'running')}
+              waitingForInput={isWaitingForInput}
               currentStage={liveCurrentStage}
               progress={liveProgress}
               progressMessage={liveProgressMessage}

@@ -479,25 +479,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             await heartbeat_task
         except asyncio.CancelledError:
             pass
-        # Let agent task finish naturally so _save_final_message can persist
-        # the agent reply to DB. WS send errors are caught by emit functions.
+        # Let background workflows keep running after the client leaves.
+        # Session-scoped runtime execution is durable enough to continue without
+        # an active socket, and future connections can reattach to task state.
         # Capture a local reference first — _on_agent_done may set agent_task=None
-        # concurrently, which would cause AttributeError on .cancel().
+        # concurrently.
         _pending = agent_task
         if _pending and not _pending.done():
-            try:
-                await asyncio.wait_for(_pending, timeout=30.0)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[WebSocket] Agent task timed out after disconnect, cancelling"
-                )
-                _pending.cancel()
-                try:
-                    await _pending
-                except (asyncio.CancelledError, Exception):
-                    pass
-            except Exception:
-                pass
+            logger.info(
+                "[WebSocket] Detaching live agent task for session %s after disconnect",
+                session_id,
+            )
         manager.disconnect(websocket)
 
 

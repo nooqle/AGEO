@@ -25,16 +25,16 @@ interface AgentCallIndicatorProps {
 
 // Agent 名称映射
 const agentNameMap: Record<string, string> = {
-  'A1': '品牌竞品分析',
-  'A2': '营销画像生成',
-  'A3': '问题模拟',
+  'A1': '品牌档案分析',
+  'A2': '用户画像分析',
+  'A3': '问题生成',
   'A4': '答案抓取',
-  'A5': '数据分析',
-  'BrandCompetitionAgent': '品牌竞品分析',
-  'MarketingPersonaAgent': '营销画像生成',
-  'QuestionSimulationAgent': '问题模拟',
+  'A5': '报告生成',
+  'BrandCompetitionAgent': '品牌档案分析',
+  'MarketingPersonaAgent': '用户画像分析',
+  'QuestionSimulationAgent': '问题生成',
   'FetchAgent': '答案抓取',
-  'DataAnalyticsAgent': '数据分析',
+  'DataAnalyticsAgent': '报告生成',
 };
 
 // 状态配置
@@ -129,11 +129,6 @@ export function AgentCallIndicator({
             <span className="text-sm font-medium text-[var(--text-primary)]">
               {displayName}
             </span>
-            {call.agentCode && (
-              <span className="ml-2 text-xs text-[var(--text-tertiary)]">
-                {call.agentCode}
-              </span>
-            )}
           </div>
         </div>
 

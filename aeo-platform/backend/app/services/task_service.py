@@ -29,6 +29,28 @@ from app.services.task_event_bus import TaskStatusChangedEvent
 logger = logging.getLogger(__name__)
 
 
+def _is_stale_waiting_message(message: str | None) -> bool:
+    if not message:
+        return False
+    return message.startswith("等待用户确认")
+
+
+def _resolved_running_progress_message(
+    task: AnalysisTask, latest_run: TaskRun | None
+) -> str:
+    """Normalize stale waiting copy after a resume run has already started."""
+
+    progress_message = task.progress_message or ""
+    if (
+        task.status == TaskStatus.RUNNING
+        and latest_run is not None
+        and latest_run.status != TaskRunStatus.WAITING_INPUT
+        and _is_stale_waiting_message(progress_message)
+    ):
+        return "正在继续分析..."
+    return progress_message
+
+
 class TaskService:
     """Manages AnalysisTask CRUD and lifecycle transitions."""
 
@@ -180,6 +202,8 @@ class TaskService:
                 "分析完成",
             }:
                 task.progress_message = "任务已恢复执行..."
+        elif _is_stale_waiting_message(task.progress_message):
+            task.progress_message = "正在继续分析..."
         task.updated_at = now
 
         run = await self._get_target_run(task_id, run_id)
@@ -758,7 +782,7 @@ def task_to_dict(task: AnalysisTask) -> dict[str, Any]:
         "status": task.status.value if task.status else "pending",
         "current_stage": task.current_stage,
         "progress": task.progress,
-        "progress_message": task.progress_message,
+        "progress_message": _resolved_running_progress_message(task, latest_run),
         "llm_call_count": task.llm_call_count,
         "llm_prompt_tokens": task.llm_prompt_tokens,
         "llm_completion_tokens": task.llm_completion_tokens,

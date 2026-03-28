@@ -37,6 +37,14 @@ _MAX_QUESTIONS = WorkflowConstants.MAX_QUESTIONS
 _QUESTIONS_PER_PERSONA = WorkflowConstants.QUESTIONS_PER_PERSONA
 
 
+def _clear_question_import_state(state: AgentState) -> dict:
+    user_decisions = dict(state.get("user_decisions", {}))
+    user_decisions["table_import_confirmed"] = False
+    user_decisions.pop("confirmed_table_kind", None)
+    user_decisions.pop("question_import_mode", None)
+    return user_decisions
+
+
 def _normalize_uploaded_question_payload(
     questions: list[dict],
     *,
@@ -419,6 +427,8 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
                 "questions": flattened_questions,
                 "current_step": "A3",
                 "progress": 0.5,
+                "confirmed_import_action": None,
+                "user_decisions": _clear_question_import_state(state),
             },
         )
 
@@ -675,6 +685,8 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
                 "questions": flattened_questions,
                 "current_step": "A3",
                 "progress": 0.5,
+                "confirmed_import_action": None,
+                "user_decisions": _clear_question_import_state(state),
             },
         )
 
@@ -1149,6 +1161,8 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
                 "questions": flattened_questions,            # Standard channel (A4 reads this)
                 "current_step": "A3",
                 "progress": 0.5,
+                "confirmed_import_action": None,
+                "user_decisions": _clear_question_import_state(state),
             },
         )
 

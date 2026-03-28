@@ -156,7 +156,7 @@ export const BrandCompetitionGraph = React.memo(function BrandCompetitionGraph({
           </div>
           <h3 className="text-lg font-medium mb-2" style={{ color: 'var(--text-tertiary)' }}>等待品牌数据</h3>
           <p className="text-sm max-w-[280px]" style={{ color: 'var(--text-muted)' }}>
-            A1 品牌信息采集完成后，将在此处显示竞品关系图谱
+            完成品牌档案分析后，将在此处显示竞品关系图谱
           </p>
         </div>
       </div>

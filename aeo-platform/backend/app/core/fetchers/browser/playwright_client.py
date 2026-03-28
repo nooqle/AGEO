@@ -191,6 +191,34 @@ class PlaywrightBrowserClient:
                 logger.info("[Browser:%s] Retrying async_playwright().start()...", self.session_name)
                 self.playwright = await async_playwright().start()
 
+    async def _reset_runtime(self) -> None:
+        """Reset any stale Playwright objects so the next open starts clean."""
+        try:
+            if self.page is not None:
+                try:
+                    await self.page.close()
+                except Exception:
+                    pass
+            self.page = None
+
+            if self.context is not None:
+                try:
+                    await self.context.close()
+                except Exception:
+                    pass
+            self.context = None
+
+            if self.playwright is not None:
+                try:
+                    await self.playwright.stop()
+                except Exception:
+                    pass
+            self.playwright = None
+        except Exception:
+            self.page = None
+            self.context = None
+            self.playwright = None
+
     async def open(self, url: str, headed: bool = False) -> dict[str, Any]:
         """Open a URL in the browser.
 
@@ -201,60 +229,88 @@ class PlaywrightBrowserClient:
         Returns:
             Command output
         """
-        try:
-            await self._ensure_playwright()
+        last_error = ""
 
-            if self.context is None and self.playwright is not None:
-                # Ensure the user-data directory exists before launching.
-                self.user_data_dir.mkdir(parents=True, exist_ok=True)
+        for attempt in range(2):
+            try:
+                await self._ensure_playwright()
 
-                # launch_persistent_context saves cookies, localStorage, etc.
-                # to user_data_dir so login sessions survive backend restarts.
-                self.context = await self.playwright.chromium.launch_persistent_context(
-                    str(self.user_data_dir),
-                    headless=not headed,
-                    args=["--disable-blink-features=AutomationControlled"],
-                    viewport={"width": 1280, "height": 720},
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/131.0.0.0 Safari/537.36"
-                    ),
-                )
-                logger.info(
-                    "[Browser] Launched persistent context for '%s' (headless=%s, dir=%s)",
-                    self.session_name, not headed, self.user_data_dir,
-                )
+                if self.page is not None and self.page.is_closed():
+                    self.page = None
 
-            if self.page is None and self.context is not None:
-                # Reuse the first existing page if present (persistent context
-                # may restore previous tabs), otherwise open a fresh one.
-                if self.context.pages:
-                    self.page = self.context.pages[0]
-                else:
-                    self.page = await self.context.new_page()
+                if self.context is None and self.playwright is not None:
+                    # Ensure the user-data directory exists before launching.
+                    self.user_data_dir.mkdir(parents=True, exist_ok=True)
 
-            if self.page is not None:
+                    # launch_persistent_context saves cookies, localStorage, etc.
+                    # to user_data_dir so login sessions survive backend restarts.
+                    self.context = await self.playwright.chromium.launch_persistent_context(
+                        str(self.user_data_dir),
+                        headless=not headed,
+                        args=["--disable-blink-features=AutomationControlled"],
+                        viewport={"width": 1280, "height": 720},
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/131.0.0.0 Safari/537.36"
+                        ),
+                    )
+                    logger.info(
+                        "[Browser] Launched persistent context for '%s' (headless=%s, dir=%s)",
+                        self.session_name,
+                        not headed,
+                        self.user_data_dir,
+                    )
+
+                if self.page is None and self.context is not None:
+                    existing_pages = [
+                        p for p in self.context.pages if not p.is_closed()
+                    ]
+                    if existing_pages:
+                        self.page = existing_pages[0]
+                    else:
+                        self.page = await self.context.new_page()
+
+                if self.page is None:
+                    raise RuntimeError("浏览器页面未初始化")
+
                 # domcontentloaded fires once DOM is parsed; networkidle may never
                 # fire in SPAs with background heartbeat requests.
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 if headed:
                     await self.bring_to_front()
 
-            return {"success": True, "url": url}
-        except Exception as e:
-            err_detail = f"{type(e).__name__}: {e}" if str(e) else f"{type(e).__name__} (no message)"
-            logger.error("[Browser:%s] open() failed: %s\n%s", self.session_name, err_detail, traceback.format_exc())
-            # Clean up partial state so next open() call retries from scratch
-            self.page = None
-            self.context = None
-            if self.playwright:
-                try:
-                    await self.playwright.stop()
-                except Exception:
-                    pass
-                self.playwright = None
-            return {"success": False, "error": err_detail}
+                return {"success": True, "url": url}
+            except Exception as e:
+                err_detail = (
+                    f"{type(e).__name__}: {e}"
+                    if str(e)
+                    else f"{type(e).__name__} (no message)"
+                )
+                last_error = err_detail
+                logger.error(
+                    "[Browser:%s] open() failed (attempt %d): %s\n%s",
+                    self.session_name,
+                    attempt + 1,
+                    err_detail,
+                    traceback.format_exc(),
+                )
+                await self._reset_runtime()
+
+                if attempt == 0 and (
+                    "TargetClosedError" in err_detail
+                    or "browser has been closed" in err_detail.lower()
+                    or "target page" in err_detail.lower()
+                ):
+                    logger.warning(
+                        "[Browser:%s] Detected stale browser context, retrying open() once",
+                        self.session_name,
+                    )
+                    continue
+
+                return {"success": False, "error": err_detail}
+
+        return {"success": False, "error": last_error or "未知浏览器错误"}
 
     async def snapshot(self, interactive_only: bool = True) -> dict[str, Any]:
         """Get a snapshot of the current page.

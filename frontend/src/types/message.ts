@@ -133,10 +133,10 @@ export interface Message {
 
   // File attachments
   attachments?: Array<{
-    id: string;
+    id?: string;
     name: string;
-    size: number;
-    type: string;
+    size?: number;
+    type?: string | null;
     url?: string;
   }>;
 

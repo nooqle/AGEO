@@ -25,7 +25,7 @@ export function PlatformTab({ data }: PlatformTabProps) {
       <EmptyState
         icon={RiBarChart2Line}
         title="暂无平台数据"
-        description="完成答案抓取（A4）后即可查看平台对比"
+        description="完成答案抓取后即可查看平台对比"
       />
     );
   }

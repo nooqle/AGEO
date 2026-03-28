@@ -513,11 +513,15 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
   // Support both camelCase and snake_case keys from backend
   const brandProfile = data?.brandProfile || data?.brand_profile;
   const competitors = data?.competitors || [];
-  const personas = data?.personas || data?.user_personas || [];
+  const personas = useMemo(
+    () => data?.personas || data?.user_personas || [],
+    [data?.personas, data?.user_personas]
+  );
 
   // Inline selection support
   const selection: WorkflowSelectionData | undefined = data?.selection;
   const hasSelection = selection && Array.isArray(selection.personas) && selection.personas.length > 0;
+  const requestId = selection?.requestId || '';
   const maxSelection = selection?.maxSelection ?? 3;
   const minSelection = selection?.minSelection ?? 1;
 
@@ -550,21 +554,19 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
     const selectedPersonas = personas.filter(p =>
       selectedIds.has(p.persona_name)
     );
-    const requestId = `persona_selection_${Date.now()}`;
-    sendConfirmation(requestId, {
+    sendConfirmation(requestId || '', {
       type: 'persona_path_selection',
       selectedPersonaIds: Array.from(selectedIds),
       selectedPersonaNames: selectedPersonas.map(p => p.persona_name),
     });
     setIsConfirmed(true);
-  }, [selectedIds, minSelection, personas, sendConfirmation]);
+  }, [selectedIds, minSelection, personas, requestId, sendConfirmation]);
 
   const handleSkip = useCallback(() => {
     if (!sendConfirmation) return;
-    const requestId = `persona_selection_skip_${Date.now()}`;
-    sendConfirmation(requestId, { type: 'skip' });
+    sendConfirmation(requestId || '', { type: 'skip' });
     setIsConfirmed(true);
-  }, [sendConfirmation]);
+  }, [requestId, sendConfirmation]);
 
   return (
     <motion.div
