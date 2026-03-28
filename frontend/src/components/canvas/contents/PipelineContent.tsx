@@ -18,13 +18,9 @@ export function PipelineContent({ content }: PipelineContentProps) {
   const { pendingConfirmation, wsConfirmation: sendConfirmation } = useConversationStore();
 
   const pipeline: PipelineData | undefined = content.data.pipeline;
+  const requestId = content.data.requestId || pendingConfirmation?.requestId || '';
   const maxSelection = content.data.maxSelection ?? 3;
   const minSelection = content.data.minSelection ?? 1;
-
-  // Pipeline is actionable as long as it hasn't been confirmed yet.
-  // Don't gate on pendingConfirmation — it may be cleared by an unrelated
-  // inline confirmation in the chat panel. Use a fallback requestId when
-  // the store-level pendingConfirmation is absent.
   const canAct = !isConfirmed;
 
   const handleCheckChange = useCallback((nodeId: string, checked: boolean) => {
@@ -44,16 +40,13 @@ export function PipelineContent({ content }: PipelineContentProps) {
     if (!sendConfirmation || checkedIds.size < minSelection) return;
     if (!pipeline) return;
 
-    // Use pendingConfirmation.requestId if available, otherwise use a stable fallback
-    const requestId = pendingConfirmation?.requestId || `pipeline_${content.id}`;
-
     // Find selected profile node labels for downstream matching
     const profileCol = pipeline.columns.find((c) => c.key === 'profile');
     const selectedNames = profileCol
       ? profileCol.nodes.filter((n) => checkedIds.has(n.id)).map((n) => n.label)
       : [];
 
-    sendConfirmation(requestId, {
+    sendConfirmation(requestId || '', {
       type: 'persona_path_selection',
       selectedPersonaIds: Array.from(checkedIds),
       selectedPersonaNames: selectedNames,
@@ -63,8 +56,7 @@ export function PipelineContent({ content }: PipelineContentProps) {
 
   const handleSkip = () => {
     if (!sendConfirmation) return;
-    const requestId = pendingConfirmation?.requestId || `pipeline_${content.id}`;
-    sendConfirmation(requestId, {
+    sendConfirmation(requestId || '', {
       type: 'skip',
     });
     setIsConfirmed(true);

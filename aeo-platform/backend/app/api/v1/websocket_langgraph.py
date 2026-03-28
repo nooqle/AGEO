@@ -31,6 +31,7 @@ from app.workflow.browser_action_runtime import (
     get_browser_action_request,
     resolve_browser_action_request,
 )
+from app.workflow.confirmation import resolve_confirmation_selection
 
 from sqlalchemy import select
 
@@ -111,6 +112,65 @@ def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
     if isinstance(progress_message, str) and progress_message.strip():
         return progress_message
     return "等待用户输入..."
+
+
+def _is_persona_selection_confirmation(
+    selection: str | dict[str, Any] | None,
+    option_id: str,
+) -> bool:
+    """Return True when the confirmation payload targets A2 persona selection."""
+
+    if isinstance(selection, dict):
+        selection_type = selection.get("type")
+        return selection_type in {"persona_path_selection", "skip"}
+
+    normalized = option_id.strip().lower()
+    if normalized == "skip":
+        return True
+    if isinstance(selection, str):
+        return selection.strip().lower() == "skip"
+    return False
+
+
+def _validate_confirmation_request_id(
+    state_values: dict[str, Any],
+    request_id: str,
+    selection: str | dict[str, Any] | None,
+    option_id: str,
+) -> tuple[bool, bool]:
+    """Validate request_id against current pending confirmation.
+
+    Returns:
+        (allowed, used_legacy_fallback)
+    """
+
+    pending_confirmation = state_values.get("pending_confirmation") or {}
+    if not isinstance(pending_confirmation, dict):
+        return True, False
+
+    pending_request_id = pending_confirmation.get("request_id")
+    pending_step_id = pending_confirmation.get("step_id")
+    expected_request_id = (
+        pending_request_id.strip()
+        if isinstance(pending_request_id, str)
+        else ""
+    )
+    step_id = pending_step_id.strip() if isinstance(pending_step_id, str) else ""
+
+    if step_id != "A2_PERSONA_SELECTION":
+        return True, False
+
+    if not expected_request_id:
+        return True, False
+
+    if request_id:
+        return request_id == expected_request_id, False
+
+    is_legacy_persona_selection = (
+        step_id == "A2_PERSONA_SELECTION"
+        and _is_persona_selection_confirmation(selection, option_id)
+    )
+    return is_legacy_persona_selection, is_legacy_persona_selection
 
 
 def _has_reusable_runtime_context(state_values: dict[str, Any]) -> bool:
@@ -1408,6 +1468,7 @@ async def handle_confirmation_langgraph(
     selection = data.get("selection", "")
     option_id = data.get("option_id", "")
     message = data.get("message", "")
+    request_id = data.get("request_id", "")
 
     # Build a user message from the confirmation
     # selection can be a string (inline button label) or dict (structured selection)
@@ -1475,6 +1536,27 @@ async def handle_confirmation_langgraph(
             )
             return
 
+        request_allowed, used_legacy_request_fallback = _validate_confirmation_request_id(
+            state_values=state_values,
+            request_id=request_id if isinstance(request_id, str) else "",
+            selection=selection if isinstance(selection, (str, dict)) else None,
+            option_id=option_id if isinstance(option_id, str) else "",
+        )
+        if not request_allowed:
+            await _emit_session_error(
+                session_id,
+                {
+                    "message": "当前确认已失效，请重新发起分析。",
+                    "recoverable": True,
+                },
+            )
+            return
+        if used_legacy_request_fallback:
+            logger.info(
+                "[LangGraph] Accepting legacy persona confirmation without request_id for session %s",
+                session_id,
+            )
+
         resumed_run_id = await _submit_resume_run(state_values.get("task_id"))
         if state_values.get("task_id") and resumed_run_id is None:
             raise RuntimeError(
@@ -1490,199 +1572,15 @@ async def handle_confirmation_langgraph(
         history = list(state_values.get("orchestrator_history", []))
         user_decisions = dict(state_values.get("user_decisions", {}))
 
-        # Parse structured selection — see ConfirmationSelection type above
-        if (
-            isinstance(selection, dict)
-            and selection.get("type") == "persona_path_selection"
-        ):
-            sel: PersonaPathSelection = selection  # type: ignore[assignment]
-            selected_ids = sel.get("selectedPersonaIds", [])
-            selected_names = sel.get("selectedPersonaNames", [])
-            user_content = (
-                f"用户选择了以下画像进行聚焦分析：{', '.join(selected_names)}"
-            )
-            user_decisions["a3_mode"] = "persona"
-            user_decisions["selected_persona_ids"] = (
-                selected_names  # Use names for A3 matching
-            )
-            user_decisions["selected_persona_names"] = selected_names
-            logger.info(
-                f"[LangGraph] Persona selection: ids={selected_ids}, names={selected_names}"
-            )
-        elif isinstance(selection, dict) and selection.get("type") == "skip":
-            user_content = "用户选择跳过画像聚焦，使用品牌全景模式生成问题"
-            user_decisions["a3_mode"] = "brand"
-            logger.info("[LangGraph] User skipped persona selection, using brand mode")
-        elif isinstance(selection, dict) and selection.get("optionId"):
-            opt_id = selection["optionId"]
-            if opt_id == "persona_focused":
-                user_content = "用户选择聚焦画像分析"
-                user_decisions["a3_mode"] = "persona"
-                logger.info("[LangGraph] Inline confirmation: persona_focused mode")
-            elif opt_id == "brand_panorama":
-                user_content = "用户选择品牌全景分析"
-                user_decisions["a3_mode"] = "brand"
-                logger.info("[LangGraph] Inline confirmation: brand_panorama mode")
-            elif opt_id == "fast":
-                user_content = "用户选择快速采集"
-                user_decisions["fetch_mode_pending"] = False
-                user_decisions["fetch_mode_confirmed"] = True
-                state_values["fetch_mode"] = "fast"
-                logger.info("[LangGraph] Inline confirmation: fast fetch mode")
-            elif opt_id == "full":
-                user_content = "用户选择完整采集"
-                user_decisions["fetch_mode_pending"] = False
-                user_decisions["fetch_mode_confirmed"] = True
-                state_values["fetch_mode"] = "full"
-                logger.info("[LangGraph] Inline confirmation: full fetch mode")
-            elif opt_id == "regenerate":
-                user_content = "用户选择重新生成问题"
-                user_decisions["fetch_mode_pending"] = False
-                user_decisions["fetch_mode_confirmed"] = False
-                logger.info("[LangGraph] Inline confirmation: regenerate questions")
-            elif opt_id == "table_import_question_list":
-                user_content = "用户确认将表格作为 A3 问题列表导入"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "question_list"
-                user_decisions["question_import_mode"] = "replace"
-                logger.info(
-                    "[LangGraph] Inline confirmation: table_import_question_list"
-                )
-            elif opt_id == "table_import_question_list_merge":
-                user_content = "用户确认将表格整合到上一版 A3 问题列表"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "question_list"
-                user_decisions["question_import_mode"] = "merge"
-                logger.info(
-                    "[LangGraph] Inline confirmation: table_import_question_list_merge"
-                )
-            elif opt_id == "table_import_question_list_replace":
-                user_content = "用户确认用本次表格替换上一版 A3 问题列表"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "question_list"
-                user_decisions["question_import_mode"] = "replace"
-                logger.info(
-                    "[LangGraph] Inline confirmation: table_import_question_list_replace"
-                )
-            elif opt_id == "table_import_brand_info":
-                user_content = "用户确认将表格用于更新品牌/竞品信息"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "brand_competitor_info"
-                logger.info(
-                    "[LangGraph] Inline confirmation: table_import_brand_info"
-                )
-            elif opt_id == "table_import_link_list":
-                user_content = "用户确认将表格作为链接清单继续分析"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "link_list"
-                logger.info("[LangGraph] Inline confirmation: table_import_link_list")
-            else:
-                user_content = selection.get("label", opt_id)
-                logger.info(f"[LangGraph] Inline confirmation: optionId={opt_id}")
-        elif isinstance(selection, str) and selection in (
-            "聚焦画像分析",
-            "开始场景细化分析",
-        ):
-            user_decisions["a3_mode"] = "persona"
-            user_content = selection
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to persona mode: {selection}"
-            )
-        elif isinstance(selection, str) and selection in ("品牌全景分析",):
-            user_decisions["a3_mode"] = "brand"
-            user_content = selection
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to brand mode: {selection}"
-            )
-        elif isinstance(selection, str) and selection in (
-            "快速采集（推荐）",
-            "快速采集",
-        ):
-            user_decisions["fetch_mode_pending"] = False
-            user_decisions["fetch_mode_confirmed"] = True
-            state_values["fetch_mode"] = "fast"
-            user_content = "用户选择快速采集"
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to fast mode: {selection}"
-            )
-        elif isinstance(selection, str) and selection in (
-            "完整采集",
-            "完整采集（全浏览器）",
-        ):
-            user_decisions["fetch_mode_pending"] = False
-            user_decisions["fetch_mode_confirmed"] = True
-            state_values["fetch_mode"] = "full"
-            user_content = "用户选择完整采集"
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to full mode: {selection}"
-            )
-        elif isinstance(selection, str) and selection in ("重新生成问题",):
-            user_decisions["fetch_mode_pending"] = False
-            user_decisions["fetch_mode_confirmed"] = False
-            user_content = "用户选择重新生成问题"
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to regenerate: {selection}"
-            )
-        elif isinstance(selection, str) and selection in (
-            "作为 A3 问题列表导入",
-            "确认导入问题列表",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "question_list"
-            user_decisions["question_import_mode"] = "replace"
-            user_content = "用户确认将表格作为 A3 问题列表导入"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to question_list import: %s",
-                selection,
-            )
-        elif isinstance(selection, str) and selection in (
-            "整合导入",
-            "整合到上一版",
-            "追加到上一版",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "question_list"
-            user_decisions["question_import_mode"] = "merge"
-            user_content = "用户确认将表格整合到上一版 A3 问题列表"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to merge question import: %s",
-                selection,
-            )
-        elif isinstance(selection, str) and selection in (
-            "替换导入",
-            "替换上一版",
-            "只保留这次上传",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "question_list"
-            user_decisions["question_import_mode"] = "replace"
-            user_content = "用户确认用本次表格替换上一版 A3 问题列表"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to replace question import: %s",
-                selection,
-            )
-        elif isinstance(selection, str) and selection in (
-            "更新品牌/竞品信息",
-            "确认更新品牌信息",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "brand_competitor_info"
-            user_content = "用户确认将表格用于更新品牌/竞品信息"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to brand_competitor_info import: %s",
-                selection,
-            )
-        elif isinstance(selection, str) and selection in (
-            "作为链接清单继续",
-            "确认使用链接清单",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "link_list"
-            user_content = "用户确认将表格作为链接清单继续分析"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to link_list import: %s",
-                selection,
-            )
+        resolution = resolve_confirmation_selection(
+            selection=selection if isinstance(selection, (str, dict)) else None,
+            option_id=option_id if isinstance(option_id, str) else "",
+            user_content=user_content,
+            user_decisions=user_decisions,
+            state_values=state_values,
+        )
+        user_content = resolution.user_content
+        user_decisions = resolution.user_decisions
 
         history.append(
             {
@@ -1703,22 +1601,7 @@ async def handle_confirmation_langgraph(
         }
         if state_values.get("fetch_mode"):
             update_state["fetch_mode"] = state_values["fetch_mode"]
-        if user_decisions.get("table_import_confirmed"):
-            table_intake_result = state_values.get("table_intake_result") or {}
-            import_intent = table_intake_result.get("import_intent") or {}
-            update_state["confirmed_import_action"] = {
-                "table_kind": user_decisions.get("confirmed_table_kind"),
-                "target_step": {
-                    "question_list": "A3",
-                    "brand_competitor_info": "A1",
-                    "link_list": "CONFIDENCE_EVAL",
-                }.get(user_decisions.get("confirmed_table_kind"), "UNKNOWN"),
-                "source_file_id": (
-                    (table_intake_result.get("source_file") or {}).get("file_id")
-                ),
-                "import_mode": user_decisions.get("question_import_mode")
-                or import_intent.get("mode"),
-            }
+        update_state.update(resolution.state_updates)
 
         async for event in workflow.astream(update_state, config=config):
             await _process_langgraph_event(session_id, event)

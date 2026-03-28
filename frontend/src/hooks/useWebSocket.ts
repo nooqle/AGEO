@@ -451,7 +451,7 @@ export function useWebSocket(sessionId: string | null) {
         });
         if (data.confirmation_data) {
           setPendingConfirmation({
-            requestId: (typeof data.request_id === 'string' ? data.request_id : `step_${data.step_id || ''}`),
+            requestId: typeof data.request_id === 'string' ? data.request_id : '',
             type: 'step_confirmation',
             message: data.message || '',
             options: Array.isArray((data.confirmation_data as Record<string, unknown>).options)
@@ -498,32 +498,39 @@ export function useWebSocket(sessionId: string | null) {
 
       case 'output_ready': {
         const payload = buildOutputReadyPayload(data, agentMessageIdRef.current);
+        const targetMessageId = payload.targetMessageId;
+
         addContent(payload.content);
         const isFinalReportArtifact = payload.content.type === 'report';
-        if (payload.targetMessageId) {
+        if (targetMessageId) {
           const state = useConversationStore.getState();
-          const msg = state.messages.find((m) => m.id === payload.targetMessageId);
+          const msg = state.messages.find((m) => m.id === targetMessageId);
           const existingCards = msg?.outputCards || [];
           const alreadyExists = existingCards.some((card) => card.id === payload.outputId);
           const nextContent = payload.content.type === 'report' && isSupersededA5FailureText(msg?.content)
             ? `${payload.card.title}已生成，右侧画布已更新。`
             : msg?.content;
           if (!alreadyExists) {
-            updateMessage(payload.targetMessageId, {
+            updateMessage(targetMessageId, {
               ...(nextContent !== undefined ? { content: nextContent } : {}),
               outputCards: [...existingCards, payload.card],
             });
           } else if (nextContent !== undefined && nextContent !== msg?.content) {
-            updateMessage(payload.targetMessageId, {
+            updateMessage(targetMessageId, {
               content: nextContent,
             });
           }
           if (
             nextContent !== undefined
-            && payload.targetMessageId === useConversationStore.getState().currentAgentMessageId
+            && targetMessageId === useConversationStore.getState().currentAgentMessageId
           ) {
             useConversationStore.setState({ streamingReply: nextContent });
           }
+        } else {
+          console.warn(
+            '[WebSocket] output_ready arrived without target message id; canvas updated but card was not attached to chat message.',
+            payload.outputId,
+          );
         }
         if (isFinalReportArtifact && useConversationStore.getState().isAgentExecuting) {
           const currentProgress = useConversationStore.getState().executionProgress;
@@ -566,7 +573,7 @@ export function useWebSocket(sessionId: string | null) {
       }
 
       case 'confirmation_request': {
-        const requestId = typeof data.request_id === 'string' ? data.request_id : `request_${Date.now()}`;
+        const requestId = typeof data.request_id === 'string' ? data.request_id : '';
         const type: ConfirmationRequest['type'] =
           typeof data.type === 'string' &&
           ['brand_info', 'persona_selection', 'action_choice', 'continue', 'step_confirmation'].includes(data.type)
@@ -840,6 +847,10 @@ export function useWebSocket(sessionId: string | null) {
           : data;
         const hasTaskPayload = typeof taskData.id === 'string';
         const currentTask = useConversationStore.getState().activeTask;
+        const latestRunStatus = isRecord(taskData.latest_run)
+          && typeof taskData.latest_run.status === 'string'
+          ? taskData.latest_run.status
+          : '';
 
         if (hasTaskPayload) {
           setActiveTask({
@@ -849,7 +860,10 @@ export function useWebSocket(sessionId: string | null) {
           } as AnalysisTask);
         }
 
-        if (taskStatus === 'running') {
+        if (taskStatus === 'running' && latestRunStatus === 'waiting_input') {
+          stopExecution();
+          setExecutionProgress(null);
+        } else if (taskStatus === 'running') {
           updateActiveTaskProgress(
             typeof taskData.current_stage === 'string' ? taskData.current_stage : '',
             typeof taskData.progress === 'number' ? taskData.progress : 0,
@@ -1126,12 +1140,19 @@ export function useWebSocket(sessionId: string | null) {
       payload.context = context;
     }
     if (attachments && attachments.length > 0) {
-      payload.attachments = attachments.map((attachment) => ({
-        file_id: attachment.id,
-        name: attachment.name,
-        mime_type: attachment.type,
-        size: attachment.size,
-      }));
+      const validAttachments = attachments.filter(
+        (attachment): attachment is Attachment & { id: string } =>
+          typeof attachment.id === 'string' && attachment.id.trim().length > 0
+      );
+
+      if (validAttachments.length > 0) {
+        payload.attachments = validAttachments.map((attachment) => ({
+          file_id: attachment.id,
+          name: attachment.name,
+          mime_type: typeof attachment.type === 'string' ? attachment.type : '',
+          size: typeof attachment.size === 'number' ? attachment.size : 0,
+        }));
+      }
     }
 
     if (wsRef.current?.readyState !== WebSocket.OPEN) {

@@ -2,10 +2,8 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
   RiArrowRightUpLine,
-  RiBarChartBoxLine,
   RiChat3Line,
   RiCompass3Line,
-  RiFileChartLine,
   RiGlobalLine,
   RiRadarLine,
   RiSparklingLine,
@@ -86,57 +84,6 @@ const faqs = [
   },
 ];
 
-const capabilityCards = [
-  {
-    icon: RiRadarLine,
-    badge: '核心',
-    badgeTone: 'amber',
-    title: '基线分析 · 全景掌控',
-    description:
-      '把 4 个主流 AI 平台里的提及、引用和主题覆盖放进同一张基线视图，先掌握整体位置。',
-    stats: [
-      ['4', '平台覆盖'],
-      ['基线', '整体位置'],
-    ],
-  },
-  {
-    icon: RiBarChartBoxLine,
-    badge: '核心',
-    badgeTone: 'green',
-    title: '用户画像分析 · 聚焦场景',
-    description:
-      '按画像和业务主题收窄分析范围，找到更高价值、更高意图的问答场景。',
-    stats: [
-      ['画像', '场景聚焦'],
-      ['主题', '高意图问题'],
-    ],
-  },
-  {
-    icon: RiChat3Line,
-    badge: '自动化',
-    badgeTone: 'violet',
-    title: '引用源置信度 · 判断来源',
-    description:
-      '不是只看引用了谁，而是判断哪些来源更可信，哪些来源真正影响 AI 的推荐结果。',
-    stats: [
-      ['分层', '来源判断'],
-      ['偏好', '平台差异'],
-    ],
-  },
-  {
-    icon: RiFileChartLine,
-    badge: '自动化',
-    badgeTone: 'rose',
-    title: '对话驱动交付 · 持续推进',
-    description:
-      '把基线、画像、来源判断沉淀成可追问的交付物，再继续往下分析和协作。',
-    stats: [
-      ['追问', '继续推进'],
-      ['交付', '持续更新'],
-    ],
-  },
-] as const;
-
 function SectionTag({ children }: { children: ReactNode }) {
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-[#e7e7e1] bg-white px-3 py-1.5 text-sm text-[#59606f]">
@@ -165,29 +112,29 @@ function HeroPreview() {
   return (
     <ProductWindow title="对话驱动分析">
       <div className="grid gap-4 lg:grid-cols-[1.08fr_0.92fr]">
-        <div className="rounded-[24px] bg-[#101828] p-5 text-white lg:row-span-2">
-          <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-white/55">
+        <div className="rounded-[24px] border border-[#eceff4] bg-[#fbfbfd] p-5 lg:row-span-2">
+          <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-[#8d95a4]">
             <span>真实回答</span>
             <span>对话快照</span>
           </div>
           <div className="mt-5 space-y-4">
-            <div className="rounded-[18px] bg-white/8 px-4 py-3 text-sm leading-7 text-white/88">
+            <div className="rounded-[18px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-7 text-[#344054] shadow-[0_12px_28px_rgba(15,23,42,0.04)]">
               25 万预算的家用纯电 SUV 怎么选？
             </div>
-            <div className="rounded-[20px] bg-white px-4 py-4 text-sm leading-7 text-[#354152]">
+            <div className="rounded-[20px] border border-[#e8ebf2] bg-[#eef2ff] px-4 py-4 text-sm leading-7 text-[#354152]">
               AI 回答优先提到 <span className="font-semibold text-[#111827]">某汽车品牌</span>，
               在家庭场景里仍然把 <span className="font-semibold text-[#111827]">竞品品牌</span>{' '}
               放在更靠前的位置，并引用了两家汽车媒体。
             </div>
-            <div className="rounded-[18px] border border-white/10 bg-white/[0.06] px-4 py-4 text-sm leading-7 text-white/84">
-              Agent 已识别出 <span className="font-semibold text-white">品牌被提及</span>、<span className="font-semibold text-white">竞品压制</span> 与 <span className="font-semibold text-white">媒体引用</span>，正在继续生成品牌表现报告。
+            <div className="rounded-[18px] border border-[#dbe4f3] bg-white px-4 py-4 text-sm leading-7 text-[#475467]">
+              Agent 已识别出 <span className="font-semibold text-[#111827]">品牌被提及</span>、<span className="font-semibold text-[#111827]">竞品压制</span> 与 <span className="font-semibold text-[#111827]">媒体引用</span>，正在继续生成品牌表现报告。
             </div>
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
             {['品牌被提及', '竞品压制', '媒体引用'].map((item) => (
               <span
                 key={item}
-                className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs text-white/70"
+                className="rounded-full border border-[#e4e7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5b6472]"
               >
                 {item}
               </span>
@@ -259,11 +206,11 @@ function HeroPreview() {
 
 function WhyNowShowcase() {
   return (
-    <div className="grid gap-10 lg:grid-cols-[0.92fr_0.88fr] lg:gap-12">
+    <div className="grid gap-8 lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-10">
       <div>
-        <div className="max-w-[820px] text-[18px] leading-[2] text-[#5b6472]">
-          Specta 不是只告诉你“有没有风险”，而是把品牌在 AI 里的真实表现拆成三层：
-          全景掌控、场景聚焦，以及来源可信度判断。
+        <div className="max-w-[720px] text-[18px] leading-[1.95] text-[#5b6472]">
+          Specta 不把问题讲成抽象风险，而是直接拆开三个判断：
+          整体有没有被看见，关键场景是不是被竞品抢走，以及哪些来源正在左右 AI 的推荐。
         </div>
 
         <div className="mt-10 border-t border-[#e5e7eb] pt-8">
@@ -287,13 +234,13 @@ function WhyNowShowcase() {
                     {item.badge}
                   </div>
                   <div>
-                    <div className="text-[28px] font-semibold leading-[1.2] tracking-[-0.05em] text-[#111827]">
+                    <div className="text-[24px] font-semibold leading-[1.2] tracking-[-0.05em] text-[#111827]">
                       {item.title}
-                      <span className="ml-3 text-[20px] font-medium tracking-[-0.03em] text-[#7b8494]">
+                      <span className="ml-3 text-[18px] font-medium tracking-[-0.03em] text-[#7b8494]">
                         {item.subtitle}
                       </span>
                     </div>
-                    <div className="mt-2 text-[17px] leading-8 text-[#5b6472]">
+                    <div className="mt-2 text-[16px] leading-8 text-[#5b6472]">
                       {item.description}
                     </div>
                   </div>
@@ -304,96 +251,105 @@ function WhyNowShowcase() {
         </div>
       </div>
 
-      <div className="rounded-[32px] border border-[#e7e9ef] bg-white px-6 py-6 shadow-[0_24px_60px_rgba(15,23,42,0.06)]">
-        <div className="text-sm font-semibold text-[#a0a7b4]">分析链路示意</div>
-        <div className="mt-6 flex flex-wrap gap-2">
-          {['基线分析', '用户画像分析', '引用源置信度'].map((tab, index) => (
-            <span
-              key={tab}
-              className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                index === 0
-                  ? 'bg-[#111827] text-white'
-                  : 'border border-[#e4e7ee] bg-[#fafaf9] text-[#5b6472]'
-              }`}
-            >
-              {tab}
-            </span>
-          ))}
-        </div>
+      <div className="rounded-[32px] border border-[#e7e9ef] bg-white shadow-[0_24px_60px_rgba(15,23,42,0.06)]">
+        <div className="grid gap-0 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="border-b border-[#eceff4] px-6 py-6 lg:border-b-0 lg:border-r">
+            <div className="text-sm font-semibold text-[#a0a7b4]">真实问答场景</div>
+            <div className="mt-5 rounded-[24px] bg-[#fbfbfd] p-5">
+              <div className="max-w-[88%] rounded-[18px] bg-white px-4 py-4 text-[16px] leading-8 text-[#334155] shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
+                25 万预算的家用纯电 SUV 怎么选？
+              </div>
+              <div className="mt-4 rounded-[22px] border border-[#eceff4] bg-white px-5 py-5 shadow-[0_14px_32px_rgba(15,23,42,0.04)]">
+                <div className="text-sm font-semibold text-[#7b8494]">AI 回答</div>
+                <div className="mt-3 text-[16px] leading-8 text-[#374151]">
+                  回答先提到 <span className="font-semibold text-[#111827]">竞品品牌</span>，再补充{' '}
+                  <span className="font-semibold text-[#111827]">某汽车品牌</span>，并引用了两家汽车媒体与一个参数库。
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {['竞品更靠前', '媒体引用', '参数库引用'].map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full bg-[#f4f6fb] px-3 py-1.5 text-xs font-semibold text-[#4b5563]"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 rounded-[18px] border border-[#f4d9b7] bg-[#fff7ed] px-4 py-4 text-[15px] leading-7 text-[#9a5c1d]">
+                如果不做基线、场景和来源三层判断，这类偏移通常只会在业务结果里被看到。
+              </div>
+            </div>
+          </div>
 
-        <div className="mt-6 grid gap-4 lg:grid-cols-[0.86fr_1.14fr]">
-          <div className="rounded-[24px] bg-[#fbfbfd] px-5 py-5">
-            <div className="text-sm font-semibold text-[#98a1af]">基线结论</div>
-            <div className="mt-4 text-[30px] font-semibold leading-[1.2] tracking-[-0.05em] text-[#111827]">
-              先看品牌在 AI 中有没有被看见
+          <div className="px-6 py-6">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-[#a0a7b4]">同一条结果，拆成三层判断</div>
+              <div className="rounded-full bg-[#111827] px-3 py-1 text-xs font-semibold text-white">
+                Specta 输出
+              </div>
             </div>
-            <div className="mt-4 text-[17px] leading-[1.9] text-[#5b6472]">
-              把提及率、引用来源分布和主题覆盖放进同一张基线报告，先掌握整体位置。
-            </div>
-            <div className="mt-6 grid gap-3">
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
               {[
-                ['品牌提及率', '41.7%'],
-                ['内容引用率', '100%'],
-                ['主题覆盖', '10 / 12'],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-[18px] bg-white px-4 py-4">
-                  <div className="text-xs text-[#7b8494]">{label}</div>
-                  <div className="mt-2 text-[24px] font-semibold tracking-[-0.05em] text-[#111827]">
+                ['品牌提及率', '41.7%', '基线'],
+                ['家庭场景缺口', '2 个', '画像'],
+                ['高置信来源', '3 类', '来源'],
+              ].map(([label, value, tag]) => (
+                <div key={label} className="rounded-[20px] bg-[#fbfbfd] px-4 py-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-[#7b8494]">{label}</div>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5b6472]">
+                      {tag}
+                    </span>
+                  </div>
+                  <div className="mt-3 text-[28px] font-semibold tracking-[-0.05em] text-[#111827]">
                     {value}
                   </div>
                 </div>
               ))}
             </div>
-          </div>
-
-          <div className="space-y-4">
-            <div className="rounded-[24px] border border-[#e4e7ee] bg-white px-5 py-5">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold text-[#98a1af]">用户画像分析</div>
-                <span className="rounded-full bg-[#eef2ff] px-3 py-1 text-xs font-semibold text-[#4f46e5]">
-                  场景聚焦
-                </span>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4">
+                <div className="text-sm font-semibold text-[#111827]">基线分析</div>
+                <div className="mt-2 text-sm leading-7 text-[#5b6472]">先判断品牌在 4 个平台里的整体位置。</div>
+                <div className="mt-4 h-2 rounded-full bg-[#edf1f5]">
+                  <div className="h-2 rounded-full bg-[#111827]" style={{ width: '42%' }} />
+                </div>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                {[
-                  ['高端家庭', '纯电 SUV'],
-                  ['智驾通勤', '城市使用'],
-                  ['科技尝鲜', '车型对比'],
-                ].map(([persona, scene]) => (
-                  <div key={persona} className="rounded-[18px] bg-[#fbfbfd] px-4 py-4">
-                    <div className="text-sm font-semibold text-[#111827]">{persona}</div>
-                    <div className="mt-2 text-sm text-[#5b6472]">{scene}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[24px] border border-[#e4e7ee] bg-white px-5 py-5">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold text-[#98a1af]">引用源置信度</div>
-                <span className="rounded-full bg-[#f4f0fb] px-3 py-1 text-xs font-semibold text-[#7c68c2]">
-                  来源判断
-                </span>
-              </div>
-              <div className="mt-4 space-y-3">
-                {[
-                  ['汽车媒体', '高', '#dcfce7', '#166534'],
-                  ['垂直社区', '中', '#eef2ff', '#4f46e5'],
-                  ['参数库', '高', '#fff6dd', '#a16207'],
-                ].map(([source, level, bg, color]) => (
-                  <div key={source} className="flex items-center justify-between rounded-[18px] bg-[#fbfbfd] px-4 py-4">
-                    <div>
-                      <div className="text-sm font-semibold text-[#111827]">{source}</div>
-                      <div className="mt-1 text-sm text-[#7b8494]">被多个平台高频引用</div>
-                    </div>
+              <div className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4">
+                <div className="text-sm font-semibold text-[#111827]">用户画像分析</div>
+                <div className="mt-2 text-sm leading-7 text-[#5b6472]">再拆出家庭、智驾、对比等关键场景。</div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {['家庭', '智驾', '对比'].map((tag) => (
                     <span
-                      className="rounded-full px-3 py-1 text-xs font-semibold"
-                      style={{ backgroundColor: bg, color }}
+                      key={tag}
+                      className="rounded-full bg-[#eef2ff] px-2.5 py-1 text-xs font-semibold text-[#4f46e5]"
                     >
-                      置信度 {level}
+                      {tag}
                     </span>
-                  </div>
-                ))}
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4">
+                <div className="text-sm font-semibold text-[#111827]">引用源置信度</div>
+                <div className="mt-2 text-sm leading-7 text-[#5b6472]">最后判断哪些来源真正影响推荐顺序。</div>
+                <div className="mt-4 space-y-2">
+                  {[
+                    ['汽车媒体', '72%'],
+                    ['参数库', '64%'],
+                    ['垂直社区', '41%'],
+                  ].map(([label, width]) => (
+                    <div key={label}>
+                      <div className="flex items-center justify-between text-xs text-[#7b8494]">
+                        <span>{label}</span>
+                        <span>{width}</span>
+                      </div>
+                      <div className="mt-1 h-2 rounded-full bg-[#edf1f5]">
+                        <div className="h-2 rounded-full bg-[#111827]" style={{ width }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -424,40 +380,40 @@ function WorkflowGrid() {
 
 function AgentOrchestrationMock() {
   const nodes = [
-    ['A1', '品牌档案', '建立品牌与竞品上下文'],
-    ['A3', '问题列表', '输出高意图问题清单'],
-    ['A4', '答案抓取', '从真实平台采集回答'],
-    ['A5', '品牌表现报告', '沉淀报告并继续追问'],
+    ['基线 Agent', '品牌档案', '已完成', '建立品牌与竞品上下文'],
+    ['问题 Agent', '问题列表', '已生成', '输出高意图问题清单'],
+    ['答案 Agent', '答案抓取', '进行中', '从真实平台采集回答'],
+    ['报告 Agent', '品牌表现报告', '待更新', '沉淀报告并继续追问'],
   ] as const;
 
   return (
     <div className="rounded-[30px] border border-[#e4e7ee] bg-white px-6 py-6 shadow-[0_20px_50px_rgba(15,23,42,0.05)]">
       <div className="grid gap-6 lg:grid-cols-[minmax(0,0.94fr)_minmax(0,1.06fr)]">
-        <div className="rounded-[24px] bg-[#101828] p-5 text-white">
-          <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-white/55">
+        <div className="rounded-[24px] border border-[#eceff4] bg-[#fbfbfd] p-5">
+          <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-[#8d95a4]">
             <span>对话编排</span>
             <span>Agent 正在推进</span>
           </div>
           <div className="mt-5 space-y-3">
-            <div className="max-w-[82%] rounded-[18px] bg-white/8 px-4 py-3 text-sm leading-7 text-white/86">
+            <div className="max-w-[82%] rounded-[18px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-7 text-[#344054]">
               帮我看一下某汽车品牌在高端纯电 SUV 场景里，哪些问题会先推荐竞品。
             </div>
-            <div className="ml-auto max-w-[88%] rounded-[18px] bg-white px-4 py-4 text-sm leading-7 text-[#344054]">
+            <div className="ml-auto max-w-[88%] rounded-[18px] border border-[#e8ebf2] bg-[#eef2ff] px-4 py-4 text-sm leading-7 text-[#344054]">
               已识别出 12 个问题，正在抓取 4 个平台的真实回答。我会继续定位负向提及、竞品压制与主题缺口。
             </div>
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             {[
               ['当前任务', '竞品压制定位'],
-              ['运行状态', 'A4 -> A5'],
+              ['运行状态', '答案抓取 -> 报告生成'],
               ['交付方式', '对话 + 工作台'],
             ].map(([label, value]) => (
               <div
                 key={label}
-                className="rounded-[18px] border border-white/10 bg-white/[0.06] px-4 py-4"
+                className="rounded-[18px] border border-[#eceff4] bg-white px-4 py-4"
               >
-                <div className="text-xs text-white/55">{label}</div>
-                <div className="mt-2 text-base font-semibold text-white">{value}</div>
+                <div className="text-xs text-[#7b8494]">{label}</div>
+                <div className="mt-2 text-base font-semibold text-[#111827]">{value}</div>
               </div>
             ))}
           </div>
@@ -465,7 +421,7 @@ function AgentOrchestrationMock() {
             {['继续追问', '负向提及', '竞品压制', '主题缺口'].map((tag) => (
               <span
                 key={tag}
-                className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-xs text-white/72"
+                className="rounded-full border border-[#e4e7ee] bg-white px-3 py-1 text-xs text-[#5b6472]"
               >
                 {tag}
               </span>
@@ -476,88 +432,69 @@ function AgentOrchestrationMock() {
         <div className="rounded-[24px] border border-[#eceff4] bg-[#fbfbfd] p-5">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">Agent 编排</div>
+              <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">执行面板</div>
               <div className="mt-2 text-[22px] font-semibold tracking-[-0.04em] text-[#111827]">
-                一条对话，持续推进四段分析
+                同一条对话，持续推进整条分析链
               </div>
             </div>
             <div className="rounded-full bg-[#eef2ff] px-3 py-1 text-xs font-semibold text-[#4f46e5]">
               实时流转
             </div>
           </div>
-          <div className="relative mt-6 grid gap-4 lg:grid-cols-4">
-            <div className="pointer-events-none absolute left-[12%] right-[12%] top-[34px] hidden h-px bg-[#d7dce6] lg:block" />
-            {nodes.map(([code, label, detail], index) => (
+          <div className="mt-6 space-y-3">
+            {nodes.map(([agentLabel, label, detail, description], index) => (
               <div
-                key={code}
-                className="relative rounded-[20px] border border-[#eceff4] bg-white px-4 py-4"
+                key={agentLabel}
+                className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4"
               >
-                <div className="flex items-center justify-between">
-                  <div className="rounded-full bg-[#111827] px-3 py-1 text-xs font-semibold text-white">
-                    {code}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-full bg-[#111827] px-3 py-1 text-xs font-semibold text-white">
+                      {agentLabel}
+                    </div>
+                    <div>
+                      <div className="text-[16px] font-semibold text-[#111827]">{label}</div>
+                      <div className="mt-1 text-sm leading-7 text-[#5b6472]">{description}</div>
+                    </div>
                   </div>
-                  <div
-                    className={`h-2.5 w-2.5 rounded-full ${
-                      index === nodes.length - 1 ? 'bg-[#4f46e5]' : 'bg-[#34d399]'
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      index < 2
+                        ? 'bg-[#dcfce7] text-[#166534]'
+                        : index === 2
+                          ? 'bg-[#eef2ff] text-[#4f46e5]'
+                          : 'bg-[#f4f0fb] text-[#7c68c2]'
                     }`}
-                  />
+                  >
+                    {detail}
+                  </span>
                 </div>
-                <div className="mt-4 text-[16px] font-semibold text-[#111827]">{label}</div>
-                <div className="mt-2 text-sm leading-7 text-[#5b6472]">{detail}</div>
               </div>
             ))}
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CapabilityGrid() {
-  return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      {capabilityCards.map((card) => {
-        const Icon = card.icon;
-        const badgeClass =
-          card.badgeTone === 'amber'
-            ? 'bg-[#fbf4ea] text-[#b7791f]'
-            : card.badgeTone === 'green'
-              ? 'bg-[#eff6ed] text-[#64895b]'
-              : card.badgeTone === 'violet'
-                ? 'bg-[#f4f0fb] text-[#7c68c2]'
-                : 'bg-[#fff1ec] text-[#c46f57]';
-        return (
-          <div
-            key={card.title}
-            className="rounded-[28px] border border-[#e4e7ee] bg-white px-6 py-6 shadow-[0_20px_50px_rgba(15,23,42,0.04)]"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[#eceff4] bg-[#fafaf9] text-[#111827]">
-                <Icon className="h-5 w-5" />
-              </span>
-              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${badgeClass}`}>
-                {card.badge}
-              </span>
-            </div>
-            <div className="mt-6 text-[30px] font-semibold leading-[1.18] tracking-[-0.05em] text-[#111827]">
-              {card.title}
-            </div>
-            <div className="mt-4 text-[17px] leading-[1.9] text-[#5b6472]">
-              {card.description}
-            </div>
-            <div className="mt-8 grid gap-4 border-t border-[#eceff4] pt-5 sm:grid-cols-2">
-              {card.stats.map(([value, label]) => (
-                <div key={label}>
-                  <div className="text-[36px] font-semibold tracking-[-0.06em] text-[#111827]">
-                    {value}
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-[18px] bg-white px-4 py-4">
+              <div className="text-xs text-[#7b8494]">已生成交付物</div>
+              <div className="mt-3 space-y-2">
+                {['品牌档案', '基线问题列表', '答案抓取结果'].map((item) => (
+                  <div key={item} className="rounded-[14px] bg-[#fbfbfd] px-3 py-3 text-sm font-semibold text-[#111827]">
+                    {item}
                   </div>
-                  <div className="text-sm text-[#7b8494]">{label}</div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-[18px] bg-white px-4 py-4">
+              <div className="text-xs text-[#7b8494]">当前推进</div>
+              <div className="mt-3 rounded-[16px] bg-[#fbfbfd] px-4 py-4">
+                <div className="text-sm font-semibold text-[#111827]">正在定位高意图家庭场景</div>
+                <div className="mt-2 text-sm leading-7 text-[#5b6472]">
+                  Agent 会把竞品压制最明显的问法补进报告，并继续支持追问。
                 </div>
-              ))}
+              </div>
             </div>
           </div>
-        );
-      })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -566,23 +503,35 @@ function AgentCapabilityStories() {
   const stories = [
     {
       index: '01',
-      title: '对话驱动分析',
-      description: '在同一条对话里发起基线分析，再继续追问场景、来源和品牌表现变化。',
+      title: '从对话里发起基线分析',
+      description: '用户直接在对话里提出分析目标，Agent 识别意图后生成问题并启动全景分析。',
       visual: (
-        <div className="space-y-3 rounded-[22px] bg-[#0f172a] p-4 text-white">
-          <div className="max-w-[82%] rounded-[16px] bg-white/8 px-4 py-3 text-sm leading-6 text-white/86">
-            基线分析出来后，继续帮我看一下高端家庭场景里哪些来源更可信。
+        <div className="space-y-3 rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
+          <div className="max-w-[82%] rounded-[16px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-6 text-[#344054]">
+            先做一轮基线分析，看看某汽车品牌在 4 个 AI 平台里的整体位置。
           </div>
-          <div className="ml-auto max-w-[88%] rounded-[16px] bg-white px-4 py-3 text-sm leading-6 text-[#344054]">
-            已定位到 3 类高意图场景，并整理出各平台最稳定的高置信来源。
+          <div className="ml-auto max-w-[88%] rounded-[16px] border border-[#e8ebf2] bg-[#eef2ff] px-4 py-3 text-sm leading-6 text-[#344054]">
+            已生成问题列表，正在进入答案抓取，采集 4 个平台的真实回答。
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              ['品牌档案', '已完成'],
+              ['问题列表', '已生成'],
+              ['答案抓取', '准备中'],
+            ].map(([label, status]) => (
+              <div key={label} className="rounded-[16px] border border-[#eceff4] bg-white px-4 py-3">
+                <div className="text-xs text-[#7b8494]">{label}</div>
+                <div className="mt-2 text-sm font-semibold text-[#111827]">{status}</div>
+              </div>
+            ))}
           </div>
         </div>
       ),
     },
     {
       index: '02',
-      title: '真实回答采集',
-      description: '不只看 API 输出，而是看用户真正看到的回答、引用和推荐顺序。',
+      title: '真实回答采集，而不是静态估计',
+      description: '对同一组问题持续抓取真实平台回答，直接记录品牌提及、竞品压制和引用来源。',
       visual: (
         <div className="rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -607,6 +556,87 @@ function AgentCapabilityStories() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      ),
+    },
+    {
+      index: '03',
+      title: '引用源置信度直接在结果里判断',
+      description: '不是只告诉你“引用了谁”，而是拆开来源类型、平台偏好和可信度层级。',
+      visual: (
+        <div className="rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
+          <div className="grid gap-3 sm:grid-cols-[1.05fr_0.95fr]">
+            <div className="rounded-[18px] bg-white px-4 py-4">
+              <div className="text-sm font-semibold text-[#111827]">来源分层</div>
+              <div className="mt-4 space-y-3">
+                {[
+                  ['汽车媒体', '高', '72%'],
+                  ['参数库', '高', '64%'],
+                  ['垂直社区', '中', '41%'],
+                ].map(([label, level, value]) => (
+                  <div key={label}>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-semibold text-[#111827]">{label}</span>
+                      <span className="text-[#7b8494]">{level}</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-[#edf1f5]">
+                      <div className="h-2 rounded-full bg-[#111827]" style={{ width: value }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-[18px] bg-white px-4 py-4">
+              <div className="text-sm font-semibold text-[#111827]">平台偏好</div>
+              <div className="mt-4 space-y-3">
+                {[
+                  ['豆包', '媒体 / 视频'],
+                  ['Kimi', '媒体 / 参数库'],
+                  ['元宝', '媒体 / 社区'],
+                ].map(([platform, mix]) => (
+                  <div key={platform} className="rounded-[14px] bg-[#fbfbfd] px-3 py-3">
+                    <div className="text-sm font-semibold text-[#111827]">{platform}</div>
+                    <div className="mt-1 text-sm text-[#5b6472]">{mix}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      index: '04',
+      title: '交付物会继续更新，不是停在一张报告',
+      description: '基线、画像、来源判断都会沉淀成交付物，并继续回到对话里追问和协作。',
+      visual: (
+        <div className="rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
+          <div className="grid gap-3 sm:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-[18px] border border-[#e8ebf2] bg-white px-4 py-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">交付物工作台</div>
+              <div className="mt-4 space-y-3">
+                {[
+                  ['基线问题列表', '已生成'],
+                  ['AI 答案抓取结果', '已完成'],
+                  ['品牌表现报告', '持续更新'],
+                ].map(([name, status]) => (
+                  <div key={name} className="rounded-[16px] border border-[#eceff4] bg-[#fbfbfd] px-4 py-3">
+                    <div className="text-sm font-semibold text-[#111827]">{name}</div>
+                    <div className="mt-1 text-xs text-[#7b8494]">{status}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-3 rounded-[18px] bg-white px-4 py-4">
+              <div className="text-sm font-semibold text-[#111827]">后续追问</div>
+              <div className="rounded-[14px] bg-[#fbfbfd] px-3 py-3 text-sm leading-6 text-[#344054]">
+                继续帮我拆一下高意图家庭场景里，哪些回答更偏向竞品。
+              </div>
+              <div className="rounded-[14px] border border-[#eceff4] px-3 py-3 text-sm leading-6 text-[#344054]">
+                已定位 2 个竞品压制最明显的问法，并补充到报告里。
+              </div>
+            </div>
           </div>
         </div>
       ),
@@ -644,13 +674,13 @@ function FaqList() {
           key={item.question}
           className={`group px-6 py-5 ${index !== faqs.length - 1 ? 'border-b border-[#eceff4]' : ''}`}
         >
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-6 text-[20px] font-semibold leading-[1.4] tracking-[-0.03em] text-[#111827]">
-            {item.question}
+          <summary className="grid cursor-pointer list-none grid-cols-[minmax(0,1fr)_20px] items-center gap-5 text-[18px] font-semibold leading-[1.45] tracking-[-0.03em] text-[#111827] lg:text-[20px]">
+            <span className="min-w-0 break-keep pr-2">{item.question}</span>
             <span className="text-[#98a1af] transition-transform duration-200 group-open:rotate-45">
               +
             </span>
           </summary>
-          <p className="mt-4 max-w-[860px] text-[16px] leading-8 text-[#5b6472]">
+          <p className="mt-4 max-w-[1080px] text-[16px] leading-8 text-[#5b6472]">
             {item.answer}
           </p>
         </details>
@@ -737,10 +767,10 @@ export default function HomePage() {
               为什么现在
             </SectionTag>
             <h2 className="mt-5 max-w-[900px] text-[38px] font-semibold leading-[1.15] tracking-[-0.06em] text-[#111827] lg:text-[52px]">
-              AI 已经在替客户回答，品牌可见性正在被重新分配
+              客户先问 AI，再决定联系谁
             </h2>
             <p className="mt-5 max-w-[760px] text-[18px] leading-[1.95] text-[#5b6472]">
-              不做监测，不代表风险不存在。它只会先出现在 AI 的回答里，再出现在你的业务结果里。
+              Specta 把整体位置、关键场景和来源可信度拆开给你看，不让偏移只在业务结果里暴露。
             </p>
           </div>
           <div className="mt-12">
@@ -758,10 +788,10 @@ export default function HomePage() {
               如何使用
             </SectionTag>
             <h2 className="mt-5 max-w-[860px] text-[38px] font-semibold leading-[1.15] tracking-[-0.06em] text-[#111827] lg:text-[52px]">
-              三步建立品牌可见分析
+              三步完成品牌可见分析
             </h2>
             <p className="mt-5 max-w-[720px] text-[18px] leading-[1.95] text-[#5b6472]">
-              不是先看一堆指标，而是按基线、场景和来源三层，逐步逼近真正影响推荐的因素。
+              先看全景，再看场景，最后判断来源可信度。
             </p>
           </div>
           <div className="mt-12">
@@ -776,10 +806,10 @@ export default function HomePage() {
               监控与分析
             </SectionTag>
             <h2 className="mt-5 max-w-[900px] text-[38px] font-semibold leading-[1.15] tracking-[-0.06em] text-[#111827] lg:text-[52px]">
-              基线、场景与来源，在同一套分析面板里展开
+              基线、场景与来源，在同一套面板里展开
             </h2>
             <p className="mt-5 max-w-[760px] text-[18px] leading-[1.95] text-[#5b6472]">
-              从全景掌控到场景聚焦，再到来源可信度判断，关键分析都能在一条链路里完成。
+              一套面板，连续看清整体位置、关键场景和来源判断。
             </p>
           </div>
           <div className="mt-12">
@@ -796,17 +826,16 @@ export default function HomePage() {
               <RiSparklingLine className="h-4 w-4 text-[#4f46e5]" />
               核心能力
             </SectionTag>
-            <h2 className="mt-5 max-w-[1180px] text-[40px] font-semibold leading-[1.12] tracking-[-0.06em] text-[#111827] lg:text-[68px]">
-              从基线到交付，全程由 Agent 推进
-            </h2>
-            <p className="mt-6 max-w-[920px] text-[19px] leading-[1.95] text-[#5b6472]">
-              Specta 会把基线分析、用户画像分析和引用源置信度判断，持续推进成一份可继续追问的交付物。
+          <h2 className="mt-5 max-w-[1180px] text-[40px] font-semibold leading-[1.12] tracking-[-0.06em] text-[#111827] lg:text-[68px]">
+            Agent 在一条对话里推进分析
+          </h2>
+          <p className="mt-6 max-w-[920px] text-[19px] leading-[1.95] text-[#5b6472]">
+            不停在一张报告上，而是继续抓取、继续追问、继续更新交付物。
             </p>
           </div>
           <div className="mt-12 space-y-6">
             <AgentOrchestrationMock />
             <AgentCapabilityStories />
-            <CapabilityGrid />
           </div>
         </section>
 

@@ -8,13 +8,14 @@ import { cn } from '@/lib/cn';
 import { INPUT_PLACEHOLDERS } from '@/config/brands';
 import { useContextStore, type ContextTag } from '@/stores/contextStore';
 import { toast } from '@/components/ui/toast';
+import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 
 const TABLE_UPLOAD_HINT_SEEN_KEY = 'specta.table-upload-hint-seen';
 
 interface InputAreaProps {
   onSend: (
     content: string,
-    attachments?: { id: string; name: string; size: number; type: string; url?: string }[],
+    attachments?: Attachment[],
     context?: ContextTag[]
   ) => void;
   onStop: () => void;
@@ -94,6 +95,14 @@ export function InputArea({
   const handleSubmit = () => {
     const trimmedContent = content.trim();
     if ((!trimmedContent && attachments.length === 0) || isExecuting || disabled) return;
+    if (isUploading) {
+      toast.error('文件仍在上传，请等待上传完成后再发送。');
+      return;
+    }
+    if (attachments.some((attachment) => !attachment.id)) {
+      toast.error('附件尚未准备完成，请稍后再发送。');
+      return;
+    }
     const atts = attachments.length > 0
       ? attachments.map((a) => ({
           id: a.id,
@@ -171,7 +180,7 @@ export function InputArea({
           <div className="max-w-3xl mx-auto flex items-center gap-2 flex-wrap">
             {attachments.map((att) => (
               <div
-                key={att.id}
+                key={att.id || att.url || `${att.name}-${att.size ?? 'na'}`}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs"
                 style={{
                   backgroundColor: 'var(--bg-secondary)',
@@ -181,11 +190,16 @@ export function InputArea({
               >
                 <span className="max-w-[120px] truncate">{att.name}</span>
                 <button
-                  onClick={() => removeAttachment(att.id)}
+                  onClick={() => {
+                    if (att.id) {
+                      removeAttachment(att.id);
+                    }
+                  }}
                   className="transition-colors"
                   style={{ color: 'var(--text-tertiary)' }}
                   onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-primary)'; }}
                   onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)'; }}
+                  disabled={!att.id}
                 >
                   <RiCloseLine className="w-3.5 h-3.5" />
                 </button>
@@ -272,7 +286,7 @@ export function InputArea({
               }}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
-              disabled={isExecuting || disabled}
+              disabled={isExecuting || disabled || isUploading}
               rows={1}
               className={cn(
                 'flex-1 resize-none rounded-2xl px-4 py-3 text-sm leading-6',
@@ -296,12 +310,12 @@ export function InputArea({
             {!isExecuting ? (
               <button
                 onClick={handleSubmit}
-                disabled={(!content.trim() && attachments.length === 0) || disabled}
+                disabled={(!content.trim() && attachments.length === 0) || disabled || isUploading}
                 className="p-2.5 rounded-xl transition-all flex-shrink-0 hover:opacity-90"
                 style={{
-                  backgroundColor: (content.trim() || attachments.length > 0) && !disabled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                  color: (content.trim() || attachments.length > 0) && !disabled ? '#fff' : 'var(--text-muted)',
-                  cursor: (content.trim() || attachments.length > 0) && !disabled ? 'pointer' : 'not-allowed',
+                  backgroundColor: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                  color: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? '#fff' : 'var(--text-muted)',
+                  cursor: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? 'pointer' : 'not-allowed',
                 }}
               >
                 <RiSendPlaneLine className="w-5 h-5" />

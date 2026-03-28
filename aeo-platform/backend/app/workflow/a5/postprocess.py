@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.utils import extract_domain
 from app.workflow.a5 import metrics as a5_metrics
 from app.workflow.nodes_a4 import PLATFORMS
 
@@ -131,6 +132,424 @@ def _build_platform_preference_lines(source_overview: dict[str, Any]) -> list[st
     return lines
 
 
+def _domain_to_site_name(domain: str) -> str:
+    normalized = str(domain or "").strip().lower()
+    if not normalized:
+        return "未知来源"
+    mapping = {
+        "mp.weixin.qq.com": "微信公众号",
+        "baijiahao.baidu.com": "百家号",
+        "baike.baidu.com": "百度百科",
+        "finance.sina.com.cn": "新浪财经",
+        "finance.ifeng.com": "凤凰财经",
+        "xueqiu.com": "雪球",
+        "36kr.com": "36氪",
+        "zhihu.com": "知乎",
+        "m.chinairn.com": "中研网",
+        "bkso.baidu.com": "百度知识搜索",
+        "iesdouyin.com": "抖音",
+        "toutiao.com": "今日头条",
+        "sohu.com": "搜狐",
+        "qq.com": "腾讯",
+        "163.com": "网易",
+        "sohu.com.cn": "搜狐",
+        "autohome.com.cn": "汽车之家",
+        "chejiahao.autohome.com.cn": "汽车之家车家号",
+        "dongchedi.com": "懂车帝",
+        "pcauto.com.cn": "太平洋汽车",
+        "amway.com.cn": "纽崔莱官网",
+    }
+    if normalized in mapping:
+        return mapping[normalized]
+    for key, value in mapping.items():
+        if normalized.endswith(key):
+            return value
+    parts = normalized.split(".")
+    if len(parts) >= 2:
+        return parts[-2].upper()
+    return normalized
+
+
+def _entity_aliases(entity_name: str, extra_aliases: list[str] | None = None) -> list[str]:
+    values = [entity_name, *(extra_aliases or [])]
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append(text)
+    return aliases
+
+
+def _text_mentions_aliases(text: str, aliases: list[str]) -> bool:
+    haystack = str(text or "").lower()
+    return any(alias.lower() in haystack for alias in aliases if alias)
+
+
+def _compute_entity_metric_snapshot(
+    fetch_results: list[dict[str, Any]],
+    *,
+    entity_name: str,
+    aliases: list[str],
+    official_domain: str,
+) -> dict[str, Any]:
+    total_questions = len(fetch_results or [])
+    mentioned_questions = 0
+    mentioned_answers = 0
+    negative_answers = 0
+    total_citations_in_mentions = 0
+    official_citations = 0
+    branded_citations = 0
+
+    for result in fetch_results or []:
+        question_has_mention = False
+        for platform_result in result.get("platform_results", []) or []:
+            if not isinstance(platform_result, dict) or not platform_result.get("success"):
+                continue
+            answer = platform_result.get("answer", {})
+            content = answer.get("content", "") if isinstance(answer, dict) else str(answer or "")
+            if not _text_mentions_aliases(content, aliases):
+                continue
+
+            question_has_mention = True
+            mentioned_answers += 1
+            if a5_metrics.analyze_sentiment(content) == "negative":
+                negative_answers += 1
+
+            for citation in platform_result.get("citations", []) or []:
+                if not isinstance(citation, dict):
+                    continue
+                total_citations_in_mentions += 1
+                url = str(citation.get("url", "") or "")
+                title = str(citation.get("title", "") or "")
+                domain = extract_domain(url)
+                if official_domain and domain and (
+                    domain == official_domain or domain.endswith("." + official_domain)
+                ):
+                    official_citations += 1
+                    branded_citations += 1
+                    continue
+                citation_text = f"{title} {url}".lower()
+                if any(alias.lower() in citation_text for alias in aliases if alias):
+                    branded_citations += 1
+
+        if question_has_mention:
+            mentioned_questions += 1
+
+    return {
+        "entity_name": entity_name,
+        "mentioned_questions": mentioned_questions,
+        "total_questions": total_questions,
+        "mention_rate": _safe_ratio(mentioned_questions, total_questions),
+        "mentioned_answers": mentioned_answers,
+        "negative_answers": negative_answers,
+        "negative_sentiment_ratio": _safe_ratio(negative_answers, mentioned_answers),
+        "official_citations": official_citations,
+        "branded_citations": branded_citations,
+        "total_citations_in_mentions": total_citations_in_mentions,
+        "official_citation_ratio": _safe_ratio(official_citations, total_citations_in_mentions),
+        "brand_content_citation_ratio": _safe_ratio(branded_citations, total_citations_in_mentions),
+    }
+
+
+def _build_metric_diagnosis(
+    metric_name: str,
+    brand_value: float,
+    competitor_a_value: float | None,
+    competitor_b_value: float | None,
+) -> str:
+    comparable = [
+        value for value in (competitor_a_value, competitor_b_value)
+        if isinstance(value, (int, float))
+    ]
+    if metric_name == "负向情感占比":
+        if not comparable:
+            return "当前缺少稳定竞品对照，先以本品牌自身负向占比跟踪变化。"
+        min_comp = min(comparable)
+        if brand_value <= min_comp:
+            return "本品牌负向情感占比低于主要竞品，当前舆情压力相对可控。"
+        return "本品牌负向情感占比高于竞品，需要优先处理高风险质疑。"
+
+    if not comparable:
+        return "当前缺少稳定竞品对照，先以本品牌自身口径做持续回测。"
+    max_comp = max(comparable)
+    if brand_value >= max_comp:
+        return "本品牌当前领先于主要竞品，建议继续巩固该维度优势。"
+    return "本品牌低于主要竞品，当前是需要优先补齐的短板。"
+
+
+def _pick_competitor_pair(competitors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked = []
+    for item in competitors or []:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        ranked.append(item)
+    ranked.sort(key=lambda item: float(item.get("mention_rate", 0) or 0), reverse=True)
+    return ranked[:2]
+
+
+def _build_platform_preference_text(platform: str) -> str:
+    normalized = str(platform or "").lower()
+    if normalized == "deepseek":
+        return "更偏向技术资料、深度长文和相对权威的中文来源。"
+    if normalized == "kimi":
+        return "更偏向长文解析、媒体报道和信息组织较完整的页面。"
+    if normalized == "doubao":
+        return "更偏向资讯流、泛生活内容和短内容聚合来源。"
+    if normalized in {"hunyuan", "yuanbao"}:
+        return "更偏向中文综合内容、社区讨论和微信生态来源。"
+    return "偏向中文综合内容与高频可访问来源。"
+
+
+def _build_aeo_report_facts(
+    *,
+    fetch_results: list[dict[str, Any]],
+    brand_profile: dict[str, Any],
+    competitors: list[dict[str, Any]],
+    summary_metrics: dict[str, Any],
+    scenario_matrix: list[dict[str, Any]],
+    source_overview: dict[str, Any],
+    mention_sentiment_analysis: dict[str, Any],
+    metrics: dict[str, Any],
+) -> dict[str, Any]:
+    brand_name = str(brand_profile.get("brand_name", "") or "本品牌").strip() or "本品牌"
+    brand_aliases = _entity_aliases(
+        brand_name,
+        [str(brand_profile.get("brand_name_en", "") or "").strip()],
+    )
+    brand_domain = str(source_overview.get("brand_domain", "") or "").strip()
+
+    brand_snapshot = _compute_entity_metric_snapshot(
+        fetch_results,
+        entity_name=brand_name,
+        aliases=brand_aliases,
+        official_domain=brand_domain,
+    )
+
+    competitor_snapshots: list[dict[str, Any]] = []
+    for competitor in _pick_competitor_pair(competitors):
+        website = str(competitor.get("website", "") or "").strip()
+        competitor_domain = extract_domain(website) if website else ""
+        aliases = _entity_aliases(
+            str(competitor.get("name", "") or "").strip(),
+            [str(competitor.get("name_en", "") or "").strip()],
+        )
+        snapshot = _compute_entity_metric_snapshot(
+            fetch_results,
+            entity_name=str(competitor.get("name", "") or "").strip(),
+            aliases=aliases,
+            official_domain=competitor_domain,
+        )
+        competitor_snapshots.append(snapshot)
+
+    while len(competitor_snapshots) < 2:
+        competitor_snapshots.append(
+            {
+                "entity_name": f"竞品{len(competitor_snapshots) + 1}",
+                "mention_rate": None,
+                "official_citation_ratio": None,
+                "brand_content_citation_ratio": None,
+                "negative_sentiment_ratio": None,
+            }
+        )
+
+    metric_rows = []
+    metric_specs = [
+        ("提及率", "在监测问题中，被至少一个平台提及的比例。", "mention_rate"),
+        ("官网引用占比", "在提及该品牌的回答里，引用链接指向该品牌官网的占比。", "official_citation_ratio"),
+        ("品牌内容引用占比", "在提及该品牌的回答里，所有引用链接中直接指向品牌相关内容的占比。", "brand_content_citation_ratio"),
+        ("负向情感占比", "在提及该品牌的回答里，带有明显负向倾向的占比。", "negative_sentiment_ratio"),
+    ]
+    for metric_name, definition, key in metric_specs:
+        brand_value = brand_snapshot.get(key)
+        comp_a_value = competitor_snapshots[0].get(key)
+        comp_b_value = competitor_snapshots[1].get(key)
+        metric_rows.append(
+            {
+                "metric_name": metric_name,
+                "definition": definition,
+                "brand_value": _format_rate(brand_value) if isinstance(brand_value, (int, float)) else "暂无足够数据",
+                "competitor_a_name": competitor_snapshots[0].get("entity_name", "竞品A"),
+                "competitor_a_value": _format_rate(comp_a_value) if isinstance(comp_a_value, (int, float)) else "暂无足够数据",
+                "competitor_b_name": competitor_snapshots[1].get("entity_name", "竞品B"),
+                "competitor_b_value": _format_rate(comp_b_value) if isinstance(comp_b_value, (int, float)) else "暂无足够数据",
+                "diagnosis": _build_metric_diagnosis(
+                    metric_name,
+                    float(brand_value or 0),
+                    float(comp_a_value) if isinstance(comp_a_value, (int, float)) else None,
+                    float(comp_b_value) if isinstance(comp_b_value, (int, float)) else None,
+                ),
+            }
+        )
+
+    platform_breakdown = metrics.get("platform_breakdown", {}) if isinstance(metrics, dict) else {}
+    platform_citation_stats = source_overview.get("platform_citation_stats", {}) if isinstance(source_overview, dict) else {}
+    brand_items = (
+        mention_sentiment_analysis.get("brand", {}).get("items", [])
+        if isinstance(mention_sentiment_analysis, dict)
+        else []
+    )
+    platform_rows = []
+    for platform in ["deepseek", "kimi", "doubao", "hunyuan"]:
+        raw_stats = platform_breakdown.get(platform, {}) if isinstance(platform_breakdown, dict) else {}
+        citation_stats = platform_citation_stats.get(platform, {}) if isinstance(platform_citation_stats, dict) else {}
+        mention_count = int(raw_stats.get("mentions", 0) or 0)
+        success_count = int(raw_stats.get("success", 0) or 0)
+        total_count = int(raw_stats.get("total", 0) or 0)
+        official_rate = _safe_ratio(
+            citation_stats.get("official_citations", 0) or 0,
+            citation_stats.get("total_citations", 0) or 0,
+        )
+        platform_mention_items = [
+            item for item in brand_items
+            if isinstance(item, dict) and str(item.get("platform", "")).lower() == platform
+        ]
+        top_domains = [
+            _domain_to_site_name(str(item.get("domain", "") or ""))
+            for item in (citation_stats.get("top_domains", []) or [])[:3]
+            if isinstance(item, dict) and item.get("domain")
+        ]
+        if mention_count <= 0:
+            status = f"本轮 {success_count}/{total_count or '--'} 次成功回答里尚未稳定提及本品牌。"
+            problem = "当前更像收录或语料缺口问题，应优先补齐该平台可抓取的高质量品牌内容。"
+        else:
+            status = (
+                f"本轮成功回答 {success_count}/{total_count or '--'} 次，提及本品牌 {mention_count} 次，"
+                f"官网引用占比 {_format_rate(official_rate)}。"
+            )
+            if official_rate <= 0.02:
+                problem = "已有提及，但官方信源弱，建议补结构化官网页与权威长文。"
+            elif platform_mention_items:
+                problem = "已形成一定占位，可继续补对比型与场景型内容，提升主胜稳定性。"
+            else:
+                problem = "已有信源进入，但品牌提及还不稳定，需补更直接的品牌表达。"
+        if top_domains:
+            problem = f"{problem} 当前高频来源主要是 {'、'.join(top_domains)}。"
+        platform_rows.append(
+            {
+                "platform": _display_platform_name(platform),
+                "preference": _build_platform_preference_text(platform),
+                "status": status,
+                "problem": problem,
+            }
+        )
+
+    missing_examples = [
+        item for item in scenario_matrix
+        if isinstance(item, dict) and item.get("battle_status") == "missing"
+    ][:3]
+    contested_examples = [
+        item for item in scenario_matrix
+        if isinstance(item, dict)
+        and item.get("battle_status") in {"contested", "defend"}
+        and (item.get("competitors_present") or [])
+    ][:3]
+
+    source_rows = []
+    top_domains = _sort_top_domains(source_overview)
+    for item in top_domains[:15]:
+        domain = str(item.get("domain", "") or "").strip()
+        if not domain:
+            continue
+        source_rows.append(
+            {
+                "site_name": _domain_to_site_name(domain),
+                "domain": domain,
+                "count": int(item.get("count", 0) or 0),
+                "share": _format_rate(item.get("share", 0)),
+            }
+        )
+    remaining_count = sum(int(item.get("count", 0) or 0) for item in top_domains[15:])
+
+    return {
+        "brand_name": brand_name,
+        "competitor_a_name": competitor_snapshots[0].get("entity_name", "竞品A"),
+        "competitor_b_name": competitor_snapshots[1].get("entity_name", "竞品B"),
+        "total_questions": int(summary_metrics.get("scenario_total", 0) or len(fetch_results)),
+        "metric_rows": metric_rows,
+        "platform_rows": platform_rows,
+        "missing_examples": missing_examples,
+        "contested_examples": contested_examples,
+        "source_rows": source_rows,
+        "remaining_source_count": remaining_count,
+    }
+
+
+def _display_platform_name(platform: str) -> str:
+    mapping = {
+        "deepseek": "DeepSeek",
+        "kimi": "Kimi",
+        "hunyuan": "腾讯混元",
+        "yuanbao": "元宝",
+        "doubao": "豆包",
+    }
+    return mapping.get(str(platform or "").lower(), str(platform or "").strip() or "未知平台")
+
+
+def _clip_text(text: Any, limit: int = 72) -> str:
+    value = " ".join(str(text or "").split())
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "…"
+
+
+def _build_platform_mention_table(metrics: dict[str, Any]) -> list[str]:
+    rows = [
+        "| 平台 | 提及次数 | 提及率 | 成功回答 |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    platform_breakdown = metrics.get("platform_breakdown", {}) or {}
+    for platform in PLATFORMS:
+        stats = platform_breakdown.get(platform, {}) if isinstance(platform_breakdown, dict) else {}
+        total = int(stats.get("total", 0) or 0)
+        mentions = int(stats.get("mentions", 0) or 0)
+        success = int(stats.get("success", 0) or 0)
+        mention_rate = _safe_ratio((mentions / total) if total > 0 else 0)
+        rows.append(
+            f"| {_display_platform_name(platform)} | {mentions} | {_format_rate(mention_rate)} | {success}/{total if total > 0 else '--'} |"
+        )
+    return rows
+
+
+def _build_source_distribution_table(source_overview: dict[str, Any]) -> list[str]:
+    rows = [
+        "| 来源域名 | 引用次数 | 占比 |",
+        "| --- | ---: | ---: |",
+    ]
+    top_domains = _sort_top_domains(source_overview)
+    for item in top_domains[:6]:
+        share = _safe_ratio(item.get("share", 0))
+        rows.append(
+            f"| {item.get('domain')} | {int(item.get('count', 0) or 0)} | {_format_rate(share)} |"
+        )
+    return rows
+
+
+def _build_topic_evidence_table(scenario_matrix: list[dict[str, Any]]) -> list[str]:
+    rows = [
+        "| 主题 | 当前状态 | 出现平台 | 证据 |",
+        "| --- | --- | --- | --- |",
+    ]
+    status_map = {
+        "advantage": "主胜",
+        "defend": "占位",
+        "contested": "争夺",
+        "missing": "缺席",
+    }
+    for item in scenario_matrix[:6]:
+        label = _clip_text(item.get("scenario_label", ""), 24)
+        status = status_map.get(str(item.get("battle_status", "")), "待判定")
+        platforms = "、".join(item.get("present_platforms", []) or []) or "未进入"
+        evidence = _clip_text(item.get("evidence", ""), 34)
+        rows.append(f"| {label} | {status} | {platforms} | {evidence} |")
+    return rows
+
+
 def _contains_reasoning_leak(markdown: str) -> bool:
     lowered = str(markdown or "").lower()
     leak_signals = [
@@ -156,6 +575,8 @@ def build_report_markdown(
     *,
     brand_profile: dict[str, Any],
     metrics: dict[str, Any],
+    fetch_results: list[dict[str, Any]],
+    competitors: list[dict[str, Any]],
     summary_metrics: dict[str, Any],
     scenario_matrix: list[dict[str, Any]],
     source_overview: dict[str, Any],
@@ -164,161 +585,243 @@ def build_report_markdown(
     executive_summary: str,
     key_findings: list[str],
 ) -> str:
-    brand_name = str(brand_profile.get("brand_name", "") or "品牌").strip() or "品牌"
-    brand_mention_rate = _safe_ratio(summary_metrics.get("brand_mention_rate", metrics.get("mention_rate", 0)))
-    total_questions = int(metrics.get("total_questions", 0) or 0)
-    mention_total = int(metrics.get("total_mentions", 0) or 0)
-    scenario_total = int(summary_metrics.get("scenario_total", len(scenario_matrix)) or len(scenario_matrix))
-    scenario_hit_count = int(summary_metrics.get("scenario_hit_count", 0) or 0)
-    content_citation_rate = _safe_ratio(summary_metrics.get("content_citation_rate", 0))
-    official_citation_rate = _safe_ratio(source_overview.get("official_citation_rate", 0))
-    official_citations = int(source_overview.get("official_citations", 0) or 0)
-    total_citations = int(source_overview.get("total_citations", 0) or 0)
-    brand_domain = str(source_overview.get("brand_domain", "") or "").strip()
+    facts = _build_aeo_report_facts(
+        fetch_results=fetch_results,
+        brand_profile=brand_profile,
+        competitors=competitors,
+        summary_metrics=summary_metrics,
+        scenario_matrix=scenario_matrix,
+        source_overview=source_overview,
+        mention_sentiment_analysis=mention_sentiment_analysis,
+        metrics=metrics,
+    )
 
-    brand_payload = mention_sentiment_analysis.get("brand", {}) if isinstance(mention_sentiment_analysis, dict) else {}
-    sentiment_summary = brand_payload.get("summary", {}) if isinstance(brand_payload, dict) else {}
-    positive_count = int(sentiment_summary.get("positive", 0) or 0)
-    neutral_count = int(sentiment_summary.get("neutral", 0) or 0)
-    negative_count = int(sentiment_summary.get("negative", 0) or 0)
+    brand_name = str(facts.get("brand_name", "") or "本品牌").strip() or "本品牌"
+    competitor_a_name = str(facts.get("competitor_a_name", "") or "竞品A").strip() or "竞品A"
+    competitor_b_name = str(facts.get("competitor_b_name", "") or "竞品B").strip() or "竞品B"
+    total_questions = int(facts.get("total_questions", 0) or 0)
+    metric_rows = [row for row in facts.get("metric_rows", []) if isinstance(row, dict)]
+    platform_rows = [row for row in facts.get("platform_rows", []) if isinstance(row, dict)]
+    missing_examples = [row for row in facts.get("missing_examples", []) if isinstance(row, dict)]
+    contested_examples = [row for row in facts.get("contested_examples", []) if isinstance(row, dict)]
+    source_rows = [row for row in facts.get("source_rows", []) if isinstance(row, dict)]
+    remaining_source_count = int(facts.get("remaining_source_count", 0) or 0)
+
+    brand_metric_lookup = {
+        str(item.get("metric_name", "")): item
+        for item in metric_rows
+        if item.get("metric_name")
+    }
+    mention_rate = str(
+        brand_metric_lookup.get("提及率", {}).get("brand_value", "暂无足够数据")
+    )
+    official_ratio = str(
+        brand_metric_lookup.get("官网引用占比", {}).get("brand_value", "暂无足够数据")
+    )
+    brand_content_ratio = str(
+        brand_metric_lookup.get("品牌内容引用占比", {}).get("brand_value", "暂无足够数据")
+    )
+    negative_ratio = str(
+        brand_metric_lookup.get("负向情感占比", {}).get("brand_value", "暂无足够数据")
+    )
 
     negative_items = _pick_negative_items(mention_sentiment_analysis)
     negative_labels = _build_negative_labels(negative_items)
-    competitor_threats = _build_competitor_threats(competitor_metrics, brand_mention_rate)
+    threat_competitors = _build_competitor_threats(
+        competitor_metrics,
+        _safe_ratio(summary_metrics.get("brand_mention_rate", metrics.get("mention_rate", 0))),
+    )
 
-    top_domains = _sort_top_domains(source_overview)
-    mention_domains = _pick_brand_mention_domains(mention_sentiment_analysis)
-    official_titles = [
-        title for title in source_overview.get("official_top_titles", []) or []
-        if isinstance(title, str) and title.strip()
-    ][:3]
-
-    covered_topics = [
-        item for item in scenario_matrix
-        if isinstance(item, dict) and item.get("brand_present")
-    ]
-    missing_topics = [
-        item for item in scenario_matrix
-        if isinstance(item, dict) and not item.get("brand_present")
-    ]
-    defend_topics = [
-        item for item in covered_topics
-        if str(item.get("battle_status", "")) in {"advantage", "defend"}
-    ]
-    marginalized_topics = [
-        item for item in scenario_matrix
-        if isinstance(item, dict) and str(item.get("battle_status", "")) in {"contested", "missing"}
-    ]
+    default_summary = (
+        f"本轮共监测 {total_questions or '若干'} 个核心问题。{brand_name} 当前提及率为 {mention_rate}，"
+        f"官网引用占比 {official_ratio}，品牌内容引用占比 {brand_content_ratio}。"
+        f"最大压力集中在品牌缺位场景与竞品同框场景，说明品牌虽然已经被部分平台识别，"
+        f"但尚未形成稳定、可复用的高置信信源与对比语料，业务上会直接影响高意图问题下的优先推荐。"
+    )
+    summary_text = " ".join(str(executive_summary or "").split()).strip() or default_summary
+    summary_text = _clip_text(summary_text, 200)
 
     lines: list[str] = [
-        "## 摘要信息",
-        executive_summary.strip() or (
-            f"{brand_name} 本轮共覆盖 {scenario_total} 个业务主题，"
-            f"品牌被提及 {mention_total} 次，提及率 {_format_rate(brand_mention_rate)}。"
-        ),
+        "## 一、核心执行摘要",
+        summary_text,
+        "",
     ]
 
     if key_findings:
-        lines.append("")
-        for finding in key_findings[:4]:
-            text = str(finding or "").strip()
+        lines.append("### 关键发现")
+        for finding in key_findings[:3]:
+            text = " ".join(str(finding or "").split()).strip()
             if text:
                 lines.append(f"- {text}")
+        lines.append("")
 
-    lines.extend([
-        "",
-        "## 一、提及率指标",
-        (
-            f"- 本次共分析 {total_questions} 个问题/场景，{brand_name} 在其中被提及 {mention_total} 次，"
-            f"品牌提及率为 {_format_rate(brand_mention_rate)}，覆盖 {scenario_hit_count}/{scenario_total} 个业务主题。"
-        ),
-        (
-            f"- 情感分布：正向 {positive_count} 次，中性 {neutral_count} 次，负向 {negative_count} 次。"
-            f"{' 当前未发现明确负向提及。' if negative_count == 0 else ''}"
-        ),
-    ])
-    if negative_labels:
-        lines.append(f"- 负向提及主要集中在：{'；'.join(negative_labels)}。")
-    if competitor_threats:
-        threat_parts = [
-            f"{item.get('name')}（提及率 {_format_rate(item.get('mention_rate', 0))}，{_summarize_competitor_sentiment(item.get('sentiment'))}）"
-            for item in competitor_threats
+    lines.extend(
+        [
+            "## 二、核心数据基准看板",
+            "| 指标名称 | 指标定义 | "
+            f"{brand_name} 数据 | {competitor_a_name} 数据 | {competitor_b_name} 数据 | 诊断结论 |",
+            "| --- | --- | ---: | ---: | ---: | --- |",
         ]
-        lines.append(f"- 当前威胁竞品：{'、'.join(threat_parts)}。")
+    )
+    for row in metric_rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(row.get("metric_name", "") or "--"),
+                    str(row.get("definition", "") or "--"),
+                    str(row.get("brand_value", "") or "--"),
+                    str(row.get("competitor_a_value", "") or "--"),
+                    str(row.get("competitor_b_value", "") or "--"),
+                    str(row.get("diagnosis", "") or "--"),
+                ]
+            )
+            + " |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "### 证据来源分布（Top 15）",
+            "| 网站名 | 域名 | 引用次数 | 占比 |",
+            "| --- | --- | ---: | ---: |",
+        ]
+    )
+    for row in source_rows[:15]:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(row.get("site_name", "") or "未知来源"),
+                    str(row.get("domain", "") or "--"),
+                    str(row.get("count", "") or "--"),
+                    str(row.get("share", "") or "--"),
+                ]
+            )
+            + " |"
+        )
+    if remaining_source_count > 0:
+        lines.append("")
+        lines.append(f"- 其余长尾来源合计 {remaining_source_count} 次引用。")
+
+    lines.extend(
+        [
+            "",
+            "## 三、跨大模型平台表现拆解",
+            "| 平台名称 | 平台抓取偏好 | 本品牌在该平台现状 | 存在问题与突破口 |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for row in platform_rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(row.get("platform", "") or "--"),
+                    str(row.get("preference", "") or "--"),
+                    str(row.get("status", "") or "--"),
+                    str(row.get("problem", "") or "--"),
+                ]
+            )
+            + " |"
+        )
+
+    lines.extend(["", "## 四、主题场景诊断：缺位与竞争图谱", "### 品牌缺位场景"])
+    if missing_examples:
+        for index, item in enumerate(missing_examples[:3], start=1):
+            examples = [
+                str(text).strip()
+                for text in (item.get("query_examples", []) or [])
+                if isinstance(text, str) and text.strip()
+            ]
+            question = examples[0] if examples else str(item.get("scenario_label", "") or "").strip() or f"缺位场景 {index}"
+            evidence = str(item.get("evidence", "") or "").strip()
+            action_hint = str(item.get("action_hint", "") or "").strip()
+            lines.extend(
+                [
+                    f"#### 典型问题 {index}",
+                    f"- 问题：{question}",
+                    f"- 数据依据：{evidence or 'AI 已回答该类问题，但品牌未进入最终答案。'}",
+                    (
+                        "- 业务影响：在这类场景里，用户已经带着明确需求来提问，"
+                        "品牌如果完全缺位，流量与心智会直接被竞品或替代方案截走。"
+                    ),
+                ]
+            )
+            if action_hint:
+                lines.append(f"- 需要补齐的语料方向：{action_hint}")
     else:
-        lines.append("- 当前未观察到提及率与本品牌接近的强威胁竞品。")
+        lines.append("- 本轮未发现完全缺位的典型场景，但仍建议扩大问题样本，继续排查长尾场景。")
 
-    lines.extend([
-        "",
-        "## 二、答案引用信息分布",
-        (
-            f"- 本轮共识别 {total_citations} 次答案引用，整体内容引用率 {_format_rate(content_citation_rate)}；"
-            f"官网引用 {official_citations} 次，官网引用率 {_format_rate(official_citation_rate)}。"
-        ),
-    ])
-    if top_domains:
-        top_domain_parts = [
-            f"{item.get('domain')}（{int(item.get('count', 0) or 0)} 次）"
-            for item in top_domains[:5]
-        ]
-        lines.append(f"- 总体来源分布：{'、'.join(top_domain_parts)}。")
-    if mention_domains:
-        mention_domain_parts = [f"{domain}（{count} 次）" for domain, count in mention_domains[:5]]
-        lines.append(f"- 在提及 {brand_name} 的回答中，高频来源为：{'、'.join(mention_domain_parts)}。")
+    lines.extend(["", "### 竞争胶着场景"])
+    if contested_examples:
+        for index, item in enumerate(contested_examples[:3], start=1):
+            examples = [
+                str(text).strip()
+                for text in (item.get("query_examples", []) or [])
+                if isinstance(text, str) and text.strip()
+            ]
+            question = examples[0] if examples else str(item.get("scenario_label", "") or "").strip() or f"竞争场景 {index}"
+            competitors_present = [
+                str(name).strip()
+                for name in (item.get("competitors_present", []) or [])
+                if isinstance(name, str) and name.strip()
+            ]
+            evidence = str(item.get("evidence", "") or "").strip()
+            action_hint = str(item.get("action_hint", "") or "").strip()
+            lines.extend(
+                [
+                    f"#### 典型问题 {index}",
+                    f"- 问题：{question}",
+                    f"- 同框竞品：{'、'.join(competitors_present) if competitors_present else '已观察到竞品同框，但当前样本未明确命名。'}",
+                    f"- 数据依据：{evidence or '品牌进入了答案，但未形成稳定主胜。'}",
+                    (
+                        "- 诊断：这类问题通常已经进入横向比较阶段，大模型会优先采用证据更完整、"
+                        "历史语料更丰富的一方。品牌若想改变排序，必须补齐对比型、场景型与权威背书型语料。"
+                    ),
+                ]
+            )
+            if action_hint:
+                lines.append(f"- 当前更缺的内容类型：{action_hint}")
     else:
-        lines.append(f"- 在提及 {brand_name} 的回答中，当前还没有稳定的高频引用来源。")
-    if brand_domain:
-        official_text = f"{brand_domain} 已进入引用链路" if official_citations > 0 else f"{brand_domain} 本轮没有进入引用链路"
-        if official_titles:
-            official_text += f"，当前出现的官网标题包括：{'；'.join(official_titles)}"
-        lines.append(f"- 官网出现情况：{official_text}。")
-    lines.extend(_build_platform_preference_lines(source_overview))
+        lines.append("- 本轮未观察到典型的竞品胶着场景，但仍建议保留对比类问题的持续监测。")
 
-    lines.extend([
-        "",
-        "## 三、业务主题覆盖",
-        f"- 本次共涉及 {scenario_total} 个业务主题，其中 {brand_name} 已进入 {scenario_hit_count} 个主题。",
-    ])
-    if defend_topics:
-        preferred = [
-            str(item.get("scenario_label", "")).strip()
-            for item in defend_topics[:5]
-            if str(item.get("scenario_label", "")).strip()
-        ]
-        if preferred:
-            lines.append(f"- 品牌被优先推荐的主题：{'、'.join(preferred)}。")
-    if marginalized_topics:
-        marginalized = [
-            str(item.get("scenario_label", "")).strip()
-            for item in marginalized_topics[:5]
-            if str(item.get("scenario_label", "")).strip()
-        ]
-        if marginalized:
-            lines.append(f"- 品牌被边缘化或竞争激烈的主题：{'、'.join(marginalized)}。")
-    if missing_topics:
-        missing = [
-            str(item.get("scenario_label", "")).strip()
-            for item in missing_topics[:5]
-            if str(item.get("scenario_label", "")).strip()
-        ]
-        if missing:
-            lines.append(f"- 品牌缺席的主题：{'、'.join(missing)}。")
+    negative_label_text = "；".join(negative_labels[:3]) if negative_labels else "当前没有明显负向标签"
+    threat_text = (
+        "、".join(
+            f"{item.get('name')}（提及率 {_format_rate(item.get('mention_rate', 0))}）"
+            for item in threat_competitors[:3]
+        )
+        if threat_competitors
+        else "当前未出现对本品牌形成稳定压制的头部竞品"
+    )
+    official_signal = (
+        f"{brand_name} 当前官网引用占比为 {official_ratio}，说明官方信源对 AI 答案的支撑仍有限。"
+    )
 
-    lines.extend([
-        "",
-        "## 四、进一步建议",
-    ])
-    if missing_topics:
-        top_missing = [
-            str(item.get("scenario_label", "")).strip()
-            for item in missing_topics[:3]
-            if str(item.get("scenario_label", "")).strip()
+    lines.extend(
+        [
+            "",
+            "## 五、AEO 常态化运营与优化策略",
+            "### 1. 基建优化（夯实第一信源）",
+            f"- {official_signal}",
+            "- 优先改造官网中最容易进入 AI 抓取链的页面：FAQ、参数页、对比页、产品详情页、品牌说明页。",
+            "- 页面结构上要强化可解析性：明确标题层级、参数表、问答块和品牌主体信息，降低 AI 解析成本。",
+            "",
+            "### 2. 语料防御与对冲（处理负向与胶着）",
+            f"- 当前负向线索：{negative_label_text}。",
+            f"- 当前高压竞品：{threat_text}。",
+            "- 要把品牌自己的权威说法、医生或专家背书、场景化证据和对比论点，持续铺到更高权重的内容阵地里，用更稳定的 EEAT 信号去对冲竞品和负向语料。",
+            "",
+            "### 3. 填补盲区漏洞（拓展增量流量）",
+            "- 针对缺位场景，定向产出首发内容，让品牌先进入答案，再争取主胜排序。",
+            "- 内容选题要直接对应问题表达，而不是泛泛做品牌宣传；重点补齐用户高意图问题和场景化推荐问题。",
+            "",
+            "### 4. 按月度 / 双周回测监测",
+            "- 持续回测四个核心指标：提及率、官网引用占比、品牌内容引用占比、负向情感占比。",
+            "- 同时追踪各平台表现、缺位场景与竞争胶着场景的变化，验证新增语料是否真的进入了答案与引用链。",
         ]
-        lines.append(f"- 主题补位：优先围绕 {'、'.join(top_missing)} 补齐官网内容、FAQ 与对比型页面，先进入回答。")
-    if negative_items:
-        lines.append("- 负向修复：针对负向提及中的具体质疑点补齐事实证据、参数解释与使用场景说明，避免 AI 回答继续放大负面标签。")
-    lines.append("- 平台优化：针对四大平台各自高频引用来源，优先布局更容易被其采纳的内容域名与页面类型。")
-    lines.append("- 深挖方向：继续追问负向提及来自哪些平台、哪些问题最容易丢失官网引用、哪些竞品在同题竞争中持续压制本品牌。")
+    )
 
     return "\n".join(line for line in lines if line is not None).strip()
 
@@ -328,19 +831,31 @@ def ensure_report_markdown(
     *,
     brand_profile: dict[str, Any],
     metrics: dict[str, Any],
+    fetch_results: list[dict[str, Any]],
+    competitors: list[dict[str, Any]],
     summary_metrics: dict[str, Any],
     scenario_matrix: list[dict[str, Any]],
     source_overview: dict[str, Any],
     mention_sentiment_analysis: dict[str, Any],
     competitor_metrics: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    report_data["aeo_report_facts"] = _build_aeo_report_facts(
+        fetch_results=fetch_results,
+        brand_profile=brand_profile,
+        competitors=competitors,
+        summary_metrics=summary_metrics,
+        scenario_matrix=scenario_matrix,
+        source_overview=source_overview,
+        mention_sentiment_analysis=mention_sentiment_analysis,
+        metrics=metrics,
+    )
     markdown = str(report_data.get("report_markdown", "") or "").strip()
     required_headers = [
-        "## 摘要信息",
-        "## 一、提及率指标",
-        "## 二、答案引用信息分布",
-        "## 三、业务主题覆盖",
-        "## 四、进一步建议",
+        "## 一、核心执行摘要",
+        "## 二、核心数据基准看板",
+        "## 三、跨大模型平台表现拆解",
+        "## 四、主题场景诊断：缺位与竞争图谱",
+        "## 五、AEO 常态化运营与优化策略",
     ]
     if (
         len(markdown) < 120
@@ -350,6 +865,8 @@ def ensure_report_markdown(
         report_data["report_markdown"] = build_report_markdown(
             brand_profile=brand_profile,
             metrics=metrics,
+            fetch_results=fetch_results,
+            competitors=competitors,
             summary_metrics=summary_metrics,
             scenario_matrix=scenario_matrix,
             source_overview=source_overview,
@@ -480,6 +997,8 @@ def enrich_report_data(
 def generate_fallback_report(
     metrics: dict[str, Any],
     brand_profile: dict[str, Any],
+    fetch_results: list[dict[str, Any]] | None = None,
+    competitors: list[dict[str, Any]] | None = None,
     summary_metrics: dict[str, Any] | None = None,
     scenario_matrix: list[dict[str, Any]] | None = None,
     source_overview: dict[str, Any] | None = None,
@@ -529,6 +1048,8 @@ def generate_fallback_report(
         report,
         brand_profile=brand_profile,
         metrics=metrics,
+        fetch_results=fetch_results or [],
+        competitors=competitors or [],
         summary_metrics=summary_metrics or {},
         scenario_matrix=scenario_matrix or [],
         source_overview=source_overview or {},

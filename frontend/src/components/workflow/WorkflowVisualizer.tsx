@@ -17,11 +17,11 @@ import { motion } from 'framer-motion';
 
 // Workflow step definitions
 const WORKFLOW_STEPS = [
-  { id: 'A1', label: '品牌信息采集', description: '分析品牌档案和竞品' },
-  { id: 'A2', label: '用户画像生成', description: '生成营销画像（可选）' },
-  { id: 'A3', label: '问题模拟生成', description: '模拟用户提问' },
-  { id: 'A4', label: 'AI答案抓取', description: '从平台抓取答案' },
-  { id: 'A5', label: '数据分析报告', description: '生成分析报告' },
+  { id: 'A1', label: '品牌档案分析', description: '梳理品牌定位和竞品关系' },
+  { id: 'A2', label: '用户画像分析', description: '生成可选的营销画像' },
+  { id: 'A3', label: '问题生成', description: '模拟用户会提出的问题' },
+  { id: 'A4', label: '答案抓取', description: '从平台抓取真实回答' },
+  { id: 'A5', label: '报告生成', description: '输出可追问的分析结果' },
 ];
 
 interface WorkflowVisualizerProps {
@@ -34,7 +34,7 @@ interface WorkflowVisualizerProps {
 type WorkflowNodeStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error' | 'waiting';
 
 interface WorkflowNodeData {
-  stepId: string;
+  stepIndex: string;
   label: string;
   description: string;
   status: WorkflowNodeStatus;
@@ -64,7 +64,7 @@ const WorkflowNode = ({ data, selected }: { data: WorkflowNodeData; selected?: b
       `}
     >
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-xs font-mono opacity-60">{data.stepId}</span>
+        <span className="text-xs opacity-60">{data.stepIndex}</span>
         {status === 'running' && (
           <motion.div
             animate={{ rotate: 360 }}
@@ -109,7 +109,7 @@ export function WorkflowVisualizer({
         type: 'workflowNode',
         position: { x: index * 220, y: 100 },
         data: {
-          stepId: step.id,
+          stepIndex: `步骤 ${index + 1}`,
           label: step.label,
           description: step.description,
           status,

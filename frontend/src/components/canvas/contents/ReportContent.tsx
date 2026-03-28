@@ -92,12 +92,12 @@ function MarkdownDocument({ markdown }: { markdown: string }) {
           remarkPlugins={[remarkGfm]}
           components={{
             h2: ({ children }) => (
-              <h2 className="mt-8 border-t border-[var(--border-subtle)] pt-6 text-[22px] font-semibold tracking-[-0.03em] text-[var(--text-primary)] first:mt-0 first:border-t-0 first:pt-0">
+              <h2 className="mt-10 border-t border-[var(--border-subtle)] pt-6 text-[22px] font-semibold tracking-[-0.03em] text-[var(--text-primary)] first:mt-0 first:border-t-0 first:pt-0">
                 {children}
               </h2>
             ),
             h3: ({ children }) => (
-              <h3 className="mt-5 text-[17px] font-semibold text-[var(--text-primary)]">{children}</h3>
+              <h3 className="mt-6 text-[17px] font-semibold text-[var(--text-primary)]">{children}</h3>
             ),
             p: ({ children }) => (
               <p className="mt-3 text-[15px] leading-8 text-[var(--text-primary)] first:mt-0">{children}</p>
@@ -120,6 +120,11 @@ function MarkdownDocument({ markdown }: { markdown: string }) {
               <td className="border-t border-[var(--border-subtle)] px-4 py-3 align-top text-[var(--text-primary)]">
                 {children}
               </td>
+            ),
+            blockquote: ({ children }) => (
+              <blockquote className="mt-4 rounded-[16px] border-l-4 border-[var(--text-accent)] bg-[var(--bg-secondary)] px-4 py-3 text-[14px] leading-7 text-[var(--text-secondary)]">
+                {children}
+              </blockquote>
             ),
             strong: ({ children }) => <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>,
             a: ({ href, children }) => (
@@ -173,6 +178,7 @@ export function ReportContent({ content, printMode = false }: ReportContentProps
 
   const view = buildReportViewModel(content);
   const reportMarkdown = buildCustomerReportMarkdown(content);
+  const hasReportMarkdown = Boolean(reportMarkdown);
   const executiveSummaryLines = splitExecutiveSummary(content.data.executive_summary || content.data.content);
 
   return (
@@ -194,13 +200,13 @@ export function ReportContent({ content, printMode = false }: ReportContentProps
             ) : null}
           </div>
         </div>
-        {executiveSummaryLines.length > 0 ? (
+        {!hasReportMarkdown && executiveSummaryLines.length > 0 ? (
           <div className="mt-5 space-y-2 text-[15px] leading-8 text-[var(--text-primary)]">
             {executiveSummaryLines.map((line) => (
               <p key={line}>{line}</p>
             ))}
           </div>
-        ) : view.summary.summary ? (
+        ) : !hasReportMarkdown && view.summary.summary ? (
           <p className="mt-5 text-[15px] leading-8 text-[var(--text-primary)]">{view.summary.summary}</p>
         ) : null}
         {view.degradationNote ? (
@@ -210,9 +216,9 @@ export function ReportContent({ content, printMode = false }: ReportContentProps
 
       <SummaryMetricStrip summary={view.summary} />
 
-      {reportMarkdown ? <MarkdownDocument markdown={reportMarkdown} /> : <LegacyFallback content={content} />}
+      {hasReportMarkdown ? <MarkdownDocument markdown={reportMarkdown} /> : <LegacyFallback content={content} />}
 
-      {!reportMarkdown && (view.summary.highlights ?? []).length > 0 ? (
+      {!hasReportMarkdown && (view.summary.highlights ?? []).length > 0 ? (
         <section
           className="rounded-[18px] border bg-[var(--bg-tertiary)] px-5 py-5"
           style={{ borderColor: 'var(--border-subtle)' }}
@@ -226,7 +232,7 @@ export function ReportContent({ content, printMode = false }: ReportContentProps
         </section>
       ) : null}
 
-      {!reportMarkdown && (
+      {!hasReportMarkdown && (
         <section className="px-1 text-[13px] leading-7 text-[var(--text-secondary)]">
           {joinText(
             [

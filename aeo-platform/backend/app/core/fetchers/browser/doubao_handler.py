@@ -101,49 +101,53 @@ class DoubaoHandler(BaseBrowserHandler):
             if self.client.page:
                 logger.info("[Doubao] Page URL: %s", self.client.page.url)
 
-            detected_modal = await self._detect_blocking_modal()
-            if detected_modal:
-                logger.info("[Doubao] Blocking modal detected before login check: %s", detected_modal)
-                waiting_message = "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作"
-                action_hint = "请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”"
-                request_id = await self._prepare_user_action_request(
-                    action_type="modal",
-                    message=waiting_message,
-                    action_hint=action_hint,
-                    progress=0.25,
-                    url=self.URL,
-                )
-                if not request_id:
-                    yield self._create_event(
-                        BrowserState.ERROR,
-                        "打开豆包浏览器窗口失败，请重试",
-                        progress=0,
+            chat_ready = await self._wait_for_doubao_chat_ready(timeout=6)
+            if chat_ready:
+                logger.info("[Doubao] Chat page already ready after open, skipping manual prompts")
+            else:
+                detected_modal = await self._detect_blocking_modal()
+                if detected_modal:
+                    logger.info("[Doubao] Blocking modal detected before login check: %s", detected_modal)
+                    waiting_message = "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作"
+                    action_hint = "请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”"
+                    request_id = await self._prepare_user_action_request(
+                        action_type="modal",
+                        message=waiting_message,
+                        action_hint=action_hint,
+                        progress=0.25,
+                        url=self.URL,
                     )
-                    return
-                yield self._create_event(
-                    BrowserState.WAITING_FOR_MODAL,
-                    waiting_message,
-                    progress=0.25,
-                    requires_action=True,
-                    action_type="modal",
-                    action_hint=action_hint,
-                    request_id=request_id,
-                )
-                modal_cleared = await self._wait_for_user_action_completion(
-                    request_id=request_id,
-                    ready_check=self._wait_for_modal_clear,
-                    timeout=300,
-                    ready_timeout=120,
-                )
-                if not modal_cleared:
-                    yield self._create_event(BrowserState.ERROR, "弹窗处理超时，请重试", progress=0)
-                    return
-                logger.info("[Doubao] Modal cleared before login check, continuing")
+                    if not request_id:
+                        yield self._create_event(
+                            BrowserState.ERROR,
+                            "打开豆包浏览器窗口失败，请重试",
+                            progress=0,
+                        )
+                        return
+                    yield self._create_event(
+                        BrowserState.WAITING_FOR_MODAL,
+                        waiting_message,
+                        progress=0.25,
+                        requires_action=True,
+                        action_type="modal",
+                        action_hint=action_hint,
+                        request_id=request_id,
+                    )
+                    modal_cleared = await self._wait_for_user_action_completion(
+                        request_id=request_id,
+                        ready_check=self._wait_for_modal_clear,
+                        timeout=300,
+                        ready_timeout=120,
+                    )
+                    if not modal_cleared:
+                        yield self._create_event(BrowserState.ERROR, "弹窗处理超时，请重试", progress=0)
+                        return
+                    logger.info("[Doubao] Modal cleared before login check, continuing")
 
             # Step 3: Check login status
             yield self._create_event(BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3)
 
-            login_needed = True
+            login_needed = not chat_ready
             if self.client.page is not None:
                 try:
                     # Multi-signal login check: textarea alone is NOT enough
@@ -196,7 +200,9 @@ class DoubaoHandler(BaseBrowserHandler):
                     return
                 logger.info("[Doubao] Login completed, continuing on current chat page")
 
-                detected_modal = await self._detect_blocking_modal()
+                detected_modal = ""
+                if not await self._wait_for_doubao_chat_ready(timeout=6):
+                    detected_modal = await self._detect_blocking_modal()
                 if detected_modal:
                     logger.info("[Doubao] Blocking modal detected after login: %s", detected_modal)
                     waiting_message = "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作"

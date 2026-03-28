@@ -2527,7 +2527,10 @@ async def orchestrator_node(state: AgentState) -> Command:
 
     confirmed_import_action = dict(state.get("confirmed_import_action") or {})
     confirmed_table_kind = str(confirmed_import_action.get("table_kind") or "")
-    if confirmed_table_kind == "question_list":
+    import_confirmed = bool(
+        (state.get("user_decisions") or {}).get("table_import_confirmed")
+    )
+    if confirmed_table_kind == "question_list" and import_confirmed:
         uploaded_ready = (state.get("simulated_questions") or {}).get(
             "generation_mode"
         ) == "uploaded_list"
@@ -3160,7 +3163,7 @@ async def _handle_tool_call(
             and state.get("user_decisions", {}).get("table_import_confirmed")
             and state.get("user_decisions", {}).get("confirmed_table_kind")
             == "question_list"
-            and requested_question_mode != "uploaded_list"
+            and not requested_question_mode
         ):
             logger.info(
                 "[Orchestrator] Overriding question_simulation mode to uploaded_list after confirmed table import"

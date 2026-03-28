@@ -6,7 +6,7 @@ import {
   RiCompassLine,
   RiLightbulbLine,
 } from '@remixicon/react';
-import type { PipelineData, PipelineNode as PipelineNodeType, PipelineEdge } from '@/types/touchpoint';
+import type { PipelineData } from '@/types/touchpoint';
 import { useContextStore } from '@/stores/contextStore';
 
 interface PersonaPipelineProps {
@@ -57,7 +57,23 @@ export function PersonaPipeline({
   const svgRef = useRef<SVGSVGElement>(null);
   const nodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
   const addContextTag = useContextStore((s) => s.addContextTag);
+
+  const columnCount = data.columns.length;
+  const horizontalPadding = containerWidth >= 1500 ? 32 : 24;
+  const columnGap = containerWidth >= 1500 ? 40 : 32;
+  const availableWidth = Math.max(
+    0,
+    containerWidth - horizontalPadding * 2 - Math.max(0, columnCount - 1) * columnGap
+  );
+  const responsiveColumnWidth = columnCount > 0
+    ? Math.max(220, Math.min(420, Math.floor(availableWidth / columnCount)))
+    : 220;
+  const contentWidth = Math.max(
+    containerWidth,
+    horizontalPadding * 2 + columnCount * responsiveColumnWidth + Math.max(0, columnCount - 1) * columnGap
+  );
 
   // Only highlight downstream pipeline nodes. The graph is left-to-right,
   // so treating edges as undirected would light up the entire connected graph.
@@ -159,9 +175,11 @@ export function PersonaPipeline({
     if (!canvas) return;
 
     const observer = new ResizeObserver(() => {
+      setContainerWidth(canvas.clientWidth);
       requestAnimationFrame(drawPipes);
     });
     observer.observe(canvas);
+    setContainerWidth(canvas.clientWidth);
 
     return () => observer.disconnect();
   }, [drawPipes]);
@@ -196,7 +214,7 @@ export function PersonaPipeline({
   return (
     <div
       ref={canvasRef}
-      className="relative flex gap-8 p-6 overflow-auto"
+      className="relative overflow-auto"
       style={{ minHeight: '400px' }}
     >
       {/* SVG layer for pipes */}
@@ -206,127 +224,142 @@ export function PersonaPipeline({
         style={{ zIndex: 0 }}
       />
 
-      {data.columns.map((col) => {
-        const colors = COLUMN_COLORS[col.color] || COLUMN_COLORS.blue;
-        const Icon = COLUMN_ICONS[col.key] || RiLightbulbLine;
-        const isFirstCol = col.key === 'profile';
+      <div
+        className="relative flex"
+        style={{
+          gap: `${columnGap}px`,
+          padding: `${horizontalPadding}px`,
+          width: `${contentWidth}px`,
+          minWidth: '100%',
+          zIndex: 1,
+        }}
+      >
+        {data.columns.map((col) => {
+          const colors = COLUMN_COLORS[col.color] || COLUMN_COLORS.blue;
+          const Icon = COLUMN_ICONS[col.key] || RiLightbulbLine;
+          const isFirstCol = col.key === 'profile';
 
-        return (
-          <div key={col.key} className="flex flex-col gap-4 flex-shrink-0" style={{ width: '220px', zIndex: 1 }}>
-            {/* Column header */}
+          return (
             <div
-              className="flex items-center gap-2 pb-2 mb-1"
-              style={{ borderBottom: `2px solid ${colors.accent}` }}
+              key={col.key}
+              className="flex flex-col gap-4 flex-shrink-0"
+              style={{ width: `${responsiveColumnWidth}px`, minWidth: `${responsiveColumnWidth}px` }}
             >
-              <Icon className="w-4 h-4" style={{ color: colors.accent }} />
-              <span className="text-xs font-semibold" style={{ color: colors.accent }}>
-                {col.label}
-              </span>
-              <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>
-                {col.nodes.length}
-              </span>
-            </div>
-
-            {/* Nodes */}
-            {col.nodes.map((node) => {
-              const isDimmed = highlightedIds.size > 0 && !highlightedIds.has(node.id);
-              const isActive = selectedNodeId === node.id;
-              const isChecked = checkedIds?.has(node.id);
-
-              return (
-                <div
-                  key={node.id}
-                  ref={(el) => setNodeRef(node.id, el)}
-                  className="rounded-xl cursor-pointer transition-all duration-200"
-                  style={{
-                    padding: '14px',
-                    background: 'var(--bg-primary)',
-                    border: isActive
-                      ? `2px solid ${colors.accent}`
-                      : `1px solid var(--border-subtle)`,
-                    boxShadow: isActive
-                      ? `0 0 0 3px ${colors.border}`
-                      : '0 2px 6px rgba(0,0,0,0.06)',
-                    opacity: isDimmed ? 0.35 : 1,
-                    transform: hoveredNodeId === node.id ? 'translateY(-2px)' : undefined,
-                  }}
-                  onClick={() => {
-                    onNodeClick?.(node.id, col.key);
-                    if (!selectionMode) {
-                      addContextTag({
-                        id: node.id,
-                        type: col.key as 'profile' | 'scenario' | 'intent',
-                        label: node.label,
-                      });
-                    }
-                  }}
-                  onMouseEnter={() => setHoveredNodeId(node.id)}
-                  onMouseLeave={() => setHoveredNodeId(null)}
-                >
-                  {/* Card header */}
-                  <div className="flex items-center gap-3">
-                    {selectionMode && isFirstCol && (
-                      <input
-                        type="checkbox"
-                        checked={isChecked ?? false}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          onCheckChange?.(node.id, e.target.checked);
-                        }}
-                        className="w-4 h-4 rounded flex-shrink-0"
-                        style={{ accentColor: colors.accent }}
-                      />
-                    )}
-                    <div
-                      className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                      style={{ backgroundColor: colors.bg }}
-                    >
-                      <span className="text-sm font-bold" style={{ color: colors.accent }}>
-                        {node.label.charAt(0)}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                        {node.label}
-                      </h4>
-                      {node.subtitle && (
-                        <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                          {node.subtitle}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Tags */}
-                  {renderTags(node.tags)}
-
-                  {/* Priority tag — separate row at bottom */}
-                  {node.priority && (
-                    <div className="mt-2 flex">
-                      <span
-                        className="text-[10px] px-2 py-0.5 rounded-full"
-                        style={{
-                          backgroundColor: colors.bg,
-                          color: colors.text,
-                          border: `1px solid ${colors.border}`,
-                        }}
-                      >
-                        {node.priority}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {col.nodes.length === 0 && (
-              <div className="flex items-center justify-center py-8 rounded-xl" style={{ border: '1px dashed var(--border-subtle)' }}>
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无数据</span>
+              {/* Column header */}
+              <div
+                className="flex items-center gap-2 pb-2 mb-1"
+                style={{ borderBottom: `2px solid ${colors.accent}` }}
+              >
+                <Icon className="w-4 h-4" style={{ color: colors.accent }} />
+                <span className="text-xs font-semibold" style={{ color: colors.accent }}>
+                  {col.label}
+                </span>
+                <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>
+                  {col.nodes.length}
+                </span>
               </div>
-            )}
-          </div>
-        );
-      })}
+
+              {/* Nodes */}
+              {col.nodes.map((node) => {
+                const isDimmed = highlightedIds.size > 0 && !highlightedIds.has(node.id);
+                const isActive = selectedNodeId === node.id;
+                const isChecked = checkedIds?.has(node.id);
+
+                return (
+                  <div
+                    key={node.id}
+                    ref={(el) => setNodeRef(node.id, el)}
+                    className="rounded-xl cursor-pointer transition-all duration-200"
+                    style={{
+                      padding: '14px',
+                      background: 'var(--bg-primary)',
+                      border: isActive
+                        ? `2px solid ${colors.accent}`
+                        : `1px solid var(--border-subtle)`,
+                      boxShadow: isActive
+                        ? `0 0 0 3px ${colors.border}`
+                        : '0 2px 6px rgba(0,0,0,0.06)',
+                      opacity: isDimmed ? 0.35 : 1,
+                      transform: hoveredNodeId === node.id ? 'translateY(-2px)' : undefined,
+                    }}
+                    onClick={() => {
+                      onNodeClick?.(node.id, col.key);
+                      if (!selectionMode) {
+                        addContextTag({
+                          id: node.id,
+                          type: col.key as 'profile' | 'scenario' | 'intent',
+                          label: node.label,
+                        });
+                      }
+                    }}
+                    onMouseEnter={() => setHoveredNodeId(node.id)}
+                    onMouseLeave={() => setHoveredNodeId(null)}
+                  >
+                    {/* Card header */}
+                    <div className="flex items-center gap-3">
+                      {selectionMode && isFirstCol && (
+                        <input
+                          type="checkbox"
+                          checked={isChecked ?? false}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            onCheckChange?.(node.id, e.target.checked);
+                          }}
+                          className="w-4 h-4 rounded flex-shrink-0"
+                          style={{ accentColor: colors.accent }}
+                        />
+                      )}
+                      <div
+                        className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                        style={{ backgroundColor: colors.bg }}
+                      >
+                        <span className="text-sm font-bold" style={{ color: colors.accent }}>
+                          {node.label.charAt(0)}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                          {node.label}
+                        </h4>
+                        {node.subtitle && (
+                          <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                            {node.subtitle}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Tags */}
+                    {renderTags(node.tags)}
+
+                    {/* Priority tag — separate row at bottom */}
+                    {node.priority && (
+                      <div className="mt-2 flex">
+                        <span
+                          className="text-[10px] px-2 py-0.5 rounded-full"
+                          style={{
+                            backgroundColor: colors.bg,
+                            color: colors.text,
+                            border: `1px solid ${colors.border}`,
+                          }}
+                        >
+                          {node.priority}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {col.nodes.length === 0 && (
+                <div className="flex items-center justify-center py-8 rounded-xl" style={{ border: '1px dashed var(--border-subtle)' }}>
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>暂无数据</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
