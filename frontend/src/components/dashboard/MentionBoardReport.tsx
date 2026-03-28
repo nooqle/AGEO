@@ -1,4 +1,4 @@
-import { getPlatformDisplayName } from '@/lib/platformLabel';
+import { getPlatformDisplayName } from '@/config/platformLabel';
 import { getSourceLabel } from '@/lib/sourceLabel';
 import type {
   DashboardMentionBoard,

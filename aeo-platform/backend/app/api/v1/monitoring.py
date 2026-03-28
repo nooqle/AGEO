@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
+from app.core.constants import PlatformConstants
 from app.models.monitoring_schedule import ScheduleFrequency, ScheduleStatus
 from app.services.entity_service import EntityService
 from app.services.monitoring_service import MonitoringService
@@ -86,6 +87,20 @@ def schedule_to_dict(schedule) -> dict[str, Any]:
             "source_task_id": baseline.get("source_task_id"),
         }
 
+    normalized_platforms: list[str] = []
+    for raw_platform in schedule.platforms or []:
+        platform = str(raw_platform).strip().lower()
+        if platform in PlatformConstants.SUPPORTED_PLATFORMS:
+            if platform not in normalized_platforms:
+                normalized_platforms.append(platform)
+            continue
+        if platform:
+            logger.warning(
+                "[MonitoringAPI] Dropping unsupported schedule platform '%s' from response for schedule %s",
+                raw_platform,
+                schedule.id,
+            )
+
     return {
         "id": str(schedule.id),
         "user_id": str(schedule.user_id),
@@ -95,7 +110,7 @@ def schedule_to_dict(schedule) -> dict[str, Any]:
         "status": schedule.status.value if schedule.status else "active",
         "preferred_hour": schedule.preferred_hour,
         "timezone": schedule.timezone,
-        "platforms": schedule.platforms,
+        "platforms": normalized_platforms or None,
         "alert_on_significant_change": schedule.alert_on_significant_change,
         "alert_threshold_bwvs": schedule.alert_threshold_bwvs,
         "has_baseline": has_baseline,

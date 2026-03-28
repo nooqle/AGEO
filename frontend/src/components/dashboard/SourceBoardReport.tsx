@@ -1,6 +1,6 @@
 import { RiExternalLinkLine } from '@remixicon/react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { getPlatformDisplayName } from '@/lib/platformLabel';
+import { getPlatformDisplayName } from '@/config/platformLabel';
 import { getSourceLabel } from '@/lib/sourceLabel';
 import { PIE_COLORS } from '@/styles/chart-theme';
 import type {

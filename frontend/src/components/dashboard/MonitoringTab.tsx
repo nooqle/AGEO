@@ -12,6 +12,8 @@ import { MetricDeltaCard } from './MetricDeltaCard';
 import { RunHistoryTable } from './RunHistoryTable';
 import { AlertCard } from '../notifications/AlertCard';
 import { EmptyState } from '@/components/ui/empty-state';
+import { toast } from '@/components/ui/toast';
+import { api } from '@/services/api';
 import type { UpdateScheduleInput } from '@/types/monitoring';
 
 interface MonitoringTabProps {
@@ -100,9 +102,25 @@ export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTa
     }
   }, [scheduleId, clearBaseline]);
 
-  const handleStartChat = useCallback(() => {
-    router.push('/dashboard');
-  }, [router]);
+  const handleStartChat = useCallback(async () => {
+    if (!activeEntityId) {
+      router.push('/dashboard');
+      return;
+    }
+
+    try {
+      const session = await api.getOrCreateSessionByEntity(activeEntityId);
+      const query = new URLSearchParams({
+        entity_id: activeEntityId,
+      });
+      if (brandName) {
+        query.set('brand', brandName);
+      }
+      router.push(`/chat/${session.id}?${query.toString()}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '进入品牌对话失败');
+    }
+  }, [activeEntityId, brandName, router]);
 
   if (isScheduleLoading) {
     return (
@@ -126,7 +144,9 @@ export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTa
         description="通过对话设置品牌的自动监测计划，持续跟踪品牌提及率、官网引用率、关键风险和场景表现变化。"
         action={{
           label: '进入对话设置',
-          onClick: handleStartChat,
+          onClick: () => {
+            void handleStartChat();
+          },
         }}
       />
     );

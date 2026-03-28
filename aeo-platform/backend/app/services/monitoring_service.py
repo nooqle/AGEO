@@ -10,6 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import PlatformConstants
 from app.models.monitoring_schedule import (
     MonitoringSchedule,
     ScheduleFrequency,
@@ -27,6 +28,8 @@ class MonitoringService:
 
     MAX_SCHEDULES_PER_USER = 10
     MAX_SCHEDULES_GLOBAL = 100
+    DEFAULT_PLATFORMS = ["doubao", "hunyuan"]
+    SUPPORTED_PLATFORM_SET = frozenset(PlatformConstants.SUPPORTED_PLATFORMS)
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -81,6 +84,9 @@ class MonitoringService:
                 "Pause or delete the existing schedule first."
             )
 
+        normalized_platforms = self._normalize_platforms(
+            platforms, use_default_when_missing=True
+        )
         next_run = self.calculate_next_run(frequency, preferred_hour, timezone_str)
 
         schedule = MonitoringSchedule(
@@ -89,7 +95,7 @@ class MonitoringService:
             frequency=frequency,
             preferred_hour=preferred_hour,
             timezone=timezone_str,
-            platforms=platforms or ["doubao", "hunyuan"],
+            platforms=normalized_platforms,
             alert_on_significant_change=alert_on_significant_change,
             alert_threshold_bwvs=alert_threshold_bwvs,
             max_runs=max_runs,
@@ -232,6 +238,10 @@ class MonitoringService:
         recalculate_next = False
         for key, value in kwargs.items():
             if value is not None and hasattr(schedule, key):
+                if key == "platforms":
+                    value = self._normalize_platforms(
+                        value, use_default_when_missing=False
+                    )
                 setattr(schedule, key, value)
                 if key in ("frequency", "preferred_hour", "timezone"):
                     recalculate_next = True
@@ -508,6 +518,44 @@ class MonitoringService:
         stmt = select(func.count()).select_from(MonitoringSchedule).where(*conditions)
         result = await self.db.execute(stmt)
         return result.scalar() or 0
+
+    @classmethod
+    def _normalize_platforms(
+        cls,
+        platforms: list[str] | None,
+        *,
+        use_default_when_missing: bool,
+    ) -> list[str]:
+        if platforms is None:
+            return list(cls.DEFAULT_PLATFORMS) if use_default_when_missing else []
+
+        normalized: list[str] = []
+        invalid: list[str] = []
+
+        for raw_platform in platforms:
+            platform = str(raw_platform).strip().lower()
+            if not platform:
+                continue
+            if platform not in cls.SUPPORTED_PLATFORM_SET:
+                invalid.append(str(raw_platform))
+                continue
+            if platform not in normalized:
+                normalized.append(platform)
+
+        if invalid:
+            supported = ", ".join(PlatformConstants.SUPPORTED_PLATFORMS)
+            raise ValueError(
+                "Unsupported monitoring platforms: "
+                f"{', '.join(invalid)}. Must be one of: {supported}"
+            )
+
+        if normalized:
+            return normalized
+
+        if use_default_when_missing:
+            return list(cls.DEFAULT_PLATFORMS)
+
+        raise ValueError("At least one supported monitoring platform must be provided.")
 
     @staticmethod
     def calculate_next_run(
