@@ -267,6 +267,8 @@ class AgentState(TypedDict):
     table_intake_result: Annotated[dict | None, _merge_error_info]
     confirmed_import_action: Annotated[dict | None, _merge_error_info]
     import_source_metadata: Annotated[dict | None, _merge_error_info]
+    selected_tool_mode: Annotated[str | None, _last_value]
+    latest_user_input: Annotated[str | None, _last_value]
 
     # =========================================================================
     # Task Persistence (Cycle 3, Module 1)

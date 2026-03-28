@@ -1,6 +1,6 @@
-"""Confidence signal artifact builders.
+"""Confidence analysis artifact builders.
 
-This module turns A4 citation data into an independent A7 ``confidence_signal``
+This module turns citation data into an independent ``confidence_analysis``
 artifact. The current implementation does not fetch full page DOM yet, but it
 already applies a structured AICE 9C scoring model with:
 
@@ -8,7 +8,7 @@ already applies a structured AICE 9C scoring model with:
 - conservative hard-deduction handling for C6 / C9a / C9b
 - overall confidence derived from evidence sufficiency
 
-Output guardrails for A7 report:
+Output guardrails for the confidence report:
 
 - only describe facts that can be traced back to score dimensions, citation data,
   DOM/text evidence, or deterministic rules
@@ -983,6 +983,32 @@ def _build_text_manual_item(text: str, index: int) -> dict[str, Any]:
     return _score_text_item(base_item, text)
 
 
+async def _build_enriched_url_manual_items(
+    urls: list[str],
+    *,
+    start_index: int = 1,
+    item_origin: str = "manual_extra",
+) -> list[dict[str, Any]]:
+    base_items = [
+        {
+            "item_id": f"manual_url_{offset}",
+            "item_origin": item_origin,
+            "input_type": "url",
+            "label": _extract_domain(url) or url,
+            "url": url,
+            "domain": _extract_domain(url),
+            "site_name": _extract_domain(url),
+            "is_official": _extract_domain(url).endswith(OFFICIAL_TLDS),
+            "occurrences": 1,
+            "platforms": [],
+            "question_samples": [],
+            "title": _extract_domain(url) or url,
+        }
+        for offset, url in enumerate(urls, start=start_index)
+    ]
+    return await _enrich_url_items(base_items)
+
+
 def extract_citations(fetch_results: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     unique: dict[str, dict[str, Any]] = {}
     if not fetch_results:
@@ -1504,7 +1530,6 @@ def _compose_report_payload(
         aice_threshold=resolved_aice_threshold,
         frequency_threshold=frequency_threshold,
     )
-    all_items = enriched_auto_items + enriched_manual_items
     summary = summarize_signal_items(enriched_auto_items, enriched_manual_items)
 
     auto_brand_items = [
@@ -1542,8 +1567,8 @@ def _compose_report_payload(
     )
 
     return {
-        "report_kind": "confidence_signal",
-        "artifact_kind": "confidence_signal",
+        "report_kind": "confidence_analysis",
+        "artifact_kind": "confidence_analysis",
         "headline": "置信度报告",
         "subtitle": "",
         "description": "",
@@ -1587,7 +1612,7 @@ def _compose_report_payload(
     }
 
 
-def build_confidence_signal_report(
+def build_confidence_analysis_report(
     fetch_results: list[dict[str, Any]] | None,
     *,
     manual_items: list[dict[str, Any]] | None = None,
@@ -1606,7 +1631,7 @@ def build_confidence_signal_report(
     )
 
 
-async def build_confidence_signal_report_async(
+async def build_confidence_analysis_report_async(
     fetch_results: list[dict[str, Any]] | None,
     *,
     manual_items: list[dict[str, Any]] | None = None,
@@ -1647,7 +1672,47 @@ def parse_extra_input(raw_input: str) -> tuple[str, Any]:
     return "text", cleaned
 
 
-def append_manual_items(
+async def build_manual_items_from_raw_input_async(
+    raw_input: str,
+    *,
+    start_index: int = 1,
+    item_origin: str = "manual_extra",
+) -> list[dict[str, Any]]:
+    input_kind, payload = parse_extra_input(raw_input)
+    if input_kind == "error":
+        raise ValueError(str(payload))
+    if input_kind == "url_list":
+        return await _build_enriched_url_manual_items(
+            list(payload),
+            start_index=start_index,
+            item_origin=item_origin,
+        )
+    return [_build_text_manual_item(str(payload), start_index)]
+
+
+async def build_manual_items_from_link_rows_async(
+    link_rows: list[dict[str, Any]] | None,
+    *,
+    start_index: int = 1,
+    item_origin: str = "imported_link_list",
+) -> list[dict[str, Any]]:
+    normalized_urls: list[str] = []
+    for row in link_rows or []:
+        if not isinstance(row, dict):
+            continue
+        normalized = _normalize_url(str(row.get("url") or ""))
+        if normalized:
+            normalized_urls.append(normalized)
+    if not normalized_urls:
+        return []
+    return await _build_enriched_url_manual_items(
+        normalized_urls,
+        start_index=start_index,
+        item_origin=item_origin,
+    )
+
+
+def append_confidence_analysis_manual_items(
     existing_report: dict[str, Any],
     *,
     raw_input: str,
@@ -1690,40 +1755,17 @@ def append_manual_items(
     return updated
 
 
-async def append_manual_items_async(
+async def append_confidence_analysis_manual_items_async(
     existing_report: dict[str, Any],
     *,
     raw_input: str,
 ) -> dict[str, Any]:
-    input_kind, payload = parse_extra_input(raw_input)
-    if input_kind == "error":
-        raise ValueError(str(payload))
-
     current_manual_items = list(existing_report.get("manual_items", []) or [])
     next_index = len(current_manual_items) + 1
-    new_items: list[dict[str, Any]] = []
-
-    if input_kind == "url_list":
-        base_items = [
-            {
-                "item_id": f"manual_url_{offset}",
-                "item_origin": "manual_extra",
-                "input_type": "url",
-                "label": _extract_domain(url) or url,
-                "url": url,
-                "domain": _extract_domain(url),
-                "site_name": _extract_domain(url),
-                "is_official": _extract_domain(url).endswith(OFFICIAL_TLDS),
-                "occurrences": 1,
-                "platforms": [],
-                "question_samples": [],
-                "title": _extract_domain(url) or url,
-            }
-            for offset, url in enumerate(payload, start=next_index)
-        ]
-        new_items = await _enrich_url_items(base_items)
-    else:
-        new_items.append(_build_text_manual_item(str(payload), next_index))
+    new_items = await build_manual_items_from_raw_input_async(
+        raw_input,
+        start_index=next_index,
+    )
 
     merged_manual = current_manual_items + new_items
     auto_items = list(existing_report.get("auto_items", []) or [])
@@ -1749,18 +1791,20 @@ async def append_manual_items_async(
     return updated
 
 
-async def generate_confidence_signal_artifact(
+async def generate_confidence_analysis_artifact(
     session_id: str,
     fetch_results: list[dict[str, Any]] | None,
     *,
+    manual_items: list[dict[str, Any]] | None = None,
     brand_profile: dict[str, Any] | None = None,
     competitors: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Generate the independent A7 confidence signal artifact from A4 data."""
+    """Generate the independent confidence analysis artifact."""
     from app.workflow.events import save_and_send_artifact
 
-    report_data = await build_confidence_signal_report_async(
+    report_data = await build_confidence_analysis_report_async(
         fetch_results,
+        manual_items=manual_items,
         brand_profile=brand_profile,
         competitors=competitors,
     )
@@ -1769,5 +1813,5 @@ async def generate_confidence_signal_artifact(
         output_type="report",
         title="置信度报告",
         data=report_data,
-        artifact_key=f"{session_id}_report_confidence_signal_main",
+        artifact_key=f"{session_id}_report_confidence_analysis_main",
     )

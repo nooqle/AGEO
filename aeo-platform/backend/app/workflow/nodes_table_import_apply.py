@@ -216,7 +216,7 @@ async def _apply_link_list_import(
 
     import_source_metadata = dict(state.get("import_source_metadata") or {})
     import_source_metadata["imported_link_list_count"] = len(rows)
-    import_source_metadata["imported_links"] = rows[:20]
+    import_source_metadata["imported_links"] = rows
 
     user_decisions = dict(state.get("user_decisions", {}))
     user_decisions["table_import_confirmed"] = False

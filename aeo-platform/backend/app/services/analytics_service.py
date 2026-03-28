@@ -152,7 +152,10 @@ class AnalyticsService:
             or ""
         ).strip().lower()
 
-        if artifact_kind == "confidence_signal" or report_kind == "confidence_signal":
+        if artifact_kind in {"confidence_signal", "confidence_analysis"} or report_kind in {
+            "confidence_signal",
+            "confidence_analysis",
+        }:
             return False
         if output_type == "report_baseline":
             return True
@@ -675,9 +678,9 @@ class AnalyticsService:
     ) -> dict[str, Any]:
         metrics = self._extract_metrics(data) or {}
         platform_analysis = self._extract_platform_analysis(data)
-        strengths = self._extract_report_data(data).get("strengths", data.get("strengths", []))
         weaknesses = self._extract_report_data(data).get("weaknesses", data.get("weaknesses", []))
         risk_alerts = self._extract_report_data(data).get("risk_alerts", data.get("risk_alerts", []))
+        sentiment_summary = self._legacy_sentiment_summary(data)
         mention_value = float(mention_rate or metrics.get("mention_rate", 0) or 0)
         total_questions = float(metrics.get("total_questions", 0) or 0)
         total_mentions = float(metrics.get("total_mentions", 0) or 0)
@@ -988,7 +991,6 @@ class AnalyticsService:
         bwvs = metrics.get("bwvs_index", 0)
         mention_rate = metrics.get("mention_rate", 0)
         # SOV can be derived from platform breakdown or competitor comparison
-        platform_breakdown = metrics.get("platform_breakdown", {})
         sov = metrics.get("share_of_voice", mention_rate * 0.8 if mention_rate else 0)
 
         kpi: dict[str, Any] = {
@@ -1556,7 +1558,6 @@ class AnalyticsService:
         source_overview = payload.get("source_overview") or self._fallback_source_overview(current)
         scenario_matrix = [row for row in payload.get("scenario_matrix", []) if isinstance(row, dict)]
         competitor_battles = [row for row in payload.get("competitor_battles", []) if isinstance(row, dict)]
-        risk_map = [row for row in payload.get("risk_map", []) if isinstance(row, dict)]
         mention_payload = payload.get("mention_sentiment_analysis") or {}
         brand_payload = mention_payload.get("brand", {}) if isinstance(mention_payload, dict) else {}
         competitor_payloads = mention_payload.get("competitors", []) if isinstance(mention_payload, dict) else []

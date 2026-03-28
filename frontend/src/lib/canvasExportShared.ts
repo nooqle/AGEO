@@ -194,7 +194,7 @@ export function getDeliverableName(content: CanvasContent): SupportedDeliverable
     return null;
   }
 
-  if (content.data.report_kind === 'confidence_signal' || content.data.artifact_kind === 'confidence_signal') {
+  if (isConfidenceCanvasReport(content)) {
     return '置信度报告';
   }
 

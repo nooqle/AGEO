@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 
 SKILLIZED_TOOL_NAMES = {
     "data_analytics",
-    "citation_confidence_analysis",
     "drill_down_analysis",
     "compare_snapshots",
     "selective_refetch",
@@ -380,18 +379,6 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "description": "最多导出多少条记录（默认 200，最大 500）",
                 },
             },
-        },
-    },
-    {
-        "name": "citation_confidence_analysis",
-        "description": (
-            "基于当前会话里已经抓取到的引用来源，生成一份引用内容置信度评估。"
-            "不会重新抓取数据，只会评估当前 fetch_results 中已有的引用来源。"
-            "通常在 A5 报告生成后，用户明确表示希望检查引用可信度时调用。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
         },
     },
     # --- Monitoring tools (Cycle 4) ---
@@ -1248,6 +1235,14 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
         data_status.append(
             f"✓ 已导入链接清单 {(state.get('import_source_metadata') or {}).get('imported_link_list_count')} 条"
         )
+    if state.get("selected_tool_mode") == "confidence_analysis":
+        data_status.append("✓ 当前输入模式：置信度分析")
+    latest_user_input = str(state.get("latest_user_input") or "").strip()
+    if state.get("selected_tool_mode") == "confidence_analysis" and latest_user_input:
+        preview = latest_user_input.replace("\n", " ")
+        if len(preview) > 80:
+            preview = preview[:77] + "..."
+        data_status.append(f"✓ 当前待判定材料：{preview}")
     if state.get("fetch_results"):
         data_status.append(f"✓ 已抓取 {len(state['fetch_results'])} 条AI回答")
     if state.get("baseline_metrics"):
@@ -1309,6 +1304,16 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
 
 {entity_context}
 
+工具模式规则（高优先级）：
+- 当 selected_tool_mode=confidence_analysis 时，当前轮目标是完成一次引用置信度分析；不要回到通用的 A1/A2/A3 流程规划。
+- 你必须先结合 latest_user_input、fetch_results、table_intake_result、import_source_metadata 判断本轮材料来源，再决定是直接调用 confidence_analysis_skill，还是先 ask_user 确认。
+- source_mode 选择规则：
+  - 用户明确要求分析当前会话里已经抓取/报告里的引用来源，且 state 中有 fetch_results 或 baseline_fetch_results：调用 confidence_analysis_skill(source_mode="current_fetch_results")。
+  - 用户本轮直接提供了链接、多条链接或一段文本：调用 confidence_analysis_skill(source_mode="raw_input", raw_input=latest_user_input)。
+  - 已导入链接清单，且用户明确要评估这批链接：调用 confidence_analysis_skill(source_mode="imported_link_list")。
+- 如果表格刚识别为 link_list，但用户还没有确认用途：必须先解释识别结果，再 ask_user 确认；不要直接调用 confidence_analysis_skill。
+- 如果当前没有足够可评估材料：不要硬调用 skill，应该 ask_user 引导用户提供链接/文本，或者先完成答案抓取。
+
 附件导入规则（高优先级）：
 - 当 state 中存在 pending_table_intake 且还没有 table_intake_result 时，必须优先调用 table_intake_skill。
 - table_intake_skill 只负责理解附件，不负责直接推进流程。执行后必须先解释你的判断，再调用 ask_user 请求确认。
@@ -1319,7 +1324,7 @@ def build_orchestrator_system_prompt(state: AgentState) -> str:
 - 如果识别结果是 link_list：先 ask_user 确认是否作为链接清单继续分析，不可自动套用到其他流程。
 - 如果用户没有文本消息，只上传了表格：你也要基于 context + table_intake_skill 结果给出初步判断，并 ask_user 确认。
 - 如果 user_decisions.table_import_confirmed=true 且 confirmed_table_kind=question_list，而当前还没有新的 A3 结果，必须立即调用 question_simulation(mode="uploaded_list")。
-- 如果链接清单已经导入并生成交付物：先用自然语言告诉用户链接清单已整理完成、右侧画布已更新，再基于用户后续说明继续；当前不要自动调用 confidence_signal_skill，因为现有 A7 仍主要消费抓取后的 fetch_results。
+- 如果链接清单已经导入并生成交付物：先用自然语言告诉用户链接清单已整理完成、右侧画布已更新；若当前处于置信度分析模式，或用户明确表示要评估这批链接，则可以调用 confidence_analysis_skill(source_mode="imported_link_list")。
 
 A1 完成后的流程（最高优先级）：
 品牌分析（A1）完成后，你必须在消息中用自然语言向用户汇报结果并列出编号选项（如 1. 确认 2. 暂不），然后调用 ask_user 等待用户回复，不传 options 参数。
@@ -1346,7 +1351,7 @@ A1 完成后的流程（最高优先级）：
 
 场景细化流程：用户选择"场景细化"时：persona_generation → 用户选择画像 → question_simulation(mode="persona_focused") → answer_fetch → analysis_report_skill(report_type="persona")
 重跑基线流程：用户说"重跑基线"时：跳过A1，直接 question_simulation(mode="baseline_dynamic") → answer_fetch → analysis_report_skill(report_type="baseline")
-引用内容置信度评估流程：用户在报告后明确表示要检查引用可信度时：confidence_signal_skill
+引用内容置信度评估流程：用户在报告后明确表示要检查引用可信度，或当前 selected_tool_mode=confidence_analysis 时：confidence_analysis_skill
 后续分析流程：用户在已有结果基础上要求深入分析、历史对比、局部重抓时：post_analysis_skill
 直接提问流程：用户选择"直接提问"时，【禁止】再次调用 ask_user 给子选项。直接用自然语言回复，告诉用户可以在输入框中自由提问，并举几个他们可能感兴趣的方向作为启发（不是按钮选项）。例如：
 "没问题！您可以直接在输入框中提问，比如：某个具体平台上品牌表现如何？竞品在 AI 平台中的优势是什么？某类用户场景下的推荐逻辑是怎样的？——任何和品牌 AEO 相关的问题我都可以为您深入分析。"
@@ -1668,7 +1673,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             "如果是因为材料不足，请考虑先补齐 brand_analysis 或 answer_fetch。"
         )
 
-    if tool_name in {"citation_confidence_analysis", "confidence_signal_skill"}:
+    if tool_name == "confidence_analysis_skill":
         return (
             "引用内容置信度评估已完成。"
             "结果已经展示在画布中，您可以继续查看各引用来源的可信度、结构化质量和可核查性差异。"
@@ -1737,7 +1742,8 @@ def _get_tool_name_from_node(node_name: str) -> str | None:
     """Reverse lookup: node name → tool name."""
     preferred = {
         "a5_analytics": "analysis_report_skill",
-        "a7_confidence_signal": "confidence_signal_skill",
+        "confidence_analysis_executor": "confidence_analysis_skill",
+        "a7_confidence_signal": "confidence_analysis_skill",
         "post_analysis_executor": "post_analysis_skill",
     }
     if node_name in preferred:
@@ -1804,7 +1810,7 @@ def _build_ask_user_fallback_reply(
             "或者基于当前报告进入下一步画像分析、深入分析或直接提问。"
         )
 
-    if tool_name in {"citation_confidence_analysis", "confidence_signal_skill"}:
+    if tool_name == "confidence_analysis_skill":
         return (
             "引用内容置信度评估已完成。"
             "您现在可以继续基于这份评估追问具体来源问题，"
@@ -2186,8 +2192,7 @@ TOOL_TO_NODE: dict[str, str] = {
     "knowledge_aggregate": "knowledge_aggregate",
     "knowledge_compare": "knowledge_compare",
     "knowledge_export": "knowledge_export",
-    "confidence_signal_skill": "a7_confidence_signal",
-    "citation_confidence_analysis": "a7_confidence_signal",
+    "confidence_analysis_skill": "confidence_analysis_executor",
     "post_analysis_skill": "post_analysis_executor",
     "drill_down_analysis": "drill_down",
     "compare_snapshots": "compare_snapshots",
@@ -2208,8 +2213,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "knowledge_aggregate": "历史知识聚合",
     "knowledge_compare": "历史知识对比",
     "knowledge_export": "历史知识导出",
-    "confidence_signal_skill": "引用置信度评估 Skill",
-    "citation_confidence_analysis": "引用内容置信度评估",
+    "confidence_analysis_skill": "引用置信度评估",
     "post_analysis_skill": "后续分析 Skill",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
@@ -2280,8 +2284,7 @@ def _matches_failed_step(tool_name: str, failed_step: str) -> bool:
         "answer_fetch": "A4",
         "analysis_report_skill": "A5",
         "data_analytics": "A5",
-        "confidence_signal_skill": "A7",
-        "citation_confidence_analysis": "A7",
+        "confidence_analysis_skill": "A7",
     }
     expected_step = step_id_map.get(tool_name, "")
     return failed_step in {tool_name, expected_step}
@@ -3248,13 +3251,14 @@ async def _handle_tool_call(
             "answer_fetch": "A4",
             "analysis_report_skill": "A5",
             "data_analytics": "A5",
-            "confidence_signal_skill": "A7",
+            "confidence_analysis_skill": "A7",
         }
         workflow_steps = _build_workflow_steps(state)
         current_step_id = tool_to_step_id.get(effective_tool_name)
         if current_step_id is None and resolved_skill is not None:
             current_step_id = {
                 "a5_data_analytics": "A5",
+                "confidence_analysis_executor": "A7",
                 "a7_confidence_signal": "A7",
             }.get(resolved_skill.executor_ref)
         for s in workflow_steps:
@@ -3312,15 +3316,17 @@ async def _handle_tool_call(
                 "answer_fetch": _fetch_fallback,
                 "analysis_report_skill": "正在整理场景、风险与优先动作建议，请稍候…",
                 "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
-                "confidence_signal_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
-                "citation_confidence_analysis": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
+                "confidence_analysis_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
                 "post_analysis_skill": "正在基于已有结果执行后续分析，请稍候...",
             }
             fallback_text = FALLBACK_TEXTS.get(effective_tool_name)
             if fallback_text is None and resolved_skill is not None:
                 fallback_text = {
                     "a5_data_analytics": FALLBACK_TEXTS["analysis_report_skill"],
-                    "a7_confidence_signal": FALLBACK_TEXTS["confidence_signal_skill"],
+                    "confidence_analysis_executor": FALLBACK_TEXTS[
+                        "confidence_analysis_skill"
+                    ],
+                    "a7_confidence_signal": FALLBACK_TEXTS["confidence_analysis_skill"],
                     "post_analysis_executor": FALLBACK_TEXTS["post_analysis_skill"],
                 }.get(resolved_skill.executor_ref)
             fallback_text = fallback_text or f"正在执行：{display_name}，请稍候..."
