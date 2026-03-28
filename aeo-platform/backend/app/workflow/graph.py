@@ -14,7 +14,7 @@ from app.workflow.nodes import a1_brand_node, a2_persona_node
 from app.workflow.nodes_a3 import a3_question_node
 from app.workflow.nodes_a4 import a4_fetch_node
 from app.workflow.nodes_a5 import a5_analytics_node
-from app.workflow.nodes_a7 import a7_confidence_signal_node
+from app.workflow.nodes_confidence_analysis import confidence_analysis_executor_node
 from app.workflow.nodes_table_intake import table_intake_node
 from app.workflow.nodes_table_import_apply import table_import_apply_node
 from app.workflow.nodes_followup import (
@@ -63,7 +63,12 @@ def build_workflow() -> StateGraph:
     workflow.add_node("a3_question", a3_question_node)
     workflow.add_node("a4_fetch", a4_fetch_node)
     workflow.add_node("a5_analytics", a5_analytics_node)
-    workflow.add_node("a7_confidence_signal", a7_confidence_signal_node)
+    workflow.add_node(
+        "confidence_analysis_executor", confidence_analysis_executor_node
+    )
+    # Compatibility alias for historical checkpoints that still reference
+    # the legacy node name.
+    workflow.add_node("a7_confidence_signal", confidence_analysis_executor_node)
     workflow.add_node("table_intake", table_intake_node)
     workflow.add_node("table_import_apply", table_import_apply_node)
     workflow.add_node("wait_for_user", wait_for_user_node)
@@ -91,6 +96,7 @@ def build_workflow() -> StateGraph:
         "a3_question",
         "a4_fetch",
         "a5_analytics",
+        "confidence_analysis_executor",
         "a7_confidence_signal",
         "table_intake",
         "table_import_apply",

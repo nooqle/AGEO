@@ -20,6 +20,7 @@ import { isSupersededA5FailureText } from '@/adapters/chatMessage';
 import { api } from '@/services/api';
 import type { AnalysisTask } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
+import type { ToolMode } from '@/types/toolMode';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
 const RUNTIME_STREAM_EVENTS = new Set([
@@ -57,6 +58,7 @@ interface QueuedUserMessage {
   content: string;
   context?: Array<{ id: string; type: string; label: string }>;
   attachments?: AttachmentRefPayload[];
+  tool_mode?: ToolMode;
 }
 
 export function useWebSocket(sessionId: string | null) {
@@ -1116,6 +1118,7 @@ export function useWebSocket(sessionId: string | null) {
     content: string,
     context?: Array<{ id: string; type: string; label: string }>,
     attachments?: Attachment[],
+    toolMode?: ToolMode | null,
   ) => {
     const clientMessageId = generateClientMessageId();
     const payload: QueuedUserMessage = {
@@ -1132,6 +1135,9 @@ export function useWebSocket(sessionId: string | null) {
         mime_type: attachment.type,
         size: attachment.size,
       }));
+    }
+    if (toolMode) {
+      payload.tool_mode = toolMode;
     }
 
     if (wsRef.current?.readyState !== WebSocket.OPEN) {

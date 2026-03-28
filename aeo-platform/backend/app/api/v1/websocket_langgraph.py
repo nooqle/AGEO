@@ -23,8 +23,8 @@ from app.services.entity_service import EntityService
 from app.services.session_event_publisher import session_event_publisher
 from app.models.session import Session
 from app.models.message import Message, MessageType
-from app.workflow.a7.confidence_signal import (
-    append_manual_items_async,
+from app.workflow.confidence_analysis import (
+    append_confidence_analysis_manual_items_async,
 )
 from app.workflow.browser_action_runtime import (
     clear_session_browser_action_requests,
@@ -74,6 +74,8 @@ _STEP_PROGRESS: dict[str, float] = {
     "A7": 0.75,
     "A5": 0.9,
 }
+
+_SUPPORTED_TOOL_MODES = {"confidence_analysis"}
 
 
 async def _emit_session_error(
@@ -169,6 +171,13 @@ def _normalize_attachment_refs(raw_attachments: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def _normalize_tool_mode(raw_tool_mode: Any) -> str | None:
+    candidate = str(raw_tool_mode or "").strip()
+    if candidate in _SUPPORTED_TOOL_MODES:
+        return candidate
+    return None
+
+
 def _build_attachment_summary(attachments: list[dict[str, Any]]) -> str:
     if not attachments:
         return ""
@@ -183,10 +192,19 @@ def _resolve_task_label(
     brand_name: str,
     content: str,
     attachments: list[dict[str, Any]],
+    tool_mode: str | None = None,
 ) -> str:
     candidate_brand = brand_name.strip()
     if candidate_brand:
         return candidate_brand
+
+    if tool_mode == "confidence_analysis":
+        if attachments:
+            attachment_name = str(attachments[0].get("name") or "").strip()
+            attachment_stem = Path(attachment_name).stem.strip()
+            if attachment_stem:
+                return f"置信度分析：{attachment_stem}"
+        return "置信度分析"
 
     candidate_content = content.strip()
     if candidate_content:
@@ -519,6 +537,8 @@ async def rebuild_state_from_db(
         "table_intake_result": None,
         "confirmed_import_action": None,
         "import_source_metadata": None,
+        "selected_tool_mode": None,
+        "latest_user_input": None,
         "agent_retry_counts": {},
         # Execution control flags
         "auto_trigger_a5": False,
@@ -590,6 +610,7 @@ async def rebuild_state_from_db(
         # Rebuild orchestrator_history from user/agent text messages
         if role == "user":
             attachments = _normalize_attachment_refs(metadata.get("attachments", []))
+            tool_mode = _normalize_tool_mode(metadata.get("tool_mode"))
             replayed_content = content
             if attachments:
                 attachment_summary = _build_attachment_summary(attachments)
@@ -601,6 +622,8 @@ async def rebuild_state_from_db(
                     "attachments": attachments,
                     "user_message": content,
                 }
+            state["selected_tool_mode"] = tool_mode
+            state["latest_user_input"] = content
             state["orchestrator_history"].append(
                 {"role": "user", "content": replayed_content}
             )
@@ -733,7 +756,7 @@ async def rebuild_state_from_db(
                             state.get("import_source_metadata") or {}
                         )
                         import_source_metadata["imported_link_list_count"] = len(rows)
-                        import_source_metadata["imported_links"] = rows[:20]
+                        import_source_metadata["imported_links"] = rows
                         state["import_source_metadata"] = import_source_metadata
                     latest_import_artifact_sequence = max(
                         latest_import_artifact_sequence, sequence
@@ -804,6 +827,7 @@ async def handle_user_message_langgraph(
     existing_message_id = data.get("message_id")
     client_message_id = data.get("clientMessageId") or data.get("client_message_id")
     attachments = _normalize_attachment_refs(data.get("attachments", []))
+    tool_mode = _normalize_tool_mode(data.get("tool_mode"))
 
     # Build context-enhanced content for orchestrator
     enhanced_content = content
@@ -829,6 +853,7 @@ async def handle_user_message_langgraph(
         brand_name=brand_name,
         content=content,
         attachments=attachments,
+        tool_mode=tool_mode,
     )
 
     logger.info(
@@ -854,11 +879,14 @@ async def handle_user_message_langgraph(
         if persist_user_message:
             message_service = MessageService(db)
             try:
+                user_metadata: dict[str, Any] = {"tool_mode": tool_mode}
+                if attachments:
+                    user_metadata["attachments"] = attachments
                 saved = await message_service.save_message(
                     session_id=UUID(session_id),
                     role="user",
                     content=content,
-                    metadata={"attachments": attachments} if attachments else None,
+                    metadata=user_metadata or None,
                 )
                 existing_message_id = str(saved["id"])
             except Exception as e:
@@ -1032,6 +1060,8 @@ async def handle_user_message_langgraph(
                     + [HumanMessage(content=enhanced_content)],
                     "task_id": follow_up_task_id,
                     "run_id": resumed_run_id or state_values.get("run_id"),
+                    "selected_tool_mode": tool_mode,
+                    "latest_user_input": content,
                 }
                 if attachments:
                     update_state["pending_table_intake"] = {
@@ -1044,6 +1074,10 @@ async def handle_user_message_langgraph(
                         "source_type": "uploaded_table",
                         "attachments": attachments,
                     }
+                    if tool_mode:
+                        update_state["import_source_metadata"]["requested_tool_mode"] = (
+                            tool_mode
+                        )
 
                 # Stream workflow execution from orchestrator
                 async for event in workflow.astream(update_state, config=config):
@@ -1123,6 +1157,8 @@ async def handle_user_message_langgraph(
                     restored["execution_status"] = "running"
                     restored["task_id"] = restored_task_id
                     restored["run_id"] = resumed_run_id or restored.get("run_id")
+                    restored["selected_tool_mode"] = tool_mode
+                    restored["latest_user_input"] = content
                     # Set A3 mode based on context profiles
                     profile_contexts = [
                         c for c in context if c.get("type") == "profile"
@@ -1145,6 +1181,10 @@ async def handle_user_message_langgraph(
                             "source_type": "uploaded_table",
                             "attachments": attachments,
                         }
+                        if tool_mode:
+                            restored["import_source_metadata"]["requested_tool_mode"] = (
+                                tool_mode
+                            )
                     async for event in workflow.astream(restored, config=config):
                         await _process_langgraph_event(session_id, event)
                     await _sync_runtime_after_stream(workflow, config)
@@ -1193,7 +1233,10 @@ async def handle_user_message_langgraph(
                 "user_id": str(session_user_id) if session_user_id else None,
                 "entity_id": entity_id,
                 "messages": [HumanMessage(content=enhanced_content)],
-                "brand_name": brand_name or content,
+                "brand_name": (
+                    brand_name
+                    or (content if tool_mode != "confidence_analysis" else "")
+                ),
                 "official_website": official_website,
                 "industry_hint": industry_hint,
                 # A1 outputs
@@ -1256,6 +1299,8 @@ async def handle_user_message_langgraph(
                     if attachments
                     else None
                 ),
+                "selected_tool_mode": tool_mode,
+                "latest_user_input": content,
                 # Cycle 3: Task persistence + multi-turn
                 "task_id": created_task_id,
                 "run_id": created_run_id,
@@ -1427,23 +1472,6 @@ async def handle_confirmation_langgraph(
         f"[LangGraph] Received confirmation for session {session_id}: "
         f"user_content={user_content!r}, selection={selection!r}"
     )
-
-    # Persist the user's confirmation as a chat message so it survives page refresh
-    async with AsyncSessionLocal() as db:
-        message_service = MessageService(db)
-        try:
-            saved = await message_service.save_message(
-                session_id=UUID(session_id),
-                role="user",
-                content=user_content,
-            )
-            await session_event_publisher.emit_to_session(
-                session_id,
-                "user_message_ack",
-                {"message_id": str(saved["id"]), "content": user_content},
-            )
-        except Exception as e:
-            logger.error(f"[LangGraph] Error saving confirmation message: {e}")
 
     workflow = None
     config = None
@@ -1684,6 +1712,27 @@ async def handle_confirmation_langgraph(
                 selection,
             )
 
+        # Persist the normalized confirmation as a chat message so it survives refresh
+        async with AsyncSessionLocal() as db:
+            message_service = MessageService(db)
+            try:
+                confirmation_metadata = {
+                    "tool_mode": state_values.get("selected_tool_mode"),
+                }
+                saved = await message_service.save_message(
+                    session_id=UUID(session_id),
+                    role="user",
+                    content=user_content,
+                    metadata=confirmation_metadata,
+                )
+                await session_event_publisher.emit_to_session(
+                    session_id,
+                    "user_message_ack",
+                    {"message_id": str(saved["id"]), "content": user_content},
+                )
+            except Exception as e:
+                logger.error(f"[LangGraph] Error saving confirmation message: {e}")
+
         history.append(
             {
                 "role": "user",
@@ -1700,6 +1749,8 @@ async def handle_confirmation_langgraph(
             "execution_status": "running",
             "user_id": state_values.get("user_id"),
             "run_id": resumed_run_id or state_values.get("run_id"),
+            "selected_tool_mode": state_values.get("selected_tool_mode"),
+            "latest_user_input": user_content,
         }
         if state_values.get("fetch_mode"):
             update_state["fetch_mode"] = state_values["fetch_mode"]
@@ -1927,11 +1978,14 @@ async def handle_artifact_action_langgraph(
     if not existing_report:
         await _emit_session_error(
             session_id,
-            {"message": "未找到对应的置信度信号交付物", "recoverable": True},
+            {"message": "未找到对应的置信度报告交付物", "recoverable": True},
         )
         return
 
-    if existing_report.get("report_kind") != "confidence_signal":
+    if existing_report.get("report_kind") not in {
+        "confidence_signal",
+        "confidence_analysis",
+    }:
         await _emit_session_error(
             session_id,
             {"message": "当前交付物不支持额外评估", "recoverable": True},
@@ -1952,7 +2006,7 @@ async def handle_artifact_action_langgraph(
     )
 
     try:
-        updated_report = await append_manual_items_async(
+        updated_report = await append_confidence_analysis_manual_items_async(
             existing_report, raw_input=raw_input
         )
     except ValueError as exc:
@@ -1973,7 +2027,7 @@ async def handle_artifact_action_langgraph(
     await save_and_send_artifact(
         session_id=session_id,
         output_type="report",
-        title=message.content if message else "置信度信号",
+        title=message.content if message else "置信度报告",
         data=updated_report,
         artifact_key=artifact_id,
     )

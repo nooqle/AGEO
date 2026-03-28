@@ -1,6 +1,7 @@
 'use client';
 
 import { buildReportViewModel } from '@/adapters/reportV2';
+import { isConfidenceCanvasReport } from '@/adapters/exportArtifacts';
 import { buildCustomerReportMarkdown } from '@/lib/canvasExportShared';
 import type { ReportCanvasContent, ReportSummaryData, ReportV2Metric } from '@/types/canvas';
 import ReactMarkdown from 'react-markdown';
@@ -167,7 +168,7 @@ function LegacyFallback({ content }: { content: ReportCanvasContent }) {
 }
 
 export function ReportContent({ content, printMode = false }: ReportContentProps) {
-  if (content.data.report_kind === 'confidence_signal' || content.data.artifact_kind === 'confidence_signal') {
+  if (isConfidenceCanvasReport(content)) {
     return <ConfidenceSignalContent content={content} printMode={printMode} />;
   }
 

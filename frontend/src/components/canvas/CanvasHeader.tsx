@@ -27,6 +27,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import { toast } from '@/components/ui/toast';
+import { isConfidenceCanvasReport } from '@/adapters/exportArtifacts';
 import {
   exportCanvasContent,
   getCanvasContentText,
@@ -71,7 +72,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
     }
     return content;
   }, [content, isViewingHistory, versions]);
-  const isConfidenceSignal = effectiveContent.type === 'report' && effectiveContent.data?.report_kind === 'confidence_signal';
+  const isConfidenceSignal = effectiveContent.type === 'report' && isConfidenceCanvasReport(effectiveContent);
   const confidenceComposer = isConfidenceSignal ? effectiveContent.data?.composer : undefined;
   const confidenceStatus = isConfidenceSignal ? effectiveContent.data?.status : undefined;
   const isArtifactActionRunning = confidenceStatus?.phase === 'running';
@@ -192,7 +193,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const getTypeIcon = () => {
     switch (content.type) {
       case 'report':
-        if (content.data?.report_kind === 'confidence_signal') {
+        if (isConfidenceCanvasReport(content)) {
           return <RiShieldCheckLine className="w-4 h-4" style={{ color: 'var(--warning)' }} />;
         }
         return <RiFileTextLine className="w-4 h-4" style={{ color: 'var(--color-primary)' }} />;
@@ -255,7 +256,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
               <span className="capitalize">
                 {content.type === 'dataTable' ? '数据表格' :
                  effectiveContent.type === 'report' ? (
-                   effectiveContent.data?.report_kind === 'confidence_signal' ? '置信度报告' : '分析报告'
+                   isConfidenceSignal ? '置信度报告' : '分析报告'
                  ) :
                  effectiveContent.type === 'chart' ? '数据图表' :
                  effectiveContent.type === 'questionList' ? '问题列表' :

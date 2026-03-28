@@ -67,14 +67,14 @@ BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
         confirmation_policy=SkillConfirmationPolicy.OPTIONAL,
     ),
     BuiltinSkillSpec(
-        skill_key="confidence_signal_skill",
+        skill_key="confidence_analysis_skill",
         display_name="引用置信度评估",
         description=(
             "面向引用内容可信度、来源质量与结构化质量评估的公共 Skill。"
-            "不会重新抓取，只评估当前已有的引用来源。"
+            "不会重新抓取；可评估当前会话里已有的引用来源，也可评估用户直接提供的链接、文本或导入链接清单。"
         ),
         executor_kind=SkillExecutorKind.BUILTIN,
-        executor_ref="a7_confidence_signal",
+        executor_ref="confidence_analysis_executor",
         intent_signals=[
             "引用可信度",
             "来源质量",
@@ -82,9 +82,9 @@ BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
             "置信度",
             "citation confidence",
         ],
-        prerequisites=["fetch_results_required"],
-        artifact_types=["confidence_signal"],
-        default_params={},
+        prerequisites=[],
+        artifact_types=["confidence_analysis"],
+        default_params={"source_mode": "auto"},
         prompt_overlay=None,
         cost_class=SkillCostClass.MEDIUM,
         latency_class=SkillLatencyClass.MEDIUM,
@@ -393,12 +393,28 @@ def _build_confidence_tool(
     description = _with_package_hint(skill.description, package)
     if skill.prompt_overlay:
         description = f"{description} 当前策略补充：{skill.prompt_overlay}"
+    properties: dict[str, Any] = {
+        "source_mode": {
+            "type": "string",
+            "enum": ["auto", "current_fetch_results", "raw_input", "imported_link_list"],
+            "description": (
+                "评估材料来源。auto 表示由执行器结合当前状态自动判断；"
+                "current_fetch_results 表示评估当前会话已抓取的引用；"
+                "raw_input 表示评估本轮用户直接提供的链接或文本；"
+                "imported_link_list 表示评估已导入的链接清单。"
+            ),
+        },
+        "raw_input": {
+            "type": "string",
+            "description": "当 source_mode=raw_input 时，传入用户原始输入的链接列表或文本内容。",
+        },
+    }
     return {
         "name": skill.skill_key,
         "description": description,
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": properties,
         },
     }
 
@@ -461,7 +477,7 @@ def build_skill_tool_definition(
         return _build_table_intake_tool(skill, profiles=profiles, package=package)
     if skill.executor_ref == "a5_data_analytics":
         return _build_analysis_report_tool(skill, profiles=profiles, package=package)
-    if skill.executor_ref == "a7_confidence_signal":
+    if skill.executor_ref in {"confidence_analysis_executor", "a7_confidence_signal"}:
         return _build_confidence_tool(skill, profiles=profiles, package=package)
     if skill.executor_ref == "post_analysis_executor":
         return _build_post_analysis_tool(skill, profiles=profiles, package=package)
@@ -601,6 +617,13 @@ class SkillRegistryService:
                         config_payload=_serialize_config(skill),
                     )
                 )
+            elif skill_changed:
+                current_version = next(
+                    version
+                    for version in (skill.versions or [])
+                    if version.version == skill.version
+                )
+                current_version.config_payload = _serialize_config(skill)
 
             if skill_changed:
                 skill.updated_at = _utcnow()

@@ -128,6 +128,10 @@ function readStringList(record: UnknownRecord | undefined, ...keys: string[]): s
   return keys.flatMap((key) => toStringArray(record?.[key]));
 }
 
+export function isConfidenceReportKind(value: string | undefined): boolean {
+  return value === 'confidence_signal' || value === 'confidence_analysis';
+}
+
 function uniqueByKey<T>(items: T[], getKey: (item: T) => string): T[] {
   const seen = new Set<string>();
   return items.filter((item) => {
@@ -468,7 +472,7 @@ export function isConfidenceCanvasReport(content: ReportCanvasContent): boolean 
   const data = content.data as UnknownRecord;
   const reportKind = readString(data, 'report_kind', 'reportKind');
   const artifactKind = readString(data, 'artifact_kind', 'artifactKind');
-  if (reportKind === 'confidence_signal' || artifactKind === 'confidence_signal') {
+  if (isConfidenceReportKind(reportKind) || isConfidenceReportKind(artifactKind)) {
     return true;
   }
 
