@@ -14,6 +14,11 @@ def _merge_error_info(existing: dict | None, new: dict | None) -> dict | None:
     return new if new is not None else existing
 
 
+def _replace_optional_dict(_existing: dict | None, new: dict | None) -> dict | None:
+    """Reducer for optional dict fields: explicit None clears the stored value."""
+    return new
+
+
 def _last_value(existing: str, new: str) -> str:
     """Reducer for simple string fields: last writer wins."""
     return new if new else existing
@@ -207,7 +212,7 @@ class AgentState(TypedDict):
     # =========================================================================
     # Human-in-Loop
     # =========================================================================
-    pending_confirmation: Annotated[dict | None, _merge_error_info]
+    pending_confirmation: Annotated[dict | None, _replace_optional_dict]
     # {
     #   "step_id": str,
     #   "step_name": str,
@@ -221,7 +226,7 @@ class AgentState(TypedDict):
     # =========================================================================
     # Error Handling
     # =========================================================================
-    error_info: Annotated[dict | None, _merge_error_info]
+    error_info: Annotated[dict | None, _replace_optional_dict]
     # {"step": str, "error": str, "timestamp": str}
 
     # =========================================================================

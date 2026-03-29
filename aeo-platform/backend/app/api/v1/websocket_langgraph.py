@@ -206,6 +206,15 @@ def _has_reusable_runtime_context(state_values: dict[str, Any]) -> bool:
     )
 
 
+def _reset_follow_up_runtime_state(state_values: dict[str, Any]) -> None:
+    """Clear stale blockers before resuming orchestration from a prior session."""
+
+    state_values["awaiting_user"] = False
+    state_values["pending_confirmation"] = None
+    state_values["error_info"] = None
+    state_values["execution_status"] = "running"
+
+
 def _normalize_attachment_refs(raw_attachments: Any) -> list[dict[str, Any]]:
     """Normalize attachment refs from websocket payload."""
 
@@ -1108,9 +1117,6 @@ async def handle_user_message_langgraph(
                 update_state: dict[str, Any] = {
                     "orchestrator_history": history,
                     "user_decisions": user_decisions,
-                    "awaiting_user": False,
-                    "pending_confirmation": None,
-                    "execution_status": "running",
                     "user_id": (
                         str(session_user_id)
                         if session_user_id
@@ -1123,6 +1129,7 @@ async def handle_user_message_langgraph(
                     "selected_tool_mode": tool_mode,
                     "latest_user_input": content,
                 }
+                _reset_follow_up_runtime_state(update_state)
                 if attachments:
                     update_state["pending_table_intake"] = {
                         "attachments": attachments,
@@ -1212,9 +1219,7 @@ async def handle_user_message_langgraph(
                     restored["messages"] = list(restored.get("messages", [])) + [
                         HumanMessage(content=enhanced_content)
                     ]
-                    restored["awaiting_user"] = False
-                    restored["pending_confirmation"] = None
-                    restored["execution_status"] = "running"
+                    _reset_follow_up_runtime_state(restored)
                     restored["task_id"] = restored_task_id
                     restored["run_id"] = resumed_run_id or restored.get("run_id")
                     restored["selected_tool_mode"] = tool_mode
