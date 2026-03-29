@@ -464,7 +464,14 @@ class RegistrationApplicationService:
         result = await self.db.execute(
             select(Organization).where(Organization.legal_name == resolved_legal_name)
         )
-        return result.scalar_one_or_none()
+        organization = result.scalar_one_or_none()
+        if organization is not None:
+            return organization
+
+        organization = Organization(legal_name=resolved_legal_name)
+        self.db.add(organization)
+        await self.db.flush()
+        return organization
 
     async def _resolve_organization_for_invite_redeem(
         self,
