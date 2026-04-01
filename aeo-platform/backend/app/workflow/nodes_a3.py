@@ -1206,17 +1206,18 @@ def _build_baseline_system_prompt() -> str:
 
 ## 核心规则
 1. 问题必须是**用户视角**，模拟真实消费者的搜索行为
-2. 直接提及目标品牌的问题**不超过总数的 10%**
-3. 问题必须覆盖品牌的**主要产品领域**
-4. 包含预算、场景、用途等真实决策因素
-5. 问题要口语化，像真实用户会在 AI 平台中输入的
+2. **绝对禁止**在问题中直接提及目标品牌名称
+3. 所有问题都必须明确围绕品牌所在行业的**核心产品、价格带、优势场景或关键卖点**
+4. 问题必须覆盖品牌的**主要产品领域**
+5. 包含预算、场景、用途等真实决策因素
+6. 问题要口语化，像真实用户会在 AI 平台中输入的
+7. 可以出现竞品名称用于对比，但不能出现目标品牌名称
 
 ## 问题分类比例
-- 品类需求咨询 (30%)
-- 场景化选购 (25%)
-- 品类对比排名 (20%)
-- 行业趋势探索 (15%)
-- 品牌直接问题 (10% 上限)
+- 品类需求咨询 (35%)
+- 场景化选购 (30%)
+- 品类对比排名 (25%)
+- 行业趋势探索 (10%)
 
 ## 输出格式 (JSON)
 请严格输出以下 JSON 格式，不要有其他文字：
@@ -1226,7 +1227,7 @@ def _build_baseline_system_prompt() -> str:
     {{
       "question_id": "bl_001",
       "core_question": "问题文本",
-      "category": "品类需求咨询|场景化选购|品类对比排名|行业趋势探索|品牌直接问题",
+      "category": "品类需求咨询|场景化选购|品类对比排名|行业趋势探索",
       "user_intent": "用户意图",
       "decision_stage": "认知|兴趣|评估|决策",
       "covers_product": "对应的产品线(可选)"
@@ -1237,9 +1238,11 @@ def _build_baseline_system_prompt() -> str:
 ## 生成规则
 1. 总问题数：10-15 个
 2. 不需要指定平台，系统会自动在 {platform_list} 之间轮转分配
-3. 问题要覆盖品牌的核心产品线
+3. 问题要覆盖品牌的核心产品线，并尽量贴近品牌已有优势产品/能力
 4. 避免重复或过于笼统的问题
-5. 竞品名称可以出现在对比类问题中"""
+5. 竞品名称可以出现在对比类问题中
+6. 所有问题都必须避免出现目标品牌名称本身
+7. 即使不提品牌名，也要让问题足够贴近品牌产品与使用场景，避免泛行业空问题"""
 
 
 def _build_baseline_user_content(
@@ -1276,8 +1279,10 @@ def _build_baseline_user_content(
 ## 要求
 - 生成 10-15 个行业全景问题
 - 【强制约束】所有问题必须严格围绕「{industry}」行业，禁止生成其他行业的问题
-- 直接提及「{brand_name}」的问题不超过总数的 10%
+- 【强制约束】任何问题都**不要直接出现「{brand_name}」这个品牌名**
+- 所有问题都要显式绑定核心产品线、价格带、优势场景或关键卖点，不能退化成泛行业空问题
 - 覆盖核心产品线: {products}
+- 允许出现竞品名称做对比，但不要把目标品牌名写进问题
 - 问题要口语化，像真实用户会搜索的
 
 请直接输出 JSON，不要有其他文字。"""
@@ -1286,7 +1291,7 @@ def _build_baseline_user_content(
 def _validate_baseline_questions(
     questions: list[dict], brand_name: str
 ) -> None:
-    """Validate baseline question quality. Logs warning if brand ratio exceeds threshold."""
+    """Validate baseline question quality for pure industry-baseline mode."""
     if not questions:
         return
 
@@ -1296,12 +1301,11 @@ def _validate_baseline_questions(
         if brand_name.lower() in q.get("core_question", "").lower()
         or q.get("category", "") == "品牌直接问题"
     )
-    brand_ratio = brand_direct_count / total if total > 0 else 0
-
-    if brand_ratio > 0.15:  # 10% target + 5% tolerance
+    if brand_direct_count > 0:
         logger.warning(
-            "[A3] Baseline questions brand_ratio=%.1f%% exceeds 15%% threshold "
-            "(%d/%d). Proceeding anyway.",
-            brand_ratio * 100, brand_direct_count, total,
+            "[A3] Baseline questions contain direct brand mentions "
+            "(%d/%d). Pure industry-baseline mode should avoid the target brand name.",
+            brand_direct_count,
+            total,
         )
 

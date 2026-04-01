@@ -12,7 +12,7 @@ from langgraph.graph import END
 from langgraph.types import Command
 
 from app.core.utils import extract_domain
-from app.workflow.brand_mentions import content_mentions_brand
+from app.workflow.brand_mentions import content_mentions_brand, extract_brand_aliases
 
 # A5 is being split by responsibility: scenario/report contracts, prompt assembly,
 # user-facing sanitization, and persistence are kept in dedicated modules.
@@ -663,6 +663,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
 
     total_questions = len(fetch_results)
     total_mentions = 0
+    successful_answers = 0
     platform_stats: dict[str, dict[str, int]] = {}
     platforms_with_mention: set[str] = set()
 
@@ -672,7 +673,9 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
     # Citation tracking
     total_citations = 0
     official_citations = 0
+    branded_citations = 0
     brand_domain = extract_domain(brand_profile.get("official_website", ""))
+    brand_aliases = extract_brand_aliases(brand_profile)
     domain_stats: dict[str, dict] = {}  # domain -> {count, is_official, sample_titles}
     platform_citation_stats: dict[str, dict] = {}  # platform -> citation stats
 
@@ -692,6 +695,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                 platform_citation_stats[platform] = {
                     "total_citations": 0,
                     "official_count": 0,
+                    "branded_count": 0,
                     "total_answers": 0,
                     "answers_with_citations": 0,
                 }
@@ -701,6 +705,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
 
             if platform_result.get("success"):
                 platform_stats[platform]["success"] += 1
+                successful_answers += 1
 
                 answer = platform_result.get("answer", {})
                 content = (
@@ -730,6 +735,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                 citations = platform_result.get("citations", [])
                 answer_citation_count = 0
                 answer_official_count = 0
+                answer_branded_count = 0
                 for citation in citations:
                     total_citations += 1
                     answer_citation_count += 1
@@ -772,6 +778,13 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                         official_citations += 1
                         answer_official_count += 1
 
+                    citation_text = f"{citation_title} {citation_url}".lower()
+                    if is_official or any(
+                        alias.lower() in citation_text for alias in brand_aliases
+                    ):
+                        branded_citations += 1
+                        answer_branded_count += 1
+
                 # Update platform citation stats
                 platform_citation_stats[platform][
                     "total_citations"
@@ -779,13 +792,15 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                 platform_citation_stats[platform][
                     "official_count"
                 ] += answer_official_count
+                platform_citation_stats[platform][
+                    "branded_count"
+                ] += answer_branded_count
                 if answer_citation_count > 0:
                     platform_citation_stats[platform]["answers_with_citations"] += 1
 
     # ---- Dimension 1: Mention score ----
-    total_platform_results = sum(p["total"] for p in platform_stats.values())
     mention_rate = (
-        total_mentions / total_platform_results if total_platform_results > 0 else 0
+        total_mentions / successful_answers if successful_answers > 0 else 0
     )
     # Amplification factor 1.2: 83.3% mention rate = full score
     mention_score = min(100.0, mention_rate * 120)
@@ -854,8 +869,14 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
         "total_citations": total_citations,
         "unique_domains": len(domain_stats),
         "official_citations": official_citations,
+        "branded_citations": branded_citations,
         "official_share": (
             round(official_citations / total_cit * 100, 1)
+            if total_citations > 0
+            else 0.0
+        ),
+        "brand_content_citation_rate": (
+            round(branded_citations / total_cit * 100, 1)
             if total_citations > 0
             else 0.0
         ),
@@ -888,6 +909,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
     return {
         "total_questions": total_questions,
         "total_mentions": total_mentions,
+        "successful_answers": successful_answers,
         "mention_rate": round(mention_rate, 4),
         "bwvs_index": round(bwvs_index, 2),
         "bwvs_breakdown": breakdown,

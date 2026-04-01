@@ -33,6 +33,7 @@ def _build_source_overview(citation_analysis: dict[str, Any]) -> dict[str, Any]:
     """Convert legacy citation_analysis into V2 source_overview shape."""
     total_citations = int(citation_analysis.get("total_citations", 0) or 0)
     official_citations = int(citation_analysis.get("official_citations", 0) or 0)
+    branded_citations = int(citation_analysis.get("branded_citations", 0) or 0)
     brand_domain = str(citation_analysis.get("brand_domain", "") or "")
     unique_domains = int(citation_analysis.get("unique_domains", 0) or 0)
 
@@ -59,10 +60,16 @@ def _build_source_overview(citation_analysis: dict[str, Any]) -> dict[str, Any]:
                 continue
             platform_total = int(stats.get("total_citations", 0) or 0)
             platform_official = int(stats.get("official_count", 0) or 0)
+            platform_branded = int(stats.get("branded_count", 0) or 0)
             platform_citation_stats[str(platform)] = {
                 "total_citations": platform_total,
                 "official_citations": platform_official,
+                "branded_citations": platform_branded,
                 "official_citation_rate": _safe_rate(platform_official, platform_total),
+                "brand_content_citation_rate": _safe_rate(
+                    platform_branded,
+                    platform_total,
+                ),
                 "unique_domains": int(stats.get("unique_domains", 0) or 0),
                 "top_domains": [
                     {
@@ -77,6 +84,11 @@ def _build_source_overview(citation_analysis: dict[str, Any]) -> dict[str, Any]:
     return {
         "official_citation_rate": _safe_rate(official_citations, total_citations),
         "official_citations": official_citations,
+        "branded_citations": branded_citations,
+        "brand_content_citation_rate": _safe_rate(
+            branded_citations,
+            total_citations,
+        ),
         "total_citations": total_citations,
         "unique_domains": unique_domains,
         "brand_domain": brand_domain,
@@ -89,7 +101,7 @@ def _build_source_overview(citation_analysis: dict[str, Any]) -> dict[str, Any]:
             if isinstance(title, str) and title.strip()
         ][:6],
         "platform_citation_stats": platform_citation_stats,
-        "note": "官网引用率口径为官网引用次数 / 总引用次数。",
+        "note": "内容引用率口径为品牌相关引用次数 / 总引用次数；官网引用率口径为官网引用次数 / 总引用次数。",
     }
 
 
@@ -247,25 +259,9 @@ def _build_summary_metrics(
     scenario_hit_count = sum(1 for item in scenario_matrix if item.get("brand_present"))
     mention_rate = float(metrics.get("mention_rate", 0) or 0)
     official_citation_rate = float(source_overview.get("official_citation_rate", 0) or 0)
-    brand_payload = mention_sentiment_analysis.get("brand", {}) if isinstance(mention_sentiment_analysis, dict) else {}
-    brand_items = brand_payload.get("items", []) if isinstance(brand_payload, dict) else []
-    mention_question_count = len({
-        str(item.get("scenario_id") or item.get("scenario_label") or "").strip()
-        for item in brand_items
-        if isinstance(item, dict)
-        and str(item.get("scenario_id") or item.get("scenario_label") or "").strip()
-    })
-    cited_answer_count = len({
-        f"{str(item.get('scenario_id') or item.get('scenario_label') or '').strip()}::{str(item.get('platform', '') or '').strip()}"
-        for item in brand_items
-        if isinstance(item, dict)
-        and (
-            (item.get("citation_domains", []) or [])
-            or (item.get("citation_titles", []) or [])
-            or (item.get("citation_urls", []) or [])
-        )
-    })
-    content_citation_rate = _safe_rate(cited_answer_count, mention_question_count)
+    content_citation_rate = float(
+        source_overview.get("brand_content_citation_rate", 0) or 0
+    )
 
     status_summary = (
         f"品牌提及率 {mention_rate:.1%}"

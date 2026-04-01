@@ -200,8 +200,10 @@ def _compute_entity_metric_snapshot(
 ) -> dict[str, Any]:
     total_questions = len(fetch_results or [])
     mentioned_questions = 0
+    successful_answers = 0
     mentioned_answers = 0
     negative_answers = 0
+    total_citations = 0
     total_citations_in_mentions = 0
     official_citations = 0
     branded_citations = 0
@@ -211,20 +213,17 @@ def _compute_entity_metric_snapshot(
         for platform_result in result.get("platform_results", []) or []:
             if not isinstance(platform_result, dict) or not platform_result.get("success"):
                 continue
+            successful_answers += 1
             answer = platform_result.get("answer", {})
             content = answer.get("content", "") if isinstance(answer, dict) else str(answer or "")
-            if not _text_mentions_aliases(content, aliases):
-                continue
-
-            question_has_mention = True
-            mentioned_answers += 1
-            if a5_metrics.analyze_sentiment(content) == "negative":
-                negative_answers += 1
+            has_brand_mention = _text_mentions_aliases(content, aliases)
 
             for citation in platform_result.get("citations", []) or []:
                 if not isinstance(citation, dict):
                     continue
-                total_citations_in_mentions += 1
+                total_citations += 1
+                if has_brand_mention:
+                    total_citations_in_mentions += 1
                 url = str(citation.get("url", "") or "")
                 title = str(citation.get("title", "") or "")
                 domain = extract_domain(url)
@@ -238,6 +237,13 @@ def _compute_entity_metric_snapshot(
                 if any(alias.lower() in citation_text for alias in aliases if alias):
                     branded_citations += 1
 
+            if not has_brand_mention:
+                continue
+            question_has_mention = True
+            mentioned_answers += 1
+            if a5_metrics.analyze_sentiment(content) == "negative":
+                negative_answers += 1
+
         if question_has_mention:
             mentioned_questions += 1
 
@@ -245,15 +251,17 @@ def _compute_entity_metric_snapshot(
         "entity_name": entity_name,
         "mentioned_questions": mentioned_questions,
         "total_questions": total_questions,
-        "mention_rate": _safe_ratio(mentioned_questions, total_questions),
+        "successful_answers": successful_answers,
+        "mention_rate": _safe_ratio(mentioned_answers, successful_answers),
         "mentioned_answers": mentioned_answers,
         "negative_answers": negative_answers,
         "negative_sentiment_ratio": _safe_ratio(negative_answers, mentioned_answers),
         "official_citations": official_citations,
         "branded_citations": branded_citations,
+        "total_citations": total_citations,
         "total_citations_in_mentions": total_citations_in_mentions,
-        "official_citation_ratio": _safe_ratio(official_citations, total_citations_in_mentions),
-        "brand_content_citation_ratio": _safe_ratio(branded_citations, total_citations_in_mentions),
+        "official_citation_ratio": _safe_ratio(official_citations, total_citations),
+        "brand_content_citation_ratio": _safe_ratio(branded_citations, total_citations),
     }
 
 
@@ -361,8 +369,8 @@ def _build_aeo_report_facts(
     metric_rows = []
     metric_specs = [
         ("提及率", "在监测问题中，被至少一个平台提及的比例。", "mention_rate"),
-        ("官网引用占比", "在提及该品牌的回答里，引用链接指向该品牌官网的占比。", "official_citation_ratio"),
-        ("品牌内容引用占比", "在提及该品牌的回答里，所有引用链接中直接指向品牌相关内容的占比。", "brand_content_citation_ratio"),
+        ("官网引用占比", "在全部引用链接中，指向该品牌官网的占比。", "official_citation_ratio"),
+        ("品牌内容引用占比", "在全部引用链接中，直接指向品牌相关内容的占比。", "brand_content_citation_ratio"),
         ("负向情感占比", "在提及该品牌的回答里，带有明显负向倾向的占比。", "negative_sentiment_ratio"),
     ]
     for metric_name, definition, key in metric_specs:

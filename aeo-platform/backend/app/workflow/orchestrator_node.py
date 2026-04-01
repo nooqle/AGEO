@@ -699,10 +699,63 @@ def _get_latest_user_message(state: AgentState) -> str:
     return ""
 
 
+def _is_current_report_follow_up(state: AgentState) -> bool:
+    latest_user_message = _get_latest_user_message(state)
+    if not latest_user_message:
+        return False
+    if not (state.get("fetch_results") or state.get("report") or state.get("metrics")):
+        return False
+
+    current_markers = [
+        "这份报告",
+        "当前报告",
+        "本次报告",
+        "这个报告",
+        "基于这份报告",
+        "基于当前报告",
+        "当前结果",
+        "本次抓取",
+        "这次抓取",
+        "当前分析",
+    ]
+    history_markers = [
+        "历史",
+        "上次",
+        "最近两次",
+        "之前",
+        "月份",
+        "导出",
+        "下载",
+        "清单",
+        "表格",
+        "过去",
+        "过往",
+    ]
+    return (
+        any(marker in latest_user_message for marker in current_markers)
+        and not any(marker in latest_user_message for marker in history_markers)
+    )
+
+
+def _has_terminal_knowledge_result(state: AgentState) -> bool:
+    for key in (
+        "knowledge_lookup_result",
+        "knowledge_aggregate_result",
+        "knowledge_compare_result",
+        "knowledge_export_result",
+    ):
+        result = state.get(key) or {}
+        if isinstance(result, dict) and result.get("status") == "miss":
+            return True
+    return False
+
+
 def _build_knowledge_planning_hint(state: AgentState) -> str:
     """Provide a lightweight planning hint without hard-forcing tool choice."""
     latest_user_message = _get_latest_user_message(state)
     if not latest_user_message:
+        return ""
+    if _is_current_report_follow_up(state) or _has_terminal_knowledge_result(state):
         return ""
 
     manifest = state.get("knowledge_manifest") or {}
@@ -861,6 +914,10 @@ def _infer_knowledge_fallback_tool(
     latest_user_message = _get_latest_user_message(state)
     if not latest_user_message:
         return None
+    if _is_current_report_follow_up(state):
+        return None
+    if _has_terminal_knowledge_result(state):
+        return None
 
     manifest = state.get("knowledge_manifest") or {}
     available_sources = manifest.get("available_sources") or {}
@@ -972,16 +1029,34 @@ def _infer_knowledge_fallback_tool(
 
     if any(keyword in text for keyword in lookup_keywords):
         source_types = None
-        if "竞品" in latest_user_message:
-            source_types = ["competitor_profile", "fetch_answer"]
-        elif "品牌" in latest_user_message:
-            source_types = ["brand_profile", "competitor_profile"]
+        answer_detail_keywords = [
+            "答案",
+            "回答",
+            "怎么回答",
+            "提及",
+            "负向",
+            "负面",
+            "正向",
+            "正面",
+            "中性",
+            "情感",
+            "证据",
+        ]
+        if any(keyword in latest_user_message for keyword in answer_detail_keywords):
+            source_types = ["fetch_answer", "fetch_citation"]
         elif (
             "引用" in latest_user_message
             or "官网" in latest_user_message
             or "来源" in latest_user_message
         ):
             source_types = ["fetch_citation", "fetch_answer"]
+        elif "竞品" in latest_user_message:
+            source_types = ["competitor_profile", "fetch_answer"]
+        elif any(
+            keyword in latest_user_message
+            for keyword in ["品牌档案", "品牌信息", "品牌定位", "品牌介绍", "核心产品", "目标受众"]
+        ):
+            source_types = ["brand_profile", "competitor_profile"]
         elif "答案" in latest_user_message:
             source_types = ["fetch_answer"]
         args: dict[str, Any] = {
@@ -3178,7 +3253,7 @@ async def _handle_tool_call(
         # unless the user just triggered a retry (retry_counts reset to 0).
         if (
             effective_tool_name == "question_simulation"
-            and requested_question_mode != "uploaded_list"
+            and not requested_question_mode
             and state.get("simulated_questions")
         ):
             is_fresh_retry = current_retry_counts.get("question_simulation", 0) == 0

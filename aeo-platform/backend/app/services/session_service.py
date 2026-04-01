@@ -30,6 +30,8 @@ class SessionService:
         limit: int = 20,
         offset: int = 0,
         status: SessionStatus | None = None,
+        *,
+        allow_internal_admin_bypass: bool = True,
     ) -> dict[str, Any]:
         """获取会话列表，含消息统计和最新消息预览。
 
@@ -43,7 +45,12 @@ class SessionService:
             包含 sessions 列表和 total 的字典
         """
         # 基础过滤条件
-        base_filter = [AccessScopeService.session_visibility_filter(viewer)]
+        base_filter = [
+            AccessScopeService.session_visibility_filter(
+                viewer,
+                allow_internal_admin_bypass=allow_internal_admin_bypass,
+            )
+        ]
         if status is not None:
             base_filter.append(Session.status == status)
 
@@ -206,12 +213,17 @@ class SessionService:
         self,
         entity_id: UUID,
         viewer: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
     ) -> dict[str, Any] | None:
         stmt = (
             select(Session)
             .where(
                 Session.entity_id == entity_id,
-                AccessScopeService.session_visibility_filter(viewer),
+                AccessScopeService.session_visibility_filter(
+                    viewer,
+                    allow_internal_admin_bypass=allow_internal_admin_bypass,
+                ),
             )
             .order_by(Session.updated_at.desc())
             .limit(1)
@@ -223,7 +235,11 @@ class SessionService:
         return self._session_to_dict(session)
 
     async def get_session(
-        self, session_id: UUID, viewer: User
+        self,
+        session_id: UUID,
+        viewer: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
     ) -> dict[str, Any] | None:
         """Get session details.
 
@@ -236,7 +252,10 @@ class SessionService:
         result = await self.db.execute(
             select(Session).where(
                 Session.id == session_id,
-                AccessScopeService.session_visibility_filter(viewer),
+                AccessScopeService.session_visibility_filter(
+                    viewer,
+                    allow_internal_admin_bypass=allow_internal_admin_bypass,
+                ),
             )
         )
         session = result.scalar_one_or_none()

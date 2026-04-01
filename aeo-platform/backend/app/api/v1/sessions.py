@@ -31,6 +31,7 @@ async def list_sessions(
         limit=limit,
         offset=offset,
         status=status,
+        allow_internal_admin_bypass=False,
     )
 
 
@@ -42,11 +43,19 @@ async def get_session_by_entity(
 ):
     """查询品牌实体关联的 Session（1:1 映射）。"""
     entity_service = EntityService(db)
-    entity = await entity_service.get_entity(str(entity_id), current_user)
+    entity = await entity_service.get_entity(
+        str(entity_id),
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     service = SessionService(db)
-    session = await service.get_latest_session_by_entity(entity_id, current_user)
+    session = await service.get_latest_session_by_entity(
+        entity_id,
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
     if not session:
         raise HTTPException(status_code=404, detail="No session found for this entity")
     return session
@@ -62,7 +71,11 @@ async def create_session(
     # Validate entity_id exists if provided
     if entity_id:
         entity_service = EntityService(db)
-        entity = await entity_service.get_entity(str(entity_id), current_user)
+        entity = await entity_service.get_entity(
+            str(entity_id),
+            current_user,
+            allow_internal_admin_bypass=False,
+        )
         if not entity:
             raise HTTPException(status_code=404, detail="Entity not found")
 
@@ -95,7 +108,11 @@ async def get_session(
 ):
     """Get session details."""
     service = SessionService(db)
-    session = await service.get_session(session_id, current_user)
+    session = await service.get_session(
+        session_id,
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session

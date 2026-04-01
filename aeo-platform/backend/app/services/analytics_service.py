@@ -18,7 +18,9 @@ from sqlalchemy import select, desc
 
 from app.models.message import Message, MessageType, MessageRole
 from app.models.session import Session
+from app.models.user import User
 from app.core.utils import extract_domain
+from app.services.access_scope_service import AccessScopeService
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +46,16 @@ def _aeo_status(value: float, metric_key: str) -> str:
 class AnalyticsService:
     """Aggregates analysis data for the Dashboard."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        viewer: User | None = None,
+        allow_internal_admin_bypass: bool = True,
+    ):
         self.db = db
+        self.viewer = viewer
+        self.allow_internal_admin_bypass = allow_internal_admin_bypass
 
     async def _get_latest_output(
         self, output_type: str | None = None, brand_id: str | None = None
@@ -66,6 +76,13 @@ class AnalyticsService:
             .order_by(desc(Message.created_at))
         )
         query = query.join(Session, Message.session_id == Session.id)
+        if self.viewer is not None:
+            query = query.where(
+                AccessScopeService.session_visibility_filter(
+                    self.viewer,
+                    allow_internal_admin_bypass=self.allow_internal_admin_bypass,
+                )
+            )
         if brand_id:
             try:
                 brand_uuid = UUID(brand_id)
@@ -99,6 +116,13 @@ class AnalyticsService:
             .limit(20)
         )
         query = query.join(Session, Message.session_id == Session.id)
+        if self.viewer is not None:
+            query = query.where(
+                AccessScopeService.session_visibility_filter(
+                    self.viewer,
+                    allow_internal_admin_bypass=self.allow_internal_admin_bypass,
+                )
+            )
         if brand_id:
             try:
                 brand_uuid = UUID(brand_id)
@@ -239,6 +263,13 @@ class AnalyticsService:
             .limit(20)
         )
         query = query.join(Session, Message.session_id == Session.id)
+        if self.viewer is not None:
+            query = query.where(
+                AccessScopeService.session_visibility_filter(
+                    self.viewer,
+                    allow_internal_admin_bypass=self.allow_internal_admin_bypass,
+                )
+            )
         if brand_id:
             try:
                 brand_uuid = UUID(brand_id)

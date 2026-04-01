@@ -56,7 +56,7 @@ def resolve_confirmation_selection(
         clear_question_import_state()
         resolved_user_content = f"我选择了{', '.join(selected_names)}画像，开始出题吧。"
         decisions["a3_mode"] = "persona"
-        decisions["selected_persona_ids"] = selected_names
+        decisions["selected_persona_ids"] = selected_ids
         decisions["selected_persona_names"] = selected_names
         logger.info(
             "[LangGraph] Persona selection: ids=%s, names=%s",
