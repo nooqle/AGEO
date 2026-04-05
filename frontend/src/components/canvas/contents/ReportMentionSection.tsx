@@ -1,4 +1,4 @@
-import { getPlatformDisplayName } from '@/lib/platformLabel';
+import { getPlatformDisplayName } from '@/config/platformLabel';
 import type { ReportMentionSectionData } from '@/types/canvas';
 import { ReportMetricCard, ReportSection } from './ReportScaffold';
 

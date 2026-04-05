@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { CanvasContentType } from '@/types/canvas';
+import { isConfidenceCanvasReport } from '@/adapters/exportArtifacts';
 import { cn } from '@/lib/cn';
 import {
   RiFileChartLine,
@@ -44,7 +45,7 @@ function getReportMeta(content: CanvasContent) {
   if (content.type !== 'report') {
     return { icon: TYPE_ICONS[content.type] || RiFileTextLine, label: TYPE_LABELS[content.type] || '' };
   }
-  if (content.data?.report_kind === 'confidence_signal') {
+  if (isConfidenceCanvasReport(content)) {
     return { icon: RiShieldCheckLine, label: '置信' };
   }
   if (content.category === 'baseline') {

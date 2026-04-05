@@ -1,7 +1,7 @@
 ﻿import type { CSSProperties } from 'react';
 import type { InsightSectionData, InsightSectionItem } from '@/types/canvas';
 import { getSourceLabel } from '@/lib/sourceLabel';
-import { getPlatformDisplayName } from '@/lib/platformLabel';
+import { getPlatformDisplayName } from '@/config/platformLabel';
 
 interface InsightSectionProps {
   data?: InsightSectionData | null;

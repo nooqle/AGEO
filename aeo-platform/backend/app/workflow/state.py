@@ -14,6 +14,11 @@ def _merge_error_info(existing: dict | None, new: dict | None) -> dict | None:
     return new if new is not None else existing
 
 
+def _replace_optional_dict(_existing: dict | None, new: dict | None) -> dict | None:
+    """Reducer for optional dict fields: explicit None clears the stored value."""
+    return new
+
+
 def _last_value(existing: str, new: str) -> str:
     """Reducer for simple string fields: last writer wins."""
     return new if new else existing
@@ -216,7 +221,7 @@ class AgentState(TypedDict):
     # =========================================================================
     # Human-in-Loop
     # =========================================================================
-    pending_confirmation: Annotated[dict | None, _merge_error_info]
+    pending_confirmation: Annotated[dict | None, _replace_optional_dict]
     # {
     #   "step_id": str,
     #   "step_name": str,
@@ -230,7 +235,7 @@ class AgentState(TypedDict):
     # =========================================================================
     # Error Handling
     # =========================================================================
-    error_info: Annotated[dict | None, _merge_error_info]
+    error_info: Annotated[dict | None, _replace_optional_dict]
     # {"step": str, "error": str, "timestamp": str}
 
     # =========================================================================
@@ -269,7 +274,7 @@ class AgentState(TypedDict):
     last_harness_decision: dict | None  # Latest harness decision payload
     harness_decision_history: list  # [{decision_type, recoverable, reason, ...}]
     next_required_action: Annotated[
-        dict | None, _merge_error_info
+        dict | None, _replace_optional_dict
     ]  # Deterministic runtime continuation action consumed before next LLM turn
     agent_retry_counts: (
         dict  # {tool_name: int} — tracks how many times each tool was called
@@ -286,6 +291,8 @@ class AgentState(TypedDict):
     table_intake_result: Annotated[dict | None, _merge_error_info]
     confirmed_import_action: Annotated[dict | None, _merge_error_info]
     import_source_metadata: Annotated[dict | None, _merge_error_info]
+    selected_tool_mode: Annotated[str | None, _last_value]
+    latest_user_input: Annotated[str | None, _last_value]
 
     # =========================================================================
     # Task Persistence (Cycle 3, Module 1)

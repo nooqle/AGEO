@@ -53,6 +53,8 @@ import { getStoredAccessToken } from '@/lib/auth-storage';
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
 
+type RequestOptions = Pick<RequestInit, 'signal'>;
+
 class ApiService {
   private getAuthToken() {
     const token = getStoredAccessToken();
@@ -328,113 +330,177 @@ class ApiService {
   // Analytics API
   // =========================================================================
 
-  async getAnalyticsOverview(brandId?: string, dateRange: string = 'month') {
+  async getAnalyticsOverview(
+    brandId?: string,
+    dateRange: string = 'month',
+    options?: RequestOptions,
+  ) {
     const params = new URLSearchParams({ date_range: dateRange });
     if (brandId) params.set('brand_id', brandId);
-    return this.request<{ kpi: DashboardData['kpi'] }>(`/analytics/overview?${params}`);
+    return this.request<{ kpi: DashboardData['kpi'] }>(
+      `/analytics/overview?${params}`,
+      options,
+    );
   }
 
-  async getAnalyticsVisibility(brandId?: string, dateRange: string = 'month') {
+  async getAnalyticsVisibility(
+    brandId?: string,
+    dateRange: string = 'month',
+    options?: RequestOptions,
+  ) {
     const params = new URLSearchParams({ date_range: dateRange });
     if (brandId) params.set('brand_id', brandId);
-    return this.request<{ visibility: DashboardData['visibility'] }>(`/analytics/visibility?${params}`);
+    return this.request<{ visibility: DashboardData['visibility'] }>(
+      `/analytics/visibility?${params}`,
+      options,
+    );
   }
 
-  async getAnalyticsPlatforms(brandId?: string) {
+  async getAnalyticsPlatforms(brandId?: string, options?: RequestOptions) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<{ platforms: DashboardData['platforms'] }>(`/analytics/platforms${query ? `?${query}` : ''}`);
+    return this.request<{ platforms: DashboardData['platforms'] }>(
+      `/analytics/platforms${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsSources(brandId?: string) {
+  async getAnalyticsSources(brandId?: string, options?: RequestOptions) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<{ sources: DashboardData['sources'] }>(`/analytics/sources${query ? `?${query}` : ''}`);
+    return this.request<{ sources: DashboardData['sources'] }>(
+      `/analytics/sources${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsAeo(brandId?: string) {
+  async getAnalyticsAeo(brandId?: string, options?: RequestOptions) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<{ aeoMetrics: DashboardData['aeoMetrics'] }>(`/analytics/aeo${query ? `?${query}` : ''}`);
+    return this.request<{ aeoMetrics: DashboardData['aeoMetrics'] }>(
+      `/analytics/aeo${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsSentiment(brandId?: string) {
+  async getAnalyticsSentiment(brandId?: string, options?: RequestOptions) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<{ sentiment: DashboardData['sentiment'] }>(`/analytics/sentiment${query ? `?${query}` : ''}`);
+    return this.request<{ sentiment: DashboardData['sentiment'] }>(
+      `/analytics/sentiment${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsCompetitors(brandId?: string) {
+  async getAnalyticsCompetitors(brandId?: string, options?: RequestOptions) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<{ competitors: DashboardData['competitors'] }>(`/analytics/competitors${query ? `?${query}` : ''}`);
+    return this.request<{ competitors: DashboardData['competitors'] }>(
+      `/analytics/competitors${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsOverviewV2(brandId?: string, dateRange: string = 'month') {
+  async getAnalyticsOverviewV2(
+    brandId?: string,
+    dateRange: string = 'month',
+    options?: RequestOptions,
+  ) {
     const params = new URLSearchParams({ date_range: dateRange });
     if (brandId) params.set('brand_id', brandId);
-    return this.request<Record<string, unknown>>(`/analytics/v2/overview?${params}`);
+    return this.request<Record<string, unknown>>(
+      `/analytics/v2/overview?${params}`,
+      options,
+    );
   }
 
-  async getAnalyticsScenariosV2(brandId?: string) {
+  async getAnalyticsScenariosV2(brandId?: string, options?: RequestOptions) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<Record<string, unknown>>(`/analytics/v2/scenarios${query ? `?${query}` : ''}`);
+    return this.request<Record<string, unknown>>(
+      `/analytics/v2/scenarios${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsCompetitorBattlesV2(brandId?: string) {
+  async getAnalyticsCompetitorBattlesV2(
+    brandId?: string,
+    options?: RequestOptions,
+  ) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<Record<string, unknown>>(`/analytics/v2/competitor-battles${query ? `?${query}` : ''}`);
+    return this.request<Record<string, unknown>>(
+      `/analytics/v2/competitor-battles${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsSourcesV2(brandId?: string) {
+  async getAnalyticsSourcesV2(brandId?: string, options?: RequestOptions) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<Record<string, unknown>>(`/analytics/v2/sources${query ? `?${query}` : ''}`);
+    return this.request<Record<string, unknown>>(
+      `/analytics/v2/sources${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsDashboardHomeV2(brandId?: string) {
+  async getAnalyticsDashboardHomeV2(
+    brandId?: string,
+    options?: RequestOptions,
+  ) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<Record<string, unknown>>(`/analytics/v2/dashboard-home${query ? `?${query}` : ''}`);
+    return this.request<Record<string, unknown>>(
+      `/analytics/v2/dashboard-home${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsRisksActionsV2(brandId?: string) {
+  async getAnalyticsRisksActionsV2(
+    brandId?: string,
+    options?: RequestOptions,
+  ) {
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
     const query = params.toString();
-    return this.request<Record<string, unknown>>(`/analytics/v2/risks-actions${query ? `?${query}` : ''}`);
+    return this.request<Record<string, unknown>>(
+      `/analytics/v2/risks-actions${query ? `?${query}` : ''}`,
+      options,
+    );
   }
 
-  async getAnalyticsAll(brandId?: string, dateRange: string = 'month'): Promise<DashboardData> {
+  async getAnalyticsAll(
+    brandId?: string,
+    dateRange: string = 'month',
+    options?: RequestOptions,
+  ): Promise<DashboardData> {
     const [overview, visibility, platforms, sources, aeo, sentiment, competitors, overviewV2, scenariosV2, competitorBattlesV2, sourcesV2, risksActionsV2, homeV2, monitoringTrendSummary, mentionTrend, contentCitationTrend, bwvsTrend] = await Promise.allSettled([
-      this.getAnalyticsOverview(brandId, dateRange),
-      this.getAnalyticsVisibility(brandId, dateRange),
-      this.getAnalyticsPlatforms(brandId),
-      this.getAnalyticsSources(brandId),
-      this.getAnalyticsAeo(brandId),
-      this.getAnalyticsSentiment(brandId),
-      this.getAnalyticsCompetitors(brandId),
-      this.getAnalyticsOverviewV2(brandId, dateRange),
-      this.getAnalyticsScenariosV2(brandId),
-      this.getAnalyticsCompetitorBattlesV2(brandId),
-      this.getAnalyticsSourcesV2(brandId),
-      this.getAnalyticsRisksActionsV2(brandId),
-      this.getAnalyticsDashboardHomeV2(brandId),
-      brandId ? this.getMonitoringTrendSummary(brandId) : Promise.resolve(undefined),
-      brandId ? this.getMonitoringTrend(brandId, 'mention_rate', 8) : Promise.resolve(undefined),
-      brandId ? this.getMonitoringTrend(brandId, 'content_citation_rate', 8) : Promise.resolve(undefined),
-      brandId ? this.getMonitoringTrend(brandId, 'bwvs_index', 8) : Promise.resolve(undefined),
+      this.getAnalyticsOverview(brandId, dateRange, options),
+      this.getAnalyticsVisibility(brandId, dateRange, options),
+      this.getAnalyticsPlatforms(brandId, options),
+      this.getAnalyticsSources(brandId, options),
+      this.getAnalyticsAeo(brandId, options),
+      this.getAnalyticsSentiment(brandId, options),
+      this.getAnalyticsCompetitors(brandId, options),
+      this.getAnalyticsOverviewV2(brandId, dateRange, options),
+      this.getAnalyticsScenariosV2(brandId, options),
+      this.getAnalyticsCompetitorBattlesV2(brandId, options),
+      this.getAnalyticsSourcesV2(brandId, options),
+      this.getAnalyticsRisksActionsV2(brandId, options),
+      this.getAnalyticsDashboardHomeV2(brandId, options),
+      brandId ? this.getMonitoringTrendSummary(brandId, options) : Promise.resolve(undefined),
+      brandId ? this.getMonitoringTrend(brandId, 'mention_rate', 8, options) : Promise.resolve(undefined),
+      brandId ? this.getMonitoringTrend(brandId, 'content_citation_rate', 8, options) : Promise.resolve(undefined),
+      brandId ? this.getMonitoringTrend(brandId, 'bwvs_index', 8, options) : Promise.resolve(undefined),
     ]);
 
     const ensure = <T,>(result: PromiseSettledResult<T>, fallback: T): T =>
@@ -800,7 +866,8 @@ class ApiService {
   async getMonitoringTrend(
     entityId: string,
     metric: string = 'mention_rate',
-    limit: number = 50
+    limit: number = 50,
+    options?: RequestOptions,
   ): Promise<{ trend: TrendDataPoint[]; metric: string }> {
     const params = new URLSearchParams({
       brand_id: entityId,
@@ -808,17 +875,20 @@ class ApiService {
       limit: String(limit),
     });
     return this.request<{ trend: TrendDataPoint[]; metric: string }>(
-      `/analytics/trend?${params}`
+      `/analytics/trend?${params}`,
+      options,
     );
   }
 
   /** Get trend summary for all core metrics of an entity */
   async getMonitoringTrendSummary(
-    entityId: string
+    entityId: string,
+    options?: RequestOptions,
   ): Promise<TrendSummaryResponse> {
     const params = new URLSearchParams({ brand_id: entityId });
     return this.request<TrendSummaryResponse>(
-      `/analytics/trend/summary?${params}`
+      `/analytics/trend/summary?${params}`,
+      options,
     );
   }
 

@@ -83,6 +83,28 @@ _CONTRACT_BLUEPRINTS: dict[str, dict[str, Any]] = {
             "skill_result_recorded",
         ),
     },
+    "confidence_analysis_skill": {
+        "intent_scope": "评估当前引用来源的可信度、结构化质量和可核查性。",
+        "required_inputs": ("confidence_fetch_results",),
+        "allowed_tools": (
+            "fact_snapshot",
+            "confidence_signal_generation",
+            "confidence_artifact_writeback",
+        ),
+        "expected_outputs": ("confidence_signal",),
+        "artifact_writeback_rules": (
+            "must_persist_confidence_artifact_before_complete",
+            "must_record_skill_result_after_artifact_writeback",
+        ),
+        "known_blockers": (
+            "fetch_results_missing",
+            "artifact_writeback_failed",
+        ),
+        "postconditions": (
+            "confidence_artifact_persisted",
+            "skill_result_recorded",
+        ),
+    },
     "confidence_signal_skill": {
         "intent_scope": "评估当前引用来源的可信度、结构化质量和可核查性。",
         "required_inputs": ("confidence_fetch_results",),

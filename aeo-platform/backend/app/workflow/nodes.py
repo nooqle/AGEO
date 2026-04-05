@@ -6,6 +6,7 @@ Each node wraps the corresponding agent logic and handles state updates.
 
 import logging
 from datetime import datetime
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -834,6 +835,8 @@ async def a2_persona_node(state: AgentState) -> Command:
             is_complete=True,
         )
 
+        request_id = f"a2_persona_selection_{uuid4().hex}"
+
         # Build pipeline data (3-column: profile → scenario → intent)
         pipeline_data = _build_pipeline_data(personas)
 
@@ -845,6 +848,7 @@ async def a2_persona_node(state: AgentState) -> Command:
             title="营销触点地图",
             data={
                 "pipeline": pipeline_data,
+                "requestId": request_id,
                 "marketing_personas": data,  # Persist for state rebuild after restart
                 "maxSelection": 3,
                 "minSelection": 1,
@@ -884,10 +888,23 @@ async def a2_persona_node(state: AgentState) -> Command:
                 logger.warning("[A2] Failed to persist stage_result: %s", e)
 
         return Command(
+            goto="wait_for_user",
             update={
                 "marketing_personas": data,
                 "current_step": "A2",
                 "progress": 0.4,
+                "awaiting_user": True,
+                "execution_status": "awaiting_user",
+                "pending_confirmation": {
+                    "step_id": "A2_PERSONA_SELECTION",
+                    "step_name": "选择用户画像",
+                    "message": "请在营销触点地图中选择您希望重点分析的用户画像。",
+                    "request_id": request_id,
+                    "options": [
+                        {"id": "persona_path_selection", "label": "确认选择画像"},
+                        {"id": "skip", "label": "全景分析所有画像"},
+                    ],
+                },
             },
         )
 

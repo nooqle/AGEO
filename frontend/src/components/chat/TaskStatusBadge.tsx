@@ -3,10 +3,12 @@
 import { useCallback } from 'react';
 import { RiLoader4Line, RiCheckLine, RiAlertLine, RiIndeterminateCircleLine } from '@remixicon/react';
 import { cn } from '@/lib/cn';
+import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
 import type { TaskStatus } from '@/types/task';
 
 interface TaskStatusBadgeProps {
   status: TaskStatus;
+  waitingForInput?: boolean;
   currentStage?: string;
   progress?: number;
   progressMessage?: string;
@@ -18,6 +20,7 @@ interface TaskStatusBadgeProps {
 
 export function TaskStatusBadge({
   status,
+  waitingForInput = false,
   currentStage,
   progress,
   progressMessage,
@@ -39,15 +42,21 @@ export function TaskStatusBadge({
     [handleInteraction]
   );
 
+  const stageLabel = getUserFacingStageLabel(currentStage);
+
   // Build aria-label for screen readers
   const getAriaLabel = (): string => {
+    if (waitingForInput) {
+      return progressMessage || '等待用户确认';
+    }
+
     switch (status) {
       case 'pending':
         return '准备中';
       case 'running': {
         if (lightweightLabel) return `正在处理追问`;
         const parts = ['分析进行中'];
-        if (currentStage) parts.push(`阶段 ${currentStage}`);
+        if (stageLabel) parts.push(`阶段 ${stageLabel}`);
         if (progress !== undefined) parts.push(`${Math.round(progress * 100)}% 完成`);
         return parts.join('，');
       }
@@ -86,6 +95,30 @@ export function TaskStatusBadge({
           style={{ background: 'var(--brand-primary)' }}
         />
         {lightweightLabel}
+      </div>
+    );
+  }
+
+  if (waitingForInput) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        aria-label={getAriaLabel()}
+        tabIndex={0}
+        onClick={handleInteraction}
+        onKeyDown={handleKeyDown}
+        className={cn(
+          'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap cursor-pointer',
+          className
+        )}
+        style={{
+          background: 'rgba(59,130,246,0.10)',
+          color: 'var(--color-primary)',
+        }}
+      >
+        <RiIndeterminateCircleLine className="w-3 h-3" />
+        {progressMessage || '等待用户确认'}
       </div>
     );
   }
@@ -137,8 +170,8 @@ export function TaskStatusBadge({
       >
         <RiLoader4Line className="w-3 h-3 animate-spin" />
         {progressMessage || '正在分析...'}
-        {currentStage && (
-          <span className="font-semibold">{currentStage}</span>
+        {stageLabel && (
+          <span className="font-semibold">{stageLabel}</span>
         )}
         {progress !== undefined && progress > 0 && (
           <span style={{ color: 'var(--text-tertiary)' }}>

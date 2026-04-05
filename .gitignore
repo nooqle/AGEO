@@ -10,7 +10,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/
@@ -52,6 +52,8 @@ logs/
 node_modules/
 .next/
 out/
+!frontend/src/lib/
+!frontend/src/lib/**
 
 # Testing
 .coverage

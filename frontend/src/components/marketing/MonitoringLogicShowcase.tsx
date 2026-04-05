@@ -37,10 +37,10 @@ const showcaseItems: Array<{
 
 function BaselinePanel() {
   const bars = [
-    ['DeepSeek', '72%', '#4f6af7'],
-    ['Kimi', '80%', '#7c4dff'],
-    ['豆包', '90%', '#11c76f'],
-    ['元宝', '98%', '#8b5cf6'],
+    ['DeepSeek', 72, '#4f6af7'],
+    ['Kimi', 80, '#7c4dff'],
+    ['豆包', 90, '#11c76f'],
+    ['元宝', 98, '#8b5cf6'],
   ] as const;
 
   return (
@@ -67,17 +67,39 @@ function BaselinePanel() {
       </div>
       <div className="px-8 py-8">
         <div className="text-[18px] font-semibold text-[#111827]">AI 可见性</div>
-        <div className="mt-5 flex h-[320px] items-end justify-between gap-8 rounded-[24px] bg-[#fcfcfd] px-8 pb-8 pt-10">
-          {bars.map(([label, height, color]) => (
-            <div key={label} className="flex flex-1 flex-col items-center justify-end gap-4">
-              <div className="text-sm text-[#94a3b8]">{height}</div>
-              <div
-                className="w-full max-w-[72px] rounded-[22px]"
-                style={{ height, backgroundColor: color }}
-              />
-              <div className="text-sm font-semibold text-[#4b5563]">{label}</div>
+        <div className="mt-5 rounded-[24px] bg-[#fcfcfd] px-8 pb-8 pt-8">
+          <div className="relative h-[320px]">
+            <div className="absolute inset-0 flex flex-col justify-between py-2">
+              {[100, 75, 50, 25, 0].map((tick) => (
+                <div
+                  key={tick}
+                  className="border-t border-dashed border-[#e5e7eb] first:border-t-0"
+                >
+                  <span className="-translate-y-1/2 block bg-[#fcfcfd] pr-2 text-xs text-[#94a3b8]">
+                    {tick}%
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
+            <div className="absolute inset-x-4 bottom-0 top-0 flex items-end justify-between gap-6">
+              {bars.map(([label, value, color]) => (
+                <div key={label} className="flex h-full flex-1 flex-col items-center justify-end gap-4">
+                  <div className="text-sm font-semibold text-[#94a3b8]">{value}%</div>
+                  <div className="flex h-[240px] w-full items-end justify-center">
+                    <div
+                      className="w-full max-w-[72px] rounded-[22px]"
+                      style={{
+                        height: `${Math.max(24, value * 2.2)}px`,
+                        backgroundColor: color,
+                        boxShadow: `0 12px 30px ${color}25`,
+                      }}
+                    />
+                  </div>
+                  <div className="text-sm font-semibold text-[#4b5563]">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -107,6 +129,12 @@ function PersonaPanel() {
               {scene}
             </div>
             <div className="mt-4 rounded-full bg-white px-3 py-2 text-sm text-[#5b6472]">{status}</div>
+            <div className="mt-4 h-2 rounded-full bg-white">
+              <div
+                className="h-2 rounded-full bg-[#111827]"
+                style={{ width: persona === '科技尝鲜' ? '42%' : persona === '高端家庭' ? '78%' : '65%' }}
+              />
+            </div>
           </div>
         ))}
       </div>
@@ -145,6 +173,18 @@ function SourcesPanel() {
               <div className="font-semibold text-[#111827]">{source}</div>
               <div>{level}</div>
               <div>{status}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          {[
+            ['豆包', '媒体 / 视频'],
+            ['Kimi', '媒体 / 参数库'],
+            ['元宝', '媒体 / 社区'],
+          ].map(([platform, mix]) => (
+            <div key={platform} className="rounded-[18px] bg-[#fbfbfd] px-4 py-4">
+              <div className="text-sm font-semibold text-[#111827]">{platform}</div>
+              <div className="mt-2 text-sm text-[#5b6472]">{mix}</div>
             </div>
           ))}
         </div>

@@ -549,19 +549,21 @@ class KnowledgeWorkspaceService:
             }
 
         terms = _extract_query_terms(query)
-        stmt = (
+        base_stmt = (
             select(KnowledgeSegment, KnowledgeRecord)
             .join(KnowledgeRecord, KnowledgeSegment.record_id == KnowledgeRecord.id)
             .where(*self._scope_conditions(entity_id=entity_id, brand_name=brand_name))
         )
         if source_types:
-            stmt = stmt.where(KnowledgeRecord.source_type.in_(source_types))
+            base_stmt = base_stmt.where(KnowledgeRecord.source_type.in_(source_types))
         if platform:
-            stmt = stmt.where(KnowledgeRecord.platform == platform)
+            base_stmt = base_stmt.where(KnowledgeRecord.platform == platform)
         if competitor_name:
-            stmt = stmt.where(KnowledgeRecord.competitor_name == competitor_name)
+            base_stmt = base_stmt.where(KnowledgeRecord.competitor_name == competitor_name)
         if domain:
-            stmt = stmt.where(KnowledgeRecord.domain == domain)
+            base_stmt = base_stmt.where(KnowledgeRecord.domain == domain)
+
+        stmt = base_stmt
         if terms:
             term_conditions = [
                 KnowledgeSegment.search_text.ilike(f"%{term}%") for term in terms
@@ -572,6 +574,11 @@ class KnowledgeWorkspaceService:
         )
 
         rows = (await self.db.execute(stmt)).all()
+        if not rows and terms:
+            fallback_stmt = base_stmt.order_by(desc(KnowledgeRecord.occurred_at)).limit(
+                max(limit * 8, 40)
+            )
+            rows = (await self.db.execute(fallback_stmt)).all()
         ranked: list[dict[str, Any]] = []
         for segment, record in rows:
             score = self._score_match(
@@ -597,7 +604,7 @@ class KnowledgeWorkspaceService:
             )
 
         ranked.sort(key=lambda item: (item["score"], item["occurred_at"]), reverse=True)
-        matches = ranked[:limit]
+        matches = [item for item in ranked if item["score"] >= 3][:limit]
         return {
             "status": "hit" if matches else "miss",
             "query": query,
@@ -926,28 +933,29 @@ class KnowledgeWorkspaceService:
         end_date: str | None,
         max_records: int,
     ) -> list[KnowledgeRecord]:
-        stmt = select(KnowledgeRecord).where(
+        base_stmt = select(KnowledgeRecord).where(
             *self._scope_conditions(entity_id=entity_id, brand_name=brand_name)
         )
         if source_types:
-            stmt = stmt.where(KnowledgeRecord.source_type.in_(source_types))
+            base_stmt = base_stmt.where(KnowledgeRecord.source_type.in_(source_types))
         if platform:
-            stmt = stmt.where(KnowledgeRecord.platform == platform)
+            base_stmt = base_stmt.where(KnowledgeRecord.platform == platform)
         if competitor_name:
-            stmt = stmt.where(KnowledgeRecord.competitor_name == competitor_name)
+            base_stmt = base_stmt.where(KnowledgeRecord.competitor_name == competitor_name)
         if domain:
-            stmt = stmt.where(KnowledgeRecord.domain == domain)
+            base_stmt = base_stmt.where(KnowledgeRecord.domain == domain)
 
         if start_date:
             parsed_start = self._parse_date(start_date, end_of_day=False)
             if parsed_start is not None:
-                stmt = stmt.where(KnowledgeRecord.occurred_at >= parsed_start)
+                base_stmt = base_stmt.where(KnowledgeRecord.occurred_at >= parsed_start)
         if end_date:
             parsed_end = self._parse_date(end_date, end_of_day=True)
             if parsed_end is not None:
-                stmt = stmt.where(KnowledgeRecord.occurred_at <= parsed_end)
+                base_stmt = base_stmt.where(KnowledgeRecord.occurred_at <= parsed_end)
 
         terms = _extract_query_terms(query)
+        stmt = base_stmt
         if terms:
             term_conditions = [
                 KnowledgeRecord.search_text.ilike(f"%{term}%") for term in terms
@@ -955,7 +963,14 @@ class KnowledgeWorkspaceService:
             stmt = stmt.where(or_(*term_conditions))
 
         stmt = stmt.order_by(desc(KnowledgeRecord.occurred_at)).limit(max_records)
-        return list((await self.db.execute(stmt)).scalars())
+        records = list((await self.db.execute(stmt)).scalars())
+        if records or not terms:
+            return records
+
+        fallback_stmt = base_stmt.order_by(desc(KnowledgeRecord.occurred_at)).limit(
+            max_records
+        )
+        return list((await self.db.execute(fallback_stmt)).scalars())
 
     def _aggregate_key(self, record: KnowledgeRecord, group_by: str) -> str | None:
         if group_by == "platform":

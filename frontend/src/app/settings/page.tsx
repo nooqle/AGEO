@@ -14,8 +14,8 @@ import { DashboardTopBar } from '@/components/layout/DashboardTopBar';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { toast } from '@/components/ui/toast';
+import { getPlatformDisplayName } from '@/config/platformLabel';
 import { cn, formatDateTime } from '@/lib/utils';
-import { PLATFORM_DISPLAY_NAMES } from '@/lib/platformLabel';
 import { api } from '@/services/api';
 import { useDashboardStore } from '@/stores/dashboardStore';
 import { useEntityStore } from '@/stores/entityStore';
@@ -30,7 +30,12 @@ import {
 } from '@/types/monitoring';
 
 const SETTINGS_STORAGE_KEY = 'specta-settings-v1';
-const PLATFORM_OPTIONS = Object.entries(PLATFORM_DISPLAY_NAMES);
+const MONITORING_PLATFORM_KEYS = ['doubao', 'hunyuan', 'kimi', 'deepseek'] as const;
+const DEFAULT_MONITORING_PLATFORMS = ['doubao', 'kimi'] as const;
+const PLATFORM_OPTIONS = MONITORING_PLATFORM_KEYS.map((platformKey) => [
+  platformKey,
+  getPlatformDisplayName(platformKey),
+]) as Array<[string, string]>;
 const FREQUENCY_OPTIONS: ScheduleFrequency[] = ['daily', 'weekly', 'biweekly', 'monthly'];
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => index);
 
@@ -75,12 +80,22 @@ function saveLocalSettings(settings: LocalSettings) {
   }
 }
 
+function filterSupportedMonitoringPlatforms(platforms: string[] | null | undefined): string[] {
+  return (platforms || []).filter((platform): platform is string =>
+    MONITORING_PLATFORM_KEYS.includes(platform as (typeof MONITORING_PLATFORM_KEYS)[number])
+  );
+}
+
 function createMonitoringForm(schedule: MonitoringSchedule | null, timezone: string): MonitoringFormState {
+  const platforms = schedule
+    ? filterSupportedMonitoringPlatforms(schedule.platforms)
+    : [...DEFAULT_MONITORING_PLATFORMS];
+
   return {
     frequency: schedule?.frequency || 'weekly',
     preferredHour: schedule?.preferred_hour ?? 9,
     timezone: schedule?.timezone || timezone,
-    platforms: schedule?.platforms?.length ? schedule.platforms : ['doubao', 'kimi'],
+    platforms,
     alertOnSignificantChange: schedule?.alert_on_significant_change ?? true,
     alertThresholdBwvs: schedule?.alert_threshold_bwvs ?? 10,
   };
@@ -391,7 +406,7 @@ export default function SettingsPage() {
         frequency: monitoringForm.frequency,
         preferred_hour: monitoringForm.preferredHour,
         timezone: monitoringForm.timezone,
-        platforms: monitoringForm.platforms,
+        platforms: filterSupportedMonitoringPlatforms(monitoringForm.platforms),
         alert_on_significant_change: monitoringForm.alertOnSignificantChange,
         alert_threshold_bwvs: monitoringForm.alertThresholdBwvs,
       };
@@ -604,7 +619,7 @@ export default function SettingsPage() {
                       <div className="flex justify-between gap-4"><span>下次执行</span><span style={{ color: 'var(--text-primary)' }}>{schedule?.next_run_at ? formatDateTime(schedule.next_run_at) : '--'}</span></div>
                       <div className="flex justify-between gap-4"><span>上次执行</span><span style={{ color: 'var(--text-primary)' }}>{schedule?.last_run_at ? formatDateTime(schedule.last_run_at) : '--'}</span></div>
                       <div className="flex justify-between gap-4"><span>基线状态</span><span style={{ color: 'var(--text-primary)' }}>{schedule?.has_baseline ? '已建立' : '未建立'}</span></div>
-                      <div className="flex justify-between gap-4"><span>监测平台</span><span className="text-right" style={{ color: 'var(--text-primary)' }}>{monitoringForm.platforms.length > 0 ? monitoringForm.platforms.map((platform) => PLATFORM_DISPLAY_NAMES[platform] || platform).join('、') : '--'}</span></div>
+                      <div className="flex justify-between gap-4"><span>监测平台</span><span className="text-right" style={{ color: 'var(--text-primary)' }}>{monitoringForm.platforms.length > 0 ? monitoringForm.platforms.map((platform) => getPlatformDisplayName(platform)).join('、') : '--'}</span></div>
                     </div>
 
                     {isScheduleLoading ? (

@@ -92,6 +92,25 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function uniqueStrings(values: Array<string | undefined | null>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    if (!isNonEmptyString(value)) {
+      continue;
+    }
+    const normalized = value.trim();
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -120,6 +139,10 @@ function toNumberValue(value: unknown): number | undefined {
     return toNumberValue(value.value);
   }
   return undefined;
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+  return toNumberValue(record[key]);
 }
 
 function formatMetricValue(metric: ReportV2Metric): string {
@@ -194,7 +217,7 @@ export function getDeliverableName(content: CanvasContent): SupportedDeliverable
     return null;
   }
 
-  if (content.data.report_kind === 'confidence_signal' || content.data.artifact_kind === 'confidence_signal') {
+  if (isConfidenceCanvasReport(content)) {
     return '置信度报告';
   }
 
@@ -418,71 +441,117 @@ function shortenScenarioLabel(value: string | undefined, limit = 42): string | u
   return trimmed.length > limit ? `${trimmed.slice(0, limit).trim()}...` : trimmed;
 }
 
-function buildBrandMentionSourcePreferences(mentions: ReportMentionItem[]): string[] {
-  const byPlatform = new Map<string, Map<string, number>>();
+const REPORT_PLATFORM_ORDER = ['doubao', 'yuanbao', 'kimi', 'deepseek', 'hunyuan'];
 
-  for (const item of mentions) {
-    if (!item.platform || !Array.isArray(item.citation_domains)) {
-      continue;
-    }
-    const platform = item.platform.trim();
-    if (!platform) {
-      continue;
-    }
-    const domainCounter = byPlatform.get(platform) ?? new Map<string, number>();
-    for (const domain of item.citation_domains) {
-      if (!domain || !domain.trim()) {
-        continue;
-      }
-      const normalized = domain.trim();
-      domainCounter.set(normalized, (domainCounter.get(normalized) ?? 0) + 1);
-    }
-    byPlatform.set(platform, domainCounter);
-  }
-
-  return [...byPlatform.entries()]
-    .map(([platform, counter]) => {
-      const topDomains = [...counter.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([domain, count]) => `${domain}（${count}）`);
-      return topDomains.length > 0 ? `在提及品牌的回答里，${platform} 主要引用 ${topDomains.join('、')}` : null;
-    })
-    .filter((item): item is string => Boolean(item));
+function getReportPlatformLabel(platform: string): string {
+  const normalized = platform.trim().toLowerCase();
+  if (normalized === 'doubao') return '豆包';
+  if (normalized === 'yuanbao') return '元宝';
+  if (normalized === 'kimi') return 'Kimi';
+  if (normalized === 'deepseek') return 'DeepSeek';
+  if (normalized === 'hunyuan') return '腾讯混元';
+  return platform;
 }
 
-function buildPlatformSourcePreferences(sourceOverview: Record<string, unknown> | undefined): string[] {
-  if (!sourceOverview || !isRecord(sourceOverview.platform_citation_stats)) {
-    return [];
+function getSourceSiteName(domain: string | undefined): string | undefined {
+  const normalized = toStringValue(domain)?.toLowerCase();
+  if (!normalized) {
+    return undefined;
   }
 
-  return Object.entries(sourceOverview.platform_citation_stats)
-    .map(([platform, rawStats]) => {
-      if (!isRecord(rawStats)) {
-        return null;
+  const mapping: Record<string, string> = {
+    'mp.weixin.qq.com': '微信公众号',
+    'baijiahao.baidu.com': '百家号',
+    'baike.baidu.com': '百度百科',
+    'finance.sina.com.cn': '新浪财经',
+    'finance.ifeng.com': '凤凰财经',
+    'xueqiu.com': '雪球',
+    '36kr.com': '36氪',
+    'zhihu.com': '知乎',
+    'm.chinairn.com': '中研网',
+    'bkso.baidu.com': '百度知识搜索',
+    'iesdouyin.com': '抖音',
+    'toutiao.com': '今日头条',
+    'sohu.com': '搜狐',
+    'sohu.com.cn': '搜狐',
+    'qq.com': '腾讯',
+    '163.com': '网易',
+  };
+
+  return mapping[normalized] ?? normalized;
+}
+
+function getPlatformPreference(platform: string): string {
+  const normalized = platform.trim().toLowerCase();
+  if (normalized === 'deepseek') return '更偏向技术内容、深度长文和结构完整的资料页。';
+  if (normalized === 'kimi') return '更偏向长文解析、媒体报道和信息组织较完整的页面。';
+  if (normalized === 'doubao') return '更偏向资讯流、泛生活内容和短内容聚合来源。';
+  if (normalized === 'hunyuan' || normalized === 'yuanbao') return '更偏向中文综合内容、社区讨论和微信生态来源。';
+  return '更偏向高频可访问的中文综合内容。';
+}
+
+function readUnknownRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function collectReportPlatforms(
+  platformBreakdown: Record<string, unknown> | undefined,
+  sourceOverview: Record<string, unknown> | undefined,
+  mentions: ReportMentionItem[]
+): string[] {
+  const candidates = uniqueStrings([
+    ...(platformBreakdown ? Object.keys(platformBreakdown) : []),
+    ...(isRecord(sourceOverview?.platform_citation_stats)
+      ? Object.keys(sourceOverview.platform_citation_stats)
+      : []),
+    ...mentions.map((item) => item.platform),
+  ]).map((item) => item.toLowerCase());
+
+  const known = REPORT_PLATFORM_ORDER.filter((item) => candidates.includes(item));
+  const others = candidates
+    .filter((item) => !known.includes(item))
+    .sort((a, b) => a.localeCompare(b));
+
+  return [...known, ...others];
+}
+
+function buildSourceDistributionTable(
+  sourceOverview: Record<string, unknown> | undefined,
+  factRows?: Array<Record<string, unknown>>
+): string[] {
+  const rows = [
+    '| 网站名 | 域名 | 引用次数 | 占比 |',
+    '| --- | --- | ---: | ---: |',
+  ];
+
+  if (factRows && factRows.length > 0) {
+    for (const item of factRows.slice(0, 15)) {
+      const domain = toStringValue(item.domain);
+      if (!domain) {
+        continue;
       }
-      const totalCitations = toNumberValue(rawStats.total_citations);
-      const officialCitations = toNumberValue(rawStats.official_citations);
-      const topDomains = Array.isArray(rawStats.top_domains) ? rawStats.top_domains : [];
-      const domainSummary = topDomains
-        .filter(isRecord)
-        .slice(0, 2)
-        .map((item) => {
-          const domain = toStringValue(item.domain);
-          const count = toNumberValue(item.count);
-          if (!domain) {
-            return null;
-          }
-          return typeof count === 'number' ? `${domain}（${count}）` : domain;
-        })
-        .filter((item): item is string => Boolean(item));
-      return joinInline([
-        `${platform} 总引用 ${typeof totalCitations === 'number' ? totalCitations : '--'} 次`,
-        typeof officialCitations === 'number' ? `官网 ${officialCitations} 次` : null,
-        domainSummary.length > 0 ? `偏好 ${domainSummary.join('、')}` : null,
-      ], '，');
-    })
-    .filter((item): item is string => Boolean(item));
+      const siteName = toStringValue(item.site_name) || getSourceSiteName(domain) || '未知来源';
+      const count = toNumberValue(item.count);
+      const share = toStringValue(item.share) || formatPercent(toNumberValue(item.share));
+      rows.push(`| ${siteName} | ${domain} | ${count ?? '--'} | ${share || '--'} |`);
+    }
+    return rows;
+  }
+
+  const topDomains = Array.isArray(sourceOverview?.top_domains) ? sourceOverview.top_domains.filter(isRecord) : [];
+
+  for (const item of topDomains.slice(0, 15)) {
+    const domain = toStringValue(item.domain);
+    if (!domain) {
+      continue;
+    }
+    const siteName = getSourceSiteName(domain) || domain;
+    const count = toNumberValue(item.count);
+    const share = formatPercent(toNumberValue(item.share));
+    rows.push(`| ${siteName} | ${domain} | ${count ?? '--'} | ${share} |`);
+  }
+
+  return rows;
 }
 
 function buildCustomerReportMarkdown(content: ReportCanvasContent): string {
@@ -491,17 +560,35 @@ function buildCustomerReportMarkdown(content: ReportCanvasContent): string {
       ? content.data.report_markdown.trim()
       : '';
 
+  // Backend is the only authority for A5 report content. Frontend falls back only
+  // for legacy artifacts that do not contain report_markdown at all.
   if (explicitMarkdown) {
     return explicitMarkdown;
   }
 
+  const dataRecord = content.data as Record<string, unknown>;
+  const reportDataRecord = readUnknownRecord(dataRecord.report_data);
+  const aeoFacts = readUnknownRecord(reportDataRecord?.aeo_report_facts);
   const view = buildReportViewModel(content);
-  const summaryMetrics = isRecord(content.data.summary_metrics) ? content.data.summary_metrics : undefined;
-  const sourceOverview = isRecord(content.data.source_overview) ? content.data.source_overview : undefined;
+  const summaryMetrics = readUnknownRecord(content.data.summary_metrics);
+  const sourceOverview = readUnknownRecord(content.data.source_overview);
+  const reportRecord = dataRecord;
+  const platformBreakdown =
+    readUnknownRecord(content.data.platform_breakdown) ||
+    readUnknownRecord(readUnknownRecord(content.data.metrics_raw)?.platform_breakdown) ||
+    readUnknownRecord(readUnknownRecord(content.data.report_data)?.platform_breakdown);
   const brandName =
     (isNonEmptyString(content.data.brand_name) ? content.data.brand_name.trim() : null) ||
     inferBrandFromHeadline(content.data.headline) ||
+    toStringValue(aeoFacts?.brand_name) ||
     '品牌';
+  const factMetricRows = Array.isArray(aeoFacts?.metric_rows) ? aeoFacts.metric_rows.filter(isRecord) : [];
+  const factPlatformRows = Array.isArray(aeoFacts?.platform_rows) ? aeoFacts.platform_rows.filter(isRecord) : [];
+  const factMissingExamples = Array.isArray(aeoFacts?.missing_examples) ? aeoFacts.missing_examples.filter(isRecord) : [];
+  const factContestedExamples = Array.isArray(aeoFacts?.contested_examples) ? aeoFacts.contested_examples.filter(isRecord) : [];
+  const factSourceRows = Array.isArray(aeoFacts?.source_rows) ? aeoFacts.source_rows.filter(isRecord) : [];
+  const competitorAName = toStringValue(aeoFacts?.competitor_a_name) || '竞品A';
+  const competitorBName = toStringValue(aeoFacts?.competitor_b_name) || '竞品B';
   const mentionRate = formatPercent(
     toNumberValue(summaryMetrics?.brand_mention_rate) ??
       toNumberValue((content.data.metrics as Record<string, unknown> | undefined)?.brand_mention_rate)
@@ -511,22 +598,16 @@ function buildCustomerReportMarkdown(content: ReportCanvasContent): string {
   const officialCitationRate = formatPercent(toNumberValue(sourceOverview?.official_citation_rate));
   const officialCitations = toNumberValue(sourceOverview?.official_citations);
   const totalCitations = toNumberValue(sourceOverview?.total_citations);
-  const topDomains = Array.isArray(sourceOverview?.top_domains)
-    ? sourceOverview.top_domains.filter(isRecord)
-    : [];
+  const brandDomain = toStringValue(reportRecord.brand_domain);
+  const remainingSourceCount = toNumberValue(aeoFacts?.remaining_source_count);
 
   const positiveCount = view.mentions.sentiment_summary?.positive ?? 0;
   const neutralCount = view.mentions.sentiment_summary?.neutral ?? 0;
   const negativeCount = view.mentions.sentiment_summary?.negative ?? 0;
-  const negativeMentions = (view.mentions.brand_mentions ?? []).filter(
+  const brandMentions = view.mentions.brand_mentions ?? [];
+  const negativeMentions = brandMentions.filter(
     (item) => item.sentiment?.toLowerCase() === 'negative'
   );
-  const negativeTopics = [...new Set(
-    negativeMentions
-      .map((item) => shortenScenarioLabel(item.scenario_label))
-      .filter((item): item is string => Boolean(item))
-  )].slice(0, 4);
-
   const legacyCompetitors = isRecord(content.data) && Array.isArray((content.data as Record<string, unknown>).competitors)
     ? ((content.data as Record<string, unknown>).competitors as unknown[])
     : [];
@@ -555,23 +636,19 @@ function buildCustomerReportMarkdown(content: ReportCanvasContent): string {
   const scenarioItems = view.scenarioCoverage.items ?? [];
   const missingItems = view.scenarioCoverage.missing_items ?? [];
   const riskItems = view.scenarioCoverage.risk_items ?? [];
-  const recommendedTopics = scenarioItems
-    .filter((item) => ['advantage', 'defend'].includes(item.battle_status || ''))
-    .slice(0, 4);
-  const marginalizedTopics = [
+  const contestedItems = [
     ...riskItems,
     ...scenarioItems.filter((item) => item.battle_status === 'contested'),
   ].slice(0, 4);
 
-  const platformPreferenceLines = buildPlatformSourcePreferences(sourceOverview);
-  const brandMentionSourcePreferenceLines = buildBrandMentionSourcePreferences(view.mentions.brand_mentions ?? []);
+  const sourceDistributionTable = buildSourceDistributionTable(sourceOverview, factSourceRows);
 
   const suggestionLines: string[] = [];
   if (missingItems.length > 0) {
     suggestionLines.push(
       `优先补齐 ${missingItems
-        .slice(0, 2)
-        .map((item) => `“${shortenScenarioLabel(item.scenario_label, 22) || item.scenario_label}”`)
+      .slice(0, 2)
+      .map((item) => `“${shortenScenarioLabel(item.scenario_label, 22) || item.scenario_label}”`)
         .join('、')} 相关的官网 FAQ、参数页和对比页，先解决品牌缺席。`
     );
   }
@@ -585,88 +662,152 @@ function buildCustomerReportMarkdown(content: ReportCanvasContent): string {
       `围绕 ${threatCompetitors.map((item) => item.name).join('、')} 这些高压竞品，补充“对比型内容 + 场景型证据页”，减少被一比一压制的场景。`
     );
   }
-  if (brandMentionSourcePreferenceLines.length > 0) {
-    suggestionLines.push('继续追问具体平台、具体负向提及和具体来源页面，可以进一步定位是内容缺口、引用缺口还是竞品压制。');
-  }
 
   const lines: string[] = [];
-  lines.push('## 摘要信息');
-  if (isNonEmptyString(content.data.executive_summary)) {
-    lines.push(content.data.executive_summary.trim(), '');
-  } else if (view.summary.summary) {
-    lines.push(view.summary.summary.trim(), '');
-  }
+  const summaryText =
+    (isNonEmptyString(content.data.executive_summary) ? content.data.executive_summary.trim() : null) ||
+    view.summary.summary ||
+    `${brandName} 当前提及率为 ${mentionRate}，在 ${scenarioTotal ?? '--'} 个核心问题里只进入了 ${scenarioHitCount ?? '--'} 个场景，品牌还没有形成稳定的跨平台占位。`;
 
-  lines.push('## 一、提及率指标');
-  lines.push(`- ${brandName} 本轮品牌提及率为 ${mentionRate}，进入了 ${scenarioHitCount ?? '--'}/${scenarioTotal ?? '--'} 个问题场景。`);
-  lines.push(`- 品牌提及情绪分布为：正向 ${positiveCount}、中性 ${neutralCount}、负向 ${negativeCount}。`);
-  if (negativeTopics.length > 0) {
-    lines.push(`- 当前负向提及主要集中在：${negativeTopics.join('、')}。`);
-  }
-  if (threatCompetitors.length > 0) {
-    lines.push(
-      `- 当前需要重点关注的竞品包括：${threatCompetitors
-        .map((item) => `${item.name}（提及率 ${item.mentionRateText}）`)
-        .join('、')}。`
-    );
-  }
+  lines.push('## 一、核心执行摘要');
+  lines.push(summaryText);
   lines.push('');
-
-  lines.push('## 二、答案引用信息分布');
-  lines.push(
-    `- 本轮共识别 ${totalCitations ?? '--'} 次引用，官网被引用 ${officialCitations ?? '--'} 次，官网引用率仅 ${officialCitationRate}。`
-  );
-  if (topDomains.length > 0) {
-    lines.push(
-      `- 整体引用来源主要集中在：${topDomains
-        .slice(0, 5)
-        .map((item) => {
-          const domain = toStringValue(item.domain);
-          const count = toNumberValue(item.count);
-          return domain ? `${domain}${typeof count === 'number' ? `（${count}）` : ''}` : null;
-        })
-        .filter((item): item is string => Boolean(item))
-        .join('、')}。`
-    );
-  }
-  platformPreferenceLines.slice(0, 4).forEach((line) => lines.push(`- ${line}。`));
-  brandMentionSourcePreferenceLines.slice(0, 4).forEach((line) => lines.push(`- ${line}。`));
-  lines.push('');
-
-  lines.push('## 三、业务主题覆盖');
-  lines.push(`- 本次共涉及 ${scenarioTotal ?? '--'} 个业务主题，品牌已进入 ${scenarioHitCount ?? '--'} 个。`);
-  if (recommendedTopics.length > 0) {
-    lines.push(
-      `- 当前优先被推荐的主题包括：${recommendedTopics
-        .map((item) => shortenScenarioLabel(item.scenario_label, 24))
-        .filter((item): item is string => Boolean(item))
-        .join('、')}。`
-    );
-  }
-  if (marginalizedTopics.length > 0) {
-    lines.push(
-      `- 当前被边缘化或竞争激烈的主题包括：${marginalizedTopics
-        .map((item) => shortenScenarioLabel(item.scenario_label, 24))
-        .filter((item): item is string => Boolean(item))
-        .join('、')}。`
-    );
-  }
-  if (missingItems.length > 0) {
-    lines.push(
-      `- 当前完全未出现的主题包括：${missingItems
-        .map((item) => shortenScenarioLabel(item.scenario_label, 24))
-        .filter((item): item is string => Boolean(item))
-        .join('、')}。`
-    );
-  }
-  lines.push('');
-
-  lines.push('## 四、进一步建议');
-  if (suggestionLines.length > 0) {
-    suggestionLines.forEach((line) => lines.push(`- ${line}`));
+  lines.push('## 二、核心数据基准看板');
+  lines.push(`| 指标名称 | 指标定义 | ${brandName} 数据 | ${competitorAName} 数据 | ${competitorBName} 数据 | 诊断结论 |`);
+  lines.push('| --- | --- | ---: | ---: | ---: | --- |');
+  if (factMetricRows.length > 0) {
+    for (const row of factMetricRows) {
+      lines.push(
+        `| ${toStringValue(row.metric_name) || '--'} | ${toStringValue(row.definition) || '--'} | ${toStringValue(row.brand_value) || '--'} | ${toStringValue(row.competitor_a_value) || '--'} | ${toStringValue(row.competitor_b_value) || '--'} | ${toStringValue(row.diagnosis) || '--'} |`
+      );
+    }
   } else {
-    lines.push(`- 建议继续围绕高价值缺席场景、官网引用缺口和竞品压制场景做追问分析，定位更深层的内容和平台问题。`);
+    lines.push(`| 提及率 | 在监测问题中，被至少一个平台提及的比例。 | ${mentionRate} | -- | -- | 当前已形成基础曝光，但还没有稳定的领先优势。 |`);
+    lines.push(`| 官网引用占比 | 在提及该品牌的回答里，引用链接指向官网的占比。 | ${officialCitationRate} | -- | -- | 官网信源是否真正影响答案，还需要结合来源分布继续判断。 |`);
+    lines.push(`| 品牌内容引用占比 | 在提及该品牌的回答里，所有引用链接中直接指向品牌相关内容的占比。 | ${formatPercent(content.data.report_v2?.sources?.content_citation_rate ?? view.sources.content_citation_rate)} | -- | -- | 品牌内容储备是否足够，会直接决定品牌能否被持续引用。 |`);
+    lines.push(`| 负向情感占比 | 在提及该品牌的回答里，带有明显负向倾向的占比。 | ${negativeMentions.length > 0 ? formatPercent(negativeMentions.length / Math.max(brandMentions.length, 1)) : '0.0%'} | -- | -- | 需要继续追溯具体负向样本，判断是历史语料还是竞品压制。 |`);
   }
+  lines.push('');
+  lines.push('### 证据来源分布（Top 15）');
+  lines.push(...sourceDistributionTable);
+  if ((remainingSourceCount ?? 0) > 0) {
+    lines.push('');
+    lines.push(`- 其余长尾来源合计 ${remainingSourceCount} 次引用。`);
+  }
+  lines.push('');
+
+  lines.push('## 三、跨大模型平台表现拆解');
+  lines.push('| 平台名称 | 平台抓取偏好 | 本品牌在该平台现状 | 存在问题与突破口 |');
+  lines.push('| --- | --- | --- | --- |');
+  if (factPlatformRows.length > 0) {
+    for (const row of factPlatformRows) {
+      lines.push(
+        `| ${toStringValue(row.platform) || '--'} | ${toStringValue(row.preference) || '--'} | ${toStringValue(row.status) || '--'} | ${toStringValue(row.problem) || '--'} |`
+      );
+    }
+  } else {
+    const platforms = collectReportPlatforms(platformBreakdown, sourceOverview, brandMentions);
+    for (const platform of platforms) {
+      const raw = platformBreakdown && isRecord(platformBreakdown[platform]) ? (platformBreakdown[platform] as Record<string, unknown>) : {};
+      const mentionCount =
+        readNumber(raw, 'mentions') ??
+        brandMentions.filter((item) => item.platform?.trim().toLowerCase() === platform).length;
+      const total = readNumber(raw, 'total') ?? scenarioTotal ?? 0;
+      const success = readNumber(raw, 'success') ?? total;
+      const status = mentionCount > 0
+        ? `本轮成功回答 ${success ?? '--'}/${total || '--'} 次，提及本品牌 ${mentionCount} 次。`
+        : `本轮成功回答 ${success ?? '--'}/${total || '--'} 次，但尚未稳定提及本品牌。`;
+      const problem = mentionCount > 0
+        ? '已有基础提及，但仍需补齐更强的对比型与场景型品牌证据。'
+        : '当前更像收录或语料缺口问题，应优先补齐该平台可抓取的品牌内容。';
+      lines.push(`| ${getReportPlatformLabel(platform)} | ${getPlatformPreference(platform)} | ${status} | ${problem} |`);
+    }
+  }
+  lines.push('');
+
+  const missingExamples = factMissingExamples.length > 0
+    ? factMissingExamples
+    : missingItems.slice(0, 3).map((item) => {
+        const itemRecord = item as unknown as Record<string, unknown>;
+        return {
+          scenario_label: item.scenario_label,
+          evidence: item.evidence,
+          query_examples: Array.isArray(itemRecord.query_examples) ? itemRecord.query_examples : [],
+        };
+      });
+  const contestedExamples = factContestedExamples.length > 0
+    ? factContestedExamples
+    : contestedItems.slice(0, 3).map((item) => {
+        const itemRecord = item as unknown as Record<string, unknown>;
+        return {
+          scenario_label: item.scenario_label,
+          evidence: item.evidence,
+          competitors_present: item.competitors_present ?? [],
+          query_examples: Array.isArray(itemRecord.query_examples) ? itemRecord.query_examples : [],
+          action_hint: toStringValue(itemRecord.action_hint),
+        };
+      });
+
+  lines.push('## 四、主题场景诊断：缺位与竞争图谱');
+  lines.push('### 品牌缺位场景');
+  if (missingExamples.length > 0) {
+    missingExamples.slice(0, 3).forEach((item, index) => {
+      const examples = Array.isArray(item.query_examples) ? item.query_examples.filter(isNonEmptyString) : [];
+      const question = (examples[0] as string | undefined) || toStringValue(item.scenario_label) || `缺位场景 ${index + 1}`;
+      lines.push(`#### 典型问题 ${index + 1}`);
+      lines.push(`- 问题：${question}`);
+      lines.push(`- 数据依据：${toStringValue(item.evidence) || 'AI 已回答该问题，但品牌没有进入最终答案。'}`);
+      lines.push('- 业务影响：这类问题通常已经进入高意图决策阶段，品牌如果完全缺位，用户会直接被带向竞品或替代方案。');
+    });
+  } else {
+    lines.push('- 本轮没有观察到完全缺位的典型场景，但仍建议持续扩大样本，排查长尾问题。');
+  }
+  lines.push('');
+  lines.push('### 竞争胶着场景');
+  if (contestedExamples.length > 0) {
+    contestedExamples.slice(0, 3).forEach((item, index) => {
+      const examples = Array.isArray(item.query_examples) ? item.query_examples.filter(isNonEmptyString) : [];
+      const question = (examples[0] as string | undefined) || toStringValue(item.scenario_label) || `竞争场景 ${index + 1}`;
+      const rivals = Array.isArray(item.competitors_present) ? item.competitors_present.filter(isNonEmptyString).join('、') : '';
+      lines.push(`#### 典型问题 ${index + 1}`);
+      lines.push(`- 问题：${question}`);
+      lines.push(`- 同框竞品：${rivals || '已观察到竞品同框，但当前样本未记录具体名称。'}`);
+      lines.push(`- 数据依据：${toStringValue(item.evidence) || '品牌进入了答案，但未形成稳定主胜。'}`);
+      if (toStringValue(item.action_hint)) {
+        lines.push(`- 当前缺口：${toStringValue(item.action_hint)}`);
+      }
+      lines.push('- 诊断：这类问题通常已经进入横向对比阶段，大模型会优先采用证据更完整、对比语料更充分的一方。');
+    });
+  } else {
+    lines.push('- 本轮没有观察到典型的竞品胶着场景，但仍建议持续监测对比类问题。');
+  }
+  lines.push('');
+
+  lines.push('## 五、AEO 常态化运营与优化策略');
+  lines.push('### 1. 基建优化（夯实第一信源）');
+  if (brandDomain) {
+    lines.push(`- 当前官网信号：${brandDomain} 被引用 ${officialCitations ?? '--'} 次，官网引用占比 ${officialCitationRate}。`);
+  } else {
+    lines.push('- 当前官网信号仍然偏弱，需要补齐更容易被 AI 解析的 FAQ、参数页、对比页和品牌说明页。');
+  }
+  lines.push('- 优先补齐结构化官网页面与问答页面，让品牌自己的权威内容真正进入答案引用链。');
+  lines.push('');
+  lines.push('### 2. 语料防御与对冲（处理负向与胶着）');
+  lines.push(`- 当前情绪分布：正向 ${positiveCount}、中性 ${neutralCount}、负向 ${negativeCount}。`);
+  lines.push(`- 当前高压竞品：${threatCompetitors.length > 0 ? threatCompetitors.map((item) => `${item.name}（提及率 ${item.mentionRateText}）`).join('、') : '暂无明显高压竞品'}。`);
+  lines.push('- 需要持续铺设更高权重、更可验证的 EEAT 语料，尤其是对比型、场景型与权威背书型内容。');
+  lines.push('');
+  lines.push('### 3. 填补盲区漏洞（拓展增量流量）');
+  if (suggestionLines.length > 0) {
+    suggestionLines.slice(0, 2).forEach((line) => lines.push(`- ${line}`));
+  } else {
+    lines.push('- 针对仍未进入答案的问题场景，定向生产首发内容，先解决缺位，再争取主胜。');
+  }
+  lines.push('- 内容选题必须直接对应真实提问方式，而不是泛化品牌宣传。');
+  lines.push('');
+  lines.push('### 4. 按月度 / 双周回测监测');
+  lines.push('- 持续回测提及率、官网引用占比、品牌内容引用占比、负向情感占比四项核心指标。');
+  lines.push('- 同时跟踪平台表现、缺位场景与竞争胶着场景，验证新增语料是否真的进入了答案与引用链。');
 
   return lines.join('\n').trim();
 }

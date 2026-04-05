@@ -23,8 +23,8 @@ from app.services.entity_service import EntityService
 from app.services.session_event_publisher import session_event_publisher
 from app.models.session import Session
 from app.models.message import Message, MessageType
-from app.workflow.a7.confidence_signal import (
-    append_manual_items_async,
+from app.workflow.confidence_analysis import (
+    append_confidence_analysis_manual_items_async,
 )
 from app.workflow.browser_action_runtime import (
     clear_session_browser_action_requests,
@@ -32,6 +32,7 @@ from app.workflow.browser_action_runtime import (
     resolve_browser_action_request,
 )
 from app.workflow.runtime_policy_executor import build_next_required_action
+from app.workflow.confirmation import resolve_confirmation_selection
 
 from sqlalchemy import select
 
@@ -76,6 +77,8 @@ _STEP_PROGRESS: dict[str, float] = {
     "A5": 0.9,
 }
 
+_SUPPORTED_TOOL_MODES = {"confidence_analysis"}
+
 
 async def _emit_session_error(
     session_id: str,
@@ -114,6 +117,65 @@ def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
     return "等待用户输入..."
 
 
+def _is_persona_selection_confirmation(
+    selection: str | dict[str, Any] | None,
+    option_id: str,
+) -> bool:
+    """Return True when the confirmation payload targets A2 persona selection."""
+
+    if isinstance(selection, dict):
+        selection_type = selection.get("type")
+        return selection_type in {"persona_path_selection", "skip"}
+
+    normalized = option_id.strip().lower()
+    if normalized == "skip":
+        return True
+    if isinstance(selection, str):
+        return selection.strip().lower() == "skip"
+    return False
+
+
+def _validate_confirmation_request_id(
+    state_values: dict[str, Any],
+    request_id: str,
+    selection: str | dict[str, Any] | None,
+    option_id: str,
+) -> tuple[bool, bool]:
+    """Validate request_id against current pending confirmation.
+
+    Returns:
+        (allowed, used_legacy_fallback)
+    """
+
+    pending_confirmation = state_values.get("pending_confirmation") or {}
+    if not isinstance(pending_confirmation, dict):
+        return True, False
+
+    pending_request_id = pending_confirmation.get("request_id")
+    pending_step_id = pending_confirmation.get("step_id")
+    expected_request_id = (
+        pending_request_id.strip()
+        if isinstance(pending_request_id, str)
+        else ""
+    )
+    step_id = pending_step_id.strip() if isinstance(pending_step_id, str) else ""
+
+    if step_id != "A2_PERSONA_SELECTION":
+        return True, False
+
+    if not expected_request_id:
+        return True, False
+
+    if request_id:
+        return request_id == expected_request_id, False
+
+    is_legacy_persona_selection = (
+        step_id == "A2_PERSONA_SELECTION"
+        and _is_persona_selection_confirmation(selection, option_id)
+    )
+    return is_legacy_persona_selection, is_legacy_persona_selection
+
+
 def _has_reusable_runtime_context(state_values: dict[str, Any]) -> bool:
     """Return True when state contains prior orchestration context to continue."""
 
@@ -145,6 +207,15 @@ def _has_reusable_runtime_context(state_values: dict[str, Any]) -> bool:
     )
 
 
+def _reset_follow_up_runtime_state(state_values: dict[str, Any]) -> None:
+    """Clear stale blockers before resuming orchestration from a prior session."""
+
+    state_values["awaiting_user"] = False
+    state_values["pending_confirmation"] = None
+    state_values["error_info"] = None
+    state_values["execution_status"] = "running"
+
+
 def _normalize_attachment_refs(raw_attachments: Any) -> list[dict[str, Any]]:
     """Normalize attachment refs from websocket payload."""
 
@@ -170,6 +241,13 @@ def _normalize_attachment_refs(raw_attachments: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def _normalize_tool_mode(raw_tool_mode: Any) -> str | None:
+    candidate = str(raw_tool_mode or "").strip()
+    if candidate in _SUPPORTED_TOOL_MODES:
+        return candidate
+    return None
+
+
 def _build_attachment_summary(attachments: list[dict[str, Any]]) -> str:
     if not attachments:
         return ""
@@ -184,10 +262,19 @@ def _resolve_task_label(
     brand_name: str,
     content: str,
     attachments: list[dict[str, Any]],
+    tool_mode: str | None = None,
 ) -> str:
     candidate_brand = brand_name.strip()
     if candidate_brand:
         return candidate_brand
+
+    if tool_mode == "confidence_analysis":
+        if attachments:
+            attachment_name = str(attachments[0].get("name") or "").strip()
+            attachment_stem = Path(attachment_name).stem.strip()
+            if attachment_stem:
+                return f"置信度分析：{attachment_stem}"
+        return "置信度分析"
 
     candidate_content = content.strip()
     if candidate_content:
@@ -521,6 +608,8 @@ async def rebuild_state_from_db(
         "table_intake_result": None,
         "confirmed_import_action": None,
         "import_source_metadata": None,
+        "selected_tool_mode": None,
+        "latest_user_input": None,
         "agent_retry_counts": {},
         # Execution control flags
         "headless_mode": False,
@@ -591,6 +680,7 @@ async def rebuild_state_from_db(
         # Rebuild orchestrator_history from user/agent text messages
         if role == "user":
             attachments = _normalize_attachment_refs(metadata.get("attachments", []))
+            tool_mode = _normalize_tool_mode(metadata.get("tool_mode"))
             replayed_content = content
             if attachments:
                 attachment_summary = _build_attachment_summary(attachments)
@@ -602,6 +692,8 @@ async def rebuild_state_from_db(
                     "attachments": attachments,
                     "user_message": content,
                 }
+            state["selected_tool_mode"] = tool_mode
+            state["latest_user_input"] = content
             state["orchestrator_history"].append(
                 {"role": "user", "content": replayed_content}
             )
@@ -734,7 +826,7 @@ async def rebuild_state_from_db(
                             state.get("import_source_metadata") or {}
                         )
                         import_source_metadata["imported_link_list_count"] = len(rows)
-                        import_source_metadata["imported_links"] = rows[:20]
+                        import_source_metadata["imported_links"] = rows
                         state["import_source_metadata"] = import_source_metadata
                     latest_import_artifact_sequence = max(
                         latest_import_artifact_sequence, sequence
@@ -805,6 +897,7 @@ async def handle_user_message_langgraph(
     existing_message_id = data.get("message_id")
     client_message_id = data.get("clientMessageId") or data.get("client_message_id")
     attachments = _normalize_attachment_refs(data.get("attachments", []))
+    tool_mode = _normalize_tool_mode(data.get("tool_mode"))
 
     # Build context-enhanced content for orchestrator
     enhanced_content = content
@@ -830,6 +923,7 @@ async def handle_user_message_langgraph(
         brand_name=brand_name,
         content=content,
         attachments=attachments,
+        tool_mode=tool_mode,
     )
 
     logger.info(
@@ -855,11 +949,14 @@ async def handle_user_message_langgraph(
         if persist_user_message:
             message_service = MessageService(db)
             try:
+                user_metadata: dict[str, Any] = {"tool_mode": tool_mode}
+                if attachments:
+                    user_metadata["attachments"] = attachments
                 saved = await message_service.save_message(
                     session_id=UUID(session_id),
                     role="user",
                     content=content,
-                    metadata={"attachments": attachments} if attachments else None,
+                    metadata=user_metadata or None,
                 )
                 existing_message_id = str(saved["id"])
             except Exception as e:
@@ -1021,9 +1118,6 @@ async def handle_user_message_langgraph(
                 update_state: dict[str, Any] = {
                     "orchestrator_history": history,
                     "user_decisions": user_decisions,
-                    "awaiting_user": False,
-                    "pending_confirmation": None,
-                    "execution_status": "running",
                     "user_id": (
                         str(session_user_id)
                         if session_user_id
@@ -1033,7 +1127,10 @@ async def handle_user_message_langgraph(
                     + [HumanMessage(content=enhanced_content)],
                     "task_id": follow_up_task_id,
                     "run_id": resumed_run_id or state_values.get("run_id"),
+                    "selected_tool_mode": tool_mode,
+                    "latest_user_input": content,
                 }
+                _reset_follow_up_runtime_state(update_state)
                 if attachments:
                     update_state["pending_table_intake"] = {
                         "attachments": attachments,
@@ -1045,6 +1142,10 @@ async def handle_user_message_langgraph(
                         "source_type": "uploaded_table",
                         "attachments": attachments,
                     }
+                    if tool_mode:
+                        update_state["import_source_metadata"]["requested_tool_mode"] = (
+                            tool_mode
+                        )
 
                 # Stream workflow execution from orchestrator
                 async for event in workflow.astream(update_state, config=config):
@@ -1119,11 +1220,11 @@ async def handle_user_message_langgraph(
                     restored["messages"] = list(restored.get("messages", [])) + [
                         HumanMessage(content=enhanced_content)
                     ]
-                    restored["awaiting_user"] = False
-                    restored["pending_confirmation"] = None
-                    restored["execution_status"] = "running"
+                    _reset_follow_up_runtime_state(restored)
                     restored["task_id"] = restored_task_id
                     restored["run_id"] = resumed_run_id or restored.get("run_id")
+                    restored["selected_tool_mode"] = tool_mode
+                    restored["latest_user_input"] = content
                     # Set A3 mode based on context profiles
                     profile_contexts = [
                         c for c in context if c.get("type") == "profile"
@@ -1146,6 +1247,10 @@ async def handle_user_message_langgraph(
                             "source_type": "uploaded_table",
                             "attachments": attachments,
                         }
+                        if tool_mode:
+                            restored["import_source_metadata"]["requested_tool_mode"] = (
+                                tool_mode
+                            )
                     async for event in workflow.astream(restored, config=config):
                         await _process_langgraph_event(session_id, event)
                     await _sync_runtime_after_stream(workflow, config)
@@ -1194,7 +1299,10 @@ async def handle_user_message_langgraph(
                 "user_id": str(session_user_id) if session_user_id else None,
                 "entity_id": entity_id,
                 "messages": [HumanMessage(content=enhanced_content)],
-                "brand_name": brand_name or content,
+                "brand_name": (
+                    brand_name
+                    or (content if tool_mode != "confidence_analysis" else "")
+                ),
                 "official_website": official_website,
                 "industry_hint": industry_hint,
                 # A1 outputs
@@ -1258,6 +1366,8 @@ async def handle_user_message_langgraph(
                     if attachments
                     else None
                 ),
+                "selected_tool_mode": tool_mode,
+                "latest_user_input": content,
                 # Cycle 3: Task persistence + multi-turn
                 "task_id": created_task_id,
                 "run_id": created_run_id,
@@ -1409,6 +1519,7 @@ async def handle_confirmation_langgraph(
     selection = data.get("selection", "")
     option_id = data.get("option_id", "")
     message = data.get("message", "")
+    request_id = data.get("request_id", "")
 
     # Build a user message from the confirmation
     # selection can be a string (inline button label) or dict (structured selection)
@@ -1428,23 +1539,6 @@ async def handle_confirmation_langgraph(
         f"[LangGraph] Received confirmation for session {session_id}: "
         f"user_content={user_content!r}, selection={selection!r}"
     )
-
-    # Persist the user's confirmation as a chat message so it survives page refresh
-    async with AsyncSessionLocal() as db:
-        message_service = MessageService(db)
-        try:
-            saved = await message_service.save_message(
-                session_id=UUID(session_id),
-                role="user",
-                content=user_content,
-            )
-            await session_event_publisher.emit_to_session(
-                session_id,
-                "user_message_ack",
-                {"message_id": str(saved["id"]), "content": user_content},
-            )
-        except Exception as e:
-            logger.error(f"[LangGraph] Error saving confirmation message: {e}")
 
     workflow = None
     config = None
@@ -1476,6 +1570,27 @@ async def handle_confirmation_langgraph(
             )
             return
 
+        request_allowed, used_legacy_request_fallback = _validate_confirmation_request_id(
+            state_values=state_values,
+            request_id=request_id if isinstance(request_id, str) else "",
+            selection=selection if isinstance(selection, (str, dict)) else None,
+            option_id=option_id if isinstance(option_id, str) else "",
+        )
+        if not request_allowed:
+            await _emit_session_error(
+                session_id,
+                {
+                    "message": "当前确认已失效，请重新发起分析。",
+                    "recoverable": True,
+                },
+            )
+            return
+        if used_legacy_request_fallback:
+            logger.info(
+                "[LangGraph] Accepting legacy persona confirmation without request_id for session %s",
+                session_id,
+            )
+
         resumed_run_id = await _submit_resume_run(state_values.get("task_id"))
         if state_values.get("task_id") and resumed_run_id is None:
             raise RuntimeError(
@@ -1491,226 +1606,69 @@ async def handle_confirmation_langgraph(
         history = list(state_values.get("orchestrator_history", []))
         user_decisions = dict(state_values.get("user_decisions", {}))
 
-        # Parse structured selection — see ConfirmationSelection type above
-        if (
-            isinstance(selection, dict)
-            and selection.get("type") == "persona_path_selection"
-        ):
-            sel: PersonaPathSelection = selection  # type: ignore[assignment]
-            selected_ids = sel.get("selectedPersonaIds", [])
-            selected_names = sel.get("selectedPersonaNames", [])
-            user_content = (
-                f"用户选择了以下画像进行聚焦分析：{', '.join(selected_names)}"
+        resolution = resolve_confirmation_selection(
+            selection=selection if isinstance(selection, (str, dict)) else None,
+            option_id=option_id if isinstance(option_id, str) else "",
+            user_content=user_content,
+            user_decisions=user_decisions,
+            state_values=state_values,
+        )
+        user_content = resolution.user_content
+        user_decisions = resolution.user_decisions
+        selected_option_id = ""
+        if isinstance(selection, dict):
+            selected_option_id = str(selection.get("optionId") or option_id or "")
+        elif isinstance(option_id, str):
+            selected_option_id = option_id
+
+        if selected_option_id == "run_answer_fetch":
+            user_content = "用户选择先执行答案抓取"
+            state_values["next_required_action"] = build_next_required_action(
+                tool_name="answer_fetch",
+                reason="用户在恢复面板中选择先执行答案抓取。",
+                reply_text="已按您的选择，先执行答案抓取。",
+                source_step="error_recovery",
             )
-            user_decisions["a3_mode"] = "persona"
-            user_decisions["selected_persona_ids"] = (
-                selected_names  # Use names for A3 matching
+            logger.info("[LangGraph] Inline confirmation: run_answer_fetch")
+        elif selected_option_id == "run_analysis_report":
+            user_content = "用户选择重新生成分析报告"
+            state_values["next_required_action"] = build_next_required_action(
+                tool_name="analysis_report_skill",
+                reason="用户在恢复面板中选择重新生成分析报告。",
+                reply_text="已按您的选择，重新生成分析报告。",
+                source_step="error_recovery",
             )
-            user_decisions["selected_persona_names"] = selected_names
-            logger.info(
-                f"[LangGraph] Persona selection: ids={selected_ids}, names={selected_names}"
+            logger.info("[LangGraph] Inline confirmation: run_analysis_report")
+        elif selected_option_id == "run_confidence_signal":
+            user_content = "用户选择重新执行引用置信度评估"
+            state_values["next_required_action"] = build_next_required_action(
+                tool_name="confidence_signal_skill",
+                reason="用户在恢复面板中选择重新执行引用置信度评估。",
+                reply_text="已按您的选择，重新执行引用置信度评估。",
+                source_step="error_recovery",
             )
-        elif isinstance(selection, dict) and selection.get("type") == "skip":
-            user_content = "用户选择跳过画像聚焦，使用品牌全景模式生成问题"
-            user_decisions["a3_mode"] = "brand"
-            logger.info("[LangGraph] User skipped persona selection, using brand mode")
-        elif isinstance(selection, dict) and selection.get("optionId"):
-            opt_id = selection["optionId"]
-            if opt_id == "persona_focused":
-                user_content = "用户选择聚焦画像分析"
-                user_decisions["a3_mode"] = "persona"
-                logger.info("[LangGraph] Inline confirmation: persona_focused mode")
-            elif opt_id == "brand_panorama":
-                user_content = "用户选择品牌全景分析"
-                user_decisions["a3_mode"] = "brand"
-                logger.info("[LangGraph] Inline confirmation: brand_panorama mode")
-            elif opt_id == "fast":
-                user_content = "用户选择快速采集"
-                user_decisions["fetch_mode_pending"] = False
-                user_decisions["fetch_mode_confirmed"] = True
-                state_values["fetch_mode"] = "fast"
-                logger.info("[LangGraph] Inline confirmation: fast fetch mode")
-            elif opt_id == "full":
-                user_content = "用户选择完整采集"
-                user_decisions["fetch_mode_pending"] = False
-                user_decisions["fetch_mode_confirmed"] = True
-                state_values["fetch_mode"] = "full"
-                logger.info("[LangGraph] Inline confirmation: full fetch mode")
-            elif opt_id == "regenerate":
-                user_content = "用户选择重新生成问题"
-                user_decisions["fetch_mode_pending"] = False
-                user_decisions["fetch_mode_confirmed"] = False
-                logger.info("[LangGraph] Inline confirmation: regenerate questions")
-            elif opt_id == "table_import_question_list":
-                user_content = "用户确认将表格作为 A3 问题列表导入"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "question_list"
-                user_decisions["question_import_mode"] = "replace"
-                logger.info(
-                    "[LangGraph] Inline confirmation: table_import_question_list"
+            logger.info("[LangGraph] Inline confirmation: run_confidence_signal")
+
+        # Persist the normalized confirmation as a chat message so it survives refresh
+        async with AsyncSessionLocal() as db:
+            message_service = MessageService(db)
+            try:
+                confirmation_metadata = {
+                    "tool_mode": state_values.get("selected_tool_mode"),
+                }
+                saved = await message_service.save_message(
+                    session_id=UUID(session_id),
+                    role="user",
+                    content=user_content,
+                    metadata=confirmation_metadata,
                 )
-            elif opt_id == "table_import_question_list_merge":
-                user_content = "用户确认将表格整合到上一版 A3 问题列表"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "question_list"
-                user_decisions["question_import_mode"] = "merge"
-                logger.info(
-                    "[LangGraph] Inline confirmation: table_import_question_list_merge"
+                await session_event_publisher.emit_to_session(
+                    session_id,
+                    "user_message_ack",
+                    {"message_id": str(saved["id"]), "content": user_content},
                 )
-            elif opt_id == "table_import_question_list_replace":
-                user_content = "用户确认用本次表格替换上一版 A3 问题列表"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "question_list"
-                user_decisions["question_import_mode"] = "replace"
-                logger.info(
-                    "[LangGraph] Inline confirmation: table_import_question_list_replace"
-                )
-            elif opt_id == "table_import_brand_info":
-                user_content = "用户确认将表格用于更新品牌/竞品信息"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "brand_competitor_info"
-                logger.info(
-                    "[LangGraph] Inline confirmation: table_import_brand_info"
-                )
-            elif opt_id == "table_import_link_list":
-                user_content = "用户确认将表格作为链接清单继续分析"
-                user_decisions["table_import_confirmed"] = True
-                user_decisions["confirmed_table_kind"] = "link_list"
-                logger.info("[LangGraph] Inline confirmation: table_import_link_list")
-            elif opt_id == "run_answer_fetch":
-                user_content = "用户选择先执行答案抓取"
-                state_values["next_required_action"] = build_next_required_action(
-                    tool_name="answer_fetch",
-                    reason="用户在恢复面板中选择先执行答案抓取。",
-                    reply_text="已按您的选择，先执行答案抓取。",
-                    source_step="error_recovery",
-                )
-                logger.info("[LangGraph] Inline confirmation: run_answer_fetch")
-            elif opt_id == "run_analysis_report":
-                user_content = "用户选择重新生成分析报告"
-                state_values["next_required_action"] = build_next_required_action(
-                    tool_name="analysis_report_skill",
-                    reason="用户在恢复面板中选择重新生成分析报告。",
-                    reply_text="已按您的选择，重新生成分析报告。",
-                    source_step="error_recovery",
-                )
-                logger.info("[LangGraph] Inline confirmation: run_analysis_report")
-            elif opt_id == "run_confidence_signal":
-                user_content = "用户选择重新执行引用置信度评估"
-                state_values["next_required_action"] = build_next_required_action(
-                    tool_name="confidence_signal_skill",
-                    reason="用户在恢复面板中选择重新执行引用置信度评估。",
-                    reply_text="已按您的选择，重新执行引用置信度评估。",
-                    source_step="error_recovery",
-                )
-                logger.info("[LangGraph] Inline confirmation: run_confidence_signal")
-            else:
-                user_content = selection.get("label", opt_id)
-                logger.info(f"[LangGraph] Inline confirmation: optionId={opt_id}")
-        elif isinstance(selection, str) and selection in (
-            "聚焦画像分析",
-            "开始场景细化分析",
-        ):
-            user_decisions["a3_mode"] = "persona"
-            user_content = selection
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to persona mode: {selection}"
-            )
-        elif isinstance(selection, str) and selection in ("品牌全景分析",):
-            user_decisions["a3_mode"] = "brand"
-            user_content = selection
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to brand mode: {selection}"
-            )
-        elif isinstance(selection, str) and selection in (
-            "快速采集（推荐）",
-            "快速采集",
-        ):
-            user_decisions["fetch_mode_pending"] = False
-            user_decisions["fetch_mode_confirmed"] = True
-            state_values["fetch_mode"] = "fast"
-            user_content = "用户选择快速采集"
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to fast mode: {selection}"
-            )
-        elif isinstance(selection, str) and selection in (
-            "完整采集",
-            "完整采集（全浏览器）",
-        ):
-            user_decisions["fetch_mode_pending"] = False
-            user_decisions["fetch_mode_confirmed"] = True
-            state_values["fetch_mode"] = "full"
-            user_content = "用户选择完整采集"
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to full mode: {selection}"
-            )
-        elif isinstance(selection, str) and selection in ("重新生成问题",):
-            user_decisions["fetch_mode_pending"] = False
-            user_decisions["fetch_mode_confirmed"] = False
-            user_content = "用户选择重新生成问题"
-            logger.info(
-                f"[LangGraph] Text confirmation mapped to regenerate: {selection}"
-            )
-        elif isinstance(selection, str) and selection in (
-            "作为 A3 问题列表导入",
-            "确认导入问题列表",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "question_list"
-            user_decisions["question_import_mode"] = "replace"
-            user_content = "用户确认将表格作为 A3 问题列表导入"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to question_list import: %s",
-                selection,
-            )
-        elif isinstance(selection, str) and selection in (
-            "整合导入",
-            "整合到上一版",
-            "追加到上一版",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "question_list"
-            user_decisions["question_import_mode"] = "merge"
-            user_content = "用户确认将表格整合到上一版 A3 问题列表"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to merge question import: %s",
-                selection,
-            )
-        elif isinstance(selection, str) and selection in (
-            "替换导入",
-            "替换上一版",
-            "只保留这次上传",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "question_list"
-            user_decisions["question_import_mode"] = "replace"
-            user_content = "用户确认用本次表格替换上一版 A3 问题列表"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to replace question import: %s",
-                selection,
-            )
-        elif isinstance(selection, str) and selection in (
-            "更新品牌/竞品信息",
-            "确认更新品牌信息",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "brand_competitor_info"
-            user_content = "用户确认将表格用于更新品牌/竞品信息"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to brand_competitor_info import: %s",
-                selection,
-            )
-        elif isinstance(selection, str) and selection in (
-            "作为链接清单继续",
-            "确认使用链接清单",
-        ):
-            user_decisions["table_import_confirmed"] = True
-            user_decisions["confirmed_table_kind"] = "link_list"
-            user_content = "用户确认将表格作为链接清单继续分析"
-            logger.info(
-                "[LangGraph] Text confirmation mapped to link_list import: %s",
-                selection,
-            )
+            except Exception as e:
+                logger.error(f"[LangGraph] Error saving confirmation message: {e}")
 
         history.append(
             {
@@ -1732,25 +1690,12 @@ async def handle_confirmation_langgraph(
             "next_required_action": state_values.get("next_required_action"),
             "user_id": state_values.get("user_id"),
             "run_id": resumed_run_id or state_values.get("run_id"),
+            "selected_tool_mode": state_values.get("selected_tool_mode"),
+            "latest_user_input": user_content,
         }
         if state_values.get("fetch_mode"):
             update_state["fetch_mode"] = state_values["fetch_mode"]
-        if user_decisions.get("table_import_confirmed"):
-            table_intake_result = state_values.get("table_intake_result") or {}
-            import_intent = table_intake_result.get("import_intent") or {}
-            update_state["confirmed_import_action"] = {
-                "table_kind": user_decisions.get("confirmed_table_kind"),
-                "target_step": {
-                    "question_list": "A3",
-                    "brand_competitor_info": "A1",
-                    "link_list": "CONFIDENCE_EVAL",
-                }.get(user_decisions.get("confirmed_table_kind"), "UNKNOWN"),
-                "source_file_id": (
-                    (table_intake_result.get("source_file") or {}).get("file_id")
-                ),
-                "import_mode": user_decisions.get("question_import_mode")
-                or import_intent.get("mode"),
-            }
+        update_state.update(resolution.state_updates)
 
         async for event in workflow.astream(update_state, config=config):
             await _process_langgraph_event(session_id, event)
@@ -1959,11 +1904,14 @@ async def handle_artifact_action_langgraph(
     if not existing_report:
         await _emit_session_error(
             session_id,
-            {"message": "未找到对应的置信度信号交付物", "recoverable": True},
+            {"message": "未找到对应的置信度报告交付物", "recoverable": True},
         )
         return
 
-    if existing_report.get("report_kind") != "confidence_signal":
+    if existing_report.get("report_kind") not in {
+        "confidence_signal",
+        "confidence_analysis",
+    }:
         await _emit_session_error(
             session_id,
             {"message": "当前交付物不支持额外评估", "recoverable": True},
@@ -1984,7 +1932,7 @@ async def handle_artifact_action_langgraph(
     )
 
     try:
-        updated_report = await append_manual_items_async(
+        updated_report = await append_confidence_analysis_manual_items_async(
             existing_report, raw_input=raw_input
         )
     except ValueError as exc:
@@ -2005,7 +1953,7 @@ async def handle_artifact_action_langgraph(
     await save_and_send_artifact(
         session_id=session_id,
         output_type="report",
-        title=message.content if message else "置信度信号",
+        title=message.content if message else "置信度报告",
         data=updated_report,
         artifact_key=artifact_id,
     )

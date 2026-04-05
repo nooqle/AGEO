@@ -21,6 +21,7 @@ import type { ContextTag } from '@/stores/contextStore';
 import type { StageResult } from '@/types/snapshot';
 import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
+import type { ToolMode } from '@/types/toolMode';
 import {
   buildOutputCardsFromApiMessage,
   getSupersededHistoryMessageIds,
@@ -40,6 +41,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const recalledContentRef = useRef<string | null>(null);
   const autoScrollEnabledRef = useRef(true);
   const [inputValue, setInputValue] = useState('');
+  const [selectedToolMode, setSelectedToolMode] = useState<ToolMode | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -342,7 +344,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           return;
         }
 
-        if (task.status === 'running') {
+        const waitingForInput = task.latest_run?.status === 'waiting_input';
+
+        if (task.status === 'running' && !waitingForInput) {
           // Restore progress UI
           useConversationStore.setState({ isAgentExecuting: true });
           if (task.progress > 0) {
@@ -384,6 +388,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
               }, index * 150);
             });
           }
+        } else if (waitingForInput) {
+          stopExecutionAction();
+          setExecutionProgress(null);
         } else if (task.status === 'completed' || task.status === 'failed') {
           // Show reconnection banner
           setReconnectionTask(task);
@@ -441,7 +448,12 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     browserActionToastRef.current = nextFingerprints;
   }, [actionableBrowserStates]);
   // Handle sending message
-  const handleSendMessage = useCallback((content: string, attachments?: Attachment[], context?: ContextTag[]) => {
+  const handleSendMessage = useCallback((
+    content: string,
+    attachments?: Attachment[],
+    context?: ContextTag[],
+    toolMode?: ToolMode | null,
+  ) => {
     if ((!content.trim() && (!attachments || attachments.length === 0)) || isAgentExecuting) return;
 
     // If user types while there's a pending confirmation, clear it
@@ -463,7 +475,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     startExecution();
 
     // Send message via WebSocket (with optional context)
-    sendMessage(content.trim(), context, attachments);
+    sendMessage(content.trim(), context, attachments, toolMode);
   }, [addMessage, startExecution, sendMessage, isAgentExecuting, pendingConfirmation, setPendingConfirmation]);
 
   // Auto-send brand name when navigating from Dashboard with ?brand= param
@@ -675,6 +687,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return undefined;
   };
 
+  const isWaitingForInput = !isAgentExecuting && activeTask?.latest_run?.status === 'waiting_input';
   const liveCurrentStage = isAgentExecuting
     ? executionProgress?.stage
     : activeTask?.current_stage ?? executionProgress?.stage;
@@ -697,6 +710,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           <div className="flex items-center gap-2">
             <TaskStatusBadge
               status={isAgentExecuting ? 'running' : (activeTask?.status ?? 'running')}
+              waitingForInput={isWaitingForInput}
               currentStage={liveCurrentStage}
               progress={liveProgress}
               progressMessage={liveProgressMessage}
@@ -834,6 +848,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         onChange={handleInputChange}
         placeholder={!isConnected ? '正在重新连接...' : undefined}
         progressMessage={liveProgressMessage}
+        selectedToolMode={selectedToolMode}
+        onToolModeChange={setSelectedToolMode}
       />
     </div>
   );

@@ -24,6 +24,7 @@ from app.workflow.harness_validation import (
 from app.workflow.nodes_a3 import _a3_baseline_dynamic_mode
 from app.workflow.nodes_a5 import a5_analytics_node
 from app.workflow.nodes_a7 import a7_confidence_signal_node
+from app.workflow.nodes_confidence_analysis import confidence_analysis_executor_node
 from app.workflow.nodes_followup import post_analysis_executor_node
 from app.workflow.orchestrator_instruction_defense import (
     build_instruction_defense_context,
@@ -550,6 +551,56 @@ async def test_a7_success_records_skill_result_and_validation(monkeypatch):
     assert command.update["error_info"] is None
     assert command.update["last_skill_result"]["skill_key"] == "confidence_signal_skill"
     assert command.update["last_skill_result"]["executor_ref"] == "a7_confidence_signal"
+    assert command.update["last_validation_result"]["passed"] is True
+    assert command.update["last_validation_result"]["gate_name"] == "postcondition_gate"
+    assert command.update["last_harness_decision"]["decision_type"] == "complete_skill"
+    assert command.update["confidence_signal_summary"]["headline"] == "置信度报告"
+
+
+@pytest.mark.asyncio
+async def test_confidence_analysis_executor_preserves_harness_gates(monkeypatch):
+    monkeypatch.setattr(
+        "app.workflow.nodes_confidence_analysis.send_progress_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_confidence_analysis.send_error_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_confidence_analysis.generate_confidence_analysis_artifact",
+        AsyncMock(
+            return_value={
+                "artifact_key": "session-a7_report_confidence_analysis_main",
+                "artifact_message_id": "msg-1",
+                "artifact_kind": "confidence_analysis",
+                "confidence_signal_summary": {
+                    "headline": "置信度报告",
+                    "overall_conclusion": "我方来源的平均置信度高于竞品。",
+                    "evaluated_source_count": 6,
+                    "brand_average_confidence": 78.4,
+                    "competitor_average_confidence": 72.1,
+                },
+            }
+        ),
+    )
+
+    command = await confidence_analysis_executor_node(
+        {
+            "session_id": "session-a7",
+            "fetch_results": [{"question_text": "Q1", "platform": "kimi"}],
+            "brand_profile": {"brand_name": "观夏"},
+            "competitors": [],
+            "current_skill": "confidence_analysis_skill",
+            "current_skill_contract": {"postconditions": ["confidence_artifact_persisted", "skill_result_recorded"]},
+            "skill_history": [],
+            "validation_history": [],
+        }
+    )
+
+    assert command.update["error_info"] is None
+    assert command.update["last_skill_result"]["skill_key"] == "confidence_analysis_skill"
+    assert command.update["last_skill_result"]["executor_ref"] == "confidence_analysis_executor"
     assert command.update["last_validation_result"]["passed"] is True
     assert command.update["last_validation_result"]["gate_name"] == "postcondition_gate"
     assert command.update["last_harness_decision"]["decision_type"] == "complete_skill"

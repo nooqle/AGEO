@@ -71,7 +71,6 @@ logger = logging.getLogger(__name__)
 
 SKILLIZED_TOOL_NAMES = {
     "data_analytics",
-    "citation_confidence_analysis",
     "drill_down_analysis",
     "compare_snapshots",
 }
@@ -436,18 +435,6 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "name": "citation_confidence_analysis",
-        "description": (
-            "基于当前会话里已经抓取到的引用来源，生成一份引用内容置信度评估。"
-            "不会重新抓取数据，只会评估当前 fetch_results 中已有的引用来源。"
-            "通常在 A5 报告生成后，用户明确表示希望检查引用可信度时调用。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-        },
-    },
     # --- Monitoring tools (Cycle 4) ---
     {
         "name": "create_monitoring_schedule",
@@ -739,10 +726,63 @@ def _get_latest_user_message(state: AgentState) -> str:
     return ""
 
 
+def _is_current_report_follow_up(state: AgentState) -> bool:
+    latest_user_message = _get_latest_user_message(state)
+    if not latest_user_message:
+        return False
+    if not (state.get("fetch_results") or state.get("report") or state.get("metrics")):
+        return False
+
+    current_markers = [
+        "这份报告",
+        "当前报告",
+        "本次报告",
+        "这个报告",
+        "基于这份报告",
+        "基于当前报告",
+        "当前结果",
+        "本次抓取",
+        "这次抓取",
+        "当前分析",
+    ]
+    history_markers = [
+        "历史",
+        "上次",
+        "最近两次",
+        "之前",
+        "月份",
+        "导出",
+        "下载",
+        "清单",
+        "表格",
+        "过去",
+        "过往",
+    ]
+    return (
+        any(marker in latest_user_message for marker in current_markers)
+        and not any(marker in latest_user_message for marker in history_markers)
+    )
+
+
+def _has_terminal_knowledge_result(state: AgentState) -> bool:
+    for key in (
+        "knowledge_lookup_result",
+        "knowledge_aggregate_result",
+        "knowledge_compare_result",
+        "knowledge_export_result",
+    ):
+        result = state.get(key) or {}
+        if isinstance(result, dict) and result.get("status") == "miss":
+            return True
+    return False
+
+
 def _build_knowledge_planning_hint(state: AgentState) -> str:
     """Provide a lightweight planning hint without hard-forcing tool choice."""
     latest_user_message = _get_latest_user_message(state)
     if not latest_user_message:
+        return ""
+    if _is_current_report_follow_up(state) or _has_terminal_knowledge_result(state):
         return ""
 
     manifest = state.get("knowledge_manifest") or {}
@@ -901,6 +941,10 @@ def _infer_knowledge_fallback_tool(
     latest_user_message = _get_latest_user_message(state)
     if not latest_user_message:
         return None
+    if _is_current_report_follow_up(state):
+        return None
+    if _has_terminal_knowledge_result(state):
+        return None
 
     manifest = state.get("knowledge_manifest") or {}
     available_sources = manifest.get("available_sources") or {}
@@ -1012,16 +1056,34 @@ def _infer_knowledge_fallback_tool(
 
     if any(keyword in text for keyword in lookup_keywords):
         source_types = None
-        if "竞品" in latest_user_message:
-            source_types = ["competitor_profile", "fetch_answer"]
-        elif "品牌" in latest_user_message:
-            source_types = ["brand_profile", "competitor_profile"]
+        answer_detail_keywords = [
+            "答案",
+            "回答",
+            "怎么回答",
+            "提及",
+            "负向",
+            "负面",
+            "正向",
+            "正面",
+            "中性",
+            "情感",
+            "证据",
+        ]
+        if any(keyword in latest_user_message for keyword in answer_detail_keywords):
+            source_types = ["fetch_answer", "fetch_citation"]
         elif (
             "引用" in latest_user_message
             or "官网" in latest_user_message
             or "来源" in latest_user_message
         ):
             source_types = ["fetch_citation", "fetch_answer"]
+        elif "竞品" in latest_user_message:
+            source_types = ["competitor_profile", "fetch_answer"]
+        elif any(
+            keyword in latest_user_message
+            for keyword in ["品牌档案", "品牌信息", "品牌定位", "品牌介绍", "核心产品", "目标受众"]
+        ):
+            source_types = ["brand_profile", "competitor_profile"]
         elif "答案" in latest_user_message:
             source_types = ["fetch_answer"]
         args: dict[str, Any] = {
@@ -1725,7 +1787,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             "如果是因为材料不足，请考虑先补齐 brand_analysis 或 answer_fetch。"
         )
 
-    if tool_name in {"citation_confidence_analysis", "confidence_signal_skill"}:
+    if tool_name == "confidence_analysis_skill":
         return (
             "引用内容置信度评估已完成。"
             "结果已经展示在画布中，您可以继续查看各引用来源的可信度、结构化质量和可核查性差异。"
@@ -1793,7 +1855,8 @@ def _get_tool_name_from_node(node_name: str) -> str | None:
     """Reverse lookup: node name → tool name."""
     preferred = {
         "a5_analytics": "analysis_report_skill",
-        "a7_confidence_signal": "confidence_signal_skill",
+        "confidence_analysis_executor": "confidence_analysis_skill",
+        "a7_confidence_signal": "confidence_analysis_skill",
         "post_analysis_executor": "post_analysis_skill",
     }
     if node_name in preferred:
@@ -1860,7 +1923,7 @@ def _build_ask_user_fallback_reply(
             "或者基于当前报告进入下一步画像分析、深入分析或直接提问。"
         )
 
-    if tool_name in {"citation_confidence_analysis", "confidence_signal_skill"}:
+    if tool_name == "confidence_analysis_skill":
         return (
             "引用内容置信度评估已完成。"
             "您现在可以继续基于这份评估追问具体来源问题，"
@@ -2242,8 +2305,7 @@ TOOL_TO_NODE: dict[str, str] = {
     "knowledge_aggregate": "knowledge_aggregate",
     "knowledge_compare": "knowledge_compare",
     "knowledge_export": "knowledge_export",
-    "confidence_signal_skill": "a7_confidence_signal",
-    "citation_confidence_analysis": "a7_confidence_signal",
+    "confidence_analysis_skill": "confidence_analysis_executor",
     "post_analysis_skill": "post_analysis_executor",
     "drill_down_analysis": "drill_down",
     "compare_snapshots": "compare_snapshots",
@@ -2265,6 +2327,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "knowledge_export": "历史知识导出",
     "confidence_signal_skill": "引用置信度评估",
     "citation_confidence_analysis": "引用内容置信度评估",
+    "confidence_analysis_skill": "引用置信度评估",
     "post_analysis_skill": "后续分析",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
@@ -2334,8 +2397,7 @@ def _matches_failed_step(tool_name: str, failed_step: str) -> bool:
         "answer_fetch": "A4",
         "analysis_report_skill": "A5",
         "data_analytics": "A5",
-        "confidence_signal_skill": "A7",
-        "citation_confidence_analysis": "A7",
+        "confidence_analysis_skill": "A7",
     }
     expected_step = step_id_map.get(tool_name, "")
     return failed_step in {tool_name, expected_step}
@@ -2659,7 +2721,10 @@ async def orchestrator_node(state: AgentState) -> Command:
 
     confirmed_import_action = dict(state.get("confirmed_import_action") or {})
     confirmed_table_kind = str(confirmed_import_action.get("table_kind") or "")
-    if confirmed_table_kind == "question_list":
+    import_confirmed = bool(
+        (state.get("user_decisions") or {}).get("table_import_confirmed")
+    )
+    if confirmed_table_kind == "question_list" and import_confirmed:
         uploaded_ready = (state.get("simulated_questions") or {}).get(
             "generation_mode"
         ) == "uploaded_list"
@@ -3342,7 +3407,7 @@ async def _handle_tool_call(
             and state.get("user_decisions", {}).get("table_import_confirmed")
             and state.get("user_decisions", {}).get("confirmed_table_kind")
             == "question_list"
-            and requested_question_mode != "uploaded_list"
+            and not requested_question_mode
         ):
             logger.info(
                 "[Orchestrator] Overriding question_simulation mode to uploaded_list after confirmed table import"
@@ -3354,7 +3419,7 @@ async def _handle_tool_call(
         # unless the user just triggered a retry (retry_counts reset to 0).
         if (
             effective_tool_name == "question_simulation"
-            and requested_question_mode != "uploaded_list"
+            and not requested_question_mode
             and state.get("simulated_questions")
         ):
             is_fresh_retry = current_retry_counts.get("question_simulation", 0) == 0
@@ -3430,13 +3495,14 @@ async def _handle_tool_call(
             "answer_fetch": "A4",
             "analysis_report_skill": "A5",
             "data_analytics": "A5",
-            "confidence_signal_skill": "A7",
+            "confidence_analysis_skill": "A7",
         }
         workflow_steps = _build_workflow_steps(state)
         current_step_id = tool_to_step_id.get(effective_tool_name)
         if current_step_id is None and resolved_skill is not None:
             current_step_id = {
                 "a5_data_analytics": "A5",
+                "confidence_analysis_executor": "A7",
                 "a7_confidence_signal": "A7",
             }.get(resolved_skill.executor_ref)
         for s in workflow_steps:
@@ -3494,15 +3560,17 @@ async def _handle_tool_call(
                 "answer_fetch": _fetch_fallback,
                 "analysis_report_skill": "正在整理场景、风险与优先动作建议，请稍候…",
                 "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
-                "confidence_signal_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
-                "citation_confidence_analysis": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
+                "confidence_analysis_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
                 "post_analysis_skill": "正在基于已有结果执行后续分析，请稍候...",
             }
             fallback_text = FALLBACK_TEXTS.get(effective_tool_name)
             if fallback_text is None and resolved_skill is not None:
                 fallback_text = {
                     "a5_data_analytics": FALLBACK_TEXTS["analysis_report_skill"],
-                    "a7_confidence_signal": FALLBACK_TEXTS["confidence_signal_skill"],
+                    "confidence_analysis_executor": FALLBACK_TEXTS[
+                        "confidence_analysis_skill"
+                    ],
+                    "a7_confidence_signal": FALLBACK_TEXTS["confidence_analysis_skill"],
                     "post_analysis_executor": FALLBACK_TEXTS["post_analysis_skill"],
                 }.get(resolved_skill.executor_ref)
             fallback_text = fallback_text or f"正在执行：{display_name}，请稍候..."

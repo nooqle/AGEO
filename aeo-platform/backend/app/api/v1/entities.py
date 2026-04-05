@@ -17,7 +17,10 @@ async def list_entities(
 ):
     """List all brand entities."""
     service = EntityService(db)
-    return await service.list_entities(current_user)
+    return await service.list_entities(
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
 
 
 @router.get("/{entity_id}")
@@ -28,7 +31,11 @@ async def get_entity(
 ):
     """Get entity by ID."""
     service = EntityService(db)
-    entity = await service.get_entity(entity_id, current_user)
+    entity = await service.get_entity(
+        entity_id,
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity

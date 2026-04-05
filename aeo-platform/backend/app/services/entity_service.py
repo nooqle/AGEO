@@ -66,11 +66,21 @@ class EntityService:
             "updated_at": entity.updated_at.isoformat() if entity.updated_at else None,
         }
 
-    async def list_entities(self, viewer: User | None = None) -> list[dict[str, Any]]:
+    async def list_entities(
+        self,
+        viewer: User | None = None,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ) -> list[dict[str, Any]]:
         if self.db:
             stmt = select(Entity)
             if viewer is not None:
-                stmt = stmt.where(AccessScopeService.entity_visibility_filter(viewer))
+                stmt = stmt.where(
+                    AccessScopeService.entity_visibility_filter(
+                        viewer,
+                        allow_internal_admin_bypass=allow_internal_admin_bypass,
+                    )
+                )
             stmt = stmt.order_by(Entity.created_at.desc())
             result = await self.db.execute(stmt)
             entities = result.scalars().all()
@@ -81,6 +91,8 @@ class EntityService:
         self,
         entity_id: str,
         viewer: User | None = None,
+        *,
+        allow_internal_admin_bypass: bool = True,
     ) -> Entity | None:
         if self.db:
             try:
@@ -92,17 +104,28 @@ class EntityService:
             result = await self.db.execute(
                 select(Entity).where(
                     Entity.id == entity_uuid,
-                    AccessScopeService.entity_visibility_filter(viewer),
+                    AccessScopeService.entity_visibility_filter(
+                        viewer,
+                        allow_internal_admin_bypass=allow_internal_admin_bypass,
+                    ),
                 )
             )
             return result.scalar_one_or_none()
         return None
 
     async def get_entity(
-        self, entity_id: str, viewer: User | None = None
+        self,
+        entity_id: str,
+        viewer: User | None = None,
+        *,
+        allow_internal_admin_bypass: bool = True,
     ) -> dict[str, Any] | None:
         if self.db:
-            entity = await self.get_entity_model(entity_id, viewer)
+            entity = await self.get_entity_model(
+                entity_id,
+                viewer,
+                allow_internal_admin_bypass=allow_internal_admin_bypass,
+            )
             return self._model_to_dict(entity) if entity else None
         return _entities.get(entity_id)
 

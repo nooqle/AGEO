@@ -13,8 +13,12 @@ class AccessScopeService:
     """Shared visibility rules for personal / organization scoped resources."""
 
     @staticmethod
-    def entity_visibility_filter(user: User):
-        if user.role == UserRole.INTERNAL_ADMIN:
+    def entity_visibility_filter(
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ):
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return true()
         filters = [
             Entity.owner_user_id == user.id,
@@ -30,8 +34,12 @@ class AccessScopeService:
         return or_(*filters) if filters else false()
 
     @staticmethod
-    def session_visibility_filter(user: User):
-        if user.role == UserRole.INTERNAL_ADMIN:
+    def session_visibility_filter(
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ):
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return true()
         filters = [Session.user_id == user.id]
         if user.organization_id:
@@ -46,8 +54,12 @@ class AccessScopeService:
         return or_(*filters) if filters else false()
 
     @staticmethod
-    def task_visibility_filter(user: User):
-        if user.role == UserRole.INTERNAL_ADMIN:
+    def task_visibility_filter(
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ):
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return true()
         filters = [AnalysisTask.user_id == user.id]
         if user.organization_id:
@@ -62,8 +74,12 @@ class AccessScopeService:
         return or_(*filters) if filters else false()
 
     @staticmethod
-    def schedule_visibility_filter(user: User):
-        if user.role == UserRole.INTERNAL_ADMIN:
+    def schedule_visibility_filter(
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ):
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return true()
         filters = [MonitoringSchedule.user_id == user.id]
         if user.organization_id:
@@ -78,10 +94,15 @@ class AccessScopeService:
         return or_(*filters) if filters else false()
 
     @staticmethod
-    def can_access_entity(entity: Entity | None, user: User) -> bool:
+    def can_access_entity(
+        entity: Entity | None,
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ) -> bool:
         if entity is None:
             return False
-        if user.role == UserRole.INTERNAL_ADMIN:
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return True
         if entity.owner_user_id == user.id:
             return True
@@ -94,47 +115,84 @@ class AccessScopeService:
         return False
 
     @staticmethod
-    def can_manage_entity(entity: Entity | None, user: User) -> bool:
+    def can_manage_entity(
+        entity: Entity | None,
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ) -> bool:
         if entity is None:
             return False
-        if user.role == UserRole.INTERNAL_ADMIN:
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return True
         return entity.owner_user_id == user.id
 
     @staticmethod
-    def can_access_session(session: Session | None, user: User) -> bool:
+    def can_access_session(
+        session: Session | None,
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ) -> bool:
         if session is None:
             return False
-        if user.role == UserRole.INTERNAL_ADMIN:
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return True
         if session.user_id == user.id:
             return True
-        return AccessScopeService.can_access_entity(session.entity, user)
+        return AccessScopeService.can_access_entity(
+            session.entity,
+            user,
+            allow_internal_admin_bypass=allow_internal_admin_bypass,
+        )
 
     @staticmethod
-    def can_access_task(task: AnalysisTask | None, user: User) -> bool:
+    def can_access_task(
+        task: AnalysisTask | None,
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ) -> bool:
         if task is None:
             return False
-        if user.role == UserRole.INTERNAL_ADMIN:
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return True
         if task.user_id == user.id:
             return True
-        return AccessScopeService.can_access_entity(task.entity, user)
+        return AccessScopeService.can_access_entity(
+            task.entity,
+            user,
+            allow_internal_admin_bypass=allow_internal_admin_bypass,
+        )
 
     @staticmethod
-    def can_access_schedule(schedule: MonitoringSchedule | None, user: User) -> bool:
+    def can_access_schedule(
+        schedule: MonitoringSchedule | None,
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ) -> bool:
         if schedule is None:
             return False
-        if user.role == UserRole.INTERNAL_ADMIN:
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return True
         if schedule.user_id == user.id:
             return True
-        return AccessScopeService.can_access_entity(schedule.entity, user)
+        return AccessScopeService.can_access_entity(
+            schedule.entity,
+            user,
+            allow_internal_admin_bypass=allow_internal_admin_bypass,
+        )
 
     @staticmethod
-    def can_manage_schedule(schedule: MonitoringSchedule | None, user: User) -> bool:
+    def can_manage_schedule(
+        schedule: MonitoringSchedule | None,
+        user: User,
+        *,
+        allow_internal_admin_bypass: bool = True,
+    ) -> bool:
         if schedule is None:
             return False
-        if user.role == UserRole.INTERNAL_ADMIN:
+        if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return True
         return schedule.user_id == user.id

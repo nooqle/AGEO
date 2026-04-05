@@ -2,13 +2,31 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
 from app.services.analytics_service import AnalyticsService
+from app.services.entity_service import EntityService
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+async def _ensure_brand_access(
+    brand_id: str | None,
+    *,
+    db: AsyncSession,
+    current_user,
+) -> None:
+    if not brand_id:
+        return
+    entity = await EntityService(db).get_entity_model(
+        brand_id,
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
+    if entity is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
 
 
 @router.get("/overview")
@@ -19,7 +37,12 @@ async def get_overview(
     current_user=Depends(get_current_user),
 ):
     """Get KPI overview: visibility, mention rate, SOV."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_overview(brand_id, date_range)
 
 
@@ -31,7 +54,12 @@ async def get_visibility(
     current_user=Depends(get_current_user),
 ):
     """Get visibility trend data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_visibility_data(brand_id, date_range)
 
 
@@ -42,7 +70,12 @@ async def get_platforms(
     current_user=Depends(get_current_user),
 ):
     """Get platform comparison data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_platform_data(brand_id)
 
 
@@ -53,7 +86,12 @@ async def get_sources(
     current_user=Depends(get_current_user),
 ):
     """Get source distribution data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_source_data(brand_id)
 
 
@@ -64,7 +102,12 @@ async def get_aeo_metrics(
     current_user=Depends(get_current_user),
 ):
     """Get AEO performance metrics."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_aeo_metrics(brand_id)
 
 
@@ -75,7 +118,12 @@ async def get_sentiment(
     current_user=Depends(get_current_user),
 ):
     """Get sentiment analysis data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_sentiment_data(brand_id)
 
 
@@ -86,7 +134,12 @@ async def get_competitors(
     current_user=Depends(get_current_user),
 ):
     """Get competitor comparison data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_competitor_data(brand_id)
 
 
@@ -98,7 +151,12 @@ async def get_overview_v2(
     current_user=Depends(get_current_user),
 ):
     """Get Dashboard V2 overview data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_overview_v2(brand_id, date_range)
 
 
@@ -109,7 +167,12 @@ async def get_scenarios_v2(
     current_user=Depends(get_current_user),
 ):
     """Get Dashboard V2 scenario table data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_scenarios_v2(brand_id)
 
 
@@ -120,7 +183,12 @@ async def get_competitor_battles_v2(
     current_user=Depends(get_current_user),
 ):
     """Get Dashboard V2 competitor battle data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_competitor_battles_v2(brand_id)
 
 
@@ -131,7 +199,12 @@ async def get_sources_v2(
     current_user=Depends(get_current_user),
 ):
     """Get Dashboard V2 source overview."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_sources_v2(brand_id)
 
 
@@ -143,7 +216,12 @@ async def get_dashboard_home_v2(
     current_user=Depends(get_current_user),
 ):
     """Get Dashboard homepage three-board aggregate data."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_dashboard_home_v2(brand_id)
 
 
@@ -154,7 +232,12 @@ async def get_risks_actions_v2(
     current_user=Depends(get_current_user),
 ):
     """Get Dashboard V2 risks and actions."""
-    service = AnalyticsService(db)
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
     return await service.get_risks_actions_v2(brand_id)
 
 
@@ -174,6 +257,7 @@ async def get_trend(
     """Get trend time series for a specific metric."""
     from app.services.trend_engine import TrendEngine
 
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
     engine = TrendEngine(db)
     data_points = await engine.get_trend_data_points(
         UUID(brand_id), metric_name=metric, limit=limit
@@ -190,6 +274,7 @@ async def get_trend_summary(
     """Get trend summary for all core metrics."""
     from app.services.trend_engine import TrendEngine
 
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
     engine = TrendEngine(db)
     summaries = await engine.get_entity_trend_summary(UUID(brand_id))
     return {

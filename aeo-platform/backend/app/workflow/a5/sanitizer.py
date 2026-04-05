@@ -3,7 +3,8 @@
 import re
 from typing import Any
 
-def _strip_bwvs_phrases(text: str) -> str:
+
+def _strip_bwvs_phrases(text: str, preserve_line_breaks: bool = False) -> str:
     """Remove BWVS-forward phrasing from user-facing copy."""
     if not text:
         return text
@@ -18,10 +19,27 @@ def _strip_bwvs_phrases(text: str) -> str:
     for pattern in patterns:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
-    cleaned = re.sub(r"[，,]{2,}", "，", cleaned)
-    cleaned = re.sub(r"([。；])\1+", r"\1", cleaned)
-    cleaned = re.sub(r"^\s*[，,；;]\s*", "", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if preserve_line_breaks:
+        normalized_lines: list[str] = []
+        blank_count = 0
+        for raw_line in cleaned.splitlines():
+            line = re.sub(r"[ \t]{2,}", " ", raw_line)
+            line = re.sub(r"[，,]{2,}", "，", line)
+            line = re.sub(r"([。；])\1+", r"\1", line)
+            line = re.sub(r"^\s*[，,；;]\s*", "", line).rstrip()
+            if not line.strip():
+                blank_count += 1
+                if blank_count <= 1:
+                    normalized_lines.append("")
+                continue
+            blank_count = 0
+            normalized_lines.append(line)
+        cleaned = "\n".join(normalized_lines).strip()
+    else:
+        cleaned = re.sub(r"[，,]{2,}", "，", cleaned)
+        cleaned = re.sub(r"([。；])\1+", r"\1", cleaned)
+        cleaned = re.sub(r"^\s*[，,；;]\s*", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned or text
 
 
@@ -32,7 +50,15 @@ def _sanitize_user_facing_report(report_data: Any) -> Any:
     if isinstance(report_data, list):
         return [_sanitize_user_facing_report(item) for item in report_data]
     if isinstance(report_data, dict):
-        return {key: _sanitize_user_facing_report(value) for key, value in report_data.items()}
+        sanitized: dict[str, Any] = {}
+        for key, value in report_data.items():
+            if key == "report_markdown" and isinstance(value, str):
+                sanitized[key] = _strip_bwvs_phrases(
+                    value, preserve_line_breaks=True
+                )
+            else:
+                sanitized[key] = _sanitize_user_facing_report(value)
+        return sanitized
     return report_data
 
 
