@@ -21,7 +21,7 @@
 ## 本轮固定共识
 
 1. `A5` 仍然是 executor，`analysis_report_skill` 是 public skill。
-2. `A7` 仍然是 executor，`confidence_signal_skill` 是 public skill。
+2. `A7` 仍然是 executor，`confidence_analysis_skill` 是 public skill。
 3. `post_analysis_skill` 是 follow-up capability contract，不是 follow-up node 的别名。
 4. `A3` 当前仍混合角色、动作、节点三层语义；本轮只先建立 capability matrix 和 contract 边界，不一次性重写 A3。
 5. `general_react_agent.md` 继续保留为 orchestrator 设计基线，但运行时 prompt 以 `orchestrator_node.py` 的 sectioned assembly 为准。
@@ -33,7 +33,7 @@
 2. Phase 1
    - 引入 `PromptAssembly`，把 orchestrator prompt 改成 sectioned runtime assembly。
 3. Phase 2
-   - 引入 `SkillContract`，先覆盖 `analysis_report_skill`、`confidence_signal_skill`、`post_analysis_skill`。
+   - 引入 `SkillContract`，先覆盖 `analysis_report_skill`、`confidence_analysis_skill`、`post_analysis_skill`。
    - A5/A7 接入 `precondition gate` 和 `artifact writeback gate`。
 4. Phase 3 以后
    - 再推进 capability matrix、A3 拆层、A4/AIO harness policy、全链路推广。
@@ -77,7 +77,7 @@
 
 ## 非目标
 
-1. 本轮不重写 A4/AIO runtime。
+1. AIO sandbox runtime 已并入当前分支；后续只做接线、生命周期与 Harness 治理收口，不重写 AIO sandbox 业务能力本身。
 2. 本轮不清理全部 legacy alias。
 3. 本轮不做数据库 schema 迁移。
 4. 本轮不把所有 node 一次性 skill 化。

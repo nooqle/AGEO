@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 from langgraph.types import Command
 
+from app.api.v1.aio import _ensure_takeover_bundle_is_active
+from app.core.fetchers.browser.aio_client import AioBrowserInfo
+from app.services.aio_runtime_contracts import AioSessionState, AioTakeoverState
+from app.services.aio_session_manager import (
+    AioSandboxSessionManager,
+    SpectaAioSession,
+    SpectaAioTakeover,
+)
 from app.services.skill_contracts import build_skill_contract
 from app.services.skill_package_service import skill_package_service
 from app.services.tool_capability_matrix import (
@@ -51,6 +61,119 @@ from app.workflow.runtime_policy_executor import (
     resolve_answer_fetch_mode_policy,
 )
 from app.workflow.skill_state import apply_skill_prompt_context
+
+
+def test_takeover_bundle_requires_active_state():
+    now = datetime.now(timezone.utc)
+    takeover = SpectaAioTakeover(
+        takeover_id="takeover_terminal",
+        session_id="session_1",
+        workspace_id="workspace_1",
+        user_id="user_1",
+        platform="deepseek",
+        mode="canvas_cdp",
+        reason="manual_intervention",
+        state=AioTakeoverState.RESOLVED,
+        frontend_id="frontend_1",
+        requested_at=now,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _ensure_takeover_bundle_is_active(takeover)
+
+    assert exc_info.value.status_code == 409
+    assert "旧接管 bundle 已失效" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_takeover_access_reissues_after_resume_failed(monkeypatch):
+    manager = AioSandboxSessionManager()
+    now = datetime.now(timezone.utc)
+    existing_takeover = SpectaAioTakeover(
+        takeover_id="takeover_old",
+        session_id="session_1",
+        workspace_id="workspace_1",
+        user_id="user_1",
+        platform="deepseek",
+        mode="canvas_cdp",
+        reason="manual_intervention",
+        state=AioTakeoverState.RESUME_FAILED,
+        frontend_id="frontend_old",
+        requested_at=now - timedelta(minutes=5),
+        issued_at=now - timedelta(minutes=5),
+        expires_at=now + timedelta(minutes=5),
+        request_id="req_1",
+        action_type="login",
+    )
+    session = SpectaAioSession(
+        session_id="session_1",
+        workspace_id="workspace_1",
+        sandbox_ref="https://aio.example.com",
+        base_url="https://aio.example.com",
+        aio_version="v1",
+        home_dir="/sandbox/home",
+        data_root="/sandbox/home/data",
+        browser_info=AioBrowserInfo(
+            cdp_url="ws://aio.example.com/devtools",
+            vnc_url=None,
+            user_agent="ua",
+            viewport={"width": 1280, "height": 720},
+            detail={},
+        ),
+        session_state=AioSessionState.READY,
+    )
+
+    async def fake_load_takeover_record_by_request_id(*, request_id: str, user_id: str):
+        assert request_id == "req_1"
+        assert user_id == "user_1"
+        return object()
+
+    async def fake_get_session(session_id: str):
+        assert session_id == "session_1"
+        return session
+
+    async def fake_save_session_record(session_obj: SpectaAioSession):
+        return session_obj
+
+    async def fake_save_takeover_record(takeover: SpectaAioTakeover):
+        manager._takeovers_by_id[takeover.takeover_id] = takeover
+        return takeover
+
+    class _FakeClient:
+        async def get_browser_info(self):
+            return session.browser_info
+
+    monkeypatch.setattr(
+        manager,
+        "_load_takeover_record_by_request_id",
+        fake_load_takeover_record_by_request_id,
+    )
+    monkeypatch.setattr(manager, "_hydrate_takeover", lambda _record: existing_takeover)
+    monkeypatch.setattr(manager, "get_session", fake_get_session)
+    monkeypatch.setattr(manager, "_save_session_record", fake_save_session_record)
+    monkeypatch.setattr(manager, "_save_takeover_record", fake_save_takeover_record)
+    monkeypatch.setattr(
+        manager, "_build_client_for_base_url", lambda _base_url: _FakeClient()
+    )
+
+    takeover = await manager.create_takeover_access(
+        session_id="session_1",
+        user_id="user_1",
+        platform="deepseek",
+        mode="canvas_cdp",
+        reason="retry_after_resume_failed",
+        request_id="req_1",
+        action_type="login",
+    )
+
+    assert takeover.takeover_id != existing_takeover.takeover_id
+    assert takeover.state == AioTakeoverState.ISSUED
+    assert takeover.frontend_id is None
+    assert session.current_takeover_id == takeover.takeover_id
+    assert session.human_takeover_lock is True
+    assert session.session_state == AioSessionState.TAKEOVER_FROZEN
 
 
 def test_orchestrator_prompt_assembly_exposes_structured_sections():

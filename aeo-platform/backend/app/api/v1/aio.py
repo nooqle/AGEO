@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.fetchers.browser.aio_client import AioBackendError, AioSandboxClient
 from app.services.aio_session_manager import (
+    ACTIVE_TAKEOVER_STATES,
     SpectaAioSession,
     SpectaAioTakeover,
     aio_session_manager,
@@ -185,6 +186,18 @@ async def _get_takeover_and_session_for_user(
     return takeover, session
 
 
+def _ensure_takeover_bundle_is_active(takeover: SpectaAioTakeover) -> None:
+    if takeover.state in ACTIVE_TAKEOVER_STATES:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"当前 takeover 已处于 {takeover.state.value} 终态，旧接管 bundle 已失效，"
+            "如需继续请重新申请新的 takeover。"
+        ),
+    )
+
+
 async def _authenticate_takeover_websocket(websocket: WebSocket):
     token = websocket.query_params.get("token")
     if not token and settings.DEBUG and settings.DEV_MODE_ENABLED:
@@ -304,6 +317,7 @@ async def get_takeover_canvas_config(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="当前用户无权访问该 takeover",
         )
+    _ensure_takeover_bundle_is_active(takeover)
     session = await aio_session_manager.get_session(takeover.session_id)
     client = AioSandboxClient(
         base_url=session.base_url,
@@ -335,6 +349,7 @@ async def get_takeover_vnc_url(
         takeover_id=takeover_id,
         user_id=str(current_user.id),
     )
+    _ensure_takeover_bundle_is_active(takeover)
     browser = await aio_session_manager.refresh_browser_info(session.session_id)
     vnc_url = browser.vnc_url
     signed_vnc_url = vnc_url
@@ -378,6 +393,7 @@ async def redirect_takeover_vnc(
         takeover_id=takeover_id,
         user_id=str(current_user.id),
     )
+    _ensure_takeover_bundle_is_active(takeover)
 
     browser = await aio_session_manager.refresh_browser_info(session.session_id)
 
@@ -419,6 +435,7 @@ async def relay_takeover_cdp(websocket: WebSocket, takeover_id: str):
             takeover_id=takeover_id,
             user_id=str(user.id),
         )
+        _ensure_takeover_bundle_is_active(takeover)
     except HTTPException as exc:
         await websocket.close(code=1008, reason=str(exc.detail))
         return

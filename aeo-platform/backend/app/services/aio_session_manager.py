@@ -90,6 +90,12 @@ class SpectaAioTakeover:
     )
 
 
+ACTIVE_TAKEOVER_STATES = {
+    AioTakeoverState.ISSUED,
+    AioTakeoverState.ACTIVE,
+}
+
+
 def _serialize_browser_info(browser: AioBrowserInfo) -> dict[str, Any]:
     return {
         "cdp_url": browser.cdp_url,
@@ -691,11 +697,7 @@ class AioSandboxSessionManager:
                     )
                     existing.resume_probe = resume_probe or existing.resume_probe
                     existing = await self._expire_takeover_if_needed(existing)
-                    if existing.state in {
-                        AioTakeoverState.ISSUED,
-                        AioTakeoverState.ACTIVE,
-                        AioTakeoverState.RESUME_FAILED,
-                    }:
+                    if existing.state in ACTIVE_TAKEOVER_STATES:
                         existing.mode = normalize_takeover_mode(mode)
                         existing.reason = reason
                         existing.request_id = request_id or existing.request_id
@@ -720,6 +722,8 @@ class AioSandboxSessionManager:
                             session.session_state = AioSessionState.TAKEOVER_FROZEN
                             await self._save_session_record(session)
                         return existing
+                    # Terminal takeovers must not be revived in-place.
+                    # Reopen requires a newly issued bundle so old URLs become invalid.
             session = await self.get_session(session_id)
             session.browser_info = await self._build_client_for_base_url(
                 session.base_url
@@ -756,12 +760,7 @@ class AioSandboxSessionManager:
         self, takeover: SpectaAioTakeover
     ) -> SpectaAioTakeover:
         now = datetime.now(timezone.utc)
-        if takeover.state in {
-            AioTakeoverState.RESOLVED,
-            AioTakeoverState.CANCELLED,
-            AioTakeoverState.EXPIRED,
-            AioTakeoverState.RESUME_FAILED,
-        }:
+        if takeover.state not in ACTIVE_TAKEOVER_STATES:
             return takeover
         if now < takeover.expires_at:
             return takeover
@@ -815,12 +814,7 @@ class AioSandboxSessionManager:
             takeover = await self.get_takeover(takeover_id)
             if takeover.user_id != user_id:
                 raise PermissionError("当前用户无权操作该 takeover")
-            if takeover.state in {
-                AioTakeoverState.RESOLVED,
-                AioTakeoverState.CANCELLED,
-                AioTakeoverState.EXPIRED,
-                AioTakeoverState.RESUME_FAILED,
-            }:
+            if takeover.state not in ACTIVE_TAKEOVER_STATES:
                 return takeover
             if takeover.frontend_id and takeover.frontend_id != frontend_id:
                 raise PermissionError("该 takeover 已被另一个前端占用")
