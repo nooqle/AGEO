@@ -19,7 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.task import AnalysisTask, TaskStatus
-from app.models.task_run import TaskRun, TaskRunStatus, TaskTriggerSource
+from app.models.task_run import (
+    LIVE_TASK_RUN_STATUSES,
+    TaskRun,
+    TaskRunStatus,
+    TaskTriggerSource,
+)
 from app.models.task_run_child_attempt import TaskRunChildAttempt
 from app.models.user import User
 from app.services.access_scope_service import AccessScopeService
@@ -584,6 +589,131 @@ class TaskService:
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def reconcile_terminal_task_live_runs(self, session_id: UUID) -> int:
+        """Align stale session tasks when their latest run is already terminal.
+
+        WebSocket and manual resume/submit flows rely on this to avoid treating
+        a session as "still active" after the durable TaskRun has already moved
+        to a terminal state. This is a narrow reconciliation pass for obvious
+        drift only; it does not attempt to repair broader workflow corruption.
+        """
+
+        stmt = (
+            select(AnalysisTask)
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
+            .where(
+                AnalysisTask.session_id == session_id,
+                AnalysisTask.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
+            )
+            .order_by(AnalysisTask.created_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        tasks = list(result.scalars().all())
+        if not tasks:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        updated = 0
+
+        for task in tasks:
+            loaded_runs = list(task.__dict__.get("task_runs") or [])
+            live_run = next(
+                (
+                    run
+                    for run in loaded_runs
+                    if getattr(run, "status", None) in LIVE_TASK_RUN_STATUSES
+                ),
+                None,
+            )
+            if live_run is not None:
+                continue
+
+            latest_run = loaded_runs[0] if loaded_runs else None
+            if latest_run is None:
+                continue
+
+            latest_status = getattr(latest_run, "status", None)
+            if latest_status == TaskRunStatus.COMPLETED:
+                task.status = TaskStatus.COMPLETED
+                task.progress = 1.0
+                task.progress_message = "分析完成"
+                task.completed_at = task.completed_at or getattr(
+                    latest_run, "finished_at", None
+                ) or now
+            elif latest_status == TaskRunStatus.FAILED:
+                task.status = TaskStatus.FAILED
+                task.error_stage = task.error_stage or getattr(
+                    latest_run, "error_kind", None
+                )
+                task.error_message = task.error_message or getattr(
+                    latest_run, "error_message", None
+                )
+                if not task.progress_message or _is_stale_waiting_message(
+                    task.progress_message
+                ):
+                    task.progress_message = "任务执行失败"
+                task.completed_at = task.completed_at or getattr(
+                    latest_run, "finished_at", None
+                ) or now
+            elif latest_status == TaskRunStatus.CANCELLED:
+                task.status = TaskStatus.CANCELLED
+                task.progress_message = "任务已取消"
+                task.completed_at = task.completed_at or getattr(
+                    latest_run, "finished_at", None
+                ) or now
+            else:
+                continue
+
+            task.updated_at = now
+            updated += 1
+
+        if updated:
+            await self.db.commit()
+            for task in tasks:
+                if task.status not in {TaskStatus.PENDING, TaskStatus.RUNNING}:
+                    await self._publish_task_status_change(task.id)
+
+        return updated
+
+    async def list_session_live_runs(
+        self,
+        session_id: UUID,
+    ) -> list[tuple[AnalysisTask, TaskRun | None]]:
+        """Return session tasks whose latest durable execution is still live."""
+
+        stmt = (
+            select(AnalysisTask)
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
+            .where(AnalysisTask.session_id == session_id)
+            .order_by(AnalysisTask.created_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        tasks = list(result.scalars().all())
+
+        live_pairs: list[tuple[AnalysisTask, TaskRun | None]] = []
+        for task in tasks:
+            loaded_runs = list(task.__dict__.get("task_runs") or [])
+            live_run = next(
+                (
+                    run
+                    for run in loaded_runs
+                    if getattr(run, "status", None) in LIVE_TASK_RUN_STATUSES
+                ),
+                None,
+            )
+            if live_run is not None:
+                live_pairs.append((task, live_run))
+
+        return live_pairs
 
     async def list_tasks(
         self,

@@ -41,6 +41,7 @@ interface InputAreaProps {
   progressMessage?: string;
   selectedToolMode?: ToolMode | null;
   onToolModeChange?: (mode: ToolMode | null) => void;
+  previousUserMessage?: string | null;
 }
 
 export function InputArea({
@@ -56,6 +57,7 @@ export function InputArea({
   progressMessage,
   selectedToolMode,
   onToolModeChange,
+  previousUserMessage,
 }: InputAreaProps) {
   const [internalContent, setInternalContent] = useState('');
   const [toolMenuOpen, setToolMenuOpen] = useState(false);
@@ -164,6 +166,32 @@ export function InputArea({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (
+      e.key === 'ArrowUp' &&
+      !e.shiftKey &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.nativeEvent.isComposing &&
+      previousUserMessage &&
+      content.trim().length === 0
+    ) {
+      e.preventDefault();
+      if (onChange) {
+        onChange(previousUserMessage);
+      } else {
+        setInternalContent(previousUserMessage);
+      }
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const cursor = textarea.value.length;
+        textarea.focus();
+        textarea.setSelectionRange(cursor, cursor);
+      });
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit();

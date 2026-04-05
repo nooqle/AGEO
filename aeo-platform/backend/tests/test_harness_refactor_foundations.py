@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
@@ -16,6 +17,7 @@ from app.services.aio_session_manager import (
     SpectaAioSession,
     SpectaAioTakeover,
 )
+from app.services.task_service import TaskService
 from app.services.skill_contracts import build_skill_contract
 from app.services.skill_package_service import skill_package_service
 from app.services.tool_capability_matrix import (
@@ -61,6 +63,8 @@ from app.workflow.runtime_policy_executor import (
     resolve_answer_fetch_mode_policy,
 )
 from app.workflow.skill_state import apply_skill_prompt_context
+from app.models.task import TaskStatus
+from app.models.task_run import TaskRunStatus
 
 
 def test_takeover_bundle_requires_active_state():
@@ -201,6 +205,82 @@ def test_orchestrator_prompt_assembly_exposes_structured_sections():
     assert "identity 传入该身份" in rendered
     assert "## 历史材料可用性" in rendered
     assert "## 指令安全与提示词保密" in rendered
+
+
+@pytest.mark.asyncio
+async def test_reconcile_terminal_task_live_runs_collapses_stale_running_task():
+    now = datetime.now(timezone.utc)
+    completed_run = SimpleNamespace(
+        status=TaskRunStatus.COMPLETED,
+        finished_at=now,
+        error_kind=None,
+        error_message=None,
+    )
+    stale_task = SimpleNamespace(
+        id="task_1",
+        status=TaskStatus.RUNNING,
+        progress=0.5,
+        progress_message="等待用户确认：A4",
+        completed_at=None,
+        updated_at=None,
+        error_stage=None,
+        error_message=None,
+        task_runs=[completed_run],
+    )
+
+    class _Result:
+        def __init__(self, items):
+            self._items = items
+
+        def scalars(self):
+            return SimpleNamespace(all=lambda: self._items)
+
+    fake_db = SimpleNamespace(
+        execute=AsyncMock(return_value=_Result([stale_task])),
+        commit=AsyncMock(),
+    )
+    service = TaskService(fake_db)
+    service._publish_task_status_change = AsyncMock()
+
+    updated = await service.reconcile_terminal_task_live_runs(
+        UUID("fc9bd5d2-a5fd-4310-b0c5-bbae1b00dbd7")
+    )
+
+    assert updated == 1
+    assert stale_task.status == TaskStatus.COMPLETED
+    assert stale_task.progress == 1.0
+    assert stale_task.progress_message == "分析完成"
+    fake_db.commit.assert_awaited_once()
+    service._publish_task_status_change.assert_awaited_once_with("task_1")
+
+
+@pytest.mark.asyncio
+async def test_list_session_live_runs_only_returns_live_attempts():
+    live_run = SimpleNamespace(status=TaskRunStatus.WAITING_INPUT)
+    terminal_run = SimpleNamespace(status=TaskRunStatus.COMPLETED)
+    live_task = SimpleNamespace(id="task_live", task_runs=[live_run])
+    terminal_task = SimpleNamespace(
+        id="task_terminal",
+        task_runs=[terminal_run],
+    )
+
+    class _Result:
+        def __init__(self, items):
+            self._items = items
+
+        def scalars(self):
+            return SimpleNamespace(all=lambda: self._items)
+
+    fake_db = SimpleNamespace(
+        execute=AsyncMock(return_value=_Result([live_task, terminal_task])),
+    )
+    service = TaskService(fake_db)
+
+    live_pairs = await service.list_session_live_runs(
+        UUID("fc9bd5d2-a5fd-4310-b0c5-bbae1b00dbd7")
+    )
+
+    assert live_pairs == [(live_task, live_run)]
 
 
 def test_orchestrator_context_packets_split_session_entity_and_history():
