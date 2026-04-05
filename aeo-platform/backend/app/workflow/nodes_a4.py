@@ -8,7 +8,7 @@ Optimizations:
 - API platforms retry up to 2 times on failure (exponential backoff)
 - Browser platforms have a 90s per-question timeout (from PlatformConstants), no retries
 - Browser failures do not block the overall flow
-- Minimum 2 platforms with data required to proceed (adjusted for selective_refetch)
+- Minimum 2 platforms with data required to proceed (adjusted for scoped platform fetch)
 """
 
 import asyncio
@@ -29,6 +29,15 @@ from app.workflow.events import (
     send_stage_result,
     send_browser_state_event,
     send_browser_user_action_event,
+)
+from app.workflow.harness_validation import (
+    build_harness_decision,
+    decide_a4_completion_policy,
+    validate_scoped_fetch_merge,
+)
+from app.workflow.skill_state import (
+    build_harness_decision_update,
+    build_validation_result_update,
 )
 
 logger = logging.getLogger(__name__)
@@ -483,8 +492,15 @@ async def a4_fetch_node(state: AgentState) -> Command:
     brand_profile = state.get("brand_profile") or {}
     fetch_mode = state.get("fetch_mode") or "fast"
 
-    # Cycle 3, Module 2: Check for platform_filter (selective_refetch)
-    platform_filter = state.get("platform_filter")
+    tool_args = state.get("tool_call_args") or {}
+    requested_platforms = tool_args.get("platforms") or []
+    normalized_requested_platforms = [
+        str(platform).strip().lower()
+        for platform in requested_platforms
+        if str(platform).strip()
+    ]
+    # 支持 answer_fetch(platforms=[...]) 直接触发限定平台抓取。
+    platform_filter = state.get("platform_filter") or normalized_requested_platforms
     if platform_filter:
         logger.info("[A4] Platform filter active: %s", platform_filter)
 
@@ -1250,9 +1266,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 else:
                     platform_statuses[pname] = "failed"
 
-        # When platform_filter is active (selective_refetch), adjust the minimum
+        # When platform_filter is active, adjust the minimum
         # threshold to the number of requested platforms (min 1), so that a
-        # single-platform refetch doesn't trigger a spurious degradation notice.
+        # single-platform scoped fetch doesn't trigger a spurious degradation notice.
         effective_min = (
             min(MIN_PLATFORMS_REQUIRED, len(platform_filter))
             if platform_filter
@@ -1380,9 +1396,27 @@ async def a4_fetch_node(state: AgentState) -> Command:
             },
         )
 
-        # Cycle 3, Module 2: Merge with baseline if selective_refetch
+        # When platform_filter is active, merge new platform results with preserved baseline results.
         final_fetch_results = fetch_results
         baseline = state.get("preserved_fetch_results")
+        if platform_filter and baseline is None and state.get("fetch_results"):
+            baseline = []
+            selected_platforms = {str(platform).lower() for platform in platform_filter}
+            for existing_entry in state.get("fetch_results") or []:
+                kept_platform_results = [
+                    platform_result
+                    for platform_result in existing_entry.get("platform_results", [])
+                    if str(platform_result.get("platform") or "").lower()
+                    not in selected_platforms
+                ]
+                if kept_platform_results:
+                    baseline.append(
+                        {
+                            "question_id": existing_entry.get("question_id", ""),
+                            "question_text": existing_entry.get("question_text", ""),
+                            "platform_results": kept_platform_results,
+                        }
+                    )
         if platform_filter and baseline:
             # Merge: new results (from filtered platforms) + baseline (unselected)
             # Build a map of question_id -> baseline entry for merging
@@ -1421,6 +1455,20 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 len(baseline),
                 len(final_fetch_results),
             )
+
+        merge_validation = validate_scoped_fetch_merge(
+            platform_filter=platform_filter,
+            preserved_results=baseline,
+            merged_results=final_fetch_results,
+        )
+        if not merge_validation.passed:
+            raise RuntimeError(merge_validation.reason)
+        completion_decision = decide_a4_completion_policy(
+            success_count=len(successful_platforms),
+            fail_count=fail_count,
+            effective_min=effective_min,
+            platform_filter=platform_filter,
+        )
 
         # Write A4 materials into Knowledge Workspace for future retrieval.
         try:
@@ -1478,7 +1526,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             "current_step": "A4",
             "progress": 0.6,
         }
-        # Clear platform_filter after use; flag auto A5 trigger for selective_refetch
+        # Clear platform_filter after use; flag auto A5 trigger for scoped reruns
         if platform_filter:
             update_dict["platform_filter"] = None
             update_dict["preserved_fetch_results"] = None
@@ -1490,6 +1538,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 "error": "所有平台数据获取均失败",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+
+        update_dict.update(build_validation_result_update(state, merge_validation))
+        update_dict.update(
+            build_harness_decision_update(
+                {**state, **update_dict},
+                completion_decision,
+            )
+        )
 
         return Command(update=update_dict)
 
@@ -1524,6 +1580,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
                 "current_step": "A4",
+                "execution_status": "error",
+                **build_harness_decision_update(
+                    state,
+                    build_harness_decision(
+                        decision_type="retry_step",
+                        reason=str(e),
+                        recoverable=True,
+                        metadata={"step": "A4", "blocker_code": "runtime_exception"},
+                    ),
+                ),
             },
         )
 

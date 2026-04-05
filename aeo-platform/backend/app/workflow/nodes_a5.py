@@ -25,17 +25,26 @@ from app.workflow.a5 import sanitizer as a5_sanitizer
 from app.workflow.a5 import sentiment as a5_sentiment
 from app.workflow.a5.persistence import build_report_artifact_data
 from app.workflow.events import (
+    send_error_event,
     send_execution_complete,
     send_progress_event,
     send_reply_event,
     send_stage_result,
+)
+from app.workflow.harness_validation import (
+    build_harness_decision,
+    evaluate_skill_postconditions,
+    evaluate_skill_preconditions,
+    validate_artifact_writeback,
 )
 from app.workflow.nodes import get_llm_model_compat, parse_llm_response
 from app.workflow.nodes_a4 import PLATFORMS
 from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.skill_state import (
     apply_skill_prompt_context,
+    build_harness_decision_update,
     build_skill_result_update,
+    build_validation_result_update,
 )
 from app.workflow.skill_fact_snapshot import build_skill_fact_snapshot
 from app.workflow.state import AgentState
@@ -63,6 +72,36 @@ async def a5_analytics_node(state: AgentState) -> Command:
     marketing_personas = state.get("marketing_personas")
     analysis_mode = facts.analysis_mode or "persona"
     is_baseline = analysis_mode == "baseline"
+    precondition_result = evaluate_skill_preconditions(
+        state, state.get("current_skill_contract")
+    )
+
+    if not precondition_result.passed:
+        message = f"A5 前置条件未满足：{precondition_result.reason}"
+        await send_error_event(session_id, "A5", message, recoverable=True)
+        validation_update = build_validation_result_update(state, precondition_result)
+        decision_update = build_harness_decision_update(
+            {**state, **validation_update},
+            build_harness_decision(
+                decision_type="fail_step",
+                reason=message,
+                recoverable=True,
+                metadata={"step": "A5", "gate": "precondition_gate"},
+            ),
+        )
+        return Command(
+            update={
+                "error_info": {
+                    "step": "A5",
+                    "error": message,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                "current_step": "A5",
+                "execution_status": "error",
+                **validation_update,
+                **decision_update,
+            }
+        )
 
     step_message = "开始基线全景分析..." if is_baseline else "开始分析抓取数据..."
     await send_progress_event(
@@ -449,6 +488,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         report_output_type = "report_baseline" if is_baseline else "report"
         report_title = "基线全景分析报告" if is_baseline else "AI 可见性分析报告"
         report_category = "baseline" if is_baseline else "scenario"
+        artifact_key = f"{session_id}_{report_output_type}"
         report_artifact_data = build_report_artifact_data(
             brand_name=brand_profile.get("brand_name", "品牌"),
             is_baseline=is_baseline,
@@ -469,9 +509,17 @@ async def a5_analytics_node(state: AgentState) -> Command:
             title=report_title,
             category=report_category,
             data=report_artifact_data,
+            artifact_key=artifact_key,
         )
-        if not artifact_message_id:
-            raise RuntimeError("A5 artifact persistence failed")
+        artifact_validation = validate_artifact_writeback(
+            gate_name="artifact_writeback_gate",
+            artifact_message_id=artifact_message_id,
+            artifact_key=artifact_key,
+            artifact_kind=report_output_type,
+            metadata={"analysis_mode": analysis_mode},
+        )
+        if not artifact_validation.passed:
+            raise RuntimeError(artifact_validation.reason)
         _ca = metrics.get("citation_analysis", {})
         logger.info(
             "[A5][Artifact] citation_analysis in artifact: total=%s, domains=%s",
@@ -527,21 +575,46 @@ async def a5_analytics_node(state: AgentState) -> Command:
             "current_step": "A5",
             "progress": 1.0,
         }
-        update_dict.update(
-            build_skill_result_update(
-                state,
-                skill_key=state.get("current_skill"),
-                tool_name="analysis_report_skill",
-                status="completed",
-                summary="分析报告 Skill 已完成，报告与关键指标已更新。",
-                executor_ref="a5_data_analytics",
-                metadata={
-                    "analysis_mode": analysis_mode,
-                    "mention_rate": metrics.get("mention_rate"),
-                    "report_type": report_data.get("report_type"),
-                },
-            )
+        skill_update = build_skill_result_update(
+            state,
+            skill_key=state.get("current_skill"),
+            tool_name="analysis_report_skill",
+            status="completed",
+            summary="分析报告 Skill 已完成，报告与关键指标已更新。",
+            executor_ref="a5_data_analytics",
+            metadata={
+                "analysis_mode": analysis_mode,
+                "mention_rate": metrics.get("mention_rate"),
+                "report_type": report_data.get("report_type"),
+            },
         )
+        update_dict.update(skill_update)
+        artifact_validation_update = build_validation_result_update(state, artifact_validation)
+        validation_state = {**state, **update_dict, **artifact_validation_update}
+        postcondition_result = evaluate_skill_postconditions(
+            state=state,
+            contract_payload=state.get("current_skill_contract"),
+            pending_update=update_dict,
+            artifact_validation=artifact_validation,
+        )
+        if not postcondition_result.passed:
+            raise RuntimeError(postcondition_result.reason)
+        postcondition_validation_update = build_validation_result_update(
+            validation_state,
+            postcondition_result,
+        )
+        decision_update = build_harness_decision_update(
+            {**validation_state, **postcondition_validation_update},
+            build_harness_decision(
+                decision_type="complete_skill",
+                reason="A5 harness gates passed.",
+                recoverable=False,
+                metadata={"step": "A5", "analysis_mode": analysis_mode},
+            ),
+        )
+        update_dict.update(artifact_validation_update)
+        update_dict.update(postcondition_validation_update)
+        update_dict.update(decision_update)
         # Baseline mode: also write to baseline_* fields for long-term storage
         if is_baseline:
             update_dict["baseline_metrics"] = metrics
@@ -583,9 +656,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
     except Exception as e:
         error_text = str(e)
         error_category = "system"
-        if "artifact persistence failed" in error_text.lower():
+        if "artifact writeback" in error_text.lower() or "artifact persistence" in error_text.lower():
             error_category = "system_persistence"
-        from app.workflow.events import send_error_event
 
         await send_error_event(session_id, "A5", str(e), recoverable=True)
         await send_progress_event(
@@ -625,6 +697,15 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 },
                 "execution_status": "error",
                 "progress": 1.0,
+                **build_harness_decision_update(
+                    state,
+                    build_harness_decision(
+                        decision_type="retry_step",
+                        reason=error_text,
+                        recoverable=True,
+                        metadata={"step": "A5", "error_category": error_category},
+                    ),
+                ),
             },
         )
 

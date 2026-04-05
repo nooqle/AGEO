@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.skill_contracts import SkillContract, build_skill_contract
 from app.services.skill_registry_service import SkillRegistryService, SkillScopeContext
 
 
@@ -31,10 +32,6 @@ LEGACY_SKILL_TOOL_ALIASES: dict[str, dict[str, Any]] = {
         "skill_key": "post_analysis_skill",
         "extra_args": {"analysis_mode": "compare_snapshots"},
     },
-    "selective_refetch": {
-        "skill_key": "post_analysis_skill",
-        "extra_args": {"analysis_mode": "selective_refetch"},
-    },
 }
 
 
@@ -53,6 +50,7 @@ class SkillInvocationPlan:
     prompt_overlay: str | None
     executor_ref: str
     merged_tool_args: dict[str, Any]
+    skill_contract: SkillContract
 
 
 class SkillInvocationService:
@@ -88,6 +86,19 @@ class SkillInvocationService:
             merged_tool_args.update(alias.get("extra_args") or {})
         merged_tool_args.update(tool_args or {})
         display_name = str(resolved_skill["display_name"])
+        skill_contract = build_skill_contract(
+            skill_key=str(resolved_skill["skill_key"]),
+            family_skill_key=str(
+                resolved_skill.get("family_skill_key") or resolved_skill["skill_key"]
+            ),
+            display_name=display_name,
+            executor_ref=str(resolved_skill["executor_ref"]),
+            prerequisites=list(resolved_skill.get("prerequisites") or []),
+            artifact_types=list(resolved_skill.get("artifact_types") or []),
+            default_params=dict(resolved_skill.get("default_params") or {}),
+            package=resolved_skill.get("package_manifest"),
+            prompt_overlay=resolved_skill.get("prompt_overlay"),
+        )
 
         return SkillInvocationPlan(
             requested_tool_name=tool_name,
@@ -105,4 +116,5 @@ class SkillInvocationService:
             prompt_overlay=resolved_skill.get("prompt_overlay"),
             executor_ref=str(resolved_skill["executor_ref"]),
             merged_tool_args=merged_tool_args,
+            skill_contract=skill_contract,
         )

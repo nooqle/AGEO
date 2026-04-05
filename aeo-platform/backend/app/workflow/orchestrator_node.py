@@ -7,6 +7,7 @@ to dynamically decide which Agent to invoke, replacing the hardcoded pipeline.
 import json
 import logging
 from datetime import datetime
+from textwrap import dedent
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
@@ -27,6 +28,10 @@ from app.services.skill_invocation_service import (
     SkillInvocationPlan,
     SkillInvocationService,
 )
+from app.services.tool_capability_matrix import (
+    get_tool_capability,
+    validate_tool_capability_access,
+)
 from app.services.session_event_publisher import session_event_publisher
 from app.workflow.events import (
     send_reply_event,
@@ -35,6 +40,23 @@ from app.workflow.events import (
     send_thought_event,
     send_confirmation_request,
 )
+from app.workflow.orchestrator_context_packets import (
+    build_entity_context_packet,
+    build_orchestrator_context_packets,
+    build_session_status_packet,
+    render_active_skill_packet,
+    render_entity_context_packet,
+    render_history_availability_packet,
+    render_pending_decision_packet,
+    render_recent_evidence_packet,
+    render_session_status_packet,
+)
+from app.workflow.orchestrator_instruction_defense import (
+    INSTRUCTION_SECURITY_POLICY,
+    build_instruction_defense_context,
+    render_instruction_defense_reminder,
+)
+from app.workflow.prompt_assembly import PromptAssembly, PromptSection
 from app.workflow.nodes_streaming import async_wrap_sync_gen
 from app.core.constants import PlatformConstants
 
@@ -45,7 +67,27 @@ SKILLIZED_TOOL_NAMES = {
     "citation_confidence_analysis",
     "drill_down_analysis",
     "compare_snapshots",
-    "selective_refetch",
+}
+
+_VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
+    "brand_analysis": "品牌分析",
+    "persona_generation": "画像生成",
+    "question_simulation": "问题模拟",
+    "answer_fetch": "答案抓取",
+    "analysis_report_skill": "分析报告",
+    "data_analytics": "分析报告",
+    "confidence_signal_skill": "引用置信度评估",
+    "citation_confidence_analysis": "引用置信度评估",
+    "post_analysis_skill": "后续分析",
+    "drill_down_analysis": "深入分析",
+    "compare_snapshots": "快照对比",
+    "knowledge_lookup": "历史知识检索",
+    "knowledge_aggregate": "历史知识聚合",
+    "knowledge_compare": "历史知识对比",
+    "knowledge_export": "历史知识导出",
+    "ask_user": "用户确认",
+    "fast": "快速采集",
+    "full": "完整采集",
 }
 
 
@@ -96,7 +138,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
         "name": "question_simulation",
         "description": (
             "模拟用户可能向 AI 平台提出的问题。"
-            "可基于品牌全景模式或画像聚焦模式生成。"
+            "默认按消费者视角生成；当用户明确要求某个身份/角色时，可通过 identity 传入显式视角覆盖。"
         ),
         "parameters": {
             "type": "object",
@@ -115,6 +157,10 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "聚焦的画像ID（persona_focused模式时需要）",
                 },
+                "identity": {
+                    "type": "string",
+                    "description": "可选身份视角覆盖。仅当用户明确要求“以某个身份/视角生成问题”时传入，例如“采购经理”“品牌经理”。未明确要求时不要传。",
+                },
             },
         },
     },
@@ -123,7 +169,8 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
         "description": (
             "从多个AI平台（豆包、元宝、Kimi、DeepSeek）抓取对模拟问题的回答。"
             "前置条件：1) 问题模拟已完成（或提供了 custom_questions）；2) 用户已明确选择 fetch_mode（fast 或 full）。"
-            "如果用户尚未选择采集模式，此工具无法执行。"
+            "如果用户尚未选择采集模式，先解释 fast / full 的差异并引导用户选择，再调用此工具。"
+            "如果用户要求只重跑部分平台、全量重跑、或从 API 改为浏览器模式，也统一使用此工具。"
         ),
         "parameters": {
             "type": "object",
@@ -140,7 +187,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 "platforms": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "要抓取的平台列表（可选，默认全部）",
+                    "description": "要抓取的平台列表（可选，默认全部）。可用于局部重跑或仅抓取指定平台。",
                 },
                 "custom_questions": {
                     "type": "array",
@@ -474,33 +521,6 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "description": "'vs_previous'(与上次对比，默认) 或 'vs_specific'(指定快照对比)",
                 },
             },
-        },
-    },
-    {
-        "name": "selective_refetch",
-        "description": (
-            "仅对指定平台重新抓取数据，保留其他平台的原有结果，然后重新生成报告。"
-            "例如：'重新分析Kimi的结果'、'再抓取一次DeepSeek'。"
-            "前置条件：当前会话中必须已有模拟问题（simulated_questions）。"
-            "如果没有先前分析数据，不要调用此工具，提示用户先运行完整分析。"
-            "会运行 A4(仅指定平台) → A5(重新生成报告)。"
-            "注意：如果用户要求用 Full 模式重跑全部平台，应使用 answer_fetch(fetch_mode='full')，而非此工具。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "platforms": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "要重新抓取的平台列表: 'kimi', 'deepseek', 'doubao', 'hunyuan'（元宝）",
-                },
-                "fetch_mode": {
-                    "type": "string",
-                    "enum": ["fast", "full"],
-                    "description": "采集模式（可选，默认fast）。full=全浏览器模式",
-                },
-            },
-            "required": ["platforms"],
         },
     },
     {
@@ -1017,6 +1037,37 @@ def _should_stream_thoughts(state: AgentState) -> bool:
     return True
 
 
+def _is_english_dominant_text(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+    ascii_letters = sum(1 for ch in stripped if ch.isascii() and ch.isalpha())
+    cjk_chars = sum(1 for ch in stripped if "\u4e00" <= ch <= "\u9fff")
+    if ascii_letters >= 8 and cjk_chars == 0:
+        return True
+    return ascii_letters >= 12 and ascii_letters > max(1, cjk_chars * 2)
+
+
+def _localize_visible_terms(text: str) -> str:
+    localized = str(text or "")
+    for source, target in _VISIBLE_TOOL_NAME_LABELS.items():
+        localized = localized.replace(source, target)
+    return localized
+
+
+def _normalize_thought_text_for_stream(
+    text: str,
+    *,
+    placeholder_sent: bool,
+) -> tuple[str | None, bool]:
+    stripped = _localize_visible_terms(text).strip()
+    if not stripped:
+        return None, placeholder_sent
+    if _is_english_dominant_text(stripped):
+        return None, placeholder_sent
+    return stripped, placeholder_sent
+
+
 def _build_context_summary(state: AgentState) -> str:
     """Build a summary of what data exists in the current session.
 
@@ -1040,7 +1091,7 @@ def _build_context_summary(state: AgentState) -> str:
     if state.get("fetch_results"):
         parts.append(f"- 抓取结果: {len(state['fetch_results'])} 组问题")
         available_tools.append(
-            "post_analysis_skill (可对已有结果做深挖、对比或局部重抓)"
+            "post_analysis_skill (可对已有结果做深挖、对比、解释或风险提取)"
         )
     else:
         unavailable_tools.append("post_analysis_skill (尚无先前分析结果)")
@@ -1065,7 +1116,6 @@ def _build_context_summary(state: AgentState) -> str:
         unavailable_tools.append("create_monitoring_schedule (尚无品牌实体)")
 
     if manifest:
-        counts = manifest.get("counts", {})
         available_sources = manifest.get("available_sources", {})
         history_info = manifest.get("history", {})
         available_labels = [
@@ -1079,16 +1129,6 @@ def _build_context_summary(state: AgentState) -> str:
             if available_sources.get(key)
         ]
         if available_labels:
-            recent_months = history_info.get("recent_months") or []
-            month_suffix = (
-                f"，覆盖月份：{'、'.join(recent_months[:3])}" if recent_months else ""
-            )
-            parts.append(
-                "- 历史材料: "
-                + "、".join(available_labels)
-                + f"（共 {sum(int(v or 0) for v in counts.values())} 条）"
-                + month_suffix
-            )
             available_tools.append("knowledge_lookup (可查询跨历史事实材料)")
             available_tools.append("knowledge_aggregate (可汇总历史材料)")
             available_tools.append("knowledge_export (可导出历史材料数据表)")
@@ -1116,14 +1156,6 @@ def _build_context_summary(state: AgentState) -> str:
         summary += "\n\n不可用的工具（缺少前置数据）:\n" + "\n".join(
             f"  - {t}" for t in unavailable_tools
         )
-
-    recent_knowledge_context = _build_recent_knowledge_context(state)
-    if recent_knowledge_context:
-        summary += recent_knowledge_context
-
-    planning_hint = _build_knowledge_planning_hint(state)
-    if planning_hint:
-        summary += planning_hint
 
     return summary
 
@@ -1206,233 +1238,237 @@ DIRECTIVE_A5_PERSONA_NEXT = (
 )
 
 
+def _build_orchestrator_data_status(state: AgentState) -> str:
+    return render_session_status_packet(build_session_status_packet(state))
+
+
+def _build_orchestrator_entity_context(state: AgentState) -> str:
+    return render_entity_context_packet(build_entity_context_packet(state))
+
+
+def _build_public_skill_index(state: AgentState) -> str:
+    lines: list[str] = []
+    for definition in build_builtin_skill_tool_definitions():
+        name = str(definition.get("name") or "")
+        description = _compact_text(definition.get("description"), 160)
+        availability = "可用"
+        if name == "post_analysis_skill" and not state.get("fetch_results"):
+            availability = "需要已有抓取结果或报告"
+        elif name == "analysis_report_skill" and not state.get("fetch_results"):
+            availability = "需要先完成 A4 抓取"
+        elif name == "confidence_signal_skill" and not state.get("fetch_results"):
+            availability = "需要先有可评估的抓取结果"
+        lines.append(f"- {name}: {description}（{availability}）")
+    return "\n".join(lines)
+
+
+def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
+    """Build the orchestrator prompt as structured sections."""
+
+    context_packets = build_orchestrator_context_packets(state)
+    status_text = render_session_status_packet(context_packets.session_status)
+    entity_context = render_entity_context_packet(context_packets.entity_context)
+    history_availability = render_history_availability_packet(
+        context_packets.history_availability
+    )
+    active_skill_context = render_active_skill_packet(context_packets.active_skill)
+    pending_decision = render_pending_decision_packet(
+        context_packets.pending_decision
+    )
+    recent_evidence = render_recent_evidence_packet(context_packets.recent_evidence)
+    context_summary = _build_context_summary(state)
+    knowledge_hint = _build_knowledge_planning_hint(state)
+    instruction_defense = render_instruction_defense_reminder(
+        build_instruction_defense_context(state, context_packets.recent_evidence)
+    )
+
+    base_policy_sections = (
+        PromptSection(
+            key="role_policy",
+            title="角色与核心职责",
+            body=dedent(
+                """
+                你是 Specta AI 的智能编排助手。
+                你的职责是：
+                1. 理解用户的品牌分析需求
+                2. 规划分析步骤并向用户解释计划
+                3. 调用合适的分析工具执行任务
+                4. 汇报结果并建议下一步
+                5. 所有对用户可见的回复、计划、解释与思考流必须使用中文
+                """
+            ).strip(),
+        ),
+        PromptSection(
+            key="attachment_intake_policy",
+            title="附件导入与理解路由",
+            body=dedent(
+                """
+                附件导入规则（高优先级）：
+                - 当 state 中存在 pending_table_intake 且还没有 table_intake_result 时，必须优先调用 table_intake_skill。
+                - table_intake_skill 只负责理解附件，不负责直接推进流程。执行后必须先解释判断，再调用 ask_user 请求确认。
+                - 如果识别结果是 question_list：未确认前先 ask_user；确认后必须调用 question_simulation(mode="uploaded_list") 更新 A3 交付物。
+                - 如果识别结果是 brand_competitor_info：先 ask_user 确认是否用于更新 A1 相关上下文，不可自动覆盖。
+                - 如果识别结果是 link_list：先 ask_user 确认是否作为链接清单继续分析，不可自动套用到其他流程。
+                - 如果用户没有文本消息，只上传了表格：也要基于 context + table_intake_skill 结果给出初步判断，并 ask_user 确认。
+                - 如果 user_decisions.table_import_confirmed=true 且 confirmed_table_kind=question_list，而当前还没有新的 A3 结果，必须立即调用 question_simulation(mode="uploaded_list")。
+                - 如果链接清单已经导入并生成交付物：先告诉用户链接清单已整理完成，再根据后续说明继续；当前不要自动调用 confidence_signal_skill。
+                """
+            ).strip(),
+        ),
+        PromptSection(
+            key="workflow_routing_policy",
+            title="流程路由规则",
+            body=dedent(
+                """
+                A1 完成后的流程（最高优先级）：
+                - A1 完成后，必须先汇报结果并 ask_user，绝不直接调用 persona_generation 或 question_simulation。
+                - 尚无基线分析时，必须按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline") 执行。
+                - 已有基线分析时，用户可进入引用置信度评估、场景细化、重跑基线或直接提问。
+
+                场景细化流程：
+                - 用户选择场景细化时：persona_generation -> 用户选择画像 -> question_simulation(mode="persona_focused") -> answer_fetch -> analysis_report_skill(report_type="persona")。
+                - 如果用户明确要求“以某个身份 / 职业 / 角色生成问题”，仍调用 question_simulation，并通过 identity 传入该身份；若用户未明确要求，默认消费者视角，不要擅自加身份。
+
+                其他固定路径：
+                - 用户说“重跑基线”时：question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline")。
+                - 用户明确要检查引用可信度时：confidence_signal_skill。
+                - 用户基于已有结果要求深入分析、历史对比、解释原因、提炼风险时：post_analysis_skill。
+                - 用户要求重新抓取、重跑部分平台、全量重跑、或从 API 改为浏览器模式时：统一走 answer_fetch，不要再发明 refetch 类能力名。
+                - 用户选择“直接提问”时，禁止再次 ask_user 给子选项；直接自然语言引导用户在输入框中继续追问。
+                - 当前会话里如果已有 fetch_results 或 report，且用户是在追问“本次报告/本次抓取”的细节，优先使用 post_analysis_skill / drill_down_analysis，不要先走 knowledge_*。
+                - 只有用户明确在问跨历史材料、历史月份、历史导出、最近两次变化时，才优先使用 knowledge_*。
+                - 围绕历史品牌/竞品/答案/引用时，优先 knowledge_lookup；围绕历史汇总时，优先 knowledge_aggregate；明确导出时，优先 knowledge_export；比较最近两轮变化时，优先 knowledge_compare。
+                """
+            ).strip(),
+        ),
+        PromptSection(
+            key="behavior_policy",
+            title="行为与 ask_user 规则",
+            body=dedent(
+                """
+                行为准则：
+                - 始终用温暖、自然、专业的语言交流，像真正了解品牌营销的顾问。
+                - 所有对用户可见的回复、计划、提示、说明和思考流都必须使用中文；不要输出英文草稿或英文推理片段。
+                - 在回复中说明打算做什么，然后调用对应工具。
+                - 不要一次调用多个工具，每轮只执行一个步骤。
+                - A2 完成后必须 ask_user 引导用户选画像；A3 完成后必须 ask_user 让用户选择采集模式；A4 完成后不要 ask_user，必须立即调用 analysis_report_skill；A5 完成后必须 ask_user 让用户决定是否做引用置信度评估或继续后续分析。
+                - 如果用户请求不明确，用自然语言追问，不要调用 ask_user。
+                - 步骤完成后的回复应包含 1 个具体数据点或风险发现，不要只报“完成了”。
+                - 如果用户直接提供问题文本并要求抓取答案，可通过 answer_fetch 的 custom_questions 传入，无需先调用 question_simulation，但仍需明确 fetch_mode。
+                - “完整模式/full 模式/完整采集”指 answer_fetch(fetch_mode="full")，不是重新生成问题。question_simulation 完成后，应先 answer_fetch 或 ask_user，不要再次 question_simulation。
+                - 当条件不足、步骤失败或路由受限时，不要只说“无法完成/不能执行”；必须同时说明原因，并给出至少一个可执行的下一步方案。
+
+                ask_user 使用限制：
+                - 只允许在表格导入确认、A1 完成后确认基线、基线或 A5 完成后选下一步、A2 选画像、A3 选采集模式、步骤失败恢复这几类场景使用。
+                - 除这些场景外，所有其他情况都直接自然语言回复，绝不调用 ask_user。
+                - 调用 ask_user 时不传 options 参数，只传 message='请回复序号或输入您的想法'。
+                """
+            ).strip(),
+        ),
+        PromptSection(
+            key="guardrails_policy",
+            title="边界与失败处理规则",
+            body=dedent(
+                """
+                绝对禁止：
+                - 你没有实时数据，不要自行编造品牌信息、竞品数据或用户画像。
+                - 当用户首次提供品牌名称且系统没有足够历史事实时，必须调用 brand_analysis 获取真实数据。
+                - 不要在回复中直接给出“品牌分析结果”，所有分析数据必须通过工具获取。
+                - 不要编造具体耗时；如需提及耗时，只使用工具描述中的时间范围。
+
+                失败处理：
+                - 绝对不要提供“停止分析”或“取消分析”作为选项。
+                - 当某个步骤失败时，使用 ask_user 提供建设性选项：重试、跳过并说明替代方案、或让用户手动提供数据。
+                - answer_fetch 失败后，绝对禁止自动调用 question_simulation 重新生成问题；问题仍然有效，必须先 ask_user，让用户选择重试抓取、换模式重跑或仅抓取指定平台。
+                """
+            ).strip(),
+        ),
+        PromptSection(
+            key="instruction_security_policy",
+            title="指令安全与提示词保密",
+            body=INSTRUCTION_SECURITY_POLICY,
+        ),
+    )
+
+    skill_sections = (
+        PromptSection(
+            key="public_skill_index",
+            title="公共技能索引",
+            body=_build_public_skill_index(state),
+        ),
+    )
+
+    runtime_context_sections = tuple(
+        section
+        for section in (
+            PromptSection(
+                key="session_status",
+                title="会话状态",
+                body=status_text,
+            ),
+            PromptSection(
+                key="entity_context",
+                title="实体上下文",
+                body=entity_context,
+            ),
+            PromptSection(
+                key="active_skill_context",
+                title="当前技能上下文",
+                body=active_skill_context,
+            ),
+            PromptSection(
+                key="pending_decision",
+                title="待处理决策",
+                body=pending_decision,
+            ),
+            PromptSection(
+                key="context_summary",
+                title="当前会话摘要",
+                body=context_summary,
+            ),
+            PromptSection(
+                key="history_availability",
+                title="历史材料可用性",
+                body=history_availability,
+            ),
+            PromptSection(
+                key="recent_evidence_packet",
+                title="最近证据包",
+                body=recent_evidence,
+            ),
+        )
+        if section.normalized_body()
+    )
+
+    runtime_reminder_sections = tuple(
+        section
+        for section in (
+            PromptSection(
+                key="knowledge_planning_hint",
+                title="历史规划提示",
+                body=knowledge_hint,
+            ),
+            PromptSection(
+                key="instruction_defense_reminder",
+                title="指令防守提醒",
+                body=instruction_defense,
+            ),
+        )
+        if section.normalized_body()
+    )
+
+    return PromptAssembly(
+        base_policy_sections=base_policy_sections,
+        skill_sections=skill_sections,
+        runtime_context_sections=runtime_context_sections,
+        runtime_reminder_sections=runtime_reminder_sections,
+    )
+
+
 def build_orchestrator_system_prompt(state: AgentState) -> str:
     """Build dynamic system prompt based on current state."""
-    data_status = []
-    if state.get("brand_profile"):
-        bp = state["brand_profile"]
-        data_status.append(
-            f"✓ 品牌信息已获取：{bp.get('brand_name', '未知')}"
-            f"（{bp.get('industry', '未知行业')}）"
-        )
-    if state.get("competitors"):
-        data_status.append(f"✓ 已识别 {len(state['competitors'])} 个竞品")
-    if state.get("marketing_personas"):
-        personas = state["marketing_personas"].get("user_personas", [])
-        data_status.append(f"✓ 已生成 {len(personas)} 个用户画像")
-    if state.get("simulated_questions"):
-        qs = state["simulated_questions"].get("simulated_questions", [])
-        a3_mode = state.get("user_decisions", {}).get("a3_mode", "brand")
-        mode_label = {
-            "brand": "品牌全景模式",
-            "baseline_dynamic": "基线全景模式",
-            "persona": "画像聚焦模式",
-            "uploaded_list": "上传问题列表",
-        }.get(a3_mode, "画像聚焦模式")
-        data_status.append(
-            f"✓ 已生成 {len(qs)} 组模拟问题（{mode_label}）— 用户可要求以不同模式/画像重新生成"
-        )
-    if state.get("pending_table_intake") and not state.get("table_intake_result"):
-        attachments = list(
-            (state.get("pending_table_intake") or {}).get("attachments") or []
-        )
-        data_status.append(
-            f"⚠ 待理解表格附件 {len(attachments)} 个 — 应先调用 table_intake_skill"
-        )
-    if state.get("table_intake_result"):
-        result = state["table_intake_result"] or {}
-        data_status.append(
-            f"✓ 已完成表格理解：{result.get('table_kind', 'unknown')}（置信度 {float(result.get('confidence') or 0):.2f}）"
-        )
-    if (state.get("import_source_metadata") or {}).get("imported_link_list_count"):
-        data_status.append(
-            f"✓ 已导入链接清单 {(state.get('import_source_metadata') or {}).get('imported_link_list_count')} 条"
-        )
-    if state.get("fetch_results"):
-        data_status.append(f"✓ 已抓取 {len(state['fetch_results'])} 条AI回答")
-    if state.get("baseline_metrics"):
-        baseline_summary = (
-            state["baseline_metrics"].get("summary_metrics", {})
-            if isinstance(state["baseline_metrics"], dict)
-            else {}
-        )
-        mention_rate = baseline_summary.get("brand_mention_rate")
-        if isinstance(mention_rate, (int, float)):
-            data_status.append(f"✓ 基线分析已完成，基线提及率={mention_rate:.1%}")
-        else:
-            data_status.append("✓ 基线分析已完成")
-    elif (
-        state.get("brand_profile")
-        and not state.get("baseline_questions")
-        and not state.get("marketing_personas")
-    ):
-        # Only warn about pending baseline if personas haven't been generated yet.
-        # Once A2 has produced personas, the user has moved past the baseline stage.
-        data_status.append(
-            "⚠ 基线分析待执行 — 必须先执行基线分析流程（question_simulation mode=baseline_dynamic → answer_fetch → analysis_report_skill report_type=baseline）"
-        )
-    if state.get("metrics"):
-        summary_metrics = (
-            state["metrics"].get("summary_metrics", {})
-            if isinstance(state["metrics"], dict)
-            else {}
-        )
-        mention_rate = summary_metrics.get("brand_mention_rate")
-        high_risk_count = summary_metrics.get("high_risk_scenario_count")
-        if isinstance(mention_rate, (int, float)) and isinstance(
-            high_risk_count, (int, float)
-        ):
-            data_status.append(
-                f"✓ 分析报告已生成，品牌提及率={mention_rate:.1%}，高风险场景={int(high_risk_count)}"
-            )
-        else:
-            data_status.append("✓ 分析报告已生成")
 
-    status_text = "\n".join(data_status) if data_status else "尚无数据"
-
-    # Entity context
-    entity_info = [f"品牌名称：{state.get('brand_name', '未指定')}"]
-    if state.get("official_website"):
-        entity_info.append(f"官方网站：{state['official_website']}")
-    if state.get("industry_hint"):
-        entity_info.append(f"所属行业：{state['industry_hint']}")
-    entity_context = "\n".join(entity_info)
-
-    return f"""你是 Specta AI 的智能编排助手。你的职责是：
-1. 理解用户的品牌分析需求
-2. 规划分析步骤并向用户解释你的计划
-3. 调用合适的分析工具执行任务
-4. 汇报结果并建议下一步
-
-当前分析状态：
-{status_text}
-
-{entity_context}
-
-附件导入规则（高优先级）：
-- 当 state 中存在 pending_table_intake 且还没有 table_intake_result 时，必须优先调用 table_intake_skill。
-- table_intake_skill 只负责理解附件，不负责直接推进流程。执行后必须先解释你的判断，再调用 ask_user 请求确认。
-- 如果识别结果是 question_list：
-  - 未确认前：说明这是一份问题列表，将挂接到 A3，然后 ask_user 请求用户确认是否导入。
-  - 用户确认后：必须调用 question_simulation(mode="uploaded_list")，先更新 A3 交付物，再继续 A4 后续流程。
-- 如果识别结果是 brand_competitor_info：先 ask_user 确认是否用于更新 A1 相关上下文，不可自动覆盖。
-- 如果识别结果是 link_list：先 ask_user 确认是否作为链接清单继续分析，不可自动套用到其他流程。
-- 如果用户没有文本消息，只上传了表格：你也要基于 context + table_intake_skill 结果给出初步判断，并 ask_user 确认。
-- 如果 user_decisions.table_import_confirmed=true 且 confirmed_table_kind=question_list，而当前还没有新的 A3 结果，必须立即调用 question_simulation(mode="uploaded_list")。
-- 如果链接清单已经导入并生成交付物：先用自然语言告诉用户链接清单已整理完成、右侧画布已更新，再基于用户后续说明继续；当前不要自动调用 confidence_signal_skill，因为现有 A7 仍主要消费抓取后的 fetch_results。
-
-A1 完成后的流程（最高优先级）：
-品牌分析（A1）完成后，你必须在消息中用自然语言向用户汇报结果并列出编号选项（如 1. 确认 2. 暂不），然后调用 ask_user 等待用户回复，不传 options 参数。
-绝不直接调用 persona_generation 或 question_simulation，必须先 ask_user。之后根据是否已有基线分析决定下一步：
-
-【情况A：尚无基线分析（baseline_metrics 为空）】
-用户确认品牌信息后，必须按以下顺序执行基线分析，不可跳过：
-  1. question_simulation(mode="baseline_dynamic") 生成行业全景问题
-  2. answer_fetch 抓取AI平台回答
-  3. analysis_report_skill(report_type="baseline") 生成基线报告
-基线分析全部完成后，在消息中用自然语言列出编号选项（包含简要说明），然后调用 ask_user 等待回复，不传 options：
-  1. 做一次引用内容置信度评估（可选）— 进一步检查当前引用来源的可信度、结构化质量与可核查性
-  2. 开始场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现
-  3. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现
-  4. 直接提问 — 针对已有数据自由提问，深入了解特定方面
-⚠ 绝对不可以在基线分析完成前调用 persona_generation（A2）
-
-【情况B：已有基线分析（baseline_metrics 已有值）】
-在消息中用自然语言列出编号选项（包含简要说明），然后调用 ask_user 等待回复，不传 options：
-  1. 做一次引用内容置信度评估（可选）— 检查当前引用来源的可信度、结构化质量与可核查性
-  2. 生成用户画像，进入场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现
-  3. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现
-  4. 直接提问 — 针对已有数据自由提问，深入了解特定方面
-
-场景细化流程：用户选择"场景细化"时：persona_generation → 用户选择画像 → question_simulation(mode="persona_focused") → answer_fetch → analysis_report_skill(report_type="persona")
-重跑基线流程：用户说"重跑基线"时：跳过A1，直接 question_simulation(mode="baseline_dynamic") → answer_fetch → analysis_report_skill(report_type="baseline")
-引用内容置信度评估流程：用户在报告后明确表示要检查引用可信度时：confidence_signal_skill
-后续分析流程：用户在已有结果基础上要求深入分析、历史对比、局部重抓时：post_analysis_skill
-直接提问流程：用户选择"直接提问"时，【禁止】再次调用 ask_user 给子选项。直接用自然语言回复，告诉用户可以在输入框中自由提问，并举几个他们可能感兴趣的方向作为启发（不是按钮选项）。例如：
-"没问题！您可以直接在输入框中提问，比如：某个具体平台上品牌表现如何？竞品在 AI 平台中的优势是什么？某类用户场景下的推荐逻辑是怎样的？——任何和品牌 AEO 相关的问题我都可以为您深入分析。"
-
-行为准则：
-- 始终用温暖、自然、专业的语言与用户交流，像一位真正了解品牌营销的顾问
-- 在回复中说明你打算做什么（规划），然后调用对应工具
-- 不要一次调用多个工具，每轮只执行一个步骤
-- 执行完一个步骤后，根据步骤特性决定下一步：
-  - 品牌分析（A1）完成后：见上方"A1 完成后的流程"
-  - 用户画像（A2）完成后：必须调用 ask_user 引导用户在画布管道图中选择画像，不可自行决定，不可直接调用 question_simulation
-  - 问题模拟（A3）完成后：必须调用 ask_user 让用户选择采集模式（快速/完整/重新生成），用户选择后根据其选择调用 answer_fetch(fetch_mode=对应模式)，不可直接调用
-  - AI答案抓取（A4）完成后：不要 ask_user，不要等待用户确认，必须立即调用 analysis_report_skill 生成报告
-  - 数据分析报告（A5）完成后：必须调用 ask_user 让用户决定是否做引用内容置信度评估，或继续后续分析
-  - 其他步骤：直接建议或执行下一步
-- 如果用户的请求不明确，用自然语言追问，不要调用 ask_user
-
-ask_user 使用限制（非常重要）：
-ask_user 只允许在以下场景使用，其他任何场景都【禁止】调用 ask_user：
-  0. table_intake_skill 完成后 → 确认表格用途及是否继续导入
-  1. A1 完成后 → 确认开始基线分析
-  2. 基线分析完成后 / 已有基线 → 选择下一步路径（置信度评估/场景细化/重跑基线/直接提问）
-  3. A2 完成后 → 引导用户选择画像
-  4. A3 完成后 → 让用户选择采集模式（快速采集/完整采集/重新生成问题），用户选择后才能调用 answer_fetch(fetch_mode=对应模式)
-  5. A5 完成后 → 选择是否做引用内容置信度评估，或继续后续分析
-  6. 步骤执行失败 → 提供恢复选项（重试/跳过/手动输入）
-除以上 7 种场景外，所有其他情况（包括闲聊、查询结果、用户提问、不确定时）都必须直接用自然语言回复，绝不调用 ask_user。用户随时可以在输入框中自由打字与你对话，不需要通过选项按钮。
-- 回复风格要求（非常重要，你的回复代表品牌的专业形象）：
-  - 你是一位资深品牌营销顾问，每一句话都应体现专业洞察，而不仅仅是传达状态
-  - 开始执行时：先说明分析思路和价值（为什么要做这一步、能带来什么洞察），让用户理解分析的意义
-  - 步骤完成后：用 3-5 句话汇报结果，必须包含至少 1 个具体的数据洞察或发现，让用户觉得"这个分析确实有价值"
-  - 展示选项时：在消息中清晰列出编号选项，每个选项附一句话说明其含义和预期收益
-  - 不要重复 Agent 已通过 UI 卡片展示的详细内容（如完整画像列表、品牌信息表格），但可以提炼 2-3 个关键洞察点加入对话
-  - 例如好的回复：「品牌调研完成！XX品牌在YY行业中定位为ZZ，目前主要竞品有A和B。有意思的是，该品牌在 AI 平台中的竞争格局与传统搜索有明显差异。接下来我将启动基线分析，看看各大 AI 平台对这个品牌的真实认知是什么。」（注意：此处XX/YY/ZZ/A/B请替换为实际数据）
-  - 例如不好的回复：「品牌分析完成，共识别出 5 个竞品。」（过于简短，缺乏价值感）
-  - 例如不好的回复：「好的，我来帮您设置定期监测计划。」+「确认设置 / 自定义参数」（没有解释任何内容，用户不知道要设置什么）
-- 如果所有分析步骤都已完成，总结分析结果并告知用户可以做什么
-- 向用户展示选项时的要求（重要）：
-  - 在消息文本中用自然语言列出编号选项（1. 2. 3.），每个选项附简要说明，让用户理解每个选择的含义和区别
-  - 调用 ask_user 时不传 options 参数，只传 message='请回复序号或输入您的想法'
-  - 不要给出用户无法理解的选项（如"自定义参数"但不说明有哪些参数可以自定义）
-  - 如果选项涉及配置（如定期监测），必须在消息中先说明默认配置是什么、有哪些可调参数、推荐配置是什么
-- 如果用户直接提供了问题文本并要求抓取答案，可通过 answer_fetch 的 custom_questions 参数传入，无需先调用 question_simulation。仍需确认 fetch_mode。
-- 即使已有模拟问题，如果用户要求以不同画像或模式重新生成，仍然应该再次调用 question_simulation
-- 【重要】"完整模式"/"full模式"/"完整采集" 指 answer_fetch(fetch_mode="full") 的参数，不是重新生成问题。question_simulation 成功后，绝不再次调用 question_simulation，必须先调用 answer_fetch 或 ask_user。
-- 如果某个Agent执行后返回"未获取到有效数据"，友好地告知用户该步骤未成功，说明可能原因，并提供建设性的替代选项。如果用户要求重试，可以再次调用同一个Agent。
-
-当前会话追问优先规则（重要）：
-- 如果当前会话已经有 fetch_results 或 report，且用户是在追问“本次报告/本次抓取”的细节，优先使用 post_analysis_skill / drill_down_analysis，不要先走 knowledge_*。
-- “负向提及/负面提及/正向提及/中性提及是什么” 这类问题，如果当前会话已有报告，优先使用 drill_down_analysis(focus_dimension="sentiment")。
-- “某个平台这次怎么回答的”“Kimi/DeepSeek 这次表现如何” 这类问题，如果当前会话已有抓取结果，优先使用 drill_down_analysis(focus_dimension="platform")。
-- 只有用户明确在问跨历史材料、历史月份、历史导出、最近两次变化时，才优先使用 knowledge_*。
-
-历史材料优先规则（重要）：
-- 当用户的问题围绕品牌信息、竞品信息、历史抓取答案、历史引用来源、基于已有抓取结果的分析、或导出历史抓取信息时，优先尝试 knowledge_lookup
-- 当用户要求按时间范围、平台、竞品、域名、问题等维度汇总历史材料时，优先尝试 knowledge_aggregate
-- 当用户明确要求导出、下载、生成文件、拉清单或交付历史材料时，优先尝试 knowledge_export
-- 当用户要求比较最近两轮历史结果、看变化最大的维度时，优先尝试 knowledge_compare
-- knowledge_lookup 是低成本历史材料工具，不需要 ask_user
-- knowledge_aggregate、knowledge_compare 和 knowledge_export 也是低成本历史材料工具，不需要 ask_user
-- 如果 knowledge_lookup 命中，优先基于返回证据继续回答、分析、导出或规划下一步
-- 如果 knowledge_export 成功，优先向用户说明交付物已生成，并简要总结导出的范围和内容
-- 如果知识类工具返回 miss，或证据不足以完成任务，再考虑调用 brand_analysis、answer_fetch 或 ask_user
-- 典型示例：
-  - “3月所有竞品抓取信息导出一下” → 先 knowledge_export
-  - “最近抓回来的答案里，我们和竞品有什么差距” → 先 knowledge_lookup 或 knowledge_aggregate
-  - “最近两次哪些平台变化最大” → 先 knowledge_compare
-
-绝对禁止（违反这些规则会导致严重错误）：
-- 你没有实时数据，不要自行编造品牌信息、竞品数据或用户画像
-- 当用户首次提供品牌名称且系统没有足够历史事实时，你必须调用 brand_analysis 工具获取真实数据
-- 不要在回复中直接给出"品牌分析结果"——所有分析数据必须通过工具获取
-- 如果你不确定该做什么，用自然语言向用户提问澄清，不要调用 ask_user
-- 不要在回复中编造具体的时间估计（如"约15秒"、"大约3分钟"、"第3/4步"等）。如需提及耗时，仅使用工具描述中给出的时间范围（如answer_fetch约8-12分钟）。其他步骤不要预估时间，使用"请稍候"即可
-
-失败处理（重要）：
-- 绝对不要提供"停止分析"或"取消分析"作为选项。我们的目标是引导用户完成分析，而不是放弃。
-- 当某个步骤失败时，使用 ask_user 向用户提供以下建设性选项：
-  1. 重新尝试（用不同参数或方式）
-  2. 跳过此步骤继续下一步（说明替代方案，如品牌全景模式）
-  3. 手动提供数据（引导用户描述所需信息，如"请描述您的目标用户群体"）
-- 举例：画像生成失败时，选项应为："重新尝试生成" / "跳过，使用品牌全景模式" / "手动描述目标用户"
-- 永远保持积极的态度，帮助用户找到可行方案
-- 【A4 失败特别规则】answer_fetch 失败后，绝对禁止自动调用 question_simulation 重新生成问题。问题已在之前步骤生成且仍然有效，只需重试 answer_fetch 即可。必须使用 ask_user 让用户选择：重试抓取/换模式重试/仅重试部分平台。
-
-{_build_context_summary(state)}"""
+    return build_orchestrator_prompt_assembly(state).render()
 
 
 def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
@@ -1453,14 +1489,20 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 DIRECTIVE_A1_HAS_BASELINE if has_baseline else DIRECTIVE_A1_NO_BASELINE
             )
             return summary
-        return "品牌分析执行完成，但未获取到有效数据。"
+        return (
+            "品牌分析暂未拿到有效结果。"
+            "请先核对品牌名称是否准确，或补充官网/行业线索后让我重试品牌分析。"
+        )
 
     if tool_name == "persona_generation":
         mp = state.get("marketing_personas")
         if mp:
             personas = mp.get("user_personas", [])
             if not personas:
-                return "画像生成未获取到数据，请提供建设性选项帮助用户继续。"
+                return (
+                    "画像生成暂未拿到有效结果。"
+                    "更合适的下一步是先补充品牌信息，或先运行基线分析后再重新生成画像。"
+                )
             persona_names = [
                 p.get("persona_name", p.get("name", f"画像{i+1}"))
                 for i, p in enumerate(personas[:6])
@@ -1470,7 +1512,10 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 f"用户画像生成完成，共 {len(personas)} 个画像：{names_str}。"
                 f"{DIRECTIVE_A2_ASK_PATH}"
             )
-        return "画像未获取到数据，请提供建设性选项帮助用户继续。"
+        return (
+            "画像生成暂未成功。"
+            "请告诉用户可以先补充品牌信息、先运行基线分析，或稍后重新尝试画像生成。"
+        )
 
     if tool_name == "table_intake_skill":
         result = state.get("table_intake_result") or {}
@@ -1497,7 +1542,9 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             )
         return (
             f"{summary}"
-            "【强制操作】请告诉用户当前无法稳定判断这份表格用途，并调用 ask_user 请求用户重新上传单个 CSV/XLSX 或补充说明。"
+            "【强制操作】请告诉用户我暂时还不能稳定判断这份表格的用途，"
+            "并补充可执行方案：重新上传单个 CSV/XLSX、说明希望挂接到哪个步骤、或拆分文件后再试。"
+            "随后调用 ask_user 请求用户选择下一步。"
         )
 
     if tool_name == "question_simulation":
@@ -1513,9 +1560,9 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             )
             return summary
         return (
-            "问题模拟未获取到有效数据，流程中止。"
-            "【强制操作】直接告知用户问题模拟失败、未能生成有效问题，"
-            "并提供两个选项：1) 重试问题模拟；2) 换一种方式描述需求。"
+            "问题模拟暂未生成有效问题。"
+            "【强制操作】直接告知用户当前问题集不足以继续抓取，"
+            "并提供两个选项：1) 重新生成问题；2) 换一种方式描述需求或改用上传问题列表。"
             "不要继续调用 answer_fetch，等待用户指示。"
         )
 
@@ -1539,7 +1586,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             "AI答案抓取完成，但未获取到有效数据。"
             "【强制操作】你必须使用 ask_user 向用户说明抓取失败，并提供以下选项："
             "1) 重新尝试抓取（可换模式，如 fast→full）；"
-            "2) 仅重试部分平台（通过 post_analysis_skill 执行 selective_refetch）；"
+            "2) 仅抓取指定平台（继续走 answer_fetch，并通过 platforms 指定平台）；"
             "3) 手动提供问题重新抓取。"
             "【绝对禁止】不要调用 question_simulation 重新生成问题。"
             "问题已经在之前的步骤中生成，无需重新生成。"
@@ -1585,7 +1632,10 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             if current_mode == "baseline":
                 return summary + DIRECTIVE_A5_BASELINE_NEXT
             return summary + DIRECTIVE_A5_PERSONA_NEXT
-        return "数据分析完成，但未获取到有效数据。"
+        return (
+            "分析报告暂未生成有效结果。"
+            "请结合当前抓取结果说明缺口，并优先给出可执行方案：补抓缺失平台、重试当前模式，或确认是否先基于现有结果继续。"
+        )
 
     if tool_name == "knowledge_lookup":
         result = state.get("knowledge_lookup_result") or {}
@@ -1678,13 +1728,12 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         "post_analysis_skill",
         "drill_down_analysis",
         "compare_snapshots",
-        "selective_refetch",
     }:
         last_skill_result = state.get("last_skill_result") or {}
         if last_skill_result.get("summary"):
             return str(last_skill_result["summary"])
         reply = state.get("orchestrator_reply", "")
-        return f"后续分析 Skill 已完成。{reply[:200]}"
+        return f"后续分析已完成。{reply[:200]}"
 
     current_skill = state.get("current_skill")
     last_skill_result = state.get("last_skill_result") or {}
@@ -1695,7 +1744,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
 
     if tool_name == "create_monitoring_schedule":
         reply = state.get("orchestrator_reply", "")
-        return f"monitoring schedule creation completed: {reply[:200]}"
+        return f"监测计划创建已完成。{reply[:200]}"
 
     return f"工具 {tool_name} 执行完成。"
 
@@ -2191,7 +2240,6 @@ TOOL_TO_NODE: dict[str, str] = {
     "post_analysis_skill": "post_analysis_executor",
     "drill_down_analysis": "drill_down",
     "compare_snapshots": "compare_snapshots",
-    "selective_refetch": "selective_refetch",
     # Monitoring tools (Cycle 4)
     "create_monitoring_schedule": "create_monitoring",
 }
@@ -2202,18 +2250,17 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "question_simulation": "问题模拟生成",
     "answer_fetch": "AI答案抓取",
     "table_intake_skill": "表格导入理解",
-    "analysis_report_skill": "完整分析报告 Skill",
+    "analysis_report_skill": "完整分析报告",
     "data_analytics": "数据分析报告",
     "knowledge_lookup": "历史知识检索",
     "knowledge_aggregate": "历史知识聚合",
     "knowledge_compare": "历史知识对比",
     "knowledge_export": "历史知识导出",
-    "confidence_signal_skill": "引用置信度评估 Skill",
+    "confidence_signal_skill": "引用置信度评估",
     "citation_confidence_analysis": "引用内容置信度评估",
-    "post_analysis_skill": "后续分析 Skill",
+    "post_analysis_skill": "后续分析",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
-    "selective_refetch": "选择性重新抓取",
     # Monitoring tools (Cycle 4)
     "create_monitoring_schedule": "创建监测计划",
 }
@@ -2569,6 +2616,7 @@ async def orchestrator_node(state: AgentState) -> Command:
     last_usage = None
     stream_started_at = perf_counter()
     stream_thoughts = _should_stream_thoughts(working_state)
+    thinking_placeholder_sent = False
 
     try:
         async for chunk in async_wrap_sync_gen(
@@ -2623,10 +2671,17 @@ async def orchestrator_node(state: AgentState) -> Command:
                 for block in chunk.thinking_blocks:
                     if block.text:
                         if stream_thoughts:
-                            thinking_text += block.text
-                            await send_thought_event(
-                                session_id, block.text, is_delta=True
+                            streamed_thought, thinking_placeholder_sent = (
+                                _normalize_thought_text_for_stream(
+                                    block.text,
+                                    placeholder_sent=thinking_placeholder_sent,
+                                )
                             )
+                            if streamed_thought:
+                                thinking_text += streamed_thought
+                                await send_thought_event(
+                                    session_id, streamed_thought, is_delta=True
+                                )
 
         # Mark reply as complete
         await send_reply_event(session_id, "", is_complete=True)
@@ -2866,7 +2921,6 @@ async def _handle_tool_call(
     """Handle LLM's tool call decision."""
     tool_name = tool_call.name
     tool_args = tool_call.arguments or {}
-
     # F8: Extract retry counts once; propagate through all return paths
     current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
 
@@ -3136,6 +3190,9 @@ async def _handle_tool_call(
     selected_skill_package_path = None
     selected_skill_package_context = None
     selected_skill_prompt_overlay = None
+    selected_skill_contract = None
+    selected_skill_prompt_sections = None
+    selected_tool_capability = None
     display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
 
     if resolved_skill is not None:
@@ -3148,10 +3205,42 @@ async def _handle_tool_call(
         selected_skill_package_path = resolved_skill.package_path
         selected_skill_package_context = resolved_skill.package_body
         selected_skill_prompt_overlay = resolved_skill.prompt_overlay
+        selected_skill_contract = resolved_skill.skill_contract.to_state_payload()
+        selected_skill_prompt_sections = selected_skill_contract.get(
+            "prompt_sections"
+        )
         node_name = resolved_skill.node_name
         tool_args = dict(resolved_skill.merged_tool_args)
     else:
         node_name = TOOL_TO_NODE.get(tool_name)
+
+    capability = get_tool_capability(tool_name) or get_tool_capability(
+        effective_tool_name
+    )
+    capability, capability_error = validate_tool_capability_access(
+        caller="orchestrator",
+        capability=capability,
+    )
+    if capability is not None:
+        selected_tool_capability = capability.to_state_payload()
+    if capability_error:
+        logger.warning("[Orchestrator] Capability access blocked: %s", capability_error)
+        new_history.append(
+            {
+                "role": "tool",
+                "content": capability_error,
+                "tool_call_id": tool_call.id or "call_1",
+                "name": tool_name,
+            }
+        )
+        return Command(
+            goto="orchestrator",
+            update={
+                "orchestrator_reply": reply_text,
+                "orchestrator_history": new_history,
+                "agent_retry_counts": current_retry_counts,
+            },
+        )
 
     if node_name:
         requested_question_mode = tool_args.get("mode", "")
@@ -3609,8 +3698,13 @@ async def _handle_tool_call(
                 "current_skill_package_path": selected_skill_package_path,
                 "current_skill_package_context": selected_skill_package_context,
                 "current_skill_prompt_overlay": selected_skill_prompt_overlay,
+                "current_skill_contract": selected_skill_contract,
+                "current_skill_prompt_sections": selected_skill_prompt_sections,
+                "current_tool_capability": selected_tool_capability,
                 "agent_retry_counts": retry_counts,
                 "error_info": None,
+                "last_validation_result": None,
+                "last_harness_decision": None,
                 **extra_updates,
             },
         )

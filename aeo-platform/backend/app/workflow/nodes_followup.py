@@ -1,11 +1,10 @@
 ﻿"""Follow-up analysis nodes for multi-turn dialogue (Cycle 3, Module 2).
 
-Three follow-up nodes that operate on existing session data without re-running
+Two follow-up nodes operate on existing session data without re-running
 the full A1-A5 pipeline:
 
 - drill_down_node: Focused analysis on a specific dimension of existing results
 - compare_snapshots_node: Compare current analysis with a previous snapshot
-- selective_refetch_node: Re-fetch from specific platforms only, merge & re-analyze
 """
 
 import json
@@ -14,6 +13,8 @@ from typing import Any
 
 from langgraph.types import Command
 
+from app.services.tool_capability_matrix import validate_tool_capability_access
+from app.workflow.harness_validation import build_harness_decision
 from app.workflow.a5.metrics import analyze_sentiment
 from app.workflow.state import AgentState
 from app.workflow.events import send_reply_event
@@ -21,6 +22,7 @@ from app.workflow.skill_fact_snapshot import build_skill_fact_snapshot
 from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.skill_state import (
     apply_skill_prompt_context,
+    build_harness_decision_update,
     build_skill_result_update,
 )
 from app.core.llm import get_llm_model
@@ -114,7 +116,7 @@ async def drill_down_node(state: AgentState) -> Command:
                 skill_key=state.get("current_skill"),
                 tool_name="post_analysis_skill",
                 status="completed",
-                summary=f"后续分析 Skill 已完成，本次执行为 drill_down（{focus_dimension}:{focus_value or '全部'}）。",
+                summary=f"后续分析已完成，本次执行为 drill_down（{focus_dimension}:{focus_value or '全部'}）。",
                 executor_ref="post_analysis_executor",
                 metadata={
                     "analysis_mode": "drill_down",
@@ -501,7 +503,7 @@ async def compare_snapshots_node(state: AgentState) -> Command:
                 skill_key=state.get("current_skill"),
                 tool_name="post_analysis_skill",
                 status="completed",
-                summary="后续分析 Skill 已完成，本次执行为快照对比。",
+                summary="后续分析已完成，本次执行为快照对比。",
                 executor_ref="post_analysis_executor",
                 metadata={"analysis_mode": "compare_snapshots"},
             ),
@@ -599,133 +601,97 @@ async def _generate_comparison(
             f"*详细对比生成失败: {e}*"
         )
 
-
-# =============================================================================
-# selective_refetch_node
-# =============================================================================
-
-
-async def selective_refetch_node(state: AgentState) -> Command:
-    """Re-fetch from selected platforms and regenerate report.
-
-    V1 SIMPLIFIED APPROACH (Review C5/T3):
-    Instead of a complex merge node, we use a platform filter pattern:
-    1. Read the LATEST Snapshot.raw_data for the entity to get baseline data
-       (existing fetch_results from unselected platforms) -- Review C3
-    2. Set state["platform_filter"] = requested platforms
-    3. Route to A4 which reads platform_filter and only fetches those platforms
-    4. After A4, merge: replace selected-platform results, keep unselected from baseline
-    5. Route to A5 to regenerate report from merged data
-    6. Create a new Snapshot with merged results (Review C5)
-
-    Precondition: simulated_questions must exist in state (from prior full analysis).
-    """
-    session_id = state["session_id"]
-    tool_args = state.get("tool_call_args") or {}
-    platforms = tool_args.get("platforms", [])
-
-    # Precondition check (Review T5)
-    simulated_questions = state.get("simulated_questions")
-    logger.info(
-        "[selective_refetch] precondition check: simulated_questions=%s, questions=%s",
-        "yes" if simulated_questions else "NO",
-        "yes" if state.get("questions") else "NO",
-    )
-    if not simulated_questions:
-        error_msg = (
-            "当前会话中没有分析数据，请先完成一次完整的品牌分析后再进行选择性重新抓取。"
-        )
-        logger.warning("[selective_refetch] PRECONDITION FAILED — returning early")
-        await send_reply_event(session_id, error_msg, is_delta=False, is_complete=True)
-        return Command(
-            update={
-                "orchestrator_reply": error_msg,
-                "execution_status": "completed",
-            }
-        )
-
-    # V1: Use current state fetch_results as baseline.
-    # Snapshot raw_data only contains summaries, not full platform results,
-    # so DB lookup is unnecessary here. If entity-level baseline is needed
-    # in the future, implement proper raw_data storage first.
-    current_fetch = state.get("fetch_results") or []
-    platforms_lower = [p.lower() for p in platforms]
-
-    # Keep results from unselected platforms
-    unselected_results = []
-    for fr in current_fetch:
-        kept_pr = [
-            pr
-            for pr in fr.get("platform_results", [])
-            if pr.get("platform", "").lower() not in platforms_lower
-        ]
-        if kept_pr:
-            unselected_results.append(
-                {
-                    "question_id": fr.get("question_id", ""),
-                    "question_text": fr.get("question_text", ""),
-                    "platform_results": kept_pr,
-                }
-            )
-
-    await send_reply_event(
-        session_id,
-        f"正在重新抓取以下平台的数据: {', '.join(platforms)}...",
-        is_delta=False,
-        is_complete=True,
-    )
-
-    # Pass fetch_mode if provided (default: inherit from state, fallback "fast")
-    fetch_mode = tool_args.get("fetch_mode") or state.get("fetch_mode") or "fast"
-    logger.info(
-        "[selective_refetch] routing to a4_fetch: platforms=%s, fetch_mode=%s",
-        platforms_lower,
-        fetch_mode,
-    )
-
-    return Command(
-        update={
-            "platform_filter": platforms_lower,
-            "preserved_fetch_results": unselected_results,
-            "fetch_mode": fetch_mode,
-            "execution_status": "running",
-            "current_skill": state.get("current_skill") or "post_analysis_skill",
-            "last_skill_result": {
-                "skill_key": state.get("current_skill") or "post_analysis_skill",
-                "tool_name": "post_analysis_skill",
-                "status": "running",
-                "summary": f"后续分析 Skill 已进入 selective_refetch，准备重抓平台：{', '.join(platforms_lower)}。",
-                "executor_ref": "post_analysis_executor",
-                "metadata": {
-                    "analysis_mode": "selective_refetch",
-                    "platforms": platforms_lower,
-                    "fetch_mode": fetch_mode,
-                },
-            },
-        },
-        goto="a4_fetch",
-    )
-
-
 async def post_analysis_executor_node(state: AgentState) -> Command:
     """Route coarse-grained post-analysis skill to existing follow-up nodes."""
 
+    session_id = str(state.get("session_id") or "")
     tool_args = state.get("tool_call_args") or {}
+    current_capability = state.get("current_tool_capability") or {}
+    capability_tool_name = str(current_capability.get("tool_name") or "").strip()
+    _, capability_error = validate_tool_capability_access(
+        caller="post_analysis_executor",
+        tool_name=capability_tool_name,
+    )
+    if capability_error:
+        logger.warning("[post_analysis_skill] Capability access blocked: %s", capability_error)
+        if session_id:
+            await send_reply_event(
+                session_id,
+                "后续分析能力路由被运行时策略阻止，请稍后重试。",
+                is_delta=False,
+                is_complete=True,
+            )
+        return Command(
+            update={
+                "execution_status": "error",
+                "current_step": state.get("current_step") or "post_analysis_executor",
+                "error_info": {
+                    "step": "post_analysis_executor",
+                    "error": capability_error,
+                },
+                **build_harness_decision_update(
+                    state,
+                    build_harness_decision(
+                        decision_type="fail_step",
+                        reason=capability_error,
+                        recoverable=False,
+                        metadata={
+                            "step": "post_analysis_executor",
+                            "blocker_code": "capability_policy_blocked",
+                            "tool_name": capability_tool_name,
+                        },
+                    )
+                ),
+            }
+        )
     requested_mode = str(tool_args.get("analysis_mode") or "").strip().lower()
-    if requested_mode not in {"drill_down", "compare_snapshots", "selective_refetch"}:
-        if tool_args.get("platforms"):
-            requested_mode = "selective_refetch"
-        elif tool_args.get("focus_dimension") or tool_args.get("focus_value"):
+    capability_mode_map = {
+        "drill_down_analysis": "drill_down",
+        "compare_snapshots": "compare_snapshots",
+    }
+    if not requested_mode and capability_tool_name in capability_mode_map:
+        requested_mode = capability_mode_map[capability_tool_name]
+    if tool_args.get("platforms") or tool_args.get("fetch_mode"):
+        guidance = (
+            "后续分析只读取已有结果，不负责重新抓取数据。"
+            "如果您希望重跑某个平台、切换 fast/full，或改用浏览器重新采集，"
+            "请改走答案抓取。"
+        )
+        if session_id:
+            await send_reply_event(
+                session_id,
+                guidance,
+                is_delta=False,
+                is_complete=True,
+            )
+        return Command(
+            update={
+                "orchestrator_reply": guidance,
+                "execution_status": "completed",
+                **build_skill_result_update(
+                    state,
+                    skill_key=state.get("current_skill"),
+                    tool_name="post_analysis_skill",
+                    status="completed",
+                    summary="后续分析检测到重抓诉求，已提示改走答案抓取。",
+                    executor_ref="post_analysis_executor",
+                    metadata={"analysis_mode": "route_to_answer_fetch"},
+                ),
+            }
+        )
+    if requested_mode not in {"drill_down", "compare_snapshots"}:
+        if tool_args.get("focus_dimension") or tool_args.get("focus_value"):
             requested_mode = "drill_down"
         else:
             requested_mode = "compare_snapshots"
 
     logger.info(
-        "[post_analysis_skill] Routed to %s with args=%s", requested_mode, tool_args
+        "[post_analysis_skill] Routed to %s with capability=%s args=%s",
+        requested_mode,
+        capability_tool_name or "none",
+        tool_args,
     )
 
     if requested_mode == "drill_down":
         return await drill_down_node(state)
-    if requested_mode == "selective_refetch":
-        return await selective_refetch_node(state)
     return await compare_snapshots_node(state)

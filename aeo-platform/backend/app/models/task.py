@@ -43,7 +43,7 @@ class AnalysisTask(Base):
 
     Design note: AnalysisTask has a many-to-one relationship with Session.
     A single session may contain multiple tasks over time (e.g., initial analysis
-    followed by selective_refetch). Each task represents one pipeline execution.
+    followed by a scoped re-run via answer_fetch). Each task represents one pipeline execution.
     """
 
     __tablename__ = "analysis_tasks"

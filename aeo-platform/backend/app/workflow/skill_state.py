@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.workflow.harness_validation import HarnessDecision, ValidationGateResult
 from app.workflow.state import AgentState
 
 
@@ -43,17 +44,77 @@ def build_skill_result_update(
     }
 
 
-def apply_skill_prompt_context(state: AgentState, prompt: str) -> str:
-    """Append package guidance and profile overlay to an executor prompt."""
+def build_validation_result_update(
+    state: AgentState,
+    result: ValidationGateResult,
+) -> dict[str, Any]:
+    history = list(state.get("validation_history") or [])
+    entry = result.to_state_payload()
+    entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+    history.append(entry)
+    return {
+        "last_validation_result": entry,
+        "validation_history": history,
+    }
 
-    sections: list[str] = []
+
+def build_harness_decision_update(
+    state: AgentState,
+    decision: HarnessDecision,
+) -> dict[str, Any]:
+    history = list(state.get("harness_decision_history") or [])
+    entry = decision.to_state_payload()
+    entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+    history.append(entry)
+    return {
+        "last_harness_decision": entry,
+        "harness_decision_history": history,
+    }
+
+
+def _iter_skill_prompt_sections(state: AgentState) -> list[dict[str, Any]]:
+    sections = list(state.get("current_skill_prompt_sections") or [])
+    if sections:
+        return sections
+
+    contract = state.get("current_skill_contract") or {}
+    contract_sections = list(contract.get("prompt_sections") or [])
+    if contract_sections:
+        return contract_sections
+
+    sections = []
     package_context = str(state.get("current_skill_package_context") or "").strip()
     if package_context:
-        sections.append(f"[Skill Package]\n{package_context}")
+        sections.append(
+            {
+                "key": "legacy_skill_package",
+                "title": "技能包上下文",
+                "body": package_context,
+            }
+        )
 
     profile_overlay = str(state.get("current_skill_prompt_overlay") or "").strip()
     if profile_overlay:
-        sections.append(f"[Skill Profile Overlay]\n{profile_overlay}")
+        sections.append(
+            {
+                "key": "legacy_skill_profile_overlay",
+                "title": "技能补充画像",
+                "body": profile_overlay,
+            }
+        )
+    return sections
+
+
+def apply_skill_prompt_context(state: AgentState, prompt: str) -> str:
+    """Append structured skill sections to an executor prompt."""
+
+    sections: list[str] = []
+    for section in _iter_skill_prompt_sections(state):
+        body = str(section.get("body") or "").strip()
+        if not body:
+            continue
+        title = str(section.get("title") or "技能上下文").strip()
+        sections.append(f"## {title}\n{body}")
 
     if not sections:
         return prompt

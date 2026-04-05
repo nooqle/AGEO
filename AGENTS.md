@@ -223,11 +223,18 @@ Required sections (must include all):
 - `Learned / New Skills`: what new skills, methods, or patterns were gained
 - `Understanding of User`: updated understanding of user expectations and working style
 
+Preferred front-loaded sections (include whenever relevant, and place them before `Today's Work`):
+- `Validation Closure`: what was actually verified, what was written back, and what remains open
+- `Failure Samples`: explicit failure patterns with signal, why they survived, kill step, and writeback
+- `Collaboration Evolution`: how the user/Codex collaboration changed, what became more explicit, and what still depends too much on one side
+
 Guidelines:
 - Follow the style and depth of existing files in `docs/daily-retro/`.
 - Be concrete; include evidence from actual work done in the workspace.
 - If there is little progress on a given day, explicitly state what blocked progress and why.
 - Add `Tomorrow's Priority` with 1-3 actionable items.
+- Do not let the retro collapse into a task list; validation quality, failure visibility, and protocol writeback are more important than raw activity volume.
+- Prefer using the global skill [$validation-closure-retro](/C:/Users/Administrator/.codex/skills/validation-closure-retro/SKILL.md) when writing or rewriting a retro, and use [$collaboration-harness](/C:/Users/Administrator/.codex/skills/collaboration-harness/SKILL.md) when adjusting the collaboration protocol itself.
 
 
 ## Local Subagent Definitions

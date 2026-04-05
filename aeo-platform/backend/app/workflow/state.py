@@ -194,6 +194,15 @@ class AgentState(TypedDict):
     #   "action_plan": {...}
     # }
 
+    confidence_signal_summary: dict | None
+    # {
+    #   "headline": str,
+    #   "overall_conclusion": str,
+    #   "evaluated_source_count": int,
+    #   "brand_average_confidence": float,
+    #   "competitor_average_confidence": float
+    # }
+
     # =========================================================================
     # Execution Control
     # =========================================================================
@@ -250,8 +259,15 @@ class AgentState(TypedDict):
     current_skill_prompt_overlay: (
         str | None
     )  # Optional prompt overlay resolved from selected profile
+    current_skill_contract: dict | None  # Structured public skill contract payload
+    current_skill_prompt_sections: list | None  # Structured model-visible skill sections
+    current_tool_capability: dict | None  # Structured tool capability payload
     last_skill_result: dict | None  # Latest skill execution result summary
     skill_history: list  # [{skill_key, tool_name, status, summary, ...}]
+    last_validation_result: dict | None  # Latest harness validation gate result
+    validation_history: list  # [{gate_name, passed, reason, ...}]
+    last_harness_decision: dict | None  # Latest harness decision payload
+    harness_decision_history: list  # [{decision_type, recoverable, reason, ...}]
     agent_retry_counts: (
         dict  # {tool_name: int} — tracks how many times each tool was called
     )
@@ -277,11 +293,11 @@ class AgentState(TypedDict):
     # =========================================================================
     # Multi-Turn Follow-Up (Cycle 3, Module 2)
     # =========================================================================
-    platform_filter: list | None  # Platform names to re-fetch (selective_refetch)
+    platform_filter: list | None  # Platform names for scoped fetch / rerun
     preserved_fetch_results: (
         list | None
-    )  # Unselected platform results to preserve during selective_refetch
-    auto_trigger_a5: bool  # True when A4 completed a selective_refetch, signals orchestrator to call A5
+    )  # Unselected platform results to preserve during scoped fetch merge
+    auto_trigger_a5: bool  # True when A4 completed a scoped rerun, signals orchestrator to call A5
 
     # =========================================================================
     # Headless Execution (Cycle 4 — Scheduler)

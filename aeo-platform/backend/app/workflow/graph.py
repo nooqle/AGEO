@@ -21,7 +21,6 @@ from app.workflow.nodes_followup import (
     post_analysis_executor_node,
     drill_down_node,
     compare_snapshots_node,
-    selective_refetch_node,
 )
 from app.workflow.nodes_knowledge import (
     knowledge_aggregate_node,
@@ -76,7 +75,6 @@ def build_workflow() -> StateGraph:
     # Follow-up nodes (Cycle 3, Module 2)
     workflow.add_node("drill_down", drill_down_node)
     workflow.add_node("compare_snapshots", compare_snapshots_node)
-    workflow.add_node("selective_refetch", selective_refetch_node)
 
     # Monitoring node (Cycle 4)
     workflow.add_node("create_monitoring", create_monitoring_node)
@@ -109,12 +107,6 @@ def build_workflow() -> StateGraph:
         "knowledge_export",
     ]:
         workflow.add_edge(node, "orchestrator")
-
-    # selective_refetch routes to a4_fetch (not back to orchestrator)
-    # A4 -> orchestrator is the existing pipeline path
-    # Note: selective_refetch uses Command(goto="a4_fetch") so this edge
-    # is declared for graph validation; actual routing is via Command.
-    workflow.add_edge("selective_refetch", "a4_fetch")
 
     # wait_for_user terminates the workflow run (user will re-invoke)
     workflow.add_edge("wait_for_user", END)
