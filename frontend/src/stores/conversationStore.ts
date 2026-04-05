@@ -287,14 +287,16 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         return existingFingerprint === fingerprint;
       });
 
-      if (existingIndex >= 0) {
-        nextStates[existingIndex] = {
-          ...nextStates[existingIndex],
-          ...browserState,
-        };
-      } else {
-        nextStates.push(browserState);
-      }
+        if (existingIndex >= 0) {
+          const existingState = nextStates[existingIndex];
+          nextStates[existingIndex] = {
+            ...existingState,
+            ...browserState,
+            takeover: browserState.takeover ?? existingState.takeover,
+          };
+        } else {
+          nextStates.push(browserState);
+        }
 
       return {
         browserState: nextStates.find((item) => item.requiresAction) || nextStates[0] || null,

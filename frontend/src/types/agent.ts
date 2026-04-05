@@ -2,6 +2,7 @@ export type TPAORPhase = 'thought' | 'plan' | 'action' | 'observation' | 'respon
 
 // 导入编排类型
 import type { ExecutionPlanStep, AgentCall, AgentCapability } from './orchestration';
+import type { AioTakeoverMode } from './aio';
 
 export interface TPAORUpdate {
   phase: TPAORPhase;
@@ -61,6 +62,17 @@ export type BrowserStateType =
 
 export type BrowserActionType = 'login' | 'verify' | 'modal';
 
+export interface BrowserTakeoverAccess {
+  takeoverId: string;
+  mode: AioTakeoverMode;
+  canvasConfigPath?: string;
+  vncUrlPath?: string;
+  heartbeatPath?: string;
+  resolvePath?: string;
+  cancelPath?: string;
+  expiresAt?: string;
+}
+
 export interface BrowserState {
   state: BrowserStateType;
   platform: 'kimi' | 'deepseek' | 'doubao' | 'hunyuan';
@@ -70,6 +82,7 @@ export interface BrowserState {
   actionHint?: string;
   progress?: number;
   requestId?: string;
+  takeover?: BrowserTakeoverAccess;
 }
 
 export interface StopState {

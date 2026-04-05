@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    aio,
     account_admin,
     alerts,
     analytics,
@@ -24,6 +25,7 @@ from app.api.v1.tasks import global_tasks_router
 api_router = APIRouter(prefix="/api/v1")
 
 api_router.include_router(sessions.router)
+api_router.include_router(aio.router)
 api_router.include_router(messages.router)
 api_router.include_router(outputs.router)
 api_router.include_router(auth.router)

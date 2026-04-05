@@ -14,20 +14,22 @@ const PLATFORM_LABELS: Record<BrowserState['platform'], string> = {
 
 interface BrowserActionBannerProps {
   browserState: BrowserState;
+  onOpenTakeover?: (() => void) | null;
 }
 
-export function BrowserActionBanner({ browserState }: BrowserActionBannerProps) {
+export function BrowserActionBanner({ browserState, onOpenTakeover }: BrowserActionBannerProps) {
   const sendBrowserActionResolution = useConversationStore((state) => state.wsBrowserActionResolution);
   const [localSubmitting, setLocalSubmitting] = useState<'completed' | 'skip' | null>(null);
+  const hasTakeover = Boolean(browserState.takeover?.takeoverId);
 
   const platformLabel = PLATFORM_LABELS[browserState.platform] || browserState.platform;
   const title = browserState.actionType === 'verify'
-    ? `${platformLabel} 遇到了安全验证，需要你协助处理`
+    ? `${platformLabel} 需要验证`
     : browserState.actionType === 'login'
-    ? `${platformLabel} 需要登录后才能继续抓取`
+    ? `${platformLabel} 需要登录`
     : browserState.actionType === 'modal'
-    ? `${platformLabel} 页面有弹窗阻碍，需要你协助确认`
-    : `${platformLabel} 需要你在浏览器窗口中协助操作`;
+    ? `${platformLabel} 需要确认`
+    : `${platformLabel} 需要处理`;
 
   const detail = browserState.actionHint || browserState.message;
   const canConfirm = Boolean(browserState.requestId && sendBrowserActionResolution);
@@ -62,34 +64,47 @@ export function BrowserActionBanner({ browserState }: BrowserActionBannerProps) 
           <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
             {detail}
           </p>
-          <p className="mt-1 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-            请先在浏览器窗口中完成操作，再点击此提示中的“我已完成”，我会继续当前任务。
-          </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => handleResolve('completed')}
-              disabled={!canConfirm || localSubmitting !== null}
-              className="rounded-full px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                background: 'var(--color-primary)',
-                color: '#fff',
-              }}
-            >
-              {localSubmitting === 'completed' ? '已提交，正在恢复...' : '我已完成'}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleResolve('skip')}
-              disabled={!canConfirm || localSubmitting !== null}
-              className="rounded-full px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                border: '1px solid var(--border-subtle)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              {localSubmitting === 'skip' ? '已提交跳过...' : '暂时跳过该平台'}
-            </button>
+            {hasTakeover ? (
+              <button
+                type="button"
+                onClick={() => onOpenTakeover?.()}
+                className="rounded-full px-3 py-1.5 text-xs font-medium transition"
+                style={{
+                  background: 'var(--color-primary)',
+                  color: '#fff',
+                }}
+              >
+                打开浏览器
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleResolve('completed')}
+                  disabled={!canConfirm || localSubmitting !== null}
+                  className="rounded-full px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    background: 'var(--color-primary)',
+                    color: '#fff',
+                  }}
+                >
+                  {localSubmitting === 'completed' ? '已提交，正在恢复...' : '我已完成'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleResolve('skip')}
+                  disabled={!canConfirm || localSubmitting !== null}
+                  className="rounded-full px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  {localSubmitting === 'skip' ? '已提交跳过...' : '暂时跳过该平台'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

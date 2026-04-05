@@ -7,6 +7,7 @@ Adapted for orchestrator-based dynamic routing (no hardcoded EXECUTION_STEPS).
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from uuid import UUID
@@ -16,11 +17,16 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from app.workflow.graph import get_compiled_workflow
 from app.workflow.state import AgentState
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.models.task_run import LIVE_TASK_RUN_STATUSES
 from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
 from app.services.message_service import MessageService
 from app.services.entity_service import EntityService
 from app.services.session_event_publisher import session_event_publisher
+from app.services.task_service import TaskService
+from app.services.task_run_child_attempt_service import TaskRunChildAttemptService
+from app.services.aio_session_manager import aio_session_manager
 from app.models.session import Session
 from app.models.message import Message, MessageType
 from app.workflow.confidence_analysis import (
@@ -29,7 +35,10 @@ from app.workflow.confidence_analysis import (
 from app.workflow.browser_action_runtime import (
     clear_session_browser_action_requests,
     get_browser_action_request,
+    get_session_browser_action_requests,
+    infer_browser_action_state,
     resolve_browser_action_request,
+    update_browser_action_request,
 )
 from app.workflow.runtime_policy_executor import build_next_required_action
 from app.workflow.confirmation import resolve_confirmation_selection
@@ -117,6 +126,296 @@ def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
     return "等待用户输入..."
 
 
+def _takeover_bundle_is_reusable(takeover: Any) -> bool:
+    """Return True only when an existing takeover bundle is still safe to reuse."""
+
+    if not isinstance(takeover, dict):
+        return False
+
+    takeover_id = takeover.get("takeover_id")
+    expires_at = takeover.get("expires_at")
+    required_paths = (
+        "canvas_config_path",
+        "vnc_url_path",
+        "heartbeat_path",
+        "resolve_path",
+        "cancel_path",
+    )
+    if not isinstance(takeover_id, str) or not takeover_id.strip():
+        return False
+    if not isinstance(expires_at, str) or not expires_at.strip():
+        return False
+    if any(not isinstance(takeover.get(path), str) for path in required_paths):
+        return False
+
+    normalized = expires_at.replace("Z", "+00:00")
+    try:
+        expires_dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    if expires_dt.tzinfo is None:
+        expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+    return expires_dt > datetime.now(timezone.utc)
+
+
+async def _rehydrate_aio_takeover_bundle(
+    *,
+    request_id: str,
+    platform: str,
+    action_type: str,
+    message: str,
+    task_id: UUID,
+    task_run_id: UUID,
+    user_id: UUID,
+) -> dict[str, Any] | None:
+    """Re-issue an AIO takeover bundle for a durable waiting_input record."""
+
+    if not settings.AIO_ENABLED or not settings.AIO_BASE_URL:
+        return None
+
+    try:
+        session = await aio_session_manager.ensure_workspace_session(
+            workspace_id=str(user_id),
+        )
+        takeover = await aio_session_manager.create_takeover_access(
+            session_id=session.session_id,
+            user_id=str(user_id),
+            platform=platform,
+            mode=settings.AIO_DEFAULT_ACCESS_MODE,
+            reason=message or action_type,
+            request_id=request_id,
+            task_id=str(task_id),
+            run_id=str(task_run_id),
+            action_type=action_type,
+        )
+    except Exception:
+        logger.exception(
+            "[WebSocket] Failed to rehydrate AIO takeover for request %s (platform=%s task_id=%s)",
+            request_id,
+            platform,
+            task_id,
+        )
+        return None
+
+    return {
+        "takeover_id": takeover.takeover_id,
+        "mode": takeover.mode,
+        "canvas_config_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/canvas-config",
+        "vnc_url_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/vnc-url",
+        "heartbeat_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/heartbeat",
+        "resolve_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/resolve",
+        "cancel_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/cancel",
+        "expires_at": takeover.expires_at.isoformat(),
+    }
+
+
+async def replay_pending_browser_actions_to_websocket(
+    websocket: WebSocket,
+    session_id: str,
+) -> None:
+    """Replay unresolved browser-action requests to a freshly connected socket."""
+
+    raw_pending_requests = await get_session_browser_action_requests(session_id)
+    runtime_request_count = len(raw_pending_requests)
+    pending_requests: list[dict[str, Any]] = []
+
+    try:
+        async with AsyncSessionLocal() as db:
+            task_service = TaskService(db)
+            await task_service.reconcile_terminal_task_live_runs(UUID(session_id))
+            active_task = await task_service.get_session_active_task(UUID(session_id))
+            authoritative_task_id = (
+                active_task.id if active_task is not None else None
+            )
+            authoritative_run_id = None
+            if active_task is not None:
+                loaded_runs = active_task.__dict__.get("task_runs") or []
+                live_run = next(
+                    (
+                        run
+                        for run in loaded_runs
+                        if getattr(run, "status", None) in LIVE_TASK_RUN_STATUSES
+                    ),
+                    None,
+                )
+                authoritative_run_id = getattr(live_run, "id", None)
+
+            service = TaskRunChildAttemptService(db)
+            if authoritative_task_id is None:
+                db_attempts = []
+            else:
+                db_attempts = await service.list_waiting_input_replay_records_for_session(
+                    UUID(session_id),
+                    task_id=authoritative_task_id,
+                    task_run_id=authoritative_run_id,
+                )
+    except Exception:
+        logger.exception(
+            "[WebSocket] Failed to query waiting_input child attempts for session %s",
+            session_id,
+        )
+        db_attempts = []
+        authoritative_run_id = None
+
+    attempts_by_request_id = {
+        attempt.request_id: attempt
+        for attempt in db_attempts
+        if getattr(attempt, "request_id", None)
+    }
+    authoritative_request_ids = set(attempts_by_request_id.keys())
+
+    filtered_runtime_count = 0
+    for request in raw_pending_requests:
+        request_id = request.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            continue
+
+        request_run_id = request.get("run_id")
+        if authoritative_run_id is not None:
+            if isinstance(request_run_id, str) and request_run_id:
+                if request_run_id != str(authoritative_run_id):
+                    filtered_runtime_count += 1
+                    continue
+            elif authoritative_request_ids and request_id not in authoritative_request_ids:
+                filtered_runtime_count += 1
+                continue
+        elif authoritative_request_ids and request_id not in authoritative_request_ids:
+            filtered_runtime_count += 1
+            continue
+        elif not authoritative_request_ids:
+            filtered_runtime_count += 1
+            continue
+
+        pending_requests.append(request)
+
+    seen_request_ids: set[str] = {
+        request.get("request_id")
+        for request in pending_requests
+        if isinstance(request.get("request_id"), str)
+    }
+
+    runtime_rehydrated_count = 0
+    for request in pending_requests:
+        request_id = request.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            continue
+        existing_takeover = request.get("takeover")
+        if _takeover_bundle_is_reusable(existing_takeover):
+            continue
+
+        attempt = attempts_by_request_id.get(request_id)
+        if attempt is None:
+            continue
+
+        takeover = await _rehydrate_aio_takeover_bundle(
+            request_id=request_id,
+            platform=attempt.platform,
+            action_type=attempt.action_type,
+            message=attempt.message,
+            task_id=attempt.task_id,
+            task_run_id=attempt.task_run_id,
+            user_id=attempt.user_id,
+        )
+        if not isinstance(takeover, dict):
+            continue
+
+        request["takeover"] = takeover
+        runtime_rehydrated_count += 1
+        request_state = request.get("state")
+        await update_browser_action_request(
+            request_id,
+            state=(
+                request_state
+                if isinstance(request_state, str)
+                else infer_browser_action_state(attempt.action_type)
+            ),
+            takeover=takeover,
+        )
+
+    db_fallback_count = 0
+    for attempt in db_attempts:
+        request_id = attempt.request_id
+        if not request_id or request_id in seen_request_ids:
+            continue
+        takeover = await _rehydrate_aio_takeover_bundle(
+            request_id=request_id,
+            platform=attempt.platform,
+            action_type=attempt.action_type,
+            message=attempt.message,
+            task_id=attempt.task_id,
+            task_run_id=attempt.task_run_id,
+            user_id=attempt.user_id,
+        )
+        pending_requests.append(
+            {
+                "request_id": request_id,
+                "platform": attempt.platform,
+                "action_type": attempt.action_type,
+                "message": attempt.message,
+                "action_hint": attempt.action_hint,
+                "progress": attempt.progress,
+                "state": infer_browser_action_state(attempt.action_type),
+                "takeover": takeover,
+            }
+        )
+        seen_request_ids.add(request_id)
+        db_fallback_count += 1
+
+    if not pending_requests:
+        return
+
+    logger.info(
+        "[WebSocket] Replaying %d browser-action request(s) for session %s "
+        "(runtime=%d, runtime_filtered=%d, runtime_rehydrated=%d, db_fallback=%d)",
+        len(pending_requests),
+        session_id,
+        runtime_request_count,
+        filtered_runtime_count,
+        runtime_rehydrated_count,
+        db_fallback_count,
+    )
+
+    for request in pending_requests:
+        request_id = request.get("request_id")
+        platform = request.get("platform")
+        state = request.get("state")
+        action_type = request.get("action_type")
+        message = request.get("message")
+        progress = request.get("progress")
+        if not all(
+            isinstance(value, str)
+            for value in [request_id, platform, state, action_type, message]
+        ):
+            continue
+
+        payload: dict[str, Any] = {
+            "platform": platform,
+            "state": state,
+            "message": message,
+            "progress": float(progress or 0.0),
+            "requires_action": True,
+            "action_hint": request.get("action_hint"),
+            "request_id": request_id,
+        }
+        takeover = request.get("takeover")
+        if isinstance(takeover, dict):
+            payload["takeover"] = takeover
+
+        await session_event_publisher.emit_to_websocket(
+            websocket,
+            "browser_state",
+            payload,
+        )
+        await session_event_publisher.emit_to_websocket(
+            websocket,
+            "browser_user_action",
+            {
+                **payload,
+                "action_type": action_type,
+            },
+        )
+
+
 def _is_persona_selection_confirmation(
     selection: str | dict[str, Any] | None,
     option_id: str,
@@ -154,9 +453,7 @@ def _validate_confirmation_request_id(
     pending_request_id = pending_confirmation.get("request_id")
     pending_step_id = pending_confirmation.get("step_id")
     expected_request_id = (
-        pending_request_id.strip()
-        if isinstance(pending_request_id, str)
-        else ""
+        pending_request_id.strip() if isinstance(pending_request_id, str) else ""
     )
     step_id = pending_step_id.strip() if isinstance(pending_step_id, str) else ""
 
@@ -233,7 +530,9 @@ def _normalize_attachment_refs(raw_attachments: Any) -> list[dict[str, Any]]:
             {
                 "file_id": file_id,
                 "name": str(item.get("name") or "").strip(),
-                "mime_type": str(item.get("mime_type") or item.get("type") or "").strip(),
+                "mime_type": str(
+                    item.get("mime_type") or item.get("type") or ""
+                ).strip(),
                 "size": int(item.get("size") or 0),
                 "sheet_hint": str(item.get("sheet_hint") or "").strip() or None,
             }
@@ -305,12 +604,12 @@ async def _ensure_manual_session_is_idle(
 
     async with AsyncSessionLocal() as db:
         task_service = TaskService(db)
-        active_task = await task_service.get_session_active_task(UUID(session_id))
-        if active_task is None:
+        await task_service.reconcile_terminal_task_live_runs(UUID(session_id))
+        live_pairs = await task_service.list_session_live_runs(UUID(session_id))
+        if not live_pairs:
             return
 
-        loaded_runs = active_task.__dict__.get("task_runs") or []
-        latest_run = loaded_runs[0] if loaded_runs else None
+        active_task, latest_run = live_pairs[0]
         if (
             allowed_waiting_task_id is not None
             and str(active_task.id) == allowed_waiting_task_id
@@ -685,7 +984,9 @@ async def rebuild_state_from_db(
             if attachments:
                 attachment_summary = _build_attachment_summary(attachments)
                 replayed_content = (
-                    f"{content}\n\n{attachment_summary}" if content else attachment_summary
+                    f"{content}\n\n{attachment_summary}"
+                    if content
+                    else attachment_summary
                 )
                 latest_attachment_turn = {
                     "sequence": sequence,
@@ -768,7 +1069,8 @@ async def rebuild_state_from_db(
                 if q:
                     state["questions"] = q
                     if any(
-                        isinstance(item, dict) and item.get("source") == "uploaded_table"
+                        isinstance(item, dict)
+                        and item.get("source") == "uploaded_table"
                         for item in q
                     ):
                         latest_import_artifact_sequence = max(
@@ -912,7 +1214,11 @@ async def handle_user_message_langgraph(
             ctx_type = ctx.get("type", "")
             ctx_label = ctx.get("label", "")
             context_parts.append(f"[{type_names.get(ctx_type, ctx_type)}: {ctx_label}]")
-        enhanced_content = (enhanced_content + "\n\n" if enhanced_content else "") + "附加上下文: " + " ".join(context_parts)
+        enhanced_content = (
+            (enhanced_content + "\n\n" if enhanced_content else "")
+            + "附加上下文: "
+            + " ".join(context_parts)
+        )
     if attachments:
         attachment_summary = _build_attachment_summary(attachments)
         if enhanced_content:
@@ -1143,9 +1449,9 @@ async def handle_user_message_langgraph(
                         "attachments": attachments,
                     }
                     if tool_mode:
-                        update_state["import_source_metadata"]["requested_tool_mode"] = (
-                            tool_mode
-                        )
+                        update_state["import_source_metadata"][
+                            "requested_tool_mode"
+                        ] = tool_mode
 
                 # Stream workflow execution from orchestrator
                 async for event in workflow.astream(update_state, config=config):
@@ -1248,9 +1554,9 @@ async def handle_user_message_langgraph(
                             "attachments": attachments,
                         }
                         if tool_mode:
-                            restored["import_source_metadata"]["requested_tool_mode"] = (
-                                tool_mode
-                            )
+                            restored["import_source_metadata"][
+                                "requested_tool_mode"
+                            ] = tool_mode
                     async for event in workflow.astream(restored, config=config):
                         await _process_langgraph_event(session_id, event)
                     await _sync_runtime_after_stream(workflow, config)
@@ -1362,6 +1668,11 @@ async def handle_user_message_langgraph(
                     {
                         "source_type": "uploaded_table",
                         "attachments": attachments,
+                        **(
+                            {"requested_tool_mode": tool_mode}
+                            if attachments and tool_mode
+                            else {}
+                        ),
                     }
                     if attachments
                     else None
@@ -1570,11 +1881,13 @@ async def handle_confirmation_langgraph(
             )
             return
 
-        request_allowed, used_legacy_request_fallback = _validate_confirmation_request_id(
-            state_values=state_values,
-            request_id=request_id if isinstance(request_id, str) else "",
-            selection=selection if isinstance(selection, (str, dict)) else None,
-            option_id=option_id if isinstance(option_id, str) else "",
+        request_allowed, used_legacy_request_fallback = (
+            _validate_confirmation_request_id(
+                state_values=state_values,
+                request_id=request_id if isinstance(request_id, str) else "",
+                selection=selection if isinstance(selection, (str, dict)) else None,
+                option_id=option_id if isinstance(option_id, str) else "",
+            )
         )
         if not request_allowed:
             await _emit_session_error(
@@ -1976,16 +2289,38 @@ async def handle_browser_action_resolution_langgraph(
     request = await get_browser_action_request(request_id)
     if request is None or request.session_id != session_id:
         logger.warning(
-            "[LangGraph] Browser action request not found or session mismatch: request_id=%s session_id=%s request_session=%s",
+            "[LangGraph] Browser action request missing from runtime registry, trying DB fallback: request_id=%s session_id=%s request_session=%s",
             request_id,
             session_id,
             request.session_id if request is not None else None,
         )
-        await _emit_session_error(
-            session_id,
-            {"message": "未找到对应的浏览器操作请求", "recoverable": True},
-        )
-        return
+        async with AsyncSessionLocal() as db:
+            service = TaskRunChildAttemptService(db)
+            fallback_attempt = (
+                await service.get_waiting_input_for_session_by_request_id(
+                    session_id=UUID(session_id),
+                    request_id=request_id,
+                )
+            )
+            if fallback_attempt is None:
+                await _emit_session_error(
+                    session_id,
+                    {"message": "未找到对应的浏览器操作请求", "recoverable": True},
+                )
+                return
+            await service.resolve_by_request_id(request_id, resolution=resolution)
+            await session_event_publisher.emit_to_session(
+                session_id,
+                "browser_user_action_ack",
+                {
+                    "request_id": request_id,
+                    "platform": fallback_attempt.platform,
+                    "action_type": fallback_attempt.action_type,
+                    "resolution": resolution,
+                    "stale_runtime": True,
+                },
+            )
+            return
 
     await resolve_browser_action_request(request_id, resolution)
     await session_event_publisher.emit_to_session(

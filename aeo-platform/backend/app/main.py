@@ -42,6 +42,7 @@ from app.core.websocket_server import (
     handle_confirmation,
     handle_stop,
     handle_recall,
+    rehydrate_runtime_events,
 )
 import app.models as models
 from app.services.user_service import UserService
@@ -135,13 +136,16 @@ async def on_startup():
         logger.warning(f"Session event publisher 启动失败: {session_event_err}")
 
     # Cycle 4: Start monitoring scheduler
-    try:
-        from app.services.scheduler import start_scheduler
+    if settings.SCHEDULER_ENABLED:
+        try:
+            from app.services.scheduler import start_scheduler
 
-        await start_scheduler()
-        logger.info("监测调度器已启动")
-    except Exception as scheduler_err:
-        logger.warning(f"监测调度器启动失败: {scheduler_err}")
+            await start_scheduler()
+            logger.info("监测调度器已启动")
+        except Exception as scheduler_err:
+            logger.warning(f"监测调度器启动失败: {scheduler_err}")
+    else:
+        logger.info("监测调度器已禁用（SCHEDULER_ENABLED=false）")
 
     logger.info("应用启动完成")
 
@@ -164,13 +168,14 @@ async def on_shutdown():
         logger.info("Runtime coordinator 后台监听已停止")
     except Exception as e:
         logger.warning(f"Runtime coordinator 停止失败: {e}")
-    try:
-        from app.services.scheduler import stop_scheduler
+    if settings.SCHEDULER_ENABLED:
+        try:
+            from app.services.scheduler import stop_scheduler
 
-        await stop_scheduler()
-        logger.info("监测调度器已停止")
-    except Exception as e:
-        logger.warning(f"监测调度器停止失败: {e}")
+            await stop_scheduler()
+            logger.info("监测调度器已停止")
+        except Exception as e:
+            logger.warning(f"监测调度器停止失败: {e}")
     try:
         from app.workflow.graph import cleanup_checkpointer
 
@@ -314,6 +319,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     logger.info(f"[WebSocket] ✅ Connection accepted for session: {session_id}")
     logger.info("[WebSocket] 📡 Registering connection with manager...")
     await manager.connect(websocket, session_id)
+    await rehydrate_runtime_events(websocket, session_id)
     logger.info("[WebSocket] ✅ Connection fully established and ready")
     logger.info("=" * 80)
 

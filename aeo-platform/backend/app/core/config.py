@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    SCHEDULER_ENABLED: bool = True
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./specta_dev.db"
@@ -67,6 +68,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
         "http://localhost:3010",
         "http://127.0.0.1:3010",
         "http://localhost:3011",
@@ -75,6 +78,17 @@ class Settings(BaseSettings):
 
     # Browser
     PLAYWRIGHT_BROWSERS_PATH: str = "0"
+
+    # AIO Cloud Sandbox
+    AIO_ENABLED: bool = False
+    AIO_BASE_URL: str | None = None
+    AIO_AUTH_TOKEN: str | None = None
+    AIO_REQUEST_TIMEOUT_SECONDS: float = 20.0
+    AIO_DEFAULT_ACCESS_MODE: str = "canvas_cdp"
+    AIO_IDLE_TTL_SECONDS: int = 900
+    AIO_TAKEOVER_HEARTBEAT_INTERVAL_MS: int = 10000
+    AIO_TAKEOVER_ISSUED_TTL_SECONDS: int = 180
+    AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS: int = 30
 
     # LLM Orchestration Mode (v2)
     USE_LLM_ORCHESTRATION: bool = False
@@ -158,9 +172,7 @@ def _require_settings() -> None:
         if not settings.VERIFICATION_EMAIL_FROM_ADDRESS:
             missing.append("VERIFICATION_EMAIL_FROM_ADDRESS")
         if missing:
-            raise RuntimeError(
-                "SMTP 邮件 provider 缺少必填配置: " + ", ".join(missing)
-            )
+            raise RuntimeError("SMTP 邮件 provider 缺少必填配置: " + ", ".join(missing))
     if email_provider == "tencent_ses_api":
         missing: list[str] = []
         if not settings.TENCENT_SES_SECRET_ID:

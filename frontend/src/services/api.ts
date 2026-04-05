@@ -48,14 +48,32 @@ import type {
   UpdateScheduleInput,
   SchedulerHealth,
 } from '@/types/monitoring';
+import type {
+  AioCanvasConfig,
+  AioResumeGateResult,
+  AioTakeoverMode,
+  AioTakeoverRecord,
+  AioVncUrl,
+} from '@/types/aio';
 import { getStoredAccessToken } from '@/lib/auth-storage';
 
-const API_URL =
+export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
+
+export function getApiBaseUrl(): string {
+  return API_URL;
+}
 
 type RequestOptions = Pick<RequestInit, 'signal'>;
 
 class ApiService {
+  private normalizeAioMode(value: unknown): AioTakeoverMode {
+    if (value === 'vnc' || value === 'vnc_fallback') {
+      return 'vnc_fallback';
+    }
+    return 'canvas_cdp';
+  }
+
   private getAuthToken() {
     const token = getStoredAccessToken();
     if (token) return token;
@@ -63,20 +81,24 @@ class ApiService {
     return null;
   }
 
+  private buildHeaders(options: RequestInit = {}): HeadersInit {
+    const token = this.getAuthToken();
+    const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
+    return {
+      'Content-Type': 'application/json',
+      ...authHeader,
+      ...(typeof options.headers === 'object' ? options.headers : {}),
+    } as HeadersInit;
+  }
+
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${API_URL}${endpoint}`;
-    const token = this.getAuthToken();
-    const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
     const response = await fetch(url, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeader,
-        ...(typeof options.headers === 'object' ? options.headers : {}),
-      } as HeadersInit,
+      headers: this.buildHeaders(options),
     });
 
     if (!response.ok) {
@@ -85,6 +107,27 @@ class ApiService {
     }
 
     // Handle 204 No Content (e.g. DELETE responses)
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    return response.json();
+  }
+
+  private async requestByPath<T>(
+    path: string,
+    options: RequestInit = {},
+  ): Promise<T> {
+    const response = await fetch(path, {
+      ...options,
+      headers: this.buildHeaders(options),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `Request failed: ${response.status}`);
+    }
+
     if (response.status === 204) {
       return undefined as T;
     }
@@ -214,6 +257,73 @@ class ApiService {
     return this.request<ControlPlaneObservabilitySnapshot>(
       `/control-plane/observability${qs ? `?${qs}` : ''}`
     );
+  }
+
+  async getAioTakeover(takeoverId: string) {
+    const response = await this.request<{ takeover: Record<string, unknown> }>(`/aio/takeovers/${takeoverId}`);
+    return this.normalizeAioTakeover(response.takeover);
+  }
+
+  async getAioTakeoverCanvasConfig(path: string) {
+    const response = await this.requestByPath<Record<string, unknown>>(path);
+    return this.normalizeAioCanvasConfig(response);
+  }
+
+  async getAioTakeoverVncUrl(path: string) {
+    const response = await this.requestByPath<Record<string, unknown>>(path);
+    return this.normalizeAioVncUrl(response);
+  }
+
+  async heartbeatAioTakeover(
+    path: string,
+    payload: { frontendId: string; mode: 'canvas_cdp' | 'vnc_fallback' },
+  ) {
+    const response = await this.requestByPath<{ takeover: Record<string, unknown> }>(path, {
+      method: 'POST',
+      body: JSON.stringify({
+        frontend_id: payload.frontendId,
+        mode: payload.mode,
+      }),
+    });
+    return this.normalizeAioTakeover(response.takeover);
+  }
+
+  async resolveAioTakeover(
+    path: string,
+    payload: {
+      frontendId: string;
+      mode: 'canvas_cdp' | 'vnc_fallback';
+      resumeGateResult?: AioResumeGateResult;
+      clientObservation?: string;
+    },
+  ) {
+    const response = await this.requestByPath<{ takeover: Record<string, unknown> }>(path, {
+      method: 'POST',
+      body: JSON.stringify({
+        frontend_id: payload.frontendId,
+        mode: payload.mode,
+        resume_gate_result: payload.resumeGateResult ?? 'pass',
+        client_observation: payload.clientObservation ?? 'user_claimed_done',
+      }),
+    });
+    return this.normalizeAioTakeover(response.takeover);
+  }
+
+  async cancelAioTakeover(
+    path: string,
+    payload: {
+      frontendId: string;
+      reason?: string;
+    },
+  ) {
+    const response = await this.requestByPath<{ takeover: Record<string, unknown> }>(path, {
+      method: 'POST',
+      body: JSON.stringify({
+        frontend_id: payload.frontendId,
+        reason: payload.reason ?? 'user_cancelled',
+      }),
+    });
+    return this.normalizeAioTakeover(response.takeover);
   }
 
   // Session management
@@ -975,6 +1085,56 @@ class ApiService {
     }
 
     return response.json();
+  }
+
+  private normalizeAioTakeover(raw: Record<string, unknown>): AioTakeoverRecord {
+    const bundle = (raw.access_bundle ?? {}) as Record<string, unknown>;
+    return {
+      takeoverId: String(raw.takeover_id || ''),
+      sessionId: String(raw.session_id || ''),
+      platform: String(raw.platform || ''),
+      mode: this.normalizeAioMode(raw.mode),
+      reason: String(raw.reason || ''),
+      takeoverState: (raw.takeover_state as AioTakeoverRecord['takeoverState']) || 'issued',
+      frontendId: typeof raw.frontend_id === 'string' ? raw.frontend_id : null,
+      requestedAt: typeof raw.requested_at === 'string' ? raw.requested_at : null,
+      issuedAt: typeof raw.issued_at === 'string' ? raw.issued_at : null,
+      expiresAt: typeof raw.expires_at === 'string' ? raw.expires_at : null,
+      lastHeartbeatAt: typeof raw.last_heartbeat_at === 'string' ? raw.last_heartbeat_at : null,
+      resumeGateResult:
+        typeof raw.resume_gate_result === 'string' ? raw.resume_gate_result : null,
+      accessBundle: {
+        canvasConfigPath: String(bundle.canvas_config_path || ''),
+        vncUrlPath: String(bundle.vnc_url_path || ''),
+        heartbeatPath: String(bundle.heartbeat_path || ''),
+        resolvePath: String(bundle.resolve_path || ''),
+        cancelPath: String(bundle.cancel_path || ''),
+      },
+    };
+  }
+
+  private normalizeAioCanvasConfig(raw: Record<string, unknown>): AioCanvasConfig {
+    return {
+      mode: this.normalizeAioMode(raw.mode),
+      takeoverId: String(raw.takeover_id || ''),
+      cdpEndpoint: String(raw.cdp_endpoint || ''),
+      expiresAt: typeof raw.expires_at === 'string' ? raw.expires_at : null,
+      heartbeatIntervalMs:
+        typeof raw.heartbeat_interval_ms === 'number' ? raw.heartbeat_interval_ms : 10000,
+    };
+  }
+
+  private normalizeAioVncUrl(raw: Record<string, unknown>): AioVncUrl {
+    return {
+      mode: this.normalizeAioMode(raw.mode),
+      takeoverId: String(raw.takeover_id || ''),
+      url: String(raw.url || ''),
+      expiresAt: typeof raw.expires_at === 'string' ? raw.expires_at : null,
+      upstreamVncAvailable:
+        typeof raw.upstream_vnc_available === 'boolean'
+          ? raw.upstream_vnc_available
+          : false,
+    };
   }
 }
 

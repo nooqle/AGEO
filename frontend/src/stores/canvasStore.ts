@@ -81,6 +81,7 @@ interface CanvasState {
   closeCanvas: () => void;
   setMode: (mode: CanvasMode) => void;
   addContent: (content: CanvasContent) => void;
+  upsertContent: (content: CanvasContent) => void;
   setActiveContent: (index: number) => void;
   setActiveContentById: (id: string) => void;
   removeContent: (id: string) => void;
@@ -160,6 +161,26 @@ export const useCanvasStore = create<CanvasState>((set) => ({
       activeContentIndex: state.contents.length,
       isOpen: true,
       mode: state.mode === 'hidden' ? 'split' : state.mode,
+    };
+  }),
+
+  upsertContent: (content) => set((state) => {
+    const existingIndex = state.contents.findIndex((c) => c.id === content.id);
+    if (existingIndex === -1) {
+      return {
+        contents: [...state.contents, content],
+        activeContentIndex: state.contents.length,
+        isOpen: true,
+        mode: state.mode === 'hidden' ? 'split' : state.mode,
+      };
+    }
+
+    const nextContents = [...state.contents];
+    nextContents[existingIndex] = content;
+    return {
+      contents: nextContents,
+      isOpen: state.isOpen,
+      mode: state.mode,
     };
   }),
 

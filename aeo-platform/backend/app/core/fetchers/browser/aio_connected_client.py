@@ -1,0 +1,395 @@
+"""Playwright-compatible browser client backed by an AIO CDP endpoint."""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+from urllib.parse import urlparse
+
+from patchright.async_api import Browser, BrowserContext
+
+from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
+from app.services.aio_runtime_contracts import AioPlatformRoots
+from app.services.aio_session_manager import aio_session_manager
+
+logger = logging.getLogger(__name__)
+
+
+class AioConnectedBrowserClient(PlaywrightBrowserClient):
+    """Remote browser client that reuses the existing Playwright handler surface.
+
+    This client intentionally subclasses ``PlaywrightBrowserClient`` so the
+    existing browser handlers can treat it as a Playwright-capable client.
+    The only lifecycle change is that it connects to an existing AIO browser
+    via CDP instead of launching a new persistent Chromium process locally.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_name: str,
+        workspace_id: str,
+        task_id: str,
+        platform: str,
+        purpose: str = "a4",
+    ) -> None:
+        super().__init__(session_name=session_name)
+        self.workspace_id = workspace_id
+        self.task_id = task_id
+        self.platform = platform
+        self.purpose = purpose
+        self.browser: Browser | None = None
+        self.aio_session_id: str | None = None
+        self.platform_roots: AioPlatformRoots | None = None
+        self._page_owned_by_client = False
+        self._context_owned_by_client = False
+
+    async def _ensure_playwright(self):
+        """Ensure Patchright is initialized for CDP attachment."""
+
+        if self.playwright is None:
+            self.playwright = await self._start_playwright()
+
+    async def _start_playwright(self):
+        # Reuse the parent helper via open-coded import path because the parent
+        # method also installs browsers if missing.
+        return await super()._ensure_playwright() or self.playwright
+
+    async def _reset_runtime(self, *, preserve_remote_surface: bool = True) -> None:
+        """Detach from the remote browser without killing the AIO runtime."""
+
+        try:
+            try:
+                await self._persist_storage_state()
+            except Exception as persist_error:
+                logger.warning(
+                    "[AIO Browser:%s] Failed to persist storage state before reset: %s",
+                    self.session_name,
+                    persist_error,
+                )
+
+            if (
+                not preserve_remote_surface
+                and self.page is not None
+                and self._page_owned_by_client
+            ):
+                try:
+                    await self.page.close()
+                except Exception:
+                    pass
+            self.page = None
+            self._page_owned_by_client = False
+
+            if self.context is not None and self._context_owned_by_client:
+                try:
+                    await self.context.close()
+                except Exception:
+                    pass
+
+            if self.browser is not None:
+                try:
+                    await self.browser.close()
+                except Exception:
+                    pass
+            self.browser = None
+            self.context = None
+            self._context_owned_by_client = False
+
+            if self.playwright is not None:
+                try:
+                    await self.playwright.stop()
+                except Exception:
+                    pass
+            self.playwright = None
+        except Exception:
+            self.browser = None
+            self.context = None
+            self.page = None
+            self.playwright = None
+            self._page_owned_by_client = False
+            self._context_owned_by_client = False
+
+    async def _ensure_remote_runtime(self) -> dict[str, Any]:
+        session = await aio_session_manager.acquire_session(
+            workspace_id=self.workspace_id,
+            task_id=self.task_id,
+            purpose=f"{self.purpose}:{self.platform}",
+            platforms=[self.platform],
+        )
+        self.aio_session_id = session.session_id
+        self.platform_roots = await aio_session_manager.ensure_platform_roots(
+            session_id=session.session_id,
+            task_id=self.task_id,
+            platform=self.platform,
+        )
+        return await aio_session_manager.get_browser_connection(session.session_id)
+
+    async def _load_storage_state(self) -> dict[str, Any] | None:
+        if self.platform_roots is None:
+            return None
+
+        file_result = await aio_session_manager.get_runtime_client().read_text_file(
+            self.platform_roots.state_path,
+            missing_ok=True,
+        )
+        if file_result is None or not file_result.content.strip():
+            return None
+
+        try:
+            payload = json.loads(file_result.content)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "[AIO Browser:%s] Ignoring invalid browser_state.json: %s",
+                self.session_name,
+                exc,
+            )
+            return None
+
+        if not isinstance(payload, dict):
+            logger.warning(
+                "[AIO Browser:%s] Ignoring non-object browser_state.json payload",
+                self.session_name,
+            )
+            return None
+
+        if self.aio_session_id is not None:
+            await aio_session_manager.mark_platform_state_loaded(
+                session_id=self.aio_session_id,
+                task_id=self.task_id,
+                platform=self.platform,
+            )
+
+        return payload
+
+    async def _persist_storage_state(self) -> None:
+        if self.context is None or self.platform_roots is None:
+            return
+
+        state = await self.context.storage_state()
+        runtime_client = aio_session_manager.get_runtime_client()
+        serialized_state = json.dumps(state, ensure_ascii=False, indent=2)
+        await runtime_client.write_text_file(
+            self.platform_roots.state_path,
+            serialized_state,
+        )
+        await runtime_client.write_text_file(
+            self.platform_roots.cookies_path,
+            json.dumps(state.get("cookies", []), ensure_ascii=False, indent=2),
+        )
+        if self.aio_session_id is not None:
+            await aio_session_manager.mark_platform_state_saved(
+                session_id=self.aio_session_id,
+                task_id=self.task_id,
+                platform=self.platform,
+            )
+
+    async def _get_or_create_remote_context(self) -> BrowserContext:
+        if self.browser is None:
+            raise RuntimeError("AIO 浏览器未连接")
+
+        existing_contexts = list(getattr(self.browser, "contexts", []) or [])
+        logger.info(
+            "[AIO Browser:%s] remote contexts discovered=%d",
+            self.session_name,
+            len(existing_contexts),
+        )
+        logger.info(
+            "[AIO Browser:%s] creating isolated context for workspace=%s task=%s platform=%s",
+            self.session_name,
+            self.workspace_id,
+            self.task_id,
+            self.platform,
+        )
+        self._context_owned_by_client = True
+        return await self.browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+        )
+
+    async def _get_or_create_remote_page(self) -> None:
+        if self.context is None:
+            raise RuntimeError("AIO 浏览器上下文未初始化")
+
+        existing_pages = [
+            candidate
+            for candidate in self.context.pages
+            if not candidate.is_closed()
+        ]
+        logger.info(
+            "[AIO Browser:%s] context pages discovered=%d urls=%s",
+            self.session_name,
+            len(existing_pages),
+            [candidate.url for candidate in existing_pages],
+        )
+        if existing_pages:
+            usable = [
+                candidate
+                for candidate in existing_pages
+                if (candidate.url or "") not in {"", "about:blank"}
+            ]
+            self.page = usable[0] if usable else existing_pages[0]
+            self._page_owned_by_client = False
+            logger.info(
+                "[AIO Browser:%s] reusing existing page url=%s",
+                self.session_name,
+                self.page.url,
+            )
+            return
+
+        self.page = await self.context.new_page()
+        self._page_owned_by_client = True
+        logger.info(
+            "[AIO Browser:%s] created new page in remote context",
+            self.session_name,
+        )
+
+    async def _apply_storage_state_to_current_page(self, url: str) -> None:
+        if self.context is None or self.page is None:
+            return
+
+        storage_state = await self._load_storage_state()
+        if not storage_state:
+            return
+
+        cookies = storage_state.get("cookies")
+        if isinstance(cookies, list) and cookies:
+            try:
+                await self.context.add_cookies(cookies)
+            except Exception as exc:
+                logger.warning(
+                    "[AIO Browser:%s] Failed to restore cookies: %s",
+                    self.session_name,
+                    exc,
+                )
+
+        parsed_url = urlparse(url)
+        target_origin = f"{parsed_url.scheme}://{parsed_url.netloc}".rstrip("/")
+        origin_payload = None
+        for candidate in storage_state.get("origins", []) or []:
+            if not isinstance(candidate, dict):
+                continue
+            origin = str(candidate.get("origin") or "").rstrip("/")
+            if origin == target_origin:
+                origin_payload = candidate
+                break
+
+        if origin_payload is None:
+            return
+
+        local_storage = origin_payload.get("localStorage")
+        if not isinstance(local_storage, list) or not local_storage:
+            return
+
+        try:
+            await self.page.goto(target_origin, wait_until="domcontentloaded", timeout=30000)
+            await self.page.evaluate(
+                """(items) => {
+                    for (const item of items) {
+                        if (!item || typeof item.name !== "string") continue;
+                        localStorage.setItem(item.name, String(item.value ?? ""));
+                    }
+                }""",
+                local_storage,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[AIO Browser:%s] Failed to restore localStorage for %s: %s",
+                self.session_name,
+                target_origin,
+                exc,
+            )
+
+    async def open(self, url: str, headed: bool = False) -> dict[str, Any]:
+        """Attach to AIO browser via CDP and navigate the client-owned page."""
+
+        del headed  # AIO browser UI mode is controlled out-of-band via takeover.
+
+        last_error = ""
+
+        for attempt in range(2):
+            try:
+                await self._ensure_playwright()
+                browser_info = await self._ensure_remote_runtime()
+                cdp_url = browser_info.get("cdp_url")
+                if not cdp_url:
+                    raise RuntimeError("AIO runtime 未返回可用 cdp_url")
+
+                if self.browser is None and self.playwright is not None:
+                    self.browser = await self.playwright.chromium.connect_over_cdp(
+                        cdp_url
+                    )
+                    logger.info(
+                        "[AIO Browser:%s] Connected over CDP (session=%s)",
+                        self.session_name,
+                        self.aio_session_id,
+                    )
+
+                if self.context is None and self.browser is not None:
+                    self.context = await self._get_or_create_remote_context()
+
+                if self.page is None or self.page.is_closed():
+                    await self._get_or_create_remote_page()
+
+                await self._apply_storage_state_to_current_page(url)
+                logger.info(
+                    "[AIO Browser:%s] navigating page from %s to %s",
+                    self.session_name,
+                    getattr(self.page, "url", None),
+                    url,
+                )
+                await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await self.page.bring_to_front()
+                logger.info(
+                    "[AIO Browser:%s] navigation complete current_url=%s",
+                    self.session_name,
+                    self.page.url,
+                )
+                return {"success": True, "url": url}
+            except Exception as e:
+                last_error = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+                logger.error(
+                    "[AIO Browser:%s] open() failed (attempt %d): %s",
+                    self.session_name,
+                    attempt + 1,
+                    last_error,
+                )
+                await self._reset_runtime(preserve_remote_surface=False)
+                if attempt == 0:
+                    continue
+                return {"success": False, "error": last_error}
+
+        return {"success": False, "error": last_error or "未知 AIO 浏览器错误"}
+
+    async def bring_to_front(self) -> dict[str, Any]:
+        """Best-effort focus inside the remote browser context."""
+
+        try:
+            if self.page is None:
+                return {"error": "Page not opened"}
+            await self.page.bring_to_front()
+            return {"success": True}
+        except Exception as e:
+            logger.debug(
+                "[AIO Browser:%s] bring_to_front failed: %s", self.session_name, e
+            )
+            return {"error": str(e)}
+
+    async def close(self) -> dict[str, Any]:
+        """Disconnect from remote browser and release the leased session holder."""
+
+        try:
+            await self._reset_runtime(preserve_remote_surface=False)
+            if self.aio_session_id is not None:
+                await aio_session_manager.release_session(
+                    self.aio_session_id,
+                    task_id=self.task_id,
+                    purpose=f"{self.purpose}:{self.platform}",
+                )
+            return {"success": True}
+        except Exception as e:
+            return {"error": str(e)}

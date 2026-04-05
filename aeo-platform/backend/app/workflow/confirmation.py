@@ -64,6 +64,7 @@ def resolve_confirmation_selection(
         state_updates["table_intake_result"] = None
         state_updates["confirmed_import_action"] = None
         state_updates["import_source_metadata"] = import_source_metadata or None
+        state_updates["selected_tool_mode"] = None
 
     if isinstance(selection, dict) and selection.get("type") == "persona_path_selection":
         selected_ids = selection.get("selectedPersonaIds", [])
