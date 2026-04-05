@@ -394,7 +394,7 @@ async def _run_pipeline_headless(
                 "run_id": str(run_id),
                 "platform_filter": platforms,
                 "preserved_fetch_results": None,
-                "auto_trigger_a5": False,
+                "next_required_action": None,
                 # Baseline Analysis (Issue #4)
                 "analysis_mode": None,
                 "baseline_questions": None,

@@ -40,8 +40,14 @@ from app.workflow.orchestrator_context_packets import (
     render_recent_evidence_packet,
 )
 from app.workflow.orchestrator_node import (
+    _execute_runtime_policy_action,
     _normalize_thought_text_for_stream,
     build_orchestrator_prompt_assembly,
+)
+from app.workflow.runtime_policy_executor import (
+    build_alternative_action_catalog,
+    build_next_required_action,
+    resolve_answer_fetch_mode_policy,
 )
 from app.workflow.skill_state import apply_skill_prompt_context
 
@@ -728,7 +734,101 @@ async def test_post_analysis_executor_rejects_fetch_like_args(monkeypatch):
 
     assert command.update["execution_status"] == "completed"
     assert "答案抓取" in command.update["orchestrator_reply"]
+    assert command.update["next_required_action"]["tool_name"] == "answer_fetch"
+    assert command.update["next_required_action"]["source_step"] == "post_analysis_executor"
     send_reply.assert_awaited()
+
+
+def test_answer_fetch_mode_policy_prefers_user_intent_and_existing_mode():
+    mode, reason = resolve_answer_fetch_mode_policy(
+        {
+            "orchestrator_history": [{"role": "user", "content": "这次改成浏览器全量重跑"}],
+            "fetch_mode": "fast",
+        },
+        {},
+    )
+    assert mode == "full"
+    assert reason == "user_intent_full"
+
+    reused_mode, reused_reason = resolve_answer_fetch_mode_policy(
+        {
+            "orchestrator_history": [{"role": "user", "content": "继续跑一下"}],
+            "fetch_mode": "full",
+        },
+        {},
+    )
+    assert reused_mode == "full"
+    assert reused_reason == "reuse_existing_mode"
+
+    default_mode, default_reason = resolve_answer_fetch_mode_policy(
+        {
+            "orchestrator_history": [{"role": "user", "content": "继续分析"}],
+            "questions": [{"id": "q1", "text": "品牌适合送礼吗？"}],
+        },
+        {},
+    )
+    assert default_mode == "fast"
+    assert default_reason == "question_ready_default_fast"
+
+
+def test_alternative_action_catalog_returns_specific_runtime_options():
+    options = build_alternative_action_catalog(
+        {
+            "fetch_results": [{"question_text": "Q1"}],
+            "report": {"executive_summary": "已有报告"},
+            "current_step": "A5",
+        },
+        failed_step="A5",
+        blocker_code="artifact_writeback_failed",
+    )
+
+    option_ids = {option["id"] for option in options}
+    assert "run_analysis_report" in option_ids
+    assert "run_confidence_signal" not in option_ids
+    assert "retry" in option_ids
+
+
+@pytest.mark.asyncio
+async def test_runtime_policy_executor_consumes_next_required_action(monkeypatch):
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_reply_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node._handle_tool_call",
+        AsyncMock(
+            return_value=Command(
+                goto="a4_fetch",
+                update={
+                    "next_action": "a4_fetch",
+                    "tool_call_args": {"fetch_mode": "fast"},
+                },
+            )
+        ),
+    )
+
+    command = await _execute_runtime_policy_action(
+        state={
+            "session_id": "session-runtime",
+            "orchestrator_history": [{"role": "user", "content": "请继续"}],
+            "next_required_action": build_next_required_action(
+                tool_name="answer_fetch",
+                tool_args={"platforms": ["kimi"]},
+                reason="测试 runtime 自动续跑。",
+                reply_text="已切换为答案抓取继续执行。",
+                source_step="post_analysis_executor",
+            ),
+            "last_validation_result": {"gate_name": "precondition_gate"},
+            "last_harness_decision": {"decision_type": "redirect"},
+        },
+        session_id="session-runtime",
+    )
+
+    assert command is not None
+    assert command.goto == "a4_fetch"
+    assert command.update["next_required_action"] is None
+    assert command.update["last_validation_result"] is None
+    assert command.update["last_harness_decision"] is None
 
 
 @pytest.mark.asyncio

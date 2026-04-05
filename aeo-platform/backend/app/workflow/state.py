@@ -268,6 +268,9 @@ class AgentState(TypedDict):
     validation_history: list  # [{gate_name, passed, reason, ...}]
     last_harness_decision: dict | None  # Latest harness decision payload
     harness_decision_history: list  # [{decision_type, recoverable, reason, ...}]
+    next_required_action: Annotated[
+        dict | None, _merge_error_info
+    ]  # Deterministic runtime continuation action consumed before next LLM turn
     agent_retry_counts: (
         dict  # {tool_name: int} — tracks how many times each tool was called
     )
@@ -297,7 +300,6 @@ class AgentState(TypedDict):
     preserved_fetch_results: (
         list | None
     )  # Unselected platform results to preserve during scoped fetch merge
-    auto_trigger_a5: bool  # True when A4 completed a scoped rerun, signals orchestrator to call A5
 
     # =========================================================================
     # Headless Execution (Cycle 4 — Scheduler)

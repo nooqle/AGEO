@@ -31,6 +31,7 @@ from app.workflow.browser_action_runtime import (
     get_browser_action_request,
     resolve_browser_action_request,
 )
+from app.workflow.runtime_policy_executor import build_next_required_action
 
 from sqlalchemy import select
 
@@ -515,13 +516,13 @@ async def rebuild_state_from_db(
         "current_skill_prompt_overlay": None,
         "last_skill_result": None,
         "skill_history": [],
+        "next_required_action": None,
         "pending_table_intake": None,
         "table_intake_result": None,
         "confirmed_import_action": None,
         "import_source_metadata": None,
         "agent_retry_counts": {},
         # Execution control flags
-        "auto_trigger_a5": False,
         "headless_mode": False,
         # Cycle 3 fields
         "task_id": None,
@@ -1238,6 +1239,7 @@ async def handle_user_message_langgraph(
                 "current_skill_prompt_overlay": None,
                 "last_skill_result": None,
                 "skill_history": [],
+                "next_required_action": None,
                 "pending_table_intake": (
                     {
                         "attachments": attachments,
@@ -1268,7 +1270,6 @@ async def handle_user_message_langgraph(
                 "baseline_metrics": None,
                 "baseline_report": None,
                 # Execution control flags
-                "auto_trigger_a5": False,
                 "headless_mode": False,
                 "agent_retry_counts": {},
             }
@@ -1576,6 +1577,33 @@ async def handle_confirmation_langgraph(
                 user_decisions["table_import_confirmed"] = True
                 user_decisions["confirmed_table_kind"] = "link_list"
                 logger.info("[LangGraph] Inline confirmation: table_import_link_list")
+            elif opt_id == "run_answer_fetch":
+                user_content = "用户选择先执行答案抓取"
+                state_values["next_required_action"] = build_next_required_action(
+                    tool_name="answer_fetch",
+                    reason="用户在恢复面板中选择先执行答案抓取。",
+                    reply_text="已按您的选择，先执行答案抓取。",
+                    source_step="error_recovery",
+                )
+                logger.info("[LangGraph] Inline confirmation: run_answer_fetch")
+            elif opt_id == "run_analysis_report":
+                user_content = "用户选择重新生成分析报告"
+                state_values["next_required_action"] = build_next_required_action(
+                    tool_name="analysis_report_skill",
+                    reason="用户在恢复面板中选择重新生成分析报告。",
+                    reply_text="已按您的选择，重新生成分析报告。",
+                    source_step="error_recovery",
+                )
+                logger.info("[LangGraph] Inline confirmation: run_analysis_report")
+            elif opt_id == "run_confidence_signal":
+                user_content = "用户选择重新执行引用置信度评估"
+                state_values["next_required_action"] = build_next_required_action(
+                    tool_name="confidence_signal_skill",
+                    reason="用户在恢复面板中选择重新执行引用置信度评估。",
+                    reply_text="已按您的选择，重新执行引用置信度评估。",
+                    source_step="error_recovery",
+                )
+                logger.info("[LangGraph] Inline confirmation: run_confidence_signal")
             else:
                 user_content = selection.get("label", opt_id)
                 logger.info(f"[LangGraph] Inline confirmation: optionId={opt_id}")
@@ -1698,6 +1726,10 @@ async def handle_confirmation_langgraph(
             "awaiting_user": False,
             "pending_confirmation": None,
             "execution_status": "running",
+            "error_info": None,
+            "last_validation_result": None,
+            "last_harness_decision": None,
+            "next_required_action": state_values.get("next_required_action"),
             "user_id": state_values.get("user_id"),
             "run_id": resumed_run_id or state_values.get("run_id"),
         }

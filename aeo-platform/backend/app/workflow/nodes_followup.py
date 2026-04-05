@@ -25,6 +25,7 @@ from app.workflow.skill_state import (
     build_harness_decision_update,
     build_skill_result_update,
 )
+from app.workflow.runtime_policy_executor import build_next_required_action
 from app.core.llm import get_llm_model
 
 logger = logging.getLogger(__name__)
@@ -653,10 +654,15 @@ async def post_analysis_executor_node(state: AgentState) -> Command:
         requested_mode = capability_mode_map[capability_tool_name]
     if tool_args.get("platforms") or tool_args.get("fetch_mode"):
         guidance = (
-            "后续分析只读取已有结果，不负责重新抓取数据。"
-            "如果您希望重跑某个平台、切换 fast/full，或改用浏览器重新采集，"
-            "请改走答案抓取。"
+            "已识别为重新抓取诉求。后续分析只读取已有结果，"
+            "接下来我会改用答案抓取继续执行。"
         )
+        redirected_fetch_args = {
+            key: value
+            for key, value in tool_args.items()
+            if key in {"platforms", "fetch_mode", "custom_questions"}
+            and value not in (None, "", [])
+        }
         if session_id:
             await send_reply_event(
                 session_id,
@@ -673,9 +679,20 @@ async def post_analysis_executor_node(state: AgentState) -> Command:
                     skill_key=state.get("current_skill"),
                     tool_name="post_analysis_skill",
                     status="completed",
-                    summary="后续分析检测到重抓诉求，已提示改走答案抓取。",
+                    summary="后续分析检测到重抓诉求，已自动重定向到答案抓取。",
                     executor_ref="post_analysis_executor",
-                    metadata={"analysis_mode": "route_to_answer_fetch"},
+                    metadata={
+                        "analysis_mode": "route_to_answer_fetch",
+                        "redirect_tool": "answer_fetch",
+                    },
+                ),
+                "next_required_action": build_next_required_action(
+                    tool_name="answer_fetch",
+                    tool_args=redirected_fetch_args,
+                    reason="后续分析识别到用户真正需求是重新抓取数据。",
+                    reply_text=guidance,
+                    source_step="post_analysis_executor",
+                    metadata={"redirected_from": "post_analysis_skill"},
                 ),
             }
         )

@@ -59,6 +59,21 @@
    - 推进 instruction provenance 与 prompt defense。
    - 当前范围：prompt disclosure refusal policy、injection-aware evidence rendering、untrusted external content tagging、最小检测与测试。
    - 当前已接入：prompt disclosure 拒绝、注入感知证据渲染、untrusted external content tagging、最小测试闭环。
+8. Phase 8
+   - 推进 runtime policy executor 与 recovery routing。
+   - 目标：把 Harness 从“会记账”推进到“会驱动”。
+   - 当前范围：
+     - `Runtime Policy Executor`
+     - `next_required_action`
+     - `post_analysis -> answer_fetch` 结构化重定向
+     - `answer_fetch` 默认模式策略
+     - `alternative_action catalog`
+   - 当前已接入：
+     - orchestrator 在进入 LLM 之前优先消费 `next_required_action`
+     - A4 scoped rerun 改写为 `next_required_action -> analysis_report_skill`
+     - post_analysis 的重抓诉求改写为 `next_required_action -> answer_fetch`
+     - `answer_fetch` 默认按 runtime policy 推断模式，无法安全判断时才 ask_user
+     - 错误恢复面板开始消费 `alternative_action catalog`
 
 ## 非目标
 

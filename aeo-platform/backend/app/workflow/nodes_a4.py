@@ -35,6 +35,7 @@ from app.workflow.harness_validation import (
     decide_a4_completion_policy,
     validate_scoped_fetch_merge,
 )
+from app.workflow.runtime_policy_executor import build_next_required_action
 from app.workflow.skill_state import (
     build_harness_decision_update,
     build_validation_result_update,
@@ -1526,11 +1527,22 @@ async def a4_fetch_node(state: AgentState) -> Command:
             "current_step": "A4",
             "progress": 0.6,
         }
-        # Clear platform_filter after use; flag auto A5 trigger for scoped reruns
+        # Clear platform_filter after use; scoped reruns should deterministically
+        # continue into A5 instead of relying on a dead boolean flag.
         if platform_filter:
             update_dict["platform_filter"] = None
             update_dict["preserved_fetch_results"] = None
-            update_dict["auto_trigger_a5"] = True
+            update_dict["next_required_action"] = build_next_required_action(
+                tool_name="analysis_report_skill",
+                tool_args={"report_type": state.get("analysis_mode") or "persona"},
+                reason="A4 定向重跑完成后需要刷新分析报告。",
+                reply_text="定向重跑已完成，继续刷新分析报告。",
+                source_step="A4",
+                metadata={
+                    "trigger": "scoped_rerun_completed",
+                    "platform_filter": list(platform_filter or []),
+                },
+            )
 
         if len(successful_platforms) == 0:
             update_dict["error_info"] = {

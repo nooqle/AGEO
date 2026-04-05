@@ -57,6 +57,13 @@ from app.workflow.orchestrator_instruction_defense import (
     render_instruction_defense_reminder,
 )
 from app.workflow.prompt_assembly import PromptAssembly, PromptSection
+from app.workflow.runtime_policy_executor import (
+    build_alternative_action_catalog,
+    clear_runtime_policy_fields,
+    parse_next_required_action,
+    resolve_answer_fetch_mode_policy,
+    summarize_alternative_actions,
+)
 from app.workflow.nodes_streaming import async_wrap_sync_gen
 from app.core.constants import PlatformConstants
 
@@ -168,8 +175,9 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
         "name": "answer_fetch",
         "description": (
             "从多个AI平台（豆包、元宝、Kimi、DeepSeek）抓取对模拟问题的回答。"
-            "前置条件：1) 问题模拟已完成（或提供了 custom_questions）；2) 用户已明确选择 fetch_mode（fast 或 full）。"
-            "如果用户尚未选择采集模式，先解释 fast / full 的差异并引导用户选择，再调用此工具。"
+            "前置条件：1) 问题模拟已完成（或提供了 custom_questions）。"
+            "如果用户明确指定快速/完整/浏览器模式，请显式传入 fetch_mode。"
+            "若用户没有明确指定，runtime 会优先复用已有模式，或默认按 fast 继续。"
             "如果用户要求只重跑部分平台、全量重跑、或从 API 改为浏览器模式，也统一使用此工具。"
         ),
         "parameters": {
@@ -195,7 +203,6 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "description": "用户自定义问题文本列表（可选）。当用户直接提供问题时使用，将覆盖 A3 生成的问题。",
                 },
             },
-            "required": ["fetch_mode"],
         },
     },
     {
@@ -2334,30 +2341,114 @@ def _matches_failed_step(tool_name: str, failed_step: str) -> bool:
     return failed_step in {tool_name, expected_step}
 
 
-def _build_error_recovery_message(error_info: dict[str, Any]) -> str:
+def _build_error_recovery_message(
+    error_info: dict[str, Any],
+    alternative_options: list[dict[str, Any]] | None = None,
+) -> str:
     failed_step = str(error_info.get("step", "未知"))
     error_msg = str(error_info.get("error", "未知错误")).strip()
     error_category = str(error_info.get("category", "")).strip()
+    alternative_preview = summarize_alternative_actions(alternative_options or [])
 
     if failed_step == "A5":
         if error_category == "system_persistence":
-            return (
+            message = (
                 "分析结果已经生成，但在保存最终报告产物时发生了系统错误。"
                 "这不是抓取数据质量问题，通常不需要重新抓取。"
                 "建议直接重新尝试生成报告。"
             )
+            if alternative_preview:
+                message += f" 当前优先方案：{alternative_preview}。"
+            return message
         if error_category == "system":
-            return (
+            message = (
                 "报告生成遇到了系统处理问题，当前失败并不等于抓取数据不可用。"
                 "建议先重新尝试生成报告；如果仍失败，再检查当前结果结构。"
             )
-        return (
+            if alternative_preview:
+                message += f" 当前优先方案：{alternative_preview}。"
+            return message
+        message = (
             "报告生成遇到了处理问题。"
             "当前失败不一定来自抓取数据本身，建议先重新尝试生成报告。"
         )
+        if alternative_preview:
+            message += f" 当前优先方案：{alternative_preview}。"
+        return message
 
     clipped_error = error_msg[:100] if error_msg else "未知错误"
-    return f"步骤 {failed_step} 执行遇到问题：{clipped_error}。请选择后续操作。"
+    message = f"步骤 {failed_step} 执行遇到问题：{clipped_error}。"
+    if alternative_preview:
+        message += f" 建议优先：{alternative_preview}。"
+    message += "请选择后续操作。"
+    return message
+
+
+def _sanitize_runtime_policy_state(state: AgentState) -> AgentState:
+    """Drop consumed runtime policy artifacts before asking the model again."""
+
+    return {
+        **state,
+        **clear_runtime_policy_fields(),
+    }
+
+
+def _merge_command_update(command: Command, extra_update: dict[str, Any]) -> Command:
+    return Command(
+        goto=command.goto,
+        update={
+            **dict(command.update or {}),
+            **extra_update,
+        },
+    )
+
+
+async def _execute_runtime_policy_action(
+    *,
+    state: AgentState,
+    session_id: str,
+) -> Command | None:
+    action = parse_next_required_action(state.get("next_required_action"))
+    if action is None:
+        return None
+
+    logger.info(
+        "[Orchestrator] Consuming next_required_action: tool=%s source=%s reason=%s",
+        action.tool_name,
+        action.source_step or "unknown",
+        action.reason,
+    )
+    sanitized_state = _sanitize_runtime_policy_state(state)
+    history = build_orchestrator_messages(sanitized_state)
+    if action.reply_text:
+        history.append({"role": "assistant", "content": action.reply_text})
+        await send_reply_event(
+            session_id,
+            action.reply_text,
+            is_delta=False,
+            is_new_round=True,
+        )
+        await send_reply_event(session_id, "", is_complete=True)
+
+    synthetic_tool_call = SimpleNamespace(
+        name=action.tool_name,
+        arguments=dict(action.tool_args or {}),
+        id=f"runtime_policy_{action.tool_name}",
+    )
+    command = await _handle_tool_call(
+        sanitized_state,
+        session_id,
+        synthetic_tool_call,
+        action.reply_text,
+        history,
+    )
+    return _merge_command_update(
+        command,
+        {
+            **clear_runtime_policy_fields(),
+            "error_info": None,
+        },
+    )
 
 
 async def _route_agent_error_without_llm(
@@ -2366,8 +2457,22 @@ async def _route_agent_error_without_llm(
     current_retry_counts: dict[str, int],
 ) -> Command:
     error_info = dict(state.get("error_info") or {})
-    recovery_message = _build_error_recovery_message(error_info)
     failed_step = str(error_info.get("step", "未知"))
+    blocker_code = str(
+        ((state.get("last_harness_decision") or {}).get("metadata") or {}).get(
+            "blocker_code"
+        )
+        or ""
+    ).strip()
+    recovery_options = build_alternative_action_catalog(
+        state,
+        failed_step=failed_step,
+        blocker_code=blocker_code,
+    )
+    recovery_message = _build_error_recovery_message(
+        error_info,
+        recovery_options,
+    )
 
     await send_reply_event(
         session_id,
@@ -2381,23 +2486,7 @@ async def _route_agent_error_without_llm(
         step_id="error_recovery",
         step_name=f"{failed_step} 执行失败",
         message=recovery_message,
-        options=[
-            {
-                "id": "retry",
-                "label": "重新尝试",
-                "description": f"再次执行 {failed_step}",
-            },
-            {
-                "id": "skip",
-                "label": "跳过此步骤",
-                "description": "跳过此步骤，继续后续分析",
-            },
-            {
-                "id": "manual",
-                "label": "手动提供数据",
-                "description": "由您手动描述所需信息",
-            },
-        ],
+        options=recovery_options,
     )
 
     new_history = build_orchestrator_messages(state)
@@ -2413,11 +2502,7 @@ async def _route_agent_error_without_llm(
                 "step_id": "error_recovery",
                 "step_name": f"{failed_step} 执行失败",
                 "message": recovery_message,
-                "options": [
-                    {"id": "retry", "label": "重新尝试"},
-                    {"id": "skip", "label": "跳过此步骤"},
-                    {"id": "manual", "label": "手动提供数据"},
-                ],
+                "options": recovery_options,
             },
             "agent_retry_counts": current_retry_counts,
         },
@@ -2595,15 +2680,23 @@ async def orchestrator_node(state: AgentState) -> Command:
             update={"next_action": "table_import_apply"},
         )
 
+    runtime_policy_command = await _execute_runtime_policy_action(
+        state=state,
+        session_id=session_id,
+    )
+    if runtime_policy_command is not None:
+        return runtime_policy_command
+
     working_state = state
     manifest = await _hydrate_knowledge_manifest(state)
     if manifest is not None:
         working_state = {**state, "knowledge_manifest": manifest}
+    llm_state = _sanitize_runtime_policy_state(working_state)
 
     # Build orchestrator call
-    system_prompt = build_orchestrator_system_prompt(working_state)
-    messages = build_orchestrator_messages(working_state)
-    tools = await build_agent_tools(working_state)
+    system_prompt = build_orchestrator_system_prompt(llm_state)
+    messages = build_orchestrator_messages(llm_state)
+    tools = await build_agent_tools(llm_state)
 
     # Stream LLM response
     model = get_llm_model()
@@ -2615,7 +2708,7 @@ async def orchestrator_node(state: AgentState) -> Command:
     last_finish_reason: str | None = None
     last_usage = None
     stream_started_at = perf_counter()
-    stream_thoughts = _should_stream_thoughts(working_state)
+    stream_thoughts = _should_stream_thoughts(llm_state)
     thinking_placeholder_sent = False
 
     try:
@@ -2762,10 +2855,10 @@ async def orchestrator_node(state: AgentState) -> Command:
 
         if tool_call_result:
             return await _handle_tool_call(
-                state, session_id, tool_call_result, reply_text, new_history
+                llm_state, session_id, tool_call_result, reply_text, new_history
             )
 
-        knowledge_fallback = _infer_knowledge_fallback_tool(working_state)
+        knowledge_fallback = _infer_knowledge_fallback_tool(llm_state)
         if knowledge_fallback is not None:
             fallback_tool_name, fallback_tool_args = knowledge_fallback
             logger.warning(
@@ -2774,7 +2867,7 @@ async def orchestrator_node(state: AgentState) -> Command:
                 fallback_tool_args,
             )
             return await _handle_tool_call(
-                state,
+                llm_state,
                 session_id,
                 SimpleNamespace(
                     name=fallback_tool_name,
@@ -2796,7 +2889,7 @@ async def orchestrator_node(state: AgentState) -> Command:
                 "[Orchestrator] No tool call after table_intake_skill; forcing import confirmation."
             )
             return await _force_table_import_confirmation(
-                state=state,
+                state=llm_state,
                 session_id=session_id,
                 reply_text=reply_text,
                 new_history=new_history,
@@ -2816,7 +2909,7 @@ async def orchestrator_node(state: AgentState) -> Command:
                 "forcing fetch-mode confirmation instead of ending run."
             )
             return await _force_fetch_mode_confirmation(
-                state=state,
+                state=llm_state,
                 session_id=session_id,
                 reply_text=reply_text,
                 new_history=new_history,
@@ -3556,9 +3649,6 @@ async def _handle_tool_call(
 
         # Pass fetch_mode for A4 + custom_questions + ask_user guard
         if effective_tool_name == "answer_fetch":
-            extra_updates["fetch_mode"] = tool_args.get("fetch_mode", "fast")
-
-            # Fix 2B: Inject custom_questions into state as questions
             custom_qs = tool_args.get("custom_questions")
             if custom_qs and isinstance(custom_qs, list):
                 formatted = [
@@ -3569,38 +3659,26 @@ async def _handle_tool_call(
                 if formatted:
                     extra_updates["questions"] = formatted
 
-            # Fix 3: Code-level guard — force fetch_mode confirmation
-            # Skip guard when:
-            #   - LLM explicitly passed fetch_mode (user intent is clear)
-            #   - custom_questions provided
-            #   - headless mode
-            #   - already confirmed/pending
             user_decisions = dict(state.get("user_decisions", {}))
-            has_questions = bool(state.get("questions")) or bool(custom_qs)
-            is_headless = state.get("headless", False)
-            already_confirmed = user_decisions.get("fetch_mode_confirmed", False)
-            already_pending = user_decisions.get("fetch_mode_pending", False)
-            is_custom = bool(
-                custom_qs
-                and isinstance(custom_qs, list)
-                and any(isinstance(q, str) and q.strip() for q in custom_qs)
+            resolved_fetch_mode, fetch_mode_policy = resolve_answer_fetch_mode_policy(
+                state,
+                tool_args,
             )
-            # If LLM explicitly set fetch_mode in tool args, the user's intent
-            # has already been captured — no need to re-ask.
-            explicit_mode = bool(tool_args.get("fetch_mode"))
-
-            if (
-                has_questions
-                and not is_headless
-                and not already_confirmed
-                and not already_pending
-                and not is_custom
-                and not explicit_mode
-            ):
-                # LLM called answer_fetch without specifying fetch_mode — force selection
+            if resolved_fetch_mode in {"fast", "full"}:
+                tool_args = {**tool_args, "fetch_mode": resolved_fetch_mode}
+                extra_updates["fetch_mode"] = resolved_fetch_mode
+                user_decisions["fetch_mode_pending"] = False
+                user_decisions["fetch_mode_confirmed"] = True
+                extra_updates["user_decisions"] = user_decisions
+                logger.info(
+                    "[Orchestrator] answer_fetch mode resolved by runtime policy: %s (%s)",
+                    resolved_fetch_mode,
+                    fetch_mode_policy,
+                )
+            else:
                 logger.warning(
-                    "[Orchestrator] answer_fetch called without explicit fetch_mode. "
-                    "Forcing user selection."
+                    "[Orchestrator] answer_fetch still requires explicit confirmation (%s)",
+                    fetch_mode_policy,
                 )
                 defense_options = [
                     {
@@ -3670,11 +3748,6 @@ async def _handle_tool_call(
                     },
                 )
 
-            # If pending (guard fired once), mark as confirmed and proceed
-            if already_pending and not already_confirmed:
-                user_decisions["fetch_mode_confirmed"] = True
-                extra_updates["user_decisions"] = user_decisions
-
         # Pass report_type as analysis_mode for A5
         if effective_tool_name in {"data_analytics", "analysis_report_skill"} or (
             resolved_skill is not None
@@ -3703,8 +3776,6 @@ async def _handle_tool_call(
                 "current_tool_capability": selected_tool_capability,
                 "agent_retry_counts": retry_counts,
                 "error_info": None,
-                "last_validation_result": None,
-                "last_harness_decision": None,
                 **extra_updates,
             },
         )
