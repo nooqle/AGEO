@@ -76,7 +76,8 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const confidenceComposer = isConfidenceSignal ? effectiveContent.data?.composer : undefined;
   const confidenceStatus = isConfidenceSignal ? effectiveContent.data?.status : undefined;
   const isArtifactActionRunning = confidenceStatus?.phase === 'running';
-  const exportable = useMemo(() => isCanvasContentExportable(content), [content]);
+  const isBrowserTakeover = effectiveContent.type === 'browser';
+  const exportable = useMemo(() => !isBrowserTakeover && isCanvasContentExportable(content), [content, isBrowserTakeover]);
   const exportLabel = useMemo(() => getCanvasExportLabel(content), [content]);
   const canExportCsv = effectiveContent.type === 'dataTable';
 
@@ -261,6 +262,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                  effectiveContent.type === 'chart' ? '数据图表' :
                  effectiveContent.type === 'questionList' ? '问题列表' :
                  effectiveContent.type === 'fetchResults' ? '抓取结果' :
+                 effectiveContent.type === 'browser' ? '浏览器' :
                  '选择项'}
               </span>
               {content.category === 'baseline' && (
@@ -295,40 +297,44 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
             </button>
           ) : null}
 
-          {/* Copy button */}
-          <button
-            onClick={handleCopy}
-            className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
-            style={copied
-              ? { backgroundColor: 'var(--status-success-bg, rgba(34,197,94,0.1))', color: 'var(--status-success)' }
-              : actionBtnStyle
-            }
-            onMouseEnter={copied ? undefined : handleActionEnter}
-            onMouseLeave={copied ? undefined : handleActionLeave}
-            title={copied ? '已复制' : '复制内容'}
-          >
-            <AnimatePresence mode="wait">
-              {copied ? (
-                <motion.div key="check" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
-                  <RiCheckLine className="w-4 h-4" />
-                </motion.div>
-              ) : (
-                <motion.div key="copy" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
-                  <RiFileCopyLine className="w-4 h-4" />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </button>
+          {!isBrowserTakeover && (
+            <>
+              {/* Copy button */}
+              <button
+                onClick={handleCopy}
+                className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
+                style={copied
+                  ? { backgroundColor: 'var(--status-success-bg, rgba(34,197,94,0.1))', color: 'var(--status-success)' }
+                  : actionBtnStyle
+                }
+                onMouseEnter={copied ? undefined : handleActionEnter}
+                onMouseLeave={copied ? undefined : handleActionLeave}
+                title={copied ? '已复制' : '复制内容'}
+              >
+                <AnimatePresence mode="wait">
+                  {copied ? (
+                    <motion.div key="check" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
+                      <RiCheckLine className="w-4 h-4" />
+                    </motion.div>
+                  ) : (
+                    <motion.div key="copy" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
+                      <RiFileCopyLine className="w-4 h-4" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </button>
 
-          {/* Share button — disabled */}
-          <button
-            disabled
-            className="p-2 rounded-lg transition-all duration-200 cursor-not-allowed opacity-40"
-            style={actionBtnStyle}
-            title="即将推出"
-          >
-            <RiShareLine className="w-4 h-4" />
-          </button>
+              {/* Share button — disabled */}
+              <button
+                disabled
+                className="p-2 rounded-lg transition-all duration-200 cursor-not-allowed opacity-40"
+                style={actionBtnStyle}
+                title="即将推出"
+              >
+                <RiShareLine className="w-4 h-4" />
+              </button>
+            </>
+          )}
 
           {/* Export button with dropdown */}
           {exportable && (

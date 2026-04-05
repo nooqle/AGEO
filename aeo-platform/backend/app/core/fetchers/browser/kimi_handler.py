@@ -15,8 +15,6 @@ from app.core.fetchers.browser.parsers.base import BaseResponseParser
 from app.core.fetchers.browser.parsers.connect import KimiConnectParser
 from app.schemas.fetch import (
     BrowserState,
-    FetchMethod,
-    FetchResult,
     Platform,
     SearchReference,
 )
@@ -179,36 +177,28 @@ class KimiHandler(BaseBrowserHandler):
                 INPUT_READY_SELECTOR = ".chat-input-editor, [class*='chat-input']"
                 waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
                 action_hint = "请在弹出的浏览器窗口中完成 Kimi 登录，完成后点击“我已完成”"
-                request_id = await self._prepare_user_action_request(
-                    action_type="login",
+                events, request_id = await self._begin_login_takeover_gate(
                     message=waiting_message,
                     action_hint=action_hint,
                     progress=0.35,
                     url=self.URL,
+                    open_error_message="打开 Kimi 浏览器窗口失败，请重试",
                 )
+                for event in events:
+                    yield event
                 if not request_id:
-                    yield self._create_event(BrowserState.ERROR, "打开 Kimi 浏览器窗口失败，请重试", progress=0)
                     return
-                yield self._create_event(
-                    BrowserState.WAITING_FOR_LOGIN,
-                    waiting_message,
-                    progress=0.35,
-                    requires_action=True,
-                    action_type="login",
-                    action_hint=action_hint,
-                    request_id=request_id,
-                )
-                login_success = await self._wait_for_user_action_completion(
+                completion_events, login_success = await self._finish_login_takeover_gate(
                     request_id=request_id,
                     ready_check=lambda ready_timeout: self._wait_for_login(
                         INPUT_READY_SELECTOR,
                         timeout=ready_timeout,
                     ),
-                    timeout=300,
-                    ready_timeout=120,
+                    timeout_error_message="登录超时，请重试",
                 )
+                for event in completion_events:
+                    yield event
                 if not login_success:
-                    yield self._create_event(BrowserState.ERROR, "登录超时，请重试", progress=0)
                     return
 
             # Step 3.5: Dismiss popups before interacting
@@ -301,36 +291,28 @@ class KimiHandler(BaseBrowserHandler):
                 if late_login_detected:
                     waiting_message = "检测到 Kimi 在回复过程中要求重新登录，请在浏览器窗口中完成登录"
                     action_hint = "请在弹出的浏览器窗口中完成 Kimi 登录，完成后点击“我已完成”"
-                    request_id = await self._prepare_user_action_request(
-                        action_type="login",
+                    events, request_id = await self._begin_login_takeover_gate(
                         message=waiting_message,
                         action_hint=action_hint,
                         progress=0.72,
                         url=self.URL,
+                        open_error_message="打开 Kimi 浏览器窗口失败，请重试",
                     )
+                    for event in events:
+                        yield event
                     if not request_id:
-                        yield self._create_event(BrowserState.ERROR, "打开 Kimi 浏览器窗口失败，请重试", progress=0)
                         return
-                    yield self._create_event(
-                        BrowserState.WAITING_FOR_LOGIN,
-                        waiting_message,
-                        progress=0.72,
-                        requires_action=True,
-                        action_type="login",
-                        action_hint=action_hint,
-                        request_id=request_id,
-                    )
-                    login_success = await self._wait_for_user_action_completion(
+                    completion_events, login_success = await self._finish_login_takeover_gate(
                         request_id=request_id,
                         ready_check=lambda ready_timeout: self._wait_for_login(
                             INPUT_READY_SELECTOR,
                             timeout=ready_timeout,
                         ),
-                        timeout=300,
-                        ready_timeout=120,
+                        timeout_error_message="重新登录超时，请重试",
                     )
+                    for event in completion_events:
+                        yield event
                     if not login_success:
-                        yield self._create_event(BrowserState.ERROR, "重新登录超时，请重试", progress=0)
                         return
 
                     await self._resubmit_question(question)
@@ -356,18 +338,11 @@ class KimiHandler(BaseBrowserHandler):
 
             # Step 7: Build result
             yield self._create_event(BrowserState.EXTRACTING, "提取回答内容...", progress=0.9)
-            fetch_result = FetchResult(
-                id=f"{self.PLATFORM.value}_{hash(question)}",
-                question_id="",
-                question_text=question,
-                platform=self.PLATFORM,
-                fetch_method=FetchMethod.BROWSER,
-                status="success",
+            fetch_result = await self._build_success_result(
+                question=question,
                 answer_text=answer_text,
                 search_references=search_refs,
-                raw_response={"source": source},
-                error_message=None,
-                fetch_duration=None,
+                source=source,
             )
 
             yield self._create_event(BrowserState.COMPLETED, "抓取完成", progress=1.0, data=fetch_result)
@@ -444,6 +419,19 @@ class KimiHandler(BaseBrowserHandler):
         except Exception as e:
             logger.debug("[Kimi] Login detection check failed: %s", e)
             return False
+
+    async def probe_takeover_ready(self, action_type: str) -> bool:
+        if action_type == "login":
+            return False
+        return await super().probe_takeover_ready(action_type)
+
+    async def probe_resume_gate_ready(self, action_type: str) -> bool:
+        if action_type == "login":
+            return await self._wait_for_login(
+                ".chat-input-editor, [class*='chat-input']",
+                timeout=2,
+            )
+        return await super().probe_resume_gate_ready(action_type)
 
     async def _wait_for_content_with_login_check(
         self,

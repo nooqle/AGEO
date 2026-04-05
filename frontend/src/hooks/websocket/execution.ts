@@ -1,6 +1,22 @@
-import type { BrowserActionType, BrowserState, ExecutionProgress, ProgressStep, SubTask } from '@/types/agent';
+import type {
+  BrowserActionType,
+  BrowserState,
+  BrowserTakeoverAccess,
+  ExecutionProgress,
+  ProgressStep,
+  SubTask,
+} from '@/types/agent';
 import type { WebSocketEventData } from '@/types/websocket';
 import { BROWSER_PLATFORMS, BROWSER_STATES, EXECUTION_STATUSES, mapStepStatus } from './protocol';
+
+function normalizeAioTakeoverMode(
+  value: unknown,
+): BrowserTakeoverAccess['mode'] {
+  if (value === 'vnc' || value === 'vnc_fallback') {
+    return 'vnc_fallback';
+  }
+  return 'canvas_cdp';
+}
 
 export function buildExecutionProgress(
   data: WebSocketEventData,
@@ -77,6 +93,42 @@ export function buildBrowserState(data: WebSocketEventData): BrowserState {
     actionType = 'login';
   }
 
+  const rawTakeover =
+    data.takeover && typeof data.takeover === 'object'
+      ? (data.takeover as Record<string, unknown>)
+      : null;
+  const takeover: BrowserTakeoverAccess | undefined = rawTakeover
+      ? {
+        takeoverId:
+          typeof rawTakeover.takeover_id === 'string' ? rawTakeover.takeover_id : '',
+        mode: normalizeAioTakeoverMode(rawTakeover.mode),
+        canvasConfigPath:
+          typeof rawTakeover.canvas_config_path === 'string'
+            ? rawTakeover.canvas_config_path
+            : undefined,
+        vncUrlPath:
+          typeof rawTakeover.vnc_url_path === 'string'
+            ? rawTakeover.vnc_url_path
+            : undefined,
+        heartbeatPath:
+          typeof rawTakeover.heartbeat_path === 'string'
+            ? rawTakeover.heartbeat_path
+            : undefined,
+        resolvePath:
+          typeof rawTakeover.resolve_path === 'string'
+            ? rawTakeover.resolve_path
+            : undefined,
+        cancelPath:
+          typeof rawTakeover.cancel_path === 'string'
+            ? rawTakeover.cancel_path
+            : undefined,
+        expiresAt:
+          typeof rawTakeover.expires_at === 'string'
+            ? rawTakeover.expires_at
+            : undefined,
+      }
+    : undefined;
+
   return {
     state,
     message,
@@ -88,5 +140,6 @@ export function buildBrowserState(data: WebSocketEventData): BrowserState {
     actionHint: typeof data.action_hint === 'string' ? data.action_hint : undefined,
     progress: typeof data.progress === 'number' ? data.progress : undefined,
     requestId: typeof data.request_id === 'string' ? data.request_id : undefined,
+    takeover: takeover?.takeoverId ? takeover : undefined,
   };
 }

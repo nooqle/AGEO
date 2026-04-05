@@ -1,3 +1,6 @@
+import type { BrowserState } from './agent';
+import type { AioTakeoverMode, AioTakeoverState } from './aio';
+
 export type CanvasMode = 'hidden' | 'split' | 'focused';
 
 export type CanvasContentType =
@@ -7,7 +10,8 @@ export type CanvasContentType =
   | 'pipeline'
   | 'workflow'
   | 'questionList'
-  | 'fetchResults';
+  | 'fetchResults'
+  | 'browser';
 
 export type CanvasPreviewMetricValue = string | number | { label?: string; value?: string | number };
 
@@ -858,6 +862,14 @@ export type FetchResultsCanvasData = CanvasPreviewData & {
   fetchResults?: FetchResultItem[];
 };
 
+export type BrowserCanvasData = CanvasPreviewData & {
+  takeoverId: string;
+  platform: BrowserState['platform'];
+  browserState: BrowserState;
+  mode?: AioTakeoverMode;
+  takeoverState?: AioTakeoverState;
+};
+
 export type ContentVersion = {
   versionNumber: number;
   timestamp: string;
@@ -873,6 +885,7 @@ export type CanvasContentDataMap = {
   workflow: WorkflowCanvasData;
   questionList: QuestionListCanvasData;
   fetchResults: FetchResultsCanvasData;
+  browser: BrowserCanvasData;
 };
 
 export type CanvasContent =
@@ -974,6 +987,20 @@ export type CanvasContent =
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }
+  | {
+      id: string;
+      type: 'browser';
+      title: string;
+      data: BrowserCanvasData;
+      createdAt: Date;
+      relatedMessageId: string;
+      versions: ContentVersion[];
+      currentVersionIndex: number;
+      linkedMessageId?: string;
+      category?: 'baseline' | 'scenario';
+      scenarioLabel?: string;
+      hasNewVersion?: boolean;
+    }
 ;
 
 export type ReportCanvasContent = Extract<CanvasContent, { type: 'report' }>;
@@ -983,5 +1010,6 @@ export type PipelineCanvasContent = Extract<CanvasContent, { type: 'pipeline' }>
 export type WorkflowCanvasContent = Extract<CanvasContent, { type: 'workflow' }>;
 export type QuestionListCanvasContent = Extract<CanvasContent, { type: 'questionList' }>;
 export type FetchResultsCanvasContent = Extract<CanvasContent, { type: 'fetchResults' }>;
+export type BrowserCanvasContent = Extract<CanvasContent, { type: 'browser' }>;
 
 

@@ -12,6 +12,7 @@ import { PipelineContent } from './contents/PipelineContent';
 import { WorkflowContent } from './contents/WorkflowContent';
 import { QuestionListContent } from './contents/QuestionListContent';
 import { FetchResultsContent } from './contents/FetchResultsContent';
+import { BrowserTakeoverContent } from './contents/BrowserTakeoverContent';
 import { cn } from '@/lib/cn';
 import { RiLayoutRightLine, RiFileTextLine, RiLoader4Line } from '@remixicon/react';
 
@@ -85,6 +86,8 @@ export function CanvasPanel() {
         return <QuestionListContent content={activeContent} />;
       case 'fetchResults':
         return <FetchResultsContent content={activeContent} />;
+      case 'browser':
+        return <BrowserTakeoverContent content={activeContent} />;
       default:
         return null;
     }

@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useConversationStore } from '@/stores/conversationStore';
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -22,6 +22,7 @@ import type { StageResult } from '@/types/snapshot';
 import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import type { ToolMode } from '@/types/toolMode';
+import type { BrowserState } from '@/types/agent';
 import {
   buildOutputCardsFromApiMessage,
   getSupersededHistoryMessageIds,
@@ -34,6 +35,36 @@ interface ChatPanelProps {
   sessionId: string;
   className?: string;
   exampleBrands?: ExampleBrand[];
+}
+
+const BROWSER_CANVAS_PLATFORM_LABELS: Record<BrowserState['platform'], string> = {
+  doubao: '豆包',
+  deepseek: 'DeepSeek',
+  kimi: 'Kimi',
+  hunyuan: '元宝',
+};
+
+function buildBrowserCanvasContent(state: BrowserState): CanvasContent | null {
+  const takeoverId = state.takeover?.takeoverId;
+  if (!takeoverId) return null;
+  const platformLabel = BROWSER_CANVAS_PLATFORM_LABELS[state.platform] || state.platform;
+  return {
+    id: `browser_takeover_${takeoverId}`,
+    type: 'browser',
+    title: `${platformLabel} 浏览器`,
+    data: {
+      takeoverId,
+      platform: state.platform,
+      browserState: state,
+      mode: state.takeover?.mode,
+      description: state.message,
+      itemCount: 1,
+    },
+    createdAt: new Date(),
+    relatedMessageId: '',
+    versions: [],
+    currentVersionIndex: -1,
+  };
 }
 
 export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProps) {
@@ -55,6 +86,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
   const replayAnimatingRef = useRef(false);
   const browserActionToastRef = useRef<Set<string>>(new Set());
+  const autoOpenedTakeoverIdRef = useRef<string | null>(null);
 
   const {
     messages,
@@ -286,7 +318,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load persisted artifacts on mount
-  const { addContent } = useCanvasStore();
+  const { addContent, upsertContent, openCanvas, removeContentsByIds } = useCanvasStore();
   useEffect(() => {
     let cancelled = false;
     const loadArtifacts = async () => {
@@ -417,8 +449,56 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
   }, [isAgentExecuting, executionProgress]);
 
+  const actionableBrowserStates = useMemo(
+    () => browserStates.filter((state) => state.requiresAction),
+    [browserStates],
+  );
+  const actionableTakeoverStates = useMemo(
+    () => actionableBrowserStates.filter((state) => Boolean(state.takeover?.takeoverId)),
+    [actionableBrowserStates],
+  );
 
-  const actionableBrowserStates = browserStates.filter((state) => state.requiresAction);
+  useEffect(() => {
+    const nextBrowserContents = actionableTakeoverStates
+      .map((state) => buildBrowserCanvasContent(state))
+      .filter((content): content is CanvasContent => Boolean(content));
+    const nextIds = new Set(nextBrowserContents.map((content) => content.id));
+
+    const existingBrowserIds = useCanvasStore
+      .getState()
+      .contents
+      .filter((content) => content.type === 'browser')
+      .map((content) => content.id);
+
+    const staleIds = existingBrowserIds.filter((id) => !nextIds.has(id));
+    if (staleIds.length > 0) {
+      removeContentsByIds(staleIds);
+    }
+
+    nextBrowserContents.forEach((content) => {
+      upsertContent(content);
+    });
+
+    const leadContent = nextBrowserContents[0];
+    const leadTakeoverId =
+      leadContent?.type === 'browser' ? leadContent.data.takeoverId : null;
+    if (leadContent && leadTakeoverId && autoOpenedTakeoverIdRef.current !== leadTakeoverId) {
+      openCanvas(leadContent);
+      autoOpenedTakeoverIdRef.current = leadTakeoverId;
+    }
+
+    if (!leadTakeoverId) {
+      autoOpenedTakeoverIdRef.current = null;
+    }
+  }, [actionableTakeoverStates, openCanvas, removeContentsByIds, upsertContent]);
+
+  const reopenTakeover = useCallback((state: BrowserState) => {
+    const content = buildBrowserCanvasContent(state);
+    if (!content) return;
+    openCanvas(content);
+    autoOpenedTakeoverIdRef.current =
+      content.type === 'browser' ? content.data.takeoverId : null;
+  }, [openCanvas]);
 
   useEffect(() => {
     const nextFingerprints = new Set<string>();
@@ -646,6 +726,22 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     setInputValue(value);
   }, []);
 
+  const previousUserMessage = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.type !== 'user') {
+        continue;
+      }
+
+      const content = typeof message.content === 'string' ? message.content.trim() : '';
+      if (content) {
+        return content;
+      }
+    }
+
+    return null;
+  }, [messages]);
+
   // Cycle 3: Handle follow-up chip selection
   const handleFollowUpSelect = useCallback((suggestion: FollowUpSuggestion) => {
     clearFollowUpSuggestions();
@@ -742,6 +838,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             <BrowserActionBanner
               key={state.requestId || `${state.platform}:${state.state}:${state.message}`}
               browserState={state}
+              onOpenTakeover={state.takeover?.takeoverId ? () => reopenTakeover(state) : null}
             />
           ))}
         </div>
@@ -850,6 +947,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         progressMessage={liveProgressMessage}
         selectedToolMode={selectedToolMode}
         onToolModeChange={setSelectedToolMode}
+        previousUserMessage={previousUserMessage}
       />
     </div>
   );

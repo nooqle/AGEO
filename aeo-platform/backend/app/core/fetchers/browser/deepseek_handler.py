@@ -15,8 +15,6 @@ from app.core.fetchers.browser.parsers.base import BaseResponseParser
 from app.core.fetchers.browser.parsers.sse import DeepSeekSSEParser
 from app.schemas.fetch import (
     BrowserState,
-    FetchMethod,
-    FetchResult,
     Platform,
     SearchReference,
 )
@@ -112,40 +110,28 @@ class DeepSeekHandler(BaseBrowserHandler):
             if not input_ready:
                 waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
                 action_hint = "请在弹出的浏览器窗口中完成 DeepSeek 登录，完成后点击“我已完成”"
-                request_id = await self._prepare_user_action_request(
-                    action_type="login",
+                events, request_id = await self._begin_login_takeover_gate(
                     message=waiting_message,
                     action_hint=action_hint,
                     progress=0.35,
                     url=self.URL,
+                    open_error_message="无法打开登录浏览器，请重试",
                 )
+                for event in events:
+                    yield event
                 if not request_id:
-                    yield self._create_event(
-                        BrowserState.ERROR,
-                        "无法打开登录浏览器，请重试",
-                        progress=0,
-                    )
                     return
-                yield self._create_event(
-                    BrowserState.WAITING_FOR_LOGIN,
-                    waiting_message,
-                    progress=0.35,
-                    requires_action=True,
-                    action_type="login",
-                    action_hint=action_hint,
-                    request_id=request_id,
-                )
-                login_success = await self._wait_for_user_action_completion(
+                completion_events, login_success = await self._finish_login_takeover_gate(
                     request_id=request_id,
                     ready_check=lambda ready_timeout: self._wait_for_login(
                         INPUT_READY_SELECTOR,
                         timeout=ready_timeout,
                     ),
-                    timeout=300,
-                    ready_timeout=120,
+                    timeout_error_message="登录超时，请重试",
                 )
+                for event in completion_events:
+                    yield event
                 if not login_success:
-                    yield self._create_event(BrowserState.ERROR, "登录超时，请重试", progress=0)
                     return
 
             # Step 4: Ensure web search is ON
@@ -224,18 +210,11 @@ class DeepSeekHandler(BaseBrowserHandler):
 
             # Step 7: Build result
             yield self._create_event(BrowserState.EXTRACTING, "提取回答内容...", progress=0.9)
-            result = FetchResult(
-                id=f"{self.PLATFORM.value}_{hash(question)}",
-                question_id="",
-                question_text=question,
-                platform=self.PLATFORM,
-                fetch_method=FetchMethod.BROWSER,
-                status="success",
+            result = await self._build_success_result(
+                question=question,
                 answer_text=answer_text,
                 search_references=search_refs,
-                raw_response={"source": source},
-                error_message=None,
-                fetch_duration=None,
+                source=source,
             )
 
             yield self._create_event(BrowserState.COMPLETED, "抓取完成", progress=1.0, data=result)
@@ -328,6 +307,14 @@ class DeepSeekHandler(BaseBrowserHandler):
 
         except Exception as e:
             logger.warning("[DeepSeek] _ensure_web_search_on failed: %s", e)
+
+    async def probe_resume_gate_ready(self, action_type: str) -> bool:
+        if action_type == "login":
+            return await self._wait_for_login(
+                self._sel("input_ready"),
+                timeout=2,
+            )
+        return await super().probe_resume_gate_ready(action_type)
 
     def _find_web_search_index(self, toolbar: list[dict]) -> int | None:
         """Find the index of the WebSearch toggle button in the toolbar."""

@@ -1,5 +1,10 @@
 """Database models."""
 
+from app.models.aio_runtime_session import (
+    AioPlatformRuntimeState,
+    AioRuntimeSession,
+    AioRuntimeTakeover,
+)
 from app.models.brand import BrandProfile
 from app.models.entity import Entity, EntityVisibilityScope
 from app.models.file_metadata import FileMetadata
@@ -51,6 +56,9 @@ from app.models.verification_challenge import (
 )
 
 __all__ = [
+    "AioRuntimeSession",
+    "AioRuntimeTakeover",
+    "AioPlatformRuntimeState",
     "Session",
     "Message",
     "BrandProfile",

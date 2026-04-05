@@ -218,3 +218,13 @@ async def handle_browser_action_resolution(
     )
 
     await handle_browser_action_resolution_langgraph(websocket, session_id, data)
+
+
+async def rehydrate_runtime_events(websocket: WebSocket, session_id: str) -> None:
+    """Replay reconnect-critical runtime events to a freshly attached socket."""
+
+    from app.api.v1.websocket_langgraph import (
+        replay_pending_browser_actions_to_websocket,
+    )
+
+    await replay_pending_browser_actions_to_websocket(websocket, session_id)
