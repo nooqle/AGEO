@@ -29,6 +29,7 @@ from app.tools.question_generation import (
     fix_persona_categories as normalize_persona_questions,
     merge_uploaded_questions as merge_uploaded_question_payload,
     normalize_uploaded_question_payload as normalize_uploaded_questions,
+    validate_baseline_questions as validate_generated_baseline_questions,
 )
 
 from app.core.constants import PlatformConstants, WorkflowConstants
@@ -836,7 +837,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         raw_questions = raw_questions[:_MAX_QUESTIONS]
 
         # Validate brand question ratio
-        _validate_baseline_questions(raw_questions, brand_name)
+        validate_generated_baseline_questions(raw_questions, brand_name)
 
         # Build simulated_questions and flattened_questions
         simulated_questions = []

@@ -25,7 +25,10 @@ from app.services.tool_capability_matrix import (
     validate_tool_capability_access,
 )
 from app.tools.a3_question_simulation import simulate_questions
-from app.tools.question_generation import QuestionGenerationTool
+from app.tools.question_generation import (
+    QuestionGenerationTool,
+    validate_baseline_questions,
+)
 from app.workflow.harness_validation import (
     decide_a4_completion_policy,
     evaluate_skill_postconditions,
@@ -54,7 +57,9 @@ from app.workflow.orchestrator_context_packets import (
 )
 from app.workflow.orchestrator_node import (
     _execute_runtime_policy_action,
+    _infer_brand_seed_candidate,
     _normalize_thought_text_for_stream,
+    _route_brand_seed_without_llm,
     build_orchestrator_prompt_assembly,
 )
 from app.workflow.runtime_policy_executor import (
@@ -927,8 +932,25 @@ def test_question_generation_tool_preserves_persona_and_baseline_contracts():
 
     assert "category" in persona_system
     assert "都市白领" in persona_user
-    assert "行业全景问题" in baseline_system
+    assert "行业基线全景问题" in baseline_system
     assert "闻献" in baseline_user
+    assert "绝对禁止在问题中直接提及目标品牌名称" in baseline_system
+    assert "直接提及目标品牌的问题不超过总数的 10%" not in baseline_user
+    assert "品牌直接问题" not in baseline_system
+
+
+def test_validate_baseline_questions_rejects_direct_brand_mentions():
+    with pytest.raises(ValueError, match="基线问题出现目标品牌直问"):
+        validate_baseline_questions(
+            [
+                {
+                    "question_id": "bl_001",
+                    "core_question": "观夏这个品牌的香薰值得买吗？",
+                    "category": "品类需求咨询",
+                }
+            ],
+            "观夏",
+        )
 
 
 def test_question_generation_tool_identity_override_is_opt_in():
@@ -1083,6 +1105,86 @@ async def test_runtime_policy_executor_consumes_next_required_action(monkeypatch
     assert command.update["next_required_action"] is None
     assert command.update["last_validation_result"] is None
     assert command.update["last_harness_decision"] is None
+
+
+def test_infer_brand_seed_candidate_treats_bare_brand_as_seed():
+    candidate = _infer_brand_seed_candidate(
+        {
+            "orchestrator_history": [{"role": "user", "content": "小鹏汽车"}],
+        }
+    )
+
+    assert candidate == "小鹏汽车"
+
+
+def test_infer_brand_seed_candidate_rejects_explicit_analysis_intent():
+    candidate = _infer_brand_seed_candidate(
+        {
+            "orchestrator_history": [{"role": "user", "content": "分析一下小鹏汽车"}],
+        }
+    )
+
+    assert candidate is None
+
+
+@pytest.mark.asyncio
+async def test_route_brand_seed_without_llm_prefers_history_lookup(monkeypatch):
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_reply_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node._hydrate_knowledge_manifest",
+        AsyncMock(
+            return_value={
+                "available_sources": {"brand_profile": True, "fetch_answer": False},
+                "counts": {"brand_profile": 1},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node._handle_tool_call",
+        AsyncMock(return_value=Command(goto="knowledge_lookup", update={"next_action": "knowledge_lookup"})),
+    )
+
+    command = await _route_brand_seed_without_llm(
+        state={
+            "orchestrator_history": [{"role": "user", "content": "小鹏汽车"}],
+        },
+        session_id="session-brand-seed-history",
+    )
+
+    assert command is not None
+    assert command.goto == "knowledge_lookup"
+    assert command.update["brand_name"] == "小鹏汽车"
+    assert command.update["knowledge_manifest"]["available_sources"]["brand_profile"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_brand_seed_without_llm_falls_back_to_brand_analysis(monkeypatch):
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_reply_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node._hydrate_knowledge_manifest",
+        AsyncMock(return_value={"available_sources": {}, "counts": {}}),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node._handle_tool_call",
+        AsyncMock(return_value=Command(goto="a1_brand", update={"next_action": "a1_brand"})),
+    )
+
+    command = await _route_brand_seed_without_llm(
+        state={
+            "orchestrator_history": [{"role": "user", "content": "小鹏汽车"}],
+        },
+        session_id="session-brand-seed-a1",
+    )
+
+    assert command is not None
+    assert command.goto == "a1_brand"
+    assert command.update["brand_name"] == "小鹏汽车"
 
 
 @pytest.mark.asyncio

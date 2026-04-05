@@ -348,10 +348,12 @@ function AuthPageContent() {
   const [isAgency, setIsAgency] = useState(false);
   const [registrationEmail, setRegistrationEmail] = useState('');
   const [registrationCode, setRegistrationCode] = useState('');
+  const [registrationDebugCode, setRegistrationDebugCode] = useState<string | null>(null);
   const [inviteCode, setInviteCode] = useState('');
 
   const [loginEmail, setLoginEmail] = useState('');
   const [loginCode, setLoginCode] = useState('');
+  const [loginDebugCode, setLoginDebugCode] = useState<string | null>(null);
 
   useEffect(() => {
     const storedToken = getStoredAccessToken();
@@ -371,6 +373,8 @@ function AuthPageContent() {
     setCountdown(0);
     setIsSendingCode(false);
     setIsSubmitting(false);
+    setRegistrationDebugCode(null);
+    setLoginDebugCode(null);
     setStep(requestedMode === 'login' ? 'login-email' : 'company');
   }, [requestedMode]);
 
@@ -411,6 +415,7 @@ function AuthPageContent() {
       return;
     }
     setIsSendingCode(true);
+    setRegistrationDebugCode(null);
     try {
       const response = await api.sendVerificationCode({
         channel: EMAIL_CHANNEL,
@@ -419,8 +424,13 @@ function AuthPageContent() {
       });
       setCountdown(Math.max(30, Math.min(response.expires_in_seconds, 60)));
       setRegistrationCode('');
+      setRegistrationDebugCode(response.debug_code ?? null);
       setStep('verify');
-      toast.success('验证码已发送');
+      toast.success(
+        response.debug_code
+          ? `验证码已生成，开发验证码：${response.debug_code}`
+          : '验证码已发送'
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '验证码发送失败');
     } finally {
@@ -492,6 +502,7 @@ function AuthPageContent() {
       return;
     }
     setIsSendingCode(true);
+    setLoginDebugCode(null);
     try {
       const response = await api.sendVerificationCode({
         channel: EMAIL_CHANNEL,
@@ -500,8 +511,13 @@ function AuthPageContent() {
       });
       setCountdown(Math.max(30, Math.min(response.expires_in_seconds, 60)));
       setLoginCode('');
+      setLoginDebugCode(response.debug_code ?? null);
       setStep('login-verify');
-      toast.success('登录验证码已发送');
+      toast.success(
+        response.debug_code
+          ? `登录验证码已生成，开发验证码：${response.debug_code}`
+          : '登录验证码已发送'
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '验证码发送失败');
     } finally {
@@ -619,6 +635,14 @@ function AuthPageContent() {
               : formatCountdown(countdown, '重新发送验证码')}
           </SecondaryAction>
         </div>
+        {registrationDebugCode ? (
+          <div className="mt-6 rounded-[20px] border border-[rgba(79,70,229,0.16)] bg-[rgba(79,70,229,0.06)] px-5 py-4 text-sm leading-7 text-[#4338ca]">
+            <div className="font-semibold text-[#312e81]">开发环境验证码</div>
+            <div className="mt-1">
+              当前邮箱的验证码是 <span className="font-mono text-base font-semibold">{registrationDebugCode}</span>
+            </div>
+          </div>
+        ) : null}
         <PrimaryButton
           className="mt-12"
           onClick={handleVerifyRegistration}
@@ -709,6 +733,14 @@ function AuthPageContent() {
               : formatCountdown(countdown, '重新发送登录验证码')}
           </SecondaryAction>
         </div>
+        {loginDebugCode ? (
+          <div className="mt-6 rounded-[20px] border border-[rgba(79,70,229,0.16)] bg-[rgba(79,70,229,0.06)] px-5 py-4 text-sm leading-7 text-[#4338ca]">
+            <div className="font-semibold text-[#312e81]">开发环境验证码</div>
+            <div className="mt-1">
+              当前邮箱的登录验证码是 <span className="font-mono text-base font-semibold">{loginDebugCode}</span>
+            </div>
+          </div>
+        ) : null}
         <PrimaryButton
           className="mt-12"
           onClick={handleLogin}

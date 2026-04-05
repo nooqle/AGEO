@@ -337,21 +337,21 @@ def _build_baseline_system_prompt(platforms: list[str] | tuple[str, ...]) -> str
         PlatformConstants.PLATFORM_DISPLAY_NAMES.get(platform, platform)
         for platform in platforms
     )
-    return f"""你是一个消费者行为研究专家。请基于以下品牌信息和竞品列表，生成模拟用户在 AI 平台（如 {platform_list}）中会提问的行业全景问题。
+    return f"""你是一个消费者行为研究专家。请基于以下品牌信息和竞品列表，生成模拟用户在 AI 平台（如 {platform_list}）中会提问的行业基线全景问题。
 
 ## 核心规则
 1. 问题必须是用户视角，模拟真实消费者的搜索行为
-2. 直接提及目标品牌的问题不超过总数的 10%
+2. 绝对禁止在问题中直接提及目标品牌名称
 3. 问题必须覆盖品牌的主要产品领域
 4. 包含预算、场景、用途等真实决策因素
 5. 问题要口语化，像真实用户会在 AI 平台中输入的
+6. 可以出现竞品名称用于对比，但不能出现目标品牌名称
 
 ## 问题分类比例
 - 品类需求咨询 (30%)
 - 场景化选购 (25%)
 - 品类对比排名 (20%)
-- 行业趋势探索 (15%)
-- 品牌直接问题 (10% 上限)
+- 行业趋势探索 (25%)
 
 ## 输出格式 (JSON)
 请严格输出以下 JSON 格式，不要有其他文字：
@@ -361,7 +361,7 @@ def _build_baseline_system_prompt(platforms: list[str] | tuple[str, ...]) -> str
     {{
       "question_id": "bl_001",
       "core_question": "问题文本",
-      "category": "品类需求咨询|场景化选购|品类对比排名|行业趋势探索|品牌直接问题",
+      "category": "品类需求咨询|场景化选购|品类对比排名|行业趋势探索",
       "user_intent": "用户意图",
       "decision_stage": "认知|兴趣|评估|决策",
       "covers_product": "对应的产品线(可选)"
@@ -374,7 +374,7 @@ def _build_baseline_system_prompt(platforms: list[str] | tuple[str, ...]) -> str
 2. 不需要指定平台，系统会自动在 {platform_list} 之间轮转分配
 3. 问题要覆盖品牌的核心产品线
 4. 避免重复或过于笼统的问题
-5. 竞品名称可以出现在对比类问题中"""
+5. 竞品名称可以出现在对比类问题中，但目标品牌名称不能出现在任何问题中"""
 
 
 def _build_baseline_user_content(
@@ -412,9 +412,10 @@ def _build_baseline_user_content(
 ## 要求
 - 生成 10-15 个行业全景问题
 - 强制约束：所有问题必须严格围绕「{industry}」行业，禁止生成其他行业的问题
-- 直接提及「{brand_name}」的问题不超过总数的 10%
+- 【强制约束】任何问题都不要直接出现「{brand_name}」这个品牌名
 - 覆盖核心产品线: {products}
 - 问题要口语化，像真实用户会搜索的
+- 允许出现竞品名称做对比，但不要把目标品牌名写进问题
 
 请直接输出 JSON，不要有其他文字。"""
 
@@ -430,10 +431,9 @@ def validate_baseline_questions(questions: list[dict], brand_name: str) -> None:
         if brand_name.lower() in str(question.get("core_question", "")).lower()
         or question.get("category", "") == "品牌直接问题"
     )
-    brand_ratio = brand_direct_count / total if total > 0 else 0
-    if brand_ratio > 0.15:
+    if brand_direct_count > 0:
         raise ValueError(
-            f"品牌直接问题占比过高: {brand_ratio:.0%}，超过上限 15%"
+            f"基线问题出现目标品牌直问: {brand_direct_count}/{total}"
         )
 
 

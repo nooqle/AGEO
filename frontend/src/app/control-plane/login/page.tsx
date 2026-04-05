@@ -109,6 +109,7 @@ function ControlPlaneLoginContent() {
   const [email, setEmail] = useState('');
   const [maskedEmail, setMaskedEmail] = useState('');
   const [code, setCode] = useState('');
+  const [debugCode, setDebugCode] = useState<string | null>(null);
   const [step, setStep] = useState<'email' | 'verify'>('email');
   const [countdown, setCountdown] = useState(0);
   const [isSendingCode, setIsSendingCode] = useState(false);
@@ -159,6 +160,7 @@ function ControlPlaneLoginContent() {
       return;
     }
     setIsSendingCode(true);
+    setDebugCode(null);
     try {
       const response = await api.sendVerificationCode({
         channel: EMAIL_CHANNEL,
@@ -169,7 +171,12 @@ function ControlPlaneLoginContent() {
       setStep('verify');
       setCountdown(Math.max(30, Math.min(response.expires_in_seconds, 60)));
       setCode('');
-      toast.success('验证码已发送');
+      setDebugCode(response.debug_code ?? null);
+      toast.success(
+        response.debug_code
+          ? `验证码已生成，开发验证码：${response.debug_code}`
+          : '验证码已发送'
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '验证码发送失败');
     } finally {
@@ -292,6 +299,14 @@ function ControlPlaneLoginContent() {
                 <div className="mt-4">
                   <CodeInputRow value={code} onChange={setCode} />
                 </div>
+                {debugCode ? (
+                  <div className="mt-4 rounded-[18px] border border-[rgba(79,70,229,0.16)] bg-[rgba(79,70,229,0.06)] px-4 py-3 text-sm leading-6 text-[#4338ca]">
+                    <div className="font-semibold text-[#312e81]">开发环境验证码</div>
+                    <div className="mt-1">
+                      当前管理员邮箱验证码是 <span className="font-mono text-base font-semibold">{debugCode}</span>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
@@ -328,6 +343,7 @@ function ControlPlaneLoginContent() {
                   onClick={() => {
                     setStep('email');
                     setCode('');
+                    setDebugCode(null);
                     setCountdown(0);
                   }}
                   className="inline-flex h-14 items-center justify-center rounded-[18px] border border-[#dde2e8] px-5 text-sm font-medium text-[#475569]"

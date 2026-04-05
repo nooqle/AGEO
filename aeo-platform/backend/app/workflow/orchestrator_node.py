@@ -727,6 +727,66 @@ def _get_latest_user_message(state: AgentState) -> str:
     return ""
 
 
+def _infer_brand_seed_candidate(state: AgentState) -> str | None:
+    """Treat a bare brand-name turn as an implicit analysis seed, not an ambiguity."""
+
+    if state.get("awaiting_user") or state.get("pending_confirmation"):
+        return None
+    if state.get("pending_table_intake"):
+        return None
+    if state.get("brand_profile") or state.get("brand_name") or state.get("entity_id"):
+        return None
+    if state.get("fetch_results") or state.get("report") or state.get("metrics"):
+        return None
+
+    latest_user_message = _get_latest_user_message(state).strip()
+    if not latest_user_message or "\n" in latest_user_message:
+        return None
+
+    candidate = latest_user_message.strip(
+        " \t\r\n,，。.!！？?：:；;、\"'“”‘’()（）[]【】<>《》"
+    )
+    if not candidate or len(candidate) > 24:
+        return None
+
+    lowered = candidate.lower()
+    intent_keywords = (
+        "分析",
+        "报告",
+        "导出",
+        "下载",
+        "对比",
+        "比较",
+        "变化",
+        "趋势",
+        "抓取",
+        "重抓",
+        "重跑",
+        "引用",
+        "官网",
+        "画像",
+        "问题",
+        "回答",
+        "结果",
+        "历史",
+        "怎么",
+        "如何",
+        "为什么",
+        "有没有",
+        "是否",
+        "查询",
+        "监测",
+        "fast",
+        "full",
+        "browser",
+        "api",
+    )
+    if any(keyword in lowered for keyword in intent_keywords):
+        return None
+
+    return candidate
+
+
 def _is_current_report_follow_up(state: AgentState) -> bool:
     latest_user_message = _get_latest_user_message(state)
     if not latest_user_message:
@@ -2514,6 +2574,78 @@ async def _execute_runtime_policy_action(
     )
 
 
+async def _route_brand_seed_without_llm(
+    *,
+    state: AgentState,
+    session_id: str,
+) -> Command | None:
+    brand_seed = _infer_brand_seed_candidate(state)
+    if not brand_seed:
+        return None
+
+    seeded_state: AgentState = {**state, "brand_name": brand_seed}
+    manifest = await _hydrate_knowledge_manifest(seeded_state)
+    if manifest is not None:
+        seeded_state = {**seeded_state, "knowledge_manifest": manifest}
+
+    available_sources = ((manifest or {}).get("available_sources") or {})
+    has_history_materials = any(bool(value) for value in available_sources.values())
+
+    if has_history_materials:
+        reply_text = (
+            f"我先查看历史里和「{brand_seed}」相关的材料，"
+            "如果已有品牌档案、竞品信息或历史抓取结果，就优先复用这些事实继续分析。"
+        )
+        tool_name = "knowledge_lookup"
+        tool_args = {
+            "query": brand_seed,
+            "limit": 6,
+        }
+    else:
+        reply_text = (
+            f"我先补充「{brand_seed}」的品牌信息和竞品格局，"
+            "拿到真实品牌事实后再继续后续分析。"
+        )
+        tool_name = "brand_analysis"
+        tool_args = {
+            "brand_name": brand_seed,
+        }
+
+    logger.info(
+        "[Orchestrator] Applying brand-seed routing for '%s' via %s",
+        brand_seed,
+        tool_name,
+    )
+
+    history = build_orchestrator_messages(_sanitize_runtime_policy_state(seeded_state))
+    history.append({"role": "assistant", "content": reply_text})
+
+    await send_reply_event(
+        session_id,
+        reply_text,
+        is_delta=False,
+        is_new_round=True,
+    )
+    await send_reply_event(session_id, "", is_complete=True)
+
+    synthetic_tool_call = SimpleNamespace(
+        name=tool_name,
+        arguments=tool_args,
+        id=f"brand_seed_{tool_name}",
+    )
+    command = await _handle_tool_call(
+        seeded_state,
+        session_id,
+        synthetic_tool_call,
+        reply_text,
+        history,
+    )
+    extra_update: dict[str, Any] = {"brand_name": brand_seed}
+    if manifest is not None:
+        extra_update["knowledge_manifest"] = manifest
+    return _merge_command_update(command, extra_update)
+
+
 async def _route_agent_error_without_llm(
     state: AgentState,
     session_id: str,
@@ -2752,6 +2884,13 @@ async def orchestrator_node(state: AgentState) -> Command:
     )
     if runtime_policy_command is not None:
         return runtime_policy_command
+
+    brand_seed_command = await _route_brand_seed_without_llm(
+        state=state,
+        session_id=session_id,
+    )
+    if brand_seed_command is not None:
+        return brand_seed_command
 
     working_state = state
     manifest = await _hydrate_knowledge_manifest(state)
