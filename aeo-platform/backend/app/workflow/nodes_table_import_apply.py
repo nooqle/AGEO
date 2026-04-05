@@ -15,6 +15,7 @@ from app.workflow.events import (
     send_progress_event,
     send_stage_result,
 )
+from app.workflow.runtime_policy_executor import build_next_required_action
 from app.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,24 @@ async def _apply_link_list_import(
     import_source_metadata = dict(state.get("import_source_metadata") or {})
     import_source_metadata["imported_link_list_count"] = len(rows)
     import_source_metadata["imported_links"] = rows
+    requested_tool_mode = str(
+        import_source_metadata.pop("requested_tool_mode", None)
+        or state.get("selected_tool_mode")
+        or ""
+    ).strip()
+    next_required_action = None
+    if requested_tool_mode in {
+        "confidence_analysis",
+        "confidence_analysis_skill",
+        "confidence_signal_skill",
+        "citation_confidence_analysis",
+    }:
+        next_required_action = build_next_required_action(
+            tool_name="confidence_analysis_skill",
+            reason="用户先上传了链接清单，导入完成后需要继续执行引用置信度评估。",
+            reply_text="链接清单已整理完成，接下来继续执行引用置信度评估。",
+            source_step="table_import_apply",
+        )
 
     user_decisions = dict(state.get("user_decisions", {}))
     user_decisions["table_import_confirmed"] = False
@@ -237,6 +256,8 @@ async def _apply_link_list_import(
             "current_step": "A7",
             "confirmed_import_action": None,
             "error_info": None,
+            "next_required_action": next_required_action,
+            "selected_tool_mode": None,
             "user_decisions": user_decisions,
         }
     )

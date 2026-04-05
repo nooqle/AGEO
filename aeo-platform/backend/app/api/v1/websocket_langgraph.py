@@ -1642,7 +1642,7 @@ async def handle_confirmation_langgraph(
         elif selected_option_id == "run_confidence_signal":
             user_content = "用户选择重新执行引用置信度评估"
             state_values["next_required_action"] = build_next_required_action(
-                tool_name="confidence_signal_skill",
+                tool_name="confidence_analysis_skill",
                 reason="用户在恢复面板中选择重新执行引用置信度评估。",
                 reply_text="已按您的选择，重新执行引用置信度评估。",
                 source_step="error_recovery",

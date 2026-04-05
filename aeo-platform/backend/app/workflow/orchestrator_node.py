@@ -82,6 +82,7 @@ _VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
     "answer_fetch": "答案抓取",
     "analysis_report_skill": "分析报告",
     "data_analytics": "分析报告",
+    "confidence_analysis_skill": "引用置信度评估",
     "confidence_signal_skill": "引用置信度评估",
     "citation_confidence_analysis": "引用置信度评估",
     "post_analysis_skill": "后续分析",
@@ -1325,7 +1326,7 @@ def _build_public_skill_index(state: AgentState) -> str:
             availability = "需要已有抓取结果或报告"
         elif name == "analysis_report_skill" and not state.get("fetch_results"):
             availability = "需要先完成 A4 抓取"
-        elif name == "confidence_signal_skill" and not state.get("fetch_results"):
+        elif name == "confidence_analysis_skill" and not state.get("fetch_results"):
             availability = "需要先有可评估的抓取结果"
         lines.append(f"- {name}: {description}（{availability}）")
     return "\n".join(lines)
@@ -1380,7 +1381,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 如果识别结果是 link_list：先 ask_user 确认是否作为链接清单继续分析，不可自动套用到其他流程。
                 - 如果用户没有文本消息，只上传了表格：也要基于 context + table_intake_skill 结果给出初步判断，并 ask_user 确认。
                 - 如果 user_decisions.table_import_confirmed=true 且 confirmed_table_kind=question_list，而当前还没有新的 A3 结果，必须立即调用 question_simulation(mode="uploaded_list")。
-                - 如果链接清单已经导入并生成交付物：先告诉用户链接清单已整理完成，再根据后续说明继续；当前不要自动调用 confidence_signal_skill。
+                - 如果链接清单已经导入并生成交付物：先告诉用户链接清单已整理完成，再根据后续说明继续；当前不要自动调用 confidence_analysis_skill。
                 """
             ).strip(),
         ),
@@ -1400,7 +1401,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
 
                 其他固定路径：
                 - 用户说“重跑基线”时：question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline")。
-                - 用户明确要检查引用可信度时：confidence_signal_skill。
+                - 用户明确要检查引用可信度时：confidence_analysis_skill。
                 - 用户基于已有结果要求深入分析、历史对比、解释原因、提炼风险时：post_analysis_skill。
                 - 用户要求重新抓取、重跑部分平台、全量重跑、或从 API 改为浏览器模式时：统一走 answer_fetch，不要再发明 refetch 类能力名。
                 - 用户选择“直接提问”时，禁止再次 ask_user 给子选项；直接自然语言引导用户在输入框中继续追问。

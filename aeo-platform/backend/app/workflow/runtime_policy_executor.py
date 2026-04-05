@@ -190,7 +190,7 @@ def build_alternative_action_catalog(
                     "label": "重新执行引用置信度评估",
                     "description": "沿用当前抓取结果，刷新引用可信度分析",
                     "action_type": "run_tool",
-                    "tool_name": "confidence_signal_skill",
+                    "tool_name": "confidence_analysis_skill",
                     "tool_args": {},
                 }
             )
