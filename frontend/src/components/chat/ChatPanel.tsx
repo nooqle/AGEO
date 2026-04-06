@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useConversationStore } from '@/stores/conversationStore';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { useAioTakeoverHeartbeat } from '@/hooks/useAioTakeoverHeartbeat';
 import { MessageList } from './MessageList';
 import { TaskStatusBadge } from './TaskStatusBadge';
 import { ReconnectionBanner } from './ReconnectionBanner';
@@ -57,6 +58,7 @@ function buildBrowserCanvasContent(state: BrowserState): CanvasContent | null {
       platform: state.platform,
       browserState: state,
       mode: state.takeover?.mode,
+      targetUrl: state.takeover?.targetUrl,
       description: state.message,
       itemCount: 1,
     },
@@ -319,6 +321,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
   // Load persisted artifacts on mount
   const { addContent, upsertContent, openCanvas, removeContentsByIds } = useCanvasStore();
+  const isCanvasOpen = useCanvasStore((state) => state.isOpen);
+  const canvasContents = useCanvasStore((state) => state.contents);
   useEffect(() => {
     let cancelled = false;
     const loadArtifacts = async () => {
@@ -457,6 +461,16 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     () => actionableBrowserStates.filter((state) => Boolean(state.takeover?.takeoverId)),
     [actionableBrowserStates],
   );
+  const browserCanvasTakeoverAccess = useMemo(
+    () =>
+      canvasContents
+        .filter((content): content is Extract<CanvasContent, { type: 'browser' }> => content.type === 'browser')
+        .map((content) => content.data.browserState.takeover)
+        .filter((takeover): takeover is NonNullable<BrowserState['takeover']> => Boolean(takeover?.takeoverId)),
+    [canvasContents],
+  );
+
+  useAioTakeoverHeartbeat(browserCanvasTakeoverAccess);
 
   useEffect(() => {
     const nextBrowserContents = actionableTakeoverStates
@@ -482,15 +496,23 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const leadContent = nextBrowserContents[0];
     const leadTakeoverId =
       leadContent?.type === 'browser' ? leadContent.data.takeoverId : null;
-    if (leadContent && leadTakeoverId && autoOpenedTakeoverIdRef.current !== leadTakeoverId) {
+    const shouldAutoOpenBrowserTakeover =
+      Boolean(leadContent && leadTakeoverId) &&
+      (!isCanvasOpen || canvasContents.length === 0);
+    if (
+      leadContent &&
+      leadTakeoverId &&
+      shouldAutoOpenBrowserTakeover &&
+      autoOpenedTakeoverIdRef.current !== leadTakeoverId
+    ) {
       openCanvas(leadContent);
       autoOpenedTakeoverIdRef.current = leadTakeoverId;
     }
 
-    if (!leadTakeoverId) {
+    if (!leadTakeoverId || shouldAutoOpenBrowserTakeover) {
       autoOpenedTakeoverIdRef.current = null;
     }
-  }, [actionableTakeoverStates, openCanvas, removeContentsByIds, upsertContent]);
+  }, [actionableTakeoverStates, canvasContents.length, isCanvasOpen, openCanvas, removeContentsByIds, upsertContent]);
 
   const reopenTakeover = useCallback((state: BrowserState) => {
     const content = buildBrowserCanvasContent(state);
@@ -523,7 +545,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         : state.actionType === 'modal'
         ? '\u51fa\u73b0\u4e86\u9875\u9762\u5f39\u6846'
         : '\u9700\u8981\u4f60\u5728\u6d4f\u89c8\u5668\u7a97\u53e3\u4e2d\u64cd\u4f5c';
-      toast.info(`${platformName}${actionLabel}\uff0c\u7cfb\u7edf\u5df2\u5c1d\u8bd5\u5c06\u7a97\u53e3\u5207\u5230\u524d\u53f0\u3002`, 8000);
+      toast.info(`${platformName}${actionLabel}\uff0c\u5df2\u5728\u53f3\u4fa7\u753b\u5e03\u8ffd\u52a0\u4e00\u4e2a\u53ef\u63a5\u7ba1\u9875\u7b7e\u3002`, 8000);
     });
     browserActionToastRef.current = nextFingerprints;
   }, [actionableBrowserStates]);

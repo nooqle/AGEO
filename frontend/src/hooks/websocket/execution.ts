@@ -126,6 +126,10 @@ export function buildBrowserState(data: WebSocketEventData): BrowserState {
           typeof rawTakeover.expires_at === 'string'
             ? rawTakeover.expires_at
             : undefined,
+        targetUrl:
+          typeof rawTakeover.target_url === 'string'
+            ? rawTakeover.target_url
+            : undefined,
       }
     : undefined;
 

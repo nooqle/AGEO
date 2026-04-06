@@ -28,10 +28,21 @@ from app.services.aio_session_manager import (
     SpectaAioTakeover,
     aio_session_manager,
 )
-from app.workflow.browser_action_runtime import resolve_browser_action_request
+from app.workflow.browser_action_runtime import (
+    get_browser_action_request,
+    resolve_browser_action_request,
+)
 
 router = APIRouter(prefix="/aio", tags=["aio"])
 logger = logging.getLogger(__name__)
+
+_PLATFORM_DEFAULT_TARGET_URLS = {
+    "doubao": "https://www.doubao.com/chat/",
+    "deepseek": "https://chat.deepseek.com/",
+    "kimi": "https://kimi.com/",
+    "hunyuan": "https://yuanbao.tencent.com/",
+    "yuanbao": "https://yuanbao.tencent.com/",
+}
 
 
 class AcquireAioSessionRequest(BaseModel):
@@ -130,6 +141,19 @@ def _serialize_takeover(takeover: SpectaAioTakeover) -> dict[str, Any]:
     }
 
 
+def _serialize_takeover_with_target(
+    takeover: SpectaAioTakeover,
+    *,
+    target_url: str | None,
+) -> dict[str, Any]:
+    payload = _serialize_takeover(takeover)
+    payload["target_url"] = target_url
+    access_bundle = payload.get("access_bundle")
+    if isinstance(access_bundle, dict):
+        access_bundle["target_url"] = target_url
+    return payload
+
+
 def _normalize_cdp_websocket_url(cdp_url: str | None) -> str | None:
     """Normalize AIO browser info into a websocket URL suitable for proxying."""
 
@@ -165,6 +189,31 @@ async def _settle_takeover_request(
             takeover.request_id,
             resolution,
         )
+
+
+def _is_valid_takeover_target_url(url: str | None) -> bool:
+    if not url or not url.strip():
+        return False
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    lowered = url.strip().lower()
+    return not lowered.startswith(
+        ("chrome://", "chrome-untrusted://", "devtools://")
+    )
+
+
+async def _resolve_takeover_target_url(
+    takeover: SpectaAioTakeover,
+) -> str | None:
+    if takeover.request_id:
+        request = await get_browser_action_request(takeover.request_id)
+        if request and _is_valid_takeover_target_url(request.target_url):
+            return request.target_url
+    fallback = _PLATFORM_DEFAULT_TARGET_URLS.get(takeover.platform)
+    if _is_valid_takeover_target_url(fallback):
+        return fallback
+    return None
 
 
 async def _get_takeover_and_session_for_user(
@@ -279,7 +328,12 @@ async def create_takeover(
         )
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    return {"takeover": _serialize_takeover(takeover)}
+    target_url = await _resolve_takeover_target_url(takeover)
+    return {
+        "takeover": _serialize_takeover_with_target(
+            takeover, target_url=target_url
+        )
+    }
 
 
 @router.get("/takeovers/{takeover_id}")
@@ -298,7 +352,12 @@ async def get_takeover(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="当前用户无权访问该 takeover",
         )
-    return {"takeover": _serialize_takeover(takeover)}
+    target_url = await _resolve_takeover_target_url(takeover)
+    return {
+        "takeover": _serialize_takeover_with_target(
+            takeover, target_url=target_url
+        )
+    }
 
 
 @router.get("/takeovers/{takeover_id}/canvas-config")
@@ -318,6 +377,12 @@ async def get_takeover_canvas_config(
             detail="当前用户无权访问该 takeover",
         )
     _ensure_takeover_bundle_is_active(takeover)
+    target_url = await _resolve_takeover_target_url(takeover)
+    if not _is_valid_takeover_target_url(target_url):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前接管未找到有效目标页面，请重新申请新的 takeover。",
+        )
     session = await aio_session_manager.get_session(takeover.session_id)
     client = AioSandboxClient(
         base_url=session.base_url,
@@ -325,7 +390,7 @@ async def get_takeover_canvas_config(
         timeout_seconds=settings.AIO_REQUEST_TIMEOUT_SECONDS,
     )
     try:
-        await client.stabilize_browser_surface()
+        await client.stabilize_browser_surface(preferred_url=target_url)
     except AioBackendError as exc:
         _raise_from_aio_error(exc)
     await aio_session_manager.refresh_browser_info(takeover.session_id)
@@ -335,6 +400,7 @@ async def get_takeover_canvas_config(
         "cdp_endpoint": f"/api/v1/aio/takeovers/{takeover.takeover_id}/cdp-relay",
         "expires_at": _serialize_datetime(takeover.expires_at),
         "heartbeat_interval_ms": settings.AIO_TAKEOVER_HEARTBEAT_INTERVAL_MS,
+        "target_url": target_url,
     }
 
 
@@ -609,7 +675,12 @@ async def heartbeat_takeover(
             current_user.id,
             body.frontend_id,
         )
-    return {"takeover": _serialize_takeover(takeover)}
+    target_url = await _resolve_takeover_target_url(takeover)
+    return {
+        "takeover": _serialize_takeover_with_target(
+            takeover, target_url=target_url
+        )
+    }
 
 
 @router.post("/takeovers/{takeover_id}/resolve")
@@ -637,7 +708,12 @@ async def resolve_takeover(
         else "skip"
     )
     await _settle_takeover_request(takeover, resolution=resolution)
-    return {"takeover": _serialize_takeover(takeover)}
+    target_url = await _resolve_takeover_target_url(takeover)
+    return {
+        "takeover": _serialize_takeover_with_target(
+            takeover, target_url=target_url
+        )
+    }
 
 
 @router.post("/takeovers/{takeover_id}/cancel")
@@ -659,4 +735,9 @@ async def cancel_takeover(
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     await _settle_takeover_request(takeover, resolution="skip")
-    return {"takeover": _serialize_takeover(takeover)}
+    target_url = await _resolve_takeover_target_url(takeover)
+    return {
+        "takeover": _serialize_takeover_with_target(
+            takeover, target_url=target_url
+        )
+    }

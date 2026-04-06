@@ -1103,12 +1103,14 @@ class ApiService {
       lastHeartbeatAt: typeof raw.last_heartbeat_at === 'string' ? raw.last_heartbeat_at : null,
       resumeGateResult:
         typeof raw.resume_gate_result === 'string' ? raw.resume_gate_result : null,
+      targetUrl: typeof raw.target_url === 'string' ? raw.target_url : null,
       accessBundle: {
         canvasConfigPath: String(bundle.canvas_config_path || ''),
         vncUrlPath: String(bundle.vnc_url_path || ''),
         heartbeatPath: String(bundle.heartbeat_path || ''),
         resolvePath: String(bundle.resolve_path || ''),
         cancelPath: String(bundle.cancel_path || ''),
+        targetUrl: typeof bundle.target_url === 'string' ? bundle.target_url : null,
       },
     };
   }
@@ -1121,6 +1123,7 @@ class ApiService {
       expiresAt: typeof raw.expires_at === 'string' ? raw.expires_at : null,
       heartbeatIntervalMs:
         typeof raw.heartbeat_interval_ms === 'number' ? raw.heartbeat_interval_ms : 10000,
+      targetUrl: typeof raw.target_url === 'string' ? raw.target_url : null,
     };
   }
 

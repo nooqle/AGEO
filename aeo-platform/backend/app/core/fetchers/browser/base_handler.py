@@ -715,6 +715,7 @@ class BaseBrowserHandler(ABC):
             action_type=action_type,
             message=message,
             action_hint=action_hint,
+            target_url=url,
             progress=progress,
             run_id=self.run_id,
             state=infer_browser_action_state(action_type),

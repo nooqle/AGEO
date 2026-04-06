@@ -110,7 +110,10 @@ class AioSandboxBackend:
 
         client = aio_session_manager.get_runtime_client()
         config = await client.set_browser_config(width=width, height=height)
-        stabilized = await client.stabilize_browser_surface(preferred_url=preferred_url)
+        stabilized = await client.stabilize_browser_surface(
+            preferred_url=preferred_url,
+            allow_blank_fallback=True,
+        )
         return {
             "config_applied": config.applied,
             "stabilized": stabilized,

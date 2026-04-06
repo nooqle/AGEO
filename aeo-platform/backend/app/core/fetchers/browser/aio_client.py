@@ -744,7 +744,8 @@ class AioSandboxClient:
     async def stabilize_browser_surface(
         self,
         *,
-        preferred_url: str = "about:blank",
+        preferred_url: str | None = None,
+        allow_blank_fallback: bool = False,
     ) -> dict[str, Any]:
         """Ensure the browser has at least one usable page target for takeover UI.
 
@@ -764,6 +765,12 @@ class AioSandboxClient:
                 retryable=False,
                 detail="AIO browser payload missing cdp_url",
             )
+
+        preferred_target_url = (
+            preferred_url.strip() if isinstance(preferred_url, str) else None
+        )
+        if preferred_target_url and self._is_internal_browser_page(preferred_target_url):
+            preferred_target_url = None
 
         try:
             async with websockets.connect(
@@ -821,23 +828,59 @@ class AioSandboxClient:
                     for target in page_targets
                     if not self._is_internal_browser_page(target.get("url"))
                 ]
+                if preferred_target_url:
+                    matching_target = next(
+                        (
+                            target
+                            for target in usable_pages
+                            if str(target.get("url") or "").strip()
+                            == preferred_target_url
+                        ),
+                        None,
+                    )
+                    if matching_target:
+                        return {
+                            "action": "reused_existing_page",
+                            "target_id": matching_target.get("targetId"),
+                            "page_count": len(page_targets),
+                            "preferred_url": preferred_target_url,
+                        }
+                    created = await send_command(
+                        "Target.createTarget",
+                        {"url": preferred_target_url},
+                    )
+                    return {
+                        "action": "created_page_target",
+                        "target_id": created.get("targetId"),
+                        "preferred_url": preferred_target_url,
+                        "page_count": len(page_targets) + 1,
+                    }
+
                 if usable_pages:
                     return {
                         "action": "reused_existing_page",
                         "target_id": usable_pages[0].get("targetId"),
                         "page_count": len(page_targets),
                     }
+                if allow_blank_fallback:
+                    created = await send_command(
+                        "Target.createTarget",
+                        {"url": "about:blank"},
+                    )
+                    return {
+                        "action": "created_page_target",
+                        "target_id": created.get("targetId"),
+                        "preferred_url": "about:blank",
+                        "page_count": len(page_targets) + 1,
+                    }
 
-                created = await send_command(
-                    "Target.createTarget",
-                    {"url": preferred_url},
+                raise AioBackendError(
+                    error_code=AioBlockerCode.STATE_INVALID.value,
+                    recover_hint="recreate_takeover_with_target_url",
+                    transport_used="cdp",
+                    retryable=False,
+                    detail="AIO 接管未找到可用的目标页面，且没有提供有效的目标 URL。",
                 )
-                return {
-                    "action": "created_page_target",
-                    "target_id": created.get("targetId"),
-                    "preferred_url": preferred_url,
-                    "page_count": len(page_targets) + 1,
-                }
         except AioBackendError:
             raise
         except Exception as exc:

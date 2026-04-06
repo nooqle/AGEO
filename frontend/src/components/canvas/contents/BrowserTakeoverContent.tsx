@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   RiAlertLine,
   RiExternalLinkLine,
@@ -8,13 +8,13 @@ import {
   RiShieldKeyholeLine,
 } from '@remixicon/react';
 
-import { useCanvasStore } from '@/stores/canvasStore';
 import { api, getApiBaseUrl } from '@/services/api';
 import { getStoredAccessToken } from '@/lib/auth-storage';
+import { useAioTakeoverStore } from '@/stores/aioTakeoverStore';
+import { useCanvasStore } from '@/stores/canvasStore';
 import type { BrowserCanvasContent } from '@/types/canvas';
 import type {
   AioCanvasConfig,
-  AioTakeoverRecord,
   AioTakeoverState,
   AioVncUrl,
 } from '@/types/aio';
@@ -28,21 +28,6 @@ type RenderState =
   | 'error';
 
 type BrowserUiController = {
-  browser: {
-    getTabsSnapshot: () => {
-      activeTabId: string | null;
-      tabs: Map<
-        string,
-        {
-          url?: string | null;
-          title?: string | null;
-        }
-      >;
-    };
-    subscribeTabChange: (callback: () => void) => () => void;
-    activeTab: (tabId: string) => Promise<boolean>;
-    closeTab: (tabId: string) => Promise<boolean>;
-  };
   destroy: () => Promise<void>;
 };
 
@@ -63,15 +48,6 @@ const TAKEOVER_STATE_LABELS: Record<AioTakeoverState, string> = {
   resume_failed: '恢复失败',
 };
 
-const DEFAULT_HEARTBEAT_MS = 10000;
-
-function createFrontendId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `fe_${crypto.randomUUID()}`;
-  }
-  return `fe_${Math.random().toString(36).slice(2, 10)}`;
-}
-
 function getFrontendAccessToken(): string | null {
   const token = getStoredAccessToken();
   if (token) return token;
@@ -90,16 +66,6 @@ function buildCanvasWsEndpoint(path: string): string {
   return url.toString();
 }
 
-function isInternalBrowserUrl(url?: string | null): boolean {
-  if (!url) return true;
-  const lowered = url.toLowerCase();
-  return (
-    lowered.startsWith('chrome://') ||
-    lowered.startsWith('chrome-untrusted://') ||
-    lowered.startsWith('devtools://')
-  );
-}
-
 function formatExpiry(value?: string | null): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -114,47 +80,73 @@ interface BrowserTakeoverContentProps {
   content: BrowserCanvasContent;
 }
 
-export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps) {
+export function BrowserTakeoverContent({
+  content,
+}: BrowserTakeoverContentProps) {
   const browserState = content.data.browserState;
   const takeover = browserState.takeover ?? null;
-  const removeContent = useCanvasStore((state) => state.removeContent);
   const takeoverId = takeover?.takeoverId ?? null;
+  const removeContent = useCanvasStore((state) => state.removeContent);
+  const takeoverRecord = useAioTakeoverStore((state) =>
+    takeoverId ? state.records[takeoverId] ?? null : null,
+  );
+  const takeoverRegistration = useAioTakeoverStore((state) =>
+    takeoverId ? state.registrations[takeoverId] ?? null : null,
+  );
+  const upsertTakeoverRecord = useAioTakeoverStore(
+    (state) => state.upsertRecord,
+  );
+  const setTakeoverMode = useAioTakeoverStore(
+    (state) => state.setTakeoverMode,
+  );
+  const setHeartbeatInterval = useAioTakeoverStore(
+    (state) => state.setHeartbeatInterval,
+  );
+  const removeRegistration = useAioTakeoverStore(
+    (state) => state.removeRegistration,
+  );
 
-  const frontendId = useMemo(() => createFrontendId(), []);
-  const platformLabel = PLATFORM_LABELS[browserState.platform] || browserState.platform;
+  const platformLabel =
+    PLATFORM_LABELS[browserState.platform] || browserState.platform;
 
-  const [takeoverRecord, setTakeoverRecord] = useState<AioTakeoverRecord | null>(null);
   const [canvasConfig, setCanvasConfig] = useState<AioCanvasConfig | null>(null);
   const [vncConfig, setVncConfig] = useState<AioVncUrl | null>(null);
   const [renderState, setRenderState] = useState<RenderState>('hidden');
-  const [currentMode, setCurrentMode] = useState<'canvas_cdp' | 'vnc_fallback' | null>(null);
+  const [currentMode, setCurrentMode] = useState<'canvas_cdp' | 'vnc_fallback'>(
+    takeoverRegistration?.mode ?? takeover?.mode ?? 'canvas_cdp',
+  );
   const [statusText, setStatusText] = useState<string | null>(null);
-  const [missedHeartbeats, setMissedHeartbeats] = useState(0);
-  const [canvasMounted, setCanvasMounted] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const browserUiRef = useRef<BrowserUiController | null>(null);
-  const tabSyncUnsubscribeRef = useRef<(() => void) | null>(null);
 
   const canvasCdpEndpoint = canvasConfig?.cdpEndpoint ?? null;
-  const heartbeatIntervalMs = canvasConfig?.heartbeatIntervalMs || DEFAULT_HEARTBEAT_MS;
   const takeoverState = takeoverRecord?.takeoverState || 'issued';
-  const takeoverMode = takeoverRecord?.mode ?? takeover?.mode ?? null;
   const canvasConfigPath =
-    takeoverRecord?.accessBundle?.canvasConfigPath ?? takeover?.canvasConfigPath ?? null;
-  const vncUrlPath = takeoverRecord?.accessBundle?.vncUrlPath ?? takeover?.vncUrlPath ?? null;
-  const heartbeatPath =
-    takeoverRecord?.accessBundle?.heartbeatPath ?? takeover?.heartbeatPath ?? null;
-  const resolvePath = takeoverRecord?.accessBundle?.resolvePath ?? takeover?.resolvePath ?? null;
-  const cancelPath = takeoverRecord?.accessBundle?.cancelPath ?? takeover?.cancelPath ?? null;
-  const expiryText = formatExpiry(takeoverRecord?.expiresAt || takeover?.expiresAt);
+    takeoverRecord?.accessBundle.canvasConfigPath ??
+    takeover?.canvasConfigPath ??
+    null;
+  const vncUrlPath =
+    takeoverRecord?.accessBundle.vncUrlPath ?? takeover?.vncUrlPath ?? null;
+  const resolvePath =
+    takeoverRecord?.accessBundle.resolvePath ?? takeover?.resolvePath ?? null;
+  const cancelPath =
+    takeoverRecord?.accessBundle.cancelPath ?? takeover?.cancelPath ?? null;
+  const expiryText = formatExpiry(
+    takeoverRecord?.expiresAt || takeover?.expiresAt,
+  );
+  const targetUrl =
+    canvasConfig?.targetUrl ??
+    takeoverRecord?.targetUrl ??
+    takeoverRecord?.accessBundle.targetUrl ??
+    takeover?.targetUrl ??
+    content.data.targetUrl ??
+    null;
 
   const destroyBrowserUi = useCallback(async () => {
-    tabSyncUnsubscribeRef.current?.();
-    tabSyncUnsubscribeRef.current = null;
     const instance = browserUiRef.current;
     browserUiRef.current = null;
-    setCanvasMounted(false);
     if (instance) {
       await instance.destroy().catch(() => undefined);
     }
@@ -163,54 +155,10 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
     }
   }, []);
 
-  const ensurePreferredCanvasTab = useCallback(async (): Promise<boolean> => {
-    const instance = browserUiRef.current;
-    if (!instance) return false;
-
-    const snapshot = instance.browser.getTabsSnapshot();
-    const preferredTabEntry = Array.from(snapshot.tabs.entries()).find(
-      ([, tab]) => !isInternalBrowserUrl(tab?.url),
-    );
-    if (!preferredTabEntry) {
-      return false;
-    }
-
-    if (snapshot.activeTabId !== preferredTabEntry[0]) {
-      await instance.browser.activeTab(preferredTabEntry[0]).catch(() => false);
-    }
-
-    const afterSwitch = instance.browser.getTabsSnapshot();
-    const activeTab = afterSwitch.activeTabId
-      ? afterSwitch.tabs.get(afterSwitch.activeTabId)
-      : null;
-
-    if (
-      activeTab &&
-      !isInternalBrowserUrl(activeTab.url) &&
-      activeTab.url === preferredTabEntry[1]?.url
-    ) {
-      return true;
-    }
-
-    const staleInternalTabId = afterSwitch.activeTabId;
-    if (
-      staleInternalTabId &&
-      staleInternalTabId !== preferredTabEntry[0] &&
-      isInternalBrowserUrl(afterSwitch.tabs.get(staleInternalTabId)?.url)
-    ) {
-      await instance.browser.closeTab(staleInternalTabId).catch(() => false);
-    }
-
-    const latestSnapshot = instance.browser.getTabsSnapshot();
-    const latestActiveTab = latestSnapshot.activeTabId
-      ? latestSnapshot.tabs.get(latestSnapshot.activeTabId)
-      : null;
-    return Boolean(
-      latestActiveTab &&
-        !isInternalBrowserUrl(latestActiveTab.url) &&
-        latestActiveTab.url === preferredTabEntry[1]?.url,
-    );
-  }, []);
+  const closeTakeoverCanvas = useCallback(async () => {
+    await destroyBrowserUi();
+    removeContent(content.id);
+  }, [content.id, destroyBrowserUi, removeContent]);
 
   const loadVncFallback = useCallback(async () => {
     if (!vncUrlPath) {
@@ -222,6 +170,9 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
     const vnc = await api.getAioTakeoverVncUrl(vncUrlPath);
     setVncConfig(vnc);
     setCurrentMode('vnc_fallback');
+    if (takeoverId) {
+      setTakeoverMode(takeoverId, 'vnc_fallback');
+    }
     if (!vnc.upstreamVncAvailable) {
       setRenderState('error');
       setStatusText('VNC 不可用');
@@ -229,7 +180,7 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
     }
     setRenderState('vnc_ready');
     setStatusText(null);
-  }, [vncUrlPath]);
+  }, [setTakeoverMode, takeoverId, vncUrlPath]);
 
   useEffect(() => {
     if (!takeoverId) {
@@ -239,30 +190,11 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
 
     let cancelled = false;
 
-    const loadTakeover = async () => {
-      setRenderState('opening');
-      setCurrentMode(takeoverMode);
-      setStatusText(null);
-      setMissedHeartbeats(0);
-      setCanvasConfig(null);
-      setVncConfig(null);
-      await destroyBrowserUi();
-
+    const loadTakeoverRecord = async () => {
       try {
         const record = await api.getAioTakeover(takeoverId);
         if (cancelled) return;
-        setTakeoverRecord(record);
-
-        if (takeoverMode === 'canvas_cdp' && canvasConfigPath) {
-          const config = await api.getAioTakeoverCanvasConfig(canvasConfigPath);
-          if (cancelled) return;
-          setCanvasConfig(config);
-          setCurrentMode('canvas_cdp');
-          setRenderState('opening');
-          return;
-        }
-
-        await loadVncFallback();
+        upsertTakeoverRecord(record);
       } catch (error) {
         if (cancelled) return;
         setRenderState('error');
@@ -270,15 +202,90 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
       }
     };
 
-    void loadTakeover();
+    void loadTakeoverRecord();
+    return () => {
+      cancelled = true;
+    };
+  }, [takeoverId, upsertTakeoverRecord]);
+
+  useEffect(() => {
+    if (!takeoverId || !takeoverRegistration?.mode) {
+      return;
+    }
+    setCurrentMode(takeoverRegistration.mode);
+  }, [takeoverId, takeoverRegistration?.mode]);
+
+  useEffect(() => {
+    if (!takeoverId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadCanvasConfig = async () => {
+      if (currentMode !== 'canvas_cdp' || !canvasConfigPath) {
+        return;
+      }
+
+      setRenderState('opening');
+      setStatusText(null);
+      setVncConfig(null);
+      await destroyBrowserUi();
+
+      try {
+        const config = await api.getAioTakeoverCanvasConfig(canvasConfigPath);
+        if (cancelled) return;
+        setCanvasConfig(config);
+        setHeartbeatInterval(takeoverId, config.heartbeatIntervalMs);
+        setStatusText(null);
+      } catch (error) {
+        if (cancelled) return;
+        setCanvasConfig(null);
+        setRenderState('error');
+        setStatusText(error instanceof Error ? error.message : 'Canvas 初始化失败');
+      }
+    };
+
+    const loadVncConfig = async () => {
+      if (currentMode !== 'vnc_fallback') {
+        return;
+      }
+      setCanvasConfig(null);
+      setRenderState('opening');
+      setStatusText(null);
+      await destroyBrowserUi();
+      try {
+        await loadVncFallback();
+      } catch (error) {
+        if (cancelled) return;
+        setRenderState('error');
+        setStatusText(error instanceof Error ? error.message : 'VNC 初始化失败');
+      }
+    };
+
+    void loadCanvasConfig();
+    void loadVncConfig();
 
     return () => {
       cancelled = true;
     };
-  }, [canvasConfigPath, destroyBrowserUi, loadVncFallback, takeoverId, takeoverMode]);
+  }, [
+    canvasConfigPath,
+    currentMode,
+    destroyBrowserUi,
+    loadVncFallback,
+    reloadNonce,
+    setHeartbeatInterval,
+    takeoverId,
+  ]);
 
   useEffect(() => {
-    if (!takeoverId || currentMode !== 'canvas_cdp' || !canvasCdpEndpoint || !canvasRootRef.current) {
+    if (
+      !takeoverId ||
+      currentMode !== 'canvas_cdp' ||
+      !canvasCdpEndpoint ||
+      !canvasRootRef.current
+    ) {
       return;
     }
 
@@ -308,35 +315,14 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
           return;
         }
 
-        const browserUi = instance as BrowserUiController;
-        browserUiRef.current = browserUi;
-        tabSyncUnsubscribeRef.current = browserUi.browser.subscribeTabChange(() => {
-          void ensurePreferredCanvasTab();
-        });
-
-        const retryDelaysMs = [0, 150, 500, 1000, 1800];
-        for (const delayMs of retryDelaysMs) {
-          if (delayMs > 0) {
-            await new Promise((resolve) => window.setTimeout(resolve, delayMs));
-          }
-          if (cancelled) return;
-          const ready = await ensurePreferredCanvasTab();
-          if (ready) {
-            break;
-          }
-        }
-
-        setCanvasMounted(true);
+        browserUiRef.current = instance as BrowserUiController;
         setRenderState('canvas_ready');
         setStatusText(null);
       } catch (error) {
         if (cancelled) return;
         await destroyBrowserUi();
-        await loadVncFallback().catch(() => undefined);
-        if (!vncUrlPath) {
-          setRenderState('error');
-          setStatusText(error instanceof Error ? error.message : 'Canvas 失败');
-        }
+        setRenderState('error');
+        setStatusText(error instanceof Error ? error.message : 'Canvas 失败');
       }
     };
 
@@ -346,103 +332,61 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
       cancelled = true;
       void destroyBrowserUi();
     };
-  }, [
-    canvasCdpEndpoint,
-    currentMode,
-    destroyBrowserUi,
-    ensurePreferredCanvasTab,
-    loadVncFallback,
-    takeoverId,
-    vncUrlPath,
-  ]);
+  }, [canvasCdpEndpoint, currentMode, destroyBrowserUi, takeoverId]);
 
   useEffect(() => {
-    const heartbeatReady =
-      renderState === 'vnc_ready' || (renderState === 'canvas_ready' && canvasMounted);
-    if (!takeoverId || !heartbeatReady || !heartbeatPath) {
+    if (!takeoverId) {
       return;
     }
-
-    let cancelled = false;
-
-    const sendHeartbeat = async () => {
-      try {
-        const next = await api.heartbeatAioTakeover(heartbeatPath, {
-          frontendId,
-          mode: currentMode || 'vnc_fallback',
-        });
-        if (cancelled) return;
-        setTakeoverRecord(next);
-        setMissedHeartbeats(0);
-        setStatusText(null);
-      } catch {
-        if (cancelled) return;
-        setMissedHeartbeats((value) => {
-          const next = value + 1;
-          if (next >= 3) {
-            setRenderState('error');
-            setStatusText('连接中断');
-          }
-          return next;
-        });
-      }
-    };
-
-    void sendHeartbeat();
-    const timer = window.setInterval(() => {
-      void sendHeartbeat();
-    }, heartbeatIntervalMs);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [canvasMounted, currentMode, frontendId, heartbeatIntervalMs, heartbeatPath, renderState, takeoverId]);
-
-  const closeTakeoverCanvas = useCallback(async () => {
-    await destroyBrowserUi();
-    removeContent(content.id);
-  }, [content.id, destroyBrowserUi, removeContent]);
-
-  useEffect(() => {
     if (takeoverState === 'resolved') {
+      removeRegistration(takeoverId);
       void closeTakeoverCanvas();
       return;
     }
     if (takeoverState === 'expired') {
+      removeRegistration(takeoverId);
       setRenderState('error');
       setStatusText('已过期');
       return;
     }
     if (takeoverState === 'cancelled') {
+      removeRegistration(takeoverId);
       setRenderState('error');
       setStatusText('已取消');
       return;
     }
     if (takeoverState === 'resume_failed') {
+      removeRegistration(takeoverId);
       setRenderState('error');
       setStatusText('恢复失败');
     }
-  }, [closeTakeoverCanvas, takeoverState]);
+  }, [closeTakeoverCanvas, removeRegistration, takeoverId, takeoverState]);
 
   const handleResolve = async () => {
-    if (!resolvePath || renderState === 'submitting') {
+    if (
+      !takeoverId ||
+      !takeoverRegistration?.frontendId ||
+      !resolvePath ||
+      renderState === 'submitting'
+    ) {
       return;
     }
     setRenderState('submitting');
     setStatusText('恢复中');
     try {
       const next = await api.resolveAioTakeover(resolvePath, {
-        frontendId,
-        mode: currentMode || 'vnc_fallback',
+        frontendId: takeoverRegistration.frontendId,
+        mode: currentMode,
         resumeGateResult: 'pass',
         clientObservation: 'user_claimed_done',
       });
-      setTakeoverRecord(next);
+      upsertTakeoverRecord(next);
       if (next.takeoverState === 'resolved') {
+        removeRegistration(takeoverId);
         await closeTakeoverCanvas();
         return;
       }
+      removeRegistration(takeoverId);
       setRenderState('error');
       setStatusText(
         next.resumeGateResult === 'fail_login_required'
@@ -462,17 +406,23 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
   };
 
   const handleCancel = async () => {
-    if (!cancelPath || renderState === 'submitting') {
+    if (
+      !takeoverId ||
+      !takeoverRegistration?.frontendId ||
+      !cancelPath ||
+      renderState === 'submitting'
+    ) {
       return;
     }
     setRenderState('submitting');
     setStatusText('取消中');
     try {
       const next = await api.cancelAioTakeover(cancelPath, {
-        frontendId,
+        frontendId: takeoverRegistration.frontendId,
         reason: 'user_cancelled',
       });
-      setTakeoverRecord(next);
+      upsertTakeoverRecord(next);
+      removeRegistration(takeoverId);
       await closeTakeoverCanvas();
     } catch (error) {
       setRenderState('error');
@@ -481,8 +431,12 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
   };
 
   const handleSwitchToVnc = async () => {
+    if (!takeoverId) {
+      return;
+    }
     setRenderState('opening');
     setStatusText(null);
+    setTakeoverMode(takeoverId, 'vnc_fallback');
     try {
       await destroyBrowserUi();
       await loadVncFallback();
@@ -490,6 +444,12 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
       setRenderState('error');
       setStatusText(error instanceof Error ? error.message : '切换失败');
     }
+  };
+
+  const handleRetry = () => {
+    setRenderState('opening');
+    setStatusText(null);
+    setReloadNonce((current) => current + 1);
   };
 
   return (
@@ -522,14 +482,9 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
               {currentMode === 'vnc_fallback' ? 'VNC' : 'Canvas'}
             </span>
             {expiryText && (
-              <span style={{ color: 'var(--text-tertiary)' }}>
-                {expiryText}
-              </span>
+              <span style={{ color: 'var(--text-tertiary)' }}>{expiryText}</span>
             )}
           </div>
-        </div>
-        <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          {missedHeartbeats > 0 ? `HB ${missedHeartbeats}` : null}
         </div>
       </div>
 
@@ -586,7 +541,10 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
         style={{ borderTop: '1px solid var(--border-subtle)' }}
       >
         <div className="min-w-0 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          {statusText || browserState.message}
+          {statusText ||
+            (targetUrl
+              ? `请在当前接管页签中完成操作：${targetUrl}`
+              : browserState.message)}
         </div>
         <div className="flex items-center gap-2">
           {currentMode !== 'vnc_fallback' && vncUrlPath && (
@@ -604,7 +562,21 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
               VNC
             </button>
           )}
-          {renderState === 'error' && vncUrlPath && (
+          {renderState === 'error' && (
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition"
+              style={{
+                borderColor: 'var(--border-subtle)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <RiRefreshLine className="h-3.5 w-3.5" />
+              重试
+            </button>
+          )}
+          {renderState === 'error' && currentMode !== 'vnc_fallback' && vncUrlPath && (
             <button
               type="button"
               onClick={handleSwitchToVnc}
@@ -621,7 +593,11 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
           <button
             type="button"
             onClick={handleResolve}
-            disabled={renderState === 'opening' || renderState === 'submitting'}
+            disabled={
+              renderState === 'opening' ||
+              renderState === 'submitting' ||
+              !takeoverRegistration?.frontendId
+            }
             className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: 'var(--color-primary)', color: '#fff' }}
           >
@@ -631,7 +607,7 @@ export function BrowserTakeoverContent({ content }: BrowserTakeoverContentProps)
           <button
             type="button"
             onClick={handleCancel}
-            disabled={renderState === 'submitting'}
+            disabled={renderState === 'submitting' || !takeoverRegistration?.frontendId}
             className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
             style={{
               borderColor: 'var(--border-subtle)',

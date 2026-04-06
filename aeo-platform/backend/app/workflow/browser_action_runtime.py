@@ -37,6 +37,7 @@ class BrowserActionRequest:
     action_type: str
     message: str
     action_hint: str | None
+    target_url: str | None
     progress: float
     created_at: float
     event: asyncio.Event | None
@@ -135,12 +136,14 @@ async def _hydrate_takeover_for_request(
         "resolve_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/resolve",
         "cancel_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/cancel",
         "expires_at": takeover.expires_at.isoformat(),
+        "target_url": request.target_url,
     }
     request.takeover = dict(bundle)
     await update_browser_action_request(
         request.request_id,
         state=request.state,
         takeover=bundle,
+        target_url=request.target_url,
     )
     return bundle
 
@@ -182,6 +185,7 @@ def _serialize_request(request: BrowserActionRequest) -> dict[str, Any]:
         "action_type": request.action_type,
         "message": request.message,
         "action_hint": request.action_hint,
+        "target_url": request.target_url,
         "progress": request.progress,
         "created_at": request.created_at,
         "run_id": request.run_id,
@@ -215,6 +219,7 @@ def _deserialize_request(payload: dict[str, Any]) -> BrowserActionRequest | None
         action_type=action_type,
         message=message,
         action_hint=payload.get("action_hint"),
+        target_url=payload.get("target_url"),
         progress=float(payload.get("progress", 0.0) or 0.0),
         created_at=float(
             payload.get("created_at", time.monotonic()) or time.monotonic()
@@ -280,6 +285,7 @@ async def register_browser_action_request(
     action_type: str,
     message: str,
     action_hint: str | None,
+    target_url: str | None,
     progress: float,
     run_id: str | None = None,
     state: str | None = None,
@@ -293,6 +299,7 @@ async def register_browser_action_request(
         action_type=action_type,
         message=message,
         action_hint=action_hint,
+        target_url=target_url,
         progress=progress,
         created_at=time.monotonic(),
         event=asyncio.Event(),
@@ -321,6 +328,7 @@ async def update_browser_action_request(
     *,
     state: str | None = None,
     takeover: dict[str, Any] | None = None,
+    target_url: str | None = None,
 ) -> BrowserActionRequest | None:
     """Persist request-side metadata needed for reconnect rehydration."""
 
@@ -330,6 +338,8 @@ async def update_browser_action_request(
             request.state = state
         if takeover is not None:
             request.takeover = dict(takeover)
+        if target_url is not None:
+            request.target_url = target_url
 
     client = await _get_redis()
     if client is not None:
@@ -343,6 +353,8 @@ async def update_browser_action_request(
                 payload["state"] = state
             if takeover is not None:
                 payload["takeover"] = dict(takeover)
+            if target_url is not None:
+                payload["target_url"] = target_url
             await client.set(
                 _request_key(request_id), json.dumps(payload), ex=_REQUEST_TTL_SECONDS
             )
@@ -535,6 +547,7 @@ async def get_session_browser_action_requests(session_id: str) -> list[dict[str,
                     "action_type": request.action_type,
                     "message": request.message,
                     "action_hint": request.action_hint,
+                    "target_url": request.target_url,
                     "progress": request.progress,
                     "run_id": request.run_id,
                     "state": request.state
@@ -565,6 +578,7 @@ async def get_session_browser_action_requests(session_id: str) -> list[dict[str,
                 "action_type": request.action_type,
                 "message": request.message,
                 "action_hint": request.action_hint,
+                "target_url": request.target_url,
                 "progress": request.progress,
                 "run_id": request.run_id,
                 "state": request.state

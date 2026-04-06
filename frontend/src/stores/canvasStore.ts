@@ -70,6 +70,13 @@ function mergeCanvasData(
   return merged as CanvasContent['data'];
 }
 
+function shouldPreserveActiveTab(
+  state: Pick<CanvasState, 'isOpen' | 'contents' | 'activeContentIndex'>,
+  contentType: CanvasContent['type'],
+): boolean {
+  return contentType === 'browser' && state.isOpen && state.contents.length > 0;
+}
+
 interface CanvasState {
   isOpen: boolean;
   mode: CanvasMode;
@@ -145,7 +152,9 @@ export const useCanvasStore = create<CanvasState>((set) => ({
       } as CanvasContent;
       return {
         contents: newContents,
-        activeContentIndex: existingIndex,
+        activeContentIndex: shouldPreserveActiveTab(state, content.type)
+          ? state.activeContentIndex
+          : existingIndex,
         isOpen: true,
         mode: state.mode === 'hidden' ? 'split' : state.mode,
       };
@@ -158,7 +167,9 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     } as CanvasContent;
     return {
       contents: [...state.contents, newContent],
-      activeContentIndex: state.contents.length,
+      activeContentIndex: shouldPreserveActiveTab(state, content.type)
+        ? state.activeContentIndex
+        : state.contents.length,
       isOpen: true,
       mode: state.mode === 'hidden' ? 'split' : state.mode,
     };
@@ -169,7 +180,9 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     if (existingIndex === -1) {
       return {
         contents: [...state.contents, content],
-        activeContentIndex: state.contents.length,
+        activeContentIndex: shouldPreserveActiveTab(state, content.type)
+          ? state.activeContentIndex
+          : state.contents.length,
         isOpen: true,
         mode: state.mode === 'hidden' ? 'split' : state.mode,
       };

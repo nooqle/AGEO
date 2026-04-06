@@ -23,6 +23,7 @@ export interface AioTakeoverAccessBundle {
   heartbeatPath: string;
   resolvePath: string;
   cancelPath: string;
+  targetUrl?: string | null;
 }
 
 export interface AioTakeoverRecord {
@@ -38,6 +39,7 @@ export interface AioTakeoverRecord {
   expiresAt?: string | null;
   lastHeartbeatAt?: string | null;
   resumeGateResult?: string | null;
+  targetUrl?: string | null;
   accessBundle: AioTakeoverAccessBundle;
 }
 
@@ -47,6 +49,7 @@ export interface AioCanvasConfig {
   cdpEndpoint: string;
   expiresAt?: string | null;
   heartbeatIntervalMs: number;
+  targetUrl?: string | null;
 }
 
 export interface AioVncUrl {

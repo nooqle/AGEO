@@ -100,6 +100,7 @@ from app.core.config import settings
 from app.workflow.brand_mentions import content_mentions_brand
 from app.workflow.browser_action_runtime import (
     clear_browser_action_request,
+    get_browser_action_request,
     register_browser_action_request,
     update_browser_action_request,
     wait_for_browser_action_resolution,
@@ -304,6 +305,7 @@ async def _get_or_create_aio_takeover_bundle(
     request_id: str | None,
     action_type: str,
     message: str,
+    target_url: str | None = None,
 ) -> dict[str, Any] | None:
     """Issue one AIO takeover bundle per browser-action request."""
 
@@ -321,8 +323,23 @@ async def _get_or_create_aio_takeover_bundle(
             action_type,
         )
         return None
+    resolved_target_url = target_url
+    if not resolved_target_url and request_id:
+        existing_request = await get_browser_action_request(request_id)
+        if existing_request is not None:
+            resolved_target_url = existing_request.target_url
+    if not resolved_target_url:
+        resolved_target_url = getattr(handler, "URL", None)
     existing = _aio_takeover_by_request_id.get(request_id)
     if existing is not None:
+        if resolved_target_url and existing.get("target_url") != resolved_target_url:
+            existing = {**existing, "target_url": resolved_target_url}
+            _aio_takeover_by_request_id[request_id] = existing
+            await update_browser_action_request(
+                request_id,
+                takeover=existing,
+                target_url=resolved_target_url,
+            )
         return existing
 
     client = getattr(handler, "client", None)
@@ -416,6 +433,7 @@ async def _get_or_create_aio_takeover_bundle(
         "resolve_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/resolve",
         "cancel_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/cancel",
         "expires_at": takeover.expires_at.isoformat(),
+        "target_url": resolved_target_url,
     }
     _aio_takeover_by_request_id[request_id] = bundle
     logger.info(
@@ -433,6 +451,7 @@ async def _persist_browser_action_takeover(
     request_id: str | None,
     state: str,
     takeover: dict[str, Any] | None,
+    target_url: str | None = None,
 ) -> None:
     """Persist reconnect-critical takeover metadata onto the request record."""
 
@@ -442,6 +461,7 @@ async def _persist_browser_action_takeover(
         request_id,
         state=state,
         takeover=takeover,
+        target_url=target_url,
     )
 
 
@@ -2246,13 +2266,16 @@ async def _emit_browser_action_prompt(
     handler: Any | None = None,
     user_id: str | None = None,
     takeover: dict[str, Any] | None = None,
+    target_url: str | None = None,
 ) -> str:
+    resolved_target_url = target_url or getattr(handler, "URL", None)
     request = await register_browser_action_request(
         session_id=session_id,
         platform=platform,
         action_type=action_type,
         message=message,
         action_hint=action_hint,
+        target_url=resolved_target_url,
         progress=progress,
         run_id=run_id,
         state=state,
@@ -2265,11 +2288,13 @@ async def _emit_browser_action_prompt(
             request_id=request.request_id,
             action_type=action_type,
             message=message,
+            target_url=resolved_target_url,
         )
     await _persist_browser_action_takeover(
         request_id=request.request_id,
         state=state,
         takeover=takeover,
+        target_url=resolved_target_url,
     )
     await send_browser_state_event(
         session_id=session_id,
@@ -2330,6 +2355,7 @@ async def _fetch_from_browser(
     try:
         async for event in handler.fetch(question):
             if event.state == browser_state.WAITING_FOR_LOGIN and session_id:
+                event_target_url = getattr(handler, "URL", None)
                 takeover = await _get_or_create_aio_takeover_bundle(
                     handler=handler,
                     user_id=user_id,
@@ -2337,11 +2363,13 @@ async def _fetch_from_browser(
                     request_id=event.request_id,
                     action_type=event.action_type or "login",
                     message=event.message,
+                    target_url=event_target_url,
                 )
                 await _persist_browser_action_takeover(
                     request_id=event.request_id,
                     state=event.state.value,
                     takeover=takeover,
+                    target_url=event_target_url,
                 )
                 await send_browser_state_event(
                     session_id=session_id,
@@ -2376,6 +2404,7 @@ async def _fetch_from_browser(
                 await send_reply_event(session_id, "", is_complete=True)
 
             if event.state == browser_state.WAITING_FOR_MODAL and session_id:
+                event_target_url = getattr(handler, "URL", None)
                 takeover = await _get_or_create_aio_takeover_bundle(
                     handler=handler,
                     user_id=user_id,
@@ -2383,11 +2412,13 @@ async def _fetch_from_browser(
                     request_id=event.request_id,
                     action_type=event.action_type or "modal",
                     message=event.message,
+                    target_url=event_target_url,
                 )
                 await _persist_browser_action_takeover(
                     request_id=event.request_id,
                     state=event.state.value,
                     takeover=takeover,
+                    target_url=event_target_url,
                 )
                 await send_browser_state_event(
                     session_id=session_id,
@@ -2553,6 +2584,7 @@ async def _fetch_from_browser(
                     run_id=run_id,
                     handler=handler,
                     user_id=user_id,
+                    target_url=getattr(handler, "URL", None),
                 )
                 resolution = await _wait_for_browser_action_resolution(
                     request_id, timeout=300
@@ -2642,6 +2674,7 @@ async def _fetch_from_browser(
                     run_id=run_id,
                     handler=handler,
                     user_id=user_id,
+                    target_url=getattr(handler, "URL", None),
                 )
                 resolution = await _wait_for_browser_action_resolution(
                     request_id, timeout=300

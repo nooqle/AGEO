@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 from langgraph.types import Command
 
+from app.api.v1 import aio as aio_api
 from app.api.v1.aio import _ensure_takeover_bundle_is_active
 from app.core.fetchers.browser.aio_client import AioBrowserInfo
 from app.services.aio_runtime_contracts import AioSessionState, AioTakeoverState
@@ -94,6 +95,76 @@ def test_takeover_bundle_requires_active_state():
 
     assert exc_info.value.status_code == 409
     assert "旧接管 bundle 已失效" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_resolve_takeover_target_url_prefers_request_target(monkeypatch):
+    now = datetime.now(timezone.utc)
+    takeover = SpectaAioTakeover(
+        takeover_id="takeover_target",
+        session_id="session_1",
+        workspace_id="workspace_1",
+        user_id="user_1",
+        platform="deepseek",
+        mode="canvas_cdp",
+        reason="manual_intervention",
+        state=AioTakeoverState.ISSUED,
+        frontend_id=None,
+        requested_at=now,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+        request_id="req_target",
+        action_type="login",
+    )
+
+    async def fake_get_browser_action_request(request_id: str):
+        assert request_id == "req_target"
+        return SimpleNamespace(target_url="https://chat.deepseek.com/")
+
+    monkeypatch.setattr(
+        aio_api,
+        "get_browser_action_request",
+        fake_get_browser_action_request,
+    )
+
+    resolved = await aio_api._resolve_takeover_target_url(takeover)
+
+    assert resolved == "https://chat.deepseek.com/"
+
+
+@pytest.mark.asyncio
+async def test_resolve_takeover_target_url_supports_yuanbao_alias(monkeypatch):
+    now = datetime.now(timezone.utc)
+    takeover = SpectaAioTakeover(
+        takeover_id="takeover_yuanbao",
+        session_id="session_1",
+        workspace_id="workspace_1",
+        user_id="user_1",
+        platform="yuanbao",
+        mode="canvas_cdp",
+        reason="manual_intervention",
+        state=AioTakeoverState.ISSUED,
+        frontend_id=None,
+        requested_at=now,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+        request_id="req_yuanbao",
+        action_type="login",
+    )
+
+    async def fake_get_browser_action_request(request_id: str):
+        assert request_id == "req_yuanbao"
+        return None
+
+    monkeypatch.setattr(
+        aio_api,
+        "get_browser_action_request",
+        fake_get_browser_action_request,
+    )
+
+    resolved = await aio_api._resolve_takeover_target_url(takeover)
+
+    assert resolved == "https://yuanbao.tencent.com/"
 
 
 @pytest.mark.asyncio
@@ -183,6 +254,158 @@ async def test_create_takeover_access_reissues_after_resume_failed(monkeypatch):
     assert session.current_takeover_id == takeover.takeover_id
     assert session.human_takeover_lock is True
     assert session.session_state == AioSessionState.TAKEOVER_FROZEN
+
+
+@pytest.mark.asyncio
+async def test_get_takeover_canvas_config_uses_target_url(monkeypatch):
+    now = datetime.now(timezone.utc)
+    takeover = SpectaAioTakeover(
+        takeover_id="takeover_canvas",
+        session_id="session_1",
+        workspace_id="workspace_1",
+        user_id="user_1",
+        platform="deepseek",
+        mode="canvas_cdp",
+        reason="manual_intervention",
+        state=AioTakeoverState.ISSUED,
+        frontend_id=None,
+        requested_at=now,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+        request_id="req_canvas",
+        action_type="login",
+    )
+    session = SpectaAioSession(
+        session_id="session_1",
+        workspace_id="workspace_1",
+        sandbox_ref="https://aio.example.com",
+        base_url="https://aio.example.com",
+        aio_version="v1",
+        home_dir="/sandbox/home",
+        data_root="/sandbox/home/data",
+        browser_info=AioBrowserInfo(
+            cdp_url="ws://aio.example.com/devtools",
+            vnc_url=None,
+            user_agent="ua",
+            viewport={"width": 1280, "height": 720},
+            detail={},
+        ),
+        session_state=AioSessionState.TAKEOVER_FROZEN,
+    )
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        def __init__(self, *, base_url: str, auth_token: str | None, timeout_seconds: float):
+            captured["base_url"] = base_url
+            captured["auth_token"] = auth_token
+            captured["timeout_seconds"] = timeout_seconds
+
+        async def stabilize_browser_surface(
+            self,
+            *,
+            preferred_url: str | None = None,
+            allow_blank_fallback: bool = False,
+        ):
+            captured["preferred_url"] = preferred_url
+            captured["allow_blank_fallback"] = allow_blank_fallback
+            return {"action": "created_page_target", "preferred_url": preferred_url}
+
+    async def fake_get_takeover(takeover_id: str):
+        assert takeover_id == "takeover_canvas"
+        return takeover
+
+    async def fake_get_session(session_id: str):
+        assert session_id == "session_1"
+        return session
+
+    async def fake_refresh_browser_info(session_id: str):
+        assert session_id == "session_1"
+        return session.browser_info
+
+    async def fake_get_browser_action_request(request_id: str):
+        assert request_id == "req_canvas"
+        return SimpleNamespace(target_url="https://chat.deepseek.com/")
+
+    monkeypatch.setattr(aio_api.aio_session_manager, "get_takeover", fake_get_takeover)
+    monkeypatch.setattr(aio_api.aio_session_manager, "get_session", fake_get_session)
+    monkeypatch.setattr(
+        aio_api.aio_session_manager,
+        "refresh_browser_info",
+        fake_refresh_browser_info,
+    )
+    monkeypatch.setattr(aio_api, "AioSandboxClient", _FakeClient)
+    monkeypatch.setattr(
+        aio_api,
+        "get_browser_action_request",
+        fake_get_browser_action_request,
+    )
+
+    response = await aio_api.get_takeover_canvas_config(
+        "takeover_canvas",
+        current_user=SimpleNamespace(id="user_1"),
+    )
+
+    assert captured["preferred_url"] == "https://chat.deepseek.com/"
+    assert captured["allow_blank_fallback"] is False
+    assert response["target_url"] == "https://chat.deepseek.com/"
+
+
+@pytest.mark.asyncio
+async def test_get_takeover_canvas_config_rejects_missing_target_url(monkeypatch):
+    now = datetime.now(timezone.utc)
+    takeover = SpectaAioTakeover(
+        takeover_id="takeover_missing_target",
+        session_id="session_1",
+        workspace_id="workspace_1",
+        user_id="user_1",
+        platform="unknown",
+        mode="canvas_cdp",
+        reason="manual_intervention",
+        state=AioTakeoverState.ISSUED,
+        frontend_id=None,
+        requested_at=now,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+        request_id=None,
+        action_type="login",
+    )
+    session = SpectaAioSession(
+        session_id="session_1",
+        workspace_id="workspace_1",
+        sandbox_ref="https://aio.example.com",
+        base_url="https://aio.example.com",
+        aio_version="v1",
+        home_dir="/sandbox/home",
+        data_root="/sandbox/home/data",
+        browser_info=AioBrowserInfo(
+            cdp_url="ws://aio.example.com/devtools",
+            vnc_url=None,
+            user_agent="ua",
+            viewport={"width": 1280, "height": 720},
+            detail={},
+        ),
+        session_state=AioSessionState.TAKEOVER_FROZEN,
+    )
+
+    async def fake_get_takeover(takeover_id: str):
+        assert takeover_id == "takeover_missing_target"
+        return takeover
+
+    async def fake_get_session(session_id: str):
+        assert session_id == "session_1"
+        return session
+
+    monkeypatch.setattr(aio_api.aio_session_manager, "get_takeover", fake_get_takeover)
+    monkeypatch.setattr(aio_api.aio_session_manager, "get_session", fake_get_session)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await aio_api.get_takeover_canvas_config(
+            "takeover_missing_target",
+            current_user=SimpleNamespace(id="user_1"),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "未找到有效目标页面" in str(exc_info.value.detail)
 
 
 def test_orchestrator_prompt_assembly_exposes_structured_sections():

@@ -868,6 +868,7 @@ export type BrowserCanvasData = CanvasPreviewData & {
   browserState: BrowserState;
   mode?: AioTakeoverMode;
   takeoverState?: AioTakeoverState;
+  targetUrl?: string;
 };
 
 export type ContentVersion = {

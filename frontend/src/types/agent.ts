@@ -71,6 +71,7 @@ export interface BrowserTakeoverAccess {
   resolvePath?: string;
   cancelPath?: string;
   expiresAt?: string;
+  targetUrl?: string;
 }
 
 export interface BrowserState {

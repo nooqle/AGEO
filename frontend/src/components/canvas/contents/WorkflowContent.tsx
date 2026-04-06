@@ -209,14 +209,11 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
               <td className="py-3 px-4">
                 {c.core_products && c.core_products.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
-                    {c.core_products.slice(0, 3).map((p, j) => (
+                    {c.core_products.map((p, j) => (
                       <span key={j} className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-xs">
                         {p}
                       </span>
                     ))}
-                    {c.core_products.length > 3 && (
-                      <span className="text-[var(--text-secondary)] text-xs self-center">+{c.core_products.length - 3}</span>
-                    )}
                   </div>
                 ) : (
                   <span className="text-[var(--text-disabled)]">-</span>
