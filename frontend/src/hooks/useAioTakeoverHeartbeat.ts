@@ -14,9 +14,11 @@ const TERMINAL_TAKEOVER_STATES = new Set([
 ]);
 
 type TimerRef = number;
+const OPERATION_WINDOW_MS = 8 * 60 * 1000;
 
 export function useAioTakeoverHeartbeat(
   takeovers: BrowserTakeoverAccess[],
+  openedAtMsByTakeoverId: Record<string, number>,
 ) {
   const timersRef = useRef<Map<string, TimerRef>>(new Map());
 
@@ -53,6 +55,11 @@ export function useAioTakeoverHeartbeat(
         stopTimer(takeoverId);
         return;
       }
+      const openedAtMs = openedAtMsByTakeoverId[takeoverId];
+      if (openedAtMs && Date.now() - openedAtMs >= OPERATION_WINDOW_MS) {
+        stopTimer(takeoverId);
+        return;
+      }
 
       try {
         const nextRecord = await api.heartbeatAioTakeover(
@@ -82,18 +89,11 @@ export function useAioTakeoverHeartbeat(
     const store = useAioTakeoverStore.getState();
     const nextIds = new Set(takeovers.map((takeover) => takeover.takeoverId));
 
-    takeovers.forEach((takeover) => {
-      store.upsertRegistration(takeover);
-    });
-
-    for (const takeoverId of Object.keys(store.registrations)) {
-      if (!nextIds.has(takeoverId)) {
-        store.removeRegistration(takeoverId);
-        stopTimer(takeoverId);
-      }
-    }
-
     for (const [takeoverId, registration] of Object.entries(store.registrations)) {
+      if (!nextIds.has(takeoverId)) {
+        stopTimer(takeoverId);
+        continue;
+      }
       if (!registration.heartbeatPath) {
         stopTimer(takeoverId);
         continue;
@@ -103,11 +103,16 @@ export function useAioTakeoverHeartbeat(
         stopTimer(takeoverId);
         continue;
       }
+      const openedAtMs = openedAtMsByTakeoverId[takeoverId];
+      if (openedAtMs && Date.now() - openedAtMs >= OPERATION_WINDOW_MS) {
+        stopTimer(takeoverId);
+        continue;
+      }
       if (!timersRef.current.has(takeoverId)) {
         scheduleHeartbeat(takeoverId, 0);
       }
     }
-  }, [takeovers]);
+  }, [openedAtMsByTakeoverId, takeovers]);
 
   useEffect(() => {
     const timers = timersRef.current;

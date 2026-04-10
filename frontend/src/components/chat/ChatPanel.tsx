@@ -4,6 +4,7 @@ import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useConversationStore } from '@/stores/conversationStore';
 import { useCanvasStore } from '@/stores/canvasStore';
+import { useAioTakeoverStore } from '@/stores/aioTakeoverStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useAioTakeoverHeartbeat } from '@/hooks/useAioTakeoverHeartbeat';
 import { MessageList } from './MessageList';
@@ -24,6 +25,8 @@ import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import type { ToolMode } from '@/types/toolMode';
 import type { BrowserState } from '@/types/agent';
+import type { Message as ChatMessage } from '@/types/message';
+import type { AioTakeoverRecord } from '@/types/aio';
 import {
   buildOutputCardsFromApiMessage,
   getSupersededHistoryMessageIds,
@@ -38,21 +41,69 @@ interface ChatPanelProps {
   exampleBrands?: ExampleBrand[];
 }
 
-const BROWSER_CANVAS_PLATFORM_LABELS: Record<BrowserState['platform'], string> = {
-  doubao: '豆包',
-  deepseek: 'DeepSeek',
-  kimi: 'Kimi',
-  hunyuan: '元宝',
+const INITIAL_HISTORY_MESSAGE_LIMIT = 30;
+const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
+
+const BROWSER_MESSAGE_KEYWORDS: Record<
+  BrowserState['platform'],
+  { labels: string[]; actionHints: string[] }
+> = {
+  doubao: {
+    labels: ['豆包'],
+    actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
+  },
+  deepseek: {
+    labels: ['DeepSeek', 'Deep Seek'],
+    actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
+  },
+  kimi: {
+    labels: ['Kimi'],
+    actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
+  },
+  hunyuan: {
+    labels: ['元宝', 'Hunyuan', 'Yuanbao'],
+    actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
+  },
 };
+
+function resolveBrowserActionMessageId(
+  state: BrowserState,
+  messages: ChatMessage[],
+  assignedMessageIds: Set<string>,
+): string | null {
+  if (state.relatedMessageId) {
+    return state.relatedMessageId;
+  }
+
+  const keywords = BROWSER_MESSAGE_KEYWORDS[state.platform];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.type !== 'agent' || assignedMessageIds.has(message.id)) {
+      continue;
+    }
+
+    const content = typeof message.content === 'string' ? message.content : '';
+    if (!content) {
+      continue;
+    }
+
+    const hasPlatformMention = keywords.labels.some((label) => content.includes(label));
+    const hasActionHint = keywords.actionHints.some((hint) => content.includes(hint));
+    if (hasPlatformMention && hasActionHint) {
+      return message.id;
+    }
+  }
+
+  return null;
+}
 
 function buildBrowserCanvasContent(state: BrowserState): CanvasContent | null {
   const takeoverId = state.takeover?.takeoverId;
   if (!takeoverId) return null;
-  const platformLabel = BROWSER_CANVAS_PLATFORM_LABELS[state.platform] || state.platform;
   return {
-    id: `browser_takeover_${takeoverId}`,
+    id: 'browser_runtime_workspace',
     type: 'browser',
-    title: `${platformLabel} 浏览器`,
+    title: '云电脑工作区',
     data: {
       takeoverId,
       platform: state.platform,
@@ -69,10 +120,27 @@ function buildBrowserCanvasContent(state: BrowserState): CanvasContent | null {
   };
 }
 
+function buildBrowserTakeoverFromRecord(record: AioTakeoverRecord): NonNullable<BrowserState['takeover']> {
+  return {
+    takeoverId: record.takeoverId,
+    mode: record.mode,
+    openPath: record.accessBundle.openPath ?? undefined,
+    canvasConfigPath: record.accessBundle.canvasConfigPath || undefined,
+    vncUrlPath: record.accessBundle.vncUrlPath || undefined,
+    heartbeatPath: record.accessBundle.heartbeatPath || undefined,
+    resolvePath: record.accessBundle.resolvePath || undefined,
+    cancelPath: record.accessBundle.cancelPath || undefined,
+    expiresAt: record.expiresAt || undefined,
+    targetUrl: record.targetUrl ?? record.accessBundle.targetUrl ?? undefined,
+  };
+}
+
 export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const recalledContentRef = useRef<string | null>(null);
   const autoScrollEnabledRef = useRef(true);
+  const artifactsHydratedRef = useRef(false);
+  const artifactsHydratingPromiseRef = useRef<Promise<void> | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [selectedToolMode, setSelectedToolMode] = useState<ToolMode | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -87,8 +155,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const [showSafeToLeave, setShowSafeToLeave] = useState(false);
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
   const replayAnimatingRef = useRef(false);
-  const browserActionToastRef = useRef<Set<string>>(new Set());
-  const autoOpenedTakeoverIdRef = useRef<string | null>(null);
 
   const {
     messages,
@@ -110,6 +176,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     clearFollowUpSuggestions,
     addStageResult,
     setExecutionProgress,
+    updateBrowserState,
+    clearBrowserStatesForPlatform,
+    wsBrowserActionResolution,
   } = useConversationStore();
 
   const setOptimisticExecutionProgress = useCallback((optionId: string) => {
@@ -231,49 +300,12 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return () => window.removeEventListener('recall-fill-input', handler);
   }, []);
 
-  // Listen for recall-reload-artifacts: reload surviving artifacts from DB after recall
-  useEffect(() => {
-    let cancelled = false;
-    const handler = async () => {
-      try {
-        const outputs = await api.getOutputs(sessionId);
-        if (cancelled || !outputs || outputs.length === 0) return;
-        const store = useCanvasStore.getState();
-        for (const output of outputs) {
-          const artifactId = output.artifact_id || output.id;
-          const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(output.type as CanvasContentType)
-            ? (output.type as CanvasContentType)
-            : 'report';
-          store.addContent({
-            id: artifactId,
-            type: outputType,
-            title: output.title || output.type || '分析结果',
-            data: (output.data || {}) as CanvasContent['data'],
-            createdAt: new Date(output.created_at),
-            relatedMessageId: '',
-            linkedMessageId: output.message_id,
-            versions: [],
-            currentVersionIndex: -1,
-          } as CanvasContent);
-        }
-        useCanvasStore.getState().setOpen(true);
-      } catch {
-        // Silently ignore — Canvas stays empty, user can refresh to recover
-      }
-    };
-    window.addEventListener('recall-reload-artifacts', handler);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('recall-reload-artifacts', handler);
-    };
-  }, [sessionId]);
-
   // Load persisted messages on mount
   useEffect(() => {
     let cancelled = false;
     const loadHistory = async () => {
       try {
-        const msgs = await api.getMessages(sessionId, { limit: 100 });
+        const msgs = await api.getMessages(sessionId, { limit: INITIAL_HISTORY_MESSAGE_LIMIT });
         if (cancelled || !msgs || msgs.length === 0) return;
         const suppressedMessageIds = getSupersededHistoryMessageIds(msgs);
         // Convert API messages to store format, reconstructing outputCards and layers from metadata
@@ -319,26 +351,49 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return () => { cancelled = true; };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load persisted artifacts on mount
-  const { addContent, upsertContent, openCanvas, removeContentsByIds } = useCanvasStore();
-  const isCanvasOpen = useCanvasStore((state) => state.isOpen);
-  const canvasContents = useCanvasStore((state) => state.contents);
-  useEffect(() => {
-    let cancelled = false;
-    const loadArtifacts = async () => {
+  const {
+    browserWorkspace,
+    clearBrowserWorkspace,
+    activeSurface,
+    isOpen: isCanvasOpen,
+    openBrowserWorkspace,
+    setActiveSurface,
+    setOpen: setCanvasOpen,
+    updateBrowserWorkspace,
+  } = useCanvasStore();
+  const upsertTakeoverRegistration = useAioTakeoverStore(
+    (state) => state.upsertRegistration,
+  );
+  const openedTakeoverIds = useAioTakeoverStore((state) => state.openedTakeoverIds);
+  const openedAtMsByTakeoverId = useAioTakeoverStore((state) => state.openedAtMsByTakeoverId);
+  const markTakeoverOpened = useAioTakeoverStore((state) => state.markTakeoverOpened);
+  const upsertTakeoverRecord = useAioTakeoverStore((state) => state.upsertRecord);
+  const clearTakeover = useAioTakeoverStore((state) => state.clearTakeover);
+  const hydrateArtifacts = useCallback(async (force = false) => {
+    if (artifactsHydratedRef.current && !force) {
+      return;
+    }
+
+    if (artifactsHydratingPromiseRef.current && !force) {
+      await artifactsHydratingPromiseRef.current;
+      return;
+    }
+
+    const promise = (async () => {
       try {
         const outputs = await api.getOutputs(sessionId);
-        if (cancelled || !outputs || outputs.length === 0) return;
-        for (const output of outputs) {
+        const store = useCanvasStore.getState();
+        for (const output of outputs || []) {
           const artifactId = output.artifact_id || output.id;
-          // Map report_baseline/report_persona to 'report' Canvas type (same as useWebSocket)
           const rawType = typeof output.type === 'string' ? output.type : 'report';
           const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
           const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(canvasTypeStr as CanvasContentType)
             ? (canvasTypeStr as CanvasContentType)
             : 'report';
-          const category = typeof output.category === 'string' ? output.category as 'baseline' | 'scenario' : undefined;
-          addContent({
+          const category = typeof output.category === 'string'
+            ? output.category as 'baseline' | 'scenario'
+            : undefined;
+          store.upsertContent({
             id: artifactId,
             type: outputType,
             title: output.title || output.type || '分析结果',
@@ -351,13 +406,49 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             category,
           } as CanvasContent);
         }
+        artifactsHydratedRef.current = true;
       } catch {
-        // Silently ignore — artifacts will be populated via WebSocket events
+        // Silently ignore — artifacts will be populated via WebSocket events or retried on demand
+      } finally {
+        artifactsHydratingPromiseRef.current = null;
+      }
+    })();
+
+    artifactsHydratingPromiseRef.current = promise;
+    await promise;
+  }, [sessionId]);
+
+  useEffect(() => {
+    artifactsHydratedRef.current = false;
+    artifactsHydratingPromiseRef.current = null;
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!isCanvasOpen || activeSurface !== 'artifact' || artifactsHydratedRef.current) {
+      return;
+    }
+    void hydrateArtifacts();
+  }, [activeSurface, hydrateArtifacts, isCanvasOpen]);
+
+  // Listen for recall-reload-artifacts: reload surviving artifacts from DB after recall
+  useEffect(() => {
+    let cancelled = false;
+    const handler = async () => {
+      try {
+        artifactsHydratedRef.current = false;
+        await hydrateArtifacts(true);
+        if (cancelled) return;
+        useCanvasStore.getState().setOpen(true);
+      } catch {
+        // Silently ignore — Canvas stays empty, user can refresh to recover
       }
     };
-    loadArtifacts();
-    return () => { cancelled = true; };
-  }, [sessionId, addContent]);
+    window.addEventListener('recall-reload-artifacts', handler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('recall-reload-artifacts', handler);
+    };
+  }, [hydrateArtifacts, sessionId]);
 
   // Cycle 3: Check for active task on mount (reconnection flow)
   useEffect(() => {
@@ -461,94 +552,286 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     () => actionableBrowserStates.filter((state) => Boolean(state.takeover?.takeoverId)),
     [actionableBrowserStates],
   );
-  const browserCanvasTakeoverAccess = useMemo(
+  const actionableTakeoverAccess = useMemo(
     () =>
-      canvasContents
-        .filter((content): content is Extract<CanvasContent, { type: 'browser' }> => content.type === 'browser')
-        .map((content) => content.data.browserState.takeover)
+      actionableTakeoverStates
+        .map((state) => state.takeover)
         .filter((takeover): takeover is NonNullable<BrowserState['takeover']> => Boolean(takeover?.takeoverId)),
-    [canvasContents],
+    [actionableTakeoverStates],
   );
 
-  useAioTakeoverHeartbeat(browserCanvasTakeoverAccess);
+  const actionableBrowserCards = useMemo(() => {
+    const assignedMessageIds = new Set<string>();
+    const byMessageId = new Map<string, BrowserState[]>();
+    const unassigned: BrowserState[] = [];
 
-  useEffect(() => {
-    const nextBrowserContents = actionableTakeoverStates
-      .map((state) => buildBrowserCanvasContent(state))
-      .filter((content): content is CanvasContent => Boolean(content));
-    const nextIds = new Set(nextBrowserContents.map((content) => content.id));
-
-    const existingBrowserIds = useCanvasStore
-      .getState()
-      .contents
-      .filter((content) => content.type === 'browser')
-      .map((content) => content.id);
-
-    const staleIds = existingBrowserIds.filter((id) => !nextIds.has(id));
-    if (staleIds.length > 0) {
-      removeContentsByIds(staleIds);
-    }
-
-    nextBrowserContents.forEach((content) => {
-      upsertContent(content);
-    });
-
-    const leadContent = nextBrowserContents[0];
-    const leadTakeoverId =
-      leadContent?.type === 'browser' ? leadContent.data.takeoverId : null;
-    const shouldAutoOpenBrowserTakeover =
-      Boolean(leadContent && leadTakeoverId) &&
-      (!isCanvasOpen || canvasContents.length === 0);
-    if (
-      leadContent &&
-      leadTakeoverId &&
-      shouldAutoOpenBrowserTakeover &&
-      autoOpenedTakeoverIdRef.current !== leadTakeoverId
-    ) {
-      openCanvas(leadContent);
-      autoOpenedTakeoverIdRef.current = leadTakeoverId;
-    }
-
-    if (!leadTakeoverId || shouldAutoOpenBrowserTakeover) {
-      autoOpenedTakeoverIdRef.current = null;
-    }
-  }, [actionableTakeoverStates, canvasContents.length, isCanvasOpen, openCanvas, removeContentsByIds, upsertContent]);
-
-  const reopenTakeover = useCallback((state: BrowserState) => {
-    const content = buildBrowserCanvasContent(state);
-    if (!content) return;
-    openCanvas(content);
-    autoOpenedTakeoverIdRef.current =
-      content.type === 'browser' ? content.data.takeoverId : null;
-  }, [openCanvas]);
-
-  useEffect(() => {
-    const nextFingerprints = new Set<string>();
-    const platformNameMap: Record<string, string> = {
-      doubao: '豆包',
-      deepseek: 'DeepSeek',
-      kimi: 'Kimi',
-      hunyuan: '元宝',
-    };
     actionableBrowserStates.forEach((state) => {
-      const fingerprint = state.requestId || `${state.platform}:${state.state}:${state.message}:${state.actionHint || ''}`;
-      nextFingerprints.add(fingerprint);
-      if (browserActionToastRef.current.has(fingerprint)) {
+      const messageId = resolveBrowserActionMessageId(state, messages, assignedMessageIds);
+      if (!messageId) {
+        unassigned.push(state);
         return;
       }
 
-      const platformName = platformNameMap[state.platform] || state.platform;
-      const actionLabel = state.actionType === 'verify'
-        ? '\u89e6\u53d1\u4e86\u5b89\u5168\u9a8c\u8bc1'
-        : state.actionType === 'login'
-        ? '\u9700\u8981\u767b\u5f55'
-        : state.actionType === 'modal'
-        ? '\u51fa\u73b0\u4e86\u9875\u9762\u5f39\u6846'
-        : '\u9700\u8981\u4f60\u5728\u6d4f\u89c8\u5668\u7a97\u53e3\u4e2d\u64cd\u4f5c';
-      toast.info(`${platformName}${actionLabel}\uff0c\u5df2\u5728\u53f3\u4fa7\u753b\u5e03\u8ffd\u52a0\u4e00\u4e2a\u53ef\u63a5\u7ba1\u9875\u7b7e\u3002`, 8000);
+      assignedMessageIds.add(messageId);
+      const existing = byMessageId.get(messageId) || [];
+      existing.push(state);
+      byMessageId.set(messageId, existing);
     });
-    browserActionToastRef.current = nextFingerprints;
-  }, [actionableBrowserStates]);
+
+    return { byMessageId, unassigned };
+  }, [actionableBrowserStates, messages]);
+  const pendingBrowserActionCount = actionableBrowserStates.length;
+
+  useEffect(() => {
+    actionableTakeoverAccess.forEach((takeover) => {
+      upsertTakeoverRegistration(takeover);
+    });
+  }, [actionableTakeoverAccess, upsertTakeoverRegistration]);
+
+  const openedTakeoverAccess = useMemo(
+    () =>
+      actionableTakeoverAccess.filter(
+        (takeover) => Boolean(openedTakeoverIds[takeover.takeoverId]),
+      ),
+    [actionableTakeoverAccess, openedTakeoverIds],
+  );
+
+  useAioTakeoverHeartbeat(openedTakeoverAccess, openedAtMsByTakeoverId);
+
+  useEffect(() => {
+    const actionableByTakeoverId = new Map<string, BrowserState>();
+    actionableTakeoverStates.forEach((state) => {
+      const takeoverId = state.takeover?.takeoverId;
+      if (takeoverId) {
+        actionableByTakeoverId.set(takeoverId, state);
+      }
+    });
+
+    const currentTakeoverId =
+      browserWorkspace?.type === 'browser' ? browserWorkspace.data.takeoverId : null;
+    if (!currentTakeoverId) {
+      return;
+    }
+
+    const nextState = actionableByTakeoverId.get(currentTakeoverId);
+    if (!nextState) {
+      return;
+    }
+
+    const nextContent = buildBrowserCanvasContent(nextState);
+    if (nextContent) {
+      updateBrowserWorkspace(nextContent as Extract<CanvasContent, { type: 'browser' }>);
+    }
+  }, [
+    actionableTakeoverStates,
+    browserWorkspace,
+    updateBrowserWorkspace,
+  ]);
+
+  const reopenTakeover = useCallback(async (state: BrowserState) => {
+    const takeover = state.takeover;
+    if (!takeover?.takeoverId) return;
+
+    upsertTakeoverRegistration(takeover);
+    const existingRegistration =
+      useAioTakeoverStore.getState().registrations[takeover.takeoverId];
+
+    try {
+      const nextRecord = await api.openAioTakeover(
+        takeover.openPath || `/api/v1/aio/takeovers/${takeover.takeoverId}/open`,
+        {
+          frontendId: existingRegistration?.frontendId ?? null,
+          mode: STABLE_AIO_TAKEOVER_MODE,
+        },
+      );
+      upsertTakeoverRecord(nextRecord);
+
+      const nextTakeover = buildBrowserTakeoverFromRecord(nextRecord);
+      const nextState: BrowserState = {
+        ...state,
+        takeover: nextTakeover,
+        message: state.message,
+      };
+
+      if (nextRecord.takeoverId !== takeover.takeoverId) {
+        clearTakeover(takeover.takeoverId);
+      }
+
+      if (state.requestId) {
+        updateBrowserState(state.requestId, {
+          takeover: nextTakeover,
+          requiresAction: true,
+        });
+      }
+
+      markTakeoverOpened(nextRecord.takeoverId);
+      const content = buildBrowserCanvasContent(nextState);
+      if (content) {
+        openBrowserWorkspace(content as Extract<CanvasContent, { type: 'browser' }>);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '打开浏览器失败，请重试。');
+    }
+  }, [
+    clearTakeover,
+    markTakeoverOpened,
+    openBrowserWorkspace,
+    updateBrowserState,
+    upsertTakeoverRecord,
+    upsertTakeoverRegistration,
+  ]);
+
+  const handleResolveBrowserAction = useCallback(async (state: BrowserState) => {
+    const requestId = state.requestId;
+    if (!requestId) {
+      return;
+    }
+
+    const takeover = state.takeover;
+    if (takeover?.takeoverId && takeover.resolvePath) {
+      const aioState = useAioTakeoverStore.getState();
+      const registration = aioState.registrations[takeover.takeoverId];
+      if (!registration?.frontendId) {
+        toast.error('请先点击“打开浏览器”，完成操作后再确认。');
+        return;
+      }
+
+      const previousMessage = state.message;
+      const previousActionHint = state.actionHint;
+      const shouldClearWorkspace =
+        browserWorkspace?.type === 'browser' &&
+        browserWorkspace.data.takeoverId === takeover.takeoverId;
+
+      try {
+        updateBrowserState(requestId, {
+          state: 'submitting',
+          requiresAction: true,
+          message: '正在确认当前平台操作，马上继续抓取...',
+          actionHint: '正在确认当前平台操作，马上继续抓取...',
+        });
+        if (shouldClearWorkspace) {
+          clearBrowserWorkspace();
+        }
+        const next = await api.resolveAioTakeover(takeover.resolvePath, {
+          frontendId: registration.frontendId,
+          mode: STABLE_AIO_TAKEOVER_MODE,
+          resumeGateResult: 'pass',
+          clientObservation: 'user_confirmed_done_from_chat',
+        });
+        upsertTakeoverRecord(next);
+        if (next.takeoverState === 'resolved') {
+          updateBrowserState(requestId, {
+            state: 'waiting_response',
+            requiresAction: false,
+            message: '已收到完成确认，系统正在继续抓取...',
+            actionHint: '已收到完成确认，系统正在继续抓取...',
+          });
+          toast.success('已收到完成确认，系统正在继续抓取。');
+          return;
+        }
+
+        const resumeFailureMessage =
+          next.resumeGateResult === 'fail_login_required'
+            ? '还没有检测到当前平台已登录完成，请完成登录后再点“我已完成”。'
+            : next.resumeGateResult === 'fail_captcha_required'
+              ? '还没有检测到当前平台的验证已完成，请先完成验证后再继续。'
+              : next.resumeGateResult === 'fail_ui_not_ready'
+                ? '当前页面还没恢复到可继续抓取的状态，请完成操作后再试。'
+                : '当前接管尚未完成，请稍后重试。';
+        updateBrowserState(requestId, {
+          state: state.state,
+          requiresAction: true,
+          message: resumeFailureMessage,
+          actionHint: resumeFailureMessage,
+        });
+        toast.error(resumeFailureMessage);
+      } catch (error) {
+        if (shouldClearWorkspace) {
+          const previousContent = buildBrowserCanvasContent(state);
+          if (previousContent?.type === 'browser') {
+            openBrowserWorkspace(previousContent);
+          }
+        }
+        updateBrowserState(requestId, {
+          state: state.state,
+          requiresAction: true,
+          message: previousMessage,
+          actionHint: previousActionHint,
+        });
+        toast.error(error instanceof Error ? error.message : '提交完成失败，请重试。');
+      }
+      return;
+    }
+
+    wsBrowserActionResolution?.(requestId, 'completed');
+    updateBrowserState(requestId, {
+      requiresAction: false,
+      message: '已收到您的完成确认，正在继续当前流程...',
+    });
+  }, [
+    browserWorkspace,
+    clearBrowserWorkspace,
+    openBrowserWorkspace,
+    updateBrowserState,
+    upsertTakeoverRecord,
+    wsBrowserActionResolution,
+  ]);
+
+  const handleSkipBrowserAction = useCallback(async (state: BrowserState) => {
+    const requestId = state.requestId;
+    if (!requestId) {
+      return;
+    }
+
+    wsBrowserActionResolution?.(requestId, 'skip');
+
+    const takeover = state.takeover;
+    if (takeover?.takeoverId && takeover.cancelPath) {
+      const aioState = useAioTakeoverStore.getState();
+      const registration = aioState.registrations[takeover.takeoverId];
+
+      try {
+        const next = await api.cancelAioTakeover(takeover.cancelPath, {
+          frontendId: registration?.frontendId ?? null,
+          reason: 'user_skipped_from_chat',
+        });
+        upsertTakeoverRecord(next);
+        clearBrowserStatesForPlatform(state.platform);
+        clearTakeover(takeover.takeoverId);
+        if (
+          browserWorkspace?.type === 'browser' &&
+          browserWorkspace.data.takeoverId === takeover.takeoverId
+        ) {
+          clearBrowserWorkspace();
+        }
+        toast.info('已跳过该平台，本轮将继续其他平台采集。');
+      } catch (error) {
+        clearBrowserStatesForPlatform(state.platform);
+        clearTakeover(takeover.takeoverId);
+        if (
+          browserWorkspace?.type === 'browser' &&
+          browserWorkspace.data.takeoverId === takeover.takeoverId
+        ) {
+          clearBrowserWorkspace();
+        }
+        toast.error(
+          error instanceof Error
+            ? `平台已跳过，但清理浏览器会话失败：${error.message}`
+            : '平台已跳过，但清理浏览器会话失败。',
+        );
+      }
+      return;
+    }
+
+    clearBrowserStatesForPlatform(state.platform);
+  }, [
+    browserWorkspace,
+    clearBrowserStatesForPlatform,
+    clearBrowserWorkspace,
+    clearTakeover,
+    upsertTakeoverRecord,
+    wsBrowserActionResolution,
+  ]);
   // Handle sending message
   const handleSendMessage = useCallback((
     content: string,
@@ -771,11 +1054,12 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   }, [clearFollowUpSuggestions, handleSendMessage]);
 
   // Cycle 3: Handle reconnection banner actions
-  const handleViewReport = useCallback(() => {
+  const handleViewReport = useCallback(async () => {
+    await hydrateArtifacts();
     const { setOpen } = useCanvasStore.getState();
     setOpen(true);
     setReconnectionTask(null);
-  }, []);
+  }, [hydrateArtifacts]);
 
   const handleReconnectionRetry = useCallback(() => {
     if (reconnectionTask) {
@@ -815,17 +1099,60 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const liveProgressMessage = isAgentExecuting
     ? executionProgress?.details
     : activeTask?.progress_message ?? executionProgress?.details;
+  const hasBrowserWorkspace = Boolean(browserWorkspace);
+  const handleFocusBrowserWorkspace = useCallback(() => {
+    if (!browserWorkspace) {
+      return;
+    }
+    setCanvasOpen(true);
+    setActiveSurface('browser');
+  }, [browserWorkspace, setActiveSurface, setCanvasOpen]);
 
   return (
     <div className={cn('relative flex flex-col h-full bg-[var(--bg-primary)]', className)}>
       {/* Cycle 3: Task status badge in header area */}
-      {(activeTask || (isAgentExecuting && executionProgress)) && (
+      {(activeTask || (isAgentExecuting && executionProgress) || pendingBrowserActionCount > 0) && (
         <div
           className="flex items-center justify-between px-4 py-1.5 flex-shrink-0"
           style={{ borderBottom: '1px solid var(--border-subtle)' }}
         >
           <div className="flex-1" />
           <div className="flex items-center gap-2">
+            {pendingBrowserActionCount > 0 && (
+              hasBrowserWorkspace ? (
+                <button
+                  type="button"
+                  onClick={handleFocusBrowserWorkspace}
+                  className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors"
+                  style={{
+                    background: 'rgba(245,158,11,0.12)',
+                    color: 'var(--warning)',
+                    border: '1px solid rgba(245,158,11,0.2)',
+                  }}
+                >
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ background: 'var(--warning)' }}
+                  />
+                  云电脑已打开 · 待接管 {pendingBrowserActionCount}
+                </button>
+              ) : (
+                <div
+                  className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium"
+                  style={{
+                    background: 'rgba(245,158,11,0.12)',
+                    color: 'var(--warning)',
+                    border: '1px solid rgba(245,158,11,0.2)',
+                  }}
+                >
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ background: 'var(--warning)' }}
+                  />
+                  待接管 {pendingBrowserActionCount}
+                </div>
+              )
+            )}
             <TaskStatusBadge
               status={isAgentExecuting ? 'running' : (activeTask?.status ?? 'running')}
               waitingForInput={isWaitingForInput}
@@ -854,18 +1181,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           </span>
         </div>
       )}
-      {actionableBrowserStates.length > 0 && (
-        <div className="flex flex-col">
-          {actionableBrowserStates.map((state) => (
-            <BrowserActionBanner
-              key={state.requestId || `${state.platform}:${state.state}:${state.message}`}
-              browserState={state}
-              onOpenTakeover={state.takeover?.takeoverId ? () => reopenTakeover(state) : null}
-            />
-          ))}
-        </div>
-      )}
-
       {/* Message list */}
       <div
         ref={scrollRef}
@@ -908,7 +1223,75 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             isAgentExecuting={isAgentExecuting}
             exampleBrands={showExampleBrands ? (exampleBrands || DEFAULT_EXAMPLE_BRANDS) : undefined}
             onBrandClick={handleBrandClick}
+            renderAfterMessage={(message) => {
+              const states = actionableBrowserCards.byMessageId.get(message.id);
+              if (!states || states.length === 0) {
+                return null;
+              }
+
+              return (
+                <div className="flex flex-col gap-3">
+                  {states.map((state) => {
+                    const takeoverId = state.takeover?.takeoverId;
+                    const isOpened = Boolean(
+                      takeoverId && openedTakeoverIds[takeoverId],
+                    );
+                    const openedAtMs =
+                      takeoverId ? openedAtMsByTakeoverId[takeoverId] : undefined;
+                    return (
+                      <BrowserActionBanner
+                        key={
+                          state.requestId ||
+                          `${state.platform}:${state.state}:${state.message}`
+                        }
+                        browserState={state}
+                        isOpened={isOpened}
+                        openedAtMs={openedAtMs}
+                        onOpenTakeover={
+                          state.takeover?.takeoverId
+                            ? () => reopenTakeover(state)
+                            : null
+                        }
+                        onResolve={() => handleResolveBrowserAction(state)}
+                        onSkip={() => handleSkipBrowserAction(state)}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            }}
           />
+
+          {actionableBrowserCards.unassigned.length > 0 && (
+            <div className="mt-4 flex flex-col gap-3">
+              {actionableBrowserCards.unassigned.map((state) => {
+                const takeoverId = state.takeover?.takeoverId;
+                const isOpened = Boolean(
+                  takeoverId && openedTakeoverIds[takeoverId],
+                );
+                const openedAtMs =
+                  takeoverId ? openedAtMsByTakeoverId[takeoverId] : undefined;
+                return (
+                  <BrowserActionBanner
+                    key={
+                      state.requestId ||
+                      `${state.platform}:${state.state}:${state.message}`
+                    }
+                    browserState={state}
+                    isOpened={isOpened}
+                    openedAtMs={openedAtMs}
+                    onOpenTakeover={
+                      state.takeover?.takeoverId
+                        ? () => reopenTakeover(state)
+                        : null
+                    }
+                    onResolve={() => handleResolveBrowserAction(state)}
+                    onSkip={() => handleSkipBrowserAction(state)}
+                  />
+                );
+              })}
+            </div>
+          )}
 
           {/* Cycle 3: Safe-to-leave signal */}
           {showSafeToLeave && isAgentExecuting && (

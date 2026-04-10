@@ -25,13 +25,28 @@ from app.models.task_run import (
     TaskRunStatus,
     TaskTriggerSource,
 )
-from app.models.task_run_child_attempt import TaskRunChildAttempt
+from app.models.task_run_child_attempt import (
+    TaskRunChildAttempt,
+    TaskRunChildAttemptStatus,
+)
 from app.models.user import User
 from app.services.access_scope_service import AccessScopeService
 from app.services.runtime_coordinator import runtime_coordinator
 from app.services.task_event_bus import TaskStatusChangedEvent
 
 logger = logging.getLogger(__name__)
+
+
+_TERMINAL_TASK_STATUSES = {
+    TaskStatus.COMPLETED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+}
+_TERMINAL_TASK_RUN_STATUSES = {
+    TaskRunStatus.COMPLETED,
+    TaskRunStatus.FAILED,
+    TaskRunStatus.CANCELLED,
+}
 
 
 def _is_stale_waiting_message(message: str | None) -> bool:
@@ -585,18 +600,29 @@ class TaskService:
                 AnalysisTask.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
             )
             .order_by(AnalysisTask.created_at.desc())
-            .limit(1)
         )
         result = await self.db.execute(stmt)
-        return result.scalar_one_or_none()
+        tasks = list(result.scalars().all())
+        for task in tasks:
+            loaded_runs = list(task.__dict__.get("task_runs") or [])
+            has_live_run = any(
+                getattr(run, "status", None) in LIVE_TASK_RUN_STATUSES
+                for run in loaded_runs
+            )
+            if task.status == TaskStatus.PENDING and not loaded_runs:
+                return task
+            if has_live_run:
+                return task
+        return None
 
     async def reconcile_terminal_task_live_runs(self, session_id: UUID) -> int:
-        """Align stale session tasks when their latest run is already terminal.
+        """Align stale session tasks and waiting_input drift for one session.
 
-        WebSocket and manual resume/submit flows rely on this to avoid treating
-        a session as "still active" after the durable TaskRun has already moved
-        to a terminal state. This is a narrow reconciliation pass for obvious
-        drift only; it does not attempt to repair broader workflow corruption.
+        This pass handles two classes of stale runtime state:
+        1. A task/run is already terminal but still has unresolved
+           ``WAITING_INPUT`` child attempts.
+        2. The latest live run is stuck in ``WAITING_INPUT`` even though it no
+           longer has any unresolved waiting_input child attempts.
         """
 
         stmt = (
@@ -606,10 +632,7 @@ class TaskService:
                     TaskRun.child_attempts
                 )
             )
-            .where(
-                AnalysisTask.session_id == session_id,
-                AnalysisTask.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
-            )
+            .where(AnalysisTask.session_id == session_id)
             .order_by(AnalysisTask.created_at.desc())
         )
         result = await self.db.execute(stmt)
@@ -619,9 +642,52 @@ class TaskService:
 
         now = datetime.now(timezone.utc)
         updated = 0
+        changed_task_ids: set[UUID | str] = set()
 
         for task in tasks:
             loaded_runs = list(task.__dict__.get("task_runs") or [])
+            task_terminal = task.status in _TERMINAL_TASK_STATUSES
+
+            for run in loaded_runs:
+                unresolved_waiting_attempts = [
+                    attempt
+                    for attempt in list(run.__dict__.get("child_attempts") or [])
+                    if getattr(attempt, "status", None)
+                    == TaskRunChildAttemptStatus.WAITING_INPUT
+                    and getattr(attempt, "resolved_at", None) is None
+                ]
+                if not unresolved_waiting_attempts:
+                    continue
+
+                run_terminal = getattr(run, "status", None) in _TERMINAL_TASK_RUN_STATUSES
+                if not task_terminal and not run_terminal:
+                    continue
+
+                if (
+                    task.status == TaskStatus.CANCELLED
+                    or getattr(run, "status", None) == TaskRunStatus.CANCELLED
+                ):
+                    final_status = TaskRunChildAttemptStatus.CANCELLED
+                    error_message = "任务已取消"
+                elif (
+                    task.status == TaskStatus.FAILED
+                    or getattr(run, "status", None) == TaskRunStatus.FAILED
+                ):
+                    final_status = TaskRunChildAttemptStatus.FAILED
+                    error_message = "任务执行失败"
+                else:
+                    final_status = TaskRunChildAttemptStatus.SKIPPED
+                    error_message = "浏览器接管请求已失效"
+
+                for attempt in unresolved_waiting_attempts:
+                    attempt.status = final_status
+                    attempt.resolution = "stale_cleanup"
+                    attempt.error_message = error_message
+                    attempt.resolved_at = now
+                    attempt.updated_at = now
+                    updated += 1
+                    changed_task_ids.add(task.id)
+
             live_run = next(
                 (
                     run
@@ -630,7 +696,36 @@ class TaskService:
                 ),
                 None,
             )
+            if live_run is not None and live_run.status == TaskRunStatus.WAITING_INPUT:
+                unresolved_waiting_attempts = [
+                    attempt
+                    for attempt in list(live_run.__dict__.get("child_attempts") or [])
+                    if getattr(attempt, "status", None)
+                    == TaskRunChildAttemptStatus.WAITING_INPUT
+                    and getattr(attempt, "resolved_at", None) is None
+                ]
+                if not unresolved_waiting_attempts:
+                    live_run.status = TaskRunStatus.FAILED
+                    live_run.error_kind = live_run.error_kind or "waiting_input_stale"
+                    live_run.error_message = (
+                        live_run.error_message
+                        or "等待用户确认状态已失效，请重新发起浏览器接管。"
+                    )
+                    live_run.finished_at = live_run.finished_at or now
+                    updated += 1
+                    changed_task_ids.add(task.id)
+                    live_run = None
+
             if live_run is not None:
+                if (
+                    task.status == TaskStatus.RUNNING
+                    and _is_stale_waiting_message(task.progress_message)
+                    and live_run.status != TaskRunStatus.WAITING_INPUT
+                ):
+                    task.progress_message = "正在继续分析..."
+                    task.updated_at = now
+                    updated += 1
+                    changed_task_ids.add(task.id)
                 continue
 
             latest_run = loaded_runs[0] if loaded_runs else None
@@ -639,44 +734,60 @@ class TaskService:
 
             latest_status = getattr(latest_run, "status", None)
             if latest_status == TaskRunStatus.COMPLETED:
-                task.status = TaskStatus.COMPLETED
-                task.progress = 1.0
-                task.progress_message = "分析完成"
-                task.completed_at = task.completed_at or getattr(
-                    latest_run, "finished_at", None
-                ) or now
+                if task.status != TaskStatus.COMPLETED or task.progress_message != "分析完成":
+                    task.status = TaskStatus.COMPLETED
+                    task.progress = 1.0
+                    task.progress_message = "分析完成"
+                    task.completed_at = task.completed_at or getattr(
+                        latest_run, "finished_at", None
+                    ) or now
+                    task.updated_at = now
+                    updated += 1
+                    changed_task_ids.add(task.id)
             elif latest_status == TaskRunStatus.FAILED:
-                task.status = TaskStatus.FAILED
-                task.error_stage = task.error_stage or getattr(
-                    latest_run, "error_kind", None
+                should_update_task = task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}
+                should_fix_message = (
+                    not task.progress_message
+                    or _is_stale_waiting_message(task.progress_message)
                 )
-                task.error_message = task.error_message or getattr(
-                    latest_run, "error_message", None
-                )
-                if not task.progress_message or _is_stale_waiting_message(
-                    task.progress_message
-                ):
-                    task.progress_message = "任务执行失败"
-                task.completed_at = task.completed_at or getattr(
-                    latest_run, "finished_at", None
-                ) or now
+                if should_update_task or should_fix_message:
+                    task.status = TaskStatus.FAILED
+                    task.error_stage = (
+                        task.error_stage
+                        or task.current_stage
+                        or getattr(latest_run, "checkpoint_stage", None)
+                        or "A4"
+                    )
+                    task.error_message = task.error_message or getattr(
+                        latest_run, "error_message", None
+                    )
+                    if should_fix_message:
+                        task.progress_message = "任务执行失败"
+                    task.completed_at = task.completed_at or getattr(
+                        latest_run, "finished_at", None
+                    ) or now
+                    task.updated_at = now
+                    updated += 1
+                    changed_task_ids.add(task.id)
             elif latest_status == TaskRunStatus.CANCELLED:
-                task.status = TaskStatus.CANCELLED
-                task.progress_message = "任务已取消"
-                task.completed_at = task.completed_at or getattr(
-                    latest_run, "finished_at", None
-                ) or now
+                should_update_task = task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}
+                should_fix_message = task.progress_message != "任务已取消"
+                if should_update_task or should_fix_message:
+                    task.status = TaskStatus.CANCELLED
+                    task.progress_message = "任务已取消"
+                    task.completed_at = task.completed_at or getattr(
+                        latest_run, "finished_at", None
+                    ) or now
+                    task.updated_at = now
+                    updated += 1
+                    changed_task_ids.add(task.id)
             else:
                 continue
 
-            task.updated_at = now
-            updated += 1
-
         if updated:
             await self.db.commit()
-            for task in tasks:
-                if task.status not in {TaskStatus.PENDING, TaskStatus.RUNNING}:
-                    await self._publish_task_status_change(task.id)
+            for task_id in changed_task_ids:
+                await self._publish_task_status_change(task_id)
 
         return updated
 

@@ -88,8 +88,8 @@ from app.schemas.fetch import (
 )
 from app.workflow.browser_action_runtime import (
     clear_browser_action_request,
+    get_or_register_browser_action_request,
     infer_browser_action_state,
-    register_browser_action_request,
     wait_for_browser_action_resolution,
 )
 
@@ -513,7 +513,7 @@ class BaseBrowserHandler(ABC):
     async def _wait_for_login(
         self,
         check_selector: str,
-        timeout: int = 300,
+        timeout: int = 480,
         poll_interval: float = 2.0,
     ) -> bool:
         """Wait for user to complete login."""
@@ -622,7 +622,7 @@ class BaseBrowserHandler(ABC):
             logger.debug("[%s] Modal detection failed: %s", self.PLATFORM_KEY, e)
             return ""
 
-    async def _wait_for_modal_clear(self, timeout: int = 300) -> bool:
+    async def _wait_for_modal_clear(self, timeout: int = 480) -> bool:
         """Wait until blocking modals are gone (user dismissed them)."""
         elapsed = 0.0
         while elapsed < timeout:
@@ -635,8 +635,11 @@ class BaseBrowserHandler(ABC):
 
     async def _open_headed_for_user_action(self, url: str | None = None) -> bool:
         """Reopen the page in headed mode and try to present it to the user."""
-        await self.client.close()
-        open_result = await self.client.open(url or self.URL, headed=True)
+        if getattr(self.client, "aio_session_id", None):
+            open_result = await self.client.open(url or self.URL, headed=False)
+        else:
+            await self.client.close()
+            open_result = await self.client.open(url or self.URL, headed=True)
         if not open_result.get("success"):
             return False
 
@@ -695,6 +698,39 @@ class BaseBrowserHandler(ABC):
 
         return await self._open_headed_for_user_action(url)
 
+    async def _reuse_existing_aio_surface(self, url: str | None = None) -> bool:
+        """Reuse the current AIO page when it already matches the target host.
+
+        After a human takeover completes, the user has already interacted with
+        the live remote browser surface. Reopening the platform URL at this
+        point can discard or bypass the just-completed login/verification page
+        and make the handler look as if the session was not preserved.
+        """
+
+        if not getattr(self.client, "aio_session_id", None):
+            return False
+
+        page = getattr(self.client, "page", None)
+        if page is None or page.is_closed():
+            return False
+
+        current_url = page.url or ""
+        target_url = url or self.URL
+        current_host = (urlparse(current_url).netloc or "").lower()
+        target_host = (urlparse(target_url).netloc or "").lower()
+        if not current_host or not target_host or current_host != target_host:
+            return False
+        if current_url == "about:blank":
+            return False
+
+        logger.info(
+            "[%s] Reusing existing AIO surface without reopening (current_url=%s target_host=%s)",
+            self.PLATFORM_KEY,
+            current_url,
+            target_host,
+        )
+        return True
+
     async def _prepare_user_action_request(
         self,
         action_type: str,
@@ -704,12 +740,15 @@ class BaseBrowserHandler(ABC):
         url: str | None = None,
     ) -> str | None:
         """Open a stable headed browser window, then register a user-action request."""
-        opened = await self._prepare_takeover_surface(url)
-        if not opened:
-            return None
+        ensure_remote_runtime = getattr(self.client, "_ensure_remote_runtime", None)
+        is_aio_client = callable(ensure_remote_runtime)
+        if not is_aio_client:
+            opened = await self._prepare_takeover_surface(url)
+            if not opened:
+                return None
         if not self.session_id:
             return None
-        request = await register_browser_action_request(
+        request, _ = await get_or_register_browser_action_request(
             session_id=self.session_id,
             platform=self.PLATFORM.value,
             action_type=action_type,
@@ -726,20 +765,21 @@ class BaseBrowserHandler(ABC):
         self,
         request_id: str | None,
         ready_check: ReadyCheck,
-        timeout: int = 300,
+        timeout: int = 480,
         ready_timeout: int = 45,
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         """Wait until the user explicitly confirms completion, then validate readiness."""
         if not request_id:
-            return False
+            return False, None
 
+        resolution: str | None = None
         try:
             resolution = await wait_for_browser_action_resolution(
                 request_id, timeout=timeout
             )
             if resolution != "completed":
-                return False
-            return await ready_check(ready_timeout)
+                return False, resolution
+            return await ready_check(ready_timeout), resolution
         finally:
             await clear_browser_action_request(request_id)
 
@@ -753,7 +793,7 @@ class BaseBrowserHandler(ABC):
         progress: float,
         url: str | None,
         ready_check: ReadyCheck,
-        timeout: int = 300,
+        timeout: int = 480,
         ready_timeout: int = 120,
         open_error_message: str,
         timeout_error_message: str,
@@ -826,13 +866,13 @@ class BaseBrowserHandler(ABC):
         *,
         request_id: str,
         ready_check: ReadyCheck,
-        timeout: int = 300,
+        timeout: int = 480,
         ready_timeout: int = 120,
         timeout_error_message: str,
     ) -> tuple[list[BrowserEvent], bool]:
         """Wait for user completion after the waiting event has already streamed."""
 
-        succeeded = await self._wait_for_user_action_completion(
+        succeeded, resolution = await self._wait_for_user_action_completion(
             request_id=request_id,
             ready_check=ready_check,
             timeout=timeout,
@@ -841,11 +881,24 @@ class BaseBrowserHandler(ABC):
         if succeeded:
             return [], True
 
+        if resolution == "skip":
+            return [
+                self._create_event(
+                    BrowserState.ERROR,
+                    "已按你的选择跳过当前平台，本轮会继续其他平台。",
+                    progress=0,
+                    error_type="user_skipped",
+                ),
+            ], False
+
         return [
             self._create_event(
                 BrowserState.ERROR,
                 timeout_error_message,
                 progress=0,
+                error_type=(
+                    "resume_gate_failed" if resolution == "completed" else "user_action_timeout"
+                ),
             ),
         ], False
 
@@ -875,7 +928,7 @@ class BaseBrowserHandler(ABC):
         *,
         request_id: str,
         ready_check: ReadyCheck,
-        timeout: int = 300,
+        timeout: int = 480,
         ready_timeout: int = 120,
         timeout_error_message: str,
     ) -> tuple[list[BrowserEvent], bool]:
@@ -915,7 +968,7 @@ class BaseBrowserHandler(ABC):
         *,
         request_id: str,
         ready_check: ReadyCheck,
-        timeout: int = 300,
+        timeout: int = 480,
         ready_timeout: int = 120,
         timeout_error_message: str,
     ) -> tuple[list[BrowserEvent], bool]:
@@ -937,7 +990,7 @@ class BaseBrowserHandler(ABC):
         progress: float,
         ready_check: ReadyCheck,
         url: str | None = None,
-        timeout: int = 300,
+        timeout: int = 480,
         ready_timeout: int = 120,
         open_error_message: str,
         timeout_error_message: str,
@@ -966,7 +1019,7 @@ class BaseBrowserHandler(ABC):
         progress: float,
         ready_check: ReadyCheck,
         url: str | None = None,
-        timeout: int = 300,
+        timeout: int = 480,
         ready_timeout: int = 120,
         open_error_message: str,
         timeout_error_message: str,
@@ -1096,7 +1149,7 @@ class BaseBrowserHandler(ABC):
             )
 
         # Wait for user to dismiss the modal
-        modal_cleared = await self._wait_for_modal_clear(timeout=300)
+        modal_cleared = await self._wait_for_modal_clear(timeout=480)
         if not modal_cleared:
             return self._create_event(
                 BrowserState.ERROR, "弹窗处理超时，请重试", progress=0

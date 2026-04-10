@@ -85,6 +85,9 @@ class DoubaoHandler(BaseBrowserHandler):
                 except Exception as e:
                     logger.debug("[Doubao] Fast path click failed: %s", e)
 
+            if not fast_path_ok and await self._reuse_existing_aio_surface(self.URL):
+                fast_path_ok = True
+
             if not fast_path_ok:
                 open_result = await self.client.open(self.URL, headed=self.headed)
                 if not open_result.get("success"):
@@ -119,16 +122,7 @@ class DoubaoHandler(BaseBrowserHandler):
                         yield event
                     if not request_id:
                         return
-                    completion_events, modal_cleared = await self._finish_modal_takeover_gate(
-                        request_id=request_id,
-                        ready_check=self._wait_for_modal_clear,
-                        timeout_error_message="弹窗处理超时，请重试",
-                    )
-                    for event in completion_events:
-                        yield event
-                    if not modal_cleared:
-                        return
-                    logger.info("[Doubao] Modal cleared before login check, continuing")
+                    return
 
             # Step 3: Check login status
             yield self._create_event(BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3)
@@ -167,16 +161,7 @@ class DoubaoHandler(BaseBrowserHandler):
                     yield event
                 if not request_id:
                     return
-                completion_events, login_success = await self._finish_login_takeover_gate(
-                    request_id=request_id,
-                    ready_check=self._wait_for_doubao_login,
-                    timeout_error_message="登录超时，请重试",
-                )
-                for event in completion_events:
-                    yield event
-                if not login_success:
-                    return
-                logger.info("[Doubao] Login completed, continuing on current chat page")
+                return
 
                 detected_modal = ""
                 if not await self._wait_for_doubao_chat_ready(timeout=6):
@@ -196,16 +181,7 @@ class DoubaoHandler(BaseBrowserHandler):
                         yield event
                     if not request_id:
                         return
-                    completion_events, modal_cleared = await self._finish_modal_takeover_gate(
-                        request_id=request_id,
-                        ready_check=self._wait_for_modal_clear,
-                        timeout_error_message="弹窗处理超时，请重试",
-                    )
-                    for event in completion_events:
-                        yield event
-                    if not modal_cleared:
-                        return
-                    logger.info("[Doubao] Modal cleared after login, continuing")
+                    return
 
             # Step 4: Enable web search
             yield self._create_event(BrowserState.ENABLING_SEARCH, "确认联网搜索...", progress=0.5)
@@ -310,8 +286,11 @@ class DoubaoHandler(BaseBrowserHandler):
         """Cooldown and reopen chat page after Doubao rate limiting."""
         logger.info("[Doubao] Cooling down for %ss before retry", cooldown_seconds)
         await asyncio.sleep(cooldown_seconds)
-        await self.client.close()
-        open_result = await self.client.open(self.URL, headed=self.headed)
+        if getattr(self.client, "aio_session_id", None):
+            open_result = await self.client.open(self.URL, headed=False)
+        else:
+            await self.client.close()
+            open_result = await self.client.open(self.URL, headed=self.headed)
         if not open_result.get("success"):
             logger.warning("[Doubao] Failed to reopen after rate limit: %s", open_result.get("error"))
             return False
@@ -365,6 +344,6 @@ class DoubaoHandler(BaseBrowserHandler):
 
     async def probe_resume_gate_ready(self, action_type: str) -> bool:
         if action_type == "login":
-            return await self._wait_for_doubao_login(timeout=2)
+            return await self._wait_for_doubao_login(timeout=30)
         return await super().probe_resume_gate_ready(action_type)
 

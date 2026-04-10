@@ -88,6 +88,9 @@ class DeepSeekHandler(BaseBrowserHandler):
                     logger.debug("[DeepSeek] %s click failed (%s), falling back to navigate",
                                  self._sel("new_chat_text"), e)
 
+            if not fast_path_ok and await self._reuse_existing_aio_surface(self.URL):
+                fast_path_ok = True
+
             if not fast_path_ok:
                 open_result = await self.client.open(self.URL, headed=False)
                 if not open_result.get("success"):
@@ -121,18 +124,7 @@ class DeepSeekHandler(BaseBrowserHandler):
                     yield event
                 if not request_id:
                     return
-                completion_events, login_success = await self._finish_login_takeover_gate(
-                    request_id=request_id,
-                    ready_check=lambda ready_timeout: self._wait_for_login(
-                        INPUT_READY_SELECTOR,
-                        timeout=ready_timeout,
-                    ),
-                    timeout_error_message="登录超时，请重试",
-                )
-                for event in completion_events:
-                    yield event
-                if not login_success:
-                    return
+                return
 
             # Step 4: Ensure web search is ON
             yield self._create_event(BrowserState.ENABLING_SEARCH, "确认联网搜索已开启...", progress=0.5)
@@ -312,7 +304,7 @@ class DeepSeekHandler(BaseBrowserHandler):
         if action_type == "login":
             return await self._wait_for_login(
                 self._sel("input_ready"),
-                timeout=2,
+                timeout=30,
             )
         return await super().probe_resume_gate_ready(action_type)
 

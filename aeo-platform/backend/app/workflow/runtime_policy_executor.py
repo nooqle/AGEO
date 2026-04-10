@@ -6,6 +6,25 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 
+_USER_VISIBLE_RUNTIME_LABELS: dict[str, str] = {
+    "A1": "品牌分析",
+    "A2": "用户画像生成",
+    "A3": "问题模拟",
+    "A4": "答案抓取",
+    "A5": "分析报告",
+    "A7": "引用置信度评估",
+    "brand_analysis": "品牌分析",
+    "persona_generation": "用户画像生成",
+    "question_simulation": "问题模拟",
+    "answer_fetch": "答案抓取",
+    "analysis_report_skill": "分析报告",
+    "data_analytics": "分析报告",
+    "confidence_analysis_skill": "引用置信度评估",
+    "confidence_signal_skill": "引用置信度评估",
+    "post_analysis_skill": "后续分析",
+}
+
+
 @dataclass(frozen=True)
 class RuntimePolicyAction:
     """Structured runtime action consumed before the orchestrator asks the model."""
@@ -77,6 +96,13 @@ def clear_runtime_policy_fields() -> dict[str, Any]:
         "last_validation_result": None,
         "last_harness_decision": None,
     }
+
+
+def get_user_visible_runtime_label(step_or_tool: str | None) -> str:
+    key = str(step_or_tool or "").strip()
+    if not key:
+        return "当前操作"
+    return _USER_VISIBLE_RUNTIME_LABELS.get(key, key)
 
 
 def _extract_latest_user_text(state: Mapping[str, Any]) -> str:
@@ -211,7 +237,7 @@ def build_alternative_action_catalog(
         {
             "id": "retry",
             "label": "重新尝试",
-            "description": f"再次执行 {step or '当前步骤'}",
+            "description": f"再次执行{get_user_visible_runtime_label(step)}",
         }
     )
     _append(

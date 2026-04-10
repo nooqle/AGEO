@@ -475,7 +475,12 @@ export function useWebSocket(sessionId: string | null) {
 
       case 'browser_state':
       case 'browser_user_action':
-        setBrowserState(buildBrowserState(data));
+        setBrowserState(
+          buildBrowserState(
+            data,
+            useConversationStore.getState().currentAgentMessageId || undefined,
+          ),
+        );
         break;
 
       case 'browser_user_action_ack': {

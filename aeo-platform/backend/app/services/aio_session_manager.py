@@ -461,11 +461,31 @@ class AioSandboxSessionManager:
             if record is not None:
                 existing = self._cache_session(self._hydrate_session(record))
 
+        if existing is not None:
+            existing = await self._reconcile_session_takeover_lock_locked(existing)
+
         if existing and existing.session_state not in {
             AioSessionState.DRAINING,
             AioSessionState.FAILED,
             AioSessionState.DESTROYED,
         }:
+            if (
+                holder
+                and existing.human_takeover_lock
+                and existing.current_takeover_id
+                and holder not in existing.holders
+            ):
+                raise AioBackendError(
+                    error_code="takeover_locked",
+                    recover_hint="wait_for_takeover_release",
+                    transport_used="rest",
+                    retryable=True,
+                    detail=(
+                        "AIO workspace is currently frozen for human takeover; "
+                        "wait until the active takeover is resolved before driving "
+                        "another platform."
+                    ),
+                )
             if holder:
                 existing.holders.add(holder)
                 existing.ref_count = len(existing.holders)
@@ -493,6 +513,54 @@ class AioSandboxSessionManager:
             automation_lock=holder,
         )
         return await self._save_session_record(session)
+
+    async def _reconcile_session_takeover_lock_locked(
+        self, session: SpectaAioSession
+    ) -> SpectaAioSession:
+        """Release stale human-takeover locks before leasing the workspace again."""
+
+        if not session.human_takeover_lock and not session.current_takeover_id:
+            return session
+
+        takeover: SpectaAioTakeover | None = None
+        if session.current_takeover_id:
+            takeover = self._takeovers_by_id.get(session.current_takeover_id)
+            if takeover is None:
+                record = await self._load_takeover_record(session.current_takeover_id)
+                if record is not None:
+                    takeover = self._cache_takeover(self._hydrate_takeover(record))
+
+        if takeover is None:
+            session.current_takeover_id = None
+            session.human_takeover_lock = False
+            if session.ref_count > 0:
+                session.session_state = AioSessionState.LEASED
+            elif session.session_state == AioSessionState.IDLE:
+                session.session_state = AioSessionState.IDLE
+            else:
+                session.session_state = AioSessionState.READY
+            return await self._save_session_record(session)
+
+        takeover = await self._expire_takeover_if_needed(takeover)
+        refreshed_session = self._sessions_by_id.get(session.session_id, session)
+        if takeover.state in ACTIVE_TAKEOVER_STATES:
+            return refreshed_session
+
+        if (
+            refreshed_session.current_takeover_id == takeover.takeover_id
+            or refreshed_session.human_takeover_lock
+        ):
+            refreshed_session.current_takeover_id = None
+            refreshed_session.human_takeover_lock = False
+            if refreshed_session.ref_count > 0:
+                refreshed_session.session_state = AioSessionState.LEASED
+            elif refreshed_session.session_state == AioSessionState.IDLE:
+                refreshed_session.session_state = AioSessionState.IDLE
+            else:
+                refreshed_session.session_state = AioSessionState.READY
+            refreshed_session = await self._save_session_record(refreshed_session)
+
+        return refreshed_session
 
     async def inspect_runtime(self) -> dict[str, Any]:
         client = self._ensure_client()
@@ -833,6 +901,52 @@ class AioSandboxSessionManager:
             await self._save_session_record(session)
             return await self._save_takeover_record(takeover)
 
+    async def open_takeover(
+        self,
+        *,
+        takeover_id: str,
+        user_id: str,
+        frontend_id: str | None,
+        mode: str,
+    ) -> SpectaAioTakeover:
+        takeover = await self.get_takeover(takeover_id)
+        if takeover.user_id != user_id:
+            raise PermissionError("当前用户无权操作该 takeover")
+
+        normalized_mode = normalize_takeover_mode(mode)
+        if takeover.state in ACTIVE_TAKEOVER_STATES:
+            async with self._lock:
+                takeover = await self.get_takeover(takeover_id)
+                if takeover.user_id != user_id:
+                    raise PermissionError("当前用户无权操作该 takeover")
+                if takeover.state not in ACTIVE_TAKEOVER_STATES:
+                    return takeover
+                takeover.mode = normalized_mode
+                takeover.frontend_id = frontend_id or takeover.frontend_id
+                takeover.state = AioTakeoverState.ISSUED
+                takeover.last_heartbeat_at = None
+                takeover.expires_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=settings.AIO_TAKEOVER_ISSUED_TTL_SECONDS
+                )
+                session = await self.get_session(takeover.session_id)
+                session.current_takeover_id = takeover.takeover_id
+                session.human_takeover_lock = True
+                session.session_state = AioSessionState.TAKEOVER_FROZEN
+                await self._save_session_record(session)
+                return await self._save_takeover_record(takeover)
+
+        return await self.create_takeover_access(
+            session_id=takeover.session_id,
+            user_id=user_id,
+            platform=takeover.platform,
+            mode=normalized_mode,
+            reason=takeover.reason,
+            request_id=takeover.request_id,
+            task_id=takeover.task_id,
+            run_id=takeover.run_id,
+            action_type=takeover.action_type,
+        )
+
     async def maybe_autoresolve_takeover(
         self,
         *,
@@ -908,10 +1022,16 @@ class AioSandboxSessionManager:
             raise PermissionError("当前用户无权操作该 takeover")
         if takeover.frontend_id and takeover.frontend_id != frontend_id:
             raise PermissionError("该 takeover 不属于当前前端实例")
+        if takeover.state not in ACTIVE_TAKEOVER_STATES:
+            return takeover
 
         requested_gate = resume_gate_result or AioResumeGateResult.PASS.value
         probe = takeover.resume_probe
-        if probe is not None and requested_gate == AioResumeGateResult.PASS.value:
+        should_probe_resume_gate = (
+            probe is not None
+            and requested_gate == AioResumeGateResult.PASS.value
+        )
+        if should_probe_resume_gate:
             try:
                 probe_passed = await probe()
             except Exception:
@@ -930,20 +1050,45 @@ class AioSandboxSessionManager:
                 raise PermissionError("当前用户无权操作该 takeover")
             if takeover.frontend_id and takeover.frontend_id != frontend_id:
                 raise PermissionError("该 takeover 不属于当前前端实例")
+            if takeover.state not in ACTIVE_TAKEOVER_STATES:
+                return takeover
             takeover.resume_gate_result = requested_gate
+            if requested_gate == AioResumeGateResult.PASS.value:
+                takeover.state = AioTakeoverState.RESOLVED
+                takeover.readiness_probe = None
+                takeover.resume_probe = None
+                session = await self.get_session(takeover.session_id)
+                session.current_takeover_id = None
+                session.human_takeover_lock = False
+                session.session_state = (
+                    AioSessionState.LEASED if session.ref_count > 0 else AioSessionState.READY
+                )
+                await self._save_session_record(session)
+                return await self._save_takeover_record(takeover)
+
+            # Resume gate failed: keep the current takeover alive and the
+            # session frozen so the user can continue operating the same cloud
+            # computer surface, then retry "我已完成" instead of immediately
+            # terminating the request and forcing a new handoff.
             takeover.state = (
-                AioTakeoverState.RESOLVED
-                if requested_gate == AioResumeGateResult.PASS.value
-                else AioTakeoverState.RESUME_FAILED
+                AioTakeoverState.ACTIVE
+                if takeover.frontend_id
+                else AioTakeoverState.ISSUED
             )
-            takeover.readiness_probe = None
-            takeover.resume_probe = None
+            now = datetime.now(timezone.utc)
+            if takeover.state == AioTakeoverState.ACTIVE:
+                takeover.last_heartbeat_at = now
+                takeover.expires_at = now + timedelta(
+                    seconds=settings.AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS
+                )
+            else:
+                takeover.expires_at = now + timedelta(
+                    seconds=settings.AIO_TAKEOVER_ISSUED_TTL_SECONDS
+                )
             session = await self.get_session(takeover.session_id)
-            session.current_takeover_id = None
-            session.human_takeover_lock = False
-            session.session_state = (
-                AioSessionState.LEASED if session.ref_count > 0 else AioSessionState.READY
-            )
+            session.current_takeover_id = takeover.takeover_id
+            session.human_takeover_lock = True
+            session.session_state = AioSessionState.TAKEOVER_FROZEN
             await self._save_session_record(session)
             return await self._save_takeover_record(takeover)
 

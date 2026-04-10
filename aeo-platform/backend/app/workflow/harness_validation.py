@@ -254,7 +254,7 @@ def decide_a4_completion_policy(
     if success_count <= 0:
         return build_harness_decision(
             decision_type="retry_step",
-            reason="A4 completed with zero successful platforms.",
+            reason="Answer fetch completed with zero successful platforms.",
             recoverable=True,
             metadata={
                 "step": "A4",
@@ -269,7 +269,7 @@ def decide_a4_completion_policy(
     if success_count < effective_min or fail_count > 0:
         return build_harness_decision(
             decision_type="degraded_continue",
-            reason="A4 completed with partial platform failure but still has usable data.",
+            reason="Answer fetch completed with partial platform failure but still has usable data.",
             recoverable=True,
             metadata={
                 "step": "A4",
@@ -283,7 +283,7 @@ def decide_a4_completion_policy(
 
     return build_harness_decision(
         decision_type="complete_step",
-        reason="A4 completion policy passed with sufficient platform coverage.",
+        reason="Answer fetch completion policy passed with sufficient platform coverage.",
         recoverable=False,
         metadata={
             "step": "A4",

@@ -28,7 +28,6 @@ from app.workflow.events import (
     send_error_event,
     send_stage_result,
     send_browser_state_event,
-    send_browser_user_action_event,
 )
 from app.workflow.harness_validation import (
     build_harness_decision,
@@ -98,12 +97,10 @@ import httpx
 from app.core.constants import PlatformConstants, WorkflowConstants
 from app.core.config import settings
 from app.workflow.brand_mentions import content_mentions_brand
-from app.workflow.browser_action_runtime import (
-    clear_browser_action_request,
-    get_browser_action_request,
-    register_browser_action_request,
-    update_browser_action_request,
-    wait_for_browser_action_resolution,
+from app.workflow.browser_action_contract import (
+    emit_browser_action_handoff,
+    wait_for_browser_action_outcome,
+    wait_for_browser_action_resume,
 )
 
 # Aliases from centralized constants
@@ -111,7 +108,6 @@ MAX_RETRIES = WorkflowConstants.API_MAX_RETRIES
 RETRY_BACKOFF_BASE = WorkflowConstants.API_RETRY_BACKOFF_BASE
 BROWSER_MAX_RETRIES = WorkflowConstants.BROWSER_MAX_RETRIES
 MIN_PLATFORMS_REQUIRED = WorkflowConstants.MIN_PLATFORMS_REQUIRED
-_aio_takeover_by_request_id: dict[str, dict[str, Any]] = {}
 
 
 def _canonicalize_platform_id(platform: Any) -> str:
@@ -139,6 +135,11 @@ def _normalize_platform_filter(platform_filter: Any) -> list[str] | None:
         normalized.append(canonical)
         seen.add(canonical)
     return normalized or None
+
+
+def _should_defer_aio_takeover_open(handler: Any) -> bool:
+    client = getattr(handler, "client", None)
+    return callable(getattr(client, "_ensure_remote_runtime", None))
 
 
 def _display_platform_names(platforms: list[str]) -> str:
@@ -269,200 +270,6 @@ def _create_browser_client(platform: str, state: AgentState):
     from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
 
     return PlaywrightBrowserClient(session_name=session_name)
-
-
-def _build_aio_readiness_probe(handler: Any, action_type: str):
-    """Build a process-local readiness probe for one live browser handoff."""
-
-    probe = getattr(handler, "probe_takeover_ready", None)
-    if not callable(probe):
-        return None
-
-    async def _run_probe() -> bool:
-        return bool(await probe(action_type))
-
-    return _run_probe
-
-
-def _build_aio_resume_gate_probe(handler: Any, action_type: str):
-    """Build the explicit manual-resume probe for one live browser handoff."""
-
-    probe = getattr(handler, "probe_resume_gate_ready", None)
-    if not callable(probe):
-        return None
-
-    async def _run_probe() -> bool:
-        return bool(await probe(action_type))
-
-    return _run_probe
-
-
-async def _get_or_create_aio_takeover_bundle(
-    *,
-    handler: Any,
-    user_id: str | None,
-    platform: str,
-    request_id: str | None,
-    action_type: str,
-    message: str,
-    target_url: str | None = None,
-) -> dict[str, Any] | None:
-    """Issue one AIO takeover bundle per browser-action request."""
-
-    if not settings.AIO_ENABLED or not settings.AIO_BASE_URL:
-        logger.debug(
-            "[A4] Skip AIO takeover bundle: runtime disabled (platform=%s request_id=%s)",
-            platform,
-            request_id,
-        )
-        return None
-    if not request_id:
-        logger.warning(
-            "[A4] Skip AIO takeover bundle: missing request_id (platform=%s action=%s)",
-            platform,
-            action_type,
-        )
-        return None
-    resolved_target_url = target_url
-    if not resolved_target_url and request_id:
-        existing_request = await get_browser_action_request(request_id)
-        if existing_request is not None:
-            resolved_target_url = existing_request.target_url
-    if not resolved_target_url:
-        resolved_target_url = getattr(handler, "URL", None)
-    existing = _aio_takeover_by_request_id.get(request_id)
-    if existing is not None:
-        if resolved_target_url and existing.get("target_url") != resolved_target_url:
-            existing = {**existing, "target_url": resolved_target_url}
-            _aio_takeover_by_request_id[request_id] = existing
-            await update_browser_action_request(
-                request_id,
-                takeover=existing,
-                target_url=resolved_target_url,
-            )
-        return existing
-
-    client = getattr(handler, "client", None)
-    resolved_user_id = user_id
-    if not resolved_user_id:
-        session_id = getattr(handler, "session_id", None)
-        if session_id:
-            try:
-                from sqlalchemy import select
-
-                from app.core.database import AsyncSessionLocal
-                from app.models.session import Session
-                from uuid import UUID as _UUID
-
-                async with AsyncSessionLocal() as db:
-                    result = await db.execute(
-                        select(Session.user_id).where(Session.id == _UUID(str(session_id)))
-                    )
-                    session_user_id = result.scalar_one_or_none()
-                    if session_user_id is not None:
-                        resolved_user_id = str(session_user_id)
-            except Exception as exc:
-                logger.warning(
-                    "[A4] Failed to recover user_id for takeover "
-                    "(platform=%s request_id=%s session_id=%s): %s",
-                    platform,
-                    request_id,
-                    session_id,
-                    exc,
-                )
-    if not resolved_user_id:
-        logger.warning(
-            "[A4] Skip AIO takeover bundle: missing user_id "
-            "(platform=%s request_id=%s action=%s)",
-            platform,
-            request_id,
-            action_type,
-        )
-        return None
-
-    aio_session_id = getattr(client, "aio_session_id", None)
-    if not aio_session_id:
-        ensure_remote_runtime = getattr(client, "_ensure_remote_runtime", None)
-        if callable(ensure_remote_runtime):
-            try:
-                await ensure_remote_runtime()
-            except Exception as exc:
-                logger.warning(
-                    "[A4] Failed to prime AIO session for takeover "
-                    "(platform=%s request_id=%s): %s",
-                    platform,
-                    request_id,
-                    exc,
-                )
-        aio_session_id = getattr(client, "aio_session_id", None)
-    if not aio_session_id:
-        logger.warning(
-            "[A4] Skip AIO takeover bundle: missing aio_session_id "
-            "(platform=%s request_id=%s client=%s)",
-            platform,
-            request_id,
-            type(client).__name__ if client is not None else "None",
-        )
-        return None
-    task_id = getattr(client, "task_id", None)
-    run_id = getattr(handler, "run_id", None)
-    readiness_probe = _build_aio_readiness_probe(handler, action_type)
-    resume_probe = _build_aio_resume_gate_probe(handler, action_type)
-
-    from app.services.aio_session_manager import aio_session_manager
-
-    takeover = await aio_session_manager.create_takeover_access(
-        session_id=aio_session_id,
-        user_id=str(resolved_user_id),
-        platform=platform,
-        mode=settings.AIO_DEFAULT_ACCESS_MODE,
-        reason=message or action_type,
-        request_id=request_id,
-        task_id=str(task_id) if task_id else None,
-        run_id=str(run_id) if run_id else None,
-        action_type=action_type,
-        readiness_probe=readiness_probe,
-        resume_probe=resume_probe,
-    )
-    bundle = {
-        "takeover_id": takeover.takeover_id,
-        "mode": takeover.mode,
-        "canvas_config_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/canvas-config",
-        "vnc_url_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/vnc-url",
-        "heartbeat_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/heartbeat",
-        "resolve_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/resolve",
-        "cancel_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/cancel",
-        "expires_at": takeover.expires_at.isoformat(),
-        "target_url": resolved_target_url,
-    }
-    _aio_takeover_by_request_id[request_id] = bundle
-    logger.info(
-        "[A4] AIO takeover bundle issued (platform=%s request_id=%s takeover_id=%s session_id=%s)",
-        platform,
-        request_id,
-        takeover.takeover_id,
-        aio_session_id,
-    )
-    return bundle
-
-
-async def _persist_browser_action_takeover(
-    *,
-    request_id: str | None,
-    state: str,
-    takeover: dict[str, Any] | None,
-    target_url: str | None = None,
-) -> None:
-    """Persist reconnect-critical takeover metadata onto the request record."""
-
-    if not request_id:
-        return
-    await update_browser_action_request(
-        request_id,
-        state=state,
-        takeover=takeover,
-        target_url=target_url,
-    )
 
 
 class _ProgressTracker:
@@ -858,14 +665,22 @@ def _build_duration_msg(fetch_mode: str, question_count: int) -> str:
     platform_count = len(PlatformConstants.SUPPORTED_PLATFORMS)
 
     if fetch_mode == "full":
-        pipelines = " / ".join(
-            PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
-            for p in PlatformConstants.SUPPORTED_PLATFORMS
-        )
+        if settings.AIO_ENABLED and settings.AIO_BASE_URL:
+            pipelines = " / ".join(
+                PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+                for p in PlatformConstants.SUPPORTED_PLATFORMS
+            )
+            schedule_hint = f"{pipelines} 各平台依次采集"
+        else:
+            pipelines = " / ".join(
+                PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+                for p in PlatformConstants.SUPPORTED_PLATFORMS
+            )
+            schedule_hint = f"{pipelines} 各平台串行采集，{platform_count} 条流水线并行"
         return (
             f"开始向{all_names} {platform_count} 个平台提问，共 {question_count} 个问题。\n\n"
             f"- 采集模式：**完整采集**（{platform_count} 平台全浏览器）\n"
-            f"- {pipelines} 各平台串行采集，{platform_count} 条流水线并行\n"
+            f"- {schedule_hint}\n"
             f"- 预计总耗时约 10-20 分钟\n\n"
             "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
         )
@@ -1260,6 +1075,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             _browser_shared_done: dict[str, int] = {}  # platform -> questions done
             # Shared partial results so global timeout can preserve completed work
             _pipeline_partial_results: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+            active_browser_pipeline_count = 1
 
             # =============================================================
             async def _browser_pipeline(
@@ -1334,8 +1150,20 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                     # Update circuit breaker state — distinguish failure types
                     error_type = r.get("error_type", "")
+                    stop_platform = bool(r.get("stop_platform"))
                     if r.get("success"):
                         breaker.record_success()
+                    elif error_type in {
+                        "user_skipped",
+                        "user_action_timeout",
+                        "resume_gate_failed",
+                    }:
+                        logger.info(
+                            "[A4] %s stopped by user-action outcome on Q%d (%s)",
+                            platform_name,
+                            idx + 1,
+                            error_type,
+                        )
                     elif error_type == "rate_limit":
                         # Rate limit is not a platform fault — don't trip breaker
                         logger.warning(
@@ -1379,6 +1207,43 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                     results.append((idx, r))
 
+                    if stop_platform:
+                        stop_reason = r.get("error") or f"{platform_name} 已停止本轮采集"
+                        for remaining_idx in range(idx + 1, total):
+                            results.append(
+                                (
+                                    remaining_idx,
+                                    {
+                                        "platform": platform,
+                                        "platform_name": platform_name,
+                                        "fetch_method": "browser",
+                                        "success": False,
+                                        "error": stop_reason,
+                                        "error_type": error_type,
+                                        "stop_platform": True,
+                                        "skipped_by_user": bool(
+                                            r.get("skipped_by_user")
+                                        ),
+                                    },
+                                )
+                            )
+                        _browser_shared_done[platform] = total
+                        total_browser_done = sum(_browser_shared_done.values())
+                        total_browser_work = total * max(active_browser_pipeline_count, 1)
+                        combined_progress = (
+                            _browser_progress_base
+                            + (total_browser_done / total_browser_work)
+                            * _browser_progress_range
+                        )
+                        await send_progress_event(
+                            session_id=session_id,
+                            step="A4",
+                            step_name="AI答案抓取",
+                            progress=combined_progress,
+                            message=f"{platform_name} 已停止本轮采集，继续其他平台",
+                        )
+                        break
+
                     # Delay between browser questions to avoid rate limiting
                     if idx < len(questions) - 1:
                         browser_delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(
@@ -1390,7 +1255,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     _browser_shared_done[platform] = idx + 1
                     total_browser_done = sum(_browser_shared_done.values())
                     # Total work = questions × number of active browser pipelines
-                    total_browser_work = total * max(len(_browser_shared_done), 1)
+                    total_browser_work = total * max(active_browser_pipeline_count, 1)
                     combined_progress = (
                         _browser_progress_base
                         + (total_browser_done / total_browser_work)
@@ -1543,14 +1408,29 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     )
 
             if browser_tasks:
+                active_browser_pipeline_count = max(len(browser_task_platforms), 1)
                 logger.info(
                     "[A4] Phase 2: Starting %d browser pipeline(s)...",
                     len(browser_tasks),
                 )
-
-                browser_all_results = await asyncio.gather(
-                    *browser_tasks, return_exceptions=True
-                )
+                if settings.AIO_ENABLED and settings.AIO_BASE_URL:
+                    logger.info(
+                        "[A4] Phase 2: AIO runtime detected, executing browser pipelines sequentially to avoid shared-browser focus contention"
+                    )
+                    browser_all_results = []
+                    for task, platform in zip(browser_tasks, browser_task_platforms):
+                        logger.info(
+                            "[A4] Phase 2: Sequential browser pipeline start platform=%s",
+                            platform,
+                        )
+                        try:
+                            browser_all_results.append(await task)
+                        except BaseException as exc:
+                            browser_all_results.append(exc)
+                else:
+                    browser_all_results = await asyncio.gather(
+                        *browser_tasks, return_exceptions=True
+                    )
 
                 for i, br in enumerate(browser_all_results):
                     if isinstance(br, BaseException):
@@ -1974,7 +1854,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             update_dict["next_required_action"] = build_next_required_action(
                 tool_name="analysis_report_skill",
                 tool_args={"report_type": state.get("analysis_mode") or "persona"},
-                reason="A4 定向重跑完成后需要刷新分析报告。",
+                reason="答案抓取定向重跑完成后需要刷新分析报告。",
                 reply_text="定向重跑已完成，继续刷新分析报告。",
                 source_step="A4",
                 metadata={
@@ -2253,84 +2133,124 @@ async def _fetch_from_kimi(
         }
 
 
-async def _emit_browser_action_prompt(
-    session_id: str,
-    platform: str,
-    state: str,
+def _infer_browser_action_requirement(
+    *,
+    platform_name: str,
+    error_message: str | None,
+    error_type: str | None,
+) -> dict[str, str] | None:
+    """Infer one browser-action requirement from normalized fetch failures."""
+
+    message = (error_message or "").strip()
+    lower_message = message.lower()
+    normalized_error_type = (error_type or "").strip().lower()
+
+    verify_markers = [
+        "verify",
+        "captcha",
+        "人机验证",
+        "安全验证",
+        "完成验证",
+        "图片验证",
+    ]
+    if normalized_error_type == "verify" or any(
+        marker in lower_message or marker in message for marker in verify_markers
+    ):
+        return {
+            "state": "waiting_for_login",
+            "action_type": "verify",
+            "message": f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
+            "action_hint": f"请在弹出的浏览器窗口中完成 {platform_name} 验证，完成后点击“我已完成”",
+            "reply_markdown": (
+                f"**{platform_name}** 触发了安全验证\n\n"
+                "请在浏览器窗口中完成验证。完成后回到聊天卡片点击“我已完成”，我会继续接管当前问题。"
+            ),
+        }
+
+    login_markers = [
+        "permission_denied",
+        "requirelogin",
+        "require login",
+        "need login",
+        "please login",
+        "please log in",
+        "sign in",
+        "log in",
+        "请登录",
+        "登录后",
+        "未登录",
+        "需要登录",
+    ]
+    login_error_types = {
+        "permission_denied",
+        "login_required",
+        "unauthorized",
+        "requirelogin",
+        "require_login",
+    }
+    if normalized_error_type in login_error_types or any(
+        marker in lower_message or marker in message for marker in login_markers
+    ):
+        return {
+            "state": "waiting_for_login",
+            "action_type": "login",
+            "message": f"检测到 {platform_name} 需要登录，请在浏览器窗口中完成登录",
+            "action_hint": f"请在弹出的浏览器窗口中完成 {platform_name} 登录，完成后点击“我已完成”",
+            "reply_markdown": (
+                f"**{platform_name}** 需要登录\n\n"
+                "请在浏览器窗口中完成登录。完成后回到聊天卡片点击“我已完成”，我会继续接管抓取。"
+            ),
+        }
+
+    modal_markers = ["弹窗", "协议", "terms", "privacy", "modal", "dialog"]
+    if normalized_error_type == "modal" or any(
+        marker in lower_message or marker in message for marker in modal_markers
+    ):
+        return {
+            "state": "waiting_for_modal",
+            "action_type": "modal",
+            "message": f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
+            "action_hint": "请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”",
+            "reply_markdown": (
+                f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
+                "请在浏览器中关闭弹窗或同意协议。完成后回到聊天卡片点击“我已完成”，我会继续接管抓取。"
+            ),
+        }
+
+    return None
+
+
+async def _resume_after_browser_action(
+    *,
+    handler: Any,
+    request_id: str,
     action_type: str,
-    message: str,
-    action_hint: str,
-    progress: float,
-    reply_markdown: str,
-    run_id: str | None = None,
-    handler: Any | None = None,
-    user_id: str | None = None,
-    takeover: dict[str, Any] | None = None,
-    target_url: str | None = None,
-) -> str:
-    resolved_target_url = target_url or getattr(handler, "URL", None)
-    request = await register_browser_action_request(
-        session_id=session_id,
-        platform=platform,
-        action_type=action_type,
-        message=message,
-        action_hint=action_hint,
-        target_url=resolved_target_url,
-        progress=progress,
-        run_id=run_id,
-        state=state,
-    )
-    if takeover is None and handler is not None:
-        takeover = await _get_or_create_aio_takeover_bundle(
-            handler=handler,
-            user_id=user_id,
-            platform=platform,
-            request_id=request.request_id,
-            action_type=action_type,
-            message=message,
-            target_url=resolved_target_url,
-        )
-    await _persist_browser_action_takeover(
-        request_id=request.request_id,
-        state=state,
-        takeover=takeover,
-        target_url=resolved_target_url,
-    )
-    await send_browser_state_event(
-        session_id=session_id,
-        platform=platform,
-        state=state,
-        message=message,
-        progress=progress,
-        requires_action=True,
-        action_hint=action_hint,
-        request_id=request.request_id,
-        takeover=takeover,
-    )
-    await send_browser_user_action_event(
-        session_id=session_id,
-        platform=platform,
-        state=state,
-        action_type=action_type,
-        message=message,
-        progress=progress,
-        action_hint=action_hint,
-        request_id=request.request_id,
-        takeover=takeover,
-    )
-    await send_reply_event(session_id, reply_markdown, is_delta=True, is_new_round=True)
-    await send_reply_event(session_id, "", is_complete=True)
-    return request.request_id
+    timeout: int = 480,
+) -> tuple[bool, str | None]:
+    """Resume one browser action using the unified contract."""
 
+    completion_callback = None
+    ready_timeout = 45
+    skip_readiness_probe = False
 
-async def _wait_for_browser_action_resolution(
-    request_id: str, timeout: int = 300
-) -> str | None:
-    try:
-        return await wait_for_browser_action_resolution(request_id, timeout=timeout)
-    finally:
-        _aio_takeover_by_request_id.pop(request_id, None)
-        await clear_browser_action_request(request_id)
+    if action_type == "verify" and hasattr(handler, "recover_after_verify"):
+        async def _recover_verify() -> bool:
+            return bool(await handler.recover_after_verify(prepare_window=False))
+
+        completion_callback = _recover_verify
+        ready_timeout = 300
+    elif action_type == "modal":
+        ready_timeout = 30
+
+    return await wait_for_browser_action_resume(
+        request_id=request_id,
+        handler=handler,
+        action_type=action_type,
+        timeout=timeout,
+        ready_timeout=ready_timeout,
+        on_completed=completion_callback,
+        skip_readiness_probe=skip_readiness_probe,
+    )
 
 
 async def _fetch_from_browser(
@@ -2351,106 +2271,65 @@ async def _fetch_from_browser(
     error_message = None
     error_type = ""
     max_verify_recoveries = 3
+    pending_action: dict[str, Any] | None = None
 
     try:
         async for event in handler.fetch(question):
             if event.state == browser_state.WAITING_FOR_LOGIN and session_id:
-                event_target_url = getattr(handler, "URL", None)
-                takeover = await _get_or_create_aio_takeover_bundle(
+                request_id = await emit_browser_action_handoff(
+                    session_id=session_id,
+                    platform=platform,
+                    state=event.state.value,
+                    action_type=event.action_type or "login",
+                    message=event.message,
+                    action_hint=event.action_hint or event.message,
+                    progress=event.progress,
+                    reply_markdown=(
+                        f"**{platform_name}** 需要登录\n\n"
+                        "请在浏览器窗口中完成登录。完成后回到聊天卡片点击“我已完成”，我会继续接管抓取。"
+                    ),
+                    run_id=run_id,
                     handler=handler,
                     user_id=user_id,
-                    platform=platform,
-                    request_id=event.request_id,
-                    action_type=event.action_type or "login",
-                    message=event.message,
-                    target_url=event_target_url,
+                    target_url=getattr(handler, "URL", None),
                 )
-                await _persist_browser_action_takeover(
-                    request_id=event.request_id,
-                    state=event.state.value,
-                    takeover=takeover,
-                    target_url=event_target_url,
-                )
-                await send_browser_state_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state=event.state.value,
-                    message=event.message,
-                    progress=event.progress,
-                    requires_action=event.requires_action,
-                    action_hint=event.action_hint,
-                    request_id=event.request_id,
-                    takeover=takeover,
-                )
-                await send_browser_user_action_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state=event.state.value,
-                    action_type=event.action_type or "login",
-                    message=event.message,
-                    progress=event.progress,
-                    action_hint=event.action_hint,
-                    request_id=event.request_id,
-                    takeover=takeover,
-                )
-                login_msg = (
-                    f"**{platform_name}** 需要登录\n\n"
-                    f"请在浏览器窗口中完成登录。"
-                    f"完成后点击下方“我已完成”，我会继续接管抓取。"
-                )
-                await send_reply_event(
-                    session_id, login_msg, is_delta=True, is_new_round=True
-                )
-                await send_reply_event(session_id, "", is_complete=True)
+                pending_action = {
+                    "request_id": request_id,
+                    "action_type": event.action_type or "login",
+                    "success_message": f"{platform_name} 登录已完成，正在继续抓取当前问题",
+                    "timeout_message": f"{platform_name} 登录未完成或等待超时，本轮将跳过该平台",
+                    "timeout_error_type": "user_action_timeout",
+                    "resume_error_type": "resume_gate_failed",
+                }
+                break
 
             if event.state == browser_state.WAITING_FOR_MODAL and session_id:
-                event_target_url = getattr(handler, "URL", None)
-                takeover = await _get_or_create_aio_takeover_bundle(
+                request_id = await emit_browser_action_handoff(
+                    session_id=session_id,
+                    platform=platform,
+                    state=event.state.value,
+                    action_type=event.action_type or "modal",
+                    message=event.message,
+                    action_hint=event.action_hint or event.message,
+                    progress=event.progress,
+                    reply_markdown=(
+                        f"**{platform_name}** 页面弹窗需要确认\n\n"
+                        "请在浏览器中关闭弹窗或同意协议。完成后回到聊天卡片点击“我已完成”，我会继续接管抓取。"
+                    ),
+                    run_id=run_id,
                     handler=handler,
                     user_id=user_id,
-                    platform=platform,
-                    request_id=event.request_id,
-                    action_type=event.action_type or "modal",
-                    message=event.message,
-                    target_url=event_target_url,
+                    target_url=getattr(handler, "URL", None),
                 )
-                await _persist_browser_action_takeover(
-                    request_id=event.request_id,
-                    state=event.state.value,
-                    takeover=takeover,
-                    target_url=event_target_url,
-                )
-                await send_browser_state_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state=event.state.value,
-                    message=event.message,
-                    progress=event.progress,
-                    requires_action=event.requires_action,
-                    action_hint=event.action_hint,
-                    request_id=event.request_id,
-                    takeover=takeover,
-                )
-                await send_browser_user_action_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state=event.state.value,
-                    action_type=event.action_type or "modal",
-                    message=event.message,
-                    progress=event.progress,
-                    action_hint=event.action_hint,
-                    request_id=event.request_id,
-                    takeover=takeover,
-                )
-                modal_msg = (
-                    f"**{platform_name}** 页面弹窗需要确认\n\n"
-                    f"请在浏览器中关闭弹窗或同意协议。"
-                    f"完成后点击下方“我已完成”，我会继续接管抓取。"
-                )
-                await send_reply_event(
-                    session_id, modal_msg, is_delta=True, is_new_round=True
-                )
-                await send_reply_event(session_id, "", is_complete=True)
+                pending_action = {
+                    "request_id": request_id,
+                    "action_type": event.action_type or "modal",
+                    "success_message": f"{platform_name} 弹窗已处理，正在继续抓取当前问题",
+                    "timeout_message": f"{platform_name} 弹窗未处理完成，本轮将跳过该平台",
+                    "timeout_error_type": "modal_timeout",
+                    "resume_error_type": "resume_gate_failed",
+                }
+                break
 
             if event.state == browser_state.ERROR:
                 error_message = event.message or event.error or "抓取失败"
@@ -2483,6 +2362,159 @@ async def _fetch_from_browser(
             },
             "citations": [ref.model_dump() for ref in result_data.search_references],
             "duration": duration,
+        }
+
+    inferred_action = None
+    if pending_action is None:
+        inferred_action = _infer_browser_action_requirement(
+            platform_name=platform_name,
+            error_message=error_message,
+            error_type=error_type,
+        )
+        if inferred_action and session_id:
+            if (
+                inferred_action["action_type"] == "verify"
+                and _verify_recovery_count >= max_verify_recoveries
+            ):
+                inferred_action = None
+            else:
+                request_id = await emit_browser_action_handoff(
+                    session_id=session_id,
+                    platform=platform,
+                    state=inferred_action["state"],
+                    action_type=inferred_action["action_type"],
+                    message=inferred_action["message"],
+                    action_hint=inferred_action["action_hint"],
+                    progress=0.35,
+                    reply_markdown=inferred_action["reply_markdown"],
+                    run_id=run_id,
+                    handler=handler,
+                    user_id=user_id,
+                    target_url=getattr(handler, "URL", None),
+                )
+                timeout_error_type = (
+                    "modal_timeout"
+                    if inferred_action["action_type"] == "modal"
+                    else "user_action_timeout"
+                )
+                pending_action = {
+                    "request_id": request_id,
+                    "action_type": inferred_action["action_type"],
+                    "success_message": (
+                        f"{platform_name} {'验证' if inferred_action['action_type'] == 'verify' else '登录' if inferred_action['action_type'] == 'login' else '弹窗处理'}已完成，正在继续抓取当前问题"
+                    ),
+                    "timeout_message": (
+                        f"{platform_name} {'验证' if inferred_action['action_type'] == 'verify' else '登录' if inferred_action['action_type'] == 'login' else '弹窗处理'}未完成或等待超时，本轮将跳过该平台"
+                    ),
+                    "timeout_error_type": timeout_error_type,
+                    "resume_error_type": "resume_gate_failed",
+                }
+
+    if pending_action is not None:
+        if (
+            pending_action["action_type"] == "verify"
+            and _verify_recovery_count >= max_verify_recoveries
+        ):
+            logger.warning(
+                "[A4] %s verify challenge exceeded max recoveries (%d), giving up on current question",
+                platform_name,
+                max_verify_recoveries,
+            )
+            if session_id:
+                await send_browser_state_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state="error",
+                    message=f"{platform_name} 连续触发安全验证，本轮已跳过该平台并继续其他平台",
+                    progress=0.7,
+                    requires_action=False,
+                )
+                await send_reply_event(
+                    session_id,
+                    (
+                        f"**{platform_name}** 连续多次触发安全验证，"
+                        "本轮无法继续自动抓取该平台。我会继续完成其他平台采集，"
+                        "并在后续报告中基于已成功的平台生成结果。"
+                    ),
+                    is_delta=True,
+                    is_new_round=True,
+                )
+                await send_reply_event(session_id, "", is_complete=True)
+            return {
+                "platform": platform,
+                "platform_name": platform_name,
+                "fetch_method": "browser",
+                "success": False,
+                "error": error_message or "安全验证未通过",
+                "error_type": "verify",
+                "stop_platform": True,
+                "duration": duration,
+            }
+
+        resumed, resolution = await _resume_after_browser_action(
+            handler=handler,
+            request_id=pending_action["request_id"],
+            action_type=pending_action["action_type"],
+            timeout=480,
+        )
+        if resumed:
+            if session_id:
+                await send_browser_state_event(
+                    session_id=session_id,
+                    platform=platform,
+                    state="waiting_response",
+                    message=pending_action["success_message"],
+                    progress=0.45,
+                    requires_action=False,
+                )
+            return await _fetch_from_browser(
+                handler,
+                question,
+                brand_profile,
+                platform,
+                platform_name,
+                browser_state,
+                session_id=session_id,
+                user_id=user_id,
+                run_id=run_id,
+                _is_retry=True,
+                _verify_recovery_count=(
+                    _verify_recovery_count + 1
+                    if pending_action["action_type"] == "verify"
+                    else _verify_recovery_count
+                ),
+            )
+        if session_id:
+            await send_browser_state_event(
+                session_id=session_id,
+                platform=platform,
+                state="error",
+                message=pending_action["timeout_message"],
+                progress=0.35,
+                requires_action=False,
+            )
+        failure_error_type = (
+            "user_skipped"
+            if resolution == "skip"
+            else pending_action["resume_error_type"]
+            if resolution == "completed"
+            else pending_action["timeout_error_type"]
+        )
+        return {
+            "platform": platform,
+            "platform_name": platform_name,
+            "fetch_method": "browser",
+            "success": False,
+            "error": pending_action["timeout_message"],
+            "error_type": failure_error_type,
+            "stop_platform": failure_error_type in {
+                "user_skipped",
+                "user_action_timeout",
+                "resume_gate_failed",
+                "modal_timeout",
+            },
+            "skipped_by_user": failure_error_type == "user_skipped",
+            "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
         }
 
     # -- Failure path: try platform-specific recovery first --
@@ -2557,6 +2589,7 @@ async def _fetch_from_browser(
                 "success": False,
                 "error": error_message or "安全验证未通过",
                 "error_type": error_type,
+                "stop_platform": True,
                 "duration": duration,
             }
 
@@ -2568,8 +2601,11 @@ async def _fetch_from_browser(
         )
         if session_id:
             recovered = False
-            if await handler._open_headed_for_user_action(handler.URL):
-                request_id = await _emit_browser_action_prompt(
+            should_open_surface = not _should_defer_aio_takeover_open(handler)
+            if not should_open_surface or await handler._open_headed_for_user_action(
+                handler.URL
+            ):
+                request_id = await emit_browser_action_handoff(
                     session_id=session_id,
                     platform=platform,
                     state="waiting_for_login",
@@ -2579,18 +2615,20 @@ async def _fetch_from_browser(
                     progress=0.35,
                     reply_markdown=(
                         f"**{platform_name}** 触发了安全验证\n\n"
-                        f"请在浏览器窗口中完成验证。完成后点击下方“我已完成”，我会继续接管当前问题。"
+                        f"请在浏览器窗口中完成验证。完成后回到聊天卡片点击“我已完成”，我会继续接管当前问题。"
                     ),
                     run_id=run_id,
                     handler=handler,
                     user_id=user_id,
                     target_url=getattr(handler, "URL", None),
                 )
-                resolution = await _wait_for_browser_action_resolution(
-                    request_id, timeout=300
+                resolution = await wait_for_browser_action_outcome(
+                    request_id, timeout=480
                 )
                 if resolution == "completed":
-                    recovered = await handler.recover_after_verify(prepare_window=False)
+                    recovered = await handler.recover_after_verify(
+                        prepare_window=False
+                    )
                 elif resolution == "skip":
                     recovered = False
             else:
@@ -2643,7 +2681,10 @@ async def _fetch_from_browser(
                 platform_name,
                 detected,
             )
-            opened = await handler._open_headed_for_user_action(handler.URL)
+            if _should_defer_aio_takeover_open(handler):
+                opened = True
+            else:
+                opened = await handler._open_headed_for_user_action(handler.URL)
             if not opened:
                 return {
                     "platform": platform,
@@ -2659,7 +2700,7 @@ async def _fetch_from_browser(
 
             modal_cleared = False
             if session_id:
-                request_id = await _emit_browser_action_prompt(
+                request_id = await emit_browser_action_handoff(
                     session_id=session_id,
                     platform=platform,
                     state="waiting_for_modal",
@@ -2669,22 +2710,22 @@ async def _fetch_from_browser(
                     progress=0.35,
                     reply_markdown=(
                         f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
-                        f"请在浏览器中关闭弹窗或同意协议。完成后点击下方“我已完成”，我会继续接管抓取。"
+                        f"请在浏览器中关闭弹窗或同意协议。完成后回到聊天卡片点击“我已完成”，我会继续接管抓取。"
                     ),
                     run_id=run_id,
                     handler=handler,
                     user_id=user_id,
                     target_url=getattr(handler, "URL", None),
                 )
-                resolution = await _wait_for_browser_action_resolution(
-                    request_id, timeout=300
+                resolution = await wait_for_browser_action_outcome(
+                    request_id, timeout=480
                 )
                 modal_cleared = (
                     resolution == "completed"
                     and await handler._wait_for_modal_clear(timeout=45)
                 )
             else:
-                modal_cleared = await handler._wait_for_modal_clear(timeout=300)
+                modal_cleared = await handler._wait_for_modal_clear(timeout=480)
             if modal_cleared:
                 logger.info(
                     "[A4] %s modal cleared by user, retrying fetch", platform_name
@@ -2709,11 +2750,18 @@ async def _fetch_from_browser(
                     "success": False,
                     "error": "弹窗处理超时",
                     "error_type": "modal_timeout",
+                    "stop_platform": True,
                     "duration": (
                         datetime.now(timezone.utc) - start_time
                     ).total_seconds(),
                 }
 
+    stop_platform = error_type in {
+        "user_skipped",
+        "user_action_timeout",
+        "resume_gate_failed",
+        "modal_timeout",
+    }
     return {
         "platform": platform,
         "platform_name": platform_name,
@@ -2721,6 +2769,8 @@ async def _fetch_from_browser(
         "success": False,
         "error": error_message or "抓取失败",
         "error_type": error_type,
+        "stop_platform": stop_platform,
+        "skipped_by_user": error_type == "user_skipped",
         "duration": duration,
     }
 

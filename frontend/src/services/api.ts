@@ -71,7 +71,10 @@ class ApiService {
     if (value === 'vnc' || value === 'vnc_fallback') {
       return 'vnc_fallback';
     }
-    return 'canvas_cdp';
+    if (value === 'canvas_cdp') {
+      return 'canvas_cdp';
+    }
+    return 'vnc_fallback';
   }
 
   private getAuthToken() {
@@ -288,6 +291,23 @@ class ApiService {
     return this.normalizeAioTakeover(response.takeover);
   }
 
+  async openAioTakeover(
+    path: string,
+    payload: {
+      frontendId?: string | null;
+      mode: 'canvas_cdp' | 'vnc_fallback';
+    },
+  ) {
+    const response = await this.requestByPath<{ takeover: Record<string, unknown> }>(path, {
+      method: 'POST',
+      body: JSON.stringify({
+        frontend_id: payload.frontendId ?? null,
+        mode: payload.mode,
+      }),
+    });
+    return this.normalizeAioTakeover(response.takeover);
+  }
+
   async resolveAioTakeover(
     path: string,
     payload: {
@@ -312,14 +332,14 @@ class ApiService {
   async cancelAioTakeover(
     path: string,
     payload: {
-      frontendId: string;
+      frontendId?: string | null;
       reason?: string;
     },
   ) {
     const response = await this.requestByPath<{ takeover: Record<string, unknown> }>(path, {
       method: 'POST',
       body: JSON.stringify({
-        frontend_id: payload.frontendId,
+        frontend_id: payload.frontendId ?? null,
         reason: payload.reason ?? 'user_cancelled',
       }),
     });
@@ -1105,6 +1125,7 @@ class ApiService {
         typeof raw.resume_gate_result === 'string' ? raw.resume_gate_result : null,
       targetUrl: typeof raw.target_url === 'string' ? raw.target_url : null,
       accessBundle: {
+        openPath: typeof bundle.open_path === 'string' ? bundle.open_path : null,
         canvasConfigPath: String(bundle.canvas_config_path || ''),
         vncUrlPath: String(bundle.vnc_url_path || ''),
         heartbeatPath: String(bundle.heartbeat_path || ''),

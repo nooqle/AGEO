@@ -7,6 +7,7 @@ export interface Session {
   created_at: string;
   updated_at: string;
   user_id: string;
+  entity_id?: string | null;
   status?: string;
   metadata?: Record<string, unknown>;
 }

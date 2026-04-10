@@ -17,10 +17,17 @@ import { cn } from '@/lib/cn';
 import { RiLayoutRightLine, RiFileTextLine, RiLoader4Line } from '@remixicon/react';
 
 export function CanvasPanel() {
-  const { contents, activeContentIndex, isOpen } = useCanvasStore();
+  const {
+    contents,
+    browserWorkspace,
+    activeContentIndex,
+    isOpen,
+  } = useCanvasStore();
   const isAgentExecuting = useConversationStore((s) => s.isAgentExecuting);
+  const hasArtifacts = contents.length > 0;
+  const hasBrowserWorkspace = Boolean(browserWorkspace);
 
-  if (!isOpen || contents.length === 0) {
+  if (!isOpen || (!hasArtifacts && !hasBrowserWorkspace)) {
     return (
       <div className="flex flex-col h-full shadow-[-2px_0_16px_rgba(0,0,0,0.08)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
         {/* 空状态 / 分析中间态 */}
@@ -55,7 +62,7 @@ export function CanvasPanel() {
     );
   }
 
-  const rawContent = contents[activeContentIndex];
+  const rawContent = browserWorkspace ?? contents[activeContentIndex] ?? null;
 
   // When viewing a historical version, overlay the version's data
   const activeContent = (() => {
@@ -111,7 +118,7 @@ export function CanvasPanel() {
       <CanvasHeader content={rawContent} />
 
       {/* Tab 栏（多内容时显示） */}
-      {contents.length > 1 && <CanvasTabs />}
+      {!hasBrowserWorkspace && contents.length > 1 && <CanvasTabs />}
 
       {/* 内容区 */}
       {/* pipeline 类型：不在此层滚动，让 PipelineContent 自控滚动与固定底栏 */}

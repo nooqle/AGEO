@@ -84,6 +84,46 @@ class YuanbaoHandler(BaseBrowserHandler):
             return dismissed;
         }}"""
 
+    def _login_surface_state_js(self) -> str:
+        input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
+        send_sel = json.dumps(self._sel("send_btn"), ensure_ascii=False)
+        new_chat_sel = json.dumps(self._sel("new_chat"), ensure_ascii=False)
+        model_sel = json.dumps(self._sel("model_selector"), ensure_ascii=False)
+        search_sel = json.dumps(self._sel("web_search_btn"), ensure_ascii=False)
+        not_logged_sel = json.dumps(self._sel("not_logged_in"), ensure_ascii=False)
+        login_btn_sel = json.dumps(self._sel("login_btn"), ensure_ascii=False)
+        return f"""() => {{
+            const isVisible = (el) => Boolean(el && el.offsetParent !== null);
+            const editor = document.querySelector({input_sel});
+            const editorPlaceholder = editor?.getAttribute('data-placeholder') || '';
+            const editorReady = isVisible(editor) && !editorPlaceholder.includes('登录');
+            const readySignals = [
+              document.querySelector({send_sel}),
+              document.querySelector({new_chat_sel}),
+              document.querySelector({model_sel}),
+              document.querySelector({search_sel}),
+            ];
+            const actionNodes = [...document.querySelectorAll('button, a, [role="button"], span')];
+            const visibleActionTexts = actionNodes
+              .filter(isVisible)
+              .map((el) => (el.textContent || '').trim())
+              .filter(Boolean);
+            const explicitLoginCta = visibleActionTexts.some((text) =>
+              /(log\\s*in|sign\\s*in|登录|立即登录|微信登录|手机号登录|注册)/i.test(text)
+            );
+            const loginNeeded =
+              isVisible(document.querySelector({not_logged_sel})) ||
+              isVisible(document.querySelector({login_btn_sel})) ||
+              explicitLoginCta ||
+              /(login|signin|auth)/i.test(window.location.href);
+            const ready = (editorReady || readySignals.some(isVisible)) && !loginNeeded;
+            return {{
+              ready,
+              loginNeeded,
+              editorReady,
+            }};
+        }}"""
+
     async def fetch(self, question: str) -> AsyncGenerator:
         """Fetch answer from Yuanbao Web."""
         self._refresh_selectors()
@@ -116,6 +156,9 @@ class YuanbaoHandler(BaseBrowserHandler):
                 except Exception as e:
                     logger.debug("[Yuanbao] Fast path click failed: %s", e)
 
+            if not fast_path_ok and await self._reuse_existing_aio_surface(self.URL):
+                fast_path_ok = True
+
             if not fast_path_ok:
                 open_result = await self.client.open(self.URL, headed=self.headed)
                 if not open_result.get("success"):
@@ -135,18 +178,12 @@ class YuanbaoHandler(BaseBrowserHandler):
             login_needed = False
             if self.client.page is not None:
                 try:
-                    login_needed = await self.client.page.evaluate(f"""() => {{
-                        const nologin = document.querySelector('{self._sel("not_logged_in")}');
-                        if (nologin && nologin.offsetParent !== null) return true;
-                        const loginBtn = document.querySelector('{self._sel("login_btn")}');
-                        if (loginBtn && loginBtn.offsetParent !== null) return true;
-                        const editor = document.querySelector('{self._sel("input")}');
-                        if (editor) {{
-                            const ph = editor.getAttribute('data-placeholder') || '';
-                            if (ph.includes('登录')) return true;
-                        }}
-                        return false;
-                    }}""")
+                    surface_state = await self.client.page.evaluate(
+                        self._login_surface_state_js()
+                    )
+                    login_needed = bool(surface_state.get("loginNeeded")) and not bool(
+                        surface_state.get("ready")
+                    )
                 except Exception as e:
                     logger.debug("[Yuanbao] Login check failed: %s", e)
 
@@ -164,15 +201,7 @@ class YuanbaoHandler(BaseBrowserHandler):
                     yield event
                 if not request_id:
                     return
-                completion_events, login_success = await self._finish_login_takeover_gate(
-                    request_id=request_id,
-                    ready_check=self._wait_for_login_ready,
-                    timeout_error_message="登录超时，请重试",
-                )
-                for event in completion_events:
-                    yield event
-                if not login_success:
-                    return
+                return
 
             # Step 3.5: Dismiss popups after navigation / login
             if self.client.page is not None:
@@ -322,13 +351,10 @@ class YuanbaoHandler(BaseBrowserHandler):
         while elapsed < timeout:
             if self.client.page is not None:
                 try:
-                    ready = await self.client.page.evaluate(f"""() => {{
-                        const editor = document.querySelector('{self._sel("input")}');
-                        if (!editor) return false;
-                        const ph = editor.getAttribute('data-placeholder') || '';
-                        return !ph.includes('登录');
-                    }}""")
-                    if ready:
+                    surface_state = await self.client.page.evaluate(
+                        self._login_surface_state_js()
+                    )
+                    if surface_state.get("ready"):
                         return True
                 except Exception:
                     pass
@@ -343,7 +369,7 @@ class YuanbaoHandler(BaseBrowserHandler):
 
     async def probe_resume_gate_ready(self, action_type: str) -> bool:
         if action_type == "login":
-            return await self._wait_for_login_ready(timeout=2)
+            return await self._wait_for_login_ready(timeout=30)
         return await super().probe_resume_gate_ready(action_type)
 
     async def _ensure_hunyuan_model(self) -> None:

@@ -18,6 +18,7 @@ export type AioResumeGateResult =
   | 'fail_unknown';
 
 export interface AioTakeoverAccessBundle {
+  openPath?: string | null;
   canvasConfigPath: string;
   vncUrlPath: string;
   heartbeatPath: string;

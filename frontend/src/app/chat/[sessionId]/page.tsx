@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { ChatLayout } from '@/components/layout/ChatLayout';
 import { ChatPanel } from '@/components/chat';
 import { CanvasPanel } from '@/components/canvas/CanvasPanel';
@@ -10,12 +10,66 @@ import { TaskNotificationPoller } from '@/components/chat/TaskNotificationPoller
 import { RequireAuth } from '@/components/auth/RequireAuth';
 import { api } from '@/services/api';
 
+const CHAT_SIDEBAR_COLLAPSED_STORAGE_KEY = 'specta-chat-sidebar-collapsed';
+
 function ChatPageContent() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = params.sessionId as string;
   const isCreatingSessionRef = useRef(false);
+  const queryEntityId = searchParams.get('entity_id') || undefined;
+  const [resolvedEntityId, setResolvedEntityId] = useState<string | undefined>(
+    () => queryEntityId
+  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    try {
+      return window.localStorage.getItem(CHAT_SIDEBAR_COLLAPSED_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        CHAT_SIDEBAR_COLLAPSED_STORAGE_KEY,
+        sidebarCollapsed ? '1' : '0'
+      );
+    } catch {
+      // ignore localStorage failures
+    }
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    if (sessionId === 'new') {
+      return;
+    }
+
+    if (queryEntityId) {
+      return;
+    }
+
+    let cancelled = false;
+    api.getSession(sessionId)
+      .then((session) => {
+        if (!cancelled) {
+          setResolvedEntityId(session.entity_id || undefined);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResolvedEntityId(undefined);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queryEntityId, sessionId]);
 
   // Handle /chat/new - create a new session and redirect
   useEffect(() => {
@@ -29,22 +83,12 @@ function ChatPageContent() {
       }
 
       isCreatingSessionRef.current = true;
-      api.createSession(entityId)
+      api.getOrCreateSessionByEntity(entityId)
         .then((session) => {
-          console.log('[ChatPage] Created new session:', session.id);
+          console.log('[ChatPage] Resolved session:', session.id);
           router.replace(`/chat/${session.id}`);
         })
-        .catch(async (error) => {
-          if (error instanceof Error && error.message.includes('????????????')) {
-            try {
-              const existing = await api.getSessionByEntity(entityId);
-              router.replace(`/chat/${existing.id}`);
-              return;
-            } catch (fallbackError) {
-              console.error('[ChatPage] Failed to load existing session after 409:', fallbackError);
-            }
-          }
-
+        .catch((error) => {
           console.error('[ChatPage] Failed to create session:', error);
           isCreatingSessionRef.current = false;
           router.replace('/dashboard');
@@ -70,7 +114,15 @@ function ChatPageContent() {
   return (
     <ChatLayout
       canvas={<CanvasPanel key={sessionId} />}
-      sidebar={<ChatSidebar activeSessionId={sessionId} />}
+      sidebar={(
+        <ChatSidebar
+          activeSessionId={sessionId}
+          activeEntityId={queryEntityId ?? resolvedEntityId}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
+        />
+      )}
+      sidebarCollapsed={sidebarCollapsed}
     >
       <ChatPanel key={sessionId} sessionId={sessionId} />
       <TaskNotificationPoller activeSessionId={sessionId} />

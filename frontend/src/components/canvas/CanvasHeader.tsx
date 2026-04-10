@@ -77,6 +77,17 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const confidenceStatus = isConfidenceSignal ? effectiveContent.data?.status : undefined;
   const isArtifactActionRunning = confidenceStatus?.phase === 'running';
   const isBrowserTakeover = effectiveContent.type === 'browser';
+  const browserPlatformLabel = isBrowserTakeover
+    ? (
+        effectiveContent.data.platform === 'doubao'
+          ? '豆包'
+          : effectiveContent.data.platform === 'deepseek'
+            ? 'DeepSeek'
+            : effectiveContent.data.platform === 'kimi'
+              ? 'Kimi'
+              : '元宝'
+      )
+    : null;
   const exportable = useMemo(() => !isBrowserTakeover && isCanvasContentExportable(content), [content, isBrowserTakeover]);
   const exportLabel = useMemo(() => getCanvasExportLabel(content), [content]);
   const canExportCsv = effectiveContent.type === 'dataTable';
@@ -251,7 +262,9 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
           </div>
           <div className="min-w-0">
             <h2 className="font-semibold truncate text-sm" style={{ color: 'var(--text-primary)' }}>
-              {content.title}
+              {isBrowserTakeover
+                ? `云电脑工作区${browserPlatformLabel ? ` · ${browserPlatformLabel}` : ''}`
+                : content.title}
             </h2>
             <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
               <span className="capitalize">
@@ -262,15 +275,15 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                  effectiveContent.type === 'chart' ? '数据图表' :
                  effectiveContent.type === 'questionList' ? '问题列表' :
                  effectiveContent.type === 'fetchResults' ? '抓取结果' :
-                 effectiveContent.type === 'browser' ? '浏览器' :
+                 effectiveContent.type === 'browser' ? '当前平台人工接管中' :
                  '选择项'}
               </span>
-              {content.category === 'baseline' && (
+              {!isBrowserTakeover && content.category === 'baseline' && (
                 <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-500/15 text-violet-300 border border-violet-500/30">
                   基线
                 </span>
               )}
-              {content.category === 'scenario' && (
+              {!isBrowserTakeover && content.category === 'scenario' && (
                 <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">
                   {content.scenarioLabel || '场景'}
                 </span>

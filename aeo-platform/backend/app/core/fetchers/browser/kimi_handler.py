@@ -155,6 +155,9 @@ class KimiHandler(BaseBrowserHandler):
                     except Exception as e:
                         logger.debug("[Kimi] Fast path retry failed (%s), falling back", e)
 
+            if not fast_path_ok and await self._reuse_existing_aio_surface(self.URL):
+                fast_path_ok = True
+
             if not fast_path_ok:
                 open_result = await self.client.open(self.URL, headed=self.headed)
                 if not open_result.get("success"):
@@ -188,18 +191,7 @@ class KimiHandler(BaseBrowserHandler):
                     yield event
                 if not request_id:
                     return
-                completion_events, login_success = await self._finish_login_takeover_gate(
-                    request_id=request_id,
-                    ready_check=lambda ready_timeout: self._wait_for_login(
-                        INPUT_READY_SELECTOR,
-                        timeout=ready_timeout,
-                    ),
-                    timeout_error_message="登录超时，请重试",
-                )
-                for event in completion_events:
-                    yield event
-                if not login_success:
-                    return
+                return
 
             # Step 3.5: Dismiss popups before interacting
             if self.client.page is not None:
@@ -302,24 +294,7 @@ class KimiHandler(BaseBrowserHandler):
                         yield event
                     if not request_id:
                         return
-                    completion_events, login_success = await self._finish_login_takeover_gate(
-                        request_id=request_id,
-                        ready_check=lambda ready_timeout: self._wait_for_login(
-                            INPUT_READY_SELECTOR,
-                            timeout=ready_timeout,
-                        ),
-                        timeout_error_message="重新登录超时，请重试",
-                    )
-                    for event in completion_events:
-                        yield event
-                    if not login_success:
-                        return
-
-                    await self._resubmit_question(question)
-                    prev_len, waited, _ = await self._wait_for_content_with_login_check(
-                        max_wait=60,
-                        detect_late_login=False,
-                    )
+                    return
 
                 if prev_len == 0:
                     await self._dump_page_debug(waited, extra_keywords=[
@@ -429,7 +404,7 @@ class KimiHandler(BaseBrowserHandler):
         if action_type == "login":
             return await self._wait_for_login(
                 ".chat-input-editor, [class*='chat-input']",
-                timeout=2,
+                timeout=30,
             )
         return await super().probe_resume_gate_ready(action_type)
 

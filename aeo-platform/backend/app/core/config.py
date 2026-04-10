@@ -84,10 +84,10 @@ class Settings(BaseSettings):
     AIO_BASE_URL: str | None = None
     AIO_AUTH_TOKEN: str | None = None
     AIO_REQUEST_TIMEOUT_SECONDS: float = 20.0
-    AIO_DEFAULT_ACCESS_MODE: str = "canvas_cdp"
+    AIO_DEFAULT_ACCESS_MODE: str = "vnc_fallback"
     AIO_IDLE_TTL_SECONDS: int = 900
     AIO_TAKEOVER_HEARTBEAT_INTERVAL_MS: int = 10000
-    AIO_TAKEOVER_ISSUED_TTL_SECONDS: int = 180
+    AIO_TAKEOVER_ISSUED_TTL_SECONDS: int = 480
     AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS: int = 30
 
     # LLM Orchestration Mode (v2)

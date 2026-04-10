@@ -12,6 +12,7 @@ interface HomeBrandLinkProps {
   showSubtitle?: boolean;
   requireConfirm?: boolean;
   className?: string;
+  compact?: boolean;
 }
 
 export function HomeBrandLink({
@@ -19,6 +20,7 @@ export function HomeBrandLink({
   showSubtitle = true,
   requireConfirm = false,
   className,
+  compact = false,
 }: HomeBrandLinkProps) {
   const router = useRouter();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -50,22 +52,24 @@ export function HomeBrandLink({
         }}
       >
         <ThemedLogo size={size} />
-        <div className="text-left">
-          <div
-            className="text-[13px] font-semibold tracking-tight"
-            style={{ color: 'var(--text-primary)' }}
-          >
-            Specta AI
-          </div>
-          {showSubtitle ? (
+        {compact ? null : (
+          <div className="text-left">
             <div
-              className="text-[10px] tracking-[0.12em]"
-              style={{ color: 'var(--text-tertiary)' }}
+              className="text-[13px] font-semibold tracking-tight"
+              style={{ color: 'var(--text-primary)' }}
             >
-              品牌AI助手
+              Specta AI
             </div>
-          ) : null}
-        </div>
+            {showSubtitle ? (
+              <div
+                className="text-[10px] tracking-[0.12em]"
+                style={{ color: 'var(--text-tertiary)' }}
+              >
+                品牌AI助手
+              </div>
+            ) : null}
+          </div>
+        )}
       </button>
 
       {confirmOpen ? (

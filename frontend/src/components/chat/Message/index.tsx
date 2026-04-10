@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { Message as MessageType } from '@/types/message';
 import { UserMessage } from './UserMessage';
 import { AgentMessage } from './AgentMessage';
@@ -20,11 +21,24 @@ interface MessageProps {
   onStepContinue?: () => void;
   onStepSkip?: () => void;
   onStepRetry?: () => void;
+  afterContent?: ReactNode;
 }
 
 const ACTIONABLE_TYPES = new Set(['user', 'agent']);
 
-export function Message({ message, isStreaming, onConfirmation, onRetry, onRecall, recallDisabled, messagesAfterCount, onStepContinue, onStepSkip, onStepRetry }: MessageProps) {
+export function Message({
+  message,
+  isStreaming,
+  onConfirmation,
+  onRetry,
+  onRecall,
+  recallDisabled,
+  messagesAfterCount,
+  onStepContinue,
+  onStepSkip,
+  onStepRetry,
+  afterContent,
+}: MessageProps) {
   const showActionMenu = ACTIONABLE_TYPES.has(message.type) && !isStreaming;
 
   const renderMessage = () => {
@@ -75,6 +89,14 @@ export function Message({ message, isStreaming, onConfirmation, onRetry, onRecal
       )}
     >
       {renderMessage()}
+
+      {afterContent && (
+        <div className={cn('mt-3', message.type === 'user' ? 'w-full flex justify-end pr-2' : 'ml-10')}>
+          <div className="w-full max-w-[min(100%,42rem)]">
+            {afterContent}
+          </div>
+        </div>
+      )}
 
       {/* 操作菜单 — agent 消息用 ... 菜单，user 消息的回退按钮已内置在 UserMessage 中 */}
       {showActionMenu && message.type === 'agent' && (

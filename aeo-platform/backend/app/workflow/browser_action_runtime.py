@@ -130,6 +130,7 @@ async def _hydrate_takeover_for_request(
     bundle = {
         "takeover_id": takeover.takeover_id,
         "mode": takeover.mode,
+        "open_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/open",
         "canvas_config_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/canvas-config",
         "vnc_url_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/vnc-url",
         "heartbeat_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/heartbeat",
@@ -196,6 +197,16 @@ def _serialize_request(request: BrowserActionRequest) -> dict[str, Any]:
     }
 
 
+def _materialize_request(request: BrowserActionRequest) -> BrowserActionRequest:
+    if request.event is None:
+        request.event = asyncio.Event()
+        if request.resolution is not None:
+            request.event.set()
+    _requests_by_id[request.request_id] = request
+    _requests_by_session.setdefault(request.session_id, set()).add(request.request_id)
+    return request
+
+
 def _deserialize_request(payload: dict[str, Any]) -> BrowserActionRequest | None:
     request_id = payload.get("request_id")
     session_id = payload.get("session_id")
@@ -234,6 +245,21 @@ def _deserialize_request(payload: dict[str, Any]) -> BrowserActionRequest | None
             if isinstance(payload.get("takeover"), dict)
             else None
         ),
+    )
+
+
+def _request_matches_reuse(
+    request: BrowserActionRequest,
+    *,
+    platform: str,
+    action_type: str,
+    run_id: str | None,
+) -> bool:
+    return (
+        request.resolution is None
+        and request.platform == platform
+        and request.action_type == action_type
+        and request.run_id == run_id
     )
 
 
@@ -323,12 +349,99 @@ async def register_browser_action_request(
     return request
 
 
+async def _find_reusable_browser_action_request(
+    *,
+    session_id: str,
+    platform: str,
+    action_type: str,
+    run_id: str | None,
+    request_id: str | None = None,
+) -> BrowserActionRequest | None:
+    if request_id:
+        exact = await get_browser_action_request(request_id)
+        if exact is not None and exact.resolution is None:
+            return exact
+
+    candidate_ids = set(_requests_by_session.get(session_id, set()))
+    client = await _get_redis()
+    if client is not None:
+        candidate_ids.update(await client.smembers(_session_key(session_id)))
+
+    newest_match: BrowserActionRequest | None = None
+    for candidate_id in candidate_ids:
+        request = await get_browser_action_request(candidate_id)
+        if request is None:
+            continue
+        if not _request_matches_reuse(
+            request,
+            platform=platform,
+            action_type=action_type,
+            run_id=run_id,
+        ):
+            continue
+        if newest_match is None or request.created_at > newest_match.created_at:
+            newest_match = request
+
+    return newest_match
+
+
+async def get_or_register_browser_action_request(
+    *,
+    session_id: str,
+    platform: str,
+    action_type: str,
+    message: str,
+    action_hint: str | None,
+    target_url: str | None,
+    progress: float,
+    run_id: str | None = None,
+    state: str | None = None,
+    request_id: str | None = None,
+) -> tuple[BrowserActionRequest, bool]:
+    _purge_expired()
+
+    existing = await _find_reusable_browser_action_request(
+        session_id=session_id,
+        platform=platform,
+        action_type=action_type,
+        run_id=run_id,
+        request_id=request_id,
+    )
+    if existing is not None:
+        await update_browser_action_request(
+            existing.request_id,
+            state=state or infer_browser_action_state(action_type),
+            target_url=target_url,
+            message=message,
+            action_hint=action_hint,
+            progress=progress,
+        )
+        refreshed = await get_browser_action_request(existing.request_id)
+        return (refreshed or existing, False)
+
+    created = await register_browser_action_request(
+        session_id=session_id,
+        platform=platform,
+        action_type=action_type,
+        message=message,
+        action_hint=action_hint,
+        target_url=target_url,
+        progress=progress,
+        run_id=run_id,
+        state=state,
+    )
+    return created, True
+
+
 async def update_browser_action_request(
     request_id: str,
     *,
     state: str | None = None,
     takeover: dict[str, Any] | None = None,
     target_url: str | None = None,
+    message: str | None = None,
+    action_hint: str | None = None,
+    progress: float | None = None,
 ) -> BrowserActionRequest | None:
     """Persist request-side metadata needed for reconnect rehydration."""
 
@@ -340,6 +453,12 @@ async def update_browser_action_request(
             request.takeover = dict(takeover)
         if target_url is not None:
             request.target_url = target_url
+        if message is not None:
+            request.message = message
+        if action_hint is not None:
+            request.action_hint = action_hint
+        if progress is not None:
+            request.progress = float(progress)
 
     client = await _get_redis()
     if client is not None:
@@ -355,18 +474,26 @@ async def update_browser_action_request(
                 payload["takeover"] = dict(takeover)
             if target_url is not None:
                 payload["target_url"] = target_url
+            if message is not None:
+                payload["message"] = message
+            if action_hint is not None:
+                payload["action_hint"] = action_hint
+            if progress is not None:
+                payload["progress"] = float(progress)
             await client.set(
                 _request_key(request_id), json.dumps(payload), ex=_REQUEST_TTL_SECONDS
             )
             if request is None:
                 request = _deserialize_request(payload)
+                if request is not None:
+                    request = _materialize_request(request)
 
     return request
 
 
 async def wait_for_browser_action_resolution(
     request_id: str,
-    timeout: float = 300.0,
+    timeout: float = 480.0,
 ) -> BrowserActionResolution | None:
     request = _requests_by_id.get(request_id)
     client = await _get_redis()
@@ -451,7 +578,10 @@ async def get_browser_action_request(request_id: str) -> BrowserActionRequest | 
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return None
-    return _deserialize_request(payload)
+    request = _deserialize_request(payload)
+    if request is None:
+        return None
+    return _materialize_request(request)
 
 
 async def clear_browser_action_request(

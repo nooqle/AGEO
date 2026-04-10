@@ -58,7 +58,7 @@ class CreateTakeoverRequest(BaseModel):
     """Request body for issuing a takeover bundle."""
 
     platform: str
-    mode: str = "canvas_cdp"
+    mode: str = "vnc_fallback"
     reason: str = "manual_intervention"
 
 
@@ -66,14 +66,21 @@ class TakeoverHeartbeatRequest(BaseModel):
     """Heartbeat payload from the active frontend."""
 
     frontend_id: str
-    mode: str = "canvas_cdp"
+    mode: str = "vnc_fallback"
+
+
+class TakeoverOpenRequest(BaseModel):
+    """Open or reopen payload from the frontend."""
+
+    frontend_id: str | None = None
+    mode: str = "vnc_fallback"
 
 
 class TakeoverResolveRequest(BaseModel):
     """Resolve payload from the active frontend."""
 
     frontend_id: str
-    mode: str = "canvas_cdp"
+    mode: str = "vnc_fallback"
     client_observation: str | None = None
     resume_gate_result: str | None = None
 
@@ -132,6 +139,7 @@ def _serialize_takeover(takeover: SpectaAioTakeover) -> dict[str, Any]:
         "last_heartbeat_at": _serialize_datetime(takeover.last_heartbeat_at),
         "resume_gate_result": takeover.resume_gate_result,
         "access_bundle": {
+            "open_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/open",
             "canvas_config_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/canvas-config",
             "vnc_url_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/vnc-url",
             "heartbeat_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/heartbeat",
@@ -360,6 +368,42 @@ async def get_takeover(
     }
 
 
+@router.post("/takeovers/{takeover_id}/open")
+async def open_takeover(
+    takeover_id: str,
+    body: TakeoverOpenRequest,
+    current_user=Depends(get_current_user),
+):
+    """Open or reopen a takeover and reset its user-facing operation window."""
+
+    try:
+        takeover = await aio_session_manager.open_takeover(
+            takeover_id=takeover_id,
+            user_id=str(current_user.id),
+            frontend_id=body.frontend_id,
+            mode=body.mode,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+
+    target_url = await _resolve_takeover_target_url(takeover)
+    if not _is_valid_takeover_target_url(target_url):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前接管未找到有效目标页面，请重新申请新的 takeover。",
+        )
+    return {
+        "takeover": _serialize_takeover_with_target(
+            takeover, target_url=target_url
+        )
+    }
+
+
 @router.get("/takeovers/{takeover_id}/canvas-config")
 async def get_takeover_canvas_config(
     takeover_id: str,
@@ -390,7 +434,10 @@ async def get_takeover_canvas_config(
         timeout_seconds=settings.AIO_REQUEST_TIMEOUT_SECONDS,
     )
     try:
-        await client.stabilize_browser_surface(preferred_url=target_url)
+        await client.stabilize_browser_surface(
+            preferred_url=target_url,
+            exclusive=True,
+        )
     except AioBackendError as exc:
         _raise_from_aio_error(exc)
     await aio_session_manager.refresh_browser_info(takeover.session_id)
@@ -702,12 +749,8 @@ async def resolve_takeover(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
-    resolution = (
-        "completed"
-        if takeover.state.value == "resolved"
-        else "skip"
-    )
-    await _settle_takeover_request(takeover, resolution=resolution)
+    if takeover.state.value == "resolved":
+        await _settle_takeover_request(takeover, resolution="completed")
     target_url = await _resolve_takeover_target_url(takeover)
     return {
         "takeover": _serialize_takeover_with_target(

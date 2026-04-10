@@ -65,6 +65,7 @@ export type BrowserActionType = 'login' | 'verify' | 'modal';
 export interface BrowserTakeoverAccess {
   takeoverId: string;
   mode: AioTakeoverMode;
+  openPath?: string;
   canvasConfigPath?: string;
   vncUrlPath?: string;
   heartbeatPath?: string;
@@ -83,6 +84,7 @@ export interface BrowserState {
   actionHint?: string;
   progress?: number;
   requestId?: string;
+  relatedMessageId?: string;
   takeover?: BrowserTakeoverAccess;
 }
 

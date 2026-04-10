@@ -1,6 +1,15 @@
 'use client';
 
-import { ReactNode, useState, useRef, useCallback, useEffect } from 'react';
+import {
+  ReactElement,
+  ReactNode,
+  cloneElement,
+  isValidElement,
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+} from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RiMenuLine } from '@remixicon/react';
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -15,6 +24,12 @@ interface ChatLayoutProps {
   children: ReactNode;
   canvas?: ReactNode;
   sidebar?: ReactNode;
+  sidebarCollapsed?: boolean;
+}
+
+interface SidebarControlProps {
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
 const CANVAS_MIN_W = 480;
@@ -25,8 +40,14 @@ const CANVAS_MIN_RATIO = 0.48;
 const CANVAS_MAX_RATIO = 0.72;
 const CHAT_MIN_W = 320;
 const CANVAS_DEFAULT_TABLET = 440;
+const SIDEBAR_COLLAPSED_W = 76;
 
-export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
+export function ChatLayout({
+  children,
+  canvas,
+  sidebar,
+  sidebarCollapsed = false,
+}: ChatLayoutProps) {
   const { isOpen, setOpen, contents, activeContentIndex } = useCanvasStore();
   const { isMobile, isTablet, canShowSplitCanvas, isDesktop } = useResponsive();
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -34,6 +55,21 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
   const showSplitCanvas = isOpen && canShowSplitCanvas && canvas;
   const splitHostRef = useRef<HTMLDivElement>(null);
   const availableSplitWidthRef = useRef(CANVAS_DEFAULT_TABLET);
+  const desktopSidebarWidth =
+    hasSidebar && !isMobile
+      ? sidebarCollapsed
+        ? SIDEBAR_COLLAPSED_W
+        : isTablet
+          ? 240
+          : 280
+      : 0;
+  const mobileSidebar =
+    hasSidebar && isValidElement(sidebar)
+      ? cloneElement(sidebar as ReactElement<SidebarControlProps>, {
+          collapsed: false,
+          onToggleCollapsed: undefined,
+        })
+      : sidebar;
 
   // Resizable canvas width
   const [canvasWidth, setCanvasWidth] = useState(
@@ -44,11 +80,11 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
   const startWidth = useRef(0);
 
   const reservedDesktopWidth = useCallback(() => {
-    if (!hasSidebar || isMobile) {
+    if (desktopSidebarWidth <= 0) {
       return 0;
     }
-    return (isTablet ? 240 : 280) + 48;
-  }, [hasSidebar, isMobile, isTablet]);
+    return desktopSidebarWidth + 48;
+  }, [desktopSidebarWidth]);
 
   const clampCanvasWidth = useCallback((width: number, availableWidth = availableSplitWidthRef.current) => {
     const safeAvailableWidth = Math.max(0, availableWidth);
@@ -151,17 +187,15 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
         {/* Sidebar — fixed 280px on desktop, 240px on laptop, hidden on mobile */}
         {hasSidebar && !isMobile && (
           <motion.div
-            className={cn(
-              'flex-shrink-0 h-full',
-              isTablet ? 'w-[240px]' : 'w-[280px]'
-            )}
+            className="h-full flex-shrink-0 overflow-hidden"
             style={{
+              width: desktopSidebarWidth,
               backgroundColor: 'var(--bg-primary)',
               borderRight: '1px solid var(--border-subtle)',
             }}
             initial={{ x: -20, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            transition={{ duration: 0.3 }}
+            animate={{ x: 0, opacity: 1, width: desktopSidebarWidth }}
+            transition={{ duration: 0.24 }}
           >
             {sidebar}
           </motion.div>
@@ -287,7 +321,7 @@ export function ChatLayout({ children, canvas, sidebar }: ChatLayoutProps) {
       {/* Mobile Sidebar Drawer */}
       {isMobile && hasSidebar && (
         <MobileDrawer open={mobileDrawerOpen} onClose={() => setMobileDrawerOpen(false)}>
-          {sidebar}
+          {mobileSidebar}
         </MobileDrawer>
       )}
     </div>

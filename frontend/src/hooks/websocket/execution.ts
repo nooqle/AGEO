@@ -73,7 +73,10 @@ export function buildExecutionProgress(
   };
 }
 
-export function buildBrowserState(data: WebSocketEventData): BrowserState {
+export function buildBrowserState(
+  data: WebSocketEventData,
+  relatedMessageId?: string,
+): BrowserState {
   const state = BROWSER_STATES.includes((data.state || '') as BrowserState['state'])
     ? ((data.state || '') as BrowserState['state'])
     : 'idle';
@@ -102,6 +105,10 @@ export function buildBrowserState(data: WebSocketEventData): BrowserState {
         takeoverId:
           typeof rawTakeover.takeover_id === 'string' ? rawTakeover.takeover_id : '',
         mode: normalizeAioTakeoverMode(rawTakeover.mode),
+        openPath:
+          typeof rawTakeover.open_path === 'string'
+            ? rawTakeover.open_path
+            : undefined,
         canvasConfigPath:
           typeof rawTakeover.canvas_config_path === 'string'
             ? rawTakeover.canvas_config_path
@@ -144,6 +151,10 @@ export function buildBrowserState(data: WebSocketEventData): BrowserState {
     actionHint: typeof data.action_hint === 'string' ? data.action_hint : undefined,
     progress: typeof data.progress === 'number' ? data.progress : undefined,
     requestId: typeof data.request_id === 'string' ? data.request_id : undefined,
+    relatedMessageId:
+      typeof data.related_message_id === 'string'
+        ? data.related_message_id
+        : relatedMessageId,
     takeover: takeover?.takeoverId ? takeover : undefined,
   };
 }

@@ -257,6 +257,7 @@ async def _dispatch_queued_runs() -> None:
                 continue
 
             lease_owner = claimed.lease_owner or "scheduler:dispatcher"
+            monitoring_service = MonitoringService(db)
             await monitoring_service.record_run_started(schedule.id, task.id)
             baseline = schedule.baseline_data
             platforms = schedule.platforms

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 import shlex
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import websockets
@@ -746,6 +747,7 @@ class AioSandboxClient:
         *,
         preferred_url: str | None = None,
         allow_blank_fallback: bool = False,
+        exclusive: bool = False,
     ) -> dict[str, Any]:
         """Ensure the browser has at least one usable page target for takeover UI.
 
@@ -771,6 +773,11 @@ class AioSandboxClient:
         )
         if preferred_target_url and self._is_internal_browser_page(preferred_target_url):
             preferred_target_url = None
+        preferred_target_host = (
+            (urlparse(preferred_target_url).netloc or "").lower()
+            if preferred_target_url
+            else ""
+        )
 
         try:
             async with websockets.connect(
@@ -815,6 +822,16 @@ class AioSandboxClient:
                         result = payload.get("result")
                         return result if isinstance(result, dict) else {}
 
+                async def close_target(target_id: str | None) -> None:
+                    if not target_id:
+                        return
+                    try:
+                        await send_command("Target.closeTarget", {"targetId": target_id})
+                    except Exception:
+                        # Surface cleanup is best-effort; failure to close a stale
+                        # tab should not block the user from taking over the main one.
+                        return
+
                 targets = (
                     await send_command("Target.getTargets")
                 ).get("targetInfos", [])
@@ -829,37 +846,80 @@ class AioSandboxClient:
                     if not self._is_internal_browser_page(target.get("url"))
                 ]
                 if preferred_target_url:
-                    matching_target = next(
-                        (
+                    exact_matches = [
+                        target
+                        for target in usable_pages
+                        if str(target.get("url") or "").strip() == preferred_target_url
+                    ]
+                    matching_target = exact_matches[-1] if exact_matches else None
+                    if matching_target is None and preferred_target_host:
+                        host_matches = [
                             target
                             for target in usable_pages
-                            if str(target.get("url") or "").strip()
-                            == preferred_target_url
-                        ),
-                        None,
-                    )
+                            if (urlparse(str(target.get("url") or "")).netloc or "").lower()
+                            == preferred_target_host
+                        ]
+                        if host_matches:
+                            # Prefer the latest host-matching page so takeover
+                            # sticks to the page that the live handler most
+                            # recently navigated.
+                            matching_target = host_matches[-1]
+
+                    selected_target_id: str | None = None
                     if matching_target:
+                        selected_target_id = matching_target.get("targetId")
+                        if exclusive and selected_target_id:
+                            for target in page_targets:
+                                target_id = target.get("targetId")
+                                if target_id == selected_target_id:
+                                    continue
+                                await close_target(target_id)
+                        if selected_target_id:
+                            await send_command(
+                                "Target.activateTarget",
+                                {"targetId": selected_target_id},
+                            )
                         return {
                             "action": "reused_existing_page",
-                            "target_id": matching_target.get("targetId"),
-                            "page_count": len(page_targets),
+                            "target_id": selected_target_id,
+                            "page_count": 1 if exclusive else len(page_targets),
                             "preferred_url": preferred_target_url,
+                            "exclusive": exclusive,
                         }
                     created = await send_command(
                         "Target.createTarget",
                         {"url": preferred_target_url},
                     )
+                    selected_target_id = created.get("targetId")
+                    if exclusive and selected_target_id:
+                        for target in page_targets:
+                            target_id = target.get("targetId")
+                            if target_id == selected_target_id:
+                                continue
+                            await close_target(target_id)
+                    if selected_target_id:
+                        await send_command(
+                            "Target.activateTarget",
+                            {"targetId": selected_target_id},
+                        )
                     return {
                         "action": "created_page_target",
-                        "target_id": created.get("targetId"),
+                        "target_id": selected_target_id,
                         "preferred_url": preferred_target_url,
-                        "page_count": len(page_targets) + 1,
+                        "page_count": 1 if exclusive else len(page_targets) + 1,
+                        "exclusive": exclusive,
                     }
 
                 if usable_pages:
+                    selected_target_id = usable_pages[-1].get("targetId")
+                    if selected_target_id:
+                        await send_command(
+                            "Target.activateTarget",
+                            {"targetId": selected_target_id},
+                        )
                     return {
                         "action": "reused_existing_page",
-                        "target_id": usable_pages[0].get("targetId"),
+                        "target_id": selected_target_id,
                         "page_count": len(page_targets),
                     }
                 if allow_blank_fallback:

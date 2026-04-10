@@ -60,6 +60,7 @@ from app.workflow.prompt_assembly import PromptAssembly, PromptSection
 from app.workflow.runtime_policy_executor import (
     build_alternative_action_catalog,
     clear_runtime_policy_fields,
+    get_user_visible_runtime_label,
     parse_next_required_action,
     resolve_answer_fetch_mode_policy,
     summarize_alternative_actions,
@@ -1337,7 +1338,7 @@ DIRECTIVE_A3_NEXT_FETCH = (
     "在消息中说明问题列表已在右侧画布中展示。然后在消息末尾用自然语言列出以下选项，每个选项必须包含说明文字：\n"
     "1. 快速采集（推荐）— 通过 API 调用豆包、元宝和 Kimi，并通过浏览器采集 DeepSeek，约 3-5 分钟。"
     "能快速建立品牌在 AI 平台中的初步观感，但 API 返回的内容与真实用户在网页端看到的可能存在差异\n"
-    "2. 完整采集 — 4 个平台全部通过浏览器模拟真实用户访问，约 8-15 分钟。"
+    "2. 完整采集 — 4 个平台全部通过浏览器模拟真实用户访问，约 10-20 分钟。"
     "完全还原用户在网页端的真实体验，采集到的回答、引用来源和品牌提及最为准确，是深度 AEO 分析的最佳选择\n"
     "3. 重新生成问题 — 如果对当前问题不满意\n"
     "您可以回复序号，或者直接说您的想法。\n"
@@ -1385,7 +1386,7 @@ def _build_public_skill_index(state: AgentState) -> str:
         if name == "post_analysis_skill" and not state.get("fetch_results"):
             availability = "需要已有抓取结果或报告"
         elif name == "analysis_report_skill" and not state.get("fetch_results"):
-            availability = "需要先完成 A4 抓取"
+            availability = "需要先完成答案抓取"
         elif name == "confidence_analysis_skill" and not state.get("fetch_results"):
             availability = "需要先有可评估的抓取结果"
         lines.append(f"- {name}: {description}（{availability}）")
@@ -1481,7 +1482,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 所有对用户可见的回复、计划、提示、说明和思考流都必须使用中文；不要输出英文草稿或英文推理片段。
                 - 在回复中说明打算做什么，然后调用对应工具。
                 - 不要一次调用多个工具，每轮只执行一个步骤。
-                - A2 完成后必须 ask_user 引导用户选画像；A3 完成后必须 ask_user 让用户选择采集模式；A4 完成后不要 ask_user，必须立即调用 analysis_report_skill；A5 完成后必须 ask_user 让用户决定是否做引用置信度评估或继续后续分析。
+                - 画像生成完成后必须 ask_user 引导用户选画像；问题生成完成后必须 ask_user 让用户选择采集模式；答案抓取完成后不要 ask_user，必须立即调用 analysis_report_skill；分析报告完成后必须 ask_user 让用户决定是否做引用置信度评估或继续后续分析。
                 - 如果用户请求不明确，用自然语言追问，不要调用 ask_user。
                 - 步骤完成后的回复应包含 1 个具体数据点或风险发现，不要只报“完成了”。
                 - 如果用户直接提供问题文本并要求抓取答案，可通过 answer_fetch 的 custom_questions 传入，无需先调用 question_simulation，但仍需明确 fetch_mode。
@@ -1489,7 +1490,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 当条件不足、步骤失败或路由受限时，不要只说“无法完成/不能执行”；必须同时说明原因，并给出至少一个可执行的下一步方案。
 
                 ask_user 使用限制：
-                - 只允许在表格导入确认、A1 完成后确认基线、基线或 A5 完成后选下一步、A2 选画像、A3 选采集模式、步骤失败恢复这几类场景使用。
+                - 只允许在表格导入确认、品牌/竞品识别后确认基线、基线或分析报告完成后选下一步、画像生成后选画像、问题生成后选采集模式、步骤失败恢复这几类场景使用。
                 - 除这些场景外，所有其他情况都直接自然语言回复，绝不调用 ask_user。
                 - 调用 ask_user 时不传 options 参数，只传 message='请回复序号或输入您的想法'。
                 """
@@ -2499,8 +2500,9 @@ def _build_error_recovery_message(
             message += f" 当前优先方案：{alternative_preview}。"
         return message
 
+    failed_step_label = get_user_visible_runtime_label(failed_step)
     clipped_error = error_msg[:100] if error_msg else "未知错误"
-    message = f"步骤 {failed_step} 执行遇到问题：{clipped_error}。"
+    message = f"{failed_step_label}遇到问题：{clipped_error}。"
     if alternative_preview:
         message += f" 建议优先：{alternative_preview}。"
     message += "请选择后续操作。"
@@ -3673,9 +3675,14 @@ async def _handle_tool_call(
                 else state.get("fetch_mode", "fast")
             )
             if _current_fetch_mode == "full":
+                _full_schedule = (
+                    "各平台依次采集"
+                    if settings.AIO_ENABLED and settings.AIO_BASE_URL
+                    else "4 条浏览器流水线并行"
+                )
                 _fetch_fallback = (
                     f"正在向{_all_names}平台提问（完整采集模式，全浏览器），抓取各平台对品牌的真实回答。"
-                    f"4 条浏览器流水线并行，预计总耗时约 10-20 分钟。"
+                    f"{_full_schedule}，预计总耗时约 10-20 分钟。"
                     "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
                 )
             else:

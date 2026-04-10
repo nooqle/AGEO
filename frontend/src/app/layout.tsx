@@ -2,6 +2,7 @@
 import './globals.css';
 import '@/styles/design-system.css';
 import { ToastContainer } from '@/components/ui/toast';
+import { SiteFooter } from '@/components/layout/SiteFooter';
 
 export const metadata: Metadata = {
   title: 'Specta AI - 品牌声量智能分析平台',
@@ -24,6 +25,7 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         {children}
+        <SiteFooter />
         <ToastContainer />
       </body>
     </html>

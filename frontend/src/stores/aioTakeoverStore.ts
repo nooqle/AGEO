@@ -4,6 +4,11 @@ import type { BrowserTakeoverAccess } from '@/types/agent';
 import type { AioTakeoverMode, AioTakeoverRecord } from '@/types/aio';
 
 const DEFAULT_HEARTBEAT_MS = 10000;
+const DEFAULT_UI_TAKEOVER_MODE: AioTakeoverMode = 'vnc_fallback';
+
+function normalizeUiTakeoverMode(mode?: AioTakeoverMode | null): AioTakeoverMode {
+  return mode === 'canvas_cdp' ? DEFAULT_UI_TAKEOVER_MODE : (mode ?? DEFAULT_UI_TAKEOVER_MODE);
+}
 
 type TakeoverRegistration = {
   takeoverId: string;
@@ -12,6 +17,7 @@ type TakeoverRegistration = {
   mode: AioTakeoverMode;
   heartbeatIntervalMs: number;
   targetUrl?: string;
+  openPath?: string;
 };
 
 function createFrontendId(): string {
@@ -24,7 +30,10 @@ function createFrontendId(): string {
 interface AioTakeoverStoreState {
   registrations: Record<string, TakeoverRegistration>;
   records: Record<string, AioTakeoverRecord>;
+  openedTakeoverIds: Record<string, true>;
+  openedAtMsByTakeoverId: Record<string, number>;
   upsertRegistration: (access: BrowserTakeoverAccess) => void;
+  markTakeoverOpened: (takeoverId: string, openedAtMs?: number) => void;
   removeRegistration: (takeoverId: string) => void;
   clearTakeover: (takeoverId: string) => void;
   setTakeoverMode: (takeoverId: string, mode: AioTakeoverMode) => void;
@@ -36,6 +45,8 @@ interface AioTakeoverStoreState {
 export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
   registrations: {},
   records: {},
+  openedTakeoverIds: {},
+  openedAtMsByTakeoverId: {},
 
   upsertRegistration: (access) =>
     set((state) => {
@@ -44,9 +55,13 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
         takeoverId: access.takeoverId,
         frontendId: existing?.frontendId ?? createFrontendId(),
         heartbeatPath: access.heartbeatPath,
-        mode: access.mode,
+        // Use the remote desktop surface as the primary cloud-computer view.
+        // The CDP screencast renderer is faster on ideal links, but it is
+        // fragile when the backend rebinds targets during manual resume.
+        mode: normalizeUiTakeoverMode(existing?.mode),
         heartbeatIntervalMs: existing?.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS,
         targetUrl: access.targetUrl ?? existing?.targetUrl,
+        openPath: access.openPath ?? existing?.openPath,
       };
       return {
         registrations: {
@@ -56,15 +71,33 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
       };
     }),
 
+  markTakeoverOpened: (takeoverId, openedAtMs) =>
+    set((state) => ({
+      openedTakeoverIds: {
+        ...state.openedTakeoverIds,
+        [takeoverId]: true,
+      },
+      openedAtMsByTakeoverId: {
+        ...state.openedAtMsByTakeoverId,
+        [takeoverId]: openedAtMs ?? Date.now(),
+      },
+    })),
+
   removeRegistration: (takeoverId) =>
     set((state) => {
       if (!state.registrations[takeoverId]) {
         return state;
       }
       const registrations = { ...state.registrations };
+      const openedTakeoverIds = { ...state.openedTakeoverIds };
+      const openedAtMsByTakeoverId = { ...state.openedAtMsByTakeoverId };
       delete registrations[takeoverId];
+      delete openedTakeoverIds[takeoverId];
+      delete openedAtMsByTakeoverId[takeoverId];
       return {
         registrations,
+        openedTakeoverIds,
+        openedAtMsByTakeoverId,
       };
     }),
 
@@ -75,11 +108,17 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
       }
       const registrations = { ...state.registrations };
       const records = { ...state.records };
+      const openedTakeoverIds = { ...state.openedTakeoverIds };
+      const openedAtMsByTakeoverId = { ...state.openedAtMsByTakeoverId };
       delete registrations[takeoverId];
       delete records[takeoverId];
+      delete openedTakeoverIds[takeoverId];
+      delete openedAtMsByTakeoverId[takeoverId];
       return {
         registrations,
         records,
+        openedTakeoverIds,
+        openedAtMsByTakeoverId,
       };
     }),
 
@@ -130,10 +169,14 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
               ...state.registrations,
               [record.takeoverId]: {
                 ...registration,
+                mode: normalizeUiTakeoverMode(registration.mode),
                 targetUrl:
                   record.targetUrl ??
                   record.accessBundle.targetUrl ??
                   registration.targetUrl,
+                openPath:
+                  record.accessBundle.openPath ??
+                  registration.openPath,
               },
             }
           : state.registrations,
@@ -143,5 +186,7 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
   clear: () => ({
     registrations: {},
     records: {},
+    openedTakeoverIds: {},
+    openedAtMsByTakeoverId: {},
   }),
 }));

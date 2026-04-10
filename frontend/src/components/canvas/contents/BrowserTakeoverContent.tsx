@@ -5,13 +5,11 @@ import {
   RiAlertLine,
   RiExternalLinkLine,
   RiRefreshLine,
-  RiShieldKeyholeLine,
 } from '@remixicon/react';
 
 import { api, getApiBaseUrl } from '@/services/api';
 import { getStoredAccessToken } from '@/lib/auth-storage';
 import { useAioTakeoverStore } from '@/stores/aioTakeoverStore';
-import { useCanvasStore } from '@/stores/canvasStore';
 import type { BrowserCanvasContent } from '@/types/canvas';
 import type {
   AioCanvasConfig,
@@ -37,6 +35,34 @@ const PLATFORM_LABELS = {
   kimi: 'Kimi',
   hunyuan: '元宝',
 } as const;
+
+const DEFAULT_RENDER_MODE: 'canvas_cdp' | 'vnc_fallback' = 'vnc_fallback';
+const CANVAS_BOOT_TIMEOUT_MS = 12000;
+const TAKEOVER_REQUEST_TIMEOUT_MS = 12000;
+const CANVAS_BOOT_TIMEOUT_ERROR = '__canvas_boot_timeout__';
+const BENIGN_TARGET_CLOSE_PATTERNS = [
+  'TargetCloseError',
+  'Target closed',
+  'Page.screencastFrameAck',
+];
+
+function isBenignTargetCloseError(value: unknown): boolean {
+  const message =
+    value instanceof Error
+      ? `${value.name}: ${value.message}`
+      : typeof value === 'string'
+        ? value
+        : value && typeof value === 'object' && 'message' in value
+          ? String((value as { message?: unknown }).message ?? '')
+          : '';
+  return BENIGN_TARGET_CLOSE_PATTERNS.some((pattern) => message.includes(pattern));
+}
+
+function normalizeRenderMode(
+  mode?: 'canvas_cdp' | 'vnc_fallback' | null,
+): 'canvas_cdp' | 'vnc_fallback' {
+  return mode === 'canvas_cdp' ? DEFAULT_RENDER_MODE : (mode ?? DEFAULT_RENDER_MODE);
+}
 
 const TAKEOVER_STATE_LABELS: Record<AioTakeoverState, string> = {
   requested: '等待',
@@ -76,6 +102,29 @@ function formatExpiry(value?: string | null): string | null {
   });
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutCode: string,
+): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(timeoutCode)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
 interface BrowserTakeoverContentProps {
   content: BrowserCanvasContent;
 }
@@ -86,7 +135,6 @@ export function BrowserTakeoverContent({
   const browserState = content.data.browserState;
   const takeover = browserState.takeover ?? null;
   const takeoverId = takeover?.takeoverId ?? null;
-  const removeContent = useCanvasStore((state) => state.removeContent);
   const takeoverRecord = useAioTakeoverStore((state) =>
     takeoverId ? state.records[takeoverId] ?? null : null,
   );
@@ -113,7 +161,7 @@ export function BrowserTakeoverContent({
   const [vncConfig, setVncConfig] = useState<AioVncUrl | null>(null);
   const [renderState, setRenderState] = useState<RenderState>('hidden');
   const [currentMode, setCurrentMode] = useState<'canvas_cdp' | 'vnc_fallback'>(
-    takeoverRegistration?.mode ?? takeover?.mode ?? 'canvas_cdp',
+    normalizeRenderMode(takeoverRegistration?.mode),
   );
   const [statusText, setStatusText] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -129,10 +177,6 @@ export function BrowserTakeoverContent({
     null;
   const vncUrlPath =
     takeoverRecord?.accessBundle.vncUrlPath ?? takeover?.vncUrlPath ?? null;
-  const resolvePath =
-    takeoverRecord?.accessBundle.resolvePath ?? takeover?.resolvePath ?? null;
-  const cancelPath =
-    takeoverRecord?.accessBundle.cancelPath ?? takeover?.cancelPath ?? null;
   const expiryText = formatExpiry(
     takeoverRecord?.expiresAt || takeover?.expiresAt,
   );
@@ -155,19 +199,18 @@ export function BrowserTakeoverContent({
     }
   }, []);
 
-  const closeTakeoverCanvas = useCallback(async () => {
-    await destroyBrowserUi();
-    removeContent(content.id);
-  }, [content.id, destroyBrowserUi, removeContent]);
-
   const loadVncFallback = useCallback(async () => {
     if (!vncUrlPath) {
       setRenderState('error');
-      setStatusText('VNC 不可用');
+      setStatusText('当前云电脑暂时不可用，请重新打开浏览器。');
       return;
     }
 
-    const vnc = await api.getAioTakeoverVncUrl(vncUrlPath);
+    const vnc = await withTimeout(
+      api.getAioTakeoverVncUrl(vncUrlPath),
+      TAKEOVER_REQUEST_TIMEOUT_MS,
+      'vnc_config_timeout',
+    );
     setVncConfig(vnc);
     setCurrentMode('vnc_fallback');
     if (takeoverId) {
@@ -175,7 +218,7 @@ export function BrowserTakeoverContent({
     }
     if (!vnc.upstreamVncAvailable) {
       setRenderState('error');
-      setStatusText('VNC 不可用');
+      setStatusText('当前云电脑暂时不可用，请重新打开浏览器。');
       return;
     }
     setRenderState('vnc_ready');
@@ -192,13 +235,17 @@ export function BrowserTakeoverContent({
 
     const loadTakeoverRecord = async () => {
       try {
-        const record = await api.getAioTakeover(takeoverId);
+        const record = await withTimeout(
+          api.getAioTakeover(takeoverId),
+          TAKEOVER_REQUEST_TIMEOUT_MS,
+          'takeover_record_timeout',
+        );
         if (cancelled) return;
         upsertTakeoverRecord(record);
-      } catch (error) {
+      } catch {
         if (cancelled) return;
         setRenderState('error');
-        setStatusText(error instanceof Error ? error.message : '初始化失败');
+        setStatusText('云电脑初始化失败，请重新打开浏览器。');
       }
     };
 
@@ -212,8 +259,18 @@ export function BrowserTakeoverContent({
     if (!takeoverId || !takeoverRegistration?.mode) {
       return;
     }
-    setCurrentMode(takeoverRegistration.mode);
+    setCurrentMode(normalizeRenderMode(takeoverRegistration.mode));
   }, [takeoverId, takeoverRegistration?.mode]);
+
+  useEffect(() => {
+    if (browserState.state !== 'submitting') {
+      return;
+    }
+
+    setRenderState('submitting');
+    setStatusText('正在确认当前平台操作，马上继续抓取...');
+    void destroyBrowserUi();
+  }, [browserState.state, destroyBrowserUi]);
 
   useEffect(() => {
     if (!takeoverId) {
@@ -233,16 +290,30 @@ export function BrowserTakeoverContent({
       await destroyBrowserUi();
 
       try {
-        const config = await api.getAioTakeoverCanvasConfig(canvasConfigPath);
+        const config = await withTimeout(
+          api.getAioTakeoverCanvasConfig(canvasConfigPath),
+          TAKEOVER_REQUEST_TIMEOUT_MS,
+          'canvas_config_timeout',
+        );
         if (cancelled) return;
         setCanvasConfig(config);
         setHeartbeatInterval(takeoverId, config.heartbeatIntervalMs);
         setStatusText(null);
-      } catch (error) {
+      } catch {
         if (cancelled) return;
         setCanvasConfig(null);
+        if (vncUrlPath) {
+          setCurrentMode('vnc_fallback');
+          setTakeoverMode(takeoverId, 'vnc_fallback');
+          try {
+            await loadVncFallback();
+            return;
+          } catch {
+            // fall through to friendly error state
+          }
+        }
         setRenderState('error');
-        setStatusText(error instanceof Error ? error.message : 'Canvas 初始化失败');
+        setStatusText('云电脑连接失败，请重新打开浏览器。');
       }
     };
 
@@ -256,10 +327,10 @@ export function BrowserTakeoverContent({
       await destroyBrowserUi();
       try {
         await loadVncFallback();
-      } catch (error) {
+      } catch {
         if (cancelled) return;
         setRenderState('error');
-        setStatusText(error instanceof Error ? error.message : 'VNC 初始化失败');
+        setStatusText('云电脑连接失败，请重新打开浏览器。');
       }
     };
 
@@ -276,13 +347,16 @@ export function BrowserTakeoverContent({
     loadVncFallback,
     reloadNonce,
     setHeartbeatInterval,
+    setTakeoverMode,
     takeoverId,
+    vncUrlPath,
   ]);
 
   useEffect(() => {
     if (
       !takeoverId ||
       currentMode !== 'canvas_cdp' ||
+      browserState.state === 'submitting' ||
       !canvasCdpEndpoint ||
       !canvasRootRef.current
     ) {
@@ -292,12 +366,14 @@ export function BrowserTakeoverContent({
     let cancelled = false;
 
     const mountBrowserUi = async () => {
+      let timedOut = false;
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
       try {
         await destroyBrowserUi();
         const { BrowserUI } = await import('@agent-infra/browser-ui');
         if (cancelled || !canvasRootRef.current) return;
 
-        const instance = await BrowserUI.create({
+        const createPromise = BrowserUI.create({
           root: canvasRootRef.current,
           browserOptions: {
             connect: {
@@ -309,6 +385,24 @@ export function BrowserTakeoverContent({
             },
           },
         });
+        createPromise
+          .then(async (instance) => {
+            if (timedOut || cancelled) {
+              await instance.destroy().catch(() => undefined);
+            }
+          })
+          .catch(() => undefined);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            timedOut = true;
+            reject(new Error(CANVAS_BOOT_TIMEOUT_ERROR));
+          }, CANVAS_BOOT_TIMEOUT_MS);
+        });
+
+        const instance = await Promise.race([createPromise, timeoutPromise]);
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
 
         if (cancelled) {
           await instance.destroy().catch(() => undefined);
@@ -319,10 +413,30 @@ export function BrowserTakeoverContent({
         setRenderState('canvas_ready');
         setStatusText(null);
       } catch (error) {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
         if (cancelled) return;
         await destroyBrowserUi();
+        if (error instanceof Error && error.message === CANVAS_BOOT_TIMEOUT_ERROR) {
+          if (vncUrlPath) {
+            setStatusText('云电脑连接较慢，已自动切换到更稳定的兼容模式。');
+            setCurrentMode('vnc_fallback');
+            setTakeoverMode(takeoverId, 'vnc_fallback');
+            try {
+              await loadVncFallback();
+            } catch {
+              setRenderState('error');
+              setStatusText('云电脑连接失败，请重新打开浏览器。');
+            }
+            return;
+          }
+          setRenderState('error');
+          setStatusText('云电脑打开超时，请重试。');
+          return;
+        }
         setRenderState('error');
-        setStatusText(error instanceof Error ? error.message : 'Canvas 失败');
+        setStatusText('云电脑连接失败，请重新打开浏览器。');
       }
     };
 
@@ -332,7 +446,16 @@ export function BrowserTakeoverContent({
       cancelled = true;
       void destroyBrowserUi();
     };
-  }, [canvasCdpEndpoint, currentMode, destroyBrowserUi, takeoverId]);
+  }, [
+    browserState.state,
+    canvasCdpEndpoint,
+    currentMode,
+    destroyBrowserUi,
+    loadVncFallback,
+    setTakeoverMode,
+    takeoverId,
+    vncUrlPath,
+  ]);
 
   useEffect(() => {
     if (!takeoverId) {
@@ -340,95 +463,26 @@ export function BrowserTakeoverContent({
     }
     if (takeoverState === 'resolved') {
       removeRegistration(takeoverId);
-      void closeTakeoverCanvas();
       return;
     }
     if (takeoverState === 'expired') {
       removeRegistration(takeoverId);
       setRenderState('error');
-      setStatusText('已过期');
+      setStatusText('当前浏览器会话已失效，请回到左侧聊天卡片重新打开。');
       return;
     }
     if (takeoverState === 'cancelled') {
       removeRegistration(takeoverId);
       setRenderState('error');
-      setStatusText('已取消');
+      setStatusText('当前平台已跳过。');
       return;
     }
     if (takeoverState === 'resume_failed') {
       removeRegistration(takeoverId);
       setRenderState('error');
-      setStatusText('恢复失败');
+      setStatusText('暂未检测到当前平台操作已完成，请回到左侧聊天卡片重新打开或再次确认。');
     }
-  }, [closeTakeoverCanvas, removeRegistration, takeoverId, takeoverState]);
-
-  const handleResolve = async () => {
-    if (
-      !takeoverId ||
-      !takeoverRegistration?.frontendId ||
-      !resolvePath ||
-      renderState === 'submitting'
-    ) {
-      return;
-    }
-    setRenderState('submitting');
-    setStatusText('恢复中');
-    try {
-      const next = await api.resolveAioTakeover(resolvePath, {
-        frontendId: takeoverRegistration.frontendId,
-        mode: currentMode,
-        resumeGateResult: 'pass',
-        clientObservation: 'user_claimed_done',
-      });
-      upsertTakeoverRecord(next);
-      if (next.takeoverState === 'resolved') {
-        removeRegistration(takeoverId);
-        await closeTakeoverCanvas();
-        return;
-      }
-      removeRegistration(takeoverId);
-      setRenderState('error');
-      setStatusText(
-        next.resumeGateResult === 'fail_login_required'
-          ? '登录未完成'
-          : next.resumeGateResult === 'fail_captcha_required'
-            ? '验证未完成'
-            : next.resumeGateResult === 'fail_ui_not_ready'
-              ? '页面未就绪'
-              : next.resumeGateResult === 'fail_state_corrupt'
-                ? '状态损坏'
-                : '恢复失败',
-      );
-    } catch (error) {
-      setRenderState('error');
-      setStatusText(error instanceof Error ? error.message : '恢复失败');
-    }
-  };
-
-  const handleCancel = async () => {
-    if (
-      !takeoverId ||
-      !takeoverRegistration?.frontendId ||
-      !cancelPath ||
-      renderState === 'submitting'
-    ) {
-      return;
-    }
-    setRenderState('submitting');
-    setStatusText('取消中');
-    try {
-      const next = await api.cancelAioTakeover(cancelPath, {
-        frontendId: takeoverRegistration.frontendId,
-        reason: 'user_cancelled',
-      });
-      upsertTakeoverRecord(next);
-      removeRegistration(takeoverId);
-      await closeTakeoverCanvas();
-    } catch (error) {
-      setRenderState('error');
-      setStatusText(error instanceof Error ? error.message : '取消失败');
-    }
-  };
+  }, [removeRegistration, takeoverId, takeoverState]);
 
   const handleSwitchToVnc = async () => {
     if (!takeoverId) {
@@ -440,9 +494,9 @@ export function BrowserTakeoverContent({
     try {
       await destroyBrowserUi();
       await loadVncFallback();
-    } catch (error) {
+    } catch {
       setRenderState('error');
-      setStatusText(error instanceof Error ? error.message : '切换失败');
+      setStatusText('云电脑连接失败，请重新打开浏览器。');
     }
   };
 
@@ -451,6 +505,36 @@ export function BrowserTakeoverContent({
     setStatusText(null);
     setReloadNonce((current) => current + 1);
   };
+
+  useEffect(() => {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      if (isBenignTargetCloseError(event.reason)) {
+        event.preventDefault();
+      }
+    };
+
+    const handleWindowError = (event: ErrorEvent) => {
+      if (isBenignTargetCloseError(event.error ?? event.message)) {
+        event.preventDefault();
+      }
+    };
+
+    const originalConsoleError = window.console.error.bind(window.console);
+    window.console.error = (...args: unknown[]) => {
+      if (args.some((value) => isBenignTargetCloseError(value))) {
+        return;
+      }
+      originalConsoleError(...args);
+    };
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    window.addEventListener('error', handleWindowError);
+    return () => {
+      window.console.error = originalConsoleError;
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+      window.removeEventListener('error', handleWindowError);
+    };
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -465,24 +549,16 @@ export function BrowserTakeoverContent({
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
             <span
               className="rounded-full px-2 py-1"
-              style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-            >
-              {platformLabel}
-            </span>
-            <span
-              className="rounded-full px-2 py-1"
-              style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              style={{
+                background: 'rgba(245, 158, 11, 0.14)',
+                color: 'var(--warning)',
+                border: '1px solid rgba(245, 158, 11, 0.2)',
+              }}
             >
               {TAKEOVER_STATE_LABELS[takeoverState]}
             </span>
-            <span
-              className="rounded-full px-2 py-1"
-              style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
-            >
-              {currentMode === 'vnc_fallback' ? 'VNC' : 'Canvas'}
-            </span>
             {expiryText && (
-              <span style={{ color: 'var(--text-tertiary)' }}>{expiryText}</span>
+              <span style={{ color: 'var(--text-tertiary)' }}>操作窗口至 {expiryText}</span>
             )}
           </div>
         </div>
@@ -494,13 +570,23 @@ export function BrowserTakeoverContent({
             <div ref={canvasRootRef} className="h-full w-full overflow-hidden" />
             {renderState !== 'canvas_ready' && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-                <div
-                  className="h-9 w-9 animate-spin rounded-full border-2"
-                  style={{
-                    borderColor: 'rgba(99, 102, 241, 0.16)',
-                    borderTopColor: 'var(--color-primary)',
-                  }}
-                />
+                <div className="flex flex-col items-center gap-3 text-center">
+                  <div
+                    className="h-9 w-9 animate-spin rounded-full border-2"
+                    style={{
+                      borderColor: 'rgba(99, 102, 241, 0.16)',
+                      borderTopColor: 'var(--color-primary)',
+                    }}
+                  />
+                  <div className="text-sm text-white/85">
+                    正在进入云电脑...
+                  </div>
+                  {targetUrl && (
+                    <div className="max-w-[420px] truncate text-xs text-white/60">
+                      {targetUrl}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -508,13 +594,43 @@ export function BrowserTakeoverContent({
 
         {renderState === 'opening' && currentMode !== 'canvas_cdp' && (
           <div className="flex h-full items-center justify-center bg-black">
-            <div
-              className="h-9 w-9 animate-spin rounded-full border-2"
-              style={{
-                borderColor: 'rgba(99, 102, 241, 0.16)',
-                borderTopColor: 'var(--color-primary)',
-              }}
-            />
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div
+                className="h-9 w-9 animate-spin rounded-full border-2"
+                style={{
+                  borderColor: 'rgba(99, 102, 241, 0.16)',
+                  borderTopColor: 'var(--color-primary)',
+                }}
+              />
+              <div className="text-sm text-white/85">
+                正在进入云电脑...
+              </div>
+              {targetUrl && (
+                <div className="max-w-[420px] truncate text-xs text-white/60">
+                  {targetUrl}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {renderState === 'submitting' && (
+          <div className="flex h-full items-center justify-center bg-black">
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div
+                className="h-9 w-9 animate-spin rounded-full border-2"
+                style={{
+                  borderColor: 'rgba(99, 102, 241, 0.16)',
+                  borderTopColor: 'var(--color-primary)',
+                }}
+              />
+              <div className="text-sm text-white/85">正在确认当前平台操作...</div>
+              {targetUrl && (
+                <div className="max-w-[420px] truncate text-xs text-white/60">
+                  {targetUrl}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -523,6 +639,8 @@ export function BrowserTakeoverContent({
             title={`${platformLabel} takeover`}
             src={vncConfig.url}
             className="h-full w-full bg-black"
+            allow="fullscreen; clipboard-read; clipboard-write"
+            allowFullScreen
           />
         )}
 
@@ -530,8 +648,13 @@ export function BrowserTakeoverContent({
           <div className="flex h-full flex-col items-center justify-center gap-3 bg-black px-6 text-center">
             <RiAlertLine className="h-8 w-8" style={{ color: 'var(--status-danger)' }} />
             <div className="text-sm" style={{ color: '#fff' }}>
-              {statusText || '不可用'}
+              {statusText || '当前云电脑暂时不可用，请重新打开浏览器。'}
             </div>
+            {targetUrl && (
+              <div className="max-w-[420px] truncate text-xs text-white/60">
+                {targetUrl}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -541,13 +664,16 @@ export function BrowserTakeoverContent({
         style={{ borderTop: '1px solid var(--border-subtle)' }}
       >
         <div className="min-w-0 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          {statusText ||
-            (targetUrl
-              ? `请在当前接管页签中完成操作：${targetUrl}`
+          {statusText
+            || (targetUrl
+              ? `请在当前云电脑中完成操作：${targetUrl}`
               : browserState.message)}
+          <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>
+            完成登录或验证后，请回到左侧聊天卡片点击“我已完成”继续。
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          {currentMode !== 'vnc_fallback' && vncUrlPath && (
+          {currentMode === 'canvas_cdp' && vncUrlPath && (
             <button
               type="button"
               onClick={handleSwitchToVnc}
@@ -559,7 +685,7 @@ export function BrowserTakeoverContent({
               }}
             >
               <RiExternalLinkLine className="h-3.5 w-3.5" />
-              VNC
+              切换稳定模式
             </button>
           )}
           {renderState === 'error' && (
@@ -573,49 +699,9 @@ export function BrowserTakeoverContent({
               }}
             >
               <RiRefreshLine className="h-3.5 w-3.5" />
-              重试
+              重新连接
             </button>
           )}
-          {renderState === 'error' && currentMode !== 'vnc_fallback' && vncUrlPath && (
-            <button
-              type="button"
-              onClick={handleSwitchToVnc}
-              className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition"
-              style={{
-                borderColor: 'var(--border-subtle)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              <RiRefreshLine className="h-3.5 w-3.5" />
-              重试
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={handleResolve}
-            disabled={
-              renderState === 'opening' ||
-              renderState === 'submitting' ||
-              !takeoverRegistration?.frontendId
-            }
-            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ background: 'var(--color-primary)', color: '#fff' }}
-          >
-            <RiShieldKeyholeLine className="h-3.5 w-3.5" />
-            完成
-          </button>
-          <button
-            type="button"
-            onClick={handleCancel}
-            disabled={renderState === 'submitting' || !takeoverRegistration?.frontendId}
-            className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            取消
-          </button>
         </div>
       </div>
     </div>
