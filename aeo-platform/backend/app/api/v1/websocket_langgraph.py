@@ -142,6 +142,15 @@ def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
     return "等待用户输入..."
 
 
+async def _get_workflow_state(workflow: Any, config: dict[str, Any]) -> Any:
+    """Read LangGraph state without using sync APIs on async checkpointers."""
+
+    aget_state = getattr(workflow, "aget_state", None)
+    if callable(aget_state):
+        return await aget_state(config)
+    return await asyncio.to_thread(workflow.get_state, config)
+
+
 def _takeover_bundle_is_reusable(takeover: Any) -> bool:
     """Return True only when an existing takeover bundle is still safe to reuse."""
 
@@ -441,7 +450,7 @@ async def replay_pending_confirmation_to_websocket(
     try:
         workflow = await get_compiled_workflow()
         config = {"configurable": {"thread_id": session_id}}
-        current_state = workflow.get_state(config)
+        current_state = await _get_workflow_state(workflow, config)
     except Exception:
         logger.exception(
             "[WebSocket] Failed to read workflow state for confirmation replay: %s",
@@ -903,7 +912,7 @@ async def _sync_runtime_after_stream(workflow, config: dict[str, Any]) -> None:
     """Persist runtime state after a stream run finishes."""
 
     try:
-        current_state = workflow.get_state(config)
+        current_state = await _get_workflow_state(workflow, config)
         if not current_state or not current_state.values:
             return
 
@@ -1434,7 +1443,7 @@ async def handle_user_message_langgraph(
             )
         else:
             try:
-                existing_state = workflow.get_state(config)
+                existing_state = await _get_workflow_state(workflow, config)
             except Exception:
                 pass
 
@@ -1869,7 +1878,7 @@ async def _save_final_message(session_id: str, workflow, config: dict):
 
     try:
         # Get final state
-        final_state = workflow.get_state(config)
+        final_state = await _get_workflow_state(workflow, config)
 
         if final_state and final_state.values:
             state_values = final_state.values
@@ -1962,7 +1971,7 @@ async def handle_confirmation_langgraph(
         }
 
         # Get current state
-        current_state = workflow.get_state(config)
+        current_state = await _get_workflow_state(workflow, config)
         if not current_state or not current_state.values:
             await _emit_session_error(session_id, {"message": "无法获取当前工作流状态"})
             return
