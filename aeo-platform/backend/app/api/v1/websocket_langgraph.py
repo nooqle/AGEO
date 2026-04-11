@@ -249,9 +249,7 @@ async def replay_pending_browser_actions_to_websocket(
             task_service = TaskService(db)
             await task_service.reconcile_terminal_task_live_runs(UUID(session_id))
             active_task = await task_service.get_session_active_task(UUID(session_id))
-            authoritative_task_id = (
-                active_task.id if active_task is not None else None
-            )
+            authoritative_task_id = active_task.id if active_task is not None else None
             authoritative_run_id = None
             if active_task is not None:
                 loaded_runs = active_task.__dict__.get("task_runs") or []
@@ -269,10 +267,12 @@ async def replay_pending_browser_actions_to_websocket(
             if authoritative_task_id is None:
                 db_attempts = []
             else:
-                db_attempts = await service.list_waiting_input_replay_records_for_session(
-                    UUID(session_id),
-                    task_id=authoritative_task_id,
-                    task_run_id=authoritative_run_id,
+                db_attempts = (
+                    await service.list_waiting_input_replay_records_for_session(
+                        UUID(session_id),
+                        task_id=authoritative_task_id,
+                        task_run_id=authoritative_run_id,
+                    )
                 )
     except Exception:
         logger.exception(
@@ -301,7 +301,10 @@ async def replay_pending_browser_actions_to_websocket(
                 if request_run_id != str(authoritative_run_id):
                     filtered_runtime_count += 1
                     continue
-            elif authoritative_request_ids and request_id not in authoritative_request_ids:
+            elif (
+                authoritative_request_ids
+                and request_id not in authoritative_request_ids
+            ):
                 filtered_runtime_count += 1
                 continue
         elif authoritative_request_ids and request_id not in authoritative_request_ids:
@@ -701,26 +704,30 @@ async def _ensure_manual_session_is_idle(
     from app.models.task_run import TaskRunStatus
     from app.services.task_service import TaskService
 
-    if await runtime_coordinator.has_live_session_execution(session_id):
-        raise RuntimeError("当前任务尚未完全停止，请稍候再试。")
-
     async with AsyncSessionLocal() as db:
         task_service = TaskService(db)
         await task_service.reconcile_terminal_task_live_runs(UUID(session_id))
         live_pairs = await task_service.list_session_live_runs(UUID(session_id))
+
+    if await runtime_coordinator.has_live_session_execution(session_id):
         if not live_pairs:
+            await runtime_coordinator.cancel_session_execution(session_id)
             return
+        raise RuntimeError("当前任务尚未完全停止，请稍候再试。")
 
-        active_task, latest_run = live_pairs[0]
-        if (
-            allowed_waiting_task_id is not None
-            and str(active_task.id) == allowed_waiting_task_id
-            and latest_run is not None
-            and latest_run.status == TaskRunStatus.WAITING_INPUT
-        ):
-            return
+    if not live_pairs:
+        return
 
-        raise RuntimeError("当前任务仍在执行，请等待完成或先停止后再继续。")
+    active_task, latest_run = live_pairs[0]
+    if (
+        allowed_waiting_task_id is not None
+        and str(active_task.id) == allowed_waiting_task_id
+        and latest_run is not None
+        and latest_run.status == TaskRunStatus.WAITING_INPUT
+    ):
+        return
+
+    raise RuntimeError("当前任务仍在执行，请等待完成或先停止后再继续。")
 
 
 async def _submit_resume_run(
@@ -1695,7 +1702,10 @@ async def handle_user_message_langgraph(
                 )
                 task_err_text = str(task_err).strip()
                 user_error_message = "任务初始化失败，分析未启动，请稍后重试。"
-                if "当前任务仍在执行" in task_err_text or "尚未完全停止" in task_err_text:
+                if (
+                    "当前任务仍在执行" in task_err_text
+                    or "尚未完全停止" in task_err_text
+                ):
                     user_error_message = task_err_text
                 error_payload = {
                     "step": "runtime",
@@ -2211,17 +2221,12 @@ async def handle_stop_langgraph(websocket: WebSocket, session_id: str) -> None:
     from app.services.runtime_coordinator import runtime_coordinator
     from app.services.task_service import TaskService
 
-    cancelled_task = None
+    cancelled_tasks = []
     async with AsyncSessionLocal() as db:
         task_service = TaskService(db)
-        active_task = await task_service.get_session_active_task(UUID(session_id))
-        if active_task is not None:
-            loaded_runs = active_task.__dict__.get("task_runs") or []
-            latest_run = loaded_runs[0] if loaded_runs else None
-            cancelled_task = await task_service.cancel_task(
-                active_task.id,
-                run_id=latest_run.id if latest_run is not None else None,
-            )
+        cancelled_tasks = await task_service.cancel_session_active_tasks(
+            UUID(session_id)
+        )
 
     await runtime_coordinator.cancel_session_execution(session_id)
     await clear_session_browser_action_requests(
@@ -2234,8 +2239,8 @@ async def handle_stop_langgraph(websocket: WebSocket, session_id: str) -> None:
         session_id,
         "execution_stopped",
         {
-            "task_id": str(cancelled_task.id) if cancelled_task else None,
-            "status": "cancelled" if cancelled_task else "idle",
+            "task_id": str(cancelled_tasks[0].id) if cancelled_tasks else None,
+            "status": "cancelled" if cancelled_tasks else "idle",
             "completed_stages": [],
             "pending_stages": [],
         },

@@ -135,6 +135,7 @@ class LocalRuntimeRegistry:
 
             if not binding.execution_task.done():
                 binding.execution_task.cancel()
+            await self._remove_binding(binding, cancel_monitor=True)
             return binding
 
     async def cancel_task_execution(
@@ -150,6 +151,7 @@ class LocalRuntimeRegistry:
             self._runtime_blocked_sessions.add(binding.session_id)
             if not binding.execution_task.done():
                 binding.execution_task.cancel()
+            await self._remove_binding(binding, cancel_monitor=True)
             return binding
 
     async def allow_session_runtime_events(self, session_id: str) -> None:
@@ -255,6 +257,8 @@ class LocalRuntimeRegistry:
                 task_id,
                 run_id,
             )
+            if not execution_task.done():
+                execution_task.cancel()
 
     async def _remove_binding(
         self,

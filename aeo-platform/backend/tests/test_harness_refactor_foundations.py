@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from app.services.aio_session_manager import (
     SpectaAioTakeover,
 )
 from app.services.task_service import TaskService
+from app.services.local_runtime_registry import LocalRuntimeRegistry
 from app.services.skill_contracts import build_skill_contract
 from app.services.skill_package_service import skill_package_service
 from app.services.tool_capability_matrix import (
@@ -2126,6 +2128,120 @@ async def test_reconcile_terminal_task_live_runs_keeps_resolved_waiting_run_live
     assert running_task.error_stage is None
     fake_db.commit.assert_not_awaited()
     service._publish_task_status_change.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancel_session_active_tasks_finalizes_all_live_runs():
+    running_run = SimpleNamespace(
+        status=TaskRunStatus.RUNNING,
+        cancel_requested_at=None,
+        finished_at=None,
+        heartbeat_at=None,
+        lease_owner="worker-1",
+        executor_ref="executor-1",
+    )
+    waiting_run = SimpleNamespace(
+        status=TaskRunStatus.WAITING_INPUT,
+        cancel_requested_at=None,
+        finished_at=None,
+        heartbeat_at=None,
+        lease_owner="worker-2",
+        executor_ref="executor-2",
+    )
+    running_task = SimpleNamespace(
+        id="task_running",
+        status=TaskStatus.RUNNING,
+        progress_message="正在分析",
+        completed_at=None,
+        updated_at=None,
+        task_runs=[running_run],
+    )
+    waiting_task = SimpleNamespace(
+        id="task_waiting",
+        status=TaskStatus.RUNNING,
+        progress_message="等待用户确认",
+        completed_at=None,
+        updated_at=None,
+        task_runs=[waiting_run],
+    )
+    pending_task = SimpleNamespace(
+        id="task_pending",
+        status=TaskStatus.PENDING,
+        progress_message="等待开始",
+        completed_at=None,
+        updated_at=None,
+        task_runs=[],
+    )
+
+    class _Result:
+        def __init__(self, items):
+            self._items = items
+
+        def scalars(self):
+            return SimpleNamespace(all=lambda: self._items)
+
+    fake_db = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=_Result([running_task, waiting_task, pending_task])
+        ),
+        commit=AsyncMock(),
+    )
+    service = TaskService(fake_db)
+    service._publish_task_status_change = AsyncMock()
+
+    cancelled = await service.cancel_session_active_tasks(
+        UUID("fc9bd5d2-a5fd-4310-b0c5-bbae1b00dbd7")
+    )
+
+    assert cancelled == [running_task, waiting_task, pending_task]
+    assert running_task.status == TaskStatus.CANCELLED
+    assert waiting_task.status == TaskStatus.CANCELLED
+    assert pending_task.status == TaskStatus.CANCELLED
+    assert running_run.status == TaskRunStatus.CANCELLED
+    assert waiting_run.status == TaskRunStatus.CANCELLED
+    assert running_run.lease_owner is None
+    assert waiting_run.executor_ref is None
+    assert running_run.finished_at is not None
+    assert waiting_run.finished_at is not None
+    fake_db.commit.assert_awaited_once()
+    assert service._publish_task_status_change.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_cancel_session_unbinds_immediately():
+    session_id = "fc9bd5d2-a5fd-4310-b0c5-bbae1b00dbd7"
+    task_id = UUID("de9bd5d2-a5fd-4310-b0c5-bbae1b00dbd7")
+    run_id = UUID("aa9bd5d2-a5fd-4310-b0c5-bbae1b00dbd7")
+
+    async def _sleep_forever():
+        await asyncio.sleep(3600)
+
+    execution_task = asyncio.create_task(_sleep_forever())
+    release_callback = AsyncMock()
+    registry = LocalRuntimeRegistry()
+
+    await registry.register_execution(
+        session_id=session_id,
+        task_id=task_id,
+        run_id=run_id,
+        lease_owner="lease-1",
+        execution_task=execution_task,
+        release_callback=release_callback,
+    )
+
+    assert await registry.get_live_session_execution(session_id) is not None
+    binding = await registry.cancel_session_execution(session_id)
+
+    assert binding is not None
+    assert await registry.get_live_session_execution(session_id) is None
+    release_callback.assert_awaited_once_with(
+        session_id,
+        task_id,
+        run_id,
+        "lease-1",
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await execution_task
 
 
 def test_orchestrator_context_packets_split_session_entity_and_history():

@@ -285,6 +285,15 @@ class RedisRuntimeCoordinator:
     ) -> LocalExecutionBinding | None:
         await self._set_session_blocked(session_id)
         binding = await self._fallback.cancel_session_execution(session_id)
+        if binding is not None:
+            await self._release_session_live_lock(
+                binding.session_id,
+                binding.task_id,
+                binding.run_id,
+                binding.lease_owner,
+            )
+        else:
+            await self._force_release_session_live_lock(session_id)
         await self._publish_cancel(
             {
                 "session_id": session_id,
@@ -303,6 +312,15 @@ class RedisRuntimeCoordinator:
         target_session_id = session_id or (binding.session_id if binding else None)
         if target_session_id:
             await self._set_session_blocked(target_session_id)
+            if binding is not None:
+                await self._release_session_live_lock(
+                    binding.session_id,
+                    binding.task_id,
+                    binding.run_id,
+                    binding.lease_owner,
+                )
+            else:
+                await self._force_release_session_live_lock(target_session_id)
         await self._publish_cancel(
             {
                 "session_id": target_session_id,
@@ -587,6 +605,8 @@ class RedisRuntimeCoordinator:
         client = await self._get_redis()
         if client is None:
             return
+        if await self.is_session_runtime_blocked(session_id):
+            raise RuntimeError("Session runtime is blocked by cancellation")
 
         token = _session_lock_token(run_id, lease_owner)
         lock_key = _session_live_lock_key(session_id)
@@ -670,6 +690,22 @@ class RedisRuntimeCoordinator:
                 session_id,
                 task_id,
                 run_id,
+            )
+
+    async def _force_release_session_live_lock(self, session_id: str) -> None:
+        client = await self._get_redis()
+        if client is None:
+            return
+        try:
+            await client.delete(
+                _session_live_lock_key(session_id),
+                _session_live_meta_key(session_id),
+            )
+        except Exception:
+            logger.exception(
+                "[RuntimeCoordinator] Failed to force release session live lock "
+                "(session=%s)",
+                session_id,
             )
 
 

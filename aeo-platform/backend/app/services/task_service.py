@@ -503,6 +503,74 @@ class TaskService:
         logger.info("[TaskService] Task %s cancelled", task_id)
         return published_task
 
+    async def cancel_session_active_tasks(
+        self,
+        session_id: UUID,
+    ) -> list[AnalysisTask]:
+        """Force-cancel every live manual task for one session.
+
+        A user stop request is a UI-level terminal action. Leaving a run in
+        ``CANCELLING`` keeps the session blocked and causes the next message to
+        be rejected as "still running"; this method collapses session-local live
+        work into durable terminal state immediately.
+        """
+
+        stmt = (
+            select(AnalysisTask)
+            .options(
+                selectinload(AnalysisTask.task_runs).selectinload(
+                    TaskRun.child_attempts
+                )
+            )
+            .where(
+                AnalysisTask.session_id == session_id,
+                AnalysisTask.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
+            )
+            .order_by(AnalysisTask.created_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        tasks = list(result.scalars().all())
+        if not tasks:
+            return []
+
+        now = datetime.now(timezone.utc)
+        cancelled_tasks: list[AnalysisTask] = []
+        changed_task_ids: set[UUID | str] = set()
+
+        for task in tasks:
+            loaded_runs = list(task.__dict__.get("task_runs") or [])
+            live_runs = [
+                run
+                for run in loaded_runs
+                if getattr(run, "status", None) in LIVE_TASK_RUN_STATUSES
+            ]
+            if not live_runs and not (
+                task.status == TaskStatus.PENDING and not loaded_runs
+            ):
+                continue
+
+            task.status = TaskStatus.CANCELLED
+            task.progress_message = "任务已取消"
+            task.completed_at = task.completed_at or now
+            task.updated_at = now
+            cancelled_tasks.append(task)
+            changed_task_ids.add(task.id)
+
+            for run in live_runs:
+                run.status = TaskRunStatus.CANCELLED
+                run.cancel_requested_at = run.cancel_requested_at or now
+                run.finished_at = run.finished_at or now
+                run.heartbeat_at = now
+                run.lease_owner = None
+                run.executor_ref = None
+
+        if changed_task_ids:
+            await self.db.commit()
+            for task_id in changed_task_ids:
+                await self._publish_task_status_change(task_id)
+
+        return cancelled_tasks
+
     async def finalize_cancel_if_requested(
         self,
         task_id: UUID,
@@ -673,7 +741,9 @@ class TaskService:
                 if not unresolved_waiting_attempts:
                     continue
 
-                run_terminal = getattr(run, "status", None) in _TERMINAL_TASK_RUN_STATUSES
+                run_terminal = (
+                    getattr(run, "status", None) in _TERMINAL_TASK_RUN_STATUSES
+                )
                 if not task_terminal and not run_terminal:
                     continue
 
@@ -728,7 +798,9 @@ class TaskService:
             if live_run is not None:
                 if task.status == TaskStatus.COMPLETED:
                     live_run.status = TaskRunStatus.COMPLETED
-                    live_run.finished_at = live_run.finished_at or task.completed_at or now
+                    live_run.finished_at = (
+                        live_run.finished_at or task.completed_at or now
+                    )
                     live_run.heartbeat_at = now
                     live_run.lease_owner = None
                     live_run.executor_ref = None
@@ -744,11 +816,11 @@ class TaskService:
                         or "runtime"
                     )
                     live_run.error_message = (
-                        task.error_message
-                        or live_run.error_message
-                        or "任务执行失败"
+                        task.error_message or live_run.error_message or "任务执行失败"
                     )
-                    live_run.finished_at = live_run.finished_at or task.completed_at or now
+                    live_run.finished_at = (
+                        live_run.finished_at or task.completed_at or now
+                    )
                     live_run.heartbeat_at = now
                     live_run.lease_owner = None
                     live_run.executor_ref = None
@@ -758,7 +830,9 @@ class TaskService:
                 elif task.status == TaskStatus.CANCELLED:
                     live_run.status = TaskRunStatus.CANCELLED
                     live_run.cancel_requested_at = live_run.cancel_requested_at or now
-                    live_run.finished_at = live_run.finished_at or task.completed_at or now
+                    live_run.finished_at = (
+                        live_run.finished_at or task.completed_at or now
+                    )
                     live_run.heartbeat_at = now
                     live_run.lease_owner = None
                     live_run.executor_ref = None
@@ -784,18 +858,26 @@ class TaskService:
 
             latest_status = getattr(latest_run, "status", None)
             if latest_status == TaskRunStatus.COMPLETED:
-                if task.status != TaskStatus.COMPLETED or task.progress_message != "分析完成":
+                if (
+                    task.status != TaskStatus.COMPLETED
+                    or task.progress_message != "分析完成"
+                ):
                     task.status = TaskStatus.COMPLETED
                     task.progress = 1.0
                     task.progress_message = "分析完成"
-                    task.completed_at = task.completed_at or getattr(
-                        latest_run, "finished_at", None
-                    ) or now
+                    task.completed_at = (
+                        task.completed_at
+                        or getattr(latest_run, "finished_at", None)
+                        or now
+                    )
                     task.updated_at = now
                     updated += 1
                     changed_task_ids.add(task.id)
             elif latest_status == TaskRunStatus.FAILED:
-                should_update_task = task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}
+                should_update_task = task.status in {
+                    TaskStatus.PENDING,
+                    TaskStatus.RUNNING,
+                }
                 should_fix_message = (
                     not task.progress_message
                     or _is_stale_waiting_message(task.progress_message)
@@ -813,21 +895,28 @@ class TaskService:
                     )
                     if should_fix_message:
                         task.progress_message = "任务执行失败"
-                    task.completed_at = task.completed_at or getattr(
-                        latest_run, "finished_at", None
-                    ) or now
+                    task.completed_at = (
+                        task.completed_at
+                        or getattr(latest_run, "finished_at", None)
+                        or now
+                    )
                     task.updated_at = now
                     updated += 1
                     changed_task_ids.add(task.id)
             elif latest_status == TaskRunStatus.CANCELLED:
-                should_update_task = task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}
+                should_update_task = task.status in {
+                    TaskStatus.PENDING,
+                    TaskStatus.RUNNING,
+                }
                 should_fix_message = task.progress_message != "任务已取消"
                 if should_update_task or should_fix_message:
                     task.status = TaskStatus.CANCELLED
                     task.progress_message = "任务已取消"
-                    task.completed_at = task.completed_at or getattr(
-                        latest_run, "finished_at", None
-                    ) or now
+                    task.completed_at = (
+                        task.completed_at
+                        or getattr(latest_run, "finished_at", None)
+                        or now
+                    )
                     task.updated_at = now
                     updated += 1
                     changed_task_ids.add(task.id)
