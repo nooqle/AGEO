@@ -537,171 +537,180 @@ export function BrowserTakeoverContent({
   }, []);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col p-4" style={{ background: 'var(--bg-secondary)' }}>
       <div
-        className="flex items-center justify-between gap-3 px-4 py-3"
-        style={{ borderBottom: '1px solid var(--border-subtle)' }}
+        className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl"
+        style={{
+          background: 'var(--bg-primary)',
+          border: '1px solid var(--border-subtle)',
+          boxShadow: '0 18px 60px rgba(15, 23, 42, 0.12)',
+        }}
       >
-        <div className="min-w-0">
-          <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            {browserState.actionHint || browserState.message}
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
-            <span
-              className="rounded-full px-2 py-1"
-              style={{
-                background: 'rgba(245, 158, 11, 0.14)',
-                color: 'var(--warning)',
-                border: '1px solid rgba(245, 158, 11, 0.2)',
-              }}
-            >
-              {TAKEOVER_STATE_LABELS[takeoverState]}
-            </span>
-            {expiryText && (
-              <span style={{ color: 'var(--text-tertiary)' }}>操作窗口至 {expiryText}</span>
-            )}
+        <div
+          className="flex shrink-0 items-center justify-between gap-3 px-4 py-3"
+          style={{ borderBottom: '1px solid var(--border-subtle)' }}
+        >
+          <div className="min-w-0">
+            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              {browserState.actionHint || browserState.message}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+              <span
+                className="rounded-full px-2 py-1"
+                style={{
+                  background: 'rgba(245, 158, 11, 0.14)',
+                  color: 'var(--warning)',
+                  border: '1px solid rgba(245, 158, 11, 0.2)',
+                }}
+              >
+                {TAKEOVER_STATE_LABELS[takeoverState]}
+              </span>
+              {expiryText && (
+                <span style={{ color: 'var(--text-tertiary)' }}>操作窗口至 {expiryText}</span>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="min-h-0 flex-1 bg-black">
-        {currentMode === 'canvas_cdp' && renderState !== 'error' && (
-          <div className="relative h-full">
-            <div ref={canvasRootRef} className="h-full w-full overflow-hidden" />
-            {renderState !== 'canvas_ready' && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-                <div className="flex flex-col items-center gap-3 text-center">
-                  <div
-                    className="h-9 w-9 animate-spin rounded-full border-2"
-                    style={{
-                      borderColor: 'rgba(99, 102, 241, 0.16)',
-                      borderTopColor: 'var(--color-primary)',
-                    }}
-                  />
-                  <div className="text-sm text-white/85">
-                    正在进入云电脑...
-                  </div>
-                  {targetUrl && (
-                    <div className="max-w-[420px] truncate text-xs text-white/60">
-                      {targetUrl}
+        <div className="min-h-0 flex-1 bg-black">
+          {currentMode === 'canvas_cdp' && renderState !== 'error' && (
+            <div className="relative h-full">
+              <div ref={canvasRootRef} className="h-full w-full overflow-hidden" />
+              {renderState !== 'canvas_ready' && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+                  <div className="flex flex-col items-center gap-3 text-center">
+                    <div
+                      className="h-9 w-9 animate-spin rounded-full border-2"
+                      style={{
+                        borderColor: 'rgba(99, 102, 241, 0.16)',
+                        borderTopColor: 'var(--color-primary)',
+                      }}
+                    />
+                    <div className="text-sm text-white/85">
+                      正在进入云电脑...
                     </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {renderState === 'opening' && currentMode !== 'canvas_cdp' && (
-          <div className="flex h-full items-center justify-center bg-black">
-            <div className="flex flex-col items-center gap-3 text-center">
-              <div
-                className="h-9 w-9 animate-spin rounded-full border-2"
-                style={{
-                  borderColor: 'rgba(99, 102, 241, 0.16)',
-                  borderTopColor: 'var(--color-primary)',
-                }}
-              />
-              <div className="text-sm text-white/85">
-                正在进入云电脑...
-              </div>
-              {targetUrl && (
-                <div className="max-w-[420px] truncate text-xs text-white/60">
-                  {targetUrl}
+                    {targetUrl && (
+                      <div className="max-w-[420px] truncate text-xs text-white/60">
+                        {targetUrl}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
-          </div>
-        )}
-
-        {renderState === 'submitting' && (
-          <div className="flex h-full items-center justify-center bg-black">
-            <div className="flex flex-col items-center gap-3 text-center">
-              <div
-                className="h-9 w-9 animate-spin rounded-full border-2"
-                style={{
-                  borderColor: 'rgba(99, 102, 241, 0.16)',
-                  borderTopColor: 'var(--color-primary)',
-                }}
-              />
-              <div className="text-sm text-white/85">正在确认当前平台操作...</div>
-              {targetUrl && (
-                <div className="max-w-[420px] truncate text-xs text-white/60">
-                  {targetUrl}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {renderState === 'vnc_ready' && vncConfig?.url && (
-          <iframe
-            title={`${platformLabel} takeover`}
-            src={vncConfig.url}
-            className="h-full w-full bg-black"
-            allow="fullscreen; clipboard-read; clipboard-write"
-            allowFullScreen
-          />
-        )}
-
-        {renderState === 'error' && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 bg-black px-6 text-center">
-            <RiAlertLine className="h-8 w-8" style={{ color: 'var(--status-danger)' }} />
-            <div className="text-sm" style={{ color: '#fff' }}>
-              {statusText || '当前云电脑暂时不可用，请重新打开浏览器。'}
-            </div>
-            {targetUrl && (
-              <div className="max-w-[420px] truncate text-xs text-white/60">
-                {targetUrl}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div
-        className="flex items-center justify-between gap-3 px-4 py-3"
-        style={{ borderTop: '1px solid var(--border-subtle)' }}
-      >
-        <div className="min-w-0 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          {statusText
-            || (targetUrl
-              ? `请在当前云电脑中完成操作：${targetUrl}`
-              : browserState.message)}
-          <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>
-            完成登录或验证后，请回到左侧聊天卡片点击“我已完成”继续。
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {currentMode === 'canvas_cdp' && vncUrlPath && (
-            <button
-              type="button"
-              onClick={handleSwitchToVnc}
-              disabled={renderState === 'submitting'}
-              className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
-              style={{
-                borderColor: 'var(--border-subtle)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              <RiExternalLinkLine className="h-3.5 w-3.5" />
-              切换稳定模式
-            </button>
           )}
+
+          {renderState === 'opening' && currentMode !== 'canvas_cdp' && (
+            <div className="flex h-full items-center justify-center bg-black">
+              <div className="flex flex-col items-center gap-3 text-center">
+                <div
+                  className="h-9 w-9 animate-spin rounded-full border-2"
+                  style={{
+                    borderColor: 'rgba(99, 102, 241, 0.16)',
+                    borderTopColor: 'var(--color-primary)',
+                  }}
+                />
+                <div className="text-sm text-white/85">
+                  正在进入云电脑...
+                </div>
+                {targetUrl && (
+                  <div className="max-w-[420px] truncate text-xs text-white/60">
+                    {targetUrl}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {renderState === 'submitting' && (
+            <div className="flex h-full items-center justify-center bg-black">
+              <div className="flex flex-col items-center gap-3 text-center">
+                <div
+                  className="h-9 w-9 animate-spin rounded-full border-2"
+                  style={{
+                    borderColor: 'rgba(99, 102, 241, 0.16)',
+                    borderTopColor: 'var(--color-primary)',
+                  }}
+                />
+                <div className="text-sm text-white/85">正在确认当前平台操作...</div>
+                {targetUrl && (
+                  <div className="max-w-[420px] truncate text-xs text-white/60">
+                    {targetUrl}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {renderState === 'vnc_ready' && vncConfig?.url && (
+            <iframe
+              title={`${platformLabel} takeover`}
+              src={vncConfig.url}
+              className="h-full w-full bg-black"
+              allow="fullscreen; clipboard-read; clipboard-write"
+              allowFullScreen
+            />
+          )}
+
           {renderState === 'error' && (
-            <button
-              type="button"
-              onClick={handleRetry}
-              className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition"
-              style={{
-                borderColor: 'var(--border-subtle)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              <RiRefreshLine className="h-3.5 w-3.5" />
-              重新连接
-            </button>
+            <div className="flex h-full flex-col items-center justify-center gap-3 bg-black px-6 text-center">
+              <RiAlertLine className="h-8 w-8" style={{ color: 'var(--status-danger)' }} />
+              <div className="text-sm" style={{ color: '#fff' }}>
+                {statusText || '当前云电脑暂时不可用，请重新打开浏览器。'}
+              </div>
+              {targetUrl && (
+                <div className="max-w-[420px] truncate text-xs text-white/60">
+                  {targetUrl}
+                </div>
+              )}
+            </div>
           )}
+        </div>
+
+        <div
+          className="flex shrink-0 items-center justify-between gap-3 px-4 py-3"
+          style={{ borderTop: '1px solid var(--border-subtle)' }}
+        >
+          <div className="min-w-0 text-xs" style={{ color: 'var(--text-secondary)' }}>
+            {statusText
+              || (targetUrl
+                ? `请在当前云电脑中完成操作：${targetUrl}`
+                : browserState.message)}
+            <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>
+              完成登录或验证后，请回到左侧聊天卡片点击“我已完成”继续。
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {currentMode === 'canvas_cdp' && vncUrlPath && (
+              <button
+                type="button"
+                onClick={handleSwitchToVnc}
+                disabled={renderState === 'submitting'}
+                className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <RiExternalLinkLine className="h-3.5 w-3.5" />
+                切换稳定模式
+              </button>
+            )}
+            {renderState === 'error' && (
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <RiRefreshLine className="h-3.5 w-3.5" />
+                重新连接
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -21,6 +21,7 @@ export function CanvasPanel() {
     contents,
     browserWorkspace,
     activeContentIndex,
+    activeSurface,
     isOpen,
   } = useCanvasStore();
   const isAgentExecuting = useConversationStore((s) => s.isAgentExecuting);
@@ -62,7 +63,10 @@ export function CanvasPanel() {
     );
   }
 
-  const rawContent = browserWorkspace ?? contents[activeContentIndex] ?? null;
+  const rawContent =
+    activeSurface === 'browser' && browserWorkspace
+      ? browserWorkspace
+      : contents[activeContentIndex] ?? browserWorkspace ?? null;
 
   // When viewing a historical version, overlay the version's data
   const activeContent = (() => {
@@ -118,7 +122,7 @@ export function CanvasPanel() {
       <CanvasHeader content={rawContent} />
 
       {/* Tab 栏（多内容时显示） */}
-      {!hasBrowserWorkspace && contents.length > 1 && <CanvasTabs />}
+      {activeContent?.type !== 'browser' && contents.length > 1 && <CanvasTabs />}
 
       {/* 内容区 */}
       {/* pipeline 类型：不在此层滚动，让 PipelineContent 自控滚动与固定底栏 */}
@@ -126,7 +130,7 @@ export function CanvasPanel() {
       <div
         className={cn(
           'flex-1 overflow-x-hidden',
-          activeContent?.type === 'pipeline'
+          activeContent?.type === 'pipeline' || activeContent?.type === 'browser'
             ? 'overflow-hidden'
             : 'overflow-y-auto'
         )}
@@ -136,7 +140,9 @@ export function CanvasPanel() {
           <motion.div
             key={`${activeContent?.id || 'empty'}_v${rawContent?.currentVersionIndex ?? -1}`}
             className={cn(
-              activeContent?.type === 'pipeline' ? 'h-full' : ''
+              activeContent?.type === 'pipeline' || activeContent?.type === 'browser'
+                ? 'h-full'
+                : ''
             )}
             data-canvas-export-body="true"
             initial={{ opacity: 0, y: 10 }}

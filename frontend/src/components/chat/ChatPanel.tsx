@@ -136,10 +136,17 @@ function buildBrowserTakeoverFromRecord(record: AioTakeoverRecord): NonNullable<
   };
 }
 
+function getBrowserActionCardKey(state: BrowserState): string {
+  return state.requestId
+    || state.takeover?.takeoverId
+    || `${state.platform}:${state.state}:${state.message}`;
+}
+
 export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const recalledContentRef = useRef<string | null>(null);
   const autoScrollEnabledRef = useRef(true);
+  const lastBrowserActionScrollKeyRef = useRef<string | null>(null);
   const artifactsHydratedRef = useRef(false);
   const artifactsHydratingPromiseRef = useRef<Promise<void> | null>(null);
   const [inputValue, setInputValue] = useState('');
@@ -583,12 +590,58 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return { byMessageId, unassigned };
   }, [actionableBrowserStates, messages]);
   const pendingBrowserActionCount = actionableBrowserStates.length;
+  const latestBrowserActionScrollKey = useMemo(() => {
+    if (actionableBrowserStates.length === 0) {
+      return null;
+    }
+    return getBrowserActionCardKey(
+      actionableBrowserStates[actionableBrowserStates.length - 1],
+    );
+  }, [actionableBrowserStates]);
 
   useEffect(() => {
     actionableTakeoverAccess.forEach((takeover) => {
       upsertTakeoverRegistration(takeover);
     });
   }, [actionableTakeoverAccess, upsertTakeoverRegistration]);
+
+  useEffect(() => {
+    if (!latestBrowserActionScrollKey) {
+      lastBrowserActionScrollKeyRef.current = null;
+      return;
+    }
+    if (lastBrowserActionScrollKeyRef.current === latestBrowserActionScrollKey) {
+      return;
+    }
+
+    lastBrowserActionScrollKeyRef.current = latestBrowserActionScrollKey;
+    autoScrollEnabledRef.current = true;
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      const container = scrollRef.current;
+      if (!container) {
+        return;
+      }
+
+      const target = Array.from(
+        container.querySelectorAll<HTMLElement>('[data-browser-action-card]'),
+      ).find(
+        (element) => element.dataset.browserActionCard === latestBrowserActionScrollKey,
+      );
+
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: 'smooth',
+      });
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [latestBrowserActionScrollKey]);
 
   const openedTakeoverAccess = useMemo(
     () =>
@@ -1235,28 +1288,27 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
                 <div className="flex flex-col gap-3">
                   {states.map((state) => {
                     const takeoverId = state.takeover?.takeoverId;
+                    const cardKey = getBrowserActionCardKey(state);
                     const isOpened = Boolean(
                       takeoverId && openedTakeoverIds[takeoverId],
                     );
                     const openedAtMs =
                       takeoverId ? openedAtMsByTakeoverId[takeoverId] : undefined;
                     return (
-                      <BrowserActionBanner
-                        key={
-                          state.requestId ||
-                          `${state.platform}:${state.state}:${state.message}`
-                        }
-                        browserState={state}
-                        isOpened={isOpened}
-                        openedAtMs={openedAtMs}
-                        onOpenTakeover={
-                          state.takeover?.takeoverId
-                            ? () => reopenTakeover(state)
-                            : null
-                        }
-                        onResolve={() => handleResolveBrowserAction(state)}
-                        onSkip={() => handleSkipBrowserAction(state)}
-                      />
+                      <div key={cardKey} data-browser-action-card={cardKey}>
+                        <BrowserActionBanner
+                          browserState={state}
+                          isOpened={isOpened}
+                          openedAtMs={openedAtMs}
+                          onOpenTakeover={
+                            state.takeover?.takeoverId
+                              ? () => reopenTakeover(state)
+                              : null
+                          }
+                          onResolve={() => handleResolveBrowserAction(state)}
+                          onSkip={() => handleSkipBrowserAction(state)}
+                        />
+                      </div>
                     );
                   })}
                 </div>
@@ -1268,28 +1320,27 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             <div className="mt-4 flex flex-col gap-3">
               {actionableBrowserCards.unassigned.map((state) => {
                 const takeoverId = state.takeover?.takeoverId;
+                const cardKey = getBrowserActionCardKey(state);
                 const isOpened = Boolean(
                   takeoverId && openedTakeoverIds[takeoverId],
                 );
                 const openedAtMs =
                   takeoverId ? openedAtMsByTakeoverId[takeoverId] : undefined;
                 return (
-                  <BrowserActionBanner
-                    key={
-                      state.requestId ||
-                      `${state.platform}:${state.state}:${state.message}`
-                    }
-                    browserState={state}
-                    isOpened={isOpened}
-                    openedAtMs={openedAtMs}
-                    onOpenTakeover={
-                      state.takeover?.takeoverId
-                        ? () => reopenTakeover(state)
-                        : null
-                    }
-                    onResolve={() => handleResolveBrowserAction(state)}
-                    onSkip={() => handleSkipBrowserAction(state)}
-                  />
+                  <div key={cardKey} data-browser-action-card={cardKey}>
+                    <BrowserActionBanner
+                      browserState={state}
+                      isOpened={isOpened}
+                      openedAtMs={openedAtMs}
+                      onOpenTakeover={
+                        state.takeover?.takeoverId
+                          ? () => reopenTakeover(state)
+                          : null
+                      }
+                      onResolve={() => handleResolveBrowserAction(state)}
+                      onSkip={() => handleSkipBrowserAction(state)}
+                    />
+                  </div>
                 );
               })}
             </div>
