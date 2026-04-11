@@ -1639,7 +1639,7 @@ async def test_reconcile_terminal_task_live_runs_cleans_stale_waiting_attempts_f
 
 
 @pytest.mark.asyncio
-async def test_reconcile_terminal_task_live_runs_fails_waiting_run_without_unresolved_attempts():
+async def test_reconcile_terminal_task_live_runs_keeps_resolved_waiting_run_live():
     now = datetime.now(timezone.utc)
     completed_attempt = SimpleNamespace(
         status=TaskRunChildAttemptStatus.COMPLETED,
@@ -1686,14 +1686,14 @@ async def test_reconcile_terminal_task_live_runs_fails_waiting_run_without_unres
         UUID("fc9bd5d2-a5fd-4310-b0c5-bbae1b00dbd7")
     )
 
-    assert updated == 2
-    assert stale_waiting_run.status == TaskRunStatus.FAILED
-    assert stale_waiting_run.error_kind == "waiting_input_stale"
-    assert running_task.status == TaskStatus.FAILED
-    assert running_task.progress_message == "任务执行失败"
-    assert running_task.error_stage == "A4"
-    fake_db.commit.assert_awaited_once()
-    service._publish_task_status_change.assert_awaited_once_with("task_waiting")
+    assert updated == 0
+    assert stale_waiting_run.status == TaskRunStatus.WAITING_INPUT
+    assert stale_waiting_run.error_kind is None
+    assert running_task.status == TaskStatus.RUNNING
+    assert running_task.progress_message == "等待用户确认：A4 登录"
+    assert running_task.error_stage is None
+    fake_db.commit.assert_not_awaited()
+    service._publish_task_status_change.assert_not_awaited()
 
 
 def test_orchestrator_context_packets_split_session_entity_and_history():

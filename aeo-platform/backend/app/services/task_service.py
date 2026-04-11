@@ -633,11 +633,10 @@ class TaskService:
     async def reconcile_terminal_task_live_runs(self, session_id: UUID) -> int:
         """Align stale session tasks and waiting_input drift for one session.
 
-        This pass handles two classes of stale runtime state:
-        1. A task/run is already terminal but still has unresolved
-           ``WAITING_INPUT`` child attempts.
-        2. The latest live run is stuck in ``WAITING_INPUT`` even though it no
-           longer has any unresolved waiting_input child attempts.
+        This pass only settles state that is already terminal. A live
+        ``WAITING_INPUT`` run may have just resolved its browser handoff and
+        still be waiting for the workflow to resume, so it must remain
+        resumable here.
         """
 
         stmt = (
@@ -721,48 +720,9 @@ class TaskService:
                     and getattr(attempt, "resolved_at", None) is None
                 ]
                 if not unresolved_waiting_attempts:
-                    if child_attempts:
-                        live_run.status = TaskRunStatus.FAILED
-                        live_run.error_kind = (
-                            task.error_stage
-                            or task.current_stage
-                            or getattr(live_run, "checkpoint_stage", None)
-                            or "runtime"
-                        )
-                        live_run.error_message = (
-                            task.error_message
-                            or live_run.error_message
-                            or "浏览器接管已结束，请重新尝试。"
-                        )
-                        live_run.finished_at = live_run.finished_at or now
-                        live_run.heartbeat_at = now
-                        live_run.lease_owner = None
-                        live_run.executor_ref = None
-                        if task.status == TaskStatus.RUNNING:
-                            task.status = TaskStatus.FAILED
-                            task.error_stage = (
-                                task.error_stage
-                                or task.current_stage
-                                or getattr(live_run, "checkpoint_stage", None)
-                                or "runtime"
-                            )
-                            task.error_message = (
-                                task.error_message
-                                or "浏览器接管已结束，请重新尝试。"
-                            )
-                            task.completed_at = task.completed_at or now
-                            task.progress_message = "任务执行失败"
-                        task.updated_at = now
-                        updated += 1
-                        changed_task_ids.add(task.id)
-                        live_run = None
-                        continue
-
-                    # A waiting-input run is not necessarily a browser handoff.
-                    # A1/A2/orchestrator confirmations are stored in the LangGraph
-                    # checkpoint as pending_confirmation and intentionally have no
-                    # TaskRunChildAttempt row. Keep them resumable instead of
-                    # failing the task as a stale takeover.
+                    # The handoff may already be resolved or skipped while the
+                    # task runner is still resuming from the checkpoint. Keep it
+                    # live; only terminal task/run state is reconciled below.
                     continue
 
             if live_run is not None:
