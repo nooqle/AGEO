@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     AIO_DEFAULT_ACCESS_MODE: str = "vnc_fallback"
     AIO_IDLE_TTL_SECONDS: int = 900
     AIO_TAKEOVER_HEARTBEAT_INTERVAL_MS: int = 10000
-    AIO_TAKEOVER_ISSUED_TTL_SECONDS: int = 900
+    AIO_TAKEOVER_ISSUED_TTL_SECONDS: int = 480
     AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS: int = 30
 
     # LLM Orchestration Mode (v2)
