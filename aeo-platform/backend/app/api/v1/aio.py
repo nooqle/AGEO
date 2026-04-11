@@ -218,9 +218,7 @@ def _is_valid_takeover_target_url(url: str | None) -> bool:
     if parsed.scheme not in {"http", "https"}:
         return False
     lowered = url.strip().lower()
-    return not lowered.startswith(
-        ("chrome://", "chrome-untrusted://", "devtools://")
-    )
+    return not lowered.startswith(("chrome://", "chrome-untrusted://", "devtools://"))
 
 
 async def _resolve_takeover_target_url(
@@ -274,7 +272,9 @@ async def _get_takeover_and_session_for_user(
         takeover = await aio_session_manager.get_takeover(takeover_id)
         session = await aio_session_manager.get_session(takeover.session_id)
     except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
 
     if takeover.user_id != user_id:
         raise HTTPException(
@@ -379,9 +379,7 @@ async def create_takeover(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     target_url = await _resolve_takeover_target_url(takeover)
     return {
-        "takeover": _serialize_takeover_with_target(
-            takeover, target_url=target_url
-        )
+        "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)
     }
 
 
@@ -403,9 +401,7 @@ async def get_takeover(
         )
     target_url = await _resolve_takeover_target_url(takeover)
     return {
-        "takeover": _serialize_takeover_with_target(
-            takeover, target_url=target_url
-        )
+        "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)
     }
 
 
@@ -425,7 +421,9 @@ async def open_takeover(
             mode=body.mode,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -438,10 +436,11 @@ async def open_takeover(
             status_code=status.HTTP_409_CONFLICT,
             detail="当前接管未找到有效目标页面，请重新申请新的 takeover。",
         )
+    session = await aio_session_manager.get_session(takeover.session_id)
+    await _stabilize_takeover_browser_surface(session=session, target_url=target_url)
+    await aio_session_manager.refresh_browser_info(takeover.session_id)
     return {
-        "takeover": _serialize_takeover_with_target(
-            takeover, target_url=target_url
-        )
+        "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)
     }
 
 
@@ -567,7 +566,9 @@ async def redirect_takeover_vnc(
     target_url = _decorate_novnc_url(
         urlunparse(parsed._replace(query=urlencode(base_query)))
     )
-    return RedirectResponse(url=target_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    return RedirectResponse(
+        url=target_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT
+    )
 
 
 @router.websocket("/takeovers/{takeover_id}/cdp-relay")
@@ -759,9 +760,7 @@ async def heartbeat_takeover(
         )
     target_url = await _resolve_takeover_target_url(takeover)
     return {
-        "takeover": _serialize_takeover_with_target(
-            takeover, target_url=target_url
-        )
+        "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)
     }
 
 
@@ -788,9 +787,7 @@ async def resolve_takeover(
         await _settle_takeover_request(takeover, resolution="completed")
     target_url = await _resolve_takeover_target_url(takeover)
     return {
-        "takeover": _serialize_takeover_with_target(
-            takeover, target_url=target_url
-        )
+        "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)
     }
 
 
@@ -815,7 +812,5 @@ async def cancel_takeover(
     await _settle_takeover_request(takeover, resolution="skip")
     target_url = await _resolve_takeover_target_url(takeover)
     return {
-        "takeover": _serialize_takeover_with_target(
-            takeover, target_url=target_url
-        )
+        "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)
     }

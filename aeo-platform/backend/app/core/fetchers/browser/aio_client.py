@@ -235,9 +235,7 @@ class AioSandboxClient:
         if not url:
             return True
         lowered = url.lower()
-        return lowered.startswith(
-            ("chrome://", "chrome-untrusted://", "devtools://")
-        )
+        return lowered.startswith(("chrome://", "chrome-untrusted://", "devtools://"))
 
     async def _request_json(
         self,
@@ -771,7 +769,9 @@ class AioSandboxClient:
         preferred_target_url = (
             preferred_url.strip() if isinstance(preferred_url, str) else None
         )
-        if preferred_target_url and self._is_internal_browser_page(preferred_target_url):
+        if preferred_target_url and self._is_internal_browser_page(
+            preferred_target_url
+        ):
             preferred_target_url = None
         preferred_target_host = (
             (urlparse(preferred_target_url).netloc or "").lower()
@@ -790,19 +790,19 @@ class AioSandboxClient:
                 async def send_command(
                     method: str,
                     params: dict[str, Any] | None = None,
+                    session_id: str | None = None,
                 ) -> dict[str, Any]:
                     nonlocal next_id
                     next_id += 1
                     message_id = next_id
-                    await ws.send(
-                        json.dumps(
-                            {
-                                "id": message_id,
-                                "method": method,
-                                "params": params or {},
-                            }
-                        )
-                    )
+                    message: dict[str, Any] = {
+                        "id": message_id,
+                        "method": method,
+                        "params": params or {},
+                    }
+                    if session_id:
+                        message["sessionId"] = session_id
+                    await ws.send(json.dumps(message))
                     while True:
                         raw = await ws.recv()
                         payload = json.loads(raw)
@@ -822,23 +822,51 @@ class AioSandboxClient:
                         result = payload.get("result")
                         return result if isinstance(result, dict) else {}
 
+                async def activate_target(target_id: str | None) -> None:
+                    if not target_id:
+                        return
+                    await send_command(
+                        "Target.activateTarget",
+                        {"targetId": target_id},
+                    )
+                    try:
+                        attached = await send_command(
+                            "Target.attachToTarget",
+                            {"targetId": target_id, "flatten": True},
+                        )
+                        session_id = attached.get("sessionId")
+                        if isinstance(session_id, str) and session_id:
+                            await send_command(
+                                "Page.bringToFront",
+                                session_id=session_id,
+                            )
+                            await send_command(
+                                "Target.detachFromTarget",
+                                {"sessionId": session_id},
+                            )
+                    except Exception:
+                        # Target.activateTarget is the required operation. The
+                        # page-level focus command is best-effort because older
+                        # AIO runtimes may expose a narrower CDP surface.
+                        return
+
                 async def close_target(target_id: str | None) -> None:
                     if not target_id:
                         return
                     try:
-                        await send_command("Target.closeTarget", {"targetId": target_id})
+                        await send_command(
+                            "Target.closeTarget", {"targetId": target_id}
+                        )
                     except Exception:
                         # Surface cleanup is best-effort; failure to close a stale
                         # tab should not block the user from taking over the main one.
                         return
 
-                targets = (
-                    await send_command("Target.getTargets")
-                ).get("targetInfos", [])
+                targets = (await send_command("Target.getTargets")).get(
+                    "targetInfos", []
+                )
                 page_targets = [
-                    target
-                    for target in targets
-                    if target.get("type") == "page"
+                    target for target in targets if target.get("type") == "page"
                 ]
                 usable_pages = [
                     target
@@ -856,7 +884,9 @@ class AioSandboxClient:
                         host_matches = [
                             target
                             for target in usable_pages
-                            if (urlparse(str(target.get("url") or "")).netloc or "").lower()
+                            if (
+                                urlparse(str(target.get("url") or "")).netloc or ""
+                            ).lower()
                             == preferred_target_host
                         ]
                         if host_matches:
@@ -872,10 +902,7 @@ class AioSandboxClient:
                             else None
                         )
                         if selected_target_id:
-                            await send_command(
-                                "Target.activateTarget",
-                                {"targetId": selected_target_id},
-                            )
+                            await activate_target(selected_target_id)
                             for target in page_targets:
                                 target_id = target.get("targetId")
                                 if target_id == selected_target_id:
@@ -895,10 +922,7 @@ class AioSandboxClient:
                         )
                         selected_target_id = created.get("targetId")
                         if selected_target_id:
-                            await send_command(
-                                "Target.activateTarget",
-                                {"targetId": selected_target_id},
-                            )
+                            await activate_target(selected_target_id)
                         for target in page_targets:
                             await close_target(target.get("targetId"))
                         return {
@@ -919,10 +943,7 @@ class AioSandboxClient:
                                     continue
                                 await close_target(target_id)
                         if selected_target_id:
-                            await send_command(
-                                "Target.activateTarget",
-                                {"targetId": selected_target_id},
-                            )
+                            await activate_target(selected_target_id)
                         return {
                             "action": "reused_existing_page",
                             "target_id": selected_target_id,
@@ -942,10 +963,7 @@ class AioSandboxClient:
                                 continue
                             await close_target(target_id)
                     if selected_target_id:
-                        await send_command(
-                            "Target.activateTarget",
-                            {"targetId": selected_target_id},
-                        )
+                        await activate_target(selected_target_id)
                     return {
                         "action": "created_page_target",
                         "target_id": selected_target_id,
@@ -957,10 +975,7 @@ class AioSandboxClient:
                 if usable_pages:
                     selected_target_id = usable_pages[-1].get("targetId")
                     if selected_target_id:
-                        await send_command(
-                            "Target.activateTarget",
-                            {"targetId": selected_target_id},
-                        )
+                        await activate_target(selected_target_id)
                     return {
                         "action": "reused_existing_page",
                         "target_id": selected_target_id,

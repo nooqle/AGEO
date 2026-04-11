@@ -358,7 +358,11 @@ _BROWSER_ACTION_RESUME_BUFFER_SECONDS = 120.0
 
 def _is_aio_browser_handler(handler: Any) -> bool:
     client = getattr(handler, "client", None)
-    return bool(getattr(client, "aio_session_id", None))
+    if client is None:
+        return False
+    if bool(getattr(client, "aio_session_id", None)):
+        return True
+    return client.__class__.__name__ == "AioConnectedBrowserClient"
 
 
 def _get_browser_human_action_timeout(platform: str) -> float:

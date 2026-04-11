@@ -101,6 +101,19 @@ def install_in_memory_aio_storage(monkeypatch, manager: AioSandboxSessionManager
     monkeypatch.setattr(manager, "_save_takeover_record", fake_save_takeover_record)
 
 
+def test_aio_browser_handler_detects_client_before_session_is_acquired():
+    client = AioConnectedBrowserClient(
+        session_name="deepseek",
+        workspace_id="workspace_1",
+        task_id="task_1",
+        platform="deepseek",
+        purpose="a4_browser",
+    )
+    handler = SimpleNamespace(client=client)
+
+    assert nodes_a4._is_aio_browser_handler(handler) is True
+
+
 def test_takeover_bundle_requires_active_state():
     now = datetime.now(timezone.utc)
     takeover = SpectaAioTakeover(
@@ -255,6 +268,55 @@ async def test_aio_session_acquire_clears_expired_takeover_lock(monkeypatch):
     assert acquired.session_state == AioSessionState.LEASED
     assert acquired.ref_count == 1
     assert acquired.holders == {"a4_browser:deepseek:task_new"}
+
+
+@pytest.mark.asyncio
+async def test_release_session_preserves_active_takeover_freeze(monkeypatch):
+    manager = AioSandboxSessionManager()
+    session = SpectaAioSession(
+        session_id="aio_session_release",
+        workspace_id="workspace_1",
+        sandbox_ref="https://aio.example.com",
+        base_url="https://aio.example.com",
+        aio_version="test",
+        home_dir="/sandbox/home",
+        data_root="/sandbox/home/data",
+        browser_info=AioBrowserInfo(
+            cdp_url="ws://aio.example.com/devtools",
+            vnc_url=None,
+            user_agent="ua",
+            viewport={"width": 1280, "height": 720},
+            detail={},
+        ),
+        session_state=AioSessionState.TAKEOVER_FROZEN,
+        holders={"a4_browser:task_1"},
+        ref_count=1,
+        current_takeover_id="takeover_active",
+        automation_lock="a4_browser:task_1",
+        human_takeover_lock=True,
+    )
+
+    async def fake_get_session(session_id: str):
+        assert session_id == "aio_session_release"
+        return session
+
+    async def fake_save_session_record(session_obj: SpectaAioSession):
+        return session_obj
+
+    monkeypatch.setattr(manager, "get_session", fake_get_session)
+    monkeypatch.setattr(manager, "_save_session_record", fake_save_session_record)
+
+    released = await manager.release_session(
+        "aio_session_release",
+        task_id="task_1",
+        purpose="a4_browser",
+    )
+
+    assert released.ref_count == 0
+    assert released.holders == set()
+    assert released.human_takeover_lock is True
+    assert released.current_takeover_id == "takeover_active"
+    assert released.session_state == AioSessionState.TAKEOVER_FROZEN
 
 
 @pytest.mark.asyncio
@@ -672,6 +734,48 @@ async def test_wait_for_browser_action_resume_skips_second_probe_for_aio_complet
 
 
 @pytest.mark.asyncio
+async def test_wait_for_browser_action_outcome_expires_aio_takeover_on_timeout(
+    monkeypatch,
+):
+    from app.services import aio_session_manager as aio_session_manager_module
+
+    expire_takeover = AsyncMock()
+    clear_request = AsyncMock()
+
+    monkeypatch.setattr(
+        browser_action_contract,
+        "wait_for_browser_action_resolution",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        browser_action_contract,
+        "get_browser_action_request",
+        AsyncMock(
+            return_value=SimpleNamespace(takeover={"takeover_id": "takeover_timeout"})
+        ),
+    )
+    monkeypatch.setattr(
+        browser_action_contract,
+        "clear_browser_action_request",
+        clear_request,
+    )
+    monkeypatch.setattr(
+        aio_session_manager_module.aio_session_manager,
+        "expire_takeover",
+        expire_takeover,
+    )
+
+    resolution = await browser_action_contract.wait_for_browser_action_outcome(
+        "browser_action_timeout",
+        timeout=1,
+    )
+
+    assert resolution is None
+    expire_takeover.assert_awaited_once_with("takeover_timeout")
+    clear_request.assert_awaited_once_with("browser_action_timeout")
+
+
+@pytest.mark.asyncio
 async def test_aio_resume_probe_syncs_live_page_before_login_probe():
     sync_to_existing_target_page = AsyncMock(return_value=True)
     persist_runtime_state = AsyncMock()
@@ -747,6 +851,12 @@ async def test_aio_stabilize_browser_surface_uses_host_match_and_cleans_other_ta
                 }
             elif method == "Target.activateTarget":
                 result = {}
+            elif method == "Target.attachToTarget":
+                result = {"sessionId": "session_yuanbao_new"}
+            elif method == "Page.bringToFront":
+                result = {}
+            elif method == "Target.detachFromTarget":
+                result = {}
             elif method == "Target.closeTarget":
                 result = {"success": True}
             else:
@@ -784,6 +894,11 @@ async def test_aio_stabilize_browser_surface_uses_host_match_and_cleans_other_ta
     assert result["target_id"] == "yuanbao_new"
     assert result["exclusive"] is True
     assert ("Target.activateTarget", {"targetId": "yuanbao_new"}) in commands
+    assert (
+        "Target.attachToTarget",
+        {"targetId": "yuanbao_new", "flatten": True},
+    ) in commands
+    assert ("Page.bringToFront", {}) in commands
     assert ("Target.closeTarget", {"targetId": "deepseek"}) in commands
     assert ("Target.closeTarget", {"targetId": "yuanbao_old"}) in commands
     assert ("Target.closeTarget", {"targetId": "newtab"}) in commands
@@ -1569,6 +1684,24 @@ async def test_open_takeover_endpoint_reissues_expired_takeover(monkeypatch):
         request_id="req_reopen",
         action_type="login",
     )
+    session = SpectaAioSession(
+        session_id="session_1",
+        workspace_id="workspace_1",
+        sandbox_ref="https://aio.example.com",
+        base_url="https://aio.example.com",
+        aio_version="v1",
+        home_dir="/sandbox/home",
+        data_root="/sandbox/home/data",
+        browser_info=AioBrowserInfo(
+            cdp_url="ws://aio.example.com/devtools",
+            vnc_url=None,
+            user_agent="ua",
+            viewport={"width": 1280, "height": 720},
+            detail={},
+        ),
+        session_state=AioSessionState.TAKEOVER_FROZEN,
+    )
+    stabilize = AsyncMock()
 
     async def fake_open_takeover(**kwargs):
         assert kwargs["takeover_id"] == "takeover_old"
@@ -1576,13 +1709,32 @@ async def test_open_takeover_endpoint_reissues_expired_takeover(monkeypatch):
         assert kwargs["frontend_id"] == "frontend_1"
         return new_takeover
 
+    async def fake_get_session(session_id: str):
+        assert session_id == "session_1"
+        return session
+
+    async def fake_refresh_browser_info(session_id: str):
+        assert session_id == "session_1"
+        return session.browser_info
+
     monkeypatch.setattr(
         aio_api.aio_session_manager, "open_takeover", fake_open_takeover
+    )
+    monkeypatch.setattr(aio_api.aio_session_manager, "get_session", fake_get_session)
+    monkeypatch.setattr(
+        aio_api.aio_session_manager,
+        "refresh_browser_info",
+        fake_refresh_browser_info,
     )
     monkeypatch.setattr(
         aio_api,
         "_resolve_takeover_target_url",
         AsyncMock(return_value="https://chat.deepseek.com/"),
+    )
+    monkeypatch.setattr(
+        aio_api,
+        "_stabilize_takeover_browser_surface",
+        stabilize,
     )
 
     response = await aio_api.open_takeover(
@@ -1596,6 +1748,10 @@ async def test_open_takeover_endpoint_reissues_expired_takeover(monkeypatch):
         "/takeover_new/open"
     )
     assert response["takeover"]["target_url"] == "https://chat.deepseek.com/"
+    stabilize.assert_awaited_once_with(
+        session=session,
+        target_url="https://chat.deepseek.com/",
+    )
 
 
 def test_orchestrator_prompt_assembly_exposes_structured_sections():

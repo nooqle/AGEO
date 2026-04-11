@@ -86,7 +86,9 @@ def _build_aio_resume_gate_probe(handler: Any, action_type: str):
     return _run_probe
 
 
-async def _resolve_user_id_from_handler(handler: Any, user_id: str | None) -> str | None:
+async def _resolve_user_id_from_handler(
+    handler: Any, user_id: str | None
+) -> str | None:
     """Recover user_id from handler session when executor did not pass it explicitly."""
 
     if user_id:
@@ -366,10 +368,37 @@ async def wait_for_browser_action_outcome(
     """Wait for user resolution and then clean reconnect caches."""
 
     try:
-        return await wait_for_browser_action_resolution(request_id, timeout=timeout)
+        resolution = await wait_for_browser_action_resolution(
+            request_id, timeout=timeout
+        )
+        if resolution is None:
+            await _expire_aio_takeover_for_request(request_id)
+        return resolution
     finally:
         _aio_takeover_by_request_id.pop(request_id, None)
         await clear_browser_action_request(request_id)
+
+
+async def _expire_aio_takeover_for_request(request_id: str) -> None:
+    request = await get_browser_action_request(request_id)
+    takeover = request.takeover if request is not None else None
+    if not takeover:
+        takeover = _aio_takeover_by_request_id.get(request_id)
+    takeover_id = takeover.get("takeover_id") if isinstance(takeover, dict) else None
+    if not isinstance(takeover_id, str) or not takeover_id:
+        return
+    try:
+        from app.services.aio_session_manager import aio_session_manager
+
+        await aio_session_manager.expire_takeover(takeover_id)
+    except Exception as exc:
+        logger.warning(
+            "[BrowserActionContract] Failed to expire timed-out AIO takeover "
+            "(request_id=%s takeover_id=%s): %s",
+            request_id,
+            takeover_id,
+            exc,
+        )
 
 
 async def wait_for_browser_action_resume(
