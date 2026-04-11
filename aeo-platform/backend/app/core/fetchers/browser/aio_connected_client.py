@@ -44,6 +44,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         self.platform_roots: AioPlatformRoots | None = None
         self._page_owned_by_client = False
         self._context_owned_by_client = False
+        self._storage_state_loaded_into_context = False
 
     @staticmethod
     def _page_matches_target_host(page_url: str | None, target_url: str | None) -> bool:
@@ -103,6 +104,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             self.browser = None
             self.context = None
             self._context_owned_by_client = False
+            self._storage_state_loaded_into_context = False
 
             if self.playwright is not None:
                 try:
@@ -117,6 +119,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             self.playwright = None
             self._page_owned_by_client = False
             self._context_owned_by_client = False
+            self._storage_state_loaded_into_context = False
 
     async def _ensure_remote_runtime(self) -> dict[str, Any]:
         session = await aio_session_manager.acquire_session(
@@ -212,6 +215,31 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
 
         await self._persist_storage_state()
 
+    async def _create_isolated_remote_context(
+        self, context_options: dict[str, Any]
+    ) -> BrowserContext:
+        if self.browser is None:
+            raise RuntimeError("AIO 浏览器未连接")
+
+        self._storage_state_loaded_into_context = False
+        try:
+            context = await self.browser.new_context(**context_options)
+        except Exception as exc:
+            if "storage_state" not in context_options:
+                raise
+            logger.warning(
+                "[AIO Browser:%s] Failed to create context with storage_state; "
+                "falling back to empty context and page-level restore: %s",
+                self.session_name,
+                exc,
+            )
+            fallback_options = dict(context_options)
+            fallback_options.pop("storage_state", None)
+            return await self.browser.new_context(**fallback_options)
+
+        self._storage_state_loaded_into_context = "storage_state" in context_options
+        return context
+
     async def _get_or_create_remote_context(
         self, target_url: str | None = None
     ) -> BrowserContext:
@@ -226,11 +254,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             len(existing_contexts),
             target_host or "<none>",
         )
-        reusable_contexts = [
-            candidate
-            for candidate in existing_contexts
-            if candidate is not None
-        ]
+        reusable_contexts = [candidate for candidate in existing_contexts if candidate]
         if reusable_contexts and target_host:
             for candidate in reversed(reusable_contexts):
                 existing_pages = [
@@ -240,6 +264,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                     page_host = (urlparse(page.url or "").netloc or "").lower()
                     if page_host == target_host:
                         self._context_owned_by_client = False
+                        self._storage_state_loaded_into_context = False
                         logger.info(
                             "[AIO Browser:%s] reusing existing remote context matched by target_host=%s page_url=%s",
                             self.session_name,
@@ -247,14 +272,18 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                             page.url,
                         )
                         return candidate
-        if reusable_contexts:
-            self._context_owned_by_client = False
+
             logger.info(
-                "[AIO Browser:%s] reusing existing remote context for workspace=%s task=%s platform=%s",
+                "[AIO Browser:%s] no existing context matched target_host=%s; creating isolated platform context",
                 self.session_name,
-                self.workspace_id,
-                self.task_id,
-                self.platform,
+                target_host,
+            )
+        elif reusable_contexts:
+            self._context_owned_by_client = False
+            self._storage_state_loaded_into_context = False
+            logger.info(
+                "[AIO Browser:%s] reusing existing remote context because no target host was provided",
+                self.session_name,
             )
             return reusable_contexts[0]
         logger.info(
@@ -265,23 +294,25 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             self.platform,
         )
         self._context_owned_by_client = True
-        return await self.browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent=(
+        context_options: dict[str, Any] = {
+            "viewport": {"width": 1280, "height": 720},
+            "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
-        )
+        }
+        storage_state = await self._load_storage_state()
+        if storage_state:
+            context_options["storage_state"] = storage_state
+        return await self._create_isolated_remote_context(context_options)
 
     async def _get_or_create_remote_page(self, target_url: str | None = None) -> None:
         if self.context is None:
             raise RuntimeError("AIO 浏览器上下文未初始化")
 
         existing_pages = [
-            candidate
-            for candidate in self.context.pages
-            if not candidate.is_closed()
+            candidate for candidate in self.context.pages if not candidate.is_closed()
         ]
         logger.info(
             "[AIO Browser:%s] context pages discovered=%d urls=%s",
@@ -299,7 +330,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             preferred = None
             if target_host:
                 for candidate in usable:
-                    candidate_host = (urlparse(candidate.url or "").netloc or "").lower()
+                    candidate_host = (
+                        urlparse(candidate.url or "").netloc or ""
+                    ).lower()
                     if candidate_host == target_host:
                         preferred = candidate
                         break
@@ -355,9 +388,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                 cdp_url = browser_info.get("cdp_url")
                 if not cdp_url or self.playwright is None:
                     return False
-                self.browser = await self.playwright.chromium.connect_over_cdp(
-                    cdp_url
-                )
+                self.browser = await self.playwright.chromium.connect_over_cdp(cdp_url)
 
             if self.browser is None:
                 return False
@@ -406,7 +437,11 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             return
 
         cookies = storage_state.get("cookies")
-        if isinstance(cookies, list) and cookies:
+        if (
+            not self._storage_state_loaded_into_context
+            and isinstance(cookies, list)
+            and cookies
+        ):
             try:
                 await self.context.add_cookies(cookies)
             except Exception as exc:
@@ -435,7 +470,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             return
 
         try:
-            await self.page.goto(target_origin, wait_until="domcontentloaded", timeout=30000)
+            await self.page.goto(
+                target_origin, wait_until="domcontentloaded", timeout=30000
+            )
             await self.page.evaluate(
                 """(items) => {
                     for (const item of items) {
@@ -490,9 +527,8 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                 if self.page is not None and self.page.is_closed():
                     self.page = None
 
-                if (
-                    self.page is None
-                    or not self._page_matches_target_host(getattr(self.page, "url", None), url)
+                if self.page is None or not self._page_matches_target_host(
+                    getattr(self.page, "url", None), url
                 ):
                     await self._get_or_create_remote_page(url)
 

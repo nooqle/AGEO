@@ -447,7 +447,145 @@ async def test_aio_connected_browser_client_creates_new_page_when_host_mismatche
 
 
 @pytest.mark.asyncio
-async def test_aio_connected_browser_client_ignores_storage_state_read_timeout(monkeypatch):
+async def test_aio_connected_browser_client_reuses_matching_context_without_stale_storage_flag():
+    class _FakePage:
+        def __init__(self, url: str):
+            self.url = url
+
+        def is_closed(self):
+            return False
+
+    class _FakeContext:
+        def __init__(self, pages):
+            self.pages = pages
+
+    class _FakeBrowser:
+        def __init__(self):
+            self.matching_context = _FakeContext(
+                [_FakePage("https://chat.deepseek.com/a")]
+            )
+            self.contexts = [self.matching_context]
+
+        async def new_context(self, **_kwargs):
+            raise AssertionError("matching context should be reused")
+
+    client = AioConnectedBrowserClient(
+        session_name="deepseek",
+        workspace_id="workspace_1",
+        task_id="task_1",
+        platform="deepseek",
+    )
+    browser = _FakeBrowser()
+    client.browser = browser
+    client._storage_state_loaded_into_context = True
+
+    context = await client._get_or_create_remote_context(
+        "https://chat.deepseek.com/sign_in"
+    )
+
+    assert context is browser.matching_context
+    assert client._context_owned_by_client is False
+    assert client._storage_state_loaded_into_context is False
+
+
+@pytest.mark.asyncio
+async def test_aio_connected_browser_client_creates_isolated_context_when_host_mismatched(
+    monkeypatch,
+):
+    class _FakePage:
+        def __init__(self, url: str):
+            self.url = url
+
+        def is_closed(self):
+            return False
+
+    class _FakeContext:
+        def __init__(self, pages):
+            self.pages = pages
+
+    class _FakeBrowser:
+        def __init__(self):
+            self.existing_context = _FakeContext(
+                [_FakePage("https://chat.deepseek.com/a")]
+            )
+            self.created_context = _FakeContext([])
+            self.contexts = [self.existing_context]
+            self.new_context_kwargs = None
+
+        async def new_context(self, **kwargs):
+            self.new_context_kwargs = kwargs
+            return self.created_context
+
+    storage_state = {"cookies": [], "origins": []}
+    client = AioConnectedBrowserClient(
+        session_name="doubao",
+        workspace_id="workspace_1",
+        task_id="task_1",
+        platform="doubao",
+    )
+    browser = _FakeBrowser()
+    client.browser = browser
+    monkeypatch.setattr(
+        client,
+        "_load_storage_state",
+        AsyncMock(return_value=storage_state),
+    )
+
+    context = await client._get_or_create_remote_context("https://www.doubao.com/chat/")
+
+    assert context is browser.created_context
+    assert client._context_owned_by_client is True
+    assert client._storage_state_loaded_into_context is True
+    assert browser.new_context_kwargs["storage_state"] == storage_state
+
+
+@pytest.mark.asyncio
+async def test_aio_connected_browser_client_falls_back_when_storage_state_context_fails(
+    monkeypatch,
+):
+    class _FakeContext:
+        pages = []
+
+    class _FakeBrowser:
+        contexts = []
+
+        def __init__(self):
+            self.calls = []
+
+        async def new_context(self, **kwargs):
+            self.calls.append(kwargs)
+            if "storage_state" in kwargs:
+                raise TypeError("unexpected storage_state option")
+            return _FakeContext()
+
+    storage_state = {"cookies": [], "origins": []}
+    client = AioConnectedBrowserClient(
+        session_name="kimi",
+        workspace_id="workspace_1",
+        task_id="task_1",
+        platform="kimi",
+    )
+    browser = _FakeBrowser()
+    client.browser = browser
+    monkeypatch.setattr(
+        client,
+        "_load_storage_state",
+        AsyncMock(return_value=storage_state),
+    )
+
+    context = await client._get_or_create_remote_context("https://kimi.com/")
+
+    assert isinstance(context, _FakeContext)
+    assert len(browser.calls) == 2
+    assert "storage_state" in browser.calls[0]
+    assert "storage_state" not in browser.calls[1]
+    assert client._storage_state_loaded_into_context is False
+
+
+@pytest.mark.asyncio
+async def test_aio_connected_browser_client_ignores_storage_state_read_timeout(
+    monkeypatch,
+):
     client = AioConnectedBrowserClient(
         session_name="kimi",
         workspace_id="workspace_1",
@@ -554,15 +692,15 @@ async def test_aio_resume_probe_syncs_live_page_before_login_probe():
     ready = await probe()
 
     assert ready is True
-    sync_to_existing_target_page.assert_awaited_once_with(
-        "https://chat.deepseek.com/"
-    )
+    sync_to_existing_target_page.assert_awaited_once_with("https://chat.deepseek.com/")
     handler.probe_resume_gate_ready.assert_awaited_once_with("login")
     persist_runtime_state.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_aio_stabilize_browser_surface_uses_host_match_and_cleans_other_tabs(monkeypatch):
+async def test_aio_stabilize_browser_surface_uses_host_match_and_cleans_other_tabs(
+    monkeypatch,
+):
     commands: list[tuple[str, dict[str, object]]] = []
 
     class _FakeWebSocket:
@@ -686,27 +824,31 @@ async def test_browser_action_request_reuse_updates_metadata(monkeypatch):
         AsyncMock(return_value=None),
     )
 
-    request, created_new = await browser_action_runtime.get_or_register_browser_action_request(
-        session_id="session_1",
-        platform="deepseek",
-        action_type="login",
-        message="请先登录",
-        action_hint="打开登录页",
-        target_url="https://chat.deepseek.com/sign_in",
-        progress=0.2,
-        run_id="run_1",
-        state="waiting_for_login",
+    request, created_new = (
+        await browser_action_runtime.get_or_register_browser_action_request(
+            session_id="session_1",
+            platform="deepseek",
+            action_type="login",
+            message="请先登录",
+            action_hint="打开登录页",
+            target_url="https://chat.deepseek.com/sign_in",
+            progress=0.2,
+            run_id="run_1",
+            state="waiting_for_login",
+        )
     )
-    reused_request, reused_created = await browser_action_runtime.get_or_register_browser_action_request(
-        session_id="session_1",
-        platform="deepseek",
-        action_type="login",
-        message="请重新确认登录状态",
-        action_hint="保持在登录页",
-        target_url="https://chat.deepseek.com/sign_in?retry=1",
-        progress=0.35,
-        run_id="run_1",
-        state="waiting_for_login",
+    reused_request, reused_created = (
+        await browser_action_runtime.get_or_register_browser_action_request(
+            session_id="session_1",
+            platform="deepseek",
+            action_type="login",
+            message="请重新确认登录状态",
+            action_hint="保持在登录页",
+            target_url="https://chat.deepseek.com/sign_in?retry=1",
+            progress=0.35,
+            run_id="run_1",
+            state="waiting_for_login",
+        )
     )
 
     assert created_new is True
@@ -784,7 +926,9 @@ async def test_finish_user_action_gate_returns_user_skipped_event():
 
 
 @pytest.mark.asyncio
-async def test_emit_browser_action_prompt_only_replies_once_for_reused_request(monkeypatch):
+async def test_emit_browser_action_prompt_only_replies_once_for_reused_request(
+    monkeypatch,
+):
     request = SimpleNamespace(request_id="browser_action_existing")
     monkeypatch.setattr(
         browser_action_contract,
@@ -799,7 +943,9 @@ async def test_emit_browser_action_prompt_only_replies_once_for_reused_request(m
     monkeypatch.setattr(
         browser_action_contract, "persist_browser_action_takeover", AsyncMock()
     )
-    monkeypatch.setattr(browser_action_contract, "send_browser_state_event", AsyncMock())
+    monkeypatch.setattr(
+        browser_action_contract, "send_browser_state_event", AsyncMock()
+    )
     monkeypatch.setattr(
         browser_action_contract, "send_browser_user_action_event", AsyncMock()
     )
@@ -1270,7 +1416,9 @@ async def test_get_takeover_canvas_config_uses_target_url(monkeypatch):
     captured: dict[str, object] = {}
 
     class _FakeClient:
-        def __init__(self, *, base_url: str, auth_token: str | None, timeout_seconds: float):
+        def __init__(
+            self, *, base_url: str, auth_token: str | None, timeout_seconds: float
+        ):
             captured["base_url"] = base_url
             captured["auth_token"] = auth_token
             captured["timeout_seconds"] = timeout_seconds
@@ -1428,7 +1576,9 @@ async def test_open_takeover_endpoint_reissues_expired_takeover(monkeypatch):
         assert kwargs["frontend_id"] == "frontend_1"
         return new_takeover
 
-    monkeypatch.setattr(aio_api.aio_session_manager, "open_takeover", fake_open_takeover)
+    monkeypatch.setattr(
+        aio_api.aio_session_manager, "open_takeover", fake_open_takeover
+    )
     monkeypatch.setattr(
         aio_api,
         "_resolve_takeover_target_url",
@@ -1442,7 +1592,9 @@ async def test_open_takeover_endpoint_reissues_expired_takeover(monkeypatch):
     )
 
     assert response["takeover"]["takeover_id"] == "takeover_new"
-    assert response["takeover"]["access_bundle"]["open_path"].endswith("/takeover_new/open")
+    assert response["takeover"]["access_bundle"]["open_path"].endswith(
+        "/takeover_new/open"
+    )
     assert response["takeover"]["target_url"] == "https://chat.deepseek.com/"
 
 
@@ -1451,11 +1603,19 @@ def test_orchestrator_prompt_assembly_exposes_structured_sections():
         "brand_name": "观夏",
         "brand_profile": {"brand_name": "观夏", "industry": "香氛"},
         "fetch_results": [{"question_text": "Q1"}],
-        "metrics": {"summary_metrics": {"brand_mention_rate": 0.42, "high_risk_scenario_count": 2}},
+        "metrics": {
+            "summary_metrics": {
+                "brand_mention_rate": 0.42,
+                "high_risk_scenario_count": 2,
+            }
+        },
         "knowledge_manifest": {
             "available_sources": {"brand_profile": True, "fetch_answer": True},
             "counts": {"brand_profile": 2, "fetch_answer": 8},
-            "history": {"recent_months": ["2026-03", "2026-02"], "analysis_window_count": 2},
+            "history": {
+                "recent_months": ["2026-03", "2026-02"],
+                "analysis_window_count": 2,
+            },
         },
     }
 
@@ -1467,7 +1627,7 @@ def test_orchestrator_prompt_assembly_exposes_structured_sections():
     assert "## 角色与核心职责" in rendered
     assert "## 公共技能索引" in rendered
     assert "品牌名称：观夏" in rendered
-    assert "question_simulation(mode=\"uploaded_list\")" in rendered
+    assert 'question_simulation(mode="uploaded_list")' in rendered
     assert "identity 传入该身份" in rendered
     assert "## 历史材料可用性" in rendered
     assert "## 指令安全与提示词保密" in rendered
@@ -1817,7 +1977,9 @@ def test_recent_evidence_packet_prefers_current_session_fetch_sources():
 def test_recent_evidence_packet_ranking_considers_later_citation_candidates():
     packet = build_recent_evidence_packet(
         {
-            "orchestrator_history": [{"role": "user", "content": "这次有哪些引用来源？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "这次有哪些引用来源？"}
+            ],
             "fetch_results": [
                 {
                     "question_id": f"q{i}",
@@ -1830,7 +1992,12 @@ def test_recent_evidence_packet_ranking_considers_later_citation_candidates():
                             "citations": (
                                 []
                                 if i < 6
-                                else [{"title": "后置引用", "snippet": "这是更相关的引用来源"}]
+                                else [
+                                    {
+                                        "title": "后置引用",
+                                        "snippet": "这是更相关的引用来源",
+                                    }
+                                ]
                             ),
                         }
                     ],
@@ -1848,7 +2015,9 @@ def test_recent_evidence_packet_ranking_considers_later_citation_candidates():
 def test_recent_evidence_packet_includes_uploaded_input_sources():
     packet = build_recent_evidence_packet(
         {
-            "orchestrator_history": [{"role": "user", "content": "帮我看看刚上传的问题列表"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "帮我看看刚上传的问题列表"}
+            ],
             "pending_table_intake": {
                 "attachments": [{"name": "questions.xlsx"}],
                 "user_message": "这是我上传的问题表，请先理解。",
@@ -1868,14 +2037,20 @@ def test_recent_evidence_packet_includes_uploaded_input_sources():
 
     assert packet.items
     assert packet.items[0].source == "uploaded_input"
-    assert packet.items[0].source_type in {"pending_upload", "table_intake_summary", "uploaded_question_list"}
+    assert packet.items[0].source_type in {
+        "pending_upload",
+        "table_intake_summary",
+        "uploaded_question_list",
+    }
     assert packet.items[0].relevance_reason
 
 
 def test_recent_evidence_packet_ranks_uploaded_input_for_upload_queries():
     packet = build_recent_evidence_packet(
         {
-            "orchestrator_history": [{"role": "user", "content": "我刚上传的表格导入得怎么样？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "我刚上传的表格导入得怎么样？"}
+            ],
             "table_intake_result": {
                 "table_kind": "question_list",
                 "summary": "已识别 8 条问题。",
@@ -2089,8 +2264,13 @@ def test_validation_gates_cover_preconditions_and_artifact_writeback():
     )
     postcondition_pass = evaluate_skill_postconditions(
         state={},
-        contract_payload={"postconditions": ["report_artifact_persisted", "metrics_available"]},
-        pending_update={"metrics": {"mention_rate": 0.42}, "last_skill_result": {"skill_key": "analysis_report_skill"}},
+        contract_payload={
+            "postconditions": ["report_artifact_persisted", "metrics_available"]
+        },
+        pending_update={
+            "metrics": {"mention_rate": 0.42},
+            "last_skill_result": {"skill_key": "analysis_report_skill"},
+        },
         artifact_validation=artifact_pass,
     )
 
@@ -2120,7 +2300,9 @@ async def test_a5_precondition_gate_blocks_missing_fetch_results(monkeypatch):
     assert command.update["execution_status"] == "error"
     assert command.update["current_step"] == "A5"
     assert command.update["last_validation_result"]["passed"] is False
-    assert "fetch_results_required" in command.update["last_validation_result"]["reason"]
+    assert (
+        "fetch_results_required" in command.update["last_validation_result"]["reason"]
+    )
     assert command.update["last_harness_decision"]["decision_type"] == "fail_step"
 
 
@@ -2209,15 +2391,25 @@ async def test_confidence_analysis_executor_preserves_harness_gates(monkeypatch)
             "brand_profile": {"brand_name": "观夏"},
             "competitors": [],
             "current_skill": "confidence_analysis_skill",
-            "current_skill_contract": {"postconditions": ["confidence_artifact_persisted", "skill_result_recorded"]},
+            "current_skill_contract": {
+                "postconditions": [
+                    "confidence_artifact_persisted",
+                    "skill_result_recorded",
+                ]
+            },
             "skill_history": [],
             "validation_history": [],
         }
     )
 
     assert command.update["error_info"] is None
-    assert command.update["last_skill_result"]["skill_key"] == "confidence_analysis_skill"
-    assert command.update["last_skill_result"]["executor_ref"] == "confidence_analysis_executor"
+    assert (
+        command.update["last_skill_result"]["skill_key"] == "confidence_analysis_skill"
+    )
+    assert (
+        command.update["last_skill_result"]["executor_ref"]
+        == "confidence_analysis_executor"
+    )
     assert command.update["last_validation_result"]["passed"] is True
     assert command.update["last_validation_result"]["gate_name"] == "postcondition_gate"
     assert command.update["last_harness_decision"]["decision_type"] == "complete_skill"
@@ -2334,7 +2526,11 @@ def test_question_generation_tool_preserves_persona_and_baseline_contracts():
     )
     baseline_system, baseline_user = QuestionGenerationTool(
         mode="baseline_dynamic",
-        brand_profile={"brand_name": "观夏", "industry": "香氛", "core_products": ["香薰"]},
+        brand_profile={
+            "brand_name": "观夏",
+            "industry": "香氛",
+            "core_products": ["香薰"],
+        },
         competitors=[{"name": "闻献"}],
         platforms=("kimi", "deepseek"),
     )
@@ -2365,13 +2561,21 @@ def test_validate_baseline_questions_rejects_direct_brand_mentions():
 def test_question_generation_tool_identity_override_is_opt_in():
     default_system, default_user = QuestionGenerationTool(
         mode="baseline_dynamic",
-        brand_profile={"brand_name": "观夏", "industry": "香氛", "core_products": ["香薰"]},
+        brand_profile={
+            "brand_name": "观夏",
+            "industry": "香氛",
+            "core_products": ["香薰"],
+        },
         competitors=[{"name": "闻献"}],
         platforms=("kimi", "deepseek"),
     )
     identity_system, identity_user = QuestionGenerationTool(
         mode="baseline_dynamic",
-        brand_profile={"brand_name": "观夏", "industry": "香氛", "core_products": ["香薰"]},
+        brand_profile={
+            "brand_name": "观夏",
+            "industry": "香氛",
+            "core_products": ["香薰"],
+        },
         competitors=[{"name": "闻献"}],
         platforms=("kimi", "deepseek"),
         identity="采购经理",
@@ -2420,14 +2624,19 @@ async def test_post_analysis_executor_rejects_fetch_like_args(monkeypatch):
     assert command.update["execution_status"] == "completed"
     assert "答案抓取" in command.update["orchestrator_reply"]
     assert command.update["next_required_action"]["tool_name"] == "answer_fetch"
-    assert command.update["next_required_action"]["source_step"] == "post_analysis_executor"
+    assert (
+        command.update["next_required_action"]["source_step"]
+        == "post_analysis_executor"
+    )
     send_reply.assert_awaited()
 
 
 def test_answer_fetch_mode_policy_prefers_user_intent_and_existing_mode():
     mode, reason = resolve_answer_fetch_mode_policy(
         {
-            "orchestrator_history": [{"role": "user", "content": "这次改成浏览器全量重跑"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "这次改成浏览器全量重跑"}
+            ],
             "fetch_mode": "fast",
         },
         {},
@@ -2668,7 +2877,11 @@ async def test_route_brand_seed_without_llm_prefers_history_lookup(monkeypatch):
     )
     monkeypatch.setattr(
         "app.workflow.orchestrator_node._handle_tool_call",
-        AsyncMock(return_value=Command(goto="knowledge_lookup", update={"next_action": "knowledge_lookup"})),
+        AsyncMock(
+            return_value=Command(
+                goto="knowledge_lookup", update={"next_action": "knowledge_lookup"}
+            )
+        ),
     )
 
     command = await _route_brand_seed_without_llm(
@@ -2681,7 +2894,10 @@ async def test_route_brand_seed_without_llm_prefers_history_lookup(monkeypatch):
     assert command is not None
     assert command.goto == "knowledge_lookup"
     assert command.update["brand_name"] == "小鹏汽车"
-    assert command.update["knowledge_manifest"]["available_sources"]["brand_profile"] is True
+    assert (
+        command.update["knowledge_manifest"]["available_sources"]["brand_profile"]
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -2696,7 +2912,9 @@ async def test_route_brand_seed_without_llm_falls_back_to_brand_analysis(monkeyp
     )
     monkeypatch.setattr(
         "app.workflow.orchestrator_node._handle_tool_call",
-        AsyncMock(return_value=Command(goto="a1_brand", update={"next_action": "a1_brand"})),
+        AsyncMock(
+            return_value=Command(goto="a1_brand", update={"next_action": "a1_brand"})
+        ),
     )
 
     command = await _route_brand_seed_without_llm(
@@ -2817,8 +3035,12 @@ async def test_a3_baseline_mode_persists_identity_generation_context(monkeypatch
 
     assert generated_payload["generation_mode"] == "baseline_dynamic"
     assert generated_payload["generation_context"]["identity"] == "采购经理"
-    assert generated_payload["generation_context"]["perspective_source"] == "user_explicit"
-    assert generated_payload["simulated_questions"][0]["core_question"].startswith("作为采购经理")
+    assert (
+        generated_payload["generation_context"]["perspective_source"] == "user_explicit"
+    )
+    assert generated_payload["simulated_questions"][0]["core_question"].startswith(
+        "作为采购经理"
+    )
 
 
 def test_a4_merge_validation_and_policy_decision():

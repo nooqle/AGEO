@@ -1,0 +1,58 @@
+# 内地 AIO Runtime 部署说明
+
+## 当前边界
+
+AIO 内地服务器不运行 AGEO 应用代码。它运行官方 Sandbox 镜像：
+
+- 镜像：`ghcr.io/agent-infra/sandbox:latest`
+- 容器：`aio-sandbox`
+- 服务端口：`8080`
+- 持久化目录：`/opt/specta-aio-home:/home/gem`
+
+AGEO 后端通过 `AIO_BASE_URL=http://10.206.16.17:8080` 调用它。
+
+## 推荐运行参数
+
+使用 `ops/aio/docker-compose.cn.yml` 启动，核心要求：
+
+- 不限制 CPU 和内存，让容器使用整台 4C/16G 机器资源。
+- 设置 `shm_size: "2gb"`，避免 Chrome 在默认 64MB `/dev/shm` 下退化。
+- 保留 `/opt/specta-aio-home:/home/gem`，否则登录态、浏览器 profile 和采集数据会丢失。
+
+## 更新流程
+
+在 AIO 主机上执行：
+
+```bash
+cd /opt/specta-aio
+docker compose pull
+docker compose up -d
+docker ps --filter name=aio-sandbox
+curl -fsS http://127.0.0.1:8080/v1/browser/info
+```
+
+如果只是检查镜像是否更新：
+
+```bash
+before=$(docker image inspect ghcr.io/agent-infra/sandbox:latest --format '{{.Id}}')
+docker pull ghcr.io/agent-infra/sandbox:latest
+after=$(docker image inspect ghcr.io/agent-infra/sandbox:latest --format '{{.Id}}')
+test "$before" = "$after" && echo "image_changed=no" || echo "image_changed=yes"
+```
+
+## 回滚
+
+不要删除 `/opt/specta-aio-home`。
+
+如新容器异常，先保留旧容器或旧镜像，再恢复：
+
+```bash
+docker compose down
+docker run -d \
+  --name aio-sandbox \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  --shm-size=2g \
+  -v /opt/specta-aio-home:/home/gem \
+  ghcr.io/agent-infra/sandbox:latest
+```

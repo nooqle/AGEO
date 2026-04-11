@@ -145,7 +145,9 @@ def _should_defer_aio_takeover_open(handler: Any) -> bool:
 def _display_platform_names(platforms: list[str]) -> str:
     """Render canonical platform IDs into user-facing display names."""
 
-    return "、".join(PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in platforms)
+    return "、".join(
+        PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in platforms
+    )
 
 
 def _resolve_fetch_paths(
@@ -158,7 +160,9 @@ def _resolve_fetch_paths(
         return [], list(platforms)
 
     api_platforms = [p for p in platforms if p in PlatformConstants.API_PLATFORMS]
-    browser_platforms = [p for p in platforms if p in PlatformConstants.BROWSER_PLATFORMS]
+    browser_platforms = [
+        p for p in platforms if p in PlatformConstants.BROWSER_PLATFORMS
+    ]
     return api_platforms, browser_platforms
 
 
@@ -220,9 +224,15 @@ def _build_browser_phase_start_message(
     """Build the browser-phase progress copy from actual requested platforms."""
 
     api_platforms, browser_platforms = _resolve_fetch_paths(fetch_mode, platforms)
-    browser_names = _display_platform_names(browser_platforms) if browser_platforms else ""
+    browser_names = (
+        _display_platform_names(browser_platforms) if browser_platforms else ""
+    )
 
-    if fetch_mode != "full" and api_success_total is not None and api_task_count is not None:
+    if (
+        fetch_mode != "full"
+        and api_success_total is not None
+        and api_task_count is not None
+    ):
         if browser_names:
             return (
                 f"Phase 1 完成: {_display_platform_names(api_platforms)} API "
@@ -763,7 +773,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
     # Send user-visible reply with expected duration based on actual execution path.
     if platform_filter:
         selective_summary = _build_filtered_fetch_summary(fetch_mode, platform_filter)
-        duration_msg = selective_summary["duration_msg"].format(question_count=len(questions))
+        duration_msg = selective_summary["duration_msg"].format(
+            question_count=len(questions)
+        )
         mode_label = selective_summary["mode_label"]
     else:
         duration_msg = _build_duration_msg(fetch_mode, len(questions))
@@ -1230,7 +1242,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     results.append((idx, r))
 
                     if stop_platform:
-                        stop_reason = r.get("error") or f"{platform_name} 已停止本轮采集"
+                        stop_reason = (
+                            r.get("error") or f"{platform_name} 已停止本轮采集"
+                        )
                         for remaining_idx in range(idx + 1, total):
                             results.append(
                                 (
@@ -1251,7 +1265,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             )
                         _browser_shared_done[platform] = total
                         total_browser_done = sum(_browser_shared_done.values())
-                        total_browser_work = total * max(active_browser_pipeline_count, 1)
+                        total_browser_work = total * max(
+                            active_browser_pipeline_count, 1
+                        )
                         combined_progress = (
                             _browser_progress_base
                             + (total_browser_done / total_browser_work)
@@ -1341,6 +1357,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             browser_tasks = []
             browser_task_platforms = []
+            browser_task_clients = []
             requested_browser_platforms: list[str] = []
 
             # DeepSeek browser: always (both modes)
@@ -1359,6 +1376,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     )
                 )
                 browser_task_platforms.append("deepseek")
+                browser_task_clients.append(deepseek_browser_client)
             elif deepseek_requested:
                 logger.warning(
                     "[A4] Phase 2: DeepSeek skipped (handler=%s, client=%s)",
@@ -1382,6 +1400,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         )
                     )
                     browser_task_platforms.append("kimi")
+                    browser_task_clients.append(kimi_browser_client)
                 elif kimi_requested:
                     logger.warning(
                         "[A4] Phase 2: Kimi skipped (handler=%s, client=%s)",
@@ -1399,6 +1418,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         )
                     )
                     browser_task_platforms.append("hunyuan")
+                    browser_task_clients.append(yuanbao_browser_client)
                 elif yuanbao_requested:
                     logger.warning(
                         "[A4] Phase 2: Yuanbao skipped (handler=%s, client=%s)",
@@ -1422,6 +1442,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         )
                     )
                     browser_task_platforms.append("doubao")
+                    browser_task_clients.append(doubao_browser_client)
                 elif doubao_requested:
                     logger.warning(
                         "[A4] Phase 2: Doubao skipped (handler=%s, client=%s)",
@@ -1440,7 +1461,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         "[A4] Phase 2: AIO runtime detected, executing browser pipelines sequentially to avoid shared-browser focus contention"
                     )
                     browser_all_results = []
-                    for task, platform in zip(browser_tasks, browser_task_platforms):
+                    for task, platform, browser_client in zip(
+                        browser_tasks,
+                        browser_task_platforms,
+                        browser_task_clients,
+                    ):
                         logger.info(
                             "[A4] Phase 2: Sequential browser pipeline start platform=%s",
                             platform,
@@ -1449,6 +1474,19 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             browser_all_results.append(await task)
                         except BaseException as exc:
                             browser_all_results.append(exc)
+                        finally:
+                            try:
+                                await browser_client.close()
+                                logger.info(
+                                    "[A4] Phase 2: Sequential browser pipeline closed platform=%s",
+                                    platform,
+                                )
+                            except BaseException as close_exc:
+                                logger.debug(
+                                    "[A4] Browser client close failed after platform=%s: %s",
+                                    platform,
+                                    close_exc,
+                                )
                 else:
                     browser_all_results = await asyncio.gather(
                         *browser_tasks, return_exceptions=True
@@ -1920,7 +1958,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         _UUID(task_id),
                         error_message=str(e),
                         error_stage="A4",
-                        run_id=_UUID(state.get("run_id")) if state.get("run_id") else None,
+                        run_id=(
+                            _UUID(state.get("run_id")) if state.get("run_id") else None
+                        ),
                     )
             except Exception as te:
                 logger.warning("[A4] TaskService fail_task failed: %s", te)
@@ -2256,6 +2296,7 @@ async def _resume_after_browser_action(
     skip_readiness_probe = False
 
     if action_type == "verify" and hasattr(handler, "recover_after_verify"):
+
         async def _recover_verify() -> bool:
             return bool(await handler.recover_after_verify(prepare_window=False))
 
@@ -2518,9 +2559,11 @@ async def _fetch_from_browser(
         failure_error_type = (
             "user_skipped"
             if resolution == "skip"
-            else pending_action["resume_error_type"]
-            if resolution == "completed"
-            else pending_action["timeout_error_type"]
+            else (
+                pending_action["resume_error_type"]
+                if resolution == "completed"
+                else pending_action["timeout_error_type"]
+            )
         )
         return {
             "platform": platform,
@@ -2529,7 +2572,8 @@ async def _fetch_from_browser(
             "success": False,
             "error": pending_action["timeout_message"],
             "error_type": failure_error_type,
-            "stop_platform": failure_error_type in {
+            "stop_platform": failure_error_type
+            in {
                 "user_skipped",
                 "user_action_timeout",
                 "resume_gate_failed",
@@ -2648,9 +2692,7 @@ async def _fetch_from_browser(
                     request_id, timeout=int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS)
                 )
                 if resolution == "completed":
-                    recovered = await handler.recover_after_verify(
-                        prepare_window=False
-                    )
+                    recovered = await handler.recover_after_verify(prepare_window=False)
                 elif resolution == "skip":
                     recovered = False
             else:
