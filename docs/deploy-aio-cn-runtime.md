@@ -16,7 +16,8 @@ AGEO 后端通过 `AIO_BASE_URL=http://10.206.16.17:8080` 调用它。
 使用 `ops/aio/docker-compose.cn.yml` 启动，核心要求：
 
 - 不限制 CPU 和内存，让容器使用整台 4C/16G 机器资源。
-- 设置 `shm_size: "2gb"`，避免 Chrome 在默认 64MB `/dev/shm` 下退化。
+- 设置 `shm_size: "4gb"`，避免 Chrome 在默认 64MB `/dev/shm` 下退化。这里是容器内 `/dev/shm` 的上限，不是预先占用 4GB 内存。
+- 显式覆盖 `BROWSER_COMMANDLINE_ARGS`，去掉 `--disable-dev-shm-usage`，让 Chromium 使用 4GB `/dev/shm` 而不是退回磁盘临时目录。
 - 保留 `security_opt: ["seccomp=unconfined"]`，这是当前 AIO 镜像启动 Chromium 的必要参数。
 - 保留 `/opt/specta-aio-home:/home/gem`，否则登录态、浏览器 profile 和采集数据会丢失。
 
@@ -65,8 +66,9 @@ docker run -d \
   --name aio-sandbox \
   --restart unless-stopped \
   -p 8080:8080 \
-  --shm-size=2g \
+  --shm-size=4g \
   --security-opt seccomp=unconfined \
+  -e BROWSER_COMMANDLINE_ARGS="--disable-backgrounding-occluded-windows --disable-background-timer-throttling --disable-blink-features=AutomationControlled --disable-external-intent-requests --disable-features=IPH_DesktopCustomizeChrome,IsolateOrigins,site-per-proces,Translate --disable-focus-on-load --disable-gpu --disable-infobars --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-site-isolation-trials --disable-web-security --disable-window-activation --mute-audio --no-default-browser-check --no-first-run --noerrdialogs --remote-allow-origins=* --remote-debugging-port=9222 --suppress-message-center-popups --start-maximized" \
   -v /opt/specta-aio-home:/home/gem \
   ghcr.io/agent-infra/sandbox:latest
 ```

@@ -5,8 +5,32 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    shm_size: "2gb"
+    shm_size: "4gb"
     security_opt:
       - seccomp=unconfined
+    environment:
+      BROWSER_COMMANDLINE_ARGS: >-
+        --disable-backgrounding-occluded-windows
+        --disable-background-timer-throttling
+        --disable-blink-features=AutomationControlled
+        --disable-external-intent-requests
+        --disable-features=IPH_DesktopCustomizeChrome,IsolateOrigins,site-per-proces,Translate
+        --disable-focus-on-load
+        --disable-gpu
+        --disable-infobars
+        --disable-popup-blocking
+        --disable-prompt-on-repost
+        --disable-renderer-backgrounding
+        --disable-site-isolation-trials
+        --disable-web-security
+        --disable-window-activation
+        --mute-audio
+        --no-default-browser-check
+        --no-first-run
+        --noerrdialogs
+        --remote-allow-origins=*
+        --remote-debugging-port=9222
+        --suppress-message-center-popups
+        --start-maximized
     volumes:
       - /opt/specta-aio-home:/home/gem
