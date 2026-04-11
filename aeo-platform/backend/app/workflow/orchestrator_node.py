@@ -3227,7 +3227,14 @@ async def _handle_tool_call(
 
     preferred_followup_tool = _infer_current_session_followup_tool(state)
     if (
-        tool_name in {"knowledge_lookup", "knowledge_aggregate"}
+        tool_name
+        in {
+            "knowledge_lookup",
+            "knowledge_aggregate",
+            "post_analysis_skill",
+            "drill_down_analysis",
+            "compare_snapshots",
+        }
         and preferred_followup_tool is not None
     ):
         logger.warning(
@@ -3665,47 +3672,11 @@ async def _handle_tool_call(
 
         # Fallback: if LLM produced no reply text, emit a short status line
         # so the user sees something before the long-running agent starts.
-        if not reply_text.strip():
-            _all_names = "、".join(
-                PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
-                for p in PlatformConstants.SUPPORTED_PLATFORMS
-            )
-            _current_fetch_mode = (
-                tool_args.get("fetch_mode", "fast")
-                if effective_tool_name == "answer_fetch"
-                else state.get("fetch_mode", "fast")
-            )
-            if _current_fetch_mode == "full":
-                _full_schedule = (
-                    "各平台依次采集"
-                    if settings.AIO_ENABLED and settings.AIO_BASE_URL
-                    else "4 条浏览器流水线并行"
-                )
-                _fetch_fallback = (
-                    f"正在向{_all_names}平台提问（完整采集模式，全浏览器），抓取各平台对品牌的真实回答。"
-                    f"{_full_schedule}，预计总耗时约 10-20 分钟。"
-                    "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
-                )
-            else:
-                _api_names = "/".join(
-                    PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
-                    for p in PlatformConstants.API_PLATFORMS
-                )
-                _browser_names = "/".join(
-                    PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
-                    for p in PlatformConstants.BROWSER_PLATFORMS
-                )
-                _fetch_fallback = (
-                    f"正在向{_all_names}平台提问，抓取各平台对品牌的真实回答。"
-                    f"API 平台（{_api_names}）并行抓取约 30 秒，"
-                    f"浏览器平台（{_browser_names}）各需 3-5 分钟，总计约 10-20 分钟。"
-                    "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
-                )
+        if not reply_text.strip() and effective_tool_name != "answer_fetch":
             FALLBACK_TEXTS = {
                 "brand_analysis": "正在收集品牌基本信息和竞品格局，请稍候...",
                 "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
                 "question_simulation": "正在模拟真实用户可能在 AI 平台中提出的问题，请稍候...",
-                "answer_fetch": _fetch_fallback,
                 "analysis_report_skill": "正在整理场景、风险与优先动作建议，请稍候…",
                 "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
                 "confidence_analysis_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",

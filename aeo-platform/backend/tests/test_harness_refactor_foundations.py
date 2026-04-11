@@ -66,6 +66,7 @@ from app.workflow.orchestrator_context_packets import (
 from app.workflow.orchestrator_node import (
     _build_error_recovery_message,
     _execute_runtime_policy_action,
+    _handle_tool_call,
     _infer_brand_seed_candidate,
     _normalize_thought_text_for_stream,
     _route_brand_seed_without_llm,
@@ -2546,6 +2547,88 @@ async def test_runtime_policy_executor_consumes_next_required_action(monkeypatch
     assert command.update["next_required_action"] is None
     assert command.update["last_validation_result"] is None
     assert command.update["last_harness_decision"] is None
+
+
+@pytest.mark.asyncio
+async def test_answer_fetch_tool_call_does_not_emit_orchestrator_fallback(monkeypatch):
+    send_reply = AsyncMock(return_value=None)
+    monkeypatch.setattr("app.workflow.orchestrator_node.send_reply_event", send_reply)
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_plan_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_action_log_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.events.send_progress_event",
+        AsyncMock(return_value=None),
+    )
+
+    command = await _handle_tool_call(
+        state={
+            "session_id": "session-answer-fetch-fallback",
+            "orchestrator_history": [{"role": "user", "content": "继续抓取答案"}],
+            "questions": [{"id": "q1", "text": "测试问题"}],
+            "user_decisions": {"fetch_mode_confirmed": True},
+        },
+        session_id="session-answer-fetch-fallback",
+        tool_call=SimpleNamespace(
+            name="answer_fetch",
+            arguments={"fetch_mode": "fast"},
+            id="call_answer_fetch",
+        ),
+        reply_text="",
+        new_history=[],
+    )
+
+    assert command.goto == "a4_fetch"
+    send_reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_current_session_followup_realigns_generic_followup_tool(monkeypatch):
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_plan_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_action_log_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.events.send_progress_event",
+        AsyncMock(return_value=None),
+    )
+
+    command = await _handle_tool_call(
+        state={
+            "session_id": "session-followup-realign",
+            "orchestrator_history": [
+                {"role": "user", "content": "DeepSeek 这次表现怎么样？"}
+            ],
+            "fetch_results": [
+                {
+                    "question_id": "q1",
+                    "question_text": "测试问题",
+                    "platform_results": [{"platform": "deepseek", "success": True}],
+                }
+            ],
+        },
+        session_id="session-followup-realign",
+        tool_call=SimpleNamespace(
+            name="compare_snapshots",
+            arguments={},
+            id="call_followup",
+        ),
+        reply_text="我先看本次结果。",
+        new_history=[],
+    )
+
+    assert command.goto == "drill_down"
+    assert command.update["tool_call_args"]["focus_dimension"] == "platform"
+    assert command.update["tool_call_args"]["focus_value"] == "deepseek"
 
 
 def test_infer_brand_seed_candidate_treats_bare_brand_as_seed():
