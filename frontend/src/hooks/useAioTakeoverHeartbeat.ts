@@ -14,7 +14,7 @@ const TERMINAL_TAKEOVER_STATES = new Set([
 ]);
 
 type TimerRef = number;
-const OPERATION_WINDOW_MS = 8 * 60 * 1000;
+const OPERATION_WINDOW_MS = 10 * 60 * 1000;
 
 export function useAioTakeoverHeartbeat(
   takeovers: BrowserTakeoverAccess[],

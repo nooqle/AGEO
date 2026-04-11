@@ -47,6 +47,21 @@ _TERMINAL_TASK_RUN_STATUSES = {
     TaskRunStatus.FAILED,
     TaskRunStatus.CANCELLED,
 }
+_USER_VISIBLE_STAGE_LABELS = {
+    "A1": "品牌档案分析",
+    "A2": "用户画像分析",
+    "A3": "问题生成",
+    "A4": "答案抓取",
+    "A5": "报告生成",
+    "A7": "可信度分析",
+}
+
+
+def _sanitize_user_visible_task_text(message: str | None) -> str:
+    text = message or ""
+    for raw_step, label in _USER_VISIBLE_STAGE_LABELS.items():
+        text = text.replace(raw_step, label)
+    return text
 
 
 def _is_stale_waiting_message(message: str | None) -> bool:
@@ -60,7 +75,7 @@ def _resolved_running_progress_message(
 ) -> str:
     """Normalize stale waiting copy after a resume run has already started."""
 
-    progress_message = task.progress_message or ""
+    progress_message = _sanitize_user_visible_task_text(task.progress_message)
     if (
         task.status == TaskStatus.RUNNING
         and latest_run is not None
@@ -697,21 +712,96 @@ class TaskService:
                 None,
             )
             if live_run is not None and live_run.status == TaskRunStatus.WAITING_INPUT:
+                child_attempts = list(live_run.__dict__.get("child_attempts") or [])
                 unresolved_waiting_attempts = [
                     attempt
-                    for attempt in list(live_run.__dict__.get("child_attempts") or [])
+                    for attempt in child_attempts
                     if getattr(attempt, "status", None)
                     == TaskRunChildAttemptStatus.WAITING_INPUT
                     and getattr(attempt, "resolved_at", None) is None
                 ]
                 if not unresolved_waiting_attempts:
+                    if child_attempts:
+                        live_run.status = TaskRunStatus.FAILED
+                        live_run.error_kind = (
+                            task.error_stage
+                            or task.current_stage
+                            or getattr(live_run, "checkpoint_stage", None)
+                            or "runtime"
+                        )
+                        live_run.error_message = (
+                            task.error_message
+                            or live_run.error_message
+                            or "浏览器接管已结束，请重新尝试。"
+                        )
+                        live_run.finished_at = live_run.finished_at or now
+                        live_run.heartbeat_at = now
+                        live_run.lease_owner = None
+                        live_run.executor_ref = None
+                        if task.status == TaskStatus.RUNNING:
+                            task.status = TaskStatus.FAILED
+                            task.error_stage = (
+                                task.error_stage
+                                or task.current_stage
+                                or getattr(live_run, "checkpoint_stage", None)
+                                or "runtime"
+                            )
+                            task.error_message = (
+                                task.error_message
+                                or "浏览器接管已结束，请重新尝试。"
+                            )
+                            task.completed_at = task.completed_at or now
+                            task.progress_message = "任务执行失败"
+                        task.updated_at = now
+                        updated += 1
+                        changed_task_ids.add(task.id)
+                        live_run = None
+                        continue
+
+                    # A waiting-input run is not necessarily a browser handoff.
+                    # A1/A2/orchestrator confirmations are stored in the LangGraph
+                    # checkpoint as pending_confirmation and intentionally have no
+                    # TaskRunChildAttempt row. Keep them resumable instead of
+                    # failing the task as a stale takeover.
+                    continue
+
+            if live_run is not None:
+                if task.status == TaskStatus.COMPLETED:
+                    live_run.status = TaskRunStatus.COMPLETED
+                    live_run.finished_at = live_run.finished_at or task.completed_at or now
+                    live_run.heartbeat_at = now
+                    live_run.lease_owner = None
+                    live_run.executor_ref = None
+                    updated += 1
+                    changed_task_ids.add(task.id)
+                    live_run = None
+                elif task.status == TaskStatus.FAILED:
                     live_run.status = TaskRunStatus.FAILED
-                    live_run.error_kind = live_run.error_kind or "waiting_input_stale"
-                    live_run.error_message = (
-                        live_run.error_message
-                        or "等待用户确认状态已失效，请重新发起浏览器接管。"
+                    live_run.error_kind = (
+                        task.error_stage
+                        or task.current_stage
+                        or getattr(live_run, "checkpoint_stage", None)
+                        or "runtime"
                     )
-                    live_run.finished_at = live_run.finished_at or now
+                    live_run.error_message = (
+                        task.error_message
+                        or live_run.error_message
+                        or "任务执行失败"
+                    )
+                    live_run.finished_at = live_run.finished_at or task.completed_at or now
+                    live_run.heartbeat_at = now
+                    live_run.lease_owner = None
+                    live_run.executor_ref = None
+                    updated += 1
+                    changed_task_ids.add(task.id)
+                    live_run = None
+                elif task.status == TaskStatus.CANCELLED:
+                    live_run.status = TaskRunStatus.CANCELLED
+                    live_run.cancel_requested_at = live_run.cancel_requested_at or now
+                    live_run.finished_at = live_run.finished_at or task.completed_at or now
+                    live_run.heartbeat_at = now
+                    live_run.lease_owner = None
+                    live_run.executor_ref = None
                     updated += 1
                     changed_task_ids.add(task.id)
                     live_run = None

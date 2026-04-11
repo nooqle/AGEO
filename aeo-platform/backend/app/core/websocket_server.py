@@ -225,6 +225,8 @@ async def rehydrate_runtime_events(websocket: WebSocket, session_id: str) -> Non
 
     from app.api.v1.websocket_langgraph import (
         replay_pending_browser_actions_to_websocket,
+        replay_pending_confirmation_to_websocket,
     )
 
     await replay_pending_browser_actions_to_websocket(websocket, session_id)
+    await replay_pending_confirmation_to_websocket(websocket, session_id)

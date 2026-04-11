@@ -40,7 +40,10 @@ from app.workflow.browser_action_runtime import (
     resolve_browser_action_request,
     update_browser_action_request,
 )
-from app.workflow.runtime_policy_executor import build_next_required_action
+from app.workflow.runtime_policy_executor import (
+    build_next_required_action,
+    get_user_visible_runtime_label,
+)
 from app.workflow.confirmation import resolve_confirmation_selection
 
 from sqlalchemy import select
@@ -113,16 +116,29 @@ def _state_is_waiting_for_user(state_values: dict[str, Any]) -> bool:
     )
 
 
+def _sanitize_user_visible_runtime_text(text: str | None) -> str:
+    """Replace internal runtime step ids before replaying user-facing copy."""
+
+    sanitized = text or ""
+    for raw_step in ("A1", "A2", "A3", "A4", "A5", "A7"):
+        sanitized = sanitized.replace(
+            raw_step,
+            get_user_visible_runtime_label(raw_step),
+        )
+    return sanitized
+
+
 def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
     """Build a concise task progress message for waiting-input states."""
 
     pending_confirmation = state_values.get("pending_confirmation") or {}
     step_name = pending_confirmation.get("step_name")
     if step_name:
-        return f"等待用户确认：{step_name}"
+        step_text = _sanitize_user_visible_runtime_text(str(step_name))
+        return f"等待用户确认：{step_text}"
     progress_message = state_values.get("progress_message")
     if isinstance(progress_message, str) and progress_message.strip():
-        return progress_message
+        return _sanitize_user_visible_runtime_text(progress_message)
     return "等待用户输入..."
 
 
@@ -414,6 +430,83 @@ async def replay_pending_browser_actions_to_websocket(
                 "action_type": action_type,
             },
         )
+
+
+async def replay_pending_confirmation_to_websocket(
+    websocket: WebSocket,
+    session_id: str,
+) -> None:
+    """Replay durable non-browser confirmation state after reconnect."""
+
+    try:
+        workflow = await get_compiled_workflow()
+        config = {"configurable": {"thread_id": session_id}}
+        current_state = workflow.get_state(config)
+    except Exception:
+        logger.exception(
+            "[WebSocket] Failed to read workflow state for confirmation replay: %s",
+            session_id,
+        )
+        return
+
+    if not current_state or not current_state.values:
+        return
+
+    state_values = dict(current_state.values)
+    if not _state_is_waiting_for_user(state_values):
+        return
+
+    pending_confirmation = state_values.get("pending_confirmation")
+    if not isinstance(pending_confirmation, dict) or not pending_confirmation:
+        return
+
+    options = pending_confirmation.get("options")
+    if not isinstance(options, list):
+        options = []
+
+    message = _sanitize_user_visible_runtime_text(
+        str(
+            pending_confirmation.get("message")
+            or state_values.get("progress_message")
+            or "请确认后继续。"
+        )
+    )
+    request_id = str(pending_confirmation.get("request_id") or "")
+    step_id = str(pending_confirmation.get("step_id") or "orchestrator")
+    step_name = _sanitize_user_visible_runtime_text(
+        str(pending_confirmation.get("step_name") or "等待用户确认")
+    )
+
+    logger.info(
+        "[WebSocket] Replaying pending confirmation for session %s (step=%s, request_id=%s)",
+        session_id,
+        step_id,
+        request_id or "<none>",
+    )
+    await session_event_publisher.emit_to_websocket(
+        websocket,
+        "inline_confirmation",
+        {
+            "message": message,
+            "options": options,
+            "type": "simple",
+            "replayed": True,
+        },
+    )
+    await session_event_publisher.emit_to_websocket(
+        websocket,
+        "confirmation_request",
+        {
+            "request_id": request_id,
+            "type": "step_confirmation",
+            "message": message,
+            "options": options,
+            "allow_text_input": True,
+            "step_id": step_id,
+            "step_name": step_name,
+            "replayed": True,
+        },
+    )
 
 
 def _is_persona_selection_confirmation(
@@ -1591,9 +1684,13 @@ async def handle_user_message_langgraph(
                     task_err,
                     exc_info=True,
                 )
+                task_err_text = str(task_err).strip()
+                user_error_message = "任务初始化失败，分析未启动，请稍后重试。"
+                if "当前任务仍在执行" in task_err_text or "尚未完全停止" in task_err_text:
+                    user_error_message = task_err_text
                 error_payload = {
                     "step": "runtime",
-                    "error": "任务初始化失败，分析未启动，请稍后重试。",
+                    "error": user_error_message,
                     "recoverable": True,
                 }
                 await _emit_session_error(session_id, error_payload)

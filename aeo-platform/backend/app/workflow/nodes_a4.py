@@ -342,6 +342,25 @@ def _get_browser_timeout(platform: str) -> float:
     return float(PlatformConstants.PLATFORM_TIMEOUTS.get(platform, 200))
 
 
+_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS = 900.0
+_BROWSER_ACTION_RESUME_BUFFER_SECONDS = 120.0
+
+
+def _is_aio_browser_handler(handler: Any) -> bool:
+    client = getattr(handler, "client", None)
+    return bool(getattr(client, "aio_session_id", None))
+
+
+def _get_browser_human_action_timeout(platform: str) -> float:
+    """Worst-case budget for a browser question that needs human takeover."""
+
+    return (
+        _BROWSER_ACTION_WAIT_TIMEOUT_SECONDS
+        + _BROWSER_ACTION_RESUME_BUFFER_SECONDS
+        + _get_browser_timeout(platform)
+    )
+
+
 def _get_browser_pipeline_timeout(platform: str, question_count: int) -> float:
     """Scale the pipeline timeout to the platform's worst-case question budget."""
 
@@ -349,7 +368,7 @@ def _get_browser_pipeline_timeout(platform: str, question_count: int) -> float:
     if question_count <= 0:
         return configured_timeout
 
-    first_question_timeout = 300.0
+    first_question_timeout = max(300.0, _get_browser_human_action_timeout(platform))
     per_question_timeout = _get_browser_timeout(platform)
     inter_question_delay = float(
         PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
@@ -626,6 +645,9 @@ async def _browser_fetch_with_timeout(
             )
 
     try:
+        if _is_aio_browser_handler(handler):
+            return await fetch_fn(*args, **kwargs)
+
         result = await asyncio.wait_for(
             fetch_fn(*args, **kwargs),
             timeout=timeout,
@@ -2225,7 +2247,7 @@ async def _resume_after_browser_action(
     handler: Any,
     request_id: str,
     action_type: str,
-    timeout: int = 480,
+    timeout: int = int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS),
 ) -> tuple[bool, str | None]:
     """Resume one browser action using the unified contract."""
 
@@ -2455,7 +2477,7 @@ async def _fetch_from_browser(
             handler=handler,
             request_id=pending_action["request_id"],
             action_type=pending_action["action_type"],
-            timeout=480,
+            timeout=int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS),
         )
         if resumed:
             if session_id:
@@ -2623,7 +2645,7 @@ async def _fetch_from_browser(
                     target_url=getattr(handler, "URL", None),
                 )
                 resolution = await wait_for_browser_action_outcome(
-                    request_id, timeout=480
+                    request_id, timeout=int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS)
                 )
                 if resolution == "completed":
                     recovered = await handler.recover_after_verify(
@@ -2718,7 +2740,7 @@ async def _fetch_from_browser(
                     target_url=getattr(handler, "URL", None),
                 )
                 resolution = await wait_for_browser_action_outcome(
-                    request_id, timeout=480
+                    request_id, timeout=int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS)
                 )
                 modal_cleared = (
                     resolution == "completed"

@@ -14,6 +14,7 @@ import { FollowUpChips } from './FollowUpChips';
 import { BrowserActionBanner } from './BrowserActionBanner';
 import { InputArea } from './InputArea';
 import { cn } from '@/lib/cn';
+import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
 import { DEFAULT_EXAMPLE_BRANDS, ExampleBrand } from '@/config/brands';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
@@ -477,9 +478,10 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           // Restore progress UI
           useConversationStore.setState({ isAgentExecuting: true });
           if (task.progress > 0) {
+            const stageLabel = getUserFacingStageLabel(task.current_stage);
             setExecutionProgress({
               stage: task.current_stage,
-              stageName: task.current_stage,
+              stageName: stageLabel ?? task.current_stage,
               stageIndex: 0,
               totalStages: 5,
               progress: task.progress,

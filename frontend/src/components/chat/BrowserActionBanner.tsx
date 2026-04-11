@@ -33,7 +33,7 @@ interface BrowserActionBannerProps {
   onSkip?: (() => void | Promise<void>) | null;
 }
 
-const OPERATION_WINDOW_MS = 8 * 60 * 1000;
+const OPERATION_WINDOW_MS = 10 * 60 * 1000;
 
 function formatRemainingTime(expiresAtMs?: number | null, nowMs?: number): string | null {
   if (!expiresAtMs) return null;

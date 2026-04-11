@@ -222,7 +222,7 @@ class KimiHandler(BaseBrowserHandler):
                 try:
                     editor = self.client.page.locator(self._sel("input")).first
                     if await editor.count() > 0:
-                        await editor.click()
+                        await editor.focus()
                         await asyncio.sleep(0.2)
                         await self.client.page.keyboard.press("Control+a")
                         await self.client.page.keyboard.type(question)
@@ -264,6 +264,22 @@ class KimiHandler(BaseBrowserHandler):
                                 len(answer_text), len(search_refs))
                 elif parsed and parsed.error_type:
                     logger.warning("[Kimi] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
+                    if parsed.error_type == "auth_required":
+                        waiting_message = "检测到 Kimi 需要登录，请在浏览器窗口中完成登录"
+                        action_hint = "请在弹出的浏览器窗口中完成 Kimi 登录，完成后点击“我已完成”"
+                        current_url = self.client.page.url if self.client.page is not None else self.URL
+                        events, request_id = await self._begin_login_takeover_gate(
+                            message=waiting_message,
+                            action_hint=action_hint,
+                            progress=0.68,
+                            url=current_url,
+                            open_error_message="打开 Kimi 浏览器窗口失败，请重试",
+                        )
+                        for event in events:
+                            yield event
+                        if not request_id:
+                            return
+                        return
                     yield self._create_event(
                         BrowserState.ERROR,
                         f"Kimi 返回错误: {parsed.error}",
@@ -478,7 +494,7 @@ class KimiHandler(BaseBrowserHandler):
             try:
                 editor = self.client.page.locator(self._sel("input")).first
                 if await editor.count() > 0:
-                    await editor.click()
+                    await editor.focus()
                     await asyncio.sleep(0.2)
                     await self.client.page.keyboard.press("Control+a")
                     await self.client.page.keyboard.type(question)

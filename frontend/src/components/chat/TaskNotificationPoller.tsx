@@ -3,7 +3,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
-import type { AnalysisTask } from '@/types/task';
+import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
 
 interface TaskNotificationPollerProps {
   /** Polling interval in ms (default 30s) */
@@ -56,8 +56,9 @@ export function TaskNotificationPoller({
             `「${task.brand_name}」分析已完成`,
           );
         } else if (task.status === 'failed') {
+          const errorStageLabel = getUserFacingStageLabel(task.error_stage);
           toast.error(
-            `「${task.brand_name}」分析失败${task.error_stage ? ` (${task.error_stage})` : ''}`,
+            `「${task.brand_name}」分析失败${errorStageLabel ? ` (${errorStageLabel})` : ''}`,
           );
         }
       }

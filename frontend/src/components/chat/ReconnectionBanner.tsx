@@ -9,6 +9,7 @@ import {
 import { cn } from '@/lib/cn';
 import type { AnalysisTask } from '@/types/task';
 import { formatTime } from '@/lib/utils';
+import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
 
 interface ReconnectionBannerProps {
   task: AnalysisTask;
@@ -112,11 +113,12 @@ export function ReconnectionBanner({
 
   // Scenario C: Task FAILED while user was away
   if (task.status === 'failed') {
+    const errorStageLabel = getUserFacingStageLabel(task.error_stage);
     return (
       <div
         role="alert"
         aria-live="assertive"
-        aria-label={`品牌 ${task.brand_name} 分析失败${task.error_stage ? `，失败阶段 ${task.error_stage}` : ''}，可重新分析或关闭`}
+        aria-label={`品牌 ${task.brand_name} 分析失败${errorStageLabel ? `，失败环节 ${errorStageLabel}` : ''}，可重新分析或关闭`}
         className={cn(
           'relative rounded-[10px] mx-4 my-2 p-3 animate-slide-up',
           className
@@ -131,9 +133,9 @@ export function ReconnectionBanner({
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
               &ldquo;{task.brand_name}&rdquo; 分析失败
-              {task.error_stage && (
+              {errorStageLabel && (
                 <span className="font-normal" style={{ color: 'var(--text-secondary)' }}>
-                  {' '}(阶段 {task.error_stage})
+                  {' '}({errorStageLabel})
                 </span>
               )}
             </div>

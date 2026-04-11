@@ -190,7 +190,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "description": (
                         "采集模式（必须由用户选择）：\n"
                         "fast=通过API调用豆包、元宝和Kimi，并通过浏览器采集DeepSeek，约3-5分钟，快速建立品牌AI表现的初步观感，但API返回内容与真实用户网页端体验可能存在差异；\n"
-                        "full=4平台全部通过浏览器模拟真实用户访问，约8-15分钟，完全还原用户真实体验，数据最准确，是深度AEO分析的最佳选择"
+                        "full=4平台全部通过浏览器模拟真实用户访问，约10-20分钟，完全还原用户真实体验，数据最准确，是深度AEO分析的最佳选择"
                     ),
                 },
                 "platforms": {
@@ -553,7 +553,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 "waiting_tips": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "等待提示（仅在用户确认后将立即执行耗时操作时提供，如AI答案抓取预计8-12分钟。普通确认或选择场景不要填写此字段）",
+                    "description": "等待提示（仅在用户确认后将立即执行耗时操作时提供，如AI答案抓取预计10-20分钟。普通确认或选择场景不要填写此字段）",
                 },
                 "checklist": {
                     "type": "array",
@@ -1314,7 +1314,7 @@ DIRECTIVE_A1_NO_BASELINE = (
     "你必须先向用户说明：“基线分析会用行业通用问题建立品牌在各个AI平台的全景基线，后续画像和场景分析都会基于它进行对比。”\\n"
     "1) 基线分析会采集行业通用问题的AI回答，建立品牌全局基线\\n"
     "2) 基线分析完成后，再生成用户画像可以做场景对比\\n"
-    "3) 完整采集模式下需要约8-12分钟\\n"
+    "3) 完整采集模式下需要约10-20分钟\\n"
     "请向用户给出两个选择：\\n"
     "1. 先运行基线分析\\n"
     "2. 暂不\\n"
@@ -3130,6 +3130,7 @@ async def orchestrator_node(state: AgentState) -> Command:
         if error_info and exec_status != "completed":
             # Agent failed but LLM didn't call a tool — offer user choices
             failed_step = error_info.get("step", "未知")
+            failed_step_label = get_user_visible_runtime_label(failed_step)
             error_msg = error_info.get("error", "未知错误")
             logger.warning(
                 f"[Orchestrator] Error state detected (step={failed_step}), "
@@ -3138,16 +3139,16 @@ async def orchestrator_node(state: AgentState) -> Command:
             await send_confirmation_request(
                 session_id=session_id,
                 step_id="error_recovery",
-                step_name=f"{failed_step} 执行失败",
+                step_name=f"{failed_step_label}执行失败",
                 message=(
-                    f"步骤 {failed_step} 执行遇到问题：{error_msg[:100]}。"
+                    f"{failed_step_label}遇到问题：{error_msg[:100]}。"
                     f"请选择后续操作："
                 ),
                 options=[
                     {
                         "id": "retry",
                         "label": "重新尝试",
-                        "description": f"再次执行 {failed_step}",
+                        "description": f"再次执行{failed_step_label}",
                     },
                     {
                         "id": "skip",
@@ -3169,8 +3170,8 @@ async def orchestrator_node(state: AgentState) -> Command:
                     "orchestrator_history": new_history,
                     "pending_confirmation": {
                         "step_id": "error_recovery",
-                        "step_name": f"{failed_step} 执行失败",
-                        "message": f"步骤 {failed_step} 执行遇到问题",
+                        "step_name": f"{failed_step_label}执行失败",
+                        "message": f"{failed_step_label}遇到问题",
                         "options": [
                             {"id": "retry", "label": "重新尝试"},
                             {"id": "skip", "label": "跳过此步骤"},
@@ -3697,7 +3698,7 @@ async def _handle_tool_call(
                 _fetch_fallback = (
                     f"正在向{_all_names}平台提问，抓取各平台对品牌的真实回答。"
                     f"API 平台（{_api_names}）并行抓取约 30 秒，"
-                    f"浏览器平台（{_browser_names}）各需 3-5 分钟，总计约 8-12 分钟。"
+                    f"浏览器平台（{_browser_names}）各需 3-5 分钟，总计约 10-20 分钟。"
                     "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
                 )
             FALLBACK_TEXTS = {

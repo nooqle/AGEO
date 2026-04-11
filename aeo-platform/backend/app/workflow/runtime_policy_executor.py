@@ -131,16 +131,41 @@ def resolve_answer_fetch_mode_policy(
     """Resolve the safest answer_fetch mode before falling back to ask_user."""
 
     args = dict(tool_args or {})
+    latest_user_text = _extract_latest_user_text(state).lower()
+    full_keywords = (
+        "完整",
+        "全量",
+        "全浏览器",
+        "全部浏览器",
+        "纯浏览器",
+        "浏览器",
+        "不要api",
+        "不要 api",
+        "不用api",
+        "不用 api",
+        "full",
+        "重新抓全部",
+        "全部重跑",
+        "完整重抓",
+        "重新完整抓取",
+        "重新做一个完整抓取",
+        "4个平台全部浏览器",
+    )
+    fast_keywords = ("快速", "fast", "先快速", "先跑一版")
+    user_requests_full = any(keyword in latest_user_text for keyword in full_keywords)
+    user_requests_fast = any(keyword in latest_user_text for keyword in fast_keywords)
+
     explicit_mode = str(args.get("fetch_mode") or "").strip().lower()
+    if explicit_mode == "fast" and user_requests_full:
+        return "full", "user_intent_full_override_tool_args"
+    if explicit_mode == "full" and user_requests_fast:
+        return "fast", "user_intent_fast_override_tool_args"
     if explicit_mode in {"fast", "full"}:
         return explicit_mode, "tool_args_explicit"
 
-    latest_user_text = _extract_latest_user_text(state).lower()
-    full_keywords = ("完整", "全量", "浏览器", "full", "重新抓全部", "全部重跑")
-    fast_keywords = ("快速", "fast", "先快速", "先跑一版")
-    if any(keyword in latest_user_text for keyword in full_keywords):
+    if user_requests_full:
         return "full", "user_intent_full"
-    if any(keyword in latest_user_text for keyword in fast_keywords):
+    if user_requests_fast:
         return "fast", "user_intent_fast"
 
     existing_mode = str(state.get("fetch_mode") or "").strip().lower()

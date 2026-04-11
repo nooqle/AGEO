@@ -865,6 +865,50 @@ class AioSandboxClient:
                             # recently navigated.
                             matching_target = host_matches[-1]
 
+                    if exclusive:
+                        selected_target_id = (
+                            matching_target.get("targetId")
+                            if matching_target is not None
+                            else None
+                        )
+                        if selected_target_id:
+                            await send_command(
+                                "Target.activateTarget",
+                                {"targetId": selected_target_id},
+                            )
+                            for target in page_targets:
+                                target_id = target.get("targetId")
+                                if target_id == selected_target_id:
+                                    continue
+                                await close_target(target_id)
+                            return {
+                                "action": "reused_existing_page",
+                                "target_id": selected_target_id,
+                                "page_count": 1,
+                                "preferred_url": preferred_target_url,
+                                "exclusive": True,
+                            }
+
+                        created = await send_command(
+                            "Target.createTarget",
+                            {"url": preferred_target_url},
+                        )
+                        selected_target_id = created.get("targetId")
+                        if selected_target_id:
+                            await send_command(
+                                "Target.activateTarget",
+                                {"targetId": selected_target_id},
+                            )
+                        for target in page_targets:
+                            await close_target(target.get("targetId"))
+                        return {
+                            "action": "reset_to_preferred_target",
+                            "target_id": selected_target_id,
+                            "preferred_url": preferred_target_url,
+                            "page_count": 1,
+                            "exclusive": True,
+                        }
+
                     selected_target_id: str | None = None
                     if matching_target:
                         selected_target_id = matching_target.get("targetId")

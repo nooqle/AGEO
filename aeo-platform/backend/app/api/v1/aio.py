@@ -177,6 +177,18 @@ def _normalize_cdp_websocket_url(cdp_url: str | None) -> str | None:
     return None
 
 
+def _decorate_novnc_url(url: str) -> str:
+    """Apply frontend-friendly noVNC defaults to reduce manual connect friction."""
+
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.setdefault("autoconnect", "1")
+    query.setdefault("resize", "remote")
+    query.setdefault("reconnect", "1")
+    query.setdefault("reconnect_delay", "1000")
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
 def _raise_from_aio_error(exc: AioBackendError) -> None:
     status_code = exc.status_code or status.HTTP_503_SERVICE_UNAVAILABLE
     raise HTTPException(status_code=status_code, detail=exc.to_dict())
@@ -222,6 +234,35 @@ async def _resolve_takeover_target_url(
     if _is_valid_takeover_target_url(fallback):
         return fallback
     return None
+
+
+async def _require_takeover_target_url(takeover: SpectaAioTakeover) -> str:
+    target_url = await _resolve_takeover_target_url(takeover)
+    if not _is_valid_takeover_target_url(target_url):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="当前接管未找到有效目标页面，请重新申请新的 takeover。",
+        )
+    return target_url
+
+
+async def _stabilize_takeover_browser_surface(
+    *,
+    session: SpectaAioSession,
+    target_url: str,
+) -> None:
+    client = AioSandboxClient(
+        base_url=session.base_url,
+        auth_token=settings.AIO_AUTH_TOKEN,
+        timeout_seconds=settings.AIO_REQUEST_TIMEOUT_SECONDS,
+    )
+    try:
+        await client.stabilize_browser_surface(
+            preferred_url=target_url,
+            exclusive=True,
+        )
+    except AioBackendError as exc:
+        _raise_from_aio_error(exc)
 
 
 async def _get_takeover_and_session_for_user(
@@ -421,25 +462,9 @@ async def get_takeover_canvas_config(
             detail="当前用户无权访问该 takeover",
         )
     _ensure_takeover_bundle_is_active(takeover)
-    target_url = await _resolve_takeover_target_url(takeover)
-    if not _is_valid_takeover_target_url(target_url):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="当前接管未找到有效目标页面，请重新申请新的 takeover。",
-        )
+    target_url = await _require_takeover_target_url(takeover)
     session = await aio_session_manager.get_session(takeover.session_id)
-    client = AioSandboxClient(
-        base_url=session.base_url,
-        auth_token=settings.AIO_AUTH_TOKEN,
-        timeout_seconds=settings.AIO_REQUEST_TIMEOUT_SECONDS,
-    )
-    try:
-        await client.stabilize_browser_surface(
-            preferred_url=target_url,
-            exclusive=True,
-        )
-    except AioBackendError as exc:
-        _raise_from_aio_error(exc)
+    await _stabilize_takeover_browser_surface(session=session, target_url=target_url)
     await aio_session_manager.refresh_browser_info(takeover.session_id)
     return {
         "mode": "canvas_cdp",
@@ -463,6 +488,8 @@ async def get_takeover_vnc_url(
         user_id=str(current_user.id),
     )
     _ensure_takeover_bundle_is_active(takeover)
+    target_url = await _require_takeover_target_url(takeover)
+    await _stabilize_takeover_browser_surface(session=session, target_url=target_url)
     browser = await aio_session_manager.refresh_browser_info(session.session_id)
     vnc_url = browser.vnc_url
     signed_vnc_url = vnc_url
@@ -480,7 +507,11 @@ async def get_takeover_vnc_url(
         parsed = urlparse(vnc_url)
         query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         query["ticket"] = ticket.ticket
-        signed_vnc_url = urlunparse(parsed._replace(query=urlencode(query)))
+        signed_vnc_url = _decorate_novnc_url(
+            urlunparse(parsed._replace(query=urlencode(query)))
+        )
+    elif signed_vnc_url:
+        signed_vnc_url = _decorate_novnc_url(signed_vnc_url)
 
     return {
         "mode": "vnc_fallback",
@@ -508,6 +539,8 @@ async def redirect_takeover_vnc(
     )
     _ensure_takeover_bundle_is_active(takeover)
 
+    target_url = await _require_takeover_target_url(takeover)
+    await _stabilize_takeover_browser_surface(session=session, target_url=target_url)
     browser = await aio_session_manager.refresh_browser_info(session.session_id)
 
     if not browser.vnc_url:
@@ -531,7 +564,9 @@ async def redirect_takeover_vnc(
     base_query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     base_query["ticket"] = ticket.ticket
     base_query["path"] = f"websockify?ticket={ticket.ticket}"
-    target_url = urlunparse(parsed._replace(query=urlencode(base_query)))
+    target_url = _decorate_novnc_url(
+        urlunparse(parsed._replace(query=urlencode(base_query)))
+    )
     return RedirectResponse(url=target_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 
