@@ -6,5 +6,7 @@ services:
     ports:
       - "8080:8080"
     shm_size: "2gb"
+    security_opt:
+      - seccomp=unconfined
     volumes:
       - /opt/specta-aio-home:/home/gem
