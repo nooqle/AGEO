@@ -211,7 +211,7 @@ def _build_takeover_vnc_proxy_url(*, takeover_id: str, ticket: str) -> str:
         "path": f"{ws_path}?ticket={ticket}",
     }
     return (
-        f"/api/v1/aio/takeovers/{takeover_id}/vnc-proxy/vnc/index.html?"
+        f"/api/v1/aio/takeovers/{takeover_id}/vnc-proxy/vnc/vnc_lite.html?"
         f"{urlencode(query)}"
     )
 
@@ -496,8 +496,6 @@ async def get_takeover_canvas_config(
         )
     _ensure_takeover_bundle_is_active(takeover)
     target_url = await _require_takeover_target_url(takeover)
-    session = await aio_session_manager.get_session(takeover.session_id)
-    await _stabilize_takeover_browser_surface(session=session, target_url=target_url)
     await aio_session_manager.refresh_browser_info(takeover.session_id)
     return {
         "mode": "canvas_cdp",
@@ -521,8 +519,7 @@ async def get_takeover_vnc_url(
         user_id=str(current_user.id),
     )
     _ensure_takeover_bundle_is_active(takeover)
-    target_url = await _require_takeover_target_url(takeover)
-    await _stabilize_takeover_browser_surface(session=session, target_url=target_url)
+    await _require_takeover_target_url(takeover)
     browser = await aio_session_manager.refresh_browser_info(session.session_id)
     vnc_url = browser.vnc_url
     proxied_vnc_url: str | None = None
@@ -760,7 +757,9 @@ async def redirect_takeover_vnc(
     except AioBackendError as exc:
         _raise_from_aio_error(exc)
 
-    target_base = browser.vnc_url or f"{session.base_url}/vnc/index.html"
+    target_base = browser.vnc_url or f"{session.base_url}/vnc/vnc_lite.html"
+    if target_base.endswith("/vnc/index.html"):
+        target_base = target_base[: -len("/vnc/index.html")] + "/vnc/vnc_lite.html"
     parsed = urlparse(target_base)
     base_query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     base_query["ticket"] = ticket.ticket

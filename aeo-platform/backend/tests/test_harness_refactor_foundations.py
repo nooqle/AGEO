@@ -1496,7 +1496,9 @@ async def test_open_takeover_refreshes_active_window(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_takeover_canvas_config_uses_target_url(monkeypatch):
+async def test_get_takeover_canvas_config_returns_target_without_restabilizing(
+    monkeypatch,
+):
     now = datetime.now(timezone.utc)
     takeover = SpectaAioTakeover(
         takeover_id="takeover_canvas",
@@ -1531,27 +1533,6 @@ async def test_get_takeover_canvas_config_uses_target_url(monkeypatch):
         ),
         session_state=AioSessionState.TAKEOVER_FROZEN,
     )
-    captured: dict[str, object] = {}
-
-    class _FakeClient:
-        def __init__(
-            self, *, base_url: str, auth_token: str | None, timeout_seconds: float
-        ):
-            captured["base_url"] = base_url
-            captured["auth_token"] = auth_token
-            captured["timeout_seconds"] = timeout_seconds
-
-        async def stabilize_browser_surface(
-            self,
-            *,
-            preferred_url: str | None = None,
-            allow_blank_fallback: bool = False,
-            exclusive: bool = False,
-        ):
-            captured["preferred_url"] = preferred_url
-            captured["allow_blank_fallback"] = allow_blank_fallback
-            captured["exclusive"] = exclusive
-            return {"action": "created_page_target", "preferred_url": preferred_url}
 
     async def fake_get_takeover(takeover_id: str):
         assert takeover_id == "takeover_canvas"
@@ -1576,7 +1557,8 @@ async def test_get_takeover_canvas_config_uses_target_url(monkeypatch):
         "refresh_browser_info",
         fake_refresh_browser_info,
     )
-    monkeypatch.setattr(aio_api, "AioSandboxClient", _FakeClient)
+    stabilize = AsyncMock(return_value=None)
+    monkeypatch.setattr(aio_api, "_stabilize_takeover_browser_surface", stabilize)
     monkeypatch.setattr(
         aio_api,
         "get_browser_action_request",
@@ -1588,9 +1570,7 @@ async def test_get_takeover_canvas_config_uses_target_url(monkeypatch):
         current_user=SimpleNamespace(id="user_1"),
     )
 
-    assert captured["preferred_url"] == "https://chat.deepseek.com/"
-    assert captured["allow_blank_fallback"] is False
-    assert captured["exclusive"] is True
+    stabilize.assert_not_awaited()
     assert response["target_url"] == "https://chat.deepseek.com/"
 
 
@@ -1737,9 +1717,10 @@ async def test_get_takeover_vnc_url_uses_same_origin_proxy(monkeypatch):
 
     proxied_url = response["url"]
     assert proxied_url.startswith(
-        "/api/v1/aio/takeovers/takeover_vnc/vnc-proxy/vnc/index.html?"
+        "/api/v1/aio/takeovers/takeover_vnc/vnc-proxy/vnc/vnc_lite.html?"
     )
     assert "10.206.16.17" not in proxied_url
+    aio_api._stabilize_takeover_browser_surface.assert_not_awaited()
     parsed = urlparse(proxied_url)
     params = parse_qs(parsed.query)
     assert params["ticket"] == ["ticket_1"]

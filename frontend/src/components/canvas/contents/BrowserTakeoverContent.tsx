@@ -159,6 +159,7 @@ export function BrowserTakeoverContent({
 
   const [canvasConfig, setCanvasConfig] = useState<AioCanvasConfig | null>(null);
   const [vncConfig, setVncConfig] = useState<AioVncUrl | null>(null);
+  const [vncFrameLoaded, setVncFrameLoaded] = useState(false);
   const [renderState, setRenderState] = useState<RenderState>('hidden');
   const [currentMode, setCurrentMode] = useState<'canvas_cdp' | 'vnc_fallback'>(
     normalizeRenderMode(takeoverRegistration?.mode),
@@ -206,6 +207,7 @@ export function BrowserTakeoverContent({
       return;
     }
 
+    setVncFrameLoaded(false);
     const vnc = await withTimeout(
       api.getAioTakeoverVncUrl(vncUrlPath),
       TAKEOVER_REQUEST_TIMEOUT_MS,
@@ -572,12 +574,12 @@ export function BrowserTakeoverContent({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 bg-black">
+        <div className="min-h-0 flex-1" style={{ background: '#f8fafc' }}>
           {currentMode === 'canvas_cdp' && renderState !== 'error' && (
             <div className="relative h-full">
               <div ref={canvasRootRef} className="h-full w-full overflow-hidden" />
               {renderState !== 'canvas_ready' && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+                <div className="absolute inset-0 flex items-center justify-center bg-white/90">
                   <div className="flex flex-col items-center gap-3 text-center">
                     <div
                       className="h-9 w-9 animate-spin rounded-full border-2"
@@ -586,11 +588,11 @@ export function BrowserTakeoverContent({
                         borderTopColor: 'var(--color-primary)',
                       }}
                     />
-                    <div className="text-sm text-white/85">
+                    <div className="text-sm" style={{ color: 'var(--text-primary)' }}>
                       正在进入云电脑...
                     </div>
                     {targetUrl && (
-                      <div className="max-w-[420px] truncate text-xs text-white/60">
+                      <div className="max-w-[420px] truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
                         {targetUrl}
                       </div>
                     )}
@@ -601,8 +603,8 @@ export function BrowserTakeoverContent({
           )}
 
           {renderState === 'opening' && currentMode !== 'canvas_cdp' && (
-            <div className="flex h-full items-center justify-center bg-black">
-              <div className="flex flex-col items-center gap-3 text-center">
+            <div className="flex h-full items-center justify-center bg-[#f8fafc]">
+              <div className="flex min-w-[280px] flex-col items-center gap-3 rounded-2xl border bg-white px-8 py-7 text-center shadow-sm">
                 <div
                   className="h-9 w-9 animate-spin rounded-full border-2"
                   style={{
@@ -610,11 +612,11 @@ export function BrowserTakeoverContent({
                     borderTopColor: 'var(--color-primary)',
                   }}
                 />
-                <div className="text-sm text-white/85">
+                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
                   正在进入云电脑...
                 </div>
                 {targetUrl && (
-                  <div className="max-w-[420px] truncate text-xs text-white/60">
+                  <div className="max-w-[420px] truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
                     {targetUrl}
                   </div>
                 )}
@@ -623,8 +625,8 @@ export function BrowserTakeoverContent({
           )}
 
           {renderState === 'submitting' && (
-            <div className="flex h-full items-center justify-center bg-black">
-              <div className="flex flex-col items-center gap-3 text-center">
+            <div className="flex h-full items-center justify-center bg-[#f8fafc]">
+              <div className="flex min-w-[280px] flex-col items-center gap-3 rounded-2xl border bg-white px-8 py-7 text-center shadow-sm">
                 <div
                   className="h-9 w-9 animate-spin rounded-full border-2"
                   style={{
@@ -632,9 +634,11 @@ export function BrowserTakeoverContent({
                     borderTopColor: 'var(--color-primary)',
                   }}
                 />
-                <div className="text-sm text-white/85">正在确认当前平台操作...</div>
+                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                  正在确认当前平台操作...
+                </div>
                 {targetUrl && (
-                  <div className="max-w-[420px] truncate text-xs text-white/60">
+                  <div className="max-w-[420px] truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
                     {targetUrl}
                   </div>
                 )}
@@ -643,23 +647,47 @@ export function BrowserTakeoverContent({
           )}
 
           {renderState === 'vnc_ready' && vncConfig?.url && (
-            <iframe
-              title={`${platformLabel} takeover`}
-              src={vncConfig.url}
-              className="h-full w-full bg-black"
-              allow="fullscreen; clipboard-read; clipboard-write"
-              allowFullScreen
-            />
+            <div className="relative h-full w-full bg-[#f8fafc]">
+              <iframe
+                title={`${platformLabel} takeover`}
+                src={vncConfig.url}
+                className="h-full w-full bg-[#f8fafc]"
+                allow="fullscreen; clipboard-read; clipboard-write"
+                allowFullScreen
+                onLoad={() => setVncFrameLoaded(true)}
+              />
+              {!vncFrameLoaded && (
+                <div className="absolute inset-0 flex items-center justify-center bg-[#f8fafc]">
+                  <div className="flex min-w-[280px] flex-col items-center gap-3 rounded-2xl border bg-white px-8 py-7 text-center shadow-sm">
+                    <div
+                      className="h-9 w-9 animate-spin rounded-full border-2"
+                      style={{
+                        borderColor: 'rgba(99, 102, 241, 0.16)',
+                        borderTopColor: 'var(--color-primary)',
+                      }}
+                    />
+                    <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                      正在连接云电脑...
+                    </div>
+                    {targetUrl && (
+                      <div className="max-w-[420px] truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                        {targetUrl}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {renderState === 'error' && (
-            <div className="flex h-full flex-col items-center justify-center gap-3 bg-black px-6 text-center">
+            <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#f8fafc] px-6 text-center">
               <RiAlertLine className="h-8 w-8" style={{ color: 'var(--status-danger)' }} />
-              <div className="text-sm" style={{ color: '#fff' }}>
+              <div className="text-sm" style={{ color: 'var(--text-primary)' }}>
                 {statusText || '当前云电脑暂时不可用，请重新打开浏览器。'}
               </div>
               {targetUrl && (
-                <div className="max-w-[420px] truncate text-xs text-white/60">
+                <div className="max-w-[420px] truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
                   {targetUrl}
                 </div>
               )}
