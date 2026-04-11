@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
 import pytest
@@ -1647,6 +1648,120 @@ async def test_get_takeover_canvas_config_rejects_missing_target_url(monkeypatch
 
     assert exc_info.value.status_code == 409
     assert "未找到有效目标页面" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_takeover_vnc_url_uses_same_origin_proxy(monkeypatch):
+    now = datetime.now(timezone.utc)
+    takeover = SpectaAioTakeover(
+        takeover_id="takeover_vnc",
+        session_id="session_1",
+        workspace_id="workspace_1",
+        user_id="user_1",
+        platform="deepseek",
+        mode="vnc_fallback",
+        reason="manual_intervention",
+        state=AioTakeoverState.ISSUED,
+        frontend_id=None,
+        requested_at=now,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+        request_id="req_vnc",
+        action_type="login",
+    )
+    browser_info = AioBrowserInfo(
+        cdp_url="ws://10.206.16.17:8080/cdp/devtools/browser/1",
+        vnc_url="http://10.206.16.17:8080/vnc/index.html",
+        user_agent="ua",
+        viewport={"width": 1280, "height": 720},
+        detail={},
+    )
+    session = SpectaAioSession(
+        session_id="session_1",
+        workspace_id="workspace_1",
+        sandbox_ref="aio-cn",
+        base_url="http://10.206.16.17:8080",
+        aio_version="v1",
+        home_dir="/sandbox/home",
+        data_root="/sandbox/home/data",
+        browser_info=browser_info,
+        session_state=AioSessionState.TAKEOVER_FROZEN,
+    )
+
+    class _FakeClient:
+        def __init__(
+            self, *, base_url: str, auth_token: str | None, timeout_seconds: float
+        ):
+            assert base_url == "http://10.206.16.17:8080"
+
+        async def create_ticket(self):
+            return SimpleNamespace(ticket="ticket_1", expires_in=300, detail={})
+
+    async def fake_get_takeover(takeover_id: str):
+        assert takeover_id == "takeover_vnc"
+        return takeover
+
+    async def fake_get_session(session_id: str):
+        assert session_id == "session_1"
+        return session
+
+    async def fake_refresh_browser_info(session_id: str):
+        assert session_id == "session_1"
+        return browser_info
+
+    monkeypatch.setattr(aio_api.aio_session_manager, "get_takeover", fake_get_takeover)
+    monkeypatch.setattr(aio_api.aio_session_manager, "get_session", fake_get_session)
+    monkeypatch.setattr(
+        aio_api.aio_session_manager,
+        "refresh_browser_info",
+        fake_refresh_browser_info,
+    )
+    monkeypatch.setattr(
+        aio_api,
+        "_require_takeover_target_url",
+        AsyncMock(return_value="https://chat.deepseek.com/"),
+    )
+    monkeypatch.setattr(
+        aio_api,
+        "_stabilize_takeover_browser_surface",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(aio_api, "AioSandboxClient", _FakeClient)
+
+    response = await aio_api.get_takeover_vnc_url(
+        "takeover_vnc",
+        current_user=SimpleNamespace(id="user_1"),
+    )
+
+    proxied_url = response["url"]
+    assert proxied_url.startswith(
+        "/api/v1/aio/takeovers/takeover_vnc/vnc-proxy/vnc/index.html?"
+    )
+    assert "10.206.16.17" not in proxied_url
+    parsed = urlparse(proxied_url)
+    params = parse_qs(parsed.query)
+    assert params["ticket"] == ["ticket_1"]
+    assert params["path"] == [
+        "api/v1/aio/takeovers/takeover_vnc/vnc-websockify?ticket=ticket_1"
+    ]
+    assert response["upstream_vnc_available"] is True
+
+
+def test_build_upstream_vnc_websocket_url_preserves_ticket():
+    assert (
+        aio_api._build_upstream_vnc_websocket_url(
+            base_url="http://10.206.16.17:8080",
+            ticket="ticket_1",
+        )
+        == "ws://10.206.16.17:8080/websockify?ticket=ticket_1"
+    )
+    assert (
+        aio_api._build_upstream_vnc_websocket_url(
+            base_url="https://aio.example.com",
+            ticket=None,
+        )
+        == "wss://aio.example.com/websockify"
+    )
 
 
 @pytest.mark.asyncio

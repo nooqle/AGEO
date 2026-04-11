@@ -8,8 +8,17 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from datetime import datetime
 from typing import Any
 
+import httpx
 import websockets
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    status,
+)
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from websockets.exceptions import ConnectionClosed
@@ -187,6 +196,31 @@ def _decorate_novnc_url(url: str) -> str:
     query.setdefault("reconnect", "1")
     query.setdefault("reconnect_delay", "1000")
     return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _build_takeover_vnc_proxy_url(*, takeover_id: str, ticket: str) -> str:
+    """Build a same-origin noVNC URL so browsers never hit the private AIO IP."""
+
+    ws_path = f"api/v1/aio/takeovers/{takeover_id}/vnc-websockify"
+    query = {
+        "autoconnect": "1",
+        "resize": "remote",
+        "reconnect": "1",
+        "reconnect_delay": "1000",
+        "ticket": ticket,
+        "path": f"{ws_path}?ticket={ticket}",
+    }
+    return (
+        f"/api/v1/aio/takeovers/{takeover_id}/vnc-proxy/vnc/index.html?"
+        f"{urlencode(query)}"
+    )
+
+
+def _build_upstream_vnc_websocket_url(*, base_url: str, ticket: str | None) -> str:
+    parsed = urlparse(base_url)
+    ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+    query = urlencode({"ticket": ticket}) if ticket else ""
+    return urlunparse((ws_scheme, parsed.netloc, "/websockify", "", query, ""))
 
 
 def _raise_from_aio_error(exc: AioBackendError) -> None:
@@ -491,7 +525,7 @@ async def get_takeover_vnc_url(
     await _stabilize_takeover_browser_surface(session=session, target_url=target_url)
     browser = await aio_session_manager.refresh_browser_info(session.session_id)
     vnc_url = browser.vnc_url
-    signed_vnc_url = vnc_url
+    proxied_vnc_url: str | None = None
     if vnc_url:
         client = AioSandboxClient(
             base_url=session.base_url,
@@ -502,23 +536,191 @@ async def get_takeover_vnc_url(
             ticket = await client.create_ticket()
         except AioBackendError as exc:
             _raise_from_aio_error(exc)
-
-        parsed = urlparse(vnc_url)
-        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query["ticket"] = ticket.ticket
-        signed_vnc_url = _decorate_novnc_url(
-            urlunparse(parsed._replace(query=urlencode(query)))
+        proxied_vnc_url = _build_takeover_vnc_proxy_url(
+            takeover_id=takeover.takeover_id,
+            ticket=ticket.ticket,
         )
-    elif signed_vnc_url:
-        signed_vnc_url = _decorate_novnc_url(signed_vnc_url)
 
     return {
         "mode": "vnc_fallback",
         "takeover_id": takeover.takeover_id,
-        "url": signed_vnc_url,
+        "url": proxied_vnc_url,
         "expires_at": _serialize_datetime(takeover.expires_at),
         "upstream_vnc_available": bool(browser.vnc_url),
     }
+
+
+@router.get("/takeovers/{takeover_id}/vnc-proxy/{proxy_path:path}")
+async def proxy_takeover_vnc_asset(
+    takeover_id: str,
+    proxy_path: str,
+    request: Request,
+):
+    """Proxy noVNC static assets through the Specta domain.
+
+    noVNC runs inside an iframe and cannot attach Authorization headers, so this
+    proxy is guarded by the unguessable takeover id plus the active takeover
+    state. The websocket still needs the short-lived upstream AIO ticket.
+    """
+
+    try:
+        takeover = await aio_session_manager.get_takeover(takeover_id)
+        session = await aio_session_manager.get_session(takeover.session_id)
+        _ensure_takeover_bundle_is_active(takeover)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    upstream_path = "/" + proxy_path.lstrip("/")
+    upstream_url = f"{session.base_url.rstrip('/')}{upstream_path}"
+    if request.url.query:
+        upstream_url = f"{upstream_url}?{request.url.query}"
+
+    headers = {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower() in {"accept", "accept-language", "user-agent"}
+    }
+    if settings.AIO_AUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {settings.AIO_AUTH_TOKEN}"
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.AIO_REQUEST_TIMEOUT_SECONDS,
+            follow_redirects=True,
+        ) as client:
+            upstream = await client.get(upstream_url, headers=headers)
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"AIO VNC proxy request failed: {exc}",
+        ) from exc
+
+    response_headers: dict[str, str] = {}
+    for header_name in ("cache-control", "etag", "last-modified"):
+        value = upstream.headers.get(header_name)
+        if value:
+            response_headers[header_name] = value
+
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type"),
+        headers=response_headers,
+    )
+
+
+@router.websocket("/takeovers/{takeover_id}/vnc-websockify")
+async def relay_takeover_vnc(websocket: WebSocket, takeover_id: str):
+    """Proxy noVNC websocket traffic so the browser never reaches AIO directly."""
+
+    ticket = websocket.query_params.get("ticket")
+    if not ticket:
+        await websocket.close(code=1008, reason="Missing AIO ticket")
+        return
+
+    try:
+        takeover = await aio_session_manager.get_takeover(takeover_id)
+        session = await aio_session_manager.get_session(takeover.session_id)
+        _ensure_takeover_bundle_is_active(takeover)
+    except (KeyError, HTTPException) as exc:
+        reason = str(getattr(exc, "detail", exc))
+        await websocket.close(code=1008, reason=reason)
+        return
+
+    upstream_url = _build_upstream_vnc_websocket_url(
+        base_url=session.base_url,
+        ticket=ticket,
+    )
+    await websocket.accept()
+
+    try:
+        upstream = await websockets.connect(
+            upstream_url,
+            open_timeout=settings.AIO_REQUEST_TIMEOUT_SECONDS,
+            ping_interval=20,
+            ping_timeout=20,
+            max_size=None,
+        )
+    except Exception as exc:
+        logger.exception(
+            "aio.vnc_relay.connect_failed takeover_id=%s session_id=%s upstream=%s error=%s",
+            takeover_id,
+            session.session_id,
+            upstream_url,
+            exc,
+        )
+        await websocket.close(code=1011, reason="Failed to connect upstream VNC")
+        return
+
+    async def safe_close_downstream(*, code: int = 1000, reason: str = "") -> None:
+        try:
+            await websocket.close(code=code, reason=reason)
+        except RuntimeError:
+            pass
+        except Exception:
+            logger.debug(
+                "aio.vnc_relay.downstream_close_ignored takeover_id=%s",
+                takeover_id,
+                exc_info=True,
+            )
+
+    async def safe_close_upstream() -> None:
+        try:
+            await upstream.close()
+        except Exception:
+            logger.debug(
+                "aio.vnc_relay.upstream_close_ignored takeover_id=%s",
+                takeover_id,
+                exc_info=True,
+            )
+
+    async def downstream_to_upstream() -> None:
+        try:
+            while True:
+                message = await websocket.receive()
+                message_type = message.get("type")
+                if message_type == "websocket.disconnect":
+                    break
+                if message.get("text") is not None:
+                    await upstream.send(message["text"])
+                    continue
+                if message.get("bytes") is not None:
+                    await upstream.send(message["bytes"])
+        finally:
+            await safe_close_upstream()
+
+    async def upstream_to_downstream() -> None:
+        try:
+            async for payload in upstream:
+                if isinstance(payload, bytes):
+                    await websocket.send_bytes(payload)
+                else:
+                    await websocket.send_text(payload)
+        except ConnectionClosed:
+            return
+
+    relay_tasks = {
+        asyncio.create_task(downstream_to_upstream()),
+        asyncio.create_task(upstream_to_downstream()),
+    }
+
+    done, pending = await asyncio.wait(relay_tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    await safe_close_upstream()
+    await safe_close_downstream()
+
+    for task in done:
+        exc = task.exception()
+        if exc and not isinstance(exc, ConnectionClosed):
+            logger.exception(
+                "aio.vnc_relay.relay_failed takeover_id=%s session_id=%s upstream=%s error=%s",
+                takeover_id,
+                session.session_id,
+                upstream_url,
+                exc,
+            )
 
 
 @router.get("/takeovers/{takeover_id}/vnc-redirect")
