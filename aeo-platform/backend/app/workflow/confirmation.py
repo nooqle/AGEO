@@ -50,6 +50,22 @@ def resolve_confirmation_selection(
         decisions.pop("question_import_mode", None)
         state_updates["confirmed_import_action"] = None
 
+    def clear_transient_table_import_state() -> None:
+        import_source_metadata = dict(state_values.get("import_source_metadata") or {})
+        import_source_metadata.pop("attachments", None)
+        import_source_metadata.pop("requested_tool_mode", None)
+        if import_source_metadata.get("source_type") == "uploaded_table" and not (
+            import_source_metadata.get("imported_links")
+            or import_source_metadata.get("imported_link_list_count")
+        ):
+            import_source_metadata.pop("source_type", None)
+
+        state_updates["pending_table_intake"] = None
+        state_updates["table_intake_result"] = None
+        state_updates["confirmed_import_action"] = None
+        state_updates["import_source_metadata"] = import_source_metadata or None
+        state_updates["selected_tool_mode"] = None
+
     if isinstance(selection, dict) and selection.get("type") == "persona_path_selection":
         selected_ids = selection.get("selectedPersonaIds", [])
         selected_names = selection.get("selectedPersonaNames", [])
@@ -129,6 +145,11 @@ def resolve_confirmation_selection(
             decisions["table_import_confirmed"] = True
             decisions["confirmed_table_kind"] = "link_list"
             logger.info("[LangGraph] Inline confirmation: table_import_link_list")
+        elif opt_id == "table_import_cancel":
+            clear_question_import_state()
+            clear_transient_table_import_state()
+            resolved_user_content = "用户选择暂不导入本次表格"
+            logger.info("[LangGraph] Inline confirmation: table_import_cancel")
         else:
             resolved_user_content = str(selection.get("label", opt_id))
             logger.info("[LangGraph] Inline confirmation: optionId=%s", opt_id)
@@ -200,6 +221,14 @@ def resolve_confirmation_selection(
         resolved_user_content = "用户确认将表格作为链接清单继续分析"
         logger.info(
             "[LangGraph] Text confirmation mapped to link_list import: %s",
+            selection,
+        )
+    elif isinstance(selection, str) and selection in ("暂不导入", "取消导入", "先不导入"):
+        clear_question_import_state()
+        clear_transient_table_import_state()
+        resolved_user_content = "用户选择暂不导入本次表格"
+        logger.info(
+            "[LangGraph] Text confirmation mapped to table_import_cancel: %s",
             selection,
         )
 

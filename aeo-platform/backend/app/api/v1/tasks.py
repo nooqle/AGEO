@@ -75,6 +75,7 @@ async def get_active_task(
     """Get the active (PENDING/RUNNING) task for a session."""
     sid = _parse_uuid(session_id, "session_id")
     service = TaskService(db)
+    await service.reconcile_terminal_task_live_runs(sid)
     task = await service.get_session_active_task(sid)
     if task is None:
         return {"task": None}

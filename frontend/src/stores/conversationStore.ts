@@ -87,6 +87,7 @@ interface ConversationState {
   setExecutionProgress: (progress: ExecutionProgress | null) => void;
   setBrowserState: (state: BrowserState | null) => void;
   updateBrowserState: (requestId: string, updates: Partial<BrowserState>) => void;
+  clearBrowserStatesForPlatform: (platform: BrowserState['platform']) => void;
   clearBrowserStates: () => void;
   setStopState: (state: StopState | null) => void;
   setPendingConfirmation: (request: ConfirmationRequest | null) => void;
@@ -272,12 +273,25 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     }
 
     set((state) => {
-      const nextStates = [...state.browserStates];
+      let nextStates = [...state.browserStates];
       const requestId = browserState.requestId;
       const fingerprint = requestId
         ? `request:${requestId}`
         : `${browserState.platform}:${browserState.state}:${browserState.message}:${browserState.actionHint || ''}`;
-      const existingIndex = nextStates.findIndex((existing) => {
+      if (browserState.requiresAction) {
+        nextStates = nextStates.filter((existing) => {
+          if (requestId && existing.requestId === requestId) {
+            return true;
+          }
+          return !(
+            existing.requiresAction &&
+            existing.platform === browserState.platform &&
+            existing.actionType === browserState.actionType
+          );
+        });
+      }
+
+      const nextExistingIndex = nextStates.findIndex((existing) => {
         if (requestId && existing.requestId) {
           return existing.requestId === requestId;
         }
@@ -287,10 +301,14 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         return existingFingerprint === fingerprint;
       });
 
-      if (existingIndex >= 0) {
-        nextStates[existingIndex] = {
-          ...nextStates[existingIndex],
+      if (nextExistingIndex >= 0) {
+        const existingState = nextStates[nextExistingIndex];
+        nextStates[nextExistingIndex] = {
+          ...existingState,
           ...browserState,
+          relatedMessageId:
+            browserState.relatedMessageId ?? existingState.relatedMessageId,
+          takeover: browserState.takeover ?? existingState.takeover,
         };
       } else {
         nextStates.push(browserState);
@@ -309,6 +327,18 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         browserState.requestId === requestId
           ? { ...browserState, ...updates }
           : browserState
+      );
+      return {
+        browserState: nextStates.find((item) => item.requiresAction) || nextStates[0] || null,
+        browserStates: nextStates,
+      };
+    });
+  },
+
+  clearBrowserStatesForPlatform: (platform) => {
+    set((state) => {
+      const nextStates = state.browserStates.filter(
+        (browserState) => browserState.platform !== platform,
       );
       return {
         browserState: nextStates.find((item) => item.requiresAction) || nextStates[0] || null,

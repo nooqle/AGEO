@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 
 const STORAGE_KEY = 'specta-theme';
 type Theme = 'dark' | 'light';
@@ -40,34 +40,46 @@ function setGlobalTheme(theme: Theme, persist: boolean) {
 
   try {
     localStorage.setItem(STORAGE_KEY, theme);
-  } catch (_) {}
+  } catch {}
+}
+
+function subscribeTheme(listener: ThemeListener) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function getThemeSnapshot(): Theme {
+  const theme = getDomTheme();
+  currentTheme = theme;
+  return theme;
+}
+
+function getServerThemeSnapshot(): Theme {
+  return 'dark';
+}
+
+function subscribeMounted() {
+  return () => {};
 }
 
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>('dark');
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    const initialTheme = getDomTheme();
-    currentTheme = initialTheme;
-    setTheme(initialTheme);
-    setMounted(true);
-
-    const listener: ThemeListener = (nextTheme) => {
-      setTheme(nextTheme);
-    };
-    listeners.add(listener);
-
-    return () => {
-      listeners.delete(listener);
-    };
-  }, []);
+  const theme = useSyncExternalStore(
+    subscribeTheme,
+    getThemeSnapshot,
+    getServerThemeSnapshot,
+  );
+  const mounted = useSyncExternalStore(
+    subscribeMounted,
+    () => true,
+    () => false,
+  );
 
   const toggleTheme = useCallback(() => {
     const baseTheme = mounted ? currentTheme : getDomTheme();
     const nextTheme: Theme = baseTheme === 'dark' ? 'light' : 'dark';
     setGlobalTheme(nextTheme, true);
-    setMounted(true);
   }, [mounted]);
 
   return { theme, mounted, toggleTheme };

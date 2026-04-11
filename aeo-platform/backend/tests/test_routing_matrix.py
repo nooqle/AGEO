@@ -4,7 +4,7 @@ E2E Routing Matrix Tests for Specta AI Orchestrator.
 Verifies that the orchestrator correctly routes through ALL node paths
 across 10+ consecutive messages, covering:
 - Full pipeline: A1 → A2 → A3 → A4 → A5
-- Follow-up tools: drill_down, compare_snapshots, selective_refetch
+- Follow-up tools: drill_down, compare_snapshots；需要重新抓取数据时统一走 answer_fetch
 - Mixed: casual chat interleaved with analysis
 - Error recovery: retry after fail
 
@@ -238,8 +238,8 @@ class TestFollowUpRouting:
         logger.info("✓ compare_snapshots routing PASS")
 
     @pytest.mark.asyncio
-    async def test_selective_refetch_routing(self):
-        """Message 4: Selective refetch routes selective_refetch→A4→(A5)."""
+    async def test_scoped_answer_fetch_routing(self):
+        """Message 4: Scoped rerun requests should route to answer_fetch→A4→(A5)."""
         await send_msg(self.ws, "请重新抓取 Kimi 平台的数据")
 
         events = await collect_until(
@@ -251,16 +251,16 @@ class TestFollowUpRouting:
         # Should see A4 progress events (re-fetch)
         progress_steps = get_progress_steps(events)
         assert "A4" in progress_steps, (
-            f"selective_refetch did not trigger A4. Steps: {progress_steps}"
+            f"scoped answer_fetch did not trigger A4. Steps: {progress_steps}"
         )
 
         # After P2-1 fix, A5 should be auto-triggered
         if "A5" in progress_steps:
-            logger.info("✓ selective_refetch → A4 → A5 auto-trigger PASS")
+            logger.info("✓ scoped answer_fetch → A4 → A5 auto-trigger PASS")
         else:
-            logger.warning("⚠ selective_refetch → A4 completed but A5 not auto-triggered")
+            logger.warning("⚠ scoped answer_fetch → A4 completed but A5 not auto-triggered")
 
-        logger.info("✓ selective_refetch routing PASS")
+        logger.info("✓ scoped answer_fetch routing PASS")
 
 
 # ─── Test: Casual Chat Interleaving ───────────────────────────────────────────
@@ -320,7 +320,7 @@ class TestMultiMessageSession:
         Msg 3: Drill-down on platform
         Msg 4: Drill-down on competitor
         Msg 5: Compare snapshots
-        Msg 6: Selective refetch (→A4→A5)
+        Msg 6: 通过 answer_fetch 触发定向重跑（→A4→A5）
         Msg 7: Casual follow-up
         Msg 8: Drill-down on sentiment
         Msg 9: General optimization question
@@ -372,14 +372,14 @@ class TestMultiMessageSession:
             has_reply = has_event(events, "reply_delta")
             results["msg5_compare"] = "PASS" if has_reply else "FAIL"
 
-            # ─── Msg 6: Selective refetch ─────────────────────
-            logger.info("═══ Msg 6: Selective refetch ═══")
+            # ─── Msg 6: Scoped rerun via answer_fetch ────────
+            logger.info("═══ Msg 6: Scoped rerun via answer_fetch ═══")
             await send_msg(ws, "重新抓取 Kimi 平台的数据")
             events = await collect_until(ws, ["execution_complete", "error"], WS_PIPELINE_TIMEOUT)
             steps = get_progress_steps(events)
             has_a4 = "A4" in steps
             has_a5 = "A5" in steps
-            results["msg6_refetch"] = f"PASS (A4={has_a4}, A5={has_a5})" if has_a4 else "FAIL"
+            results["msg6_scoped_rerun"] = f"PASS (A4={has_a4}, A5={has_a5})" if has_a4 else "FAIL"
 
             # ─── Msg 7: Casual follow-up ──────────────────────
             logger.info("═══ Msg 7: Casual follow-up ═══")

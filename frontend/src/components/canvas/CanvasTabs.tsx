@@ -5,7 +5,8 @@ import { cn } from '@/lib/cn';
 import { RiCloseLine } from '@remixicon/react';
 
 export function CanvasTabs() {
-  const { contents, activeContentIndex, setActiveContent, removeContent } = useCanvasStore();
+  const { contents, activeContentIndex, setActiveContent, removeContent, setActiveSurface } =
+    useCanvasStore();
 
   return (
     <div className="flex items-center gap-1 px-2 py-2 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] overflow-x-auto">
@@ -18,7 +19,10 @@ export function CanvasTabs() {
               ? 'bg-[var(--bg-secondary)] text-[var(--text-primary)] border border-[var(--border-hover)]'
               : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]'
           )}
-          onClick={() => setActiveContent(index)}
+          onClick={() => {
+            setActiveSurface('artifact');
+            setActiveContent(index);
+          }}
         >
           <span className="truncate max-w-[120px]">{content.title}</span>
           {content.hasNewVersion && index !== activeContentIndex && (

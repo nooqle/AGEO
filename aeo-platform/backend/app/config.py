@@ -43,13 +43,29 @@ class Settings(BaseSettings):
     SYNC_DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/specta_db"
 
     # CORS
-    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    CORS_ORIGINS: str = (
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000,"
+        "http://localhost:3001,"
+        "http://127.0.0.1:3001"
+    )
 
     # Logging
     LOG_LEVEL: str = "INFO"
+    SCHEDULER_ENABLED: bool = True
 
     # Redis (Optional)
     REDIS_URL: str | None = None
+
+    # AIO Cloud Sandbox
+    AIO_ENABLED: bool = False
+    AIO_BASE_URL: str | None = None
+    AIO_AUTH_TOKEN: str | None = None
+    AIO_REQUEST_TIMEOUT_SECONDS: float = 20.0
+    AIO_DEFAULT_ACCESS_MODE: str = "canvas_cdp"
+    AIO_IDLE_TTL_SECONDS: int = 900
+    AIO_TAKEOVER_HEARTBEAT_INTERVAL_MS: int = 10000
+    AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS: int = 30
 
     # LLM Provider Selection
     LLM_PROVIDER: str = "glm5"

@@ -1,10 +1,7 @@
 """A3 Node: Simulated Question Generation.
 
-This module contains the A3 node implementation for generating simulated user questions.
-All modes use LLM-driven generation:
-  - "brand" (default): LLM generates brand panorama questions
-  - "persona": LLM generates questions focused on selected user personas
-  - "baseline_dynamic": LLM generates industry baseline panorama questions
+The workflow stage is responsible for routing, progress, artifacts, and validation.
+Pure question-generation logic is delegated to the internal `question_generation` tool.
 """
 
 import logging
@@ -26,6 +23,14 @@ from app.workflow.events import (
 from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.nodes import _get_fast_model
 from app.core.utils import extract_json_from_content
+from app.tools.question_generation import (
+    QuestionGenerationTool,
+    extract_brand_name as generate_brand_name,
+    fix_persona_categories as normalize_persona_questions,
+    merge_uploaded_questions as merge_uploaded_question_payload,
+    normalize_uploaded_question_payload as normalize_uploaded_questions,
+    validate_baseline_questions as validate_generated_baseline_questions,
+)
 
 from app.core.constants import PlatformConstants, WorkflowConstants
 
@@ -33,8 +38,6 @@ from app.core.constants import PlatformConstants, WorkflowConstants
 _PLATFORMS = PlatformConstants.SUPPORTED_PLATFORMS
 # Hard limit on total questions
 _MAX_QUESTIONS = WorkflowConstants.MAX_QUESTIONS
-# Questions per persona in persona mode
-_QUESTIONS_PER_PERSONA = WorkflowConstants.QUESTIONS_PER_PERSONA
 
 
 def _clear_question_import_state(state: AgentState) -> dict:
@@ -50,60 +53,31 @@ def _normalize_uploaded_question_payload(
     *,
     start_index: int = 1,
 ) -> tuple[list[dict], list[dict]]:
-    simulated_questions = []
-    flattened_questions = []
-
-    for offset, question in enumerate(questions, start=start_index):
-        question_id = question.get("id") or question.get("question_id") or f"upload_q_{offset:03d}"
-        category = question.get("category") or "上传问题"
-        core_question = question.get("text") or question.get("core_question") or ""
-        if not core_question:
-            continue
-        intent = question.get("intent") or question.get("user_intent") or ""
-        stage = question.get("stage") or question.get("decision_stage") or ""
-
-        simulated_questions.append(
-            {
-                "question_id": question_id,
-                "category": category,
-                "core_question": core_question,
-                "user_intent": intent,
-                "decision_stage": stage,
-                "source": "uploaded_table",
-            }
-        )
-        flattened_questions.append(
-            {
-                "id": question_id,
-                "text": core_question,
-                "category": category,
-                "intent": intent,
-                "stage": stage,
-                "source": "uploaded_table",
-            }
-        )
-
-    return simulated_questions, flattened_questions
+    return normalize_uploaded_questions(questions, start_index=start_index)
 
 
 def _merge_uploaded_questions(
     existing_questions: list[dict],
     incoming_questions: list[dict],
 ) -> list[dict]:
-    merged_questions: list[dict] = []
-    seen_texts: set[str] = set()
+    return merge_uploaded_question_payload(existing_questions, incoming_questions)
 
-    for question in [*existing_questions, *incoming_questions]:
-        text = str(question.get("text") or question.get("core_question") or "").strip()
-        if not text:
-            continue
-        normalized_text = " ".join(text.lower().split())
-        if normalized_text in seen_texts:
-            continue
-        seen_texts.add(normalized_text)
-        merged_questions.append(question)
 
-    return merged_questions
+def _get_identity_override(state: AgentState) -> str | None:
+    tool_args = state.get("tool_call_args") or {}
+    identity = str(tool_args.get("identity") or "").strip()
+    return identity or None
+
+
+def _build_generation_context(identity: str | None) -> dict[str, str | None]:
+    return {
+        "identity": identity,
+        "perspective_source": "user_explicit" if identity else "default_consumer",
+    }
+
+
+def _identity_suffix(identity: str | None) -> str:
+    return f"（以“{identity}”身份视角）" if identity else ""
 
 
 async def a3_question_node(state: AgentState) -> Command:
@@ -271,6 +245,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
     brand_profile = state.get("brand_profile") or {}
     competitors = state.get("competitors") or []
     brand_name = _extract_brand_name(brand_profile, state)
+    identity = _get_identity_override(state)
 
     # Defensive check: refuse to generate if industry is unknown
     industry = brand_profile.get("industry", "")
@@ -289,17 +264,22 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
         step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
-        message="品牌全景模式：正在通过 LLM 生成问题",
+        message=f"品牌全景模式：正在通过 LLM 生成问题{_identity_suffix(identity)}",
     )
 
     await send_tpaor_event(
         session_id, "thought",
-        f"正在为「{brand_name}」生成品牌全景问题，覆盖品牌认知、产品特性、竞品对比等维度...",
+        f"正在为「{brand_name}」生成品牌全景问题{_identity_suffix(identity)}，覆盖品牌认知、产品特性、竞品对比等维度...",
     )
 
     try:
-        system_prompt = _build_baseline_system_prompt()
-        user_content = _build_baseline_user_content(brand_profile, competitors)
+        system_prompt, user_content = QuestionGenerationTool(
+            mode="brand_panorama",
+            brand_profile=brand_profile,
+            competitors=competitors,
+            platforms=_PLATFORMS,
+            identity=identity,
+        )
 
         model = _get_fast_model()
         response = await call_llm_streaming(
@@ -381,12 +361,18 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
         )
 
+        generated_payload = {
+            "simulated_questions": simulated_questions,
+            "generation_mode": "brand_panorama",
+            "generation_context": _build_generation_context(identity),
+        }
+
         await save_and_send_artifact(
             session_id=session_id,
             output_type="questionList",
             title="模拟问题列表",
             data={
-                "simulatedQuestions": {"simulated_questions": simulated_questions},
+                "simulatedQuestions": generated_payload,
                 "questions": flattened_questions,
                 "generationMode": "品牌全景模式（LLM生成）",
             },
@@ -423,7 +409,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
 
         return Command(
             update={
-                "simulated_questions": {"simulated_questions": simulated_questions},
+                "simulated_questions": generated_payload,
                 "questions": flattened_questions,
                 "current_step": "A3",
                 "progress": 0.5,
@@ -484,6 +470,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
     """A3 persona focused mode: LLM generates questions based on selected personas."""
     session_id = state["session_id"]
     brand_profile = state.get("brand_profile") or {}
+    identity = _get_identity_override(state)
     brand_name = brand_profile.get("brand_name", "") or brand_profile.get("name", "")
     if not brand_name:
         brand_name = state.get("brand_name", "")
@@ -526,19 +513,22 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
         step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
-        message=f"画像聚焦模式：为 {len(selected_personas)} 个画像生成问题",
+        message=f"画像聚焦模式：为 {len(selected_personas)} 个画像生成问题{_identity_suffix(identity)}",
     )
 
     await send_tpaor_event(
         session_id, "thought",
-        f"正在基于 {len(selected_personas)} 个选中画像生成针对性问题...",
+        f"正在基于 {len(selected_personas)} 个选中画像生成针对性问题{_identity_suffix(identity)}...",
     )
 
     try:
         # Build LLM prompt
-        system_prompt = _build_persona_system_prompt()
-        user_content = _build_persona_user_content(
-            brand_profile, selected_personas
+        system_prompt, user_content = QuestionGenerationTool(
+            mode="persona_focused",
+            brand_profile=brand_profile,
+            selected_personas=selected_personas,
+            platforms=_PLATFORMS,
+            identity=identity,
         )
 
         model = _get_fast_model()
@@ -636,12 +626,18 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
         )
 
+        generated_payload = {
+            "simulated_questions": simulated_questions,
+            "generation_mode": "persona_focused",
+            "generation_context": _build_generation_context(identity),
+        }
+
         await save_and_send_artifact(
             session_id=session_id,
             output_type="questionList",
             title="模拟问题列表",
             data={
-                "simulatedQuestions": {"simulated_questions": simulated_questions},
+                "simulatedQuestions": generated_payload,
                 "questions": flattened_questions,
                 "generationMode": "画像聚焦模式（LLM生成）",
                 "selectedPersonas": persona_names,
@@ -681,7 +677,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 
         return Command(
             update={
-                "simulated_questions": {"simulated_questions": simulated_questions},
+                "simulated_questions": generated_payload,
                 "questions": flattened_questions,
                 "current_step": "A3",
                 "progress": 0.5,
@@ -725,240 +721,25 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 # Shared Helpers
 # ============================================================================
 
-# --- Category validation & ratio enforcement for persona mode ---
-
-_VALID_CATEGORIES = {"画像痛点场景", "品牌直接问题", "品类选购对比", "行业趋势认知"}
-
-_CATEGORY_ALIAS_MAP: dict[str, str] = {
-    "画像聚焦": "画像痛点场景",
-    "画像痛点": "画像痛点场景",
-    "痛点场景": "画像痛点场景",
-    "场景问题": "画像痛点场景",
-    "画像场景": "画像痛点场景",
-    "品牌问题": "品牌直接问题",
-    "品牌相关": "品牌直接问题",
-    "品牌认知": "品牌直接问题",
-    "品牌对比": "品牌直接问题",
-    "品牌评价": "品牌直接问题",
-    "品类对比": "品类选购对比",
-    "品类问题": "品类选购对比",
-    "选购对比": "品类选购对比",
-    "选购推荐": "品类选购对比",
-    "行业趋势": "行业趋势认知",
-    "行业认知": "行业趋势认知",
-    "趋势认知": "行业趋势认知",
-    "行业问题": "行业趋势认知",
-}
-
-
-def _normalize_category(raw: str) -> str:
-    """Map LLM-returned category to one of the 4 valid values."""
-    raw = raw.strip()
-    if raw in _VALID_CATEGORIES:
-        return raw
-    if raw in _CATEGORY_ALIAS_MAP:
-        return _CATEGORY_ALIAS_MAP[raw]
-    # Substring match: check if any valid category is contained
-    for valid in _VALID_CATEGORIES:
-        if valid in raw or raw in valid:
-            return valid
-    return "画像痛点场景"
-
-
 def _fix_persona_categories(
     questions: list[dict],
     brand_name: str,
     min_brand_ratio: float = 0.25,
 ) -> list[dict]:
-    """Normalize categories and enforce brand-direct question ratio (≥25%).
-
-    Steps:
-    1. Normalize every category to one of the 4 valid values.
-    2. If a question contains brand_name but is NOT categorized as 品牌直接问题,
-       and brand ratio is below target, re-label it.
-    3. Log the final distribution.
-    """
-    if not questions or not brand_name:
-        return questions
-
-    brand_lower = brand_name.lower()
-
-    # Step 1: normalize categories
-    for q in questions:
-        raw_cat = q.get("category", "")
-        q["category"] = _normalize_category(raw_cat)
-
-    # Step 2: count current brand-direct questions
-    total = len(questions)
-    brand_count = sum(1 for q in questions if q["category"] == "品牌直接问题")
-    target_count = max(1, int(total * min_brand_ratio + 0.5))
-
-    if brand_count < target_count:
-        # Find questions that mention brand_name but are mis-categorized
-        for q in questions:
-            if brand_count >= target_count:
-                break
-            core = q.get("core_question", q.get("question", "")).lower()
-            if brand_lower in core and q["category"] != "品牌直接问题":
-                logger.info(
-                    f"[A3] Re-labeling question to 品牌直接问题: "
-                    f"{q.get('core_question', '')[:40]}… "
-                    f"(was: {q['category']})"
-                )
-                q["category"] = "品牌直接问题"
-                brand_count += 1
-
-    # Step 3: log distribution
+    """Normalize categories and enforce brand-direct question ratio (≥25%)."""
+    questions = normalize_persona_questions(
+        questions,
+        brand_name,
+        min_brand_ratio=min_brand_ratio,
+    )
     from collections import Counter
     dist = Counter(q["category"] for q in questions)
     logger.info(
-        f"[A3] Persona category distribution (total={total}): "
+        f"[A3] Persona category distribution (total={len(questions)}): "
         + ", ".join(f"{k}={v}" for k, v in sorted(dist.items()))
     )
 
     return questions
-
-
-def _build_persona_system_prompt() -> str:
-    """System prompt for persona-focused question generation."""
-    platform_list = "、".join(
-        PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in _PLATFORMS
-    )
-    return f"""你是一个资深的 AI 平台用户行为分析专家。你的任务是根据品牌信息和用户画像，生成这些用户可能在 AI 平台（如{platform_list}）中提出的真实问题。
-
-## 输出格式
-请严格输出以下 JSON 格式，不要有其他文字：
-
-{{
-  "questions": [
-    {{
-      "question_id": "pq_001",
-      "core_question": "用户会在 AI 平台中问的完整问题",
-      "category": "必须从以下4个值中选择：画像痛点场景 | 品牌直接问题 | 品类选购对比 | 行业趋势认知",
-      "user_intent": "用户提问的潜在意图",
-      "decision_stage": "认知/兴趣/评估/决策/验证",
-      "source_persona": "对应画像名称"
-    }}
-  ]
-}}
-
-## 问题分类比例（严格遵守，这是最高优先级的规则）
-生成问题时，必须按以下数量分配（以12个问题为例）：
-- 品牌直接问题：至少 3-4 个（约30%）— 必须在问题中直接提及品牌名称
-- 画像痛点场景：约 4 个（约35%）— 基于画像痛点，不包含品牌名
-- 品类选购对比：约 2-3 个（约20%）— 品类层面选购/对比
-- 行业趋势认知：约 1-2 个（约15%）— 行业宏观趋势
-
-⚠ 请先生成品牌直接问题，确保数量达标，再生成其他类型。
-
-## 生成规则
-1. 每个画像生成 10-15 个问题
-2. 问题必须覆盖决策全路径：认知 → 兴趣 → 评估 → 决策 → 验证
-3. 不需要指定平台，系统会自动在 {platform_list} 之间轮转分配
-4. 问题要贴合该画像人群的真实表达方式和关注点
-5. 避免重复或过于笼统的问题
-6. 总问题数不超过 40 个
-7. **最高优先级**：品牌直接问题必须占总数的 30%（如12题中至少3-4个）。
-   生成完毕后请自检各分类数量。category 字段只能使用上述4个固定值。"""
-
-
-def _build_persona_user_content(
-    brand_profile: dict,
-    selected_personas: list,
-) -> str:
-    """Build user content for persona-focused question generation."""
-    brand_name = brand_profile.get("brand_name", "")
-    industry = brand_profile.get("industry", "")
-    description = brand_profile.get("description", "")
-    products = ", ".join(brand_profile.get("core_products", []))
-
-    persona_blocks = []
-    for p in selected_personas:
-        name = p.get("persona_name", p.get("name", ""))
-        desc = p.get("persona_description", p.get("description", ""))
-        key_qs = p.get("key_questions", [])
-        scenarios = p.get("usage_scenarios", [])
-
-        # Build demographics context if available
-        demographics = p.get("demographics")
-        demo_text = ""
-        if demographics and isinstance(demographics, dict):
-            demo_parts = []
-            if demographics.get("age_range"):
-                demo_parts.append(f"年龄: {demographics['age_range']}")
-            if demographics.get("gender"):
-                demo_parts.append(f"性别: {demographics['gender']}")
-            if demographics.get("city_tier"):
-                demo_parts.append(f"城市: {demographics['city_tier']}")
-            if demographics.get("income"):
-                demo_parts.append(f"收入: {demographics['income']}")
-            if demographics.get("occupation"):
-                demo_parts.append(f"职业: {demographics['occupation']}")
-            if demo_parts:
-                demo_text = f"- 人口统计: {', '.join(demo_parts)}"
-
-        # Build psychographics context if available
-        psychographics = p.get("psychographics")
-        psycho_text = ""
-        if psychographics and isinstance(psychographics, dict):
-            psycho_parts = []
-            if psychographics.get("lifestyle"):
-                psycho_parts.append(f"生活方式: {psychographics['lifestyle']}")
-            if psychographics.get("values"):
-                psycho_parts.append(f"价值观: {psychographics['values']}")
-            pain_points = psychographics.get("pain_points", [])
-            if pain_points:
-                psycho_parts.append(f"痛点: {', '.join(pain_points)}")
-            if psycho_parts:
-                psycho_text = f"- 心理画像: {'; '.join(psycho_parts)}"
-
-        scenario_text = ""
-        if scenarios:
-            scenario_lines = []
-            for s in scenarios:
-                if isinstance(s, dict):
-                    line = f"  - {s.get('scenario_name', '')}: {s.get('scenario_description', '')}"
-                    # Include search intents if available
-                    intents = s.get("brand_interaction_intents", s.get("likely_search_intents", []))
-                    if intents:
-                        line += f" (互动意图: {', '.join(intents)})"
-                    scenario_lines.append(line)
-                elif isinstance(s, str):
-                    scenario_lines.append(f"  - {s}")
-            scenario_text = "\n".join(scenario_lines)
-
-        block = f"""### {name}
-- 描述: {desc}
-{demo_text}
-{psycho_text}
-- 关注问题: {', '.join(key_qs) if key_qs else '无'}
-- 使用场景:
-{scenario_text if scenario_text else '  - 无'}""".strip()
-        persona_blocks.append(block)
-
-    return f"""请为以下品牌的目标用户画像生成 AI 平台模拟问题。
-
-## 品牌信息
-- 品牌名称: {brand_name}
-- 行业: {industry}
-- 品牌描述: {description}
-- 核心产品: {products}
-
-## 选中画像（为每个画像生成 10-15 个问题）
-
-{chr(10).join(persona_blocks)}
-
-## 比例要求（最高优先级，务必遵守）
-请严格按照以下比例和数量生成问题：
-- 品牌直接问题（约30%，"{brand_name}"必须出现在问题中）：如果总共12题，至少3-4个
-- 画像痛点场景（约35%，不包含品牌名"{brand_name}"）
-- 品类选购对比（约20%）：围绕{industry}品类的选购、对比、推荐
-- 行业趋势认知（约15%）：{industry}行业的趋势、技术、市场变化
-
-⚠ category 字段必须使用以上4个固定名称，不要自创分类。
-⚠ 先生成品牌直接问题确保达标，再生成其他类型。
-
-请直接输出 JSON，不要有其他文字。"""
 
 
 # ============================================================================
@@ -968,9 +749,7 @@ def _build_persona_user_content(
 
 def _extract_brand_name(brand_profile: dict, state: AgentState) -> str:
     """Extract brand_name from brand_profile or state fallback."""
-    brand_name = brand_profile.get("brand_name", "") or brand_profile.get("name", "")
-    if not brand_name:
-        brand_name = state.get("brand_name", "")
+    brand_name = generate_brand_name(brand_profile, state)
     if not brand_name:
         brand_name = "品牌"
         logger.warning(
@@ -986,6 +765,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
     brand_profile = state.get("brand_profile") or {}
     competitors = state.get("competitors") or []
     brand_name = _extract_brand_name(brand_profile, state)
+    identity = _get_identity_override(state)
 
     # Defensive check: refuse to generate if industry is unknown
     industry = brand_profile.get("industry", "")
@@ -1004,18 +784,23 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
-        message="基线全景模式：正在生成行业全景问题",
+        message=f"基线全景模式：正在生成行业全景问题{_identity_suffix(identity)}",
     )
 
     await send_tpaor_event(
         session_id, "thought",
-        f"正在为「{brand_name}」生成行业全景基线问题，覆盖品类需求、场景选购、竞品对比等维度...",
+        f"正在为「{brand_name}」生成行业全景基线问题{_identity_suffix(identity)}，覆盖品类需求、场景选购、竞品对比等维度...",
     )
 
     try:
         # Build LLM prompt
-        system_prompt = _build_baseline_system_prompt()
-        user_content = _build_baseline_user_content(brand_profile, competitors)
+        system_prompt, user_content = QuestionGenerationTool(
+            mode="baseline_dynamic",
+            brand_profile=brand_profile,
+            competitors=competitors,
+            platforms=_PLATFORMS,
+            identity=identity,
+        )
 
         model = _get_fast_model()
         response = await call_llm_streaming(
@@ -1052,7 +837,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         raw_questions = raw_questions[:_MAX_QUESTIONS]
 
         # Validate brand question ratio
-        _validate_baseline_questions(raw_questions, brand_name)
+        validate_generated_baseline_questions(raw_questions, brand_name)
 
         # Build simulated_questions and flattened_questions
         simulated_questions = []
@@ -1109,12 +894,18 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         )
 
         # Save and send artifact to Canvas
+        generated_payload = {
+            "simulated_questions": simulated_questions,
+            "generation_mode": "baseline_dynamic",
+            "generation_context": _build_generation_context(identity),
+        }
+
         await save_and_send_artifact(
             session_id=session_id,
             output_type="questionList",
             title="基线问题列表",
             data={
-                "simulatedQuestions": {"simulated_questions": simulated_questions},
+                "simulatedQuestions": generated_payload,
                 "questions": flattened_questions,
                 "generationMode": "基线全景模式（LLM生成）",
             },
@@ -1156,7 +947,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         # Dual-write: baseline_questions + questions
         return Command(
             update={
-                "simulated_questions": {"simulated_questions": simulated_questions},
+                "simulated_questions": generated_payload,
                 "baseline_questions": flattened_questions,  # Baseline channel (long-term)
                 "questions": flattened_questions,            # Standard channel (A4 reads this)
                 "current_step": "A3",

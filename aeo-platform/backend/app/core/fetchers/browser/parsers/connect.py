@@ -87,6 +87,19 @@ class KimiConnectParser(BaseResponseParser):
         seen_urls: set[str] = set()
 
         for chunk in chunks:
+            error = chunk.get("error")
+            if isinstance(error, dict):
+                error_info, error_type = self._classify_connect_error(error)
+                if error_info:
+                    result.error = error_info
+                    result.error_type = error_type
+                    logger.warning(
+                        "[KimiConnect] Error frame detected: %s (type=%s)",
+                        error_info,
+                        error_type,
+                    )
+                    continue
+
             op = chunk.get("op", "")
             mask = chunk.get("mask", "")
 
@@ -130,6 +143,25 @@ class KimiConnectParser(BaseResponseParser):
         result.answer_text = "\n".join(all_text_parts)
 
         return result
+
+    @staticmethod
+    def _classify_connect_error(error: dict) -> tuple[str, str]:
+        details = error.get("details") or []
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            debug = detail.get("debug") or {}
+            reason = str(debug.get("reason") or "")
+            localized = debug.get("localizedMessage") or {}
+            message = str(localized.get("message") or "")
+            lowered = f"{reason} {message}".lower()
+            if "anonymous_require_login" in lowered or "login" in lowered:
+                return message or "Please login to continue.", "auth_required"
+
+        code = str(error.get("code") or "")
+        if code:
+            return code, "server_error"
+        return "", ""
 
     @staticmethod
     def _add_ref(

@@ -257,6 +257,7 @@ async def _dispatch_queued_runs() -> None:
                 continue
 
             lease_owner = claimed.lease_owner or "scheduler:dispatcher"
+            monitoring_service = MonitoringService(db)
             await monitoring_service.record_run_started(schedule.id, task.id)
             baseline = schedule.baseline_data
             platforms = schedule.platforms
@@ -394,7 +395,7 @@ async def _run_pipeline_headless(
                 "run_id": str(run_id),
                 "platform_filter": platforms,
                 "preserved_fetch_results": None,
-                "auto_trigger_a5": False,
+                "next_required_action": None,
                 # Baseline Analysis (Issue #4)
                 "analysis_mode": None,
                 "baseline_questions": None,

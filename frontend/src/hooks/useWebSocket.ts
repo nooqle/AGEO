@@ -475,7 +475,12 @@ export function useWebSocket(sessionId: string | null) {
 
       case 'browser_state':
       case 'browser_user_action':
-        setBrowserState(buildBrowserState(data));
+        setBrowserState(
+          buildBrowserState(
+            data,
+            useConversationStore.getState().currentAgentMessageId || undefined,
+          ),
+        );
         break;
 
       case 'browser_user_action_ack': {
@@ -700,7 +705,7 @@ export function useWebSocket(sessionId: string | null) {
           console.warn('[WebSocket] Received empty error event, ignoring:', data);
           break;
         }
-        console.error('[WebSocket] Error:', data);
+        console.warn('[WebSocket] Error event:', errorMsg, data);
         toast.error(errorMsg);
         completePendingActionLogs('（已中断）');
         // 所有有效错误都解锁输入框 — 用户必须随时可以继续输入或重试

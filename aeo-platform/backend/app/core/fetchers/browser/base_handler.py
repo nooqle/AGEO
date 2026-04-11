@@ -9,6 +9,7 @@ standard Playwright API pattern - not Python's eval().
 """
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import re
@@ -70,6 +71,7 @@ def _undo_double_utf8(text: str) -> str:
 
 
 from app.core.fetchers.browser.agent_browser import AgentBrowserClient
+from app.core.fetchers.browser.aio_backend import AioSandboxBackend
 from app.core.fetchers.browser.parsers.base import (
     BaseResponseParser,
     InterceptConfig,
@@ -79,13 +81,15 @@ from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
 from app.schemas.fetch import (
     BrowserEvent,
     BrowserState,
+    FetchMethod,
     FetchResult,
     Platform,
     SearchReference,
 )
 from app.workflow.browser_action_runtime import (
     clear_browser_action_request,
-    register_browser_action_request,
+    get_or_register_browser_action_request,
+    infer_browser_action_state,
     wait_for_browser_action_resolution,
 )
 
@@ -133,6 +137,7 @@ class BaseBrowserHandler(ABC):
         self.run_id = run_id
         self._is_playwright = isinstance(client, PlaywrightBrowserClient)
         self._sel_cache: dict = {}
+        self._aio_backend = AioSandboxBackend()
 
     # ------------------------------------------------------------------ selectors
 
@@ -508,7 +513,7 @@ class BaseBrowserHandler(ABC):
     async def _wait_for_login(
         self,
         check_selector: str,
-        timeout: int = 300,
+        timeout: int = 480,
         poll_interval: float = 2.0,
     ) -> bool:
         """Wait for user to complete login."""
@@ -518,6 +523,33 @@ class BaseBrowserHandler(ABC):
                 return True
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval
+        return False
+
+    async def probe_takeover_ready(self, action_type: str) -> bool:
+        """Cheap readiness probe used by AIO heartbeat auto-resume.
+
+        The live A4 handler keeps owning the browser session while the user
+        operates the Canvas/VNC surface. This probe lets the control plane ask
+        whether the blocker has already been cleared, so takeover does not
+        depend on a second frontend-specific resolve channel.
+        """
+
+        if action_type == "modal":
+            return not bool(await self._detect_blocking_modal())
+        if action_type == "login":
+            # Login takeover must be explicitly resumed by the user.
+            # Auto-resume is too aggressive for interactive Canvas flows and
+            # can close the browser while the user is still operating it.
+            return False
+        return False
+
+    async def probe_resume_gate_ready(self, action_type: str) -> bool:
+        """Readiness probe used by explicit manual resolve."""
+
+        if action_type == "modal":
+            return not bool(await self._detect_blocking_modal())
+        if action_type == "login":
+            return False
         return False
 
     # ------------------------------------------------------------------ modal/popup detection
@@ -590,7 +622,7 @@ class BaseBrowserHandler(ABC):
             logger.debug("[%s] Modal detection failed: %s", self.PLATFORM_KEY, e)
             return ""
 
-    async def _wait_for_modal_clear(self, timeout: int = 300) -> bool:
+    async def _wait_for_modal_clear(self, timeout: int = 480) -> bool:
         """Wait until blocking modals are gone (user dismissed them)."""
         elapsed = 0.0
         while elapsed < timeout:
@@ -603,8 +635,11 @@ class BaseBrowserHandler(ABC):
 
     async def _open_headed_for_user_action(self, url: str | None = None) -> bool:
         """Reopen the page in headed mode and try to present it to the user."""
-        await self.client.close()
-        open_result = await self.client.open(url or self.URL, headed=True)
+        if getattr(self.client, "aio_session_id", None):
+            open_result = await self.client.open(url or self.URL, headed=False)
+        else:
+            await self.client.close()
+            open_result = await self.client.open(url or self.URL, headed=True)
         if not open_result.get("success"):
             return False
 
@@ -633,6 +668,69 @@ class BaseBrowserHandler(ABC):
         await asyncio.sleep(3)
         return True
 
+    async def _prepare_takeover_surface(self, url: str | None = None) -> bool:
+        """Prepare the interactive surface used for human takeover.
+
+        For local Playwright runtimes we keep the old behavior of reopening in a
+        visible headed browser. For AIO-backed clients the live browser already
+        exists remotely, so we should preserve the leased session and only ensure
+        the current page is available for takeover.
+        """
+
+        if getattr(self.client, "aio_session_id", None):
+            page = getattr(self.client, "page", None)
+            if page is None or page.is_closed():
+                open_result = await self.client.open(url or self.URL, headed=False)
+                if not open_result.get("success"):
+                    return False
+            bring_to_front = getattr(self.client, "bring_to_front", None)
+            if callable(bring_to_front):
+                try:
+                    await bring_to_front()
+                except Exception as e:
+                    logger.debug(
+                        "[%s] bring_to_front failed during AIO takeover prep: %s",
+                        self.PLATFORM_KEY,
+                        e,
+                    )
+            await asyncio.sleep(1)
+            return True
+
+        return await self._open_headed_for_user_action(url)
+
+    async def _reuse_existing_aio_surface(self, url: str | None = None) -> bool:
+        """Reuse the current AIO page when it already matches the target host.
+
+        After a human takeover completes, the user has already interacted with
+        the live remote browser surface. Reopening the platform URL at this
+        point can discard or bypass the just-completed login/verification page
+        and make the handler look as if the session was not preserved.
+        """
+
+        if not getattr(self.client, "aio_session_id", None):
+            return False
+
+        page = getattr(self.client, "page", None)
+        if page is None or page.is_closed():
+            return False
+
+        current_url = page.url or ""
+        target_url = url or self.URL
+        current_host = (urlparse(current_url).netloc or "").lower()
+        target_host = (urlparse(target_url).netloc or "").lower()
+        if not current_host or not target_host or current_host != target_host:
+            return False
+        if current_url == "about:blank":
+            return False
+
+        logger.info(
+            "[%s] Reusing existing AIO surface without reopening (current_url=%s target_host=%s)",
+            self.PLATFORM_KEY,
+            current_url,
+            target_host,
+        )
+        return True
+
     async def _prepare_user_action_request(
         self,
         action_type: str,
@@ -642,19 +740,24 @@ class BaseBrowserHandler(ABC):
         url: str | None = None,
     ) -> str | None:
         """Open a stable headed browser window, then register a user-action request."""
-        opened = await self._open_headed_for_user_action(url)
-        if not opened:
-            return None
+        ensure_remote_runtime = getattr(self.client, "_ensure_remote_runtime", None)
+        is_aio_client = callable(ensure_remote_runtime)
+        if not is_aio_client:
+            opened = await self._prepare_takeover_surface(url)
+            if not opened:
+                return None
         if not self.session_id:
             return None
-        request = await register_browser_action_request(
+        request, _ = await get_or_register_browser_action_request(
             session_id=self.session_id,
             platform=self.PLATFORM.value,
             action_type=action_type,
             message=message,
             action_hint=action_hint,
+            target_url=url,
             progress=progress,
             run_id=self.run_id,
+            state=infer_browser_action_state(action_type),
         )
         return request.request_id
 
@@ -662,22 +765,351 @@ class BaseBrowserHandler(ABC):
         self,
         request_id: str | None,
         ready_check: ReadyCheck,
-        timeout: int = 300,
+        timeout: int = 480,
         ready_timeout: int = 45,
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         """Wait until the user explicitly confirms completion, then validate readiness."""
         if not request_id:
-            return False
+            return False, None
 
+        resolution: str | None = None
         try:
             resolution = await wait_for_browser_action_resolution(
                 request_id, timeout=timeout
             )
             if resolution != "completed":
-                return False
-            return await ready_check(ready_timeout)
+                return False, resolution
+            return await ready_check(ready_timeout), resolution
         finally:
             await clear_browser_action_request(request_id)
+
+    async def _run_user_action_gate(
+        self,
+        *,
+        state: BrowserState,
+        action_type: str,
+        message: str,
+        action_hint: str,
+        progress: float,
+        url: str | None,
+        ready_check: ReadyCheck,
+        timeout: int = 480,
+        ready_timeout: int = 120,
+        open_error_message: str,
+        timeout_error_message: str,
+    ) -> tuple[list[BrowserEvent], bool]:
+        """Prepare, emit, and validate one human-action gate consistently."""
+
+        initial_events, request_id = await self._begin_user_action_gate(
+            state=state,
+            action_type=action_type,
+            message=message,
+            action_hint=action_hint,
+            progress=progress,
+            url=url,
+            open_error_message=open_error_message,
+        )
+        if not request_id:
+            return initial_events, False
+
+        completion_events, succeeded = await self._finish_user_action_gate(
+            request_id=request_id,
+            ready_check=ready_check,
+            timeout=timeout,
+            ready_timeout=ready_timeout,
+            timeout_error_message=timeout_error_message,
+        )
+        return initial_events + completion_events, succeeded
+
+    async def _begin_user_action_gate(
+        self,
+        *,
+        state: BrowserState,
+        action_type: str,
+        message: str,
+        action_hint: str,
+        progress: float,
+        url: str | None,
+        open_error_message: str,
+    ) -> tuple[list[BrowserEvent], str | None]:
+        """Create and emit the waiting event before blocking on user input."""
+
+        request_id = await self._prepare_user_action_request(
+            action_type=action_type,
+            message=message,
+            action_hint=action_hint,
+            progress=progress,
+            url=url,
+        )
+        if not request_id:
+            return [
+                self._create_event(
+                    BrowserState.ERROR,
+                    open_error_message,
+                    progress=0,
+                )
+            ], None
+
+        waiting_event = self._create_event(
+            state,
+            message,
+            progress=progress,
+            requires_action=True,
+            action_type=action_type,
+            action_hint=action_hint,
+            request_id=request_id,
+        )
+        return [waiting_event], request_id
+
+    async def _finish_user_action_gate(
+        self,
+        *,
+        request_id: str,
+        ready_check: ReadyCheck,
+        timeout: int = 480,
+        ready_timeout: int = 120,
+        timeout_error_message: str,
+    ) -> tuple[list[BrowserEvent], bool]:
+        """Wait for user completion after the waiting event has already streamed."""
+
+        succeeded, resolution = await self._wait_for_user_action_completion(
+            request_id=request_id,
+            ready_check=ready_check,
+            timeout=timeout,
+            ready_timeout=ready_timeout,
+        )
+        if succeeded:
+            return [], True
+
+        if resolution == "skip":
+            return [
+                self._create_event(
+                    BrowserState.ERROR,
+                    "已按你的选择跳过当前平台，本轮会继续其他平台。",
+                    progress=0,
+                    error_type="user_skipped",
+                ),
+            ], False
+
+        return [
+            self._create_event(
+                BrowserState.ERROR,
+                timeout_error_message,
+                progress=0,
+                error_type=(
+                    "resume_gate_failed" if resolution == "completed" else "user_action_timeout"
+                ),
+            ),
+        ], False
+
+    async def _begin_login_takeover_gate(
+        self,
+        *,
+        message: str,
+        action_hint: str,
+        progress: float,
+        url: str | None = None,
+        open_error_message: str,
+    ) -> tuple[list[BrowserEvent], str | None]:
+        """Emit the login waiting event immediately and return request context."""
+
+        return await self._begin_user_action_gate(
+            state=BrowserState.WAITING_FOR_LOGIN,
+            action_type="login",
+            message=message,
+            action_hint=action_hint,
+            progress=progress,
+            url=url,
+            open_error_message=open_error_message,
+        )
+
+    async def _finish_login_takeover_gate(
+        self,
+        *,
+        request_id: str,
+        ready_check: ReadyCheck,
+        timeout: int = 480,
+        ready_timeout: int = 120,
+        timeout_error_message: str,
+    ) -> tuple[list[BrowserEvent], bool]:
+        """Complete the login waiting cycle after user action."""
+
+        return await self._finish_user_action_gate(
+            request_id=request_id,
+            ready_check=ready_check,
+            timeout=timeout,
+            ready_timeout=ready_timeout,
+            timeout_error_message=timeout_error_message,
+        )
+
+    async def _begin_modal_takeover_gate(
+        self,
+        *,
+        message: str,
+        action_hint: str,
+        progress: float,
+        url: str | None = None,
+        open_error_message: str,
+    ) -> tuple[list[BrowserEvent], str | None]:
+        """Emit the modal waiting event immediately and return request context."""
+
+        return await self._begin_user_action_gate(
+            state=BrowserState.WAITING_FOR_MODAL,
+            action_type="modal",
+            message=message,
+            action_hint=action_hint,
+            progress=progress,
+            url=url,
+            open_error_message=open_error_message,
+        )
+
+    async def _finish_modal_takeover_gate(
+        self,
+        *,
+        request_id: str,
+        ready_check: ReadyCheck,
+        timeout: int = 480,
+        ready_timeout: int = 120,
+        timeout_error_message: str,
+    ) -> tuple[list[BrowserEvent], bool]:
+        """Complete the modal waiting cycle after user action."""
+
+        return await self._finish_user_action_gate(
+            request_id=request_id,
+            ready_check=ready_check,
+            timeout=timeout,
+            ready_timeout=ready_timeout,
+            timeout_error_message=timeout_error_message,
+        )
+
+    async def _run_login_takeover_gate(
+        self,
+        *,
+        message: str,
+        action_hint: str,
+        progress: float,
+        ready_check: ReadyCheck,
+        url: str | None = None,
+        timeout: int = 480,
+        ready_timeout: int = 120,
+        open_error_message: str,
+        timeout_error_message: str,
+    ) -> tuple[list[BrowserEvent], bool]:
+        """Shared login takeover gate for AIO/local browser handlers."""
+
+        return await self._run_user_action_gate(
+            state=BrowserState.WAITING_FOR_LOGIN,
+            action_type="login",
+            message=message,
+            action_hint=action_hint,
+            progress=progress,
+            url=url,
+            ready_check=ready_check,
+            timeout=timeout,
+            ready_timeout=ready_timeout,
+            open_error_message=open_error_message,
+            timeout_error_message=timeout_error_message,
+        )
+
+    async def _run_modal_takeover_gate(
+        self,
+        *,
+        message: str,
+        action_hint: str,
+        progress: float,
+        ready_check: ReadyCheck,
+        url: str | None = None,
+        timeout: int = 480,
+        ready_timeout: int = 120,
+        open_error_message: str,
+        timeout_error_message: str,
+    ) -> tuple[list[BrowserEvent], bool]:
+        """Shared blocking-modal takeover gate for AIO/local browser handlers."""
+
+        return await self._run_user_action_gate(
+            state=BrowserState.WAITING_FOR_MODAL,
+            action_type="modal",
+            message=message,
+            action_hint=action_hint,
+            progress=progress,
+            url=url,
+            ready_check=ready_check,
+            timeout=timeout,
+            ready_timeout=ready_timeout,
+            open_error_message=open_error_message,
+            timeout_error_message=timeout_error_message,
+        )
+
+    async def _build_success_result(
+        self,
+        *,
+        question: str,
+        answer_text: str,
+        search_references: list[SearchReference],
+        source: str,
+    ) -> FetchResult:
+        """Create the canonical success result and persist AIO extraction artifact."""
+
+        fetch_result = FetchResult(
+            id=f"{self.PLATFORM.value}_{hash(question)}",
+            question_id="",
+            question_text=question,
+            platform=self.PLATFORM,
+            fetch_method=FetchMethod.BROWSER,
+            status="success",
+            answer_text=answer_text,
+            search_references=search_references,
+            raw_response={"source": source},
+            error_message=None,
+            fetch_duration=None,
+        )
+        await self._persist_extraction_artifact(
+            question=question,
+            fetch_result=fetch_result,
+            source=source,
+        )
+        return fetch_result
+
+    async def _persist_extraction_artifact(
+        self,
+        *,
+        question: str,
+        fetch_result: FetchResult,
+        source: str,
+    ) -> None:
+        """Persist the current successful extraction under the AIO run_root."""
+
+        session_id = getattr(self.client, "aio_session_id", None)
+        workspace_id = getattr(self.client, "workspace_id", None)
+        task_id = getattr(self.client, "task_id", None)
+        if not session_id or not workspace_id or not task_id:
+            return
+
+        try:
+            runtime = await self._aio_backend.ensure_runtime(
+                workspace_id=str(workspace_id),
+                task_id=str(task_id),
+                platform=self.PLATFORM.value,
+                purpose="a4_browser",
+            )
+            payload = {
+                "platform": self.PLATFORM.value,
+                "question": question,
+                "answer_text": fetch_result.answer_text,
+                "references": [
+                    ref.model_dump() if hasattr(ref, "model_dump") else dict(ref)
+                    for ref in fetch_result.search_references
+                ],
+                "source": source,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await self._aio_backend.persist_extraction(runtime, payload=payload)
+        except Exception as exc:
+            logger.warning(
+                "[%s] Failed to persist AIO extraction artifact: %s",
+                self.PLATFORM_KEY,
+                exc,
+            )
 
     async def _check_and_handle_modal(self) -> "BrowserEvent | None":
         """Generic modal/popup check.  Call once after navigation, not per question.
@@ -717,7 +1149,7 @@ class BaseBrowserHandler(ABC):
             )
 
         # Wait for user to dismiss the modal
-        modal_cleared = await self._wait_for_modal_clear(timeout=300)
+        modal_cleared = await self._wait_for_modal_clear(timeout=480)
         if not modal_cleared:
             return self._create_event(
                 BrowserState.ERROR, "弹窗处理超时，请重试", progress=0

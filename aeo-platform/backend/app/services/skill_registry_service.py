@@ -92,14 +92,14 @@ BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
     ),
     BuiltinSkillSpec(
         skill_key="post_analysis_skill",
-        display_name="后续分析与重抓",
+        display_name="后续分析",
         description=(
             "面向已有分析结果后的继续任务的公共 Skill。"
-            "适用于深入分析、历史对比、局部重抓等场景。"
+            "适用于深入分析、历史对比、结论解释和风险提取等场景。"
         ),
         executor_kind=SkillExecutorKind.BUILTIN,
         executor_ref="post_analysis_executor",
-        intent_signals=["深入分析", "对比", "变化", "趋势", "局部重抓", "只看某个平台"],
+        intent_signals=["深入分析", "对比", "变化", "趋势", "追问结果", "解释原因"],
         prerequisites=["analysis_results_required"],
         artifact_types=["chat_reply", "report"],
         default_params={"analysis_mode": "compare_snapshots"},
@@ -431,7 +431,7 @@ def _build_post_analysis_tool(
     properties: dict[str, Any] = {
         "analysis_mode": {
             "type": "string",
-            "enum": ["drill_down", "compare_snapshots", "selective_refetch"],
+            "enum": ["drill_down", "compare_snapshots"],
             "description": "后续分析模式。可以省略，由 Skill 根据参数自动判断。",
         },
         "focus_dimension": {
@@ -445,16 +445,6 @@ def _build_post_analysis_tool(
         "comparison_type": {
             "type": "string",
             "description": "对比方式：vs_previous（默认）或 vs_specific",
-        },
-        "platforms": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "局部重抓的平台列表",
-        },
-        "fetch_mode": {
-            "type": "string",
-            "enum": ["fast", "full"],
-            "description": "局部重抓时的采集模式（默认 fast）",
         },
     }
     return {
@@ -994,5 +984,6 @@ class SkillRegistryService:
             "package_description": package.description if package else None,
             "package_path": package.skill_md_path if package else None,
             "package_body": package.body if package else None,
+            "package_manifest": package,
             "tool_definition": tool_definition,
         }

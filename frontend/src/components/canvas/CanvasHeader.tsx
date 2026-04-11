@@ -76,7 +76,19 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const confidenceComposer = isConfidenceSignal ? effectiveContent.data?.composer : undefined;
   const confidenceStatus = isConfidenceSignal ? effectiveContent.data?.status : undefined;
   const isArtifactActionRunning = confidenceStatus?.phase === 'running';
-  const exportable = useMemo(() => isCanvasContentExportable(content), [content]);
+  const isBrowserTakeover = effectiveContent.type === 'browser';
+  const browserPlatformLabel = isBrowserTakeover
+    ? (
+        effectiveContent.data.platform === 'doubao'
+          ? '豆包'
+          : effectiveContent.data.platform === 'deepseek'
+            ? 'DeepSeek'
+            : effectiveContent.data.platform === 'kimi'
+              ? 'Kimi'
+              : '元宝'
+      )
+    : null;
+  const exportable = useMemo(() => !isBrowserTakeover && isCanvasContentExportable(content), [content, isBrowserTakeover]);
   const exportLabel = useMemo(() => getCanvasExportLabel(content), [content]);
   const canExportCsv = effectiveContent.type === 'dataTable';
 
@@ -250,7 +262,9 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
           </div>
           <div className="min-w-0">
             <h2 className="font-semibold truncate text-sm" style={{ color: 'var(--text-primary)' }}>
-              {content.title}
+              {isBrowserTakeover
+                ? `云电脑工作区${browserPlatformLabel ? ` · ${browserPlatformLabel}` : ''}`
+                : content.title}
             </h2>
             <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
               <span className="capitalize">
@@ -261,14 +275,15 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                  effectiveContent.type === 'chart' ? '数据图表' :
                  effectiveContent.type === 'questionList' ? '问题列表' :
                  effectiveContent.type === 'fetchResults' ? '抓取结果' :
+                 effectiveContent.type === 'browser' ? '当前平台人工接管中' :
                  '选择项'}
               </span>
-              {content.category === 'baseline' && (
+              {!isBrowserTakeover && content.category === 'baseline' && (
                 <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-500/15 text-violet-300 border border-violet-500/30">
                   基线
                 </span>
               )}
-              {content.category === 'scenario' && (
+              {!isBrowserTakeover && content.category === 'scenario' && (
                 <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">
                   {content.scenarioLabel || '场景'}
                 </span>
@@ -295,40 +310,44 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
             </button>
           ) : null}
 
-          {/* Copy button */}
-          <button
-            onClick={handleCopy}
-            className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
-            style={copied
-              ? { backgroundColor: 'var(--status-success-bg, rgba(34,197,94,0.1))', color: 'var(--status-success)' }
-              : actionBtnStyle
-            }
-            onMouseEnter={copied ? undefined : handleActionEnter}
-            onMouseLeave={copied ? undefined : handleActionLeave}
-            title={copied ? '已复制' : '复制内容'}
-          >
-            <AnimatePresence mode="wait">
-              {copied ? (
-                <motion.div key="check" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
-                  <RiCheckLine className="w-4 h-4" />
-                </motion.div>
-              ) : (
-                <motion.div key="copy" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
-                  <RiFileCopyLine className="w-4 h-4" />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </button>
+          {!isBrowserTakeover && (
+            <>
+              {/* Copy button */}
+              <button
+                onClick={handleCopy}
+                className="p-2 rounded-lg transition-all duration-200 active:scale-95 cursor-pointer"
+                style={copied
+                  ? { backgroundColor: 'var(--status-success-bg, rgba(34,197,94,0.1))', color: 'var(--status-success)' }
+                  : actionBtnStyle
+                }
+                onMouseEnter={copied ? undefined : handleActionEnter}
+                onMouseLeave={copied ? undefined : handleActionLeave}
+                title={copied ? '已复制' : '复制内容'}
+              >
+                <AnimatePresence mode="wait">
+                  {copied ? (
+                    <motion.div key="check" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
+                      <RiCheckLine className="w-4 h-4" />
+                    </motion.div>
+                  ) : (
+                    <motion.div key="copy" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
+                      <RiFileCopyLine className="w-4 h-4" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </button>
 
-          {/* Share button — disabled */}
-          <button
-            disabled
-            className="p-2 rounded-lg transition-all duration-200 cursor-not-allowed opacity-40"
-            style={actionBtnStyle}
-            title="即将推出"
-          >
-            <RiShareLine className="w-4 h-4" />
-          </button>
+              {/* Share button — disabled */}
+              <button
+                disabled
+                className="p-2 rounded-lg transition-all duration-200 cursor-not-allowed opacity-40"
+                style={actionBtnStyle}
+                title="即将推出"
+              >
+                <RiShareLine className="w-4 h-4" />
+              </button>
+            </>
+          )}
 
           {/* Export button with dropdown */}
           {exportable && (

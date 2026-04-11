@@ -563,6 +563,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                         _UUID(task_id),
                         error_message=str(e),
                         error_stage="A1",
+                        run_id=_UUID(state.get("run_id")) if state.get("run_id") else None,
                     )
             except Exception as te:
                 logger.warning("[A1] TaskService fail_task failed: %s", te)
@@ -948,6 +949,7 @@ async def a2_persona_node(state: AgentState) -> Command:
                         _UUID(task_id),
                         error_message=str(e),
                         error_stage="A2",
+                        run_id=_UUID(state.get("run_id")) if state.get("run_id") else None,
                     )
             except Exception as te:
                 logger.warning("[A2] TaskService fail_task failed: %s", te)

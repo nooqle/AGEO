@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { Message as MessageType } from '@/types/message';
 import { Message } from './Message';
 import { cn } from '@/lib/cn';
@@ -23,6 +24,7 @@ interface MessageListProps {
   onStepContinue?: () => void;
   onStepSkip?: () => void;
   onStepRetry?: () => void;
+  renderAfterMessage?: (message: MessageType, index: number) => ReactNode;
 }
 
 export function MessageList({
@@ -37,6 +39,7 @@ export function MessageList({
   onStepContinue,
   onStepSkip,
   onStepRetry,
+  renderAfterMessage,
 }: MessageListProps) {
   if (messages.length === 0) {
     return (
@@ -62,6 +65,7 @@ export function MessageList({
           onStepContinue={onStepContinue}
           onStepSkip={onStepSkip}
           onStepRetry={onStepRetry}
+          afterContent={renderAfterMessage?.(message, index)}
         />
       ))}
     </div>

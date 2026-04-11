@@ -1,7 +1,11 @@
 """Confidence analysis executor node.
 
-This node evaluates citation/source confidence without re-fetching data.
-It can consume existing fetch results, imported link lists, or raw user input.
+This node preserves the accepted A7 harness behavior while supporting the
+newer confidence-analysis entry modes introduced on main:
+
+- current fetch results
+- imported link list
+- raw user input
 """
 
 from __future__ import annotations
@@ -18,8 +22,18 @@ from app.workflow.confidence_analysis import (
     generate_confidence_analysis_artifact,
 )
 from app.workflow.events import send_error_event, send_progress_event
+from app.workflow.harness_validation import (
+    build_harness_decision,
+    evaluate_skill_postconditions,
+    evaluate_skill_preconditions,
+    validate_artifact_writeback,
+)
 from app.workflow.skill_fact_snapshot import build_skill_fact_snapshot
-from app.workflow.skill_state import build_skill_result_update
+from app.workflow.skill_state import (
+    build_harness_decision_update,
+    build_skill_result_update,
+    build_validation_result_update,
+)
 from app.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -27,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 async def confidence_analysis_executor_node(state: AgentState) -> Command:
     """Generate a confidence-analysis artifact from the best available source."""
+
     session_id = state["session_id"]
     facts = build_skill_fact_snapshot(state)
     fetch_results = facts.confidence_fetch_results
@@ -38,6 +53,40 @@ async def confidence_analysis_executor_node(state: AgentState) -> Command:
     )
     manual_items: list[dict[str, Any]] = []
     material_summary: dict[str, Any] = {"source_mode": source_mode}
+    precondition_result = evaluate_skill_preconditions(
+        state, state.get("current_skill_contract")
+    )
+
+    if not precondition_result.passed:
+        message = f"A7 前置条件未满足：{precondition_result.reason}"
+        await send_error_event(session_id, "A7", message, recoverable=True)
+        validation_update = build_validation_result_update(state, precondition_result)
+        decision_update = build_harness_decision_update(
+            {**state, **validation_update},
+            build_harness_decision(
+                decision_type="fail_step",
+                reason=message,
+                recoverable=True,
+                metadata={
+                    "step": "A7",
+                    "gate": "precondition_gate",
+                    "source_mode": source_mode,
+                },
+            ),
+        )
+        return Command(
+            update={
+                "error_info": {
+                    "step": "A7",
+                    "error": message,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                "current_step": "A7",
+                "execution_status": "error",
+                **validation_update,
+                **decision_update,
+            }
+        )
 
     try:
         if source_mode == "raw_input":
@@ -60,13 +109,28 @@ async def confidence_analysis_executor_node(state: AgentState) -> Command:
                 material_summary["source_mode"] = "current_fetch_results"
                 material_summary["fetch_result_count"] = len(fetch_results)
             elif imported_links:
-                manual_items = await build_manual_items_from_link_rows_async(imported_links)
+                manual_items = await build_manual_items_from_link_rows_async(
+                    imported_links
+                )
                 fetch_results = []
                 material_summary["source_mode"] = "imported_link_list"
                 material_summary["imported_link_count"] = len(manual_items)
     except ValueError as exc:
         message = str(exc)
         await send_error_event(session_id, "A7", message, recoverable=True)
+        decision_update = build_harness_decision_update(
+            state,
+            build_harness_decision(
+                decision_type="fail_step",
+                reason=message,
+                recoverable=True,
+                metadata={
+                    "step": "A7",
+                    "gate": "input_validation_gate",
+                    "source_mode": source_mode,
+                },
+            ),
+        )
         return Command(
             update={
                 "error_info": {
@@ -74,6 +138,9 @@ async def confidence_analysis_executor_node(state: AgentState) -> Command:
                     "error": message,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
+                "current_step": "A7",
+                "execution_status": "error",
+                **decision_update,
             }
         )
 
@@ -83,6 +150,19 @@ async def confidence_analysis_executor_node(state: AgentState) -> Command:
             "或先完成答案抓取/分析报告生成。"
         )
         await send_error_event(session_id, "A7", message, recoverable=True)
+        decision_update = build_harness_decision_update(
+            state,
+            build_harness_decision(
+                decision_type="fail_step",
+                reason=message,
+                recoverable=True,
+                metadata={
+                    "step": "A7",
+                    "gate": "data_presence_gate",
+                    "source_mode": material_summary.get("source_mode", source_mode),
+                },
+            ),
+        )
         return Command(
             update={
                 "error_info": {
@@ -90,6 +170,9 @@ async def confidence_analysis_executor_node(state: AgentState) -> Command:
                     "error": message,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
+                "current_step": "A7",
+                "execution_status": "error",
+                **decision_update,
             }
         )
 
@@ -102,13 +185,26 @@ async def confidence_analysis_executor_node(state: AgentState) -> Command:
             message="正在评估引用来源的可信度与结构化质量...",
         )
 
-        await generate_confidence_analysis_artifact(
+        artifact_result = await generate_confidence_analysis_artifact(
             session_id=session_id,
             fetch_results=fetch_results,
             manual_items=manual_items,
             brand_profile=facts.brand_profile,
             competitors=facts.competitors,
         )
+        artifact_validation = validate_artifact_writeback(
+            gate_name="artifact_writeback_gate",
+            artifact_message_id=artifact_result.get("artifact_message_id"),
+            artifact_key=artifact_result.get("artifact_key"),
+            artifact_kind=artifact_result.get("artifact_kind", "confidence_analysis"),
+            metadata={
+                "fetch_result_count": len(fetch_results or []),
+                "manual_item_count": len(manual_items),
+                **material_summary,
+            },
+        )
+        if not artifact_validation.passed:
+            raise RuntimeError(artifact_validation.reason)
 
         await send_progress_event(
             session_id=session_id,
@@ -119,19 +215,60 @@ async def confidence_analysis_executor_node(state: AgentState) -> Command:
             status="completed",
         )
 
+        skill_update = build_skill_result_update(
+            state,
+            skill_key=state.get("current_skill"),
+            tool_name=str(state.get("current_skill") or "confidence_analysis_skill"),
+            status="completed",
+            summary="引用置信度 Skill 已完成，结果已写入画布 artifact。",
+            executor_ref="confidence_analysis_executor",
+            metadata={
+                "fetch_result_count": len(fetch_results or []),
+                "manual_item_count": len(manual_items),
+                **material_summary,
+            },
+        )
+        artifact_validation_update = build_validation_result_update(
+            state, artifact_validation
+        )
+        validation_state = {**state, **skill_update, **artifact_validation_update}
+        postcondition_result = evaluate_skill_postconditions(
+            state=state,
+            contract_payload=state.get("current_skill_contract"),
+            pending_update=skill_update,
+            artifact_validation=artifact_validation,
+        )
+        if not postcondition_result.passed:
+            raise RuntimeError(postcondition_result.reason)
+        postcondition_validation_update = build_validation_result_update(
+            validation_state,
+            postcondition_result,
+        )
+        decision_update = build_harness_decision_update(
+            {**validation_state, **postcondition_validation_update},
+            build_harness_decision(
+                decision_type="complete_skill",
+                reason="A7 harness gates passed.",
+                recoverable=False,
+                metadata={
+                    "step": "A7",
+                    "source_mode": material_summary.get("source_mode", source_mode),
+                    "fetch_result_count": len(fetch_results or []),
+                    "manual_item_count": len(manual_items),
+                },
+            ),
+        )
         return Command(
             update={
                 "error_info": None,
                 "progress": 1.0,
-                **build_skill_result_update(
-                    state,
-                    skill_key=state.get("current_skill"),
-                    tool_name="confidence_analysis_skill",
-                    status="completed",
-                    summary="引用置信度分析已完成，结果已写入画布 artifact。",
-                    executor_ref="confidence_analysis_executor",
-                    metadata=material_summary,
+                "confidence_signal_summary": artifact_result.get(
+                    "confidence_signal_summary"
                 ),
+                **skill_update,
+                **artifact_validation_update,
+                **postcondition_validation_update,
+                **decision_update,
             }
         )
     except Exception as exc:
@@ -144,5 +281,21 @@ async def confidence_analysis_executor_node(state: AgentState) -> Command:
                     "error": str(exc),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
+                "current_step": "A7",
+                "execution_status": "error",
+                **build_harness_decision_update(
+                    state,
+                    build_harness_decision(
+                        decision_type="retry_step",
+                        reason=str(exc),
+                        recoverable=True,
+                        metadata={
+                            "step": "A7",
+                            "source_mode": material_summary.get(
+                                "source_mode", source_mode
+                            ),
+                        },
+                    ),
+                ),
             }
         )

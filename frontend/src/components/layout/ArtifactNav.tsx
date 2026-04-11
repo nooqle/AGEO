@@ -10,6 +10,7 @@ import {
   RiFileChartLine,
   RiBarChartBoxLine,
   RiBuilding2Line,
+  RiChromeLine,
   RiQuestionLine,
   RiSearchLine,
   RiFileTextLine,
@@ -28,6 +29,7 @@ const TYPE_ICONS: Record<CanvasContentType, typeof RiFileChartLine> = {
   fetchResults: RiSearchLine,
   dataTable: RiTableLine,
   pipeline: RiGitBranchLine,
+  browser: RiChromeLine,
 };
 
 const TYPE_LABELS: Record<CanvasContentType, string> = {
@@ -38,6 +40,7 @@ const TYPE_LABELS: Record<CanvasContentType, string> = {
   fetchResults: '抓取',
   dataTable: '数据',
   pipeline: '画像',
+  browser: '浏览器',
 };
 
 /** Report subtypes: baseline vs scenario get different icon & label */

@@ -1,31 +1,44 @@
-"""A3 Tool - Question Simulation.
+"""Compatibility layer for A3 question-generation primitives.
 
-Pure function implementation for simulating user questions.
+`question_simulation` remains a workflow stage in `nodes_a3.py`.
+Pure prompt-building and normalization logic now lives in `question_generation.py`.
 """
 
-from typing import Any
+from app.tools.question_generation import (
+    QuestionGenerationTool,
+    build_question_generation_messages,
+)
 
 
 async def simulate_questions(
     brand_profile: dict,
     competitors: list,
-    personas: dict | None = None,
+    personas: list | None = None,
     mode: str = "brand",
-) -> dict[str, Any]:
-    """Simulate user questions.
+    identity: str | None = None,
+) -> dict:
+    """Backward-compatible async wrapper for legacy A3 tool callers."""
 
-    Args:
-        brand_profile: Brand profile data
-        competitors: Competitors list
-        personas: Optional personas data for persona mode
-        mode: "brand" or "persona"
-
-    Returns:
-        Dictionary containing simulated_questions data
-    """
-    # This is implemented in nodes_a3.py for now
-    raise NotImplementedError("A3 is implemented directly in workflow nodes")
-
+    normalized_mode = {
+        "persona": "persona_focused",
+        "persona_focused": "persona_focused",
+        "baseline_dynamic": "baseline_dynamic",
+        "brand": "brand_panorama",
+        "brand_panorama": "brand_panorama",
+    }.get(mode, "brand_panorama")
+    system_prompt, user_content = build_question_generation_messages(
+        mode=normalized_mode,
+        brand_profile=brand_profile,
+        competitors=competitors,
+        selected_personas=personas or [],
+        platforms=("kimi", "deepseek", "doubao", "hunyuan"),
+        identity=identity,
+    )
+    return {
+        "system_prompt": system_prompt,
+        "user_content": user_content,
+        "mode": normalized_mode,
+    }
 
 # Backward compatibility
 QuestionSimulationTool = simulate_questions

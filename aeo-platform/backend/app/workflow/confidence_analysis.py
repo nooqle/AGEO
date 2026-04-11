@@ -1631,6 +1631,25 @@ def build_confidence_analysis_report(
     )
 
 
+def build_confidence_signal_summary(
+    report_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    report = report_data or {}
+    summary = report.get("summary") or {}
+    brand_overview = report.get("brand_confidence_overview") or {}
+    competitor_overview = report.get("competitor_confidence_overview") or {}
+    return {
+        "headline": str(report.get("headline") or "置信度报告"),
+        "overall_conclusion": str(report.get("overall_conclusion") or "").strip(),
+        "evaluated_source_count": int(summary.get("auto_evaluated_count") or 0),
+        "brand_average_confidence": brand_overview.get("average_confidence"),
+        "competitor_average_confidence": competitor_overview.get(
+            "average_confidence"
+        ),
+        "updated_at": report.get("updated_at"),
+    }
+
+
 async def build_confidence_analysis_report_async(
     fetch_results: list[dict[str, Any]] | None,
     *,
@@ -1798,8 +1817,8 @@ async def generate_confidence_analysis_artifact(
     manual_items: list[dict[str, Any]] | None = None,
     brand_profile: dict[str, Any] | None = None,
     competitors: list[dict[str, Any]] | None = None,
-) -> None:
-    """Generate the independent confidence analysis artifact."""
+) -> dict[str, Any]:
+    """Generate the independent A7 confidence signal artifact from A4 data."""
     from app.workflow.events import save_and_send_artifact
 
     report_data = await build_confidence_analysis_report_async(
@@ -1808,10 +1827,17 @@ async def generate_confidence_analysis_artifact(
         brand_profile=brand_profile,
         competitors=competitors,
     )
-    await save_and_send_artifact(
+    artifact_key = f"{session_id}_report_confidence_analysis_main"
+    artifact_message_id = await save_and_send_artifact(
         session_id=session_id,
         output_type="report",
         title="置信度报告",
         data=report_data,
-        artifact_key=f"{session_id}_report_confidence_analysis_main",
+        artifact_key=artifact_key,
     )
+    return {
+        "artifact_key": artifact_key,
+        "artifact_message_id": artifact_message_id,
+        "artifact_kind": str(report_data.get("artifact_kind") or "confidence_analysis"),
+        "confidence_signal_summary": build_confidence_signal_summary(report_data),
+    }
