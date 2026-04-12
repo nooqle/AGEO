@@ -21,6 +21,7 @@ codex/aio-runtime-isolation
 ```text
 30abb2a feat(aio): add answer fetch tool facade
 8833a4a docs(aio): add answer fetch handoff note
+a910e97 feat(aio): attach platform result packets
 ```
 
 ## User Goal & Constraints
@@ -182,6 +183,27 @@ aeo-platform/backend/tests/test_harness_refactor_foundations.py
 6. 平台级 provenance 写入 `source / source_type / platform_legacy_id / duration / auth_context / run_context`。
 7. 新增 result、skip 终态、takeover_required packet 的单测。
 
+P1b / P1c 当前未提交增量：
+
+```text
+aeo-platform/backend/app/workflow/nodes_a4.py
+aeo-platform/backend/app/tools/a4_fetch_agent.py
+aeo-platform/backend/app/api/v1/aio.py
+frontend/src/components/chat/ChatPanel.tsx
+aeo-platform/backend/tests/test_harness_refactor_foundations.py
+```
+
+已完成：
+
+1. A4 下游汇总逻辑优先读取 `aio_platform_packets`，不再以 legacy `platform_results.success` 作为唯一事实来源。
+2. 新增 `_build_aio_packet_fetch_summary()`，统一生成 `successful_fetches / successful_platforms / platform_fetch_stats / platform_statuses / total_answers / brand_mentions`。
+3. 浏览器阶段 question-level 成功计数和阶段汇总切到 packet-first，避免 packet 与 legacy bool 打架。
+4. `skip / takeover_required / failed / result` 现在都能进入 A4 的阶段结果与降级判断。
+5. 登录接管恢复成功后，browser result 会写入 `auth_state_updated=true`。
+6. 登录恢复失败或用户跳过时，legacy result 与 `aio_packet` 都会附加 `reason_code / target_url / final_url / probe_result / request_id`。
+7. noVNC 隐藏 CSS 进一步收紧，补充隐藏 `settings / disconnect / panel / expander / noVNC_button` 等控制项。
+8. Chat 遇到新的接管消息时增加双 `requestAnimationFrame` + `setTimeout` fallback 自动滚动，降低用户看不到当前接管卡片的概率。
+
 ## Current Known State
 
 已提交：
@@ -207,6 +229,31 @@ Select-String affected files -Pattern "\?\?\?"
 => no matches
 ```
 
+P1b / P1c 当前验证：
+
+```text
+python -m compileall app\tools\a4_fetch_agent.py app\workflow\nodes_a4.py app\api\v1\aio.py
+=> passed
+
+pytest tests\test_harness_refactor_foundations.py -q
+=> 107 passed
+
+python -m ruff check app\tools\a4_fetch_agent.py app\workflow\nodes_a4.py app\api\v1\aio.py tests\test_harness_refactor_foundations.py
+=> passed
+
+npx eslint src/components/chat/ChatPanel.tsx
+=> passed
+
+npx tsc --noEmit
+=> passed
+
+Select-String affected files -Pattern "\?\?\?"
+=> no matches
+
+git diff --check
+=> only CRLF warnings
+```
+
 仍有未跟踪文件：
 
 ```text
@@ -218,20 +265,21 @@ aeo-platform/backend/scripts/probe_aio_parallel_contexts.py
 ## Open Risks / Unknowns
 
 1. `AioPlatformFetchResult` 已被附加到 legacy `platform_results`，但还没有完全替代 A4 内部 legacy `fetch_results/platform_results` 合并结构。
-2. `takeover_required / skipped / failed / result` 已进入 packet，但还没有成为 A4 唯一平台状态机，仍与旧 browser action request/resolution 机制并存。
+2. `takeover_required / skipped / failed / result` 已进入 packet，A4 汇总已优先使用 packet；但更深层的 browser action request/resolution 仍是底层执行机制，尚未完全抽离。
 3. BlockerPolicy 还没有系统化；普通弹窗和轻量阻塞处理仍散落在各平台 handler 中。
 4. 当前后端仍通过 `connect_over_cdp` 控制远端 AIO Chromium，未下沉到 AIO Runtime worker。
 5. 当前 AIO 是否能稳定支持四平台多 Playwright context 并行，尚需 probe / UAT 验证。
 6. 如果底层只有一个可视 browser process，VNC focus / tab 互扰仍可能存在。
 7. 登录态复用闭环必须通过真实 UAT 验证：`takeover -> resume_probe -> persist auth state -> next run reuse`。
 8. 真实“雅姿”四平台全浏览器 UAT 尚未完成。
+9. 当前本地 worktree 和共享 env 都没有配置 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`，因此真实 AIO probe / UAT 目前被运行时配置阻塞，而不是被代码测试阻塞。
 
 ## Next Step
 
 建议下一步不要直接迁 worker，先继续 P1b / P2：
 
-1. P1b：让 A4 downstream 正式消费 `aio_platform_packets`，逐步把 legacy `platform_results` 降级为兼容层。
-2. P1b：把 skip 终态、resume probe、auth state persist、error provenance 的写入与读取闭环统一到 packet。
+1. 先提交当前 P1b / P1c 代码与测试，保留 `probe_aio_parallel_contexts.py` 为未跟踪诊断脚本。
+2. 补齐 AIO 运行时配置：至少让当前 worktree 或共享 env 具备 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`。
 3. P2：运行 AIO 并行 context probe，确认当前 runtime 支持多 context、多 page、多 browser process 还是必须多 sandbox lease。
 4. P2：跑真实“雅姿”四平台完整采集 UAT，记录卡点并修复。
 5. P3：在 P1/P2 明确后，再设计并落地 Playwright executor 下沉到 AIO Runtime 内部 worker。

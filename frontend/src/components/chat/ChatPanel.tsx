@@ -622,7 +622,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     lastBrowserActionScrollKeyRef.current = latestBrowserActionScrollKey;
     autoScrollEnabledRef.current = true;
 
-    const animationFrame = window.requestAnimationFrame(() => {
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const scrollToBrowserAction = () => {
       const container = scrollRef.current;
       if (!container) {
         return;
@@ -643,9 +644,19 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         top: container.scrollHeight,
         behavior: 'smooth',
       });
+    };
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(scrollToBrowserAction);
+      timeoutHandle = setTimeout(scrollToBrowserAction, 250);
     });
 
-    return () => window.cancelAnimationFrame(animationFrame);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    };
   }, [latestBrowserActionScrollKey]);
 
   const openedTakeoverAccess = useMemo(

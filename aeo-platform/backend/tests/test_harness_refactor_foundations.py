@@ -296,6 +296,37 @@ def test_aio_answer_fetch_tool_classifies_skip_as_terminal_packet():
     assert enriched["aio_packet"]["errors"][0]["stop_platform"] is True
 
 
+def test_aio_answer_fetch_tool_records_resume_probe_failure_context():
+    tool = AioAnswerFetchTool()
+
+    enriched = tool.attach_result_packet_to_legacy(
+        result={
+            "platform": "deepseek",
+            "fetch_method": "browser",
+            "success": False,
+            "error": "还没有检测到当前平台已登录完成",
+            "error_type": "resume_gate_failed",
+            "reason_code": "login",
+            "target_url": "https://chat.deepseek.com/",
+            "final_url": "https://chat.deepseek.com/sign_in",
+            "probe_result": "resume_gate_failed",
+            "request_id": "browser_action_1",
+            "stop_platform": True,
+        },
+        question={"id": "q1", "text": "test"},
+    )
+
+    error = enriched["aio_packet"]["errors"][0]
+    provenance = enriched["aio_packet"]["provenance"]
+    assert enriched["aio_packet"]["status"] == "failed"
+    assert error["reason_code"] == "login"
+    assert error["target_url"] == "https://chat.deepseek.com/"
+    assert error["final_url"] == "https://chat.deepseek.com/sign_in"
+    assert error["probe_result"] == "resume_gate_failed"
+    assert provenance["request_id"] == "browser_action_1"
+    assert provenance["probe_result"] == "resume_gate_failed"
+
+
 def test_aio_answer_fetch_tool_attaches_takeover_required_packet():
     tool = AioAnswerFetchTool()
 
@@ -321,6 +352,89 @@ def test_aio_answer_fetch_tool_attaches_takeover_required_packet():
     assert enriched["aio_packet"]["takeover"]["surface_url"].endswith("/vnc/")
     assert enriched["aio_packet"]["takeover"]["target_url"] == "https://kimi.com/"
     assert enriched["aio_packet"]["errors"][0]["error_type"] == "takeover_required"
+
+
+def test_a4_packet_fetch_summary_prefers_packet_status_over_legacy_success():
+    fetch_results = [
+        {
+            "question_id": "q1",
+            "question_text": "test",
+            "platform_results": [
+                {
+                    "platform": "deepseek",
+                    "success": True,
+                    "aio_packet": {
+                        "platform": "deepseek",
+                        "status": "failed",
+                        "answers": [{"content": "雅姿 answer"}],
+                    },
+                },
+                {
+                    "platform": "hunyuan",
+                    "success": False,
+                    "skipped_by_user": True,
+                    "aio_packet": {
+                        "platform": "yuanbao",
+                        "status": "skipped",
+                        "answers": [],
+                    },
+                },
+            ],
+            "aio_platform_packets": [
+                {
+                    "platform": "deepseek",
+                    "status": "failed",
+                    "answers": [{"content": "雅姿 answer"}],
+                },
+                {"platform": "yuanbao", "status": "skipped", "answers": []},
+            ],
+        }
+    ]
+
+    summary = nodes_a4._build_aio_packet_fetch_summary(
+        fetch_results,
+        brand_profile={"brand_name": "雅姿"},
+    )
+
+    assert summary["total_fetches"] == 2
+    assert summary["successful_fetches"] == 0
+    assert summary["successful_platforms"] == set()
+    assert summary["platform_statuses"]["deepseek"] == "failed"
+    assert summary["platform_statuses"]["yuanbao"] == "skipped"
+    assert summary["platform_fetch_stats"]["yuanbao"]["skipped"] == 1
+
+
+def test_a4_fetch_result_success_prefers_packet_status():
+    assert (
+        nodes_a4._fetch_result_has_success(
+            {
+                "success": True,
+                "aio_platform_packets": [
+                    {
+                        "platform": "deepseek",
+                        "status": "failed",
+                        "answers": [],
+                    }
+                ],
+            }
+        )
+        is False
+    )
+    assert (
+        nodes_a4._fetch_result_has_success(
+            {
+                "success": False,
+                "aio_platform_packets": [
+                    {
+                        "platform": "deepseek",
+                        "status": "result",
+                        "answers": [{"content": "ok"}],
+                    }
+                ],
+            }
+        )
+        is True
+    )
 
 
 def test_aio_answer_fetch_tool_registered_as_internal_runtime_tool():
@@ -1714,6 +1828,7 @@ async def test_fetch_from_browser_retries_after_waiting_login_event(monkeypatch)
     )
 
     assert result["success"] is True
+    assert result["auth_state_updated"] is True
     emit_handoff.assert_awaited_once()
     wait_resume.assert_awaited_once()
     browser_state_event.assert_awaited()
@@ -1754,6 +1869,10 @@ async def test_fetch_from_browser_emits_login_handoff_for_permission_denied_erro
 
     assert result["success"] is False
     assert result["error_type"] == "user_skipped"
+    assert result["reason_code"] == "login"
+    assert result["target_url"] == "https://chat.kimi.com/"
+    assert result["final_url"] is None
+    assert result["probe_result"] == "user_skipped"
     emit_handoff.assert_awaited_once()
     wait_resume.assert_awaited_once()
 

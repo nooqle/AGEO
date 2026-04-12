@@ -306,6 +306,136 @@ def _collect_aio_platform_packets(
     ]
 
 
+def _packets_for_fetch_result(fetch_result: dict[str, Any]) -> list[dict[str, Any]]:
+    packets = fetch_result.get("aio_platform_packets")
+    if isinstance(packets, list):
+        return [packet for packet in packets if isinstance(packet, dict)]
+    platform_results = fetch_result.get("platform_results", [])
+    if isinstance(platform_results, list):
+        return _collect_aio_platform_packets(platform_results)
+    return []
+
+
+def _packet_status(packet: dict[str, Any]) -> str:
+    return str(packet.get("status") or "").strip().lower()
+
+
+def _packet_platform(packet: dict[str, Any]) -> str:
+    return str(packet.get("platform") or "unknown").strip().lower() or "unknown"
+
+
+def _packet_answer_content(packet: dict[str, Any]) -> str:
+    answers = packet.get("answers")
+    if not isinstance(answers, list) or not answers:
+        return ""
+    answer = answers[0]
+    if isinstance(answer, dict):
+        return str(answer.get("content") or "")
+    return str(answer or "")
+
+
+def _packet_has_brand_mention(
+    packet: dict[str, Any],
+    brand_profile: dict[str, Any],
+) -> bool:
+    answers = packet.get("answers")
+    if isinstance(answers, list) and answers:
+        answer = answers[0]
+        if isinstance(answer, dict) and isinstance(
+            answer.get("has_brand_mention"), bool
+        ):
+            return bool(answer["has_brand_mention"])
+    content = _packet_answer_content(packet)
+    return bool(content and content_mentions_brand(content, brand_profile))
+
+
+def _status_priority(status: str) -> int:
+    if status == "success":
+        return 4
+    if status == "skipped":
+        return 3
+    if status == "takeover_required":
+        return 2
+    if status == "failed":
+        return 1
+    return 0
+
+
+def _fetch_result_has_success(fetch_result: dict[str, Any]) -> bool:
+    packets = _packets_for_fetch_result(fetch_result)
+    if packets:
+        return any(_packet_status(packet) == "result" for packet in packets)
+    return bool(fetch_result.get("success"))
+
+
+def _build_aio_packet_fetch_summary(
+    fetch_results: list[dict[str, Any]],
+    *,
+    brand_profile: dict[str, Any],
+) -> dict[str, Any]:
+    """Build A4 downstream status from AIO packets, not legacy booleans."""
+
+    total_fetches = 0
+    successful_fetches = 0
+    total_answers = 0
+    brand_mentions = 0
+    successful_platforms: set[str] = set()
+    platform_statuses: dict[str, str] = {}
+    platform_fetch_stats: dict[str, dict[str, int]] = {}
+
+    for fetch_result in fetch_results:
+        for packet in _packets_for_fetch_result(fetch_result):
+            platform = _packet_platform(packet)
+            status = _packet_status(packet)
+            total_fetches += 1
+
+            if platform not in platform_fetch_stats:
+                platform_fetch_stats[platform] = {
+                    "completed": 0,
+                    "total": 0,
+                    "mentions": 0,
+                    "skipped": 0,
+                    "takeover_required": 0,
+                    "failed": 0,
+                }
+            platform_fetch_stats[platform]["total"] += 1
+
+            next_platform_status = "failed"
+            if status == "result":
+                successful_fetches += 1
+                total_answers += 1
+                successful_platforms.add(platform)
+                platform_fetch_stats[platform]["completed"] += 1
+                next_platform_status = "success"
+                if _packet_has_brand_mention(packet, brand_profile):
+                    brand_mentions += 1
+                    platform_fetch_stats[platform]["mentions"] += 1
+            elif status == "skipped":
+                platform_fetch_stats[platform]["skipped"] += 1
+                next_platform_status = "skipped"
+            elif status == "takeover_required":
+                platform_fetch_stats[platform]["takeover_required"] += 1
+                next_platform_status = "takeover_required"
+            else:
+                platform_fetch_stats[platform]["failed"] += 1
+
+            previous_status = platform_statuses.get(platform)
+            if _status_priority(next_platform_status) >= _status_priority(
+                previous_status or ""
+            ):
+                platform_statuses[platform] = next_platform_status
+
+    return {
+        "total_fetches": total_fetches,
+        "successful_fetches": successful_fetches,
+        "successful_platforms": successful_platforms,
+        "platform_fetch_stats": platform_fetch_stats,
+        "platform_statuses": platform_statuses,
+        "total_answers": total_answers,
+        "brand_mentions": brand_mentions,
+    }
+
+
 class _ProgressTracker:
     """Track per-platform completion during Phase 1 API fetch and emit progress."""
 
@@ -1542,14 +1672,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         )
                 else:
                     for q_idx, r in browser_batch:
-                        question_results[q_idx].append(
-                            _attach_aio_platform_packet(
-                                r,
-                                question=questions[q_idx],
-                                request=aio_fetch_request,
-                            )
+                        enriched_result = _attach_aio_platform_packet(
+                            r,
+                            question=questions[q_idx],
+                            request=aio_fetch_request,
                         )
-                        if r.get("success"):
+                        question_results[q_idx].append(enriched_result)
+                        if _fetch_result_has_success(enriched_result):
                             browser_success_total += 1
 
             logger.info(
@@ -1561,7 +1690,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 question_id = question.get("id", f"Q{idx}")
                 question_text = question.get("text", "")
                 platform_results = question_results[idx]
-                q_success = sum(1 for r in platform_results if r.get("success"))
+                q_success = sum(
+                    1 for result in platform_results if _fetch_result_has_success(result)
+                )
                 logger.info(
                     "[A4] Q%d/%d: %d platforms succeeded", idx + 1, total, q_success
                 )
@@ -1583,40 +1714,30 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 except BaseException as e:
                     logger.debug("[A4] Browser client close failed: %s", e)
 
-        # Calculate success rate
-        total_fetches = sum(len(r["platform_results"]) for r in fetch_results)
-        successful_fetches = sum(
-            1 for r in fetch_results for p in r["platform_results"] if p.get("success")
+        # Calculate downstream status from the AIO packet contract. The legacy
+        # platform_results shape remains in artifacts for compatibility only.
+        packet_summary = _build_aio_packet_fetch_summary(
+            fetch_results,
+            brand_profile=brand_profile,
         )
-
-        # Check minimum platform threshold: at least MIN_PLATFORMS_REQUIRED platforms
-        # must have at least one successful fetch across all questions
-        successful_platforms = set()
-        for r in fetch_results:
-            for p in r["platform_results"]:
-                if p.get("success"):
-                    successful_platforms.add(p.get("platform"))
-
-        # Stage result: 逐平台推送抓取结果状态
-        platform_fetch_stats: dict[str, dict[str, int]] = {}
-        for r in fetch_results:
-            for p in r["platform_results"]:
-                pname = p.get("platform", "unknown")
-                if pname not in platform_fetch_stats:
-                    platform_fetch_stats[pname] = {
-                        "completed": 0,
-                        "total": 0,
-                        "mentions": 0,
-                    }
-                platform_fetch_stats[pname]["total"] += 1
-                if p.get("success"):
-                    platform_fetch_stats[pname]["completed"] += 1
-                    answer = p.get("answer", {})
-                    if isinstance(answer, dict) and answer.get("has_brand_mention"):
-                        platform_fetch_stats[pname]["mentions"] += 1
+        total_fetches = int(packet_summary["total_fetches"])
+        successful_fetches = int(packet_summary["successful_fetches"])
+        successful_platforms = set(packet_summary["successful_platforms"])
+        platform_fetch_stats = packet_summary["platform_fetch_stats"]
+        platform_statuses = packet_summary["platform_statuses"]
+        total_answers = int(packet_summary["total_answers"])
+        brand_mentions = int(packet_summary["brand_mentions"])
 
         for pname, pstats in platform_fetch_stats.items():
-            p_status = "success" if pstats["completed"] > 0 else "failed"
+            p_status = platform_statuses.get(pname, "failed")
+            display_name = PlatformConstants.PLATFORM_DISPLAY_NAMES.get(pname, pname)
+            error_message = None
+            if p_status == "skipped":
+                error_message = f"{display_name} 已跳过"
+            elif p_status == "takeover_required":
+                error_message = f"{display_name} 等待人工接管"
+            elif p_status != "success":
+                error_message = f"{display_name} 部分抓取失败"
             await send_stage_result(
                 session_id,
                 "A4",
@@ -1630,11 +1751,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             "questions_completed": pstats["completed"],
                             "questions_total": pstats["total"],
                             "mention_count": pstats["mentions"],
-                            "error": (
-                                None
-                                if p_status == "success"
-                                else f"{pname} 部分抓取失败"
-                            ),
+                            "error": error_message,
                         }
                     ],
                 },
@@ -1644,26 +1761,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
         from app.workflow.resilience import DegradationRegistry
 
         # When platform_filter is set, total is the filtered set, not all platforms
-        total_platforms = len(platform_filter) if platform_filter else len(PLATFORMS)
+        total_platforms = len(aio_fetch_request.platforms)
         fail_count = total_platforms - len(successful_platforms)
-
-        # Build per-platform status from fetch_results for degradation notice
-        platform_statuses: dict[str, str] = {}
-        for fr in fetch_results:
-            for pr in fr.get("platform_results", []):
-                pname = pr.get("platform", "unknown")
-                if pr.get("skipped_by_breaker"):
-                    platform_statuses[pname] = "skipped"
-                elif pr.get("success"):
-                    platform_statuses[pname] = "success"
-                else:
-                    platform_statuses[pname] = "failed"
 
         # When platform_filter is active, adjust the minimum
         # threshold to the number of requested platforms (min 1), so that a
         # single-platform scoped fetch doesn't trigger a spurious degradation notice.
         effective_min = (
-            min(MIN_PLATFORMS_REQUIRED, len(platform_filter))
+            min(MIN_PLATFORMS_REQUIRED, total_platforms)
             if platform_filter
             else MIN_PLATFORMS_REQUIRED
         )
@@ -1718,34 +1823,17 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # Send detailed response to user
         brand_name = brand_profile.get("brand_name", "该品牌")
 
-        # Calculate platform stats
-        platform_stats: dict[str, dict[str, int]] = {}
-        total_answers = 0
-        brand_mentions = 0
-
-        for result in fetch_results:
-            platform_results = result.get("platform_results", [])
-            for pr in platform_results:
-                platform = pr.get("platform", "unknown")
-                if platform not in platform_stats:
-                    platform_stats[platform] = {"total": 0, "success": 0}
-                platform_stats[platform]["total"] += 1
-                if pr.get("success"):
-                    platform_stats[platform]["success"] += 1
-                    total_answers += 1
-                    answer = pr.get("answer", "")
-                    if isinstance(answer, dict):
-                        answer = answer.get("content", "")
-                    if brand_name in str(answer):
-                        brand_mentions += 1
-
         platform_summary = []
-        for platform, stats in platform_stats.items():
+        for platform, stats in platform_fetch_stats.items():
             success_rate = (
-                (stats["success"] / stats["total"] * 100) if stats["total"] > 0 else 0
+                (stats["completed"] / stats["total"] * 100) if stats["total"] > 0 else 0
+            )
+            display_name = PlatformConstants.PLATFORM_DISPLAY_NAMES.get(
+                platform,
+                platform,
             )
             platform_summary.append(
-                f"- **{platform}**: {stats['success']}/{stats['total']} 成功 ({success_rate:.0f}%)"
+                f"- **{display_name}**: {stats['completed']}/{stats['total']} 成功 ({success_rate:.0f}%)"
             )
 
         detailed_response = f"""✅ **答案抓取完成**
@@ -2335,6 +2423,18 @@ async def _resume_after_browser_action(
     )
 
 
+def _get_handler_page_url(handler: Any) -> str | None:
+    client = getattr(handler, "client", None)
+    page = getattr(client, "page", None)
+    if page is None:
+        return None
+    try:
+        page_url = getattr(page, "url", None)
+    except Exception:
+        return None
+    return page_url if isinstance(page_url, str) and page_url.strip() else None
+
+
 async def _fetch_from_browser(
     handler,
     question: str,
@@ -2347,6 +2447,7 @@ async def _fetch_from_browser(
     run_id: str | None = None,
     _is_retry: bool = False,
     _verify_recovery_count: int = 0,
+    _auth_state_updated: bool = False,
 ) -> dict[str, Any]:
     start_time = datetime.now(timezone.utc)
     result_data = None
@@ -2443,6 +2544,7 @@ async def _fetch_from_browser(
                 "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in result_data.search_references],
+            "auth_state_updated": _auth_state_updated,
             "duration": duration,
         }
 
@@ -2565,6 +2667,9 @@ async def _fetch_from_browser(
                     if pending_action["action_type"] == "verify"
                     else _verify_recovery_count
                 ),
+                _auth_state_updated=(
+                    _auth_state_updated or pending_action["action_type"] == "login"
+                ),
             )
         if session_id:
             await send_browser_state_event(
@@ -2591,6 +2696,11 @@ async def _fetch_from_browser(
             "success": False,
             "error": pending_action["timeout_message"],
             "error_type": failure_error_type,
+            "reason_code": pending_action["action_type"],
+            "target_url": getattr(handler, "URL", None),
+            "final_url": _get_handler_page_url(handler),
+            "probe_result": failure_error_type,
+            "request_id": pending_action["request_id"],
             "stop_platform": failure_error_type
             in {
                 "user_skipped",
@@ -2634,6 +2744,7 @@ async def _fetch_from_browser(
                 user_id=user_id,
                 run_id=run_id,
                 _is_retry=True,
+                _auth_state_updated=_auth_state_updated,
             )
 
     if (
@@ -2740,6 +2851,7 @@ async def _fetch_from_browser(
                 run_id=run_id,
                 _is_retry=True,
                 _verify_recovery_count=_verify_recovery_count + 1,
+                _auth_state_updated=_auth_state_updated,
             )
         if session_id:
             await send_browser_state_event(
@@ -2824,6 +2936,7 @@ async def _fetch_from_browser(
                     user_id=user_id,
                     run_id=run_id,
                     _is_retry=True,
+                    _auth_state_updated=_auth_state_updated,
                 )
             else:
                 return {

@@ -236,7 +236,15 @@ def _rewrite_novnc_html(content: bytes, content_type: str | None) -> bytes:
   #noVNC_control_bar,
   #noVNC_control_bar_handle,
   #noVNC_status_bar,
-  #noVNC_control_bar_hint {
+  #noVNC_control_bar_hint,
+  #noVNC_settings,
+  #noVNC_disconnect_button,
+  #noVNC_connect_dlg,
+  #noVNC_status,
+  .noVNC_panel,
+  .noVNC_expander,
+  .noVNC_button,
+  [id^="noVNC_setting_"] {
     display: none !important;
     visibility: hidden !important;
     pointer-events: none !important;
