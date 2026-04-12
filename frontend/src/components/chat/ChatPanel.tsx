@@ -849,20 +849,14 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
       const previousMessage = state.message;
       const previousActionHint = state.actionHint;
-      const shouldClearWorkspace =
-        browserWorkspace?.type === 'browser' &&
-        browserWorkspace.data.takeoverId === takeover.takeoverId;
 
       try {
         updateBrowserState(requestId, {
-          state: 'submitting',
-          requiresAction: true,
-          message: '正在确认当前平台操作，马上继续抓取...',
-          actionHint: '正在确认当前平台操作，马上继续抓取...',
+          state: 'waiting_response',
+          requiresAction: false,
+          message: '已收到完成确认，Agent 正在继续当前平台抓取...',
+          actionHint: '已收到完成确认，Agent 正在继续当前平台抓取...',
         });
-        if (shouldClearWorkspace) {
-          clearBrowserWorkspace();
-        }
         const next = await api.resolveAioTakeover(takeover.resolvePath, {
           frontendId: registration.frontendId,
           mode: STABLE_AIO_TAKEOVER_MODE,
@@ -875,8 +869,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           updateBrowserState(requestId, {
             state: 'waiting_response',
             requiresAction: false,
-            message: '已收到完成确认，系统正在继续抓取...',
-            actionHint: '已收到完成确认，系统正在继续抓取...',
+            message: '已收到完成确认，Agent 正在继续当前平台抓取...',
+            actionHint: '已收到完成确认，Agent 正在继续当前平台抓取...',
             takeover: buildBrowserTakeoverFromRecord(next),
             blockingUrl:
               next.blockingUrl ??
@@ -888,7 +882,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
               state.blockingFingerprint,
             reasonCode: next.reasonCode ?? next.accessBundle.reasonCode ?? state.reasonCode,
           });
-          toast.success('已收到完成确认，系统正在继续抓取。');
+          toast.success('已收到完成确认，Agent 正在继续当前平台抓取。');
           return;
         }
 
@@ -918,12 +912,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         });
         toast.error(resumeFailureMessage);
       } catch (error) {
-        if (shouldClearWorkspace) {
-          const previousContent = buildBrowserCanvasContent(state);
-          if (previousContent?.type === 'browser') {
-            openBrowserWorkspace(previousContent);
-          }
-        }
         updateBrowserState(requestId, {
           state: state.state,
           requiresAction: true,
@@ -938,12 +926,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     wsBrowserActionResolution?.(requestId, 'completed');
     updateBrowserState(requestId, {
       requiresAction: false,
-      message: '已收到您的完成确认，正在继续当前流程...',
+      message: '已收到完成确认，Agent 正在继续当前平台抓取...',
     });
   }, [
-    browserWorkspace,
-    clearBrowserWorkspace,
-    openBrowserWorkspace,
     removeTakeoverRegistration,
     updateBrowserState,
     upsertTakeoverRecord,

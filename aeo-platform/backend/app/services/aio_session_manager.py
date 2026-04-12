@@ -1088,22 +1088,6 @@ class AioSandboxSessionManager:
             return takeover
 
         requested_gate = resume_gate_result or AioResumeGateResult.PASS.value
-        probe = takeover.resume_probe
-        should_probe_resume_gate = (
-            probe is not None and requested_gate == AioResumeGateResult.PASS.value
-        )
-        if should_probe_resume_gate:
-            try:
-                probe_passed = await probe()
-            except Exception:
-                probe_passed = False
-            if not probe_passed:
-                if takeover.action_type == "login":
-                    requested_gate = AioResumeGateResult.FAIL_LOGIN_REQUIRED.value
-                elif takeover.action_type == "modal":
-                    requested_gate = AioResumeGateResult.FAIL_UI_NOT_READY.value
-                else:
-                    requested_gate = AioResumeGateResult.FAIL_UNKNOWN.value
 
         async with self._lock:
             takeover = await self.get_takeover(takeover_id)

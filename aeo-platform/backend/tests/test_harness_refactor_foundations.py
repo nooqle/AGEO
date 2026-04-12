@@ -754,7 +754,7 @@ async def test_release_session_preserves_active_takeover_freeze(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_takeover_keeps_login_takeover_active_when_resume_probe_fails(
+async def test_resolve_takeover_releases_login_takeover_without_sync_resume_probe(
     monkeypatch,
 ):
     manager = AioSandboxSessionManager()
@@ -781,6 +781,7 @@ async def test_resolve_takeover_keeps_login_takeover_active_when_resume_probe_fa
         current_takeover_id="takeover_login",
         human_takeover_lock=True,
     )
+    resume_probe = AsyncMock(return_value=False)
     takeover = SpectaAioTakeover(
         takeover_id="takeover_login",
         session_id="aio_session_login",
@@ -795,7 +796,7 @@ async def test_resolve_takeover_keeps_login_takeover_active_when_resume_probe_fa
         issued_at=now - timedelta(minutes=1),
         expires_at=now + timedelta(minutes=5),
         action_type="login",
-        resume_probe=AsyncMock(return_value=False),
+        resume_probe=resume_probe,
     )
     manager._sessions_by_id[session.session_id] = session
     manager._session_by_workspace[session.workspace_id] = session.session_id
@@ -808,13 +809,14 @@ async def test_resolve_takeover_keeps_login_takeover_active_when_resume_probe_fa
         resume_gate_result="pass",
     )
 
-    assert resolved.state == AioTakeoverState.ACTIVE
-    assert resolved.resume_gate_result == "fail_login_required"
-    assert manager._sessions_by_id["aio_session_login"].human_takeover_lock is True
+    assert resolved.state == AioTakeoverState.RESOLVED
+    assert resolved.resume_gate_result == "pass"
+    assert manager._sessions_by_id["aio_session_login"].human_takeover_lock is False
     assert (
         manager._sessions_by_id["aio_session_login"].session_state
-        == AioSessionState.TAKEOVER_FROZEN
+        == AioSessionState.LEASED
     )
+    resume_probe.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1480,6 +1482,37 @@ async def test_finish_user_action_gate_returns_user_skipped_event():
     assert events[0].state == FetchBrowserState.ERROR
     assert events[0].error_type == "user_skipped"
     assert "跳过当前平台" in events[0].message
+
+
+@pytest.mark.asyncio
+async def test_wait_for_user_action_completion_returns_immediately_after_completed_resolution(
+    monkeypatch,
+):
+    ready_check = AsyncMock(return_value=False)
+    wait_resolution = AsyncMock(return_value="completed")
+    clear_request = AsyncMock()
+
+    monkeypatch.setattr(
+        "app.core.fetchers.browser.base_handler.wait_for_browser_action_resolution",
+        wait_resolution,
+    )
+    monkeypatch.setattr(
+        "app.core.fetchers.browser.base_handler.clear_browser_action_request",
+        clear_request,
+    )
+
+    succeeded, resolution = await BaseBrowserHandler._wait_for_user_action_completion(
+        SimpleNamespace(),
+        request_id="browser_action_1",
+        ready_check=ready_check,
+        timeout=480,
+        ready_timeout=45,
+    )
+
+    assert succeeded is True
+    assert resolution == "completed"
+    ready_check.assert_not_awaited()
+    clear_request.assert_awaited_once_with("browser_action_1")
 
 
 @pytest.mark.asyncio

@@ -1425,7 +1425,12 @@ class BaseBrowserHandler(ABC):
         timeout: int = 480,
         ready_timeout: int = 45,
     ) -> tuple[bool, str | None]:
-        """Wait until the user explicitly confirms completion, then validate readiness."""
+        """Wait until the user explicitly confirms completion.
+
+        Readiness should be validated by the resumed automation path itself.
+        Acknowledge user completion immediately so control returns to the
+        browser agent instead of blocking on a second synchronous gate here.
+        """
         if not request_id:
             return False, None
 
@@ -1436,7 +1441,7 @@ class BaseBrowserHandler(ABC):
             )
             if resolution != "completed":
                 return False, resolution
-            return await ready_check(ready_timeout), resolution
+            return True, resolution
         finally:
             await clear_browser_action_request(request_id)
 
