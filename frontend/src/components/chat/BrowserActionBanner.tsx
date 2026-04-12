@@ -131,6 +131,46 @@ export function BrowserActionBanner({
       : browserState.requiresAction
         ? '待处理'
         : '已处理';
+  const isResolvedState = takeoverState === 'resolved';
+  const isCancelledState = takeoverState === 'cancelled';
+  const isSettledState = isResolvedState || isCancelledState;
+
+  const containerStyle = isResolvedState
+    ? {
+        background: 'rgba(15, 23, 42, 0.02)',
+        borderColor: 'rgba(15, 23, 42, 0.08)',
+      }
+    : isCancelledState
+      ? {
+          background: 'rgba(15, 23, 42, 0.018)',
+          borderColor: 'rgba(15, 23, 42, 0.07)',
+        }
+      : {
+          background: 'rgba(245, 158, 11, 0.08)',
+          borderColor: 'rgba(245, 158, 11, 0.18)',
+        };
+  const dotStyle = isResolvedState
+    ? { background: 'rgba(34, 197, 94, 0.9)' }
+    : isCancelledState
+      ? { background: 'rgba(100, 116, 139, 0.8)' }
+      : { background: 'var(--warning)' };
+  const stateBadgeStyle = isResolvedState
+    ? {
+        background: 'rgba(34, 197, 94, 0.1)',
+        color: 'var(--success)',
+      }
+    : isCancelledState
+      ? {
+          background: 'rgba(148, 163, 184, 0.12)',
+          color: 'var(--text-secondary)',
+        }
+      : {
+          background: 'var(--bg-secondary)',
+          color: 'var(--text-secondary)',
+        };
+  const detailTextColor = isSettledState ? 'var(--text-primary)' : 'var(--text-secondary)';
+  const helperTextColor = isSettledState ? 'var(--text-secondary)' : 'var(--text-tertiary)';
+  const sceneTextColor = isSettledState ? 'var(--text-secondary)' : 'var(--text-tertiary)';
 
   const canResolve =
     Boolean(onResolve) &&
@@ -176,15 +216,12 @@ export function BrowserActionBanner({
   return (
     <div
       className="rounded-2xl border px-4 py-4"
-      style={{
-        background: 'rgba(245, 158, 11, 0.08)',
-        borderColor: 'rgba(245, 158, 11, 0.18)',
-      }}
+      style={containerStyle}
     >
       <div className="flex items-start gap-3">
         <div
           className="mt-1 h-2.5 w-2.5 rounded-full"
-          style={{ background: 'var(--warning)' }}
+          style={dotStyle}
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -193,7 +230,7 @@ export function BrowserActionBanner({
             </p>
             <span
               className="rounded-full px-2 py-0.5 text-[11px]"
-              style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+              style={stateBadgeStyle}
             >
               {stateLabel}
             </span>
@@ -204,14 +241,14 @@ export function BrowserActionBanner({
             )}
           </div>
 
-          <p className="mt-1 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+          <p className="mt-1 text-sm leading-6" style={{ color: detailTextColor }}>
             {detail}
           </p>
-          <p className="mt-1 text-xs leading-5" style={{ color: 'var(--text-tertiary)' }}>
+          <p className="mt-1 text-xs leading-5" style={{ color: helperTextColor }}>
             {helperText}
           </p>
           {sceneUrl && (
-            <p className="mt-1 truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
+            <p className="mt-1 truncate text-xs" style={{ color: sceneTextColor }}>
               {blockingUrl ? '当前阻塞页面：' : '目标页面：'}
               {sceneUrl}
             </p>
