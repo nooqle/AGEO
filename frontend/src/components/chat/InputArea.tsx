@@ -330,11 +330,11 @@ export function InputArea({
       <div className="px-4 py-4">
         <div className="max-w-3xl mx-auto">
           {/* 输入框行 */}
-          <div className="flex items-end gap-2">
+          <div className="flex items-center gap-2">
             {/* 附件按钮 */}
             <button
               onClick={handleOpenFilePicker}
-              className="p-2 rounded-xl transition-colors flex-shrink-0"
+              className="self-center p-2 rounded-xl transition-colors flex-shrink-0"
               style={{ color: 'var(--text-tertiary)' }}
               onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)'; e.currentTarget.style.backgroundColor = 'transparent'; }}
@@ -368,6 +368,7 @@ export function InputArea({
                 'border',
                 'focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20',
                 'min-h-[48px] max-h-[200px]',
+                'self-center',
                 'disabled:cursor-not-allowed disabled:opacity-50',
                 disabled && 'opacity-50',
                 'scrollbar-hide'
@@ -386,7 +387,7 @@ export function InputArea({
               <button
                 onClick={handleSubmit}
                 disabled={(!content.trim() && attachments.length === 0) || disabled || isUploading}
-                className="p-2.5 rounded-xl transition-all flex-shrink-0 hover:opacity-90"
+                className="self-center p-2.5 rounded-xl transition-all flex-shrink-0 hover:opacity-90"
                 style={{
                   backgroundColor: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? 'var(--color-primary)' : 'var(--bg-tertiary)',
                   color: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? '#fff' : 'var(--text-muted)',
@@ -398,7 +399,7 @@ export function InputArea({
             ) : (
               <button
                 onClick={onStop}
-                className="p-2.5 rounded-xl text-white hover:opacity-90 transition-colors flex-shrink-0"
+                className="self-center p-2.5 rounded-xl text-white hover:opacity-90 transition-colors flex-shrink-0"
                 style={{ backgroundColor: 'var(--error, #EF4444)' }}
               >
                 <RiStopLine className="w-5 h-5" />

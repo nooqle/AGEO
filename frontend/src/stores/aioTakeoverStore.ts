@@ -31,9 +31,14 @@ interface AioTakeoverStoreState {
   registrations: Record<string, TakeoverRegistration>;
   records: Record<string, AioTakeoverRecord>;
   openedTakeoverIds: Record<string, true>;
+  openedRequestIds: Record<string, true>;
   openedAtMsByTakeoverId: Record<string, number>;
   upsertRegistration: (access: BrowserTakeoverAccess) => void;
-  markTakeoverOpened: (takeoverId: string, openedAtMs?: number) => void;
+  markTakeoverOpened: (
+    takeoverId: string,
+    openedAtMs?: number,
+    requestId?: string | null,
+  ) => void;
   removeRegistration: (takeoverId: string) => void;
   clearTakeover: (takeoverId: string) => void;
   setTakeoverMode: (takeoverId: string, mode: AioTakeoverMode) => void;
@@ -46,6 +51,7 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
   registrations: {},
   records: {},
   openedTakeoverIds: {},
+  openedRequestIds: {},
   openedAtMsByTakeoverId: {},
 
   upsertRegistration: (access) =>
@@ -71,12 +77,18 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
       };
     }),
 
-  markTakeoverOpened: (takeoverId, openedAtMs) =>
+  markTakeoverOpened: (takeoverId, openedAtMs, requestId) =>
     set((state) => ({
       openedTakeoverIds: {
         ...state.openedTakeoverIds,
         [takeoverId]: true,
       },
+      openedRequestIds: requestId
+        ? {
+            ...state.openedRequestIds,
+            [requestId]: true,
+          }
+        : state.openedRequestIds,
       openedAtMsByTakeoverId: {
         ...state.openedAtMsByTakeoverId,
         [takeoverId]: openedAtMs ?? Date.now(),
@@ -187,6 +199,7 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
     registrations: {},
     records: {},
     openedTakeoverIds: {},
+    openedRequestIds: {},
     openedAtMsByTakeoverId: {},
   }),
 }));

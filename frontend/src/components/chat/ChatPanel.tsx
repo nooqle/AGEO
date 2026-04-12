@@ -436,6 +436,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     (state) => state.upsertRegistration,
   );
   const openedTakeoverIds = useAioTakeoverStore((state) => state.openedTakeoverIds);
+  const openedRequestIds = useAioTakeoverStore((state) => state.openedRequestIds);
   const openedAtMsByTakeoverId = useAioTakeoverStore((state) => state.openedAtMsByTakeoverId);
   const markTakeoverOpened = useAioTakeoverStore((state) => state.markTakeoverOpened);
   const upsertTakeoverRecord = useAioTakeoverStore((state) => state.upsertRecord);
@@ -814,7 +815,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         });
       }
 
-      markTakeoverOpened(nextRecord.takeoverId);
+      markTakeoverOpened(nextRecord.takeoverId, undefined, state.requestId);
       const content = buildBrowserCanvasContent(nextState);
       if (content) {
         openBrowserWorkspace(content as Extract<CanvasContent, { type: 'browser' }>);
@@ -1329,6 +1330,38 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     setActiveSurface('browser');
   }, [browserWorkspace, setActiveSurface, setCanvasOpen]);
 
+  useEffect(() => {
+    const resumedState = actionableTakeoverStates.find((state) => {
+      const takeoverId = state.takeover?.takeoverId;
+      return Boolean(
+        (takeoverId && openedTakeoverIds[takeoverId]) ||
+        (state.requestId && openedRequestIds[state.requestId]),
+      );
+    });
+    if (!resumedState) {
+      return;
+    }
+
+    const resumedContent = buildBrowserCanvasContent(resumedState);
+    if (!resumedContent || resumedContent.type !== 'browser') {
+      return;
+    }
+
+    const currentTakeoverId =
+      browserWorkspace?.type === 'browser' ? browserWorkspace.data.takeoverId : null;
+    if (currentTakeoverId === resumedContent.data.takeoverId) {
+      return;
+    }
+
+    openBrowserWorkspace(resumedContent);
+  }, [
+    actionableTakeoverStates,
+    browserWorkspace,
+    openBrowserWorkspace,
+    openedRequestIds,
+    openedTakeoverIds,
+  ]);
+
   return (
     <div className={cn('relative flex flex-col h-full bg-[var(--bg-primary)]', className)}>
       {/* Cycle 3: Task status badge in header area */}
@@ -1456,7 +1489,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
                     const takeoverId = state.takeover?.takeoverId;
                     const cardKey = getBrowserActionCardKey(state);
                     const isOpened = Boolean(
-                      takeoverId && openedTakeoverIds[takeoverId],
+                      (takeoverId && openedTakeoverIds[takeoverId]) ||
+                      (state.requestId && openedRequestIds[state.requestId]),
                     );
                     const openedAtMs =
                       takeoverId ? openedAtMsByTakeoverId[takeoverId] : undefined;
@@ -1488,7 +1522,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
                 const takeoverId = state.takeover?.takeoverId;
                 const cardKey = getBrowserActionCardKey(state);
                 const isOpened = Boolean(
-                  takeoverId && openedTakeoverIds[takeoverId],
+                  (takeoverId && openedTakeoverIds[takeoverId]) ||
+                  (state.requestId && openedRequestIds[state.requestId]),
                 );
                 const openedAtMs =
                   takeoverId ? openedAtMsByTakeoverId[takeoverId] : undefined;

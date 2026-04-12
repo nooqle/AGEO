@@ -195,6 +195,10 @@ async def _rehydrate_aio_takeover_bundle(
     task_id: UUID,
     task_run_id: UUID,
     user_id: UUID,
+    target_url: str | None = None,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
+    reason_code: str | None = None,
 ) -> dict[str, Any] | None:
     """Re-issue an AIO takeover bundle for a durable waiting_input record."""
 
@@ -228,12 +232,18 @@ async def _rehydrate_aio_takeover_bundle(
     return {
         "takeover_id": takeover.takeover_id,
         "mode": takeover.mode,
+        "open_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/open",
         "canvas_config_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/canvas-config",
         "vnc_url_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/vnc-url",
         "heartbeat_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/heartbeat",
         "resolve_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/resolve",
         "cancel_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/cancel",
         "expires_at": takeover.expires_at.isoformat(),
+        "action_type": action_type,
+        "reason_code": reason_code,
+        "target_url": target_url,
+        "blocking_url": blocking_url,
+        "blocking_fingerprint": blocking_fingerprint,
     }
 
 
@@ -346,6 +356,10 @@ async def replay_pending_browser_actions_to_websocket(
             task_id=attempt.task_id,
             task_run_id=attempt.task_run_id,
             user_id=attempt.user_id,
+            target_url=request.get("target_url"),
+            blocking_url=request.get("blocking_url"),
+            blocking_fingerprint=request.get("blocking_fingerprint"),
+            reason_code=request.get("reason_code"),
         )
         if not isinstance(takeover, dict):
             continue

@@ -99,6 +99,12 @@ export function BrowserActionBanner({
       operationWindowExpiresAtMs <= nowMs &&
       !isTerminalTakeoverState,
   );
+  const effectiveTakeoverState =
+    isOpened &&
+    !isTerminalTakeoverState &&
+    (takeoverState === 'issued' || takeoverState === 'requested')
+      ? 'active'
+      : takeoverState;
   const remainingLabel = isOpened && !isTerminalTakeoverState
     ? formatRemainingTime(operationWindowExpiresAtMs, nowMs)
     : null;
@@ -126,8 +132,10 @@ export function BrowserActionBanner({
   const stateLabel =
     isClientWindowExpired
       ? '已失效，可重新打开'
-      : takeoverState && takeoverState in TAKEOVER_STATE_LABELS
-      ? TAKEOVER_STATE_LABELS[takeoverState as keyof typeof TAKEOVER_STATE_LABELS]
+      : effectiveTakeoverState && effectiveTakeoverState in TAKEOVER_STATE_LABELS
+      ? TAKEOVER_STATE_LABELS[
+          effectiveTakeoverState as keyof typeof TAKEOVER_STATE_LABELS
+        ]
       : browserState.requiresAction
         ? '待处理'
         : '已处理';
