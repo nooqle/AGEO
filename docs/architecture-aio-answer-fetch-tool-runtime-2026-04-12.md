@@ -180,6 +180,7 @@ AIO Answer Fetch Tool
 - `BrowserAgentBootstrapPolicy`
 - `HybridBrowserAgentPolicy`
 - `LLMBrowserAgentPolicy`（默认关闭，仅作为可替换执行器）
+- `LLMBrowserAgentPolicy` 现在已按 `preflight / wait_gate / resume_probe / empty_answer` 生成阶段化 prompt
 - `collect_browser_agent_step(...)`
 - `BaseBrowserHandler._run_browser_agent_preflight(...)`
 - `BaseBrowserHandler._wait_for_content_with_browser_agent(...)`
@@ -191,7 +192,13 @@ AIO Answer Fetch Tool
 - 四个平台在登录检查前统一先跑 preflight
 - 四个平台在 DOM fallback 等待阶段统一先跑 wait gate
 - preflight / wait gate / resume probe / empty answer 现在都带 `BrowserAgentLoopContext` 阶段信息进入 loop
-- “我已完成”后的 resume probe 先走 Browser Agent 当前页观察，再回退到平台专属 readiness check
+- “我已完成”后的 resume probe 现在进入共享 Browser Agent resume loop：
+  - 支持 `action_type`
+  - 支持平台自然语言 stage note / meta
+  - 支持自动执行轻量动作后再次观察
+  - `takeover_required / failed` 直接保持阻塞
+  - 只对 `blank_page / navigation_error / target_closed` 这类瞬时状态继续轮询
+- 四个平台不再 override `probe_resume_gate_ready`；平台只补充自然语言恢复期望，不再各自维护 selector 轮询
 - parser 错误、wait blocker、空答案兜底继续往 Base 收，减少平台 handler 对 blocker 恢复的直接分叉
 
 也就是说，下一阶段不需要先重写浏览器底层，而是把 handler 中的页面理解与 blocker 分类逐步迁移到 Browser Agent policy / executor，并把 stale page / live page resync 这类确定性问题继续留在 runtime / base handler 层。当前 Browser Agent 还不是最终的 LLM planner，但运行时已经具备“阶段上下文 + 可替换执行器”的骨架。

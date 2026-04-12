@@ -497,99 +497,24 @@ class KimiHandler(BaseBrowserHandler):
             return False
         return await super().probe_takeover_ready(action_type)
 
-    async def probe_resume_gate_ready(self, action_type: str) -> bool:
-        if action_type == "login":
-            if await super().probe_resume_gate_ready(action_type):
-                return True
-            return await self._wait_for_kimi_login_ready(timeout=30)
-        return await super().probe_resume_gate_ready(action_type)
-
-    async def _wait_for_kimi_login_ready(self, timeout: int = 300) -> bool:
-        """Wait until the live Kimi page shows a post-login chat surface."""
-
-        elapsed = 0.0
-        while elapsed < timeout:
-            page = self.client.page
-            if page is not None:
-                try:
-                    state = await page.evaluate(
-                        """() => {
-                        const isVisible = (el) => {
-                            if (!el) return false;
-                            const style = window.getComputedStyle(el);
-                            const rect = el.getBoundingClientRect();
-                            return style.visibility !== 'hidden'
-                                && style.display !== 'none'
-                                && rect.width > 0
-                                && rect.height > 0;
-                        };
-                        const loginSelectors = [
-                            '.login-modal-content',
-                            '.wechat-login',
-                            '.phone-login-mobile-number',
-                            '[placeholder="请输入手机号"]',
-                            '[class*="login-modal"]',
-                            '[class*="login-dialog"]',
-                            '[class*="auth-modal"]',
-                            '.not-login-container',
-                        ];
-                        for (const sel of loginSelectors) {
-                            const el = document.querySelector(sel);
-                            if (isVisible(el) && (el.textContent || '').includes('登录')) {
-                                return {ready: false, reason: sel};
-                            }
-                            if (isVisible(el) && sel !== '.not-login-container') {
-                                return {ready: false, reason: sel};
-                            }
-                        }
-                        const inputSelectors = [
-                            '.chat-input-editor',
-                            '[class*="chat-input"]',
-                            '[contenteditable="true"]',
-                            'textarea',
-                        ];
-                        for (const sel of inputSelectors) {
-                            const el = document.querySelector(sel);
-                            if (isVisible(el)) return {ready: true, reason: sel};
-                        }
-                        const bodyText = document.body?.innerText || '';
-                        const loggedInHints = [
-                            'New Chat',
-                            'Chat History',
-                            'All Chats',
-                            'Upgrade your plan',
-                            'Kimi Claw',
-                            'Deep Research',
-                            'Docs',
-                            'Slides',
-                        ];
-                        const loginTextVisible = Array.from(document.querySelectorAll('button, a'))
-                            .some((el) => {
-                                const text = (el.textContent || '').trim();
-                                return isVisible(el) && ['登录', 'Log in', 'Sign in'].includes(text);
-                            });
-                        if (!loginTextVisible && loggedInHints.some((text) => bodyText.includes(text))) {
-                            return {ready: true, reason: 'logged_in_shell'};
-                        }
-                        return {ready: false, reason: 'no_ready_signal'};
-                    }"""
-                    )
-                    if isinstance(state, dict) and state.get("ready"):
-                        logger.info(
-                            "[Kimi] Login resume gate ready via %s",
-                            state.get("reason"),
-                        )
-                        return True
-                    if isinstance(state, dict):
-                        logger.info(
-                            "[Kimi] Login resume gate not ready yet: %s",
-                            state.get("reason"),
-                        )
-                except Exception as exc:
-                    logger.debug("[Kimi] Login resume gate check failed: %s", exc)
-            await asyncio.sleep(2)
-            elapsed += 2
-        return False
+    def _browser_agent_stage_note(
+        self,
+        *,
+        stage: str,
+        action_type: str | None = None,
+    ) -> str | None:
+        note = super()._browser_agent_stage_note(stage=stage, action_type=action_type)
+        if stage == "resume_probe" and action_type == "login":
+            return (
+                f"{note} Kimi 的就绪信号通常是已经回到聊天主页，可见 Ask Anything 输入区，"
+                "或者可见 New Chat / Chat History / Docs / Slides / Deep Research 等已登录 shell。"
+                "如果页面中央仍有登录弹窗、微信二维码、手机号或验证码输入，则仍需人工接管。"
+            )
+        if stage == "wait_gate":
+            return (
+                f"{note} Kimi 可能在提交后晚到弹出登录框；如果出现居中的登录弹窗或遮罩，不要继续当作正常回答页。"
+            )
+        return note
 
     async def _wait_for_content_with_login_check(
         self,

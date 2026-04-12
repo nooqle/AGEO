@@ -324,15 +324,23 @@ class DeepSeekHandler(BaseBrowserHandler):
         except Exception as e:
             logger.warning("[DeepSeek] _ensure_web_search_on failed: %s", e)
 
-    async def probe_resume_gate_ready(self, action_type: str) -> bool:
-        if action_type == "login":
-            if await super().probe_resume_gate_ready(action_type):
-                return True
-            return await self._wait_for_login(
-                self._sel("input_ready"),
-                timeout=30,
+    def _browser_agent_stage_note(
+        self,
+        *,
+        stage: str,
+        action_type: str | None = None,
+    ) -> str | None:
+        note = super()._browser_agent_stage_note(stage=stage, action_type=action_type)
+        if stage == "resume_probe" and action_type == "login":
+            return (
+                f"{note} DeepSeek 的就绪信号通常是已经进入聊天页，可见输入区和工具栏；"
+                "如果仍停留在 sign_in/login 页面、手机号/验证码表单、二维码登录或安全验证页面，则不要放行。"
             )
-        return await super().probe_resume_gate_ready(action_type)
+        if stage == "wait_gate":
+            return (
+                f"{note} DeepSeek 可能在提交后转入登录页或验证页；如果 URL 或页面文案显示 sign_in/login/验证码，应及时识别为 blocker。"
+            )
+        return note
 
     def _find_web_search_index(self, toolbar: list[dict]) -> int | None:
         """Find the index of the WebSearch toggle button in the toolbar."""

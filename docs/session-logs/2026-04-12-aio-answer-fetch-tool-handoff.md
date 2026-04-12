@@ -22,6 +22,8 @@ codex/aio-runtime-isolation
 30abb2a feat(aio): add answer fetch tool facade
 8833a4a docs(aio): add answer fetch handoff note
 a910e97 feat(aio): attach platform result packets
+b9b47a2 refactor(harness): align current-session followup tool surface
+9340aa7 refactor(browser): add stage-aware browser agent policy seam
 ```
 
 ## User Goal & Constraints
@@ -270,6 +272,58 @@ Select-String affected files -Pattern "\?\?\?"
 => no matches
 ```
 
+Browser Agent resume/runtime 当前未提交增量：
+
+```text
+aeo-platform/backend/app/core/fetchers/browser/base_handler.py
+aeo-platform/backend/app/core/fetchers/browser/browser_agent_loop.py
+aeo-platform/backend/app/core/fetchers/browser/doubao_handler.py
+aeo-platform/backend/app/core/fetchers/browser/yuanbao_handler.py
+aeo-platform/backend/app/core/fetchers/browser/kimi_handler.py
+aeo-platform/backend/app/core/fetchers/browser/deepseek_handler.py
+aeo-platform/backend/tests/test_browser_agent_resume_probe.py
+aeo-platform/backend/tests/test_harness_refactor_foundations.py
+```
+
+已完成：
+
+1. `probe_resume_gate_ready` 已统一收敛到 Base 的共享 Browser Agent resume loop。
+2. 共享 resume loop 现在支持：
+   - `action_type`
+   - stage note / meta
+   - 自动执行轻量动作后再次观察
+   - `target_closed` live-page resync
+   - `blank_page / navigation_error / target_closed` 这类瞬时状态轮询
+   - `takeover_required / failed` 直接保持阻塞
+3. 四个平台不再 override `probe_resume_gate_ready`，登录恢复不再走各自 selector 轮询。
+4. 四个平台现在只补充自然语言平台语义：
+   - Doubao：`/chat` 对话页 + 输入区 + 无登录/验证文案
+   - Yuanbao：对话页 + 输入区 + 无登录抽屉/短信验证/账号确认
+   - Kimi：Ask Anything / New Chat / Chat History 等已登录 shell
+   - DeepSeek：聊天页 + 输入区 + 工具栏 + 非 `sign_in/login`
+5. `LLMBrowserAgentPolicy` prompt 已改成 stage-aware：
+   - `preflight`
+   - `wait_gate`
+   - `resume_probe`
+   - `empty_answer`
+6. stage note 现在会直接注入 LLM Browser Agent prompt，不再只是 runtime metadata。
+
+当前验证：
+
+```text
+python -m compileall app\core\fetchers\browser\base_handler.py app\core\fetchers\browser\browser_agent_loop.py app\core\fetchers\browser\doubao_handler.py app\core\fetchers\browser\yuanbao_handler.py app\core\fetchers\browser\kimi_handler.py app\core\fetchers\browser\deepseek_handler.py tests\test_browser_agent_resume_probe.py
+=> passed
+
+python -m ruff check app\core\fetchers\browser\base_handler.py app\core\fetchers\browser\browser_agent_loop.py app\core\fetchers\browser\doubao_handler.py app\core\fetchers\browser\yuanbao_handler.py app\core\fetchers\browser\kimi_handler.py app\core\fetchers\browser\deepseek_handler.py tests\test_browser_agent_resume_probe.py tests\test_harness_refactor_foundations.py
+=> passed
+
+$env:JWT_SECRET='test-secret'; $env:ENVIRONMENT='development'; $env:DEBUG='true'; $env:DEV_MODE_ENABLED='true'; python -m pytest tests\test_browser_agent_contract.py tests\test_browser_agent_loop.py tests\test_browser_agent_policy.py tests\test_browser_agent_llm_policy.py tests\test_browser_agent_resume_probe.py tests\test_harness_refactor_foundations.py -q
+=> 134 passed
+
+Select-String affected files -Pattern "\?\?\?"
+=> no matches
+```
+
 2026-04-12 晚间补充架构决策：
 
 ```text
@@ -337,16 +391,16 @@ aeo-platform/backend/scripts/probe_aio_parallel_contexts.py
 9. 当前 Browser Agent 已经不再只有 bootstrap seam，而是具备“阶段上下文 + hybrid executor”骨架；但 LLM policy 默认仍关闭，避免未验证前直接进入生产路径。
 10. 当前这轮 Browser Agent 还不是最终的 LLM-driven browser loop；页面理解控制权已经开始从平台 handler 收回到公共层，但平台旧逻辑还没有完全删除。
 11. `network intercept -> ParsedResponse` 这一路仍然有平台 parser 差异；目前只是把其 `auth_required / verify` 结果先映射进公共 takeover，还没有完全进入统一 Browser Agent runtime。
-12. 共享 resume probe 已经落地，但当前仍是“共享 observation 优先 + 平台 fallback”双轨，平台专属 probe 还没有完全删除。
+12. 共享 resume probe 已经统一到 Base，但平台登录“初始判定”和部分 late blocker 识别仍保留在 handler 中，页面理解控制权还没完全收回到 Browser Agent runtime。
 13. 当前本地 worktree 和共享 env 都没有配置 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`，因此真实 AIO probe / UAT 目前被运行时配置阻塞，而不是被代码测试阻塞。
 
 ## Next Step
 
 建议下一步不要直接迁 worker，先继续 P1b / P2：
 
-1. 先提交当前 P1b / P1c 代码与测试，保留 `probe_aio_parallel_contexts.py` 为未跟踪诊断脚本。
-2. 补齐 AIO 运行时配置：至少让当前 worktree 或共享 env 具备 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`。
-3. P2：运行 AIO 并行 context probe，确认当前 runtime 支持多 context、多 page、多 browser process 还是必须多 sandbox lease。
-4. 继续把 `network intercept` 之后的错误恢复、空答案复判、登录恢复 probe 逐步迁到统一 Browser Agent runtime，并减少平台 fallback。
+1. 先提交当前 Browser Agent resume/runtime 代码与测试，保留 `probe_aio_parallel_contexts.py` 为未跟踪诊断脚本。
+2. 继续把 Kimi / DeepSeek / Doubao / Yuanbao 的“初始登录判定”和 late blocker 识别从 handler 往共享 Browser Agent runtime 迁。
+3. 补齐 AIO 运行时配置：至少让当前 worktree 或共享 env 具备 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`。
+4. P2：运行 AIO 并行 context probe，确认当前 runtime 支持多 context、多 page、多 browser process 还是必须多 sandbox lease。
 5. 在共享 env 补齐 AIO 运行时配置后，跑真实“雅姿”四平台完整采集 UAT，记录卡点并修复。
 6. P3：在 P1/P2 明确后，让 `LLMBrowserAgentPolicy` 真正接管默认执行路径，逐步替代 `BrowserAgentBootstrapPolicy` 只作为 deterministic guardrail。

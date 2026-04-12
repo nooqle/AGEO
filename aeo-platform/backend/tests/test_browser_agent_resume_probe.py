@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import app.core.fetchers.browser.base_handler as base_handler_module
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
-from app.core.fetchers.browser.browser_agent_contract import BrowserAgentDecision
+from app.core.fetchers.browser.browser_agent_contract import (
+    BrowserAgentAction,
+    BrowserAgentDecision,
+)
+from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
+from app.core.fetchers.browser.kimi_handler import KimiHandler
 from app.schemas.fetch import Platform
 
 
@@ -54,6 +59,45 @@ async def test_login_resume_probe_stays_blocked_when_browser_agent_still_needs_t
     handler = _DummyHandler(client=SimpleNamespace(page=None))
 
     assert await handler.probe_resume_gate_ready("login") is False
+
+
+async def test_login_resume_probe_runs_auto_action_before_ready(monkeypatch):
+    decisions = iter(
+        [
+            SimpleNamespace(
+                decision=BrowserAgentDecision(
+                    outcome="continue",
+                    blocker_kind="popup",
+                    rationale="dismiss popup",
+                    confidence=0.9,
+                    actions=(
+                        BrowserAgentAction(
+                            action_type="wait",
+                            wait_seconds=0.01,
+                            reason="wait for auto recovery",
+                        ),
+                    ),
+                )
+            ),
+            SimpleNamespace(
+                decision=BrowserAgentDecision(
+                    outcome="continue",
+                    blocker_kind="none",
+                    rationale="ready",
+                    confidence=0.9,
+                )
+            ),
+        ]
+    )
+
+    async def _fake_collect(**kwargs):
+        return next(decisions)
+
+    monkeypatch.setattr(base_handler_module, "collect_browser_agent_step", _fake_collect)
+
+    handler = _DummyHandler(client=SimpleNamespace(page=None))
+
+    assert await handler.probe_resume_gate_ready("login") is True
 
 
 async def test_modal_resume_probe_prefers_browser_agent_ready_over_modal_scan(monkeypatch):
@@ -152,3 +196,31 @@ async def test_empty_answer_preserves_takeover_open_failure_event(monkeypatch):
 
     assert handled is True
     assert events == [failure_event]
+
+
+def test_kimi_resume_probe_context_uses_platform_specific_note():
+    handler = KimiHandler(client=SimpleNamespace(page=None))
+
+    context = handler._build_browser_agent_loop_context(
+        stage="resume_probe",
+        action_type="login",
+        url=handler.URL,
+    )
+
+    assert context.note is not None
+    assert "Ask Anything" in context.note
+    assert context.meta["action_type"] == "login"
+
+
+def test_deepseek_resume_probe_context_uses_platform_specific_note():
+    handler = DeepSeekHandler(client=SimpleNamespace(page=None))
+
+    context = handler._build_browser_agent_loop_context(
+        stage="resume_probe",
+        action_type="login",
+        url=handler.URL,
+    )
+
+    assert context.note is not None
+    assert "sign_in/login" in context.note
+    assert context.meta["platform_display_name"] == "DeepSeek"

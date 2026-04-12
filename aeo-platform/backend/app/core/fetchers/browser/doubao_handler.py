@@ -358,19 +358,26 @@ class DoubaoHandler(BaseBrowserHandler):
         logger.warning("[Doubao] Chat page was not ready within %ss", timeout)
         return False
 
-    async def _wait_for_doubao_login(self, timeout: int = 300) -> bool:
-        """Wait until Doubao login completes (URL contains /chat + textarea ready)."""
-        return await self._wait_for_doubao_chat_ready(timeout=timeout)
+    def _browser_agent_stage_note(
+        self,
+        *,
+        stage: str,
+        action_type: str | None = None,
+    ) -> str | None:
+        note = super()._browser_agent_stage_note(stage=stage, action_type=action_type)
+        if stage == "resume_probe" and action_type == "login":
+            return (
+                f"{note} 豆包的就绪信号通常是已经进入 /chat 对话页，可见聊天输入区，"
+                "且页面上不再出现登录按钮、验证提示或安全校验文案。"
+            )
+        if stage == "wait_gate":
+            return (
+                f"{note} 如果豆包已经转入安全验证、限流或登录阻塞，不要继续等待空答案。"
+            )
+        return note
 
     async def probe_takeover_ready(self, action_type: str) -> bool:
         if action_type == "login":
             return False
         return await super().probe_takeover_ready(action_type)
-
-    async def probe_resume_gate_ready(self, action_type: str) -> bool:
-        if action_type == "login":
-            if await super().probe_resume_gate_ready(action_type):
-                return True
-            return await self._wait_for_doubao_login(timeout=30)
-        return await super().probe_resume_gate_ready(action_type)
 

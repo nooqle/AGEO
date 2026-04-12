@@ -492,16 +492,84 @@ class BaseBrowserHandler(ABC):
         *,
         stage: str,
         url: str | None = None,
+        action_type: str | None = None,
         note: str | None = None,
         meta: dict | None = None,
     ) -> BrowserAgentLoopContext:
+        resolved_note = note or self._browser_agent_stage_note(
+            stage=stage,
+            action_type=action_type,
+        )
+        resolved_meta = self._browser_agent_stage_meta(
+            stage=stage,
+            action_type=action_type,
+            extra_meta=meta,
+        )
         return BrowserAgentLoopContext(
             platform=self.PLATFORM.value,
             stage=stage,
             target_url=url or self.URL,
-            note=note,
-            meta=dict(meta or {}),
+            note=resolved_note,
+            meta=resolved_meta,
         )
+
+    def _browser_agent_stage_note(
+        self,
+        *,
+        stage: str,
+        action_type: str | None = None,
+    ) -> str | None:
+        platform_name = self._platform_display_name()
+        if stage == "preflight":
+            return (
+                f"你正在为 {platform_name} 抓取答案做浏览器预检。"
+                "优先自动处理空白页、错误页、Cookie/协议弹窗、下载/升级弹窗。"
+                "只有登录、验证码、人机验证、安全确认、账号选择才交给人工接管。"
+            )
+        if stage == "wait_gate":
+            return (
+                f"当前问题已经提交到 {platform_name}。"
+                "请判断页面是在正常生成回答、可以自动关闭的轻量弹窗、还是已经进入需要人工接管的登录/验证阻塞。"
+            )
+        if stage == "resume_probe":
+            if action_type in {
+                "login",
+                "verify",
+                "captcha",
+                "security_confirmation",
+                "account_selection",
+            }:
+                return (
+                    f"当前正在判断 {platform_name} 的人工接管是否已经完成。"
+                    "如果页面仍显示登录、二维码、手机号/验证码、人机验证、安全确认或账号选择，则不要放行。"
+                    "只有当页面已经回到可继续提问、继续等待回答、或继续提取结果的主界面时，才视为 ready。"
+                )
+            if action_type == "modal":
+                return (
+                    f"当前正在判断 {platform_name} 的弹窗阻塞是否已解除。"
+                    "优先自动关闭普通弹窗；如果仍是登录/验证类阻塞，则继续保持人工接管。"
+                )
+        if stage == "empty_answer":
+            return (
+                f"{platform_name} 当前提取到的回答为空或过短。"
+                "请判断这是页面尚未完成、可自动恢复的弹窗/错误、还是需要人工接管才能继续。"
+            )
+        return None
+
+    def _browser_agent_stage_meta(
+        self,
+        *,
+        stage: str,
+        action_type: str | None = None,
+        extra_meta: dict | None = None,
+    ) -> dict:
+        resolved_meta = {
+            "platform_display_name": self._platform_display_name(),
+            "action_type": action_type,
+        }
+        if extra_meta:
+            resolved_meta.update(dict(extra_meta))
+        return resolved_meta
 
     async def _execute_browser_agent_action(
         self,
@@ -931,6 +999,9 @@ class BaseBrowserHandler(ABC):
         self,
         *,
         target_url: str | None = None,
+        action_type: str | None = None,
+        timeout: float = 30,
+        poll_interval: float = 2.0,
     ) -> bool:
         """Check whether the current live page no longer needs human takeover.
 
@@ -941,37 +1012,79 @@ class BaseBrowserHandler(ABC):
         manual resume gate should remain blocked.
         """
 
-        try:
-            step = await collect_browser_agent_step(
-                client=self.client,
-                platform=self.PLATFORM.value,
-                loop_context=self._build_browser_agent_loop_context(
-                    stage="resume_probe",
-                    url=target_url or self.URL,
-                ),
-                target_url=target_url or self.URL,
-                screenshot_provider=self._browser_agent_screenshot_provider,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[%s] Browser-agent resume probe failed: %s",
-                self.PLATFORM_KEY,
-                exc,
-            )
-            return False
+        sync_method = getattr(self.client, "sync_to_existing_target_page", None)
+        elapsed = 0.0
 
-        decision = step.decision
-        if decision.outcome in {"takeover_required", "failed"}:
-            return False
-        if decision.actions:
-            return False
-        if decision.blocker_kind in {
-            "blank_page",
-            "navigation_error",
-            "target_closed",
-        }:
-            return False
-        return True
+        while elapsed <= timeout:
+            try:
+                step = await collect_browser_agent_step(
+                    client=self.client,
+                    platform=self.PLATFORM.value,
+                    loop_context=self._build_browser_agent_loop_context(
+                        stage="resume_probe",
+                        url=target_url or self.URL,
+                        action_type=action_type,
+                        meta={"elapsed_seconds": round(elapsed, 2)},
+                    ),
+                    target_url=target_url or self.URL,
+                    screenshot_provider=self._browser_agent_screenshot_provider,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Browser-agent resume probe failed: %s",
+                    self.PLATFORM_KEY,
+                    exc,
+                )
+                return False
+
+            decision = step.decision
+            logger.info(
+                "[%s] Browser-agent resume probe: outcome=%s blocker=%s actions=%d confidence=%.2f",
+                self.PLATFORM_KEY,
+                decision.outcome,
+                decision.blocker_kind,
+                len(decision.actions),
+                decision.confidence,
+            )
+
+            if (
+                decision.blocker_kind == "target_closed"
+                and callable(sync_method)
+                and await sync_method(target_url or self.URL)
+            ):
+                await asyncio.sleep(0.3)
+                elapsed += 0.3
+                continue
+
+            if decision.actions:
+                all_ok = True
+                for action in decision.actions:
+                    if not await self._execute_browser_agent_action(
+                        action,
+                        fallback_url=target_url or self.URL,
+                    ):
+                        all_ok = False
+                        break
+                if all_ok:
+                    await asyncio.sleep(max(poll_interval, 0.8))
+                    elapsed += max(poll_interval, 0.8)
+                    continue
+                return False
+
+            if decision.outcome in {"takeover_required", "failed"}:
+                return False
+
+            if decision.blocker_kind in {
+                "blank_page",
+                "navigation_error",
+                "target_closed",
+            }:
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+                continue
+
+            return True
+        return False
 
     # ------------------------------------------------------------------ login
 
@@ -992,21 +1105,6 @@ class BaseBrowserHandler(ABC):
                 return False
         except Exception:
             return False
-
-    async def _wait_for_login(
-        self,
-        check_selector: str,
-        timeout: int = 480,
-        poll_interval: float = 2.0,
-    ) -> bool:
-        """Wait for user to complete login."""
-        elapsed = 0.0
-        while elapsed < timeout:
-            if await self._check_login_status(check_selector):
-                return True
-            await asyncio.sleep(poll_interval)
-            elapsed += poll_interval
-        return False
 
     async def probe_takeover_ready(self, action_type: str) -> bool:
         """Cheap readiness probe used by AIO heartbeat auto-resume.
@@ -1036,9 +1134,15 @@ class BaseBrowserHandler(ABC):
             "security_confirmation",
             "account_selection",
         }:
-            return await self._browser_agent_resume_probe_ready(target_url=self.URL)
+            return await self._browser_agent_resume_probe_ready(
+                target_url=self.URL,
+                action_type=action_type,
+            )
         if action_type == "modal":
-            if await self._browser_agent_resume_probe_ready(target_url=self.URL):
+            if await self._browser_agent_resume_probe_ready(
+                target_url=self.URL,
+                action_type=action_type,
+            ):
                 return True
             return not bool(await self._detect_blocking_modal())
         return False

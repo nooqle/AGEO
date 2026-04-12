@@ -62,6 +62,45 @@ class BrowserAgentBootstrapPolicy:
         )
 
 
+def _build_llm_browser_agent_prompt(loop_context: BrowserAgentLoopContext) -> str:
+    base_rules = (
+        "你是浏览器执行代理。"
+        "请基于给定的页面观测，判断当前是否需要继续自动操作、交给人工接管、或已经可以继续主流程。"
+        "只能输出 JSON 对象，不要输出解释。"
+        "可用 outcome: continue/takeover_required/completed/failed。"
+        "可用 blocker_kind: none/login/verification/captcha/security_confirmation/"
+        "account_selection/consent_modal/popup/blank_page/navigation_error/rate_limit/"
+        "target_closed/unknown。"
+        "如果给出 actions，只能使用 click_ref/fill_ref/press_key/wait/navigate/refresh/"
+        "close_popup/complete/handoff。"
+        "登录、验证码、人机验证、安全确认、账号选择必须交给人工接管。"
+        "普通弹窗、协议弹窗、空白页、错误页、轻量恢复操作应优先自动处理。"
+    )
+    stage_rules = {
+        "preflight": (
+            "当前阶段是预检。重点判断页面是否已经偏离目标、存在普通弹窗、登录阻塞、验证阻塞、空白页或导航错误。"
+        ),
+        "wait_gate": (
+            "当前阶段是等待回答。问题已经提交。"
+            "重点判断页面是在正常生成回答、仍需等待、还是已经转成 late login / verification / popup / blank / error。"
+            "不要因为短暂等待就误判为人工接管；但如果已经明显进入登录或验证阻塞，要及时要求接管。"
+        ),
+        "resume_probe": (
+            "当前阶段是人工接管后的恢复探针。"
+            "只有当人工阻塞已经真正清除、页面已经回到可继续提问或继续读取答案的主界面时，才返回可继续。"
+            "如果仍有任何登录、验证码、人机验证、安全确认、账号选择信号，必须继续保持 takeover_required。"
+        ),
+        "empty_answer": (
+            "当前阶段是空答案兜底。"
+            "重点判断这是页面尚未完成、可自动恢复的异常，还是需要人工接管才能继续。"
+        ),
+    }
+    prompt = f"{base_rules} {stage_rules.get(loop_context.stage, '')}".strip()
+    if loop_context.note:
+        prompt = f"{prompt} 当前阶段补充要求：{loop_context.note}".strip()
+    return prompt
+
+
 def _extract_json_object(text: str) -> dict[str, Any] | None:
     stripped = str(text or "").strip()
     if not stripped:
@@ -168,15 +207,7 @@ class LLMBrowserAgentPolicy:
     ) -> BrowserAgentDecision | None:
         model = get_llm_model()
         prompt = (
-            "你是浏览器执行代理。"
-            "请基于给定的页面观测，判断当前是否需要继续自动操作、交给人工接管、或保持继续。"
-            "只能输出 JSON 对象，不要输出解释。"
-            "可用 outcome: continue/takeover_required/completed/failed。"
-            "可用 blocker_kind: none/login/verification/captcha/security_confirmation/"
-            "account_selection/consent_modal/popup/blank_page/navigation_error/rate_limit/"
-            "target_closed/unknown。"
-            "如果给出 actions，只能使用 click_ref/fill_ref/press_key/wait/navigate/refresh/"
-            "close_popup/complete/handoff。"
+            f"{_build_llm_browser_agent_prompt(loop_context)} "
             "当缺少足够把握时，返回 outcome=continue、blocker_kind=none、actions=[]。"
         )
         response = await model.async_call(

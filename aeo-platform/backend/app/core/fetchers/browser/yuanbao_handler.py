@@ -372,34 +372,28 @@ class YuanbaoHandler(BaseBrowserHandler):
 
     # ------------------------------------------------------------------ platform-specific helpers
 
-    async def _wait_for_login_ready(self, timeout: int = 300) -> bool:
-        """Wait until user logs in and input becomes available."""
-        elapsed = 0.0
-        while elapsed < timeout:
-            if self.client.page is not None:
-                try:
-                    surface_state = await self.client.page.evaluate(
-                        self._login_surface_state_js()
-                    )
-                    if surface_state.get("ready"):
-                        return True
-                except Exception:
-                    pass
-            await asyncio.sleep(2)
-            elapsed += 2
-        return False
+    def _browser_agent_stage_note(
+        self,
+        *,
+        stage: str,
+        action_type: str | None = None,
+    ) -> str | None:
+        note = super()._browser_agent_stage_note(stage=stage, action_type=action_type)
+        if stage == "resume_probe" and action_type == "login":
+            return (
+                f"{note} 元宝的就绪信号通常是已经回到对话页面，可见输入区，"
+                "且登录抽屉、二维码、短信验证或账号确认控件已经消失。"
+            )
+        if stage == "wait_gate":
+            return (
+                f"{note} 如果元宝已经弹出登录抽屉、验证卡片或账号确认，不要继续等待答案，直接识别为 blocker。"
+            )
+        return note
 
     async def probe_takeover_ready(self, action_type: str) -> bool:
         if action_type == "login":
             return False
         return await super().probe_takeover_ready(action_type)
-
-    async def probe_resume_gate_ready(self, action_type: str) -> bool:
-        if action_type == "login":
-            if await super().probe_resume_gate_ready(action_type):
-                return True
-            return await self._wait_for_login_ready(timeout=30)
-        return await super().probe_resume_gate_ready(action_type)
 
     async def _ensure_hunyuan_model(self) -> None:
         """Ensure the Hunyuan model is selected (not DeepSeek)."""
