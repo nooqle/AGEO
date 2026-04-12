@@ -173,6 +173,15 @@ class YuanbaoHandler(BaseBrowserHandler):
             if self.client.page:
                 logger.info("[Yuanbao] Page URL: %s", self.client.page.url)
 
+            preflight_events, should_abort = await self._run_browser_agent_preflight(
+                progress=0.28,
+                url=self.URL,
+            )
+            for event in preflight_events:
+                yield event
+            if should_abort:
+                return
+
             # Step 3: Check login status
             yield self._create_event(BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3)
             login_needed = False
@@ -274,20 +283,34 @@ class YuanbaoHandler(BaseBrowserHandler):
                                 len(answer_text), len(search_refs))
                 elif parsed and parsed.error_type:
                     logger.warning("[Yuanbao] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
-                    yield self._create_event(
-                        BrowserState.ERROR,
-                        f"元宝返回错误: {parsed.error}",
-                        progress=0,
+                    events, handled = await self._handle_browser_agent_parser_error(
+                        parsed_error=parsed.error,
                         error_type=parsed.error_type,
+                        progress=0.68,
+                        fallback_url=self.URL,
                     )
+                    for event in events:
+                        yield event
+                    if handled:
+                        return
                     return
 
             # DOM fallback
             if not answer_text:
                 logger.info("[Yuanbao] Falling back to DOM extraction")
-                prev_len, waited = await self._wait_for_content_stable(
+                prev_len, waited, blocker_decision = await self._wait_for_content_with_browser_agent(
                     max_wait=60, poll_interval=3, min_content_len=100,
+                    target_url=self.URL,
                 )
+                events, handled = await self._handle_browser_agent_wait_blocker(
+                    blocker_decision,
+                    progress=0.72,
+                    fallback_url=self.URL,
+                )
+                for event in events:
+                    yield event
+                if handled:
+                    return
                 if prev_len == 0:
                     await self._dump_page_debug(waited, extra_keywords=['agent-dialogue'])
 
@@ -323,10 +346,14 @@ class YuanbaoHandler(BaseBrowserHandler):
                 answer_text = await self._extract_answer_dom()
                 search_refs = await self._extract_references_dom()
 
-            if not answer_text or len(answer_text.strip()) < 10:
-                logger.warning("[Yuanbao] Answer too short or empty (%d chars)",
-                               len(answer_text) if answer_text else 0)
-                yield self._create_event(BrowserState.ERROR, "未能提取到有效回答", progress=0)
+            events, handled = await self._handle_browser_agent_empty_answer(
+                answer_text,
+                progress=0.92,
+                fallback_url=self.URL,
+            )
+            for event in events:
+                yield event
+            if handled:
                 return
 
             # Step 7: Build result
@@ -369,6 +396,8 @@ class YuanbaoHandler(BaseBrowserHandler):
 
     async def probe_resume_gate_ready(self, action_type: str) -> bool:
         if action_type == "login":
+            if await super().probe_resume_gate_ready(action_type):
+                return True
             return await self._wait_for_login_ready(timeout=30)
         return await super().probe_resume_gate_ready(action_type)
 

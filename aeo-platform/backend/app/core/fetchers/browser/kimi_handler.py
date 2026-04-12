@@ -191,6 +191,15 @@ class KimiHandler(BaseBrowserHandler):
             if self.client.page:
                 logger.info("[Kimi] Page URL: %s", self.client.page.url)
 
+            preflight_events, should_abort = await self._run_browser_agent_preflight(
+                progress=0.28,
+                url=self.URL,
+            )
+            for event in preflight_events:
+                yield event
+            if should_abort:
+                return
+
             # Step 3: Check login status (Kimi-specific multi-step detection)
             yield self._create_event(
                 BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3
@@ -198,7 +207,6 @@ class KimiHandler(BaseBrowserHandler):
             login_detected = await self._detect_login_needed()
 
             if login_detected:
-                INPUT_READY_SELECTOR = ".chat-input-editor, [class*='chat-input']"
                 waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
                 action_hint = (
                     "请在弹出的浏览器窗口中完成 Kimi 登录，完成后点击“我已完成”"
@@ -306,66 +314,45 @@ class KimiHandler(BaseBrowserHandler):
                         parsed.error,
                         parsed.error_type,
                     )
-                    if parsed.error_type == "auth_required":
-                        waiting_message = (
-                            "检测到 Kimi 需要登录，请在浏览器窗口中完成登录"
-                        )
-                        action_hint = (
-                            "请在弹出的浏览器窗口中完成 Kimi 登录，完成后点击“我已完成”"
-                        )
-                        current_url = (
-                            self.client.page.url
-                            if self.client.page is not None
-                            else self.URL
-                        )
-                        events, request_id = await self._begin_login_takeover_gate(
-                            message=waiting_message,
-                            action_hint=action_hint,
-                            progress=0.68,
-                            url=current_url,
-                            open_error_message="打开 Kimi 浏览器窗口失败，请重试",
-                        )
-                        for event in events:
-                            yield event
-                        if not request_id:
-                            return
-                        return
-                    yield self._create_event(
-                        BrowserState.ERROR,
-                        f"Kimi 返回错误: {parsed.error}",
-                        progress=0,
-                        error_type=parsed.error_type,
+                    current_url = (
+                        self.client.page.url
+                        if self.client.page is not None
+                        else self.URL
                     )
+                    events, handled = await self._handle_browser_agent_parser_error(
+                        parsed_error=parsed.error,
+                        error_type=parsed.error_type,
+                        progress=0.68,
+                        fallback_url=current_url,
+                    )
+                    for event in events:
+                        yield event
+                    if handled:
+                        return
                     return
 
             # DOM fallback (with Kimi's late login detection)
             if not answer_text:
                 logger.info("[Kimi] Falling back to DOM extraction")
-                prev_len, waited, late_login_detected = (
-                    await self._wait_for_content_with_login_check(
+                prev_len, waited, blocker_decision = (
+                    await self._wait_for_content_with_browser_agent(
                         max_wait=60,
-                        detect_late_login=True,
+                        poll_interval=3,
+                        min_content_len=100,
+                        stable_rounds=2,
+                        target_url=self.URL,
+                        blocker_check_after_seconds=12,
                     )
                 )
 
-                if late_login_detected:
-                    waiting_message = (
-                        "检测到 Kimi 在回复过程中要求重新登录，请在浏览器窗口中完成登录"
-                    )
-                    action_hint = (
-                        "请在弹出的浏览器窗口中完成 Kimi 登录，完成后点击“我已完成”"
-                    )
-                    events, request_id = await self._begin_login_takeover_gate(
-                        message=waiting_message,
-                        action_hint=action_hint,
-                        progress=0.72,
-                        url=self.URL,
-                        open_error_message="打开 Kimi 浏览器窗口失败，请重试",
-                    )
-                    for event in events:
-                        yield event
-                    if not request_id:
-                        return
+                events, handled = await self._handle_browser_agent_wait_blocker(
+                    blocker_decision,
+                    progress=0.72,
+                    fallback_url=self.URL,
+                )
+                for event in events:
+                    yield event
+                if handled:
                     return
 
                 if prev_len == 0:
@@ -385,14 +372,14 @@ class KimiHandler(BaseBrowserHandler):
                 answer_text = await self._extract_answer_dom()
                 search_refs = await self._extract_references_dom()
 
-            if not answer_text or len(answer_text.strip()) < 10:
-                logger.warning(
-                    "[Kimi] Answer too short or empty (%d chars)",
-                    len(answer_text) if answer_text else 0,
-                )
-                yield self._create_event(
-                    BrowserState.ERROR, "未能提取到有效回答", progress=0
-                )
+            events, handled = await self._handle_browser_agent_empty_answer(
+                answer_text,
+                progress=0.92,
+                fallback_url=self.URL,
+            )
+            for event in events:
+                yield event
+            if handled:
                 return
 
             # Step 7: Build result
@@ -512,6 +499,8 @@ class KimiHandler(BaseBrowserHandler):
 
     async def probe_resume_gate_ready(self, action_type: str) -> bool:
         if action_type == "login":
+            if await super().probe_resume_gate_ready(action_type):
+                return True
             return await self._wait_for_kimi_login_ready(timeout=30)
         return await super().probe_resume_gate_ready(action_type)
 
@@ -607,70 +596,16 @@ class KimiHandler(BaseBrowserHandler):
         max_wait: float = 60,
         detect_late_login: bool = True,
     ) -> tuple[int, float, bool]:
-        """Wait for content stability with late login modal detection.
-
-        Returns (final_content_len, waited_seconds, late_login_detected).
-        """
-        await asyncio.sleep(3)
-        waited = 3.0
-        prev_len = 0
-        stable_count = 0
-
-        _LOGIN_CHECK_JS = """() => {
-            const sels = ['.login-modal-content', '.wechat-login',
-                          '[class*="login-modal"]', '[class*="login-dialog"]'];
-            for (const s of sels) {
-                const el = document.querySelector(s);
-                if (el && el.offsetParent !== null) return true;
-            }
-            return false;
-        }"""
-
-        while waited < max_wait:
-            await asyncio.sleep(3)
-            waited += 3
-            result = await self.client.eval(self._content_check_js())
-            if "error" in result:
-                logger.warning("[Kimi] eval error at %ds: %s", waited, result["error"])
-            cur_len = int(result.get("output", "0") or "0")
-            logger.info(
-                "[Kimi] Poll %ds: content_len=%d (prev=%d, stable=%d)",
-                waited,
-                cur_len,
-                prev_len,
-                stable_count,
-            )
-
-            # Detect late login modal
-            if (
-                detect_late_login
-                and cur_len == 0
-                and waited >= 12
-                and self.client.page is not None
-            ):
-                try:
-                    has_login = await self.client.page.evaluate(_LOGIN_CHECK_JS)
-                    if has_login:
-                        logger.warning(
-                            "[Kimi] Late login modal detected at %ds", waited
-                        )
-                        return prev_len, waited, True
-                except Exception as e:
-                    logger.debug("[Kimi] Late login check failed: %s", e)
-
-            MIN_CONTENT_LEN = 100
-            if cur_len > 0 and cur_len == prev_len:
-                stable_count += 1
-                if stable_count >= 2 and cur_len >= MIN_CONTENT_LEN:
-                    logger.info(
-                        "[Kimi] Content stable at %d chars after %ds", cur_len, waited
-                    )
-                    break
-            else:
-                stable_count = 0
-            prev_len = cur_len
-
-        return prev_len, waited, False
+        """Legacy wrapper kept for compatibility with older call sites."""
+        prev_len, waited, blocker_decision = await self._wait_for_content_with_browser_agent(
+            max_wait=max_wait,
+            poll_interval=3,
+            min_content_len=100,
+            stable_rounds=2,
+            target_url=self.URL,
+            blocker_check_after_seconds=12 if detect_late_login else max_wait + 1,
+        )
+        return prev_len, waited, blocker_decision is not None
 
     async def _resubmit_question(self, question: str) -> None:
         """Re-submit the question after manual login recovery."""

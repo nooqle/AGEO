@@ -12,6 +12,18 @@ from typing import Any
 __all__ = [
     "AgentBrowserClient",
     "PlaywrightBrowserClient",
+    "BrowserAgentAction",
+    "BrowserAgentDecision",
+    "BrowserPageObservation",
+    "BrowserTakeoverNeed",
+    "BrowserAgentBootstrapPolicy",
+    "BrowserAgentLoopStep",
+    "collect_browser_page_observation",
+    "collect_browser_agent_step",
+    "decide_browser_preflight",
+    "observation_to_llm_json",
+    "observation_to_llm_payload",
+    "requires_human_takeover",
     "DeepSeekHandler",
     "DoubaoHandler",
     "KimiHandler",
@@ -26,6 +38,54 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "PlaywrightBrowserClient": (
         "app.core.fetchers.browser.playwright_client",
         "PlaywrightBrowserClient",
+    ),
+    "BrowserAgentAction": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "BrowserAgentAction",
+    ),
+    "BrowserAgentDecision": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "BrowserAgentDecision",
+    ),
+    "BrowserPageObservation": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "BrowserPageObservation",
+    ),
+    "BrowserTakeoverNeed": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "BrowserTakeoverNeed",
+    ),
+    "BrowserAgentBootstrapPolicy": (
+        "app.core.fetchers.browser.browser_agent_loop",
+        "BrowserAgentBootstrapPolicy",
+    ),
+    "BrowserAgentLoopStep": (
+        "app.core.fetchers.browser.browser_agent_loop",
+        "BrowserAgentLoopStep",
+    ),
+    "collect_browser_page_observation": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "collect_browser_page_observation",
+    ),
+    "collect_browser_agent_step": (
+        "app.core.fetchers.browser.browser_agent_loop",
+        "collect_browser_agent_step",
+    ),
+    "decide_browser_preflight": (
+        "app.core.fetchers.browser.browser_agent_policy",
+        "decide_browser_preflight",
+    ),
+    "observation_to_llm_json": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "observation_to_llm_json",
+    ),
+    "observation_to_llm_payload": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "observation_to_llm_payload",
+    ),
+    "requires_human_takeover": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "requires_human_takeover",
     ),
     "DeepSeekHandler": (
         "app.core.fetchers.browser.deepseek_handler",

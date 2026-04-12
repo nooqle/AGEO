@@ -149,6 +149,48 @@ AIO Answer Fetch Tool
 
 如果继续靠平台 handler 堆 selector、位置规则、登录按钮判断，系统只会不断为当下页面补丁，无法适应平台 UI 演化。
 
+当前已落地的第一层代码 seam：
+
+- `app/core/fetchers/browser/browser_agent_contract.py`
+- `app/core/fetchers/browser/browser_agent_policy.py`
+- `app/core/fetchers/browser/browser_agent_loop.py`
+
+这层先把 Browser Agent loop 的公共契约明确下来，避免一上来就继续改平台 handler。当前已经定义：
+
+- `BrowserPageObservation`
+- `BrowserAgentAction`
+- `BrowserAgentDecision`
+- `BrowserTakeoverNeed`
+- `collect_browser_page_observation(...)`
+- `decide_browser_preflight(...)`
+- `collect_browser_agent_step(...)`
+- `observation_to_llm_payload(...)`
+- `requires_human_takeover(...)`
+
+这意味着下一步可以直接基于当前已有 client 原语推进 Browser Agent loop：
+
+- `snapshot / click / fill / press / eval`
+- AIO runtime 的 `take_screenshot()`
+- AIO client 的 `sync_to_existing_target_page() / persist_runtime_state()`
+
+当前已经落地的第一步接入：
+
+- `BrowserAgentBootstrapPolicy`
+- `collect_browser_agent_step(...)`
+- `BaseBrowserHandler._run_browser_agent_preflight(...)`
+- `BaseBrowserHandler._wait_for_content_with_browser_agent(...)`
+- `BaseBrowserHandler._browser_agent_resume_probe_ready(...)`
+- `BaseBrowserHandler._handle_browser_agent_parser_error(...)`
+- `BaseBrowserHandler._handle_browser_agent_wait_blocker(...)`
+- `BaseBrowserHandler._handle_browser_agent_empty_answer(...)`
+- `BaseBrowserHandler._execute_browser_agent_action(...)`
+- 四个平台在登录检查前统一先跑 preflight
+- 四个平台在 DOM fallback 等待阶段统一先跑 wait gate
+- “我已完成”后的 resume probe 先走 Browser Agent 当前页观察，再回退到平台专属 readiness check
+- parser 错误、wait blocker、空答案兜底继续往 Base 收，减少平台 handler 对 blocker 恢复的直接分叉
+
+也就是说，下一阶段不需要先重写浏览器底层，而是把 handler 中的页面理解与 blocker 分类逐步迁移到 Browser Agent policy，并把 stale page / live page resync 这类确定性问题继续留在 runtime / base handler 层。
+
 ## 4. AIO Runtime
 
 职责：

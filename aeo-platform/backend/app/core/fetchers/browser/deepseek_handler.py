@@ -105,6 +105,15 @@ class DeepSeekHandler(BaseBrowserHandler):
             if self.client.page:
                 logger.info("[DeepSeek] Page URL: %s", self.client.page.url)
 
+            preflight_events, should_abort = await self._run_browser_agent_preflight(
+                progress=0.28,
+                url=self.URL,
+            )
+            for event in preflight_events:
+                yield event
+            if should_abort:
+                return
+
             # Step 3: Check login
             yield self._create_event(BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3)
             INPUT_READY_SELECTOR = self._sel("input_ready")
@@ -142,19 +151,16 @@ class DeepSeekHandler(BaseBrowserHandler):
                 )
 
             # Step 5b: Submit question
-            submitted = False
             snapshot = await self.client.snapshot(interactive_only=True)
             textarea_ref = self._find_textarea_ref(snapshot)
             if textarea_ref:
                 await self.client.fill(textarea_ref, question)
                 await asyncio.sleep(0.5)
                 await self.client.press("Enter")
-                submitted = True
                 logger.info("[DeepSeek] Question submitted via snapshot ref %s", textarea_ref)
             else:
                 await self.client.find_and_fill("发送消息", question)
                 await self.client.press("Enter")
-                submitted = True
                 logger.info("[DeepSeek] Question submitted via find_and_fill fallback")
 
             # Step 6: Wait for response (try network interception first, fallback to DOM)
@@ -173,20 +179,34 @@ class DeepSeekHandler(BaseBrowserHandler):
                                 len(answer_text), len(search_refs))
                 elif parsed and parsed.error_type:
                     logger.warning("[DeepSeek] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
-                    yield self._create_event(
-                        BrowserState.ERROR,
-                        f"DeepSeek 返回错误: {parsed.error}",
-                        progress=0,
+                    events, handled = await self._handle_browser_agent_parser_error(
+                        parsed_error=parsed.error,
                         error_type=parsed.error_type,
+                        progress=0.68,
+                        fallback_url=self.URL,
                     )
+                    for event in events:
+                        yield event
+                    if handled:
+                        return
                     return
 
             # DOM fallback
             if not answer_text:
                 logger.info("[DeepSeek] Falling back to DOM extraction")
-                prev_len, waited = await self._wait_for_content_stable(
+                prev_len, waited, blocker_decision = await self._wait_for_content_with_browser_agent(
                     max_wait=50, poll_interval=3, min_content_len=0,
+                    target_url=self.URL,
                 )
+                events, handled = await self._handle_browser_agent_wait_blocker(
+                    blocker_decision,
+                    progress=0.72,
+                    fallback_url=self.URL,
+                )
+                for event in events:
+                    yield event
+                if handled:
+                    return
                 if prev_len == 0:
                     await self._dump_page_debug(waited, extra_keywords=['ds-'])
 
@@ -194,10 +214,14 @@ class DeepSeekHandler(BaseBrowserHandler):
                 answer_text = await self._extract_answer_dom()
                 search_refs = await self._extract_references()
 
-            if not answer_text or len(answer_text.strip()) < 10:
-                logger.warning("[DeepSeek] Answer too short or empty (%d chars)",
-                               len(answer_text) if answer_text else 0)
-                yield self._create_event(BrowserState.ERROR, "未能提取到有效回答", progress=0)
+            events, handled = await self._handle_browser_agent_empty_answer(
+                answer_text,
+                progress=0.92,
+                fallback_url=self.URL,
+            )
+            for event in events:
+                yield event
+            if handled:
                 return
 
             # Step 7: Build result
@@ -302,6 +326,8 @@ class DeepSeekHandler(BaseBrowserHandler):
 
     async def probe_resume_gate_ready(self, action_type: str) -> bool:
         if action_type == "login":
+            if await super().probe_resume_gate_ready(action_type):
+                return True
             return await self._wait_for_login(
                 self._sel("input_ready"),
                 timeout=30,

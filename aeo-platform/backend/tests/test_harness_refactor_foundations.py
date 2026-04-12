@@ -1340,9 +1340,11 @@ async def test_aio_stabilize_browser_surface_uses_host_match_and_cleans_other_ta
 
 @pytest.mark.asyncio
 async def test_doubao_login_resume_probe_waits_longer():
-    fake_handler = SimpleNamespace(_wait_for_doubao_login=AsyncMock(return_value=True))
+    fake_handler = DoubaoHandler(client=SimpleNamespace(page=None))
+    fake_handler._browser_agent_resume_probe_ready = AsyncMock(return_value=False)
+    fake_handler._wait_for_doubao_login = AsyncMock(return_value=True)
 
-    ready = await DoubaoHandler.probe_resume_gate_ready(fake_handler, "login")
+    ready = await fake_handler.probe_resume_gate_ready("login")
 
     assert ready is True
     fake_handler._wait_for_doubao_login.assert_awaited_once_with(timeout=30)
@@ -1350,9 +1352,11 @@ async def test_doubao_login_resume_probe_waits_longer():
 
 @pytest.mark.asyncio
 async def test_yuanbao_login_resume_probe_waits_longer():
-    fake_handler = SimpleNamespace(_wait_for_login_ready=AsyncMock(return_value=True))
+    fake_handler = YuanbaoHandler(client=SimpleNamespace(page=None))
+    fake_handler._browser_agent_resume_probe_ready = AsyncMock(return_value=False)
+    fake_handler._wait_for_login_ready = AsyncMock(return_value=True)
 
-    ready = await YuanbaoHandler.probe_resume_gate_ready(fake_handler, "login")
+    ready = await fake_handler.probe_resume_gate_ready("login")
 
     assert ready is True
     fake_handler._wait_for_login_ready.assert_awaited_once_with(timeout=30)

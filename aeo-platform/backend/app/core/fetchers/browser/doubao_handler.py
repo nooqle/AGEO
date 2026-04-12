@@ -102,6 +102,15 @@ class DoubaoHandler(BaseBrowserHandler):
             if self.client.page:
                 logger.info("[Doubao] Page URL: %s", self.client.page.url)
 
+            preflight_events, should_abort = await self._run_browser_agent_preflight(
+                progress=0.24,
+                url=self.URL,
+            )
+            for event in preflight_events:
+                yield event
+            if should_abort:
+                return
+
             chat_ready = await self._wait_for_doubao_chat_ready(timeout=6)
             if chat_ready:
                 logger.info("[Doubao] Chat page already ready after open, skipping manual prompts")
@@ -233,26 +242,38 @@ class DoubaoHandler(BaseBrowserHandler):
                 elif parsed and parsed.error_type:
                     # SSE error detected — skip DOM fallback, report specific error
                     logger.warning("[Doubao] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
-                    if parsed.error_type == "rate_limit":
-                        message = "豆包触发平台限流，请稍后重试，或降低并发后再采集。"
-                    elif parsed.error_type == "verify":
-                        message = "豆包触发安全验证，请在浏览器窗口完成验证后重新采集。"
-                    else:
-                        message = f"豆包返回错误: {parsed.error}"
-                    yield self._create_event(
-                        BrowserState.ERROR,
-                        message,
-                        progress=0,
+                    events, handled = await self._handle_browser_agent_parser_error(
+                        parsed_error=parsed.error,
                         error_type=parsed.error_type,
+                        progress=0.68,
+                        fallback_url=self.URL,
+                        message_overrides={
+                            "rate_limit": "豆包触发平台限流，请稍后重试，或降低并发后再采集。",
+                            "verify": "豆包触发安全验证，请在浏览器窗口完成验证后重新采集。",
+                        },
                     )
+                    for event in events:
+                        yield event
+                    if handled:
+                        return
                     return
 
             # DOM fallback
             if not answer_text:
                 logger.info("[Doubao] Falling back to DOM extraction")
-                prev_len, waited = await self._wait_for_content_stable(
+                prev_len, waited, blocker_decision = await self._wait_for_content_with_browser_agent(
                     max_wait=60, poll_interval=3, min_content_len=80,
+                    target_url=self.URL,
                 )
+                events, handled = await self._handle_browser_agent_wait_blocker(
+                    blocker_decision,
+                    progress=0.72,
+                    fallback_url=self.URL,
+                )
+                for event in events:
+                    yield event
+                if handled:
+                    return
                 if prev_len == 0:
                     await self._dump_page_debug(waited)
 
@@ -260,10 +281,14 @@ class DoubaoHandler(BaseBrowserHandler):
                 answer_text = await self._extract_answer_dom()
                 search_refs = await self._extract_references_dom()
 
-            if not answer_text or len(answer_text.strip()) < 10:
-                logger.warning("[Doubao] Answer too short or empty (%d chars)",
-                               len(answer_text) if answer_text else 0)
-                yield self._create_event(BrowserState.ERROR, "未能提取到有效回答", progress=0)
+            events, handled = await self._handle_browser_agent_empty_answer(
+                answer_text,
+                progress=0.92,
+                fallback_url=self.URL,
+            )
+            for event in events:
+                yield event
+            if handled:
                 return
 
             # Step 7: Build result
@@ -344,6 +369,8 @@ class DoubaoHandler(BaseBrowserHandler):
 
     async def probe_resume_gate_ready(self, action_type: str) -> bool:
         if action_type == "login":
+            if await super().probe_resume_gate_ready(action_type):
+                return True
             return await self._wait_for_doubao_login(timeout=30)
         return await super().probe_resume_gate_ready(action_type)
 

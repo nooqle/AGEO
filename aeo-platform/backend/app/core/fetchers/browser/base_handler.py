@@ -17,6 +17,34 @@ from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Awaitable, Callable, Union
 from urllib.parse import urlparse
 
+from app.core.fetchers.browser.agent_browser import AgentBrowserClient
+from app.core.fetchers.browser.aio_backend import AioSandboxBackend
+from app.core.fetchers.browser.browser_agent_contract import (
+    BrowserAgentAction,
+    BrowserAgentDecision,
+)
+from app.core.fetchers.browser.browser_agent_loop import collect_browser_agent_step
+from app.core.fetchers.browser.parsers.base import (
+    BaseResponseParser,
+    InterceptConfig,
+    ParsedResponse,
+)
+from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
+from app.schemas.fetch import (
+    BrowserEvent,
+    BrowserState,
+    FetchMethod,
+    FetchResult,
+    Platform,
+    SearchReference,
+)
+from app.workflow.browser_action_runtime import (
+    clear_browser_action_request,
+    get_or_register_browser_action_request,
+    infer_browser_action_state,
+    wait_for_browser_action_resolution,
+)
+
 # CP1252 byte-to-Unicode mappings for the 0x80-0x9F range (where CP1252 differs
 # from ISO-8859-1).  Used by _undo_double_utf8() to reverse double encoding.
 _CP1252_EXTRA: dict[int, int] = {
@@ -68,30 +96,6 @@ def _undo_double_utf8(text: str) -> str:
         else:
             out.extend(ch.encode("utf-8"))
     return bytes(out).decode("utf-8", errors="replace")
-
-
-from app.core.fetchers.browser.agent_browser import AgentBrowserClient
-from app.core.fetchers.browser.aio_backend import AioSandboxBackend
-from app.core.fetchers.browser.parsers.base import (
-    BaseResponseParser,
-    InterceptConfig,
-    ParsedResponse,
-)
-from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
-from app.schemas.fetch import (
-    BrowserEvent,
-    BrowserState,
-    FetchMethod,
-    FetchResult,
-    Platform,
-    SearchReference,
-)
-from app.workflow.browser_action_runtime import (
-    clear_browser_action_request,
-    get_or_register_browser_action_request,
-    infer_browser_action_state,
-    wait_for_browser_action_resolution,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -380,44 +384,13 @@ class BaseBrowserHandler(ABC):
         Returns:
             (final_content_len, waited_seconds)
         """
-        tag = self.PLATFORM_KEY.capitalize()
-        await asyncio.sleep(poll_interval)
-        waited = poll_interval
-        prev_len = 0
-        stable_count = 0
-
-        while waited < max_wait:
-            await asyncio.sleep(poll_interval)
-            waited += poll_interval
-            result = await self.client.eval(self._content_check_js())
-            if "error" in result:
-                logger.warning(
-                    "[%s] eval error at %ds: %s", tag, waited, result["error"]
-                )
-            cur_len = int(result.get("output", "0") or "0")
-            logger.info(
-                "[%s] Poll %ds: content_len=%d (prev=%d, stable=%d)",
-                tag,
-                waited,
-                cur_len,
-                prev_len,
-                stable_count,
-            )
-
-            if cur_len > 0 and cur_len == prev_len:
-                stable_count += 1
-                if stable_count >= stable_rounds and cur_len >= min_content_len:
-                    logger.info(
-                        "[%s] Content stable at %d chars after %ds",
-                        tag,
-                        cur_len,
-                        waited,
-                    )
-                    break
-            else:
-                stable_count = 0
-            prev_len = cur_len
-
+        prev_len, waited, _ = await self._wait_for_content_with_browser_agent(
+            max_wait=max_wait,
+            poll_interval=poll_interval,
+            min_content_len=min_content_len,
+            stable_rounds=stable_rounds,
+            target_url=self.URL,
+        )
         return prev_len, waited
 
     async def _dump_page_debug(
@@ -490,6 +463,478 @@ class BaseBrowserHandler(ABC):
         except Exception:
             return False
 
+    def _platform_display_name(self) -> str:
+        mapping = {
+            "doubao": "豆包",
+            "hunyuan": "元宝",
+            "yuanbao": "元宝",
+            "kimi": "Kimi",
+            "deepseek": "DeepSeek",
+        }
+        return mapping.get(self.PLATFORM.value, self.PLATFORM.value)
+
+    async def _browser_agent_screenshot_provider(self) -> dict | None:
+        if not getattr(self.client, "aio_session_id", None):
+            return None
+        try:
+            return await self._aio_backend.take_screenshot()
+        except Exception as e:
+            logger.debug(
+                "[%s] Browser-agent screenshot capture failed: %s",
+                self.PLATFORM_KEY,
+                e,
+            )
+            return None
+
+    async def _execute_browser_agent_action(
+        self,
+        action: BrowserAgentAction,
+        *,
+        fallback_url: str | None,
+    ) -> bool:
+        try:
+            if action.action_type in {"click_ref", "close_popup"}:
+                if not action.ref:
+                    return False
+                result = await self.client.click(action.ref)
+                return bool(result.get("success"))
+
+            if action.action_type == "fill_ref":
+                if not action.ref:
+                    return False
+                result = await self.client.fill(action.ref, action.text or "")
+                return bool(result.get("success"))
+
+            if action.action_type == "press_key":
+                if not action.key:
+                    return False
+                result = await self.client.press(action.key)
+                return bool(result.get("success"))
+
+            if action.action_type == "wait":
+                await asyncio.sleep(max(action.wait_seconds or 0.2, 0.2))
+                return True
+
+            if action.action_type == "refresh":
+                if self.client.page is not None:
+                    await self.client.page.reload(wait_until="domcontentloaded")
+                    return True
+                return False
+
+            if action.action_type == "navigate":
+                target_url = action.target_url or fallback_url
+                if not target_url:
+                    return False
+                if self.client.page is not None:
+                    await self.client.page.goto(target_url, wait_until="domcontentloaded")
+                    return True
+                result = await self.client.open(target_url, headed=self.headed)
+                return bool(result.get("success"))
+
+            return action.action_type == "complete"
+        except Exception as e:
+            logger.warning(
+                "[%s] Browser-agent action failed (%s): %s",
+                self.PLATFORM_KEY,
+                action.action_type,
+                e,
+            )
+            return False
+
+    async def _begin_browser_agent_takeover_gate(
+        self,
+        *,
+        blocker_kind: str,
+        progress: float,
+        url: str | None,
+    ) -> tuple[list[BrowserEvent], str | None]:
+        platform_name = self._platform_display_name()
+        if blocker_kind in {"verification", "captcha"}:
+            return await self._begin_modal_takeover_gate(
+                message="检测到安全验证，请在浏览器窗口中完成验证",
+                action_hint=f"请在弹出的浏览器窗口中完成{platform_name}验证，完成后点击“我已完成”",
+                progress=progress,
+                url=url,
+                open_error_message=f"打开{platform_name}浏览器窗口失败，请重试",
+            )
+
+        return await self._begin_login_takeover_gate(
+            message="检测到登录或账号确认界面，请在浏览器窗口中完成操作",
+            action_hint=f"请在弹出的浏览器窗口中完成{platform_name}登录或账号确认，完成后点击“我已完成”",
+            progress=progress,
+            url=url,
+            open_error_message=f"打开{platform_name}浏览器窗口失败，请重试",
+        )
+
+    async def _run_browser_agent_preflight(
+        self,
+        *,
+        progress: float,
+        url: str | None = None,
+        max_rounds: int = 3,
+    ) -> tuple[list[BrowserEvent], bool]:
+        """Run one generic browser-agent preflight before platform logic."""
+
+        sync_method = getattr(self.client, "sync_to_existing_target_page", None)
+        for _ in range(max_rounds):
+            step = await collect_browser_agent_step(
+                client=self.client,
+                platform=self.PLATFORM.value,
+                target_url=url or self.URL,
+                screenshot_provider=self._browser_agent_screenshot_provider,
+            )
+            decision = step.decision
+            logger.info(
+                "[%s] Browser-agent preflight decision: outcome=%s blocker=%s rationale=%s",
+                self.PLATFORM_KEY,
+                decision.outcome,
+                decision.blocker_kind,
+                decision.rationale,
+            )
+
+            if (
+                decision.blocker_kind == "target_closed"
+                and callable(sync_method)
+                and await sync_method(url or self.URL)
+            ):
+                continue
+
+            if decision.outcome == "takeover_required":
+                events, request_id = await self._begin_browser_agent_takeover_gate(
+                    blocker_kind=decision.blocker_kind,
+                    progress=progress,
+                    url=decision.takeover.target_url if decision.takeover else (url or self.URL),
+                )
+                return events, bool(request_id or events)
+
+            if decision.outcome == "failed":
+                return [
+                    self._create_event(
+                        BrowserState.ERROR,
+                        decision.error or "浏览器智能预检查失败",
+                        progress=0,
+                    )
+                ], True
+
+            if not decision.actions:
+                return [], False
+
+            action_ok = True
+            for action in decision.actions:
+                action_ok = await self._execute_browser_agent_action(
+                    action,
+                    fallback_url=url or self.URL,
+                )
+                if not action_ok:
+                    break
+            if not action_ok:
+                return [], False
+
+        return [], False
+
+    async def _wait_for_content_with_browser_agent(
+        self,
+        *,
+        max_wait: float = 50,
+        poll_interval: float = 3,
+        min_content_len: int = 0,
+        stable_rounds: int = 2,
+        target_url: str | None = None,
+        blocker_check_after_seconds: float = 9,
+    ) -> tuple[int, float, BrowserAgentDecision | None]:
+        """Poll DOM content while allowing Browser Agent blocker checks."""
+
+        tag = self.PLATFORM_KEY.capitalize()
+        sync_method = getattr(self.client, "sync_to_existing_target_page", None)
+        await asyncio.sleep(poll_interval)
+        waited = poll_interval
+        prev_len = 0
+        stable_count = 0
+
+        while waited < max_wait:
+            await asyncio.sleep(poll_interval)
+            waited += poll_interval
+            result = await self.client.eval(self._content_check_js())
+            if "error" in result:
+                error_message = str(result["error"])
+                logger.warning(
+                    "[%s] eval error at %ds: %s", tag, waited, error_message
+                )
+                if (
+                    callable(sync_method)
+                    and "target" in error_message.lower()
+                    and "closed" in error_message.lower()
+                ):
+                    logger.info(
+                        "[%s] Attempting live-page resync after target-closed eval failure",
+                        tag,
+                    )
+                    try:
+                        if await sync_method(target_url or self.URL):
+                            continue
+                    except Exception as sync_error:
+                        logger.warning(
+                            "[%s] Live-page resync failed after target-closed eval error: %s",
+                            tag,
+                            sync_error,
+                        )
+            cur_len = int(result.get("output", "0") or "0")
+            logger.info(
+                "[%s] Poll %ds: content_len=%d (prev=%d, stable=%d)",
+                tag,
+                waited,
+                cur_len,
+                prev_len,
+                stable_count,
+            )
+
+            if cur_len == 0 and waited >= blocker_check_after_seconds:
+                step = await collect_browser_agent_step(
+                    client=self.client,
+                    platform=self.PLATFORM.value,
+                    target_url=target_url or self.URL,
+                    screenshot_provider=self._browser_agent_screenshot_provider,
+                )
+                decision = step.decision
+                if (
+                    decision.blocker_kind == "target_closed"
+                    and callable(sync_method)
+                    and await sync_method(target_url or self.URL)
+                ):
+                    continue
+                if decision.outcome == "takeover_required":
+                    logger.warning(
+                        "[%s] Browser-agent wait gate detected blocker=%s at %ds",
+                        tag,
+                        decision.blocker_kind,
+                        waited,
+                    )
+                    return prev_len, waited, decision
+                if decision.actions:
+                    action_ok = True
+                    for action in decision.actions:
+                        action_ok = await self._execute_browser_agent_action(
+                            action,
+                            fallback_url=target_url or self.URL,
+                        )
+                        if not action_ok:
+                            break
+                    if action_ok:
+                        continue
+
+            if cur_len > 0 and cur_len == prev_len:
+                stable_count += 1
+                if stable_count >= stable_rounds and cur_len >= min_content_len:
+                    logger.info(
+                        "[%s] Content stable at %d chars after %ds",
+                        tag,
+                        cur_len,
+                        waited,
+                    )
+                    break
+            else:
+                stable_count = 0
+            prev_len = cur_len
+
+        return prev_len, waited, None
+
+    async def _emit_browser_agent_takeover_from_decision(
+        self,
+        decision: BrowserAgentDecision,
+        *,
+        progress: float,
+        fallback_url: str | None = None,
+    ) -> tuple[list[BrowserEvent], str | None]:
+        if decision.outcome != "takeover_required":
+            return [], None
+        takeover_url = (
+            decision.takeover.target_url
+            if decision.takeover and decision.takeover.target_url
+            else fallback_url
+        )
+        return await self._begin_browser_agent_takeover_gate(
+            blocker_kind=decision.blocker_kind,
+            progress=progress,
+            url=takeover_url,
+        )
+
+    def _browser_agent_blocker_for_error_type(self, error_type: str | None) -> str | None:
+        normalized = str(error_type or "").strip().lower()
+        if normalized in {"auth_required", "login"}:
+            return "login"
+        if normalized in {"verify", "verification"}:
+            return "verification"
+        if normalized == "captcha":
+            return "captcha"
+        return None
+
+    async def _emit_browser_agent_takeover_for_error_type(
+        self,
+        *,
+        error_type: str | None,
+        progress: float,
+        fallback_url: str | None = None,
+    ) -> tuple[list[BrowserEvent], str | None]:
+        blocker_kind = self._browser_agent_blocker_for_error_type(error_type)
+        if blocker_kind is None:
+            return [], None
+        return await self._begin_browser_agent_takeover_gate(
+            blocker_kind=blocker_kind,
+            progress=progress,
+            url=fallback_url or self.URL,
+        )
+
+    async def _emit_browser_agent_takeover_for_current_page(
+        self,
+        *,
+        progress: float,
+        fallback_url: str | None = None,
+    ) -> tuple[list[BrowserEvent], str | None]:
+        step = await collect_browser_agent_step(
+            client=self.client,
+            platform=self.PLATFORM.value,
+            target_url=fallback_url or self.URL,
+            screenshot_provider=self._browser_agent_screenshot_provider,
+        )
+        decision = step.decision
+        if decision.outcome != "takeover_required":
+            return [], None
+        return await self._emit_browser_agent_takeover_from_decision(
+            decision,
+            progress=progress,
+            fallback_url=fallback_url or self.URL,
+        )
+
+    async def _handle_browser_agent_wait_blocker(
+        self,
+        blocker_decision: BrowserAgentDecision | None,
+        *,
+        progress: float,
+        fallback_url: str | None = None,
+    ) -> tuple[list[BrowserEvent], bool]:
+        if blocker_decision is None:
+            return [], False
+        events, request_id = await self._emit_browser_agent_takeover_from_decision(
+            blocker_decision,
+            progress=progress,
+            fallback_url=fallback_url or self.URL,
+        )
+        if request_id or events:
+            return events, True
+        return [], False
+
+    async def _handle_browser_agent_parser_error(
+        self,
+        *,
+        parsed_error: str,
+        error_type: str | None,
+        progress: float,
+        fallback_url: str | None = None,
+        message_overrides: dict[str, str] | None = None,
+    ) -> tuple[list[BrowserEvent], bool]:
+        events, request_id = await self._emit_browser_agent_takeover_for_error_type(
+            error_type=error_type,
+            progress=progress,
+            fallback_url=fallback_url or self.URL,
+        )
+        if request_id or events:
+            return events, True
+
+        normalized_error_type = str(error_type or "").strip().lower()
+        message_map = {
+            "verify": f"{self._platform_display_name()}触发安全验证，请在浏览器窗口完成验证后重新采集。",
+            "captcha": f"{self._platform_display_name()}触发验证码校验，请在浏览器窗口完成验证后重新采集。",
+            "auth_required": f"{self._platform_display_name()}需要登录后才能继续抓取。",
+            "login": f"{self._platform_display_name()}需要登录后才能继续抓取。",
+            "rate_limit": f"{self._platform_display_name()}触发平台限流，请稍后重试。",
+        }
+        if message_overrides:
+            message_map.update(message_overrides)
+        message = message_map.get(
+            normalized_error_type,
+            f"{self._platform_display_name()}返回错误: {parsed_error}",
+        )
+        return [
+            self._create_event(
+                BrowserState.ERROR,
+                message,
+                progress=0,
+                error_type=error_type,
+            )
+        ], True
+
+    async def _handle_browser_agent_empty_answer(
+        self,
+        answer_text: str | None,
+        *,
+        progress: float,
+        fallback_url: str | None = None,
+    ) -> tuple[list[BrowserEvent], bool]:
+        if answer_text and len(answer_text.strip()) >= 10:
+            return [], False
+
+        events, request_id = await self._emit_browser_agent_takeover_for_current_page(
+            progress=progress,
+            fallback_url=fallback_url or self.URL,
+        )
+        if request_id or events:
+            return events, True
+
+        logger.warning(
+            "[%s] Answer too short or empty (%d chars)",
+            self.PLATFORM_KEY.capitalize(),
+            len(answer_text) if answer_text else 0,
+        )
+        return [
+            self._create_event(
+                BrowserState.ERROR,
+                "未能提取到有效回答",
+                progress=0,
+            )
+        ], True
+
+    async def _browser_agent_resume_probe_ready(
+        self,
+        *,
+        target_url: str | None = None,
+    ) -> bool:
+        """Check whether the current live page no longer needs human takeover.
+
+        This is the first shared resume probe that relies on the Browser Agent
+        observation/decision seam instead of platform-specific login selectors.
+        It intentionally stays conservative: if the page still needs a human
+        blocker cleared, or if auto-healing actions are still pending, the
+        manual resume gate should remain blocked.
+        """
+
+        try:
+            step = await collect_browser_agent_step(
+                client=self.client,
+                platform=self.PLATFORM.value,
+                target_url=target_url or self.URL,
+                screenshot_provider=self._browser_agent_screenshot_provider,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[%s] Browser-agent resume probe failed: %s",
+                self.PLATFORM_KEY,
+                exc,
+            )
+            return False
+
+        decision = step.decision
+        if decision.outcome in {"takeover_required", "failed"}:
+            return False
+        if decision.actions:
+            return False
+        if decision.blocker_kind in {
+            "blank_page",
+            "navigation_error",
+            "target_closed",
+        }:
+            return False
+        return True
+
     # ------------------------------------------------------------------ login
 
     async def _check_login_status(self, check_selector: str) -> bool:
@@ -546,10 +991,18 @@ class BaseBrowserHandler(ABC):
     async def probe_resume_gate_ready(self, action_type: str) -> bool:
         """Readiness probe used by explicit manual resolve."""
 
+        if action_type in {
+            "login",
+            "verify",
+            "captcha",
+            "security_confirmation",
+            "account_selection",
+        }:
+            return await self._browser_agent_resume_probe_ready(target_url=self.URL)
         if action_type == "modal":
+            if await self._browser_agent_resume_probe_ready(target_url=self.URL):
+                return True
             return not bool(await self._detect_blocking_modal())
-        if action_type == "login":
-            return False
         return False
 
     # ------------------------------------------------------------------ modal/popup detection
