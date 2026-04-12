@@ -195,6 +195,7 @@ def _decorate_novnc_url(url: str) -> str:
     query.setdefault("resize", "remote")
     query.setdefault("reconnect", "1")
     query.setdefault("reconnect_delay", "1000")
+    query.setdefault("show_dot", "0")
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
@@ -207,6 +208,7 @@ def _build_takeover_vnc_proxy_url(*, takeover_id: str, ticket: str) -> str:
         "resize": "remote",
         "reconnect": "1",
         "reconnect_delay": "1000",
+        "show_dot": "0",
         "ticket": ticket,
         "path": f"{ws_path}?ticket={ticket}",
     }
@@ -214,6 +216,43 @@ def _build_takeover_vnc_proxy_url(*, takeover_id: str, ticket: str) -> str:
         f"/api/v1/aio/takeovers/{takeover_id}/vnc-proxy/vnc/vnc_lite.html?"
         f"{urlencode(query)}"
     )
+
+
+def _rewrite_novnc_html(content: bytes, content_type: str | None) -> bytes:
+    """Hide raw noVNC controls that would let users disconnect the session."""
+
+    if "text/html" not in (content_type or "").lower():
+        return content
+    try:
+        html = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+
+    if "specta-novnc-controls" in html:
+        return content
+
+    injected_style = """
+<style id="specta-novnc-controls">
+  #noVNC_control_bar,
+  #noVNC_control_bar_handle,
+  #noVNC_status_bar,
+  #noVNC_control_bar_hint {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+  body {
+    margin: 0 !important;
+    overflow: hidden !important;
+    background: #f8fafc !important;
+  }
+</style>
+""".strip()
+    if "</head>" in html:
+        html = html.replace("</head>", f"{injected_style}</head>", 1)
+    else:
+        html = f"{injected_style}{html}"
+    return html.encode("utf-8")
 
 
 def _build_upstream_vnc_websocket_url(*, base_url: str, ticket: str | None) -> str:
@@ -598,10 +637,13 @@ async def proxy_takeover_vnc_asset(
         if value:
             response_headers[header_name] = value
 
+    content_type = upstream.headers.get("content-type")
+    content = _rewrite_novnc_html(upstream.content, content_type)
+
     return Response(
-        content=upstream.content,
+        content=content,
         status_code=upstream.status_code,
-        media_type=upstream.headers.get("content-type"),
+        media_type=content_type,
         headers=response_headers,
     )
 

@@ -61,6 +61,10 @@ const BROWSER_MESSAGE_KEYWORDS: Record<
     labels: ['Kimi'],
     actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
   },
+  yuanbao: {
+    labels: ['元宝', 'Yuanbao'],
+    actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
+  },
   hunyuan: {
     labels: ['元宝', 'Hunyuan', 'Yuanbao'],
     actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
@@ -186,6 +190,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     setExecutionProgress,
     updateBrowserState,
     clearBrowserStatesForPlatform,
+    clearBrowserStates,
     wsBrowserActionResolution,
   } = useConversationStore();
 
@@ -994,8 +999,11 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   // Handle stopping execution
   const handleStopExecution = useCallback(() => {
     stopExecutionAction();
+    clearBrowserStates();
+    clearBrowserWorkspace();
+    useAioTakeoverStore.getState().clear();
     sendStopExecution();
-  }, [stopExecutionAction, sendStopExecution]);
+  }, [clearBrowserStates, clearBrowserWorkspace, stopExecutionAction, sendStopExecution]);
 
   // Handle confirmation
   const handleConfirmation = useCallback((optionId: string) => {

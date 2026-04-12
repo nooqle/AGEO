@@ -492,7 +492,7 @@ def _display_platform_name(platform: str) -> str:
     mapping = {
         "deepseek": "DeepSeek",
         "kimi": "Kimi",
-        "hunyuan": "腾讯混元",
+        "hunyuan": "元宝",
         "yuanbao": "元宝",
         "doubao": "豆包",
     }

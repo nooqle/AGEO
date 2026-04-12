@@ -9,6 +9,7 @@ const PLATFORM_LABELS: Record<BrowserState['platform'], string> = {
   doubao: '豆包',
   deepseek: 'DeepSeek',
   kimi: 'Kimi',
+  yuanbao: '元宝',
   hunyuan: '元宝',
 };
 

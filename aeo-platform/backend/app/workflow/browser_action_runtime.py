@@ -624,7 +624,12 @@ async def clear_session_browser_action_requests(
 ) -> None:
     request_ids = list(_requests_by_session.pop(session_id, set()))
     for request_id in request_ids:
-        request = _requests_by_id.pop(request_id, None)
+        request = _requests_by_id.get(request_id)
+        if request is not None and request.resolution is None:
+            request.resolution = "skip"
+            if request.event is not None:
+                request.event.set()
+        clear_browser_action_request_local(request_id)
         await _finalize_unresolved_child_attempt(
             request_id,
             final_status=unresolved_status,

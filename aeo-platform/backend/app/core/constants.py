@@ -87,6 +87,7 @@ class PlatformConstants:
 
     PLATFORM_DISPLAY_NAMES: Final[dict[str, str]] = {
         "doubao": "豆包",
+        "yuanbao": "元宝",
         "hunyuan": "元宝",
         "kimi": "Kimi",
         "deepseek": "DeepSeek",
@@ -96,6 +97,7 @@ class PlatformConstants:
     # Used by _get_browser_timeout() in nodes_a4.py for browser pipelines only.
     PLATFORM_TIMEOUTS: Final[dict[str, int]] = {
         "doubao": 90,
+        "yuanbao": 90,
         "hunyuan": 90,
         "kimi": 90,
         "deepseek": 90,
@@ -107,6 +109,7 @@ class PlatformConstants:
     # Per-platform inter-request delay (seconds) for rate limiting
     PLATFORM_REQUEST_DELAYS: Final[dict[str, float]] = {
         "doubao": 15.0,   # Responses API with web_search has strict rate limits
+        "yuanbao": 3.0,
         "hunyuan": 3.0,
         "kimi": 3.0,
         "deepseek": 2.0,
@@ -115,6 +118,7 @@ class PlatformConstants:
     # Per-platform HTTP timeouts for API clients (seconds)
     PLATFORM_API_TIMEOUTS: Final[dict[str, float]] = {
         "doubao": 90.0,
+        "yuanbao": 60.0,
         "hunyuan": 60.0,
         "kimi": 60.0,
     }

@@ -1,24 +1,467 @@
-"""A4 Tool - Answer Fetching.
+"""A4/AIO answer-fetch tool contract.
 
-Pure function implementation for fetching answers from AI platforms.
+This module is the stable tool-facing seam for answer fetching. The current
+executor still runs in the backend and attaches to AIO through CDP; future AIO
+runtime workers should replace only this tool's executor internals, not A4's
+public contract.
 """
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Literal, cast
+
+from app.core.config import settings
+from app.core.constants import PlatformConstants
+
+AioPublicPlatform = Literal["doubao", "yuanbao", "kimi", "deepseek"]
+AioExecutorPlatform = Literal["doubao", "hunyuan", "kimi", "deepseek"]
+AioFetchMode = Literal["fast", "full"]
+AioFetchMethod = Literal["api", "browser"]
+AioPlatformStatus = Literal["result", "takeover_required", "skipped", "failed"]
+
+PUBLIC_PLATFORM_IDS: tuple[AioPublicPlatform, ...] = (
+    "doubao",
+    "yuanbao",
+    "kimi",
+    "deepseek",
+)
+
+_PUBLIC_PLATFORM_DISPLAY_NAMES: dict[str, str] = {
+    "doubao": "豆包",
+    "yuanbao": "元宝",
+    "hunyuan": "元宝",
+    "kimi": "Kimi",
+    "deepseek": "DeepSeek",
+}
+
+_PLATFORM_ALIASES: dict[str, AioPublicPlatform] = {
+    "doubao": "doubao",
+    "豆包": "doubao",
+    "yuanbao": "yuanbao",
+    "hunyuan": "yuanbao",
+    "元宝": "yuanbao",
+    "kimi": "kimi",
+    "deepseek": "deepseek",
+    "deep_seek": "deepseek",
+    "deep seek": "deepseek",
+}
+
+_PUBLIC_TO_EXECUTOR_PLATFORM: dict[AioPublicPlatform, AioExecutorPlatform] = {
+    "doubao": "doubao",
+    "yuanbao": "hunyuan",
+    "kimi": "kimi",
+    "deepseek": "deepseek",
+}
+
+_EXECUTOR_TO_PUBLIC_PLATFORM: dict[str, AioPublicPlatform] = {
+    "doubao": "doubao",
+    "hunyuan": "yuanbao",
+    "yuanbao": "yuanbao",
+    "kimi": "kimi",
+    "deepseek": "deepseek",
+}
+
+_API_PUBLIC_PLATFORMS: set[AioPublicPlatform] = {"doubao", "yuanbao", "kimi"}
+_FAST_BROWSER_PUBLIC_PLATFORMS: set[AioPublicPlatform] = {"deepseek"}
+
+
+@dataclass(frozen=True, slots=True)
+class AioAuthContext:
+    """Long-lived auth identity for AIO browser state."""
+
+    specta_user_id: str
+    environment: str
+
+    @property
+    def context_key(self) -> str:
+        return f"{self.environment}/{self.specta_user_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class AioRunContext:
+    """Per-analysis run identity for AIO extracted artifacts."""
+
+    entity_id: str
+    task_id: str
+    run_id: str | None = None
+
+    @property
+    def context_key(self) -> str:
+        return f"{self.entity_id}/{self.task_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class AioAnswerFetchRequest:
+    """Tool-level answer-fetch request."""
+
+    session_id: str
+    specta_user_id: str
+    entity_id: str
+    task_id: str
+    run_id: str | None
+    questions: list[dict[str, Any]]
+    brand_profile: dict[str, Any]
+    mode: AioFetchMode
+    platforms: tuple[AioPublicPlatform, ...]
+    auth_context: AioAuthContext
+    run_context: AioRunContext
+    raw_platform_filter: list[str] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AioPlatformFetchJob:
+    """One platform job after mode/path routing."""
+
+    public_platform: AioPublicPlatform
+    executor_platform: AioExecutorPlatform
+    browser_platform: AioPublicPlatform
+    display_name: str
+    method: AioFetchMethod
+    question_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class AioTakeoverRequiredPacket:
+    """Tool output when one platform needs human takeover."""
+
+    takeover_id: str
+    platform: AioPublicPlatform
+    reason_code: str
+    surface_url: str | None
+    target_url: str | None
+    expires_at: str | None
+    resume_policy: str = "manual_resume_gate"
+
+
+@dataclass(frozen=True, slots=True)
+class AioPlatformFetchResult:
+    """Tool-level platform result packet."""
+
+    platform: AioPublicPlatform
+    status: AioPlatformStatus
+    questions: list[dict[str, Any]] = field(default_factory=list)
+    answers: list[dict[str, Any]] = field(default_factory=list)
+    citations: list[dict[str, Any]] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    auth_state_updated: bool = False
+    provenance: dict[str, Any] = field(default_factory=dict)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    takeover: AioTakeoverRequiredPacket | None = None
+
+
+BrowserTask = Awaitable[Any]
+
+
+def normalize_public_platform_id(platform: Any) -> AioPublicPlatform | None:
+    """Normalize user/API aliases into the public AIO platform ID."""
+
+    value = str(platform or "").strip()
+    if not value:
+        return None
+    return _PLATFORM_ALIASES.get(value.lower())
+
+
+def normalize_public_platforms(platforms: Any) -> tuple[AioPublicPlatform, ...]:
+    """Return a deduplicated public-platform tuple preserving input order."""
+
+    if not platforms:
+        return PUBLIC_PLATFORM_IDS
+    if isinstance(platforms, str):
+        platform_values = [platforms]
+    else:
+        try:
+            platform_values = list(platforms)
+        except TypeError:
+            platform_values = [platforms]
+    normalized: list[AioPublicPlatform] = []
+    seen: set[str] = set()
+    for raw in platform_values:
+        public_platform = normalize_public_platform_id(raw)
+        if not public_platform or public_platform in seen:
+            continue
+        normalized.append(public_platform)
+        seen.add(public_platform)
+    return tuple(normalized) or PUBLIC_PLATFORM_IDS
+
+
+def to_executor_platform_id(platform: Any) -> AioExecutorPlatform:
+    public_platform = normalize_public_platform_id(platform)
+    if public_platform is None:
+        value = str(platform or "").strip().lower()
+        if value in _EXECUTOR_TO_PUBLIC_PLATFORM:
+            return cast(AioExecutorPlatform, value)
+        raise ValueError(f"Unsupported AIO platform: {platform!r}")
+    return _PUBLIC_TO_EXECUTOR_PLATFORM[public_platform]
+
+
+def to_public_platform_id(platform: Any) -> AioPublicPlatform:
+    value = str(platform or "").strip().lower()
+    public_platform = _EXECUTOR_TO_PUBLIC_PLATFORM.get(value)
+    if public_platform is None:
+        normalized = normalize_public_platform_id(value)
+        if normalized is None:
+            raise ValueError(f"Unsupported AIO platform: {platform!r}")
+        public_platform = normalized
+    return public_platform
+
+
+def display_platform_name(platform: Any) -> str:
+    value = str(platform or "").strip().lower()
+    return _PUBLIC_PLATFORM_DISPLAY_NAMES.get(value, str(platform or ""))
+
+
+class AioAnswerFetchTool:
+    """AIO-backed answer-fetch tool facade used by the A4 executor."""
+
+    def build_auth_context(self, state: dict[str, Any]) -> AioAuthContext:
+        user_id = str(state.get("user_id") or state.get("session_id") or "anonymous")
+        return AioAuthContext(
+            specta_user_id=user_id,
+            environment=settings.AIO_AUTH_ENV_SCOPE,
+        )
+
+    def build_run_context(self, state: dict[str, Any]) -> AioRunContext:
+        return AioRunContext(
+            entity_id=str(
+                state.get("entity_id") or state.get("session_id") or "anonymous"
+            ),
+            task_id=str(state.get("task_id") or state.get("session_id") or "unknown"),
+            run_id=str(state.get("run_id")) if state.get("run_id") else None,
+        )
+
+    def build_request(
+        self,
+        *,
+        state: dict[str, Any],
+        questions: list[dict[str, Any]],
+        brand_profile: dict[str, Any],
+        mode: str,
+        platform_filter: Any = None,
+    ) -> AioAnswerFetchRequest:
+        auth_context = self.build_auth_context(state)
+        run_context = self.build_run_context(state)
+        normalized_mode: AioFetchMode = "full" if mode == "full" else "fast"
+        platforms = normalize_public_platforms(platform_filter)
+        if isinstance(platform_filter, str):
+            raw_platform_filter = [platform_filter]
+        elif platform_filter:
+            try:
+                raw_platform_filter = list(platform_filter)
+            except TypeError:
+                raw_platform_filter = [platform_filter]
+        else:
+            raw_platform_filter = None
+        return AioAnswerFetchRequest(
+            session_id=str(state.get("session_id") or ""),
+            specta_user_id=auth_context.specta_user_id,
+            entity_id=run_context.entity_id,
+            task_id=run_context.task_id,
+            run_id=run_context.run_id,
+            questions=questions,
+            brand_profile=brand_profile,
+            mode=normalized_mode,
+            platforms=platforms,
+            auth_context=auth_context,
+            run_context=run_context,
+            raw_platform_filter=raw_platform_filter,
+        )
+
+    def to_executor_platforms(
+        self,
+        platforms: Any,
+    ) -> list[AioExecutorPlatform]:
+        normalized = normalize_public_platforms(platforms)
+        return [_PUBLIC_TO_EXECUTOR_PLATFORM[platform] for platform in normalized]
+
+    def resolve_execution_paths(
+        self,
+        request: AioAnswerFetchRequest,
+    ) -> tuple[list[AioPlatformFetchJob], list[AioPlatformFetchJob]]:
+        api_jobs: list[AioPlatformFetchJob] = []
+        browser_jobs: list[AioPlatformFetchJob] = []
+
+        for public_platform in request.platforms:
+            executor_platform = _PUBLIC_TO_EXECUTOR_PLATFORM[public_platform]
+            if request.mode != "full" and public_platform in _API_PUBLIC_PLATFORMS:
+                api_jobs.append(
+                    self._build_job(request, public_platform, executor_platform, "api")
+                )
+            if request.mode == "full" or public_platform in _FAST_BROWSER_PUBLIC_PLATFORMS:
+                browser_jobs.append(
+                    self._build_job(
+                        request,
+                        public_platform,
+                        executor_platform,
+                        "browser",
+                    )
+                )
+        return api_jobs, browser_jobs
+
+    def _build_job(
+        self,
+        request: AioAnswerFetchRequest,
+        public_platform: AioPublicPlatform,
+        executor_platform: AioExecutorPlatform,
+        method: AioFetchMethod,
+    ) -> AioPlatformFetchJob:
+        return AioPlatformFetchJob(
+            public_platform=public_platform,
+            executor_platform=executor_platform,
+            browser_platform=public_platform,
+            display_name=display_platform_name(public_platform),
+            method=method,
+            question_count=len(request.questions),
+        )
+
+    def create_browser_client(
+        self,
+        *,
+        platform: Any,
+        state: dict[str, Any],
+    ) -> Any:
+        """Create the browser client selected by current runtime mode."""
+
+        public_platform = to_public_platform_id(platform)
+        session_name = public_platform
+        if settings.AIO_ENABLED and settings.AIO_BASE_URL:
+            from app.core.fetchers.browser.aio_connected_client import (
+                AioConnectedBrowserClient,
+            )
+
+            auth_context = self.build_auth_context(state)
+            run_context = self.build_run_context(state)
+            return AioConnectedBrowserClient(
+                session_name=session_name,
+                workspace_id=auth_context.specta_user_id,
+                task_id=run_context.task_id,
+                platform=public_platform,
+                purpose="a4_browser",
+                auth_scope_id=auth_context.specta_user_id,
+                run_scope_id=run_context.entity_id,
+            )
+
+        from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
+
+        return PlaywrightBrowserClient(session_name=session_name)
+
+    def create_browser_handler(
+        self,
+        *,
+        platform: Any,
+        browser_client: Any,
+        session_id: str,
+        run_id: str | None = None,
+    ) -> Any:
+        public_platform = to_public_platform_id(platform)
+        if public_platform == "deepseek":
+            from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
+
+            return DeepSeekHandler(browser_client, session_id=session_id, run_id=run_id)
+        if public_platform == "kimi":
+            from app.core.fetchers.browser.kimi_handler import KimiHandler
+
+            return KimiHandler(browser_client, session_id=session_id, run_id=run_id)
+        if public_platform == "yuanbao":
+            from app.core.fetchers.browser.yuanbao_handler import YuanbaoHandler
+
+            return YuanbaoHandler(browser_client, session_id=session_id, run_id=run_id)
+        if public_platform == "doubao":
+            from app.core.fetchers.browser.doubao_handler import DoubaoHandler
+
+            return DoubaoHandler(browser_client, session_id=session_id, run_id=run_id)
+        raise ValueError(f"Unsupported AIO browser platform: {platform!r}")
+
+    async def gather_browser_tasks(
+        self,
+        browser_tasks: list[BrowserTask],
+    ) -> list[Any]:
+        """Run browser platform jobs with the configured AIO concurrency cap."""
+
+        if settings.AIO_ENABLED and settings.AIO_BASE_URL:
+            max_parallel = max(1, settings.AIO_MAX_PARALLEL_BROWSER_SESSIONS)
+            semaphore = asyncio.Semaphore(max_parallel)
+
+            async def _bounded(task: BrowserTask) -> Any:
+                async with semaphore:
+                    return await task
+
+            return await asyncio.gather(
+                *[_bounded(task) for task in browser_tasks],
+                return_exceptions=True,
+            )
+
+        return await asyncio.gather(*browser_tasks, return_exceptions=True)
+
+    def build_result_packet(
+        self,
+        *,
+        platform: Any,
+        status: AioPlatformStatus,
+        questions: list[dict[str, Any]] | None = None,
+        answers: list[dict[str, Any]] | None = None,
+        citations: list[dict[str, Any]] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        auth_state_updated: bool = False,
+        provenance: dict[str, Any] | None = None,
+        errors: list[dict[str, Any]] | None = None,
+        takeover: AioTakeoverRequiredPacket | None = None,
+    ) -> AioPlatformFetchResult:
+        return AioPlatformFetchResult(
+            platform=to_public_platform_id(platform),
+            status=status,
+            questions=questions or [],
+            answers=answers or [],
+            citations=citations or [],
+            evidence=evidence or [],
+            auth_state_updated=auth_state_updated,
+            provenance=provenance or {},
+            errors=errors or [],
+            takeover=takeover,
+        )
+
+
+def build_legacy_platform_configs() -> dict[str, dict[str, str]]:
+    """Legacy A4 platform config map kept for existing downstream code."""
+
+    return {
+        "doubao": {"name": display_platform_name("doubao"), "method": "api"},
+        "hunyuan": {"name": display_platform_name("yuanbao"), "method": "api"},
+        "kimi": {"name": display_platform_name("kimi"), "method": "api"},
+        "deepseek": {"name": display_platform_name("deepseek"), "method": "browser"},
+    }
+
+
+def resolve_platform_display_names(platforms: list[str]) -> str:
+    return "、".join(display_platform_name(platform) for platform in platforms)
 
 
 async def fetch_answers(
-    questions: list, brand_profile: dict, platforms: list[str] | None = None
+    questions: list,
+    brand_profile: dict,
+    platforms: list[str] | None = None,
 ) -> list[dict]:
-    """Fetch answers from AI platforms.
+    """Backward-compatible async wrapper for legacy callers.
 
-    Args:
-        questions: List of questions to fetch answers for
-        brand_profile: Brand profile data
-        platforms: List of platform names to fetch from
-
-    Returns:
-        List of fetch results
+    The executable A4 route is still the LangGraph node. This wrapper now
+    exposes the normalized tool contract instead of pretending to fetch directly.
     """
-    # This is implemented in nodes_a4.py for now
-    raise NotImplementedError("A4 is implemented directly in workflow nodes")
+
+    tool = AioAnswerFetchTool()
+    request = tool.build_request(
+        state={"session_id": "legacy_direct_tool_call"},
+        questions=[dict(q) for q in questions],
+        brand_profile=brand_profile,
+        mode="fast",
+        platform_filter=platforms,
+    )
+    api_jobs, browser_jobs = tool.resolve_execution_paths(request)
+    raise NotImplementedError(
+        "Use the answer-fetch workflow node for execution; "
+        f"aio_answer_fetch contract resolved {len(api_jobs)} api job(s) "
+        f"and {len(browser_jobs)} browser job(s)."
+    )
 
 
 # Backward compatibility

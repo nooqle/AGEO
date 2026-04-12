@@ -3,6 +3,7 @@
 > 日期：2026-03-31
 > 状态：Draft
 > 目标：将 AIO Sandbox 的原子能力收口为 Specta 可控、可审计、可路由的工具层，使节点 Agent 能按状态选择工具，而不是在业务层直接依赖底层 CDP/MCP 接口。
+> 2026-04-12 更新：AIO Answer Fetch 的生产级归位见 [AIO Answer Fetch Tool 架构归位](./architecture-aio-answer-fetch-tool-runtime-2026-04-12.md)。本文件继续描述工具 schema，但应以 `AIO Tool Facade -> runtime atomic tools` 的方式理解。
 
 ---
 
@@ -12,18 +13,26 @@ Specta 不应把 AIO 的底层能力直接裸暴露给业务 Agent。
 正确做法是建立四层抽象：
 
 1. `AIO 原子能力`
-2. `Specta Tool Schema`
-3. `Platform Skill Contract`
+2. `Specta Tool Schema / Tool Facade`
+3. `Platform Execution Contract`
 4. `Node Agent / Orchestrator 决策`
 
 其中：
 
 1. `AIO 原子能力` 提供浏览器、文件、代码、接管等基本动作
-2. `Specta Tool Schema` 把这些能力封装成稳定工具
-3. `Platform Skill Contract` 描述每个平台允许如何使用这些工具
-4. `Agent` 决定在当前状态下调用哪个工具
+2. `Specta Tool Schema / Tool Facade` 把这些能力封装成稳定工具，例如 `aio_answer_fetch`
+3. `Platform Execution Contract` 描述四个平台如何使用这些工具
+4. `Agent` 决定是否调用 AIO Tool，以及如何处理其 event / result packet
 
-本设计中的共享状态词、路径术语和职责边界以 [design-aio-runtime-contracts-2026-04-01.md](/D:/AGEO-worktrees/browser-operator-design/docs/design-aio-runtime-contracts-2026-04-01.md) 为准。
+本设计中的共享状态词、路径术语和职责边界以 [design-aio-runtime-contracts-2026-04-01.md](./design-aio-runtime-contracts-2026-04-01.md) 为准。
+
+补充边界：
+
+1. `AIO Answer Fetch Tool` 是 A4 / Fetch Answer Agent 调用的浏览器执行 Tool Facade。
+2. 它默认覆盖豆包、元宝、Kimi、DeepSeek 四个平台。
+3. 它内部可以调用 browser action、file、takeover、state、trace 等原子工具。
+4. 它不是新的 public skill，也不应该把 CDP/MCP/tab/page 细节暴露给业务 Agent。
+5. 普通页面阻塞应由 AIO Browser Agent 自动处理；登录、验证码、人机验证才返回 `takeover_required`。
 
 ---
 
@@ -269,6 +278,70 @@ Specta 接入时应统一以：
 ## 3.1 Session 工具
 
 用于管理 AIO sandbox 与平台会话。
+
+### `aio_answer_fetch`
+
+用途：
+
+1. 作为 Fetch Answer Agent / A4 调用 AIO 的主入口。
+2. 创建四平台 answer fetch job。
+3. 返回平台级 event 和最终 result packet。
+
+输入：
+
+```json
+{
+  "job_id": "answer_fetch_job_123",
+  "session_id": "specta_session_1",
+  "task_id": "task_789",
+  "entity_id": "entity_456",
+  "specta_user_id": "user_123",
+  "brand": "雅姿",
+  "questions": [
+    {
+      "question_id": "q1",
+      "text": "30岁刚开始抗老，有什么推荐？"
+    }
+  ],
+  "platforms": ["doubao", "yuanbao", "kimi", "deepseek"],
+  "execution_mode": "full_browser",
+  "auth_scope": "prod/user_123",
+  "run_scope": "entity_456/task_789"
+}
+```
+
+输出：
+
+```json
+{
+  "job_id": "answer_fetch_job_123",
+  "status": "completed",
+  "platform_results": {
+    "doubao": {"status": "succeeded"},
+    "yuanbao": {"status": "succeeded"},
+    "kimi": {"status": "skipped"},
+    "deepseek": {"status": "succeeded"}
+  }
+}
+```
+
+关键事件：
+
+```text
+platform_started
+blocker_detected
+auto_action_taken
+takeover_required
+platform_result
+job_completed
+```
+
+实现要求：
+
+1. 默认四平台整体调度，不允许只围绕局部平台实现。
+2. 普通弹窗和页面恢复先自动处理。
+3. 人工接管 surface 必须是 AIO 已准备好的阻塞现场。
+4. 登录态保存到 AuthContext，任务结果保存到 RunContext。
 
 ### `aio_session_acquire`
 
@@ -707,10 +780,10 @@ Specta 接入时应统一以：
 
 ## 6.1 当前可复用点
 
-1. [playwright_client.py](/D:/AGEO-worktrees/browser-operator-design/aeo-platform/backend/app/core/fetchers/browser/playwright_client.py)
-2. [deepseek_handler.py](/D:/AGEO-worktrees/browser-operator-design/aeo-platform/backend/app/core/fetchers/browser/deepseek_handler.py)
-3. [nodes_a4.py](/D:/AGEO-worktrees/browser-operator-design/aeo-platform/backend/app/workflow/nodes_a4.py)
-4. [browser_action_runtime.py](/D:/AGEO-worktrees/browser-operator-design/aeo-platform/backend/app/workflow/browser_action_runtime.py)
+1. [playwright_client.py](../aeo-platform/backend/app/core/fetchers/browser/playwright_client.py)
+2. [deepseek_handler.py](../aeo-platform/backend/app/core/fetchers/browser/deepseek_handler.py)
+3. [nodes_a4.py](../aeo-platform/backend/app/workflow/nodes_a4.py)
+4. [browser_action_runtime.py](../aeo-platform/backend/app/workflow/browser_action_runtime.py)
 
 ## 6.2 当前需要改造点
 

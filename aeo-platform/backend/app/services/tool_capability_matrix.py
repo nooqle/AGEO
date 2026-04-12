@@ -83,6 +83,19 @@ _TOOL_CAPABILITY_MATRIX: dict[str, ToolCapability] = {
         canonical_route="a4_fetch",
         notes="A4 fetch entrypoint; may run first-time fetch, platform-scoped rerun, or full-mode rerun.",
     ),
+    "aio_answer_fetch": ToolCapability(
+        tool_name="aio_answer_fetch",
+        capability_type="runtime_tool",
+        allowed_callers=("a4_fetch",),
+        side_effect_level="external_read_write",
+        artifact_writeback_target="fetch_results",
+        confirmation_policy="internal_only",
+        canonical_route=None,
+        notes=(
+            "Internal AIO runtime tool used by A4. It owns browser execution, "
+            "AuthContext/RunContext binding, and human takeover packets."
+        ),
+    ),
     "drill_down_analysis": ToolCapability(
         tool_name="drill_down_analysis",
         capability_type="followup_tool",

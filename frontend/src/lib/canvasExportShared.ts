@@ -449,7 +449,7 @@ function getReportPlatformLabel(platform: string): string {
   if (normalized === 'yuanbao') return '元宝';
   if (normalized === 'kimi') return 'Kimi';
   if (normalized === 'deepseek') return 'DeepSeek';
-  if (normalized === 'hunyuan') return '腾讯混元';
+  if (normalized === 'hunyuan') return '元宝';
   return platform;
 }
 

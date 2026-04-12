@@ -15,13 +15,21 @@ from langgraph.types import Command
 from app.api.v1 import aio as aio_api
 from app.api.v1.aio import _ensure_takeover_bundle_is_active
 from app.core.fetchers.browser import aio_client as aio_client_module
-from app.core.fetchers.browser.aio_client import AioBackendError, AioBrowserInfo
+from app.core.fetchers.browser.aio_client import (
+    AioBackendError,
+    AioBrowserInfo,
+    AioSandboxInfo,
+)
 from app.core.fetchers.browser.aio_connected_client import AioConnectedBrowserClient
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
 from app.core.fetchers.browser.doubao_handler import DoubaoHandler
 from app.core.fetchers.browser.yuanbao_handler import YuanbaoHandler
 from app.schemas.fetch import BrowserState as FetchBrowserState
-from app.services.aio_runtime_contracts import AioSessionState, AioTakeoverState
+from app.services.aio_runtime_contracts import (
+    AioSessionState,
+    AioTakeoverState,
+    derive_platform_roots,
+)
 from app.services.aio_session_manager import (
     AioSandboxSessionManager,
     SpectaAioSession,
@@ -34,6 +42,12 @@ from app.services.skill_package_service import skill_package_service
 from app.services.tool_capability_matrix import (
     get_tool_capability,
     validate_tool_capability_access,
+)
+from app.tools.a4_fetch_agent import (
+    AioAnswerFetchTool,
+    normalize_public_platforms,
+    to_executor_platform_id,
+    to_public_platform_id,
 )
 from app.tools.a3_question_simulation import simulate_questions
 from app.tools.question_generation import (
@@ -90,6 +104,14 @@ from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
 from app.core.config import Settings
 
 
+def reset_browser_action_test_state():
+    browser_action_runtime._requests_by_id.clear()
+    browser_action_runtime._requests_by_session.clear()
+    browser_action_contract._aio_takeover_by_request_id.clear()
+    browser_action_contract._handoff_slot_by_request_id.clear()
+    browser_action_contract._handoff_slot_locks.clear()
+
+
 def install_in_memory_aio_storage(monkeypatch, manager: AioSandboxSessionManager):
     async def fake_save_session_record(session: SpectaAioSession):
         manager._sessions_by_id[session.session_id] = session
@@ -117,6 +139,110 @@ def test_aio_browser_handler_detects_client_before_session_is_acquired():
     assert nodes_a4._is_aio_browser_handler(handler) is True
 
 
+def test_aio_platform_roots_separate_user_auth_from_task_run():
+    roots = derive_platform_roots(
+        data_root="/home/gem/data",
+        workspace_id="legacy_workspace",
+        task_id="task_1",
+        platform="Kimi",
+        auth_scope_id="user_1",
+        run_scope_id="entity_1",
+        environment="prod",
+    )
+
+    assert roots.auth_context_key == "prod/user_1/kimi"
+    assert roots.run_context_key == "entity_1/task_1/kimi"
+    assert (
+        roots.state_path
+        == "/home/gem/data/auth/prod/user_1/kimi/profile/browser_state.json"
+    )
+    assert roots.extraction_path == (
+        "/home/gem/data/runs/entity_1/task_1/kimi/run/extraction.json"
+    )
+    assert roots.legacy_state_path == (
+        "/home/gem/data/legacy_workspace/kimi/profile/browser_state.json"
+    )
+
+
+def test_aio_browser_client_uses_user_auth_and_entity_run_scopes(monkeypatch):
+    monkeypatch.setattr(nodes_a4.settings, "AIO_ENABLED", True)
+    monkeypatch.setattr(nodes_a4.settings, "AIO_BASE_URL", "http://127.0.0.1:18180")
+
+    client = nodes_a4._create_browser_client(
+        "kimi",
+        {
+            "session_id": "session_1",
+            "user_id": "user_1",
+            "entity_id": "entity_1",
+            "task_id": "task_1",
+        },
+    )
+
+    assert isinstance(client, AioConnectedBrowserClient)
+    assert client.workspace_id == "user_1"
+    assert client.auth_scope_id == "user_1"
+    assert client.run_scope_id == "entity_1"
+    assert client.task_id == "task_1"
+
+
+def test_aio_answer_fetch_tool_normalizes_public_and_legacy_platforms():
+    assert normalize_public_platforms(
+        ["doubao", "hunyuan", "yuanbao", "元宝", "Kimi", "deep seek"]
+    ) == ("doubao", "yuanbao", "kimi", "deepseek")
+    assert normalize_public_platforms("yuanbao") == ("yuanbao",)
+    assert to_executor_platform_id("yuanbao") == "hunyuan"
+    assert to_public_platform_id("hunyuan") == "yuanbao"
+
+
+def test_a4_platform_filter_treats_string_as_single_platform():
+    assert nodes_a4._normalize_platform_filter("yuanbao") == ["hunyuan"]
+    assert nodes_a4._normalize_platform_filter("deep seek") == ["deepseek"]
+
+
+def test_aio_answer_fetch_tool_builds_contexts_and_execution_paths(monkeypatch):
+    monkeypatch.setattr(nodes_a4.settings, "AIO_AUTH_ENV_SCOPE", "prod")
+    tool = AioAnswerFetchTool()
+    request = tool.build_request(
+        state={
+            "session_id": "session_1",
+            "user_id": "user_1",
+            "entity_id": "entity_1",
+            "task_id": "task_1",
+            "run_id": "run_1",
+        },
+        questions=[{"id": "q1", "text": "test"}],
+        brand_profile={"brand_name": "雅姿"},
+        mode="full",
+        platform_filter=["doubao", "yuanbao", "kimi", "deepseek"],
+    )
+
+    api_jobs, browser_jobs = tool.resolve_execution_paths(request)
+
+    assert request.auth_context.context_key == "prod/user_1"
+    assert request.run_context.context_key == "entity_1/task_1"
+    assert api_jobs == []
+    assert [job.public_platform for job in browser_jobs] == [
+        "doubao",
+        "yuanbao",
+        "kimi",
+        "deepseek",
+    ]
+    assert [job.executor_platform for job in browser_jobs] == [
+        "doubao",
+        "hunyuan",
+        "kimi",
+        "deepseek",
+    ]
+
+
+def test_aio_answer_fetch_tool_registered_as_internal_runtime_tool():
+    capability = get_tool_capability("aio_answer_fetch")
+
+    assert capability is not None
+    assert capability.allowed_callers == ("a4_fetch",)
+    assert capability.confirmation_policy == "internal_only"
+
+
 def test_takeover_bundle_requires_active_state():
     now = datetime.now(timezone.utc)
     takeover = SpectaAioTakeover(
@@ -139,6 +265,17 @@ def test_takeover_bundle_requires_active_state():
 
     assert exc_info.value.status_code == 409
     assert "旧接管 bundle 已失效" in str(exc_info.value.detail)
+
+
+def test_novnc_html_proxy_hides_raw_control_bar():
+    html = b"<html><head><title>noVNC</title></head><body>canvas</body></html>"
+
+    rewritten = aio_api._rewrite_novnc_html(html, "text/html; charset=utf-8")
+
+    assert b"specta-novnc-controls" in rewritten
+    assert b"#noVNC_control_bar" in rewritten
+    assert b"#noVNC_control_bar_handle" in rewritten
+    assert aio_api._rewrite_novnc_html(b"body {}", "text/css") == b"body {}"
 
 
 @pytest.mark.asyncio
@@ -193,6 +330,93 @@ async def test_aio_session_acquire_blocks_new_holder_while_takeover_frozen():
 
     assert exc_info.value.error_code == "takeover_locked"
     assert "human takeover" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_aio_session_acquire_uses_platform_scope_for_parallel_takeover(
+    monkeypatch,
+):
+    manager = AioSandboxSessionManager()
+    now = datetime.now(timezone.utc)
+    deepseek_scope = manager._derive_session_workspace_scope(
+        "workspace_1",
+        ["deepseek"],
+    )
+    session = SpectaAioSession(
+        session_id="aio_session_deepseek",
+        workspace_id=deepseek_scope,
+        sandbox_ref="http://127.0.0.1:18180",
+        base_url="http://127.0.0.1:18180",
+        aio_version="test",
+        home_dir="/tmp/home",
+        data_root="/tmp/data",
+        browser_info=AioBrowserInfo(
+            cdp_url="ws://localhost/devtools/browser/test",
+            vnc_url=None,
+            user_agent=None,
+            viewport=None,
+            detail={},
+        ),
+        session_state=AioSessionState.TAKEOVER_FROZEN,
+        holders={"a4_browser:deepseek:task_1"},
+        ref_count=1,
+        current_takeover_id="takeover_deepseek",
+        human_takeover_lock=True,
+    )
+    takeover = SpectaAioTakeover(
+        takeover_id="takeover_deepseek",
+        session_id=session.session_id,
+        workspace_id=session.workspace_id,
+        user_id="user_1",
+        platform="deepseek",
+        mode="canvas_cdp",
+        reason="manual_intervention",
+        state=AioTakeoverState.ACTIVE,
+        frontend_id="frontend_1",
+        requested_at=now,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+    manager._sessions_by_id[session.session_id] = session
+    manager._session_by_workspace[session.workspace_id] = session.session_id
+    manager._takeovers_by_id[takeover.takeover_id] = takeover
+    install_in_memory_aio_storage(monkeypatch, manager)
+
+    class _FakeClient:
+        base_url = "http://127.0.0.1:18180"
+
+        async def get_sandbox_info(self):
+            return AioSandboxInfo(
+                base_url=self.base_url,
+                version="test",
+                home_dir="/tmp/home",
+                detail={},
+            )
+
+        async def get_browser_info(self):
+            return AioBrowserInfo(
+                cdp_url="ws://localhost/devtools/browser/test",
+                vnc_url=None,
+                user_agent=None,
+                viewport=None,
+                detail={},
+            )
+
+    monkeypatch.setattr(manager, "_ensure_client", lambda: _FakeClient())
+    monkeypatch.setattr(manager, "_load_session_record", AsyncMock(return_value=None))
+
+    acquired = await manager.acquire_session(
+        workspace_id="workspace_1",
+        task_id="task_2",
+        purpose="a4_browser:doubao",
+        platforms=["doubao"],
+    )
+
+    assert acquired.session_id != "aio_session_deepseek"
+    assert acquired.workspace_id == "workspace_1::aio-platform::doubao"
+    assert acquired.session_state == AioSessionState.LEASED
+    assert acquired.holders == {"a4_browser:doubao:task_2"}
+    assert session.human_takeover_lock is True
 
 
 @pytest.mark.asyncio
@@ -1047,6 +1271,7 @@ async def test_finish_user_action_gate_returns_user_skipped_event():
 async def test_emit_browser_action_prompt_only_replies_once_for_reused_request(
     monkeypatch,
 ):
+    reset_browser_action_test_state()
     request = SimpleNamespace(request_id="browser_action_existing")
     monkeypatch.setattr(
         browser_action_contract,
@@ -1099,6 +1324,165 @@ async def test_emit_browser_action_prompt_only_replies_once_for_reused_request(
         is_new_round=True,
     )
     send_reply_event.assert_any_await("session_1", "", is_complete=True)
+    reset_browser_action_test_state()
+
+
+@pytest.mark.asyncio
+async def test_browser_action_handoff_serializes_takeover_prompts_per_run(
+    monkeypatch,
+):
+    reset_browser_action_test_state()
+    monkeypatch.setattr(
+        browser_action_runtime, "_get_redis", AsyncMock(return_value=None)
+    )
+    send_browser_user_action_event = AsyncMock()
+    monkeypatch.setattr(browser_action_contract, "send_reply_event", AsyncMock())
+    monkeypatch.setattr(
+        browser_action_contract, "send_browser_state_event", AsyncMock()
+    )
+    monkeypatch.setattr(
+        browser_action_contract,
+        "send_browser_user_action_event",
+        send_browser_user_action_event,
+    )
+
+    first_id = await browser_action_contract.emit_browser_action_handoff(
+        session_id="session_1",
+        platform="deepseek",
+        state="waiting_for_login",
+        action_type="login",
+        message="DeepSeek requires login",
+        action_hint="Login",
+        progress=0.3,
+        reply_markdown="DeepSeek requires login",
+        run_id="run_1",
+    )
+
+    second_task = asyncio.create_task(
+        browser_action_contract.emit_browser_action_handoff(
+            session_id="session_1",
+            platform="kimi",
+            state="waiting_for_login",
+            action_type="login",
+            message="Kimi requires login",
+            action_hint="Login",
+            progress=0.3,
+            reply_markdown="Kimi requires login",
+            run_id="run_1",
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    assert second_task.done() is False
+    assert send_browser_user_action_event.await_count == 1
+
+    await browser_action_runtime.resolve_browser_action_request(first_id, "skip")
+    first_resolution = await browser_action_contract.wait_for_browser_action_outcome(
+        first_id,
+        timeout=1,
+    )
+    second_id = await asyncio.wait_for(second_task, timeout=1)
+
+    assert first_resolution == "skip"
+    assert second_id != first_id
+    assert send_browser_user_action_event.await_count == 2
+    assert send_browser_user_action_event.await_args_list[0].kwargs["platform"] == (
+        "deepseek"
+    )
+    assert send_browser_user_action_event.await_args_list[1].kwargs["platform"] == (
+        "kimi"
+    )
+
+    await browser_action_runtime.resolve_browser_action_request(second_id, "skip")
+    await browser_action_contract.wait_for_browser_action_outcome(second_id, timeout=1)
+    reset_browser_action_test_state()
+
+
+@pytest.mark.asyncio
+async def test_session_cancel_releases_handoff_slot_without_queued_prompt(
+    monkeypatch,
+):
+    reset_browser_action_test_state()
+    monkeypatch.setattr(
+        browser_action_runtime, "_get_redis", AsyncMock(return_value=None)
+    )
+    send_browser_user_action_event = AsyncMock()
+    monkeypatch.setattr(browser_action_contract, "send_reply_event", AsyncMock())
+    monkeypatch.setattr(
+        browser_action_contract, "send_browser_state_event", AsyncMock()
+    )
+    monkeypatch.setattr(
+        browser_action_contract,
+        "send_browser_user_action_event",
+        send_browser_user_action_event,
+    )
+
+    await browser_action_contract.emit_browser_action_handoff(
+        session_id="session_1",
+        platform="deepseek",
+        state="waiting_for_login",
+        action_type="login",
+        message="DeepSeek requires login",
+        action_hint="Login",
+        progress=0.3,
+        reply_markdown="DeepSeek requires login",
+        run_id="run_1",
+    )
+    second_task = asyncio.create_task(
+        browser_action_contract.emit_browser_action_handoff(
+            session_id="session_1",
+            platform="kimi",
+            state="waiting_for_login",
+            action_type="login",
+            message="Kimi requires login",
+            action_hint="Login",
+            progress=0.3,
+            reply_markdown="Kimi requires login",
+            run_id="run_1",
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    await browser_action_runtime.clear_session_browser_action_requests("session_1")
+    await browser_action_contract.release_session_browser_action_handoff_slots(
+        "session_1"
+    )
+    await asyncio.wait_for(second_task, timeout=1)
+
+    assert send_browser_user_action_event.await_count == 1
+    reset_browser_action_test_state()
+
+
+@pytest.mark.asyncio
+async def test_clear_session_browser_action_requests_unblocks_local_waiters(
+    monkeypatch,
+):
+    reset_browser_action_test_state()
+    monkeypatch.setattr(
+        browser_action_runtime, "_get_redis", AsyncMock(return_value=None)
+    )
+    request = await browser_action_runtime.register_browser_action_request(
+        session_id="session_1",
+        platform="deepseek",
+        action_type="login",
+        message="DeepSeek requires login",
+        action_hint="Login",
+        target_url="https://chat.deepseek.com/",
+        progress=0.3,
+    )
+    waiter = asyncio.create_task(
+        browser_action_runtime.wait_for_browser_action_resolution(
+            request.request_id,
+            timeout=10,
+        )
+    )
+    await asyncio.sleep(0)
+
+    await browser_action_runtime.clear_session_browser_action_requests("session_1")
+    resolution = await asyncio.wait_for(waiter, timeout=1)
+
+    assert resolution == "skip"
+    reset_browser_action_test_state()
 
 
 @pytest.mark.asyncio
@@ -1148,7 +1532,7 @@ async def test_wait_for_browser_action_resume_can_trust_runtime_gate(monkeypatch
     handler.probe_resume_gate_ready.assert_not_awaited()
 
 
-def test_full_fetch_user_message_matches_aio_sequential_runtime(monkeypatch):
+def test_full_fetch_user_message_matches_aio_parallel_runtime(monkeypatch):
     monkeypatch.setattr(nodes_a4.settings, "AIO_ENABLED", True)
     monkeypatch.setattr(nodes_a4.settings, "AIO_BASE_URL", "http://127.0.0.1:18180")
 
@@ -1157,9 +1541,40 @@ def test_full_fetch_user_message_matches_aio_sequential_runtime(monkeypatch):
         question_count=13,
     )
 
-    assert "预计总耗时约 10-20 分钟" in message
-    assert "各平台依次采集" in message
-    assert "流水线并行" not in message
+    assert "预计总耗时约 8-15 分钟" in message
+    assert "各平台并行采集" in message
+    assert "依次采集" not in message
+
+
+@pytest.mark.asyncio
+async def test_aio_browser_task_gather_runs_platforms_in_parallel(monkeypatch):
+    monkeypatch.setattr(nodes_a4.settings, "AIO_ENABLED", True)
+    monkeypatch.setattr(nodes_a4.settings, "AIO_BASE_URL", "http://127.0.0.1:18180")
+    monkeypatch.setattr(nodes_a4.settings, "AIO_MAX_PARALLEL_BROWSER_SESSIONS", 4)
+
+    active = 0
+    max_active = 0
+    started = 0
+    lock = asyncio.Lock()
+    all_started = asyncio.Event()
+
+    async def _task(index: int):
+        nonlocal active, max_active, started
+        async with lock:
+            active += 1
+            started += 1
+            max_active = max(max_active, active)
+            if started == 4:
+                all_started.set()
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        async with lock:
+            active -= 1
+        return index
+
+    results = await nodes_a4._gather_browser_tasks([_task(i) for i in range(4)])
+
+    assert results == [0, 1, 2, 3]
+    assert max_active == 4
 
 
 @pytest.mark.asyncio
@@ -1750,22 +2165,6 @@ def test_build_upstream_vnc_websocket_url_preserves_ticket():
 @pytest.mark.asyncio
 async def test_open_takeover_endpoint_reissues_expired_takeover(monkeypatch):
     now = datetime.now(timezone.utc)
-    old_takeover = SpectaAioTakeover(
-        takeover_id="takeover_old",
-        session_id="session_1",
-        workspace_id="workspace_1",
-        user_id="user_1",
-        platform="deepseek",
-        mode="canvas_cdp",
-        reason="manual_intervention",
-        state=AioTakeoverState.EXPIRED,
-        frontend_id=None,
-        requested_at=now - timedelta(minutes=15),
-        issued_at=now - timedelta(minutes=15),
-        expires_at=now - timedelta(minutes=7),
-        request_id="req_reopen",
-        action_type="login",
-    )
     new_takeover = SpectaAioTakeover(
         takeover_id="takeover_new",
         session_id="session_1",

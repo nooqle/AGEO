@@ -161,6 +161,26 @@ class AioSandboxSessionManager:
         return f"{purpose}:{task_id}"
 
     @staticmethod
+    def _normalize_platform_scope(platforms: list[str] | None) -> tuple[str, ...]:
+        if not platforms:
+            return ()
+        normalized: list[str] = []
+        for platform in platforms:
+            value = str(platform or "").strip().lower()
+            if value and value not in normalized:
+                normalized.append(value)
+        return tuple(sorted(normalized))
+
+    @classmethod
+    def _derive_session_workspace_scope(
+        cls, workspace_id: str, platforms: list[str] | None
+    ) -> str:
+        platform_scope = cls._normalize_platform_scope(platforms)
+        if not platform_scope:
+            return workspace_id
+        return f"{workspace_id}::aio-platform::{'+'.join(platform_scope)}"
+
+    @staticmethod
     def _touch_session(session: SpectaAioSession) -> None:
         now = datetime.now(timezone.utc)
         session.last_seen_at = now
@@ -610,11 +630,14 @@ class AioSandboxSessionManager:
         purpose: str,
         platforms: list[str] | None = None,
     ) -> SpectaAioSession:
-        del platforms
+        session_workspace_id = self._derive_session_workspace_scope(
+            workspace_id,
+            platforms,
+        )
         holder = self._make_holder(task_id, purpose)
         async with self._lock:
             return await self._get_or_create_workspace_session_locked(
-                workspace_id=workspace_id,
+                workspace_id=session_workspace_id,
                 holder=holder,
             )
 
@@ -635,13 +658,20 @@ class AioSandboxSessionManager:
         session_id: str,
         task_id: str,
         platform: str,
+        workspace_id: str | None = None,
+        auth_scope_id: str | None = None,
+        run_scope_id: str | None = None,
     ) -> AioPlatformRoots:
         session = await self.get_session(session_id)
+        logical_workspace_id = workspace_id or session.workspace_id
         roots = derive_platform_roots(
             data_root=session.data_root,
-            workspace_id=session.workspace_id,
+            workspace_id=logical_workspace_id,
             task_id=task_id,
             platform=platform,
+            auth_scope_id=auth_scope_id or logical_workspace_id,
+            run_scope_id=run_scope_id or logical_workspace_id,
+            environment=settings.AIO_AUTH_ENV_SCOPE,
         )
         client = self._build_client_for_base_url(session.base_url)
         await client.ensure_directories(
@@ -656,9 +686,12 @@ class AioSandboxSessionManager:
             json.dumps(
                 {
                     "session_id": session.session_id,
-                    "workspace_id": session.workspace_id,
+                    "workspace_id": logical_workspace_id,
+                    "session_workspace_id": session.workspace_id,
                     "task_id": task_id,
                     "platform": platform,
+                    "auth_context_key": roots.auth_context_key,
+                    "run_context_key": roots.run_context_key,
                     "sandbox_ref": session.sandbox_ref,
                     "data_root": session.data_root,
                 },
@@ -668,7 +701,7 @@ class AioSandboxSessionManager:
         )
         await self._upsert_platform_state(
             session_id=session.session_id,
-            workspace_id=session.workspace_id,
+            workspace_id=logical_workspace_id,
             task_id=task_id,
             platform=platform,
             roots=roots,

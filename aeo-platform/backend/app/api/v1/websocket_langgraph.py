@@ -40,6 +40,9 @@ from app.workflow.browser_action_runtime import (
     resolve_browser_action_request,
     update_browser_action_request,
 )
+from app.workflow.browser_action_contract import (
+    release_session_browser_action_handoff_slots,
+)
 from app.workflow.runtime_policy_executor import (
     build_next_required_action,
     get_user_visible_runtime_label,
@@ -2234,6 +2237,7 @@ async def handle_stop_langgraph(websocket: WebSocket, session_id: str) -> None:
         unresolved_status=TaskRunChildAttemptStatus.CANCELLED,
         error_message="任务已取消",
     )
+    await release_session_browser_action_handoff_slots(session_id)
 
     await session_event_publisher.emit_to_session(
         session_id,

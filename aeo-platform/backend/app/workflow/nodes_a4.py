@@ -19,8 +19,24 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
 
+import httpx
 from langgraph.types import Command
 
+from app.core.config import settings
+from app.core.constants import PlatformConstants, WorkflowConstants
+from app.tools.a4_fetch_agent import (
+    AioAnswerFetchTool,
+    build_legacy_platform_configs,
+    normalize_public_platform_id,
+    resolve_platform_display_names,
+    to_executor_platform_id,
+)
+from app.workflow.brand_mentions import content_mentions_brand
+from app.workflow.browser_action_contract import (
+    emit_browser_action_handoff,
+    wait_for_browser_action_outcome,
+    wait_for_browser_action_resume,
+)
 from app.workflow.state import AgentState
 from app.workflow.events import (
     send_progress_event,
@@ -74,34 +90,9 @@ for _handler_mod in [
         _hl.setLevel(logging.DEBUG)
 
 # Platform configurations
-PLATFORMS = {
-    "doubao": {"name": "豆包", "method": "api"},
-    "hunyuan": {"name": "元宝", "method": "api"},
-    "kimi": {"name": "Kimi", "method": "api"},
-    "deepseek": {"name": "DeepSeek", "method": "browser"},
-}
-_PLATFORM_FILTER_ALIASES = {
-    "doubao": "doubao",
-    "豆包": "doubao",
-    "hunyuan": "hunyuan",
-    "yuanbao": "hunyuan",
-    "元宝": "hunyuan",
-    "kimi": "kimi",
-    "deepseek": "deepseek",
-    "deep_seek": "deepseek",
-    "deep seek": "deepseek",
-}
+_AIO_ANSWER_FETCH_TOOL = AioAnswerFetchTool()
 
-import httpx
-
-from app.core.constants import PlatformConstants, WorkflowConstants
-from app.core.config import settings
-from app.workflow.brand_mentions import content_mentions_brand
-from app.workflow.browser_action_contract import (
-    emit_browser_action_handoff,
-    wait_for_browser_action_outcome,
-    wait_for_browser_action_resume,
-)
+PLATFORMS = build_legacy_platform_configs()
 
 # Aliases from centralized constants
 MAX_RETRIES = WorkflowConstants.API_MAX_RETRIES
@@ -111,14 +102,12 @@ MIN_PLATFORMS_REQUIRED = WorkflowConstants.MIN_PLATFORMS_REQUIRED
 
 
 def _canonicalize_platform_id(platform: Any) -> str:
-    """Normalize user/orchestrator platform IDs into A4 canonical keys."""
+    """Normalize user/orchestrator platform IDs into legacy A4 executor keys."""
 
-    if platform is None:
-        return ""
-    value = str(platform).strip()
-    if not value:
-        return ""
-    return _PLATFORM_FILTER_ALIASES.get(value.lower(), value.lower())
+    public_platform = normalize_public_platform_id(platform)
+    if public_platform is None:
+        return str(platform or "").strip().lower()
+    return to_executor_platform_id(public_platform)
 
 
 def _normalize_platform_filter(platform_filter: Any) -> list[str] | None:
@@ -126,9 +115,16 @@ def _normalize_platform_filter(platform_filter: Any) -> list[str] | None:
 
     if not platform_filter:
         return None
+    if isinstance(platform_filter, str):
+        platform_values = [platform_filter]
+    else:
+        try:
+            platform_values = list(platform_filter)
+        except TypeError:
+            platform_values = [platform_filter]
     normalized: list[str] = []
     seen: set[str] = set()
-    for raw in platform_filter:
+    for raw in platform_values:
         canonical = _canonicalize_platform_id(raw)
         if not canonical or canonical in seen:
             continue
@@ -145,9 +141,7 @@ def _should_defer_aio_takeover_open(handler: Any) -> bool:
 def _display_platform_names(platforms: list[str]) -> str:
     """Render canonical platform IDs into user-facing display names."""
 
-    return "、".join(
-        PlatformConstants.PLATFORM_DISPLAY_NAMES.get(p, p) for p in platforms
-    )
+    return resolve_platform_display_names(platforms)
 
 
 def _resolve_fetch_paths(
@@ -235,11 +229,11 @@ def _build_browser_phase_start_message(
     ):
         if browser_names:
             return (
-                f"Phase 1 完成: {_display_platform_names(api_platforms)} API "
-                f"{api_success_total}/{api_task_count} 成功。开始 {browser_names} 浏览器采集..."
+                f"{_display_platform_names(api_platforms)} API 抓取完成，"
+                f"{api_success_total}/{api_task_count} 成功。开始 {browser_names} 浏览器采集。"
             )
         return (
-            f"Phase 1 完成: {_display_platform_names(api_platforms)} API "
+            f"{_display_platform_names(api_platforms)} API 抓取完成，"
             f"{api_success_total}/{api_task_count} 成功。"
         )
 
@@ -248,38 +242,42 @@ def _build_browser_phase_start_message(
     return "启动浏览器采集。"
 
 
-def _get_aio_workspace_scope(state: AgentState) -> str:
-    """Derive the workspace-level session reuse scope for AIO.
+async def _gather_browser_tasks(
+    browser_tasks: list[Coroutine[Any, Any, Any]],
+) -> list[Any]:
+    """Run browser platform pipelines with the configured AIO concurrency cap."""
 
-    Current Specta runtime does not yet expose a dedicated workspace UUID in A4
-    state, so V1 uses the authenticated user scope when available, otherwise it
-    falls back to the session ID. This keeps the behavior deterministic without
-    inventing a second persistence channel.
+    if settings.AIO_ENABLED and settings.AIO_BASE_URL:
+        logger.info(
+            "[A4] Phase 2: AIO runtime detected, executing browser pipelines in parallel (max=%d)",
+            max(1, settings.AIO_MAX_PARALLEL_BROWSER_SESSIONS),
+        )
+
+    return await _AIO_ANSWER_FETCH_TOOL.gather_browser_tasks(browser_tasks)
+
+
+def _get_aio_auth_scope(state: AgentState) -> str:
+    """Derive the long-lived AIO auth scope.
+
+    Login state must follow the imspecta account, not one analysis task.
     """
 
-    return str(state.get("user_id") or state.get("session_id") or "anonymous")
+    return _AIO_ANSWER_FETCH_TOOL.build_auth_context(state).specta_user_id
+
+
+def _get_aio_run_scope(state: AgentState) -> str:
+    """Derive the per-analysis AIO run artifact scope."""
+
+    return _AIO_ANSWER_FETCH_TOOL.build_run_context(state).entity_id
 
 
 def _create_browser_client(platform: str, state: AgentState):
     """Create the browser client selected by current runtime mode."""
 
-    session_name = platform
-    if settings.AIO_ENABLED and settings.AIO_BASE_URL:
-        from app.core.fetchers.browser.aio_connected_client import (
-            AioConnectedBrowserClient,
-        )
-
-        return AioConnectedBrowserClient(
-            session_name=session_name,
-            workspace_id=_get_aio_workspace_scope(state),
-            task_id=str(state.get("task_id") or state.get("session_id") or "unknown"),
-            platform=platform,
-            purpose="a4_browser",
-        )
-
-    from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
-
-    return PlaywrightBrowserClient(session_name=session_name)
+    return _AIO_ANSWER_FETCH_TOOL.create_browser_client(
+        platform=platform,
+        state=state,
+    )
 
 
 class _ProgressTracker:
@@ -701,23 +699,16 @@ def _build_duration_msg(fetch_mode: str, question_count: int) -> str:
     platform_count = len(PlatformConstants.SUPPORTED_PLATFORMS)
 
     if fetch_mode == "full":
-        if settings.AIO_ENABLED and settings.AIO_BASE_URL:
-            pipelines = " / ".join(
-                PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
-                for p in PlatformConstants.SUPPORTED_PLATFORMS
-            )
-            schedule_hint = f"{pipelines} 各平台依次采集"
-        else:
-            pipelines = " / ".join(
-                PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
-                for p in PlatformConstants.SUPPORTED_PLATFORMS
-            )
-            schedule_hint = f"{pipelines} 各平台串行采集，{platform_count} 条流水线并行"
+        pipelines = " / ".join(
+            PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
+            for p in PlatformConstants.SUPPORTED_PLATFORMS
+        )
+        schedule_hint = f"{pipelines} 各平台并行采集"
         return (
             f"开始向{all_names} {platform_count} 个平台提问，共 {question_count} 个问题。\n\n"
             f"- 采集模式：**完整采集**（{platform_count} 平台全浏览器）\n"
             f"- {schedule_hint}\n"
-            f"- 预计总耗时约 10-20 分钟\n\n"
+            f"- 预计总耗时约 8-15 分钟\n\n"
             "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
         )
     else:
@@ -744,7 +735,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
     Supports two modes (controlled by state['fetch_mode']):
     - fast: API (Doubao/Yuanbao/Kimi) + DeepSeek Browser  (~5-10 min)
-    - full: All 4 platforms via Browser only, no API       (~10-20 min)
+    - full: All 4 platforms via Browser only, no API       (~8-15 min)
     """
     session_id = state["session_id"]
     questions = state.get("questions", [])
@@ -756,14 +747,28 @@ async def a4_fetch_node(state: AgentState) -> Command:
     # 显式 tool_args.platforms 优先于历史 state.platform_filter，避免旧范围覆盖当前用户意图。
     raw_platform_filter = normalized_requested_platforms or state.get("platform_filter")
     platform_filter = _normalize_platform_filter(raw_platform_filter)
+    aio_fetch_request = _AIO_ANSWER_FETCH_TOOL.build_request(
+        state=state,
+        questions=questions,
+        brand_profile=brand_profile,
+        mode=fetch_mode,
+        platform_filter=raw_platform_filter,
+    )
     if platform_filter:
         logger.info(
-            "[A4] Platform filter active: raw=%s canonical=%s",
+            "[A4] Platform filter active: raw=%s executor=%s public=%s",
             raw_platform_filter,
             platform_filter,
+            list(aio_fetch_request.platforms),
         )
 
-    logger.info("[A4] fetch_mode=%s, questions=%d", fetch_mode, len(questions))
+    logger.info(
+        "[A4] fetch_mode=%s, questions=%d, auth_context=%s, run_context=%s",
+        fetch_mode,
+        len(questions),
+        aio_fetch_request.auth_context.context_key,
+        aio_fetch_request.run_context.context_key,
+    )
 
     if not questions:
         return Command(
@@ -885,13 +890,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
             # DeepSeek browser: always initialized (both modes)
             try:
                 if _pf is None or "deepseek" in _pf:
-                    from app.core.fetchers.browser.deepseek_handler import (
-                        DeepSeekHandler,
-                    )
-
                     deepseek_browser_client = _create_browser_client("deepseek", state)
-                    deepseek_handler = DeepSeekHandler(
-                        deepseek_browser_client,
+                    deepseek_handler = _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
+                        platform="deepseek",
+                        browser_client=deepseek_browser_client,
                         session_id=session_id,
                         run_id=state.get("run_id"),
                     )
@@ -905,13 +907,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
             if fetch_mode == "full":
                 try:
                     if _pf is None or "kimi" in _pf:
-                        from app.core.fetchers.browser.kimi_handler import KimiHandler
-
                         kimi_browser_client = _create_browser_client("kimi", state)
-                        kimi_browser_handler = KimiHandler(
-                            kimi_browser_client,
-                            session_id=session_id,
-                            run_id=state.get("run_id"),
+                        kimi_browser_handler = (
+                            _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
+                                platform="kimi",
+                                browser_client=kimi_browser_client,
+                                session_id=session_id,
+                                run_id=state.get("run_id"),
+                            )
                         )
                         browser_clients.append(kimi_browser_client)
                         logger.info("[A4] Kimi browser handler initialized")
@@ -921,17 +924,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                 try:
                     if _pf is None or "hunyuan" in _pf:
-                        from app.core.fetchers.browser.yuanbao_handler import (
-                            YuanbaoHandler,
-                        )
-
                         yuanbao_browser_client = _create_browser_client(
                             "yuanbao", state
                         )
-                        yuanbao_handler = YuanbaoHandler(
-                            yuanbao_browser_client,
-                            session_id=session_id,
-                            run_id=state.get("run_id"),
+                        yuanbao_handler = (
+                            _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
+                                platform="yuanbao",
+                                browser_client=yuanbao_browser_client,
+                                session_id=session_id,
+                                run_id=state.get("run_id"),
+                            )
                         )
                         browser_clients.append(yuanbao_browser_client)
                         logger.info("[A4] Yuanbao browser handler initialized")
@@ -941,15 +943,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                 try:
                     if _pf is None or "doubao" in _pf:
-                        from app.core.fetchers.browser.doubao_handler import (
-                            DoubaoHandler as DoubaoWebHandler,
-                        )
-
                         doubao_browser_client = _create_browser_client("doubao", state)
-                        doubao_browser_handler = DoubaoWebHandler(
-                            doubao_browser_client,
-                            session_id=session_id,
-                            run_id=state.get("run_id"),
+                        doubao_browser_handler = (
+                            _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
+                                platform="doubao",
+                                browser_client=doubao_browser_client,
+                                session_id=session_id,
+                                run_id=state.get("run_id"),
+                            )
                         )
                         browser_clients.append(doubao_browser_client)
                         logger.info("[A4] Doubao browser handler initialized")
@@ -978,7 +979,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     step="A4",
                     step_name="AI答案抓取",
                     progress=0.57,
-                    message=f"Phase 1: {total} 个问题 × 豆包、元宝、Kimi API，批量并行抓取中...",
+                    message=f"正在通过 API 抓取：{total} 个问题 × 豆包、元宝、Kimi，批量并行抓取中...",
                 )
 
                 api_tasks = []
@@ -1361,7 +1362,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             browser_tasks = []
             browser_task_platforms = []
-            browser_task_clients = []
             requested_browser_platforms: list[str] = []
 
             # DeepSeek browser: always (both modes)
@@ -1380,7 +1380,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     )
                 )
                 browser_task_platforms.append("deepseek")
-                browser_task_clients.append(deepseek_browser_client)
             elif deepseek_requested:
                 logger.warning(
                     "[A4] Phase 2: DeepSeek skipped (handler=%s, client=%s)",
@@ -1404,7 +1403,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         )
                     )
                     browser_task_platforms.append("kimi")
-                    browser_task_clients.append(kimi_browser_client)
                 elif kimi_requested:
                     logger.warning(
                         "[A4] Phase 2: Kimi skipped (handler=%s, client=%s)",
@@ -1422,7 +1420,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         )
                     )
                     browser_task_platforms.append("hunyuan")
-                    browser_task_clients.append(yuanbao_browser_client)
                 elif yuanbao_requested:
                     logger.warning(
                         "[A4] Phase 2: Yuanbao skipped (handler=%s, client=%s)",
@@ -1446,7 +1443,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         )
                     )
                     browser_task_platforms.append("doubao")
-                    browser_task_clients.append(doubao_browser_client)
                 elif doubao_requested:
                     logger.warning(
                         "[A4] Phase 2: Doubao skipped (handler=%s, client=%s)",
@@ -1460,41 +1456,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     "[A4] Phase 2: Starting %d browser pipeline(s)...",
                     len(browser_tasks),
                 )
-                if settings.AIO_ENABLED and settings.AIO_BASE_URL:
-                    logger.info(
-                        "[A4] Phase 2: AIO runtime detected, executing browser pipelines sequentially to avoid shared-browser focus contention"
-                    )
-                    browser_all_results = []
-                    for task, platform, browser_client in zip(
-                        browser_tasks,
-                        browser_task_platforms,
-                        browser_task_clients,
-                    ):
-                        logger.info(
-                            "[A4] Phase 2: Sequential browser pipeline start platform=%s",
-                            platform,
-                        )
-                        try:
-                            browser_all_results.append(await task)
-                        except BaseException as exc:
-                            browser_all_results.append(exc)
-                        finally:
-                            try:
-                                await browser_client.close()
-                                logger.info(
-                                    "[A4] Phase 2: Sequential browser pipeline closed platform=%s",
-                                    platform,
-                                )
-                            except BaseException as close_exc:
-                                logger.debug(
-                                    "[A4] Browser client close failed after platform=%s: %s",
-                                    platform,
-                                    close_exc,
-                                )
-                else:
-                    browser_all_results = await asyncio.gather(
-                        *browser_tasks, return_exceptions=True
-                    )
+                browser_all_results = await _gather_browser_tasks(browser_tasks)
 
                 for i, br in enumerate(browser_all_results):
                     if isinstance(br, BaseException):

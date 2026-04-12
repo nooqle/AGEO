@@ -33,6 +33,7 @@ const PLATFORM_LABELS = {
   doubao: '豆包',
   deepseek: 'DeepSeek',
   kimi: 'Kimi',
+  yuanbao: '元宝',
   hunyuan: '元宝',
 } as const;
 
@@ -160,6 +161,7 @@ export function BrowserTakeoverContent({
   const [canvasConfig, setCanvasConfig] = useState<AioCanvasConfig | null>(null);
   const [vncConfig, setVncConfig] = useState<AioVncUrl | null>(null);
   const [vncFrameLoaded, setVncFrameLoaded] = useState(false);
+  const [vncFrameVisible, setVncFrameVisible] = useState(false);
   const [renderState, setRenderState] = useState<RenderState>('hidden');
   const [currentMode, setCurrentMode] = useState<'canvas_cdp' | 'vnc_fallback'>(
     normalizeRenderMode(takeoverRegistration?.mode),
@@ -169,6 +171,7 @@ export function BrowserTakeoverContent({
 
   const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const browserUiRef = useRef<BrowserUiController | null>(null);
+  const vncRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canvasCdpEndpoint = canvasConfig?.cdpEndpoint ?? null;
   const takeoverState = takeoverRecord?.takeoverState || 'issued';
@@ -207,7 +210,12 @@ export function BrowserTakeoverContent({
       return;
     }
 
+    if (vncRevealTimerRef.current) {
+      clearTimeout(vncRevealTimerRef.current);
+      vncRevealTimerRef.current = null;
+    }
     setVncFrameLoaded(false);
+    setVncFrameVisible(false);
     const vnc = await withTimeout(
       api.getAioTakeoverVncUrl(vncUrlPath),
       TAKEOVER_REQUEST_TIMEOUT_MS,
@@ -226,6 +234,14 @@ export function BrowserTakeoverContent({
     setRenderState('vnc_ready');
     setStatusText(null);
   }, [setTakeoverMode, takeoverId, vncUrlPath]);
+
+  useEffect(() => {
+    return () => {
+      if (vncRevealTimerRef.current) {
+        clearTimeout(vncRevealTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!takeoverId) {
@@ -652,11 +668,23 @@ export function BrowserTakeoverContent({
                 title={`${platformLabel} takeover`}
                 src={vncConfig.url}
                 className="h-full w-full bg-[#f8fafc]"
+                style={{
+                  opacity: vncFrameVisible ? 1 : 0,
+                  transition: 'opacity 180ms ease',
+                }}
                 allow="fullscreen; clipboard-read; clipboard-write"
                 allowFullScreen
-                onLoad={() => setVncFrameLoaded(true)}
+                onLoad={() => {
+                  setVncFrameLoaded(true);
+                  if (vncRevealTimerRef.current) {
+                    clearTimeout(vncRevealTimerRef.current);
+                  }
+                  vncRevealTimerRef.current = setTimeout(() => {
+                    setVncFrameVisible(true);
+                  }, 1200);
+                }}
               />
-              {!vncFrameLoaded && (
+              {(!vncFrameLoaded || !vncFrameVisible) && (
                 <div className="absolute inset-0 flex items-center justify-center bg-[#f8fafc]">
                   <div className="flex min-w-[280px] flex-col items-center gap-3 rounded-2xl border bg-white px-8 py-7 text-center shadow-sm">
                     <div

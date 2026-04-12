@@ -33,12 +33,16 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         task_id: str,
         platform: str,
         purpose: str = "a4",
+        auth_scope_id: str | None = None,
+        run_scope_id: str | None = None,
     ) -> None:
         super().__init__(session_name=session_name)
         self.workspace_id = workspace_id
         self.task_id = task_id
         self.platform = platform
         self.purpose = purpose
+        self.auth_scope_id = auth_scope_id or workspace_id
+        self.run_scope_id = run_scope_id or workspace_id
         self.browser: Browser | None = None
         self.aio_session_id: str | None = None
         self.platform_roots: AioPlatformRoots | None = None
@@ -133,6 +137,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             session_id=session.session_id,
             task_id=self.task_id,
             platform=self.platform,
+            workspace_id=self.workspace_id,
+            auth_scope_id=self.auth_scope_id,
+            run_scope_id=self.run_scope_id,
         )
         return await aio_session_manager.get_browser_connection(session.session_id)
 
@@ -141,10 +148,22 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             return None
 
         try:
-            file_result = await aio_session_manager.get_runtime_client().read_text_file(
+            runtime_client = aio_session_manager.get_runtime_client()
+            file_result = await runtime_client.read_text_file(
                 self.platform_roots.state_path,
                 missing_ok=True,
             )
+            if file_result is None:
+                file_result = await runtime_client.read_text_file(
+                    self.platform_roots.legacy_state_path,
+                    missing_ok=True,
+                )
+                if file_result is not None:
+                    logger.info(
+                        "[AIO Browser:%s] Loaded legacy auth state for platform=%s; it will be migrated on next save",
+                        self.session_name,
+                        self.platform,
+                    )
         except Exception as exc:
             logger.warning(
                 "[AIO Browser:%s] Failed to read browser_state.json, continuing without storage restore: %s",

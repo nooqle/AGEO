@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePosixPath
+import re
 
 
 class AioBlockerCode(str, Enum):
@@ -92,6 +93,12 @@ class AioPlatformRoots:
     snapshot_root: str
     download_root: str
     extraction_path: str
+    auth_context_key: str
+    run_context_key: str
+    legacy_profile_root: str
+    legacy_cookies_path: str
+    legacy_state_path: str
+    legacy_session_meta_path: str
 
 
 def derive_data_root(home_dir: str) -> str:
@@ -111,29 +118,63 @@ def normalize_takeover_mode(value: str | None) -> str:
     return AioTakeoverMode.CANVAS_CDP.value
 
 
+def _safe_path_segment(value: str | None, fallback: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raw = fallback
+    normalized = re.sub(r"[^A-Za-z0-9_.:-]+", "_", raw)
+    normalized = normalized.strip("._-:")
+    return normalized or fallback
+
+
 def derive_platform_roots(
     *,
     data_root: str,
     workspace_id: str,
     task_id: str,
     platform: str,
+    auth_scope_id: str | None = None,
+    run_scope_id: str | None = None,
+    environment: str | None = None,
 ) -> AioPlatformRoots:
     """Derive canonical profile_root and run_root paths.
 
-    profile_root stores long-lived login state per workspace/platform.
+    profile_root stores long-lived login state per env/user/platform.
     run_root stores per-task snapshots, checkpoints and extracted artifacts.
     """
 
-    normalized_platform = platform.strip().lower()
+    normalized_platform = _safe_path_segment(platform.lower(), "unknown_platform")
+    normalized_workspace = _safe_path_segment(workspace_id, "anonymous")
+    normalized_task = _safe_path_segment(task_id, "unknown_task")
+    normalized_auth_scope = _safe_path_segment(
+        auth_scope_id or workspace_id,
+        "anonymous",
+    )
+    normalized_run_scope = _safe_path_segment(
+        run_scope_id or workspace_id,
+        normalized_workspace,
+    )
+    normalized_env = _safe_path_segment(environment, "default")
+    auth_context_key = f"{normalized_env}/{normalized_auth_scope}/{normalized_platform}"
+    run_context_key = f"{normalized_run_scope}/{normalized_task}/{normalized_platform}"
     profile_root = (
-        PurePosixPath(data_root) / workspace_id / normalized_platform / "profile"
+        PurePosixPath(data_root)
+        / "auth"
+        / normalized_env
+        / normalized_auth_scope
+        / normalized_platform
+        / "profile"
     )
     run_root = (
         PurePosixPath(data_root)
-        / workspace_id
-        / task_id
+        / "runs"
+        / normalized_run_scope
+        / normalized_task
         / normalized_platform
         / "run"
+    )
+    legacy_profile_root = (
+        PurePosixPath(data_root) / normalized_workspace / normalized_platform / "profile"
     )
     return AioPlatformRoots(
         profile_root=str(profile_root),
@@ -145,4 +186,10 @@ def derive_platform_roots(
         snapshot_root=str(run_root / "snapshots"),
         download_root=str(run_root / "downloads"),
         extraction_path=str(run_root / "extraction.json"),
+        auth_context_key=auth_context_key,
+        run_context_key=run_context_key,
+        legacy_profile_root=str(legacy_profile_root),
+        legacy_cookies_path=str(legacy_profile_root / "cookies.json"),
+        legacy_state_path=str(legacy_profile_root / "browser_state.json"),
+        legacy_session_meta_path=str(legacy_profile_root / "session_meta.json"),
     )

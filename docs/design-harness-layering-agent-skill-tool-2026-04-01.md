@@ -46,6 +46,37 @@ AGEO 后续应该以如下关系作为稳定共识：
 4. `Prompt` 只是 `Harness` 的一部分
 5. `Harness` 不应只负责“记录状态”，还应负责“治理确定性”
 
+### 2.1 AIO Answer Fetch Tool 的归位
+
+AIO 相关能力应作为本分层模型的一个具体样例来理解：
+
+```text
+Orchestrator
+  -> answer fetch capability
+    -> Fetch Answer Agent / A4 executor
+      -> AIO Answer Fetch Tool
+        -> AIO Runtime
+          -> Playwright Browser Agent
+          -> Chromium / CDP / VNC
+          -> AuthContext / RunContext
+      -> Result Packet
+    -> Artifact Writeback
+```
+
+边界结论：
+
+1. `AIO` 不是新的 public skill。
+2. `AIO` 不是前端 Canvas 交付物。
+3. `AIO` 也不应该长期只是后端远程连 CDP 的临时技巧。
+4. `AIO Answer Fetch Tool` 是 `A4 / Fetch Answer Agent` 调用的 Browser Execution Tool Facade。
+5. `AIO Runtime` 内部应承载 Playwright executor、浏览器、VNC 接管、AuthContext、RunContext。
+6. Agent 通过 Tool 操作浏览器，但不直接维护 CDP page、tab 或前端 VNC 状态。
+
+完整设计见：
+
+1. [AIO Answer Fetch Tool 架构归位](./architecture-aio-answer-fetch-tool-runtime-2026-04-12.md)
+2. [AIO Answer Fetch Tool 生产级架构设计](./design-aio-parallel-playwright-context-2026-04-11.md)
+
 ---
 
 ## 3. 五层边界定义
@@ -175,11 +206,13 @@ AGEO 后续应该以如下关系作为稳定共识：
 2. `knowledge_lookup / aggregate / compare / export` 更像 tool
 3. `question generation` 如果只是生成问题，本质更像 tool 或 executor 内部模块
 4. “消费者专家”更像角色设定或 executor 视角，而不是 tool
+5. `AIO Answer Fetch Tool` 是 A4 使用的浏览器执行 Tool Facade，内部可以拆分为 browser action、takeover、auth state、run artifact 等原子工具
 
 这意味着：
 
 1. `A3` 当前之所以显得混，是因为它同时承担了角色、动作和节点三种语义
 2. 后续应逐步拆开，而不是继续在一个名词里叠加三层语义
+3. `AIO` 当前之所以容易混，是因为它同时被看成 runtime、前端云电脑、CDP 连接和答案抓取能力；后续必须统一收敛为 Tool / Runtime Capability
 
 ---
 
@@ -228,7 +261,7 @@ AGEO 后续应该以如下关系作为稳定共识：
 
 当前主控提示词：
 
-- [aeo-platform/backend/prompts/general_react_agent.md](D:/AGEO-worktrees/validation-retro-harness/aeo-platform/backend/prompts/general_react_agent.md)
+- [aeo-platform/backend/prompts/general_react_agent.md](../aeo-platform/backend/prompts/general_react_agent.md)
 
 ### 4.1 当前提示词做对了什么
 
@@ -475,6 +508,12 @@ Claude Code 会区分：
 4. `knowledge_compare`
 5. `knowledge_export`
 6. 各类确定性 persistence / normalization / artifact write-back 动作
+7. `aio_answer_fetch`
+   - 它不是新的 public skill，而是 `A4 / Fetch Answer Agent` 调用的粗粒度 browser execution tool
+   - 内部必须统一覆盖豆包、元宝、Kimi、DeepSeek 四个平台
+   - 普通弹窗、广告、Cookie、页面恢复应由 AIO Browser Agent 自动处理
+   - 登录、验证码、人机验证、账号安全确认才进入 human takeover
+   - 返回结构化 result packet 后再由 A4 写入 Artifact
 
 对于 `question generation`，建议暂时保持审慎：
 

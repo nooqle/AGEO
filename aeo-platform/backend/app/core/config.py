@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     AIO_TAKEOVER_HEARTBEAT_INTERVAL_MS: int = 10000
     AIO_TAKEOVER_ISSUED_TTL_SECONDS: int = 480
     AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS: int = 30
+    AIO_MAX_PARALLEL_BROWSER_SESSIONS: int = 4
+    AIO_AUTH_ENV_SCOPE: str = "default"
 
     # LLM Orchestration Mode (v2)
     USE_LLM_ORCHESTRATION: bool = False

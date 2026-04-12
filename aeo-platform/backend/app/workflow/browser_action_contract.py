@@ -30,6 +30,57 @@ from app.workflow.events import (
 logger = logging.getLogger(__name__)
 
 _aio_takeover_by_request_id: dict[str, dict[str, Any]] = {}
+_handoff_slot_locks: dict[str, asyncio.Lock] = {}
+_handoff_slot_by_request_id: dict[str, str] = {}
+_handoff_slot_guard = asyncio.Lock()
+
+
+def _build_handoff_slot_scope(session_id: str, run_id: str | None) -> str:
+    return f"{session_id}:{run_id or 'session'}"
+
+
+async def _acquire_browser_action_handoff_slot(
+    *, session_id: str, run_id: str | None
+) -> str:
+    """Serialize user-visible takeover prompts per active workflow run."""
+
+    scope = _build_handoff_slot_scope(session_id, run_id)
+    async with _handoff_slot_guard:
+        lock = _handoff_slot_locks.get(scope)
+        if lock is None:
+            lock = asyncio.Lock()
+            _handoff_slot_locks[scope] = lock
+    await lock.acquire()
+    return scope
+
+
+async def _release_browser_action_handoff_slot(request_id: str) -> None:
+    scope = _handoff_slot_by_request_id.pop(request_id, None)
+    if not scope:
+        return
+    lock = _handoff_slot_locks.get(scope)
+    if lock is not None and lock.locked():
+        lock.release()
+
+
+async def release_session_browser_action_handoff_slots(session_id: str) -> None:
+    """Release process-local takeover slots when a session task is cancelled."""
+
+    prefix = f"{session_id}:"
+    request_ids = [
+        request_id
+        for request_id, scope in list(_handoff_slot_by_request_id.items())
+        if scope.startswith(prefix)
+    ]
+    for request_id in request_ids:
+        await _release_browser_action_handoff_slot(request_id)
+
+
+async def _browser_action_request_is_active(request: Any) -> bool:
+    if not hasattr(request, "event"):
+        return True
+    active_request = await get_browser_action_request(request.request_id)
+    return active_request is not None and active_request.resolution is None
 
 
 def _build_aio_readiness_probe(handler: Any, action_type: str):
@@ -313,52 +364,73 @@ async def emit_browser_action_handoff(
         run_id=run_id,
         state=state,
     )
-    if takeover is None and handler is not None:
-        takeover = await ensure_aio_takeover_bundle(
-            handler=handler,
-            user_id=user_id,
-            platform=platform,
+    slot_acquired = False
+    if request.request_id not in _handoff_slot_by_request_id:
+        slot_scope = await _acquire_browser_action_handoff_slot(
+            session_id=session_id,
+            run_id=run_id,
+        )
+        _handoff_slot_by_request_id[request.request_id] = slot_scope
+        slot_acquired = True
+
+    try:
+        if not await _browser_action_request_is_active(request):
+            await _release_browser_action_handoff_slot(request.request_id)
+            return request.request_id
+
+        if takeover is None and handler is not None:
+            takeover = await ensure_aio_takeover_bundle(
+                handler=handler,
+                user_id=user_id,
+                platform=platform,
+                request_id=request.request_id,
+                action_type=action_type,
+                message=message,
+                target_url=resolved_target_url,
+            )
+        if not await _browser_action_request_is_active(request):
+            await _release_browser_action_handoff_slot(request.request_id)
+            return request.request_id
+        await persist_browser_action_takeover(
             request_id=request.request_id,
-            action_type=action_type,
-            message=message,
+            state=state,
+            takeover=takeover,
             target_url=resolved_target_url,
         )
-    await persist_browser_action_takeover(
-        request_id=request.request_id,
-        state=state,
-        takeover=takeover,
-        target_url=resolved_target_url,
-    )
-    if created_new:
-        await send_reply_event(
-            session_id,
-            reply_markdown,
-            is_delta=True,
-            is_new_round=True,
+        if created_new:
+            await send_reply_event(
+                session_id,
+                reply_markdown,
+                is_delta=True,
+                is_new_round=True,
+            )
+            await send_reply_event(session_id, "", is_complete=True)
+        await send_browser_state_event(
+            session_id=session_id,
+            platform=platform,
+            state=state,
+            message=message,
+            progress=progress,
+            requires_action=True,
+            action_hint=action_hint,
+            request_id=request.request_id,
+            takeover=takeover,
         )
-        await send_reply_event(session_id, "", is_complete=True)
-    await send_browser_state_event(
-        session_id=session_id,
-        platform=platform,
-        state=state,
-        message=message,
-        progress=progress,
-        requires_action=True,
-        action_hint=action_hint,
-        request_id=request.request_id,
-        takeover=takeover,
-    )
-    await send_browser_user_action_event(
-        session_id=session_id,
-        platform=platform,
-        state=state,
-        action_type=action_type,
-        message=message,
-        progress=progress,
-        action_hint=action_hint,
-        request_id=request.request_id,
-        takeover=takeover,
-    )
+        await send_browser_user_action_event(
+            session_id=session_id,
+            platform=platform,
+            state=state,
+            action_type=action_type,
+            message=message,
+            progress=progress,
+            action_hint=action_hint,
+            request_id=request.request_id,
+            takeover=takeover,
+        )
+    except Exception:
+        if slot_acquired:
+            await _release_browser_action_handoff_slot(request.request_id)
+        raise
     return request.request_id
 
 
@@ -376,6 +448,7 @@ async def wait_for_browser_action_outcome(
         return resolution
     finally:
         _aio_takeover_by_request_id.pop(request_id, None)
+        await _release_browser_action_handoff_slot(request_id)
         await clear_browser_action_request(request_id)
 
 
