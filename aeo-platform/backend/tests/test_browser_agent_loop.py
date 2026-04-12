@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.fetchers.browser.browser_agent_contract import BrowserAgentLoopContext
 from app.core.fetchers.browser.browser_agent_loop import (
     BrowserAgentBootstrapPolicy,
     collect_browser_agent_step,
@@ -43,9 +44,15 @@ async def test_collect_browser_agent_step_uses_bootstrap_policy():
     step = await collect_browser_agent_step(
         client=_FakeClient(),
         platform="kimi",
+        loop_context=BrowserAgentLoopContext(
+            platform="kimi",
+            stage="preflight",
+            target_url="https://kimi.com/",
+        ),
         target_url="https://kimi.com/",
     )
 
+    assert step.loop_context.stage == "preflight"
     assert step.observation.platform == "kimi"
     assert isinstance(BrowserAgentBootstrapPolicy(), BrowserAgentBootstrapPolicy)
     assert step.decision.outcome == "takeover_required"

@@ -22,6 +22,7 @@ from app.core.fetchers.browser.aio_backend import AioSandboxBackend
 from app.core.fetchers.browser.browser_agent_contract import (
     BrowserAgentAction,
     BrowserAgentDecision,
+    BrowserAgentLoopContext,
 )
 from app.core.fetchers.browser.browser_agent_loop import collect_browser_agent_step
 from app.core.fetchers.browser.parsers.base import (
@@ -486,6 +487,22 @@ class BaseBrowserHandler(ABC):
             )
             return None
 
+    def _build_browser_agent_loop_context(
+        self,
+        *,
+        stage: str,
+        url: str | None = None,
+        note: str | None = None,
+        meta: dict | None = None,
+    ) -> BrowserAgentLoopContext:
+        return BrowserAgentLoopContext(
+            platform=self.PLATFORM.value,
+            stage=stage,
+            target_url=url or self.URL,
+            note=note,
+            meta=dict(meta or {}),
+        )
+
     async def _execute_browser_agent_action(
         self,
         action: BrowserAgentAction,
@@ -580,6 +597,10 @@ class BaseBrowserHandler(ABC):
             step = await collect_browser_agent_step(
                 client=self.client,
                 platform=self.PLATFORM.value,
+                loop_context=self._build_browser_agent_loop_context(
+                    stage="preflight",
+                    url=url or self.URL,
+                ),
                 target_url=url or self.URL,
                 screenshot_provider=self._browser_agent_screenshot_provider,
             )
@@ -692,6 +713,15 @@ class BaseBrowserHandler(ABC):
                 step = await collect_browser_agent_step(
                     client=self.client,
                     platform=self.PLATFORM.value,
+                    loop_context=self._build_browser_agent_loop_context(
+                        stage="wait_gate",
+                        url=target_url or self.URL,
+                        meta={
+                            "waited_seconds": waited,
+                            "min_content_len": min_content_len,
+                            "stable_rounds": stable_rounds,
+                        },
+                    ),
                     target_url=target_url or self.URL,
                     screenshot_provider=self._browser_agent_screenshot_provider,
                 )
@@ -793,6 +823,10 @@ class BaseBrowserHandler(ABC):
         step = await collect_browser_agent_step(
             client=self.client,
             platform=self.PLATFORM.value,
+            loop_context=self._build_browser_agent_loop_context(
+                stage="empty_answer",
+                url=fallback_url or self.URL,
+            ),
             target_url=fallback_url or self.URL,
             screenshot_provider=self._browser_agent_screenshot_provider,
         )
@@ -911,6 +945,10 @@ class BaseBrowserHandler(ABC):
             step = await collect_browser_agent_step(
                 client=self.client,
                 platform=self.PLATFORM.value,
+                loop_context=self._build_browser_agent_loop_context(
+                    stage="resume_probe",
+                    url=target_url or self.URL,
+                ),
                 target_url=target_url or self.URL,
                 screenshot_provider=self._browser_agent_screenshot_provider,
             )

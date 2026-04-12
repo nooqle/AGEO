@@ -13,14 +13,19 @@ __all__ = [
     "AgentBrowserClient",
     "PlaywrightBrowserClient",
     "BrowserAgentAction",
+    "BrowserAgentLoopContext",
     "BrowserAgentDecision",
     "BrowserPageObservation",
     "BrowserTakeoverNeed",
     "BrowserAgentBootstrapPolicy",
+    "HybridBrowserAgentPolicy",
+    "LLMBrowserAgentPolicy",
     "BrowserAgentLoopStep",
     "collect_browser_page_observation",
     "collect_browser_agent_step",
+    "build_default_browser_agent_policy",
     "decide_browser_preflight",
+    "loop_context_to_llm_payload",
     "observation_to_llm_json",
     "observation_to_llm_payload",
     "requires_human_takeover",
@@ -47,6 +52,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "app.core.fetchers.browser.browser_agent_contract",
         "BrowserAgentDecision",
     ),
+    "BrowserAgentLoopContext": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "BrowserAgentLoopContext",
+    ),
     "BrowserPageObservation": (
         "app.core.fetchers.browser.browser_agent_contract",
         "BrowserPageObservation",
@@ -58,6 +67,14 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "BrowserAgentBootstrapPolicy": (
         "app.core.fetchers.browser.browser_agent_loop",
         "BrowserAgentBootstrapPolicy",
+    ),
+    "HybridBrowserAgentPolicy": (
+        "app.core.fetchers.browser.browser_agent_loop",
+        "HybridBrowserAgentPolicy",
+    ),
+    "LLMBrowserAgentPolicy": (
+        "app.core.fetchers.browser.browser_agent_loop",
+        "LLMBrowserAgentPolicy",
     ),
     "BrowserAgentLoopStep": (
         "app.core.fetchers.browser.browser_agent_loop",
@@ -71,9 +88,17 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "app.core.fetchers.browser.browser_agent_loop",
         "collect_browser_agent_step",
     ),
+    "build_default_browser_agent_policy": (
+        "app.core.fetchers.browser.browser_agent_loop",
+        "build_default_browser_agent_policy",
+    ),
     "decide_browser_preflight": (
         "app.core.fetchers.browser.browser_agent_policy",
         "decide_browser_preflight",
+    ),
+    "loop_context_to_llm_payload": (
+        "app.core.fetchers.browser.browser_agent_contract",
+        "loop_context_to_llm_payload",
     ),
     "observation_to_llm_json": (
         "app.core.fetchers.browser.browser_agent_contract",

@@ -56,6 +56,13 @@ BrowserDecisionOutcome = Literal[
     "failed",
 ]
 
+BrowserAgentStage = Literal[
+    "preflight",
+    "wait_gate",
+    "resume_probe",
+    "empty_answer",
+]
+
 HUMAN_TAKEOVER_BLOCKERS: frozenset[BrowserBlockerKind] = frozenset(
     {
         "login",
@@ -108,6 +115,15 @@ class BrowserAgentDecision:
     confidence: float = 0.0
     takeover: BrowserTakeoverNeed | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserAgentLoopContext:
+    platform: str
+    stage: BrowserAgentStage
+    target_url: str | None = None
+    note: str | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 ScreenshotProvider = Callable[[], Awaitable[dict[str, Any] | None]]
@@ -269,6 +285,16 @@ def observation_to_llm_payload(observation: BrowserPageObservation) -> dict[str,
         "visible_text_excerpt": observation.visible_text_excerpt,
         "meta": dict(observation.meta),
         "screenshot": observation.screenshot,
+    }
+
+
+def loop_context_to_llm_payload(loop_context: BrowserAgentLoopContext) -> dict[str, Any]:
+    return {
+        "platform": loop_context.platform,
+        "stage": loop_context.stage,
+        "target_url": loop_context.target_url,
+        "note": loop_context.note,
+        "meta": dict(loop_context.meta),
     }
 
 

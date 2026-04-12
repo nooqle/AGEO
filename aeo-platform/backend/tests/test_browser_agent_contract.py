@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from app.core.fetchers.browser.browser_agent_contract import (
+    BrowserAgentLoopContext,
     collect_browser_page_observation,
+    loop_context_to_llm_payload,
     observation_to_llm_payload,
     requires_human_takeover,
 )
@@ -99,3 +101,21 @@ def test_requires_human_takeover_marks_only_hard_blockers():
     assert requires_human_takeover("popup") is False
     assert requires_human_takeover("blank_page") is False
     assert requires_human_takeover("target_closed") is False
+
+
+def test_loop_context_to_llm_payload_preserves_stage_and_meta():
+    payload = loop_context_to_llm_payload(
+        BrowserAgentLoopContext(
+            platform="kimi",
+            stage="resume_probe",
+            target_url="https://kimi.com/",
+            note="after manual resolve",
+            meta={"waited_seconds": 12},
+        )
+    )
+
+    assert payload["platform"] == "kimi"
+    assert payload["stage"] == "resume_probe"
+    assert payload["target_url"] == "https://kimi.com/"
+    assert payload["note"] == "after manual resolve"
+    assert payload["meta"]["waited_seconds"] == 12

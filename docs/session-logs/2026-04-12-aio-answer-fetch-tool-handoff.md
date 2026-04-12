@@ -291,20 +291,29 @@ Select-String affected files -Pattern "\?\?\?"
    - 当前默认是 `BrowserAgentBootstrapPolicy`
    - `collect_browser_agent_step(...)` 统一负责 `observe -> decide`
    - `BaseBrowserHandler` 不再直接绑死某个 policy 实现
-8. 四个平台在 DOM fallback / 空答案阶段也开始走公共 Browser Agent wait gate：
+8. Browser Agent loop 继续升级为“阶段上下文 + 混合执行器”：
+   - 新增 `BrowserAgentLoopContext`，把 `preflight / wait_gate / resume_probe / empty_answer` 阶段信息显式带进 loop
+   - 新增 `HybridBrowserAgentPolicy`
+   - 新增 `LLMBrowserAgentPolicy`（默认关闭，作为后续真正 agent-driven browser policy 的运行时入口）
+   - `build_default_browser_agent_policy()` 负责按配置选择默认执行器，而不是让 BaseHandler 直接假定只有 bootstrap policy
+9. 四个平台在 DOM fallback / 空答案阶段也开始走公共 Browser Agent wait gate：
    - 提交后再弹登录/验证，不再只靠 Kimi 私有 late-login 检测
    - SSE 明确返回 `auth_required / verify / captcha` 时，也先尝试映射到公共 takeover
    - “未能提取到有效回答”前会先让 Browser Agent 再看一轮当前页面
-9. 手动“我已完成”后的 resume probe 开始优先走共享 Browser Agent 当前页观察：
+10. 手动“我已完成”后的 resume probe 开始优先走共享 Browser Agent 当前页观察：
    - 新增 `BaseBrowserHandler._browser_agent_resume_probe_ready(...)`
    - `login / verify / captcha / security_confirmation / account_selection` 先用共享 observation 判断 blocker 是否已解除
    - Doubao / Yuanbao / Kimi / DeepSeek 的平台专属 readiness check 改成 fallback，不再是唯一事实来源
-10. parser 错误、wait blocker、空答案兜底继续往 Base 收：
+11. parser 错误、wait blocker、空答案兜底继续往 Base 收：
    - 新增 `BaseBrowserHandler._handle_browser_agent_parser_error(...)`
    - 新增 `BaseBrowserHandler._handle_browser_agent_wait_blocker(...)`
    - 新增 `BaseBrowserHandler._handle_browser_agent_empty_answer(...)`
    - 四个平台进一步减少对 blocker 恢复分支的直接拼接
-11. 新增 `tests/test_browser_agent_resume_probe.py`，覆盖 login/modal 的共享 resume probe 行为
+12. 新增 `tests/test_browser_agent_resume_probe.py`，覆盖 login/modal 的共享 resume probe 行为
+13. 新增 `tests/test_browser_agent_llm_policy.py`，覆盖：
+   - LLM policy JSON 解析
+   - bootstrap 优先、LLM 次级的 hybrid 行为
+   - 默认 policy 的配置选择
 ```
 
 仍有未跟踪文件：
@@ -325,10 +334,11 @@ aeo-platform/backend/scripts/probe_aio_parallel_contexts.py
 6. 如果底层只有一个可视 browser process，VNC focus / tab 互扰仍可能存在。
 7. 登录态复用闭环必须通过真实 UAT 验证：`takeover -> resume_probe -> persist auth state -> next run reuse`。
 8. 真实“雅姿”四平台全浏览器 UAT 尚未完成。
-9. 当前这轮 Browser Agent 还只是 bootstrap policy，不是最终的 LLM-driven browser loop；页面理解控制权已经开始从平台 handler 收回到公共层，但平台旧逻辑还没有完全删除。
-10. `network intercept -> ParsedResponse` 这一路仍然有平台 parser 差异；目前只是把其 `auth_required / verify` 结果先映射进公共 takeover，还没有完全进入统一 Browser Agent runtime。
-11. 共享 resume probe 已经落地，但当前仍是“共享 observation 优先 + 平台 fallback”双轨，平台专属 probe 还没有完全删除。
-12. 当前本地 worktree 和共享 env 都没有配置 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`，因此真实 AIO probe / UAT 目前被运行时配置阻塞，而不是被代码测试阻塞。
+9. 当前 Browser Agent 已经不再只有 bootstrap seam，而是具备“阶段上下文 + hybrid executor”骨架；但 LLM policy 默认仍关闭，避免未验证前直接进入生产路径。
+10. 当前这轮 Browser Agent 还不是最终的 LLM-driven browser loop；页面理解控制权已经开始从平台 handler 收回到公共层，但平台旧逻辑还没有完全删除。
+11. `network intercept -> ParsedResponse` 这一路仍然有平台 parser 差异；目前只是把其 `auth_required / verify` 结果先映射进公共 takeover，还没有完全进入统一 Browser Agent runtime。
+12. 共享 resume probe 已经落地，但当前仍是“共享 observation 优先 + 平台 fallback”双轨，平台专属 probe 还没有完全删除。
+13. 当前本地 worktree 和共享 env 都没有配置 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`，因此真实 AIO probe / UAT 目前被运行时配置阻塞，而不是被代码测试阻塞。
 
 ## Next Step
 
@@ -339,4 +349,4 @@ aeo-platform/backend/scripts/probe_aio_parallel_contexts.py
 3. P2：运行 AIO 并行 context probe，确认当前 runtime 支持多 context、多 page、多 browser process 还是必须多 sandbox lease。
 4. 继续把 `network intercept` 之后的错误恢复、空答案复判、登录恢复 probe 逐步迁到统一 Browser Agent runtime，并减少平台 fallback。
 5. 在共享 env 补齐 AIO 运行时配置后，跑真实“雅姿”四平台完整采集 UAT，记录卡点并修复。
-6. P3：在 P1/P2 明确后，再把 `BrowserAgentBootstrapPolicy` 换成真正的 LLM-driven Browser Agent policy / executor。
+6. P3：在 P1/P2 明确后，让 `LLMBrowserAgentPolicy` 真正接管默认执行路径，逐步替代 `BrowserAgentBootstrapPolicy` 只作为 deterministic guardrail。

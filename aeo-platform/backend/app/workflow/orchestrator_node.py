@@ -1563,7 +1563,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 用户基于已有结果要求深入分析、历史对比、解释原因、提炼风险时：post_analysis_skill。
                 - 用户要求重新抓取、重跑部分平台、全量重跑、或从 API 改为浏览器模式时：统一走 answer_fetch，不要再发明 refetch 类能力名。
                 - 用户选择“直接提问”时，禁止再次 ask_user 给子选项；直接自然语言引导用户在输入框中继续追问。
-                - 当前会话里如果已有 fetch_results 或 report，且用户是在追问“本次报告/本次抓取”的细节，优先使用 post_analysis_skill / drill_down_analysis，不要先走 knowledge_*。
+                - 当前会话里如果已有 fetch_results 或 report，且用户是在追问“本次报告/本次抓取”的细节，应先依赖当前回合工具面收敛后的深挖入口；若已收敛到 drill_down_analysis，就直接使用它，不要再先走 knowledge_* 或泛化后续分析入口。
                 - 只有用户明确在问跨历史材料、历史月份、历史导出、最近两次变化时，才优先使用 knowledge_*。
                 - 围绕历史品牌/竞品/答案/引用时，优先 knowledge_lookup；围绕历史汇总时，优先 knowledge_aggregate；明确导出时，优先 knowledge_export；比较最近两轮变化时，优先 knowledge_compare。
                 """
