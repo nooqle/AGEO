@@ -31,6 +31,23 @@ class DeepSeekHandler(BaseBrowserHandler):
     URL = "https://chat.deepseek.com/"
     PLATFORM = Platform.DEEPSEEK
     PLATFORM_KEY = "deepseek"
+    BROWSER_READY_URL_PATTERNS = ("chat.deepseek.com",)
+    BROWSER_LOGIN_URL_PATTERNS = ("sign_in", "login", "auth")
+    BROWSER_READY_HINTS = ("联网搜索", "new chat", "textarea")
+    BROWSER_LOGIN_HINTS = (
+        "scan with wechat to login",
+        "send code",
+        "phone number",
+        "verification code",
+        "二维码",
+        "手机号",
+    )
+    BROWSER_LATE_BLOCKER_HINTS = (
+        "scan with wechat to login",
+        "verification",
+        "人机验证",
+        "安全验证",
+    )
 
     _DEFAULTS: dict = {
         "input": "textarea",
@@ -114,28 +131,7 @@ class DeepSeekHandler(BaseBrowserHandler):
             if should_abort:
                 return
 
-            # Step 3: Check login
-            yield self._create_event(BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3)
-            INPUT_READY_SELECTOR = self._sel("input_ready")
-            input_ready = await self._check_login_status(INPUT_READY_SELECTOR)
-
-            if not input_ready:
-                waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
-                action_hint = "请在弹出的浏览器窗口中完成 DeepSeek 登录，完成后点击“我已完成”"
-                events, request_id = await self._begin_login_takeover_gate(
-                    message=waiting_message,
-                    action_hint=action_hint,
-                    progress=0.35,
-                    url=self.URL,
-                    open_error_message="无法打开登录浏览器，请重试",
-                )
-                for event in events:
-                    yield event
-                if not request_id:
-                    return
-                return
-
-            # Step 4: Ensure web search is ON
+            # Step 3: Ensure web search is ON
             yield self._create_event(BrowserState.ENABLING_SEARCH, "确认联网搜索已开启...", progress=0.5)
             if self.client.page is not None:
                 await self._ensure_web_search_on()

@@ -105,6 +105,8 @@ function resolveBrowserActionMessageId(
 function buildBrowserCanvasContent(state: BrowserState): CanvasContent | null {
   const takeoverId = state.takeover?.takeoverId;
   if (!takeoverId) return null;
+  const blockingUrl = state.takeover?.blockingUrl || state.blockingUrl;
+  const targetUrl = blockingUrl || state.takeover?.targetUrl;
   return {
     id: 'browser_runtime_workspace',
     type: 'browser',
@@ -114,7 +116,7 @@ function buildBrowserCanvasContent(state: BrowserState): CanvasContent | null {
       platform: state.platform,
       browserState: state,
       mode: state.takeover?.mode,
-      targetUrl: state.takeover?.targetUrl,
+      targetUrl,
       description: state.message,
       itemCount: 1,
     },
@@ -129,6 +131,13 @@ function buildBrowserTakeoverFromRecord(record: AioTakeoverRecord): NonNullable<
   return {
     takeoverId: record.takeoverId,
     mode: record.mode,
+    actionType:
+      record.actionType === 'login' || record.actionType === 'verify' || record.actionType === 'modal'
+        ? record.actionType
+        : record.accessBundle.actionType === 'login' || record.accessBundle.actionType === 'verify' || record.accessBundle.actionType === 'modal'
+          ? record.accessBundle.actionType
+          : undefined,
+    reasonCode: record.reasonCode ?? record.accessBundle.reasonCode ?? undefined,
     openPath: record.accessBundle.openPath ?? undefined,
     canvasConfigPath: record.accessBundle.canvasConfigPath || undefined,
     vncUrlPath: record.accessBundle.vncUrlPath || undefined,
@@ -137,13 +146,63 @@ function buildBrowserTakeoverFromRecord(record: AioTakeoverRecord): NonNullable<
     cancelPath: record.accessBundle.cancelPath || undefined,
     expiresAt: record.expiresAt || undefined,
     targetUrl: record.targetUrl ?? record.accessBundle.targetUrl ?? undefined,
+    blockingUrl: record.blockingUrl ?? record.accessBundle.blockingUrl ?? undefined,
+    blockingFingerprint:
+      record.blockingFingerprint ?? record.accessBundle.blockingFingerprint ?? undefined,
+  };
+}
+
+function buildCancelledTakeoverRecord(
+  state: BrowserState,
+  sessionId: string,
+): AioTakeoverRecord | null {
+  const takeover = state.takeover;
+  if (!takeover?.takeoverId) {
+    return null;
+  }
+
+  return {
+    takeoverId: takeover.takeoverId,
+    sessionId,
+    platform: state.platform,
+    mode: takeover.mode ?? STABLE_AIO_TAKEOVER_MODE,
+    reason: state.actionHint || state.message,
+    takeoverState: 'cancelled',
+    actionType: takeover.actionType ?? state.actionType ?? null,
+    reasonCode: takeover.reasonCode ?? state.reasonCode ?? null,
+    frontendId: null,
+    requestedAt: null,
+    issuedAt: null,
+    expiresAt: takeover.expiresAt ?? null,
+    lastHeartbeatAt: null,
+    resumeGateResult: null,
+    targetUrl: takeover.targetUrl ?? null,
+    blockingUrl: takeover.blockingUrl ?? state.blockingUrl ?? null,
+    blockingFingerprint:
+      takeover.blockingFingerprint ?? state.blockingFingerprint ?? null,
+    accessBundle: {
+      openPath: takeover.openPath ?? null,
+      canvasConfigPath: takeover.canvasConfigPath ?? '',
+      vncUrlPath: takeover.vncUrlPath ?? '',
+      heartbeatPath: takeover.heartbeatPath ?? '',
+      resolvePath: takeover.resolvePath ?? '',
+      cancelPath: takeover.cancelPath ?? '',
+      actionType: takeover.actionType ?? state.actionType ?? null,
+      reasonCode: takeover.reasonCode ?? state.reasonCode ?? null,
+      targetUrl: takeover.targetUrl ?? null,
+      blockingUrl: takeover.blockingUrl ?? state.blockingUrl ?? null,
+      blockingFingerprint:
+        takeover.blockingFingerprint ?? state.blockingFingerprint ?? null,
+    },
   };
 }
 
 function getBrowserActionCardKey(state: BrowserState): string {
   return state.requestId
     || state.takeover?.takeoverId
-    || `${state.platform}:${state.state}:${state.message}`;
+    || (state.blockingFingerprint
+      ? `${state.platform}:${state.actionType || state.state}:${state.blockingFingerprint}`
+      : `${state.platform}:${state.state}:${state.message}`);
 }
 
 export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProps) {
@@ -189,8 +248,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     addStageResult,
     setExecutionProgress,
     updateBrowserState,
-    clearBrowserStatesForPlatform,
-    clearBrowserStates,
+    settleBrowserActionStates,
     wsBrowserActionResolution,
   } = useConversationStore();
 
@@ -381,6 +439,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const openedAtMsByTakeoverId = useAioTakeoverStore((state) => state.openedAtMsByTakeoverId);
   const markTakeoverOpened = useAioTakeoverStore((state) => state.markTakeoverOpened);
   const upsertTakeoverRecord = useAioTakeoverStore((state) => state.upsertRecord);
+  const removeTakeoverRegistration = useAioTakeoverStore((state) => state.removeRegistration);
   const clearTakeover = useAioTakeoverStore((state) => state.clearTakeover);
   const hydrateArtifacts = useCallback(async (force = false) => {
     if (artifactsHydratedRef.current && !force) {
@@ -562,6 +621,18 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     () => browserStates.filter((state) => state.requiresAction),
     [browserStates],
   );
+  const browserActionCardStates = useMemo(
+    () =>
+      browserStates.filter(
+        (state) =>
+          Boolean(
+            state.requestId ||
+              state.takeover?.takeoverId ||
+              state.actionType,
+          ),
+      ),
+    [browserStates],
+  );
   const actionableTakeoverStates = useMemo(
     () => actionableBrowserStates.filter((state) => Boolean(state.takeover?.takeoverId)),
     [actionableBrowserStates],
@@ -579,7 +650,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const byMessageId = new Map<string, BrowserState[]>();
     const unassigned: BrowserState[] = [];
 
-    actionableBrowserStates.forEach((state) => {
+    browserActionCardStates.forEach((state) => {
       const messageId = resolveBrowserActionMessageId(state, messages, assignedMessageIds);
       if (!messageId) {
         unassigned.push(state);
@@ -593,7 +664,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     });
 
     return { byMessageId, unassigned };
-  }, [actionableBrowserStates, messages]);
+  }, [browserActionCardStates, messages]);
   const pendingBrowserActionCount = actionableBrowserStates.length;
   const latestBrowserActionScrollKey = useMemo(() => {
     if (actionableBrowserStates.length === 0) {
@@ -721,6 +792,10 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       const nextState: BrowserState = {
         ...state,
         takeover: nextTakeover,
+        blockingUrl: nextTakeover.blockingUrl ?? state.blockingUrl,
+        blockingFingerprint:
+          nextTakeover.blockingFingerprint ?? state.blockingFingerprint,
+        reasonCode: nextTakeover.reasonCode ?? state.reasonCode,
         message: state.message,
       };
 
@@ -731,6 +806,10 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       if (state.requestId) {
         updateBrowserState(state.requestId, {
           takeover: nextTakeover,
+          blockingUrl: nextTakeover.blockingUrl ?? state.blockingUrl,
+          blockingFingerprint:
+            nextTakeover.blockingFingerprint ?? state.blockingFingerprint,
+          reasonCode: nextTakeover.reasonCode ?? state.reasonCode,
           requiresAction: true,
         });
       }
@@ -791,11 +870,22 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         });
         upsertTakeoverRecord(next);
         if (next.takeoverState === 'resolved') {
+          removeTakeoverRegistration(takeover.takeoverId);
           updateBrowserState(requestId, {
             state: 'waiting_response',
             requiresAction: false,
             message: '已收到完成确认，系统正在继续抓取...',
             actionHint: '已收到完成确认，系统正在继续抓取...',
+            takeover: buildBrowserTakeoverFromRecord(next),
+            blockingUrl:
+              next.blockingUrl ??
+              next.accessBundle.blockingUrl ??
+              state.blockingUrl,
+            blockingFingerprint:
+              next.blockingFingerprint ??
+              next.accessBundle.blockingFingerprint ??
+              state.blockingFingerprint,
+            reasonCode: next.reasonCode ?? next.accessBundle.reasonCode ?? state.reasonCode,
           });
           toast.success('已收到完成确认，系统正在继续抓取。');
           return;
@@ -814,6 +904,16 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           requiresAction: true,
           message: resumeFailureMessage,
           actionHint: resumeFailureMessage,
+          takeover: buildBrowserTakeoverFromRecord(next),
+          blockingUrl:
+            next.blockingUrl ??
+            next.accessBundle.blockingUrl ??
+            state.blockingUrl,
+          blockingFingerprint:
+            next.blockingFingerprint ??
+            next.accessBundle.blockingFingerprint ??
+            state.blockingFingerprint,
+          reasonCode: next.reasonCode ?? next.accessBundle.reasonCode ?? state.reasonCode,
         });
         toast.error(resumeFailureMessage);
       } catch (error) {
@@ -843,6 +943,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     browserWorkspace,
     clearBrowserWorkspace,
     openBrowserWorkspace,
+    removeTakeoverRegistration,
     updateBrowserState,
     upsertTakeoverRecord,
     wsBrowserActionResolution,
@@ -867,8 +968,22 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           reason: 'user_skipped_from_chat',
         });
         upsertTakeoverRecord(next);
-        clearBrowserStatesForPlatform(state.platform);
-        clearTakeover(takeover.takeoverId);
+        removeTakeoverRegistration(takeover.takeoverId);
+        updateBrowserState(requestId, {
+          requiresAction: false,
+          message: '已跳过该平台，本轮将继续其他平台采集。',
+          actionHint: '已跳过该平台，本轮将继续其他平台采集。',
+          takeover: buildBrowserTakeoverFromRecord(next),
+          blockingUrl:
+            next.blockingUrl ??
+            next.accessBundle.blockingUrl ??
+            state.blockingUrl,
+          blockingFingerprint:
+            next.blockingFingerprint ??
+            next.accessBundle.blockingFingerprint ??
+            state.blockingFingerprint,
+          reasonCode: next.reasonCode ?? next.accessBundle.reasonCode ?? state.reasonCode,
+        });
         if (
           browserWorkspace?.type === 'browser' &&
           browserWorkspace.data.takeoverId === takeover.takeoverId
@@ -877,8 +992,12 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         }
         toast.info('已跳过该平台，本轮将继续其他平台采集。');
       } catch (error) {
-        clearBrowserStatesForPlatform(state.platform);
-        clearTakeover(takeover.takeoverId);
+        removeTakeoverRegistration(takeover.takeoverId);
+        updateBrowserState(requestId, {
+          requiresAction: false,
+          message: '已跳过该平台，本轮将继续其他平台采集。',
+          actionHint: '已跳过该平台，本轮将继续其他平台采集。',
+        });
         if (
           browserWorkspace?.type === 'browser' &&
           browserWorkspace.data.takeoverId === takeover.takeoverId
@@ -894,13 +1013,17 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       return;
     }
 
-    clearBrowserStatesForPlatform(state.platform);
+    updateBrowserState(requestId, {
+      requiresAction: false,
+      message: '已跳过该平台，本轮将继续其他平台采集。',
+      actionHint: '已跳过该平台，本轮将继续其他平台采集。',
+    });
   }, [
     browserWorkspace,
-    clearBrowserStatesForPlatform,
     clearBrowserWorkspace,
-    clearTakeover,
+    removeTakeoverRegistration,
     upsertTakeoverRecord,
+    updateBrowserState,
     wsBrowserActionResolution,
   ]);
   // Handle sending message
@@ -1009,12 +1132,36 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
   // Handle stopping execution
   const handleStopExecution = useCallback(() => {
+    const conversationState = useConversationStore.getState();
+    const takeoverState = useAioTakeoverStore.getState();
+
+    conversationState.browserStates.forEach((state) => {
+      if (!state.requiresAction) {
+        return;
+      }
+      const localCancelledRecord = buildCancelledTakeoverRecord(state, sessionId);
+      if (localCancelledRecord) {
+        upsertTakeoverRecord(localCancelledRecord);
+        removeTakeoverRegistration(localCancelledRecord.takeoverId);
+      }
+    });
+
     stopExecutionAction();
-    clearBrowserStates();
+    settleBrowserActionStates('任务已停止，本轮接管已结束。', '任务已停止，本轮接管已结束。');
     clearBrowserWorkspace();
-    useAioTakeoverStore.getState().clear();
+    Object.keys(takeoverState.registrations).forEach((takeoverId) => {
+      removeTakeoverRegistration(takeoverId);
+    });
     sendStopExecution();
-  }, [clearBrowserStates, clearBrowserWorkspace, stopExecutionAction, sendStopExecution]);
+  }, [
+    clearBrowserWorkspace,
+    removeTakeoverRegistration,
+    sendStopExecution,
+    sessionId,
+    settleBrowserActionStates,
+    stopExecutionAction,
+    upsertTakeoverRecord,
+  ]);
 
   // Handle confirmation
   const handleConfirmation = useCallback((optionId: string) => {

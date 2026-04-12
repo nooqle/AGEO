@@ -9,6 +9,7 @@ resolve and resume the same browser-action request.
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha1
 import json
 import logging
 import time
@@ -38,10 +39,15 @@ class BrowserActionRequest:
     message: str
     action_hint: str | None
     target_url: str | None
+    blocking_url: str | None
+    blocking_fingerprint: str | None
+    reason_code: str | None
     progress: float
     created_at: float
     event: asyncio.Event | None
     run_id: str | None = None
+    task_id: str | None = None
+    user_id: str | None = None
     child_attempt_id: str | None = None
     resolution: BrowserActionResolution | None = None
     state: str | None = None
@@ -137,7 +143,11 @@ async def _hydrate_takeover_for_request(
         "resolve_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/resolve",
         "cancel_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/cancel",
         "expires_at": takeover.expires_at.isoformat(),
+        "action_type": request.action_type,
+        "reason_code": request.reason_code,
         "target_url": request.target_url,
+        "blocking_url": request.blocking_url,
+        "blocking_fingerprint": request.blocking_fingerprint,
     }
     request.takeover = dict(bundle)
     await update_browser_action_request(
@@ -145,6 +155,9 @@ async def _hydrate_takeover_for_request(
         state=request.state,
         takeover=bundle,
         target_url=request.target_url,
+        blocking_url=request.blocking_url,
+        blocking_fingerprint=request.blocking_fingerprint,
+        reason_code=request.reason_code,
     )
     return bundle
 
@@ -187,9 +200,14 @@ def _serialize_request(request: BrowserActionRequest) -> dict[str, Any]:
         "message": request.message,
         "action_hint": request.action_hint,
         "target_url": request.target_url,
+        "blocking_url": request.blocking_url,
+        "blocking_fingerprint": request.blocking_fingerprint,
+        "reason_code": request.reason_code,
         "progress": request.progress,
         "created_at": request.created_at,
         "run_id": request.run_id,
+        "task_id": request.task_id,
+        "user_id": request.user_id,
         "child_attempt_id": request.child_attempt_id,
         "resolution": request.resolution,
         "state": request.state,
@@ -231,12 +249,17 @@ def _deserialize_request(payload: dict[str, Any]) -> BrowserActionRequest | None
         message=message,
         action_hint=payload.get("action_hint"),
         target_url=payload.get("target_url"),
+        blocking_url=payload.get("blocking_url"),
+        blocking_fingerprint=payload.get("blocking_fingerprint"),
+        reason_code=payload.get("reason_code"),
         progress=float(payload.get("progress", 0.0) or 0.0),
         created_at=float(
             payload.get("created_at", time.monotonic()) or time.monotonic()
         ),
         event=None,
         run_id=payload.get("run_id"),
+        task_id=payload.get("task_id"),
+        user_id=payload.get("user_id"),
         child_attempt_id=payload.get("child_attempt_id"),
         resolution=resolution,
         state=payload.get("state"),
@@ -254,13 +277,45 @@ def _request_matches_reuse(
     platform: str,
     action_type: str,
     run_id: str | None,
+    task_id: str | None,
+    user_id: str | None,
+    blocking_fingerprint: str | None,
 ) -> bool:
     return (
         request.resolution is None
         and request.platform == platform
         and request.action_type == action_type
         and request.run_id == run_id
+        and request.task_id == task_id
+        and request.user_id == user_id
+        and request.blocking_fingerprint == blocking_fingerprint
     )
+
+
+def _normalize_blocking_fingerprint(
+    *,
+    platform: str,
+    action_type: str,
+    blocking_fingerprint: str | None,
+    blocking_url: str | None,
+    reason_code: str | None,
+) -> str | None:
+    if isinstance(blocking_fingerprint, str) and blocking_fingerprint.strip():
+        return blocking_fingerprint.strip()
+    if not any(
+        isinstance(value, str) and value.strip()
+        for value in (blocking_url, reason_code)
+    ):
+        return None
+    seed = "|".join(
+        [
+            platform,
+            action_type,
+            str(reason_code or "").strip().lower(),
+            str(blocking_url or "").strip().lower(),
+        ]
+    )
+    return sha1(seed.encode("utf-8")).hexdigest()[:16]
 
 
 def infer_browser_action_state(action_type: str) -> str:
@@ -312,11 +367,23 @@ async def register_browser_action_request(
     message: str,
     action_hint: str | None,
     target_url: str | None,
-    progress: float,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
+    reason_code: str | None = None,
+    progress: float = 0.0,
     run_id: str | None = None,
+    task_id: str | None = None,
+    user_id: str | None = None,
     state: str | None = None,
 ) -> BrowserActionRequest:
     _purge_expired()
+    normalized_blocking_fingerprint = _normalize_blocking_fingerprint(
+        platform=platform,
+        action_type=action_type,
+        blocking_fingerprint=blocking_fingerprint,
+        blocking_url=blocking_url,
+        reason_code=reason_code,
+    )
 
     request = BrowserActionRequest(
         request_id=f"browser_action_{uuid4().hex}",
@@ -326,10 +393,15 @@ async def register_browser_action_request(
         message=message,
         action_hint=action_hint,
         target_url=target_url,
+        blocking_url=blocking_url,
+        blocking_fingerprint=normalized_blocking_fingerprint,
+        reason_code=reason_code,
         progress=progress,
         created_at=time.monotonic(),
         event=asyncio.Event(),
         run_id=run_id,
+        task_id=task_id,
+        user_id=user_id,
         state=state or infer_browser_action_state(action_type),
     )
     if run_id:
@@ -355,6 +427,9 @@ async def _find_reusable_browser_action_request(
     platform: str,
     action_type: str,
     run_id: str | None,
+    task_id: str | None,
+    user_id: str | None,
+    blocking_fingerprint: str | None,
     request_id: str | None = None,
 ) -> BrowserActionRequest | None:
     if request_id:
@@ -377,6 +452,9 @@ async def _find_reusable_browser_action_request(
             platform=platform,
             action_type=action_type,
             run_id=run_id,
+            task_id=task_id,
+            user_id=user_id,
+            blocking_fingerprint=blocking_fingerprint,
         ):
             continue
         if newest_match is None or request.created_at > newest_match.created_at:
@@ -395,16 +473,31 @@ async def get_or_register_browser_action_request(
     target_url: str | None,
     progress: float,
     run_id: str | None = None,
+    task_id: str | None = None,
+    user_id: str | None = None,
     state: str | None = None,
+    reason_code: str | None = None,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
     request_id: str | None = None,
 ) -> tuple[BrowserActionRequest, bool]:
     _purge_expired()
+    normalized_blocking_fingerprint = _normalize_blocking_fingerprint(
+        platform=platform,
+        action_type=action_type,
+        blocking_fingerprint=blocking_fingerprint,
+        blocking_url=blocking_url,
+        reason_code=reason_code,
+    )
 
     existing = await _find_reusable_browser_action_request(
         session_id=session_id,
         platform=platform,
         action_type=action_type,
         run_id=run_id,
+        task_id=task_id,
+        user_id=user_id,
+        blocking_fingerprint=normalized_blocking_fingerprint,
         request_id=request_id,
     )
     if existing is not None:
@@ -415,6 +508,9 @@ async def get_or_register_browser_action_request(
             message=message,
             action_hint=action_hint,
             progress=progress,
+            reason_code=reason_code,
+            blocking_url=blocking_url,
+            blocking_fingerprint=normalized_blocking_fingerprint,
         )
         refreshed = await get_browser_action_request(existing.request_id)
         return (refreshed or existing, False)
@@ -426,8 +522,13 @@ async def get_or_register_browser_action_request(
         message=message,
         action_hint=action_hint,
         target_url=target_url,
+        blocking_url=blocking_url,
+        blocking_fingerprint=normalized_blocking_fingerprint,
+        reason_code=reason_code,
         progress=progress,
         run_id=run_id,
+        task_id=task_id,
+        user_id=user_id,
         state=state,
     )
     return created, True
@@ -439,6 +540,9 @@ async def update_browser_action_request(
     state: str | None = None,
     takeover: dict[str, Any] | None = None,
     target_url: str | None = None,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
+    reason_code: str | None = None,
     message: str | None = None,
     action_hint: str | None = None,
     progress: float | None = None,
@@ -453,6 +557,12 @@ async def update_browser_action_request(
             request.takeover = dict(takeover)
         if target_url is not None:
             request.target_url = target_url
+        if blocking_url is not None:
+            request.blocking_url = blocking_url
+        if blocking_fingerprint is not None:
+            request.blocking_fingerprint = blocking_fingerprint
+        if reason_code is not None:
+            request.reason_code = reason_code
         if message is not None:
             request.message = message
         if action_hint is not None:
@@ -474,6 +584,12 @@ async def update_browser_action_request(
                 payload["takeover"] = dict(takeover)
             if target_url is not None:
                 payload["target_url"] = target_url
+            if blocking_url is not None:
+                payload["blocking_url"] = blocking_url
+            if blocking_fingerprint is not None:
+                payload["blocking_fingerprint"] = blocking_fingerprint
+            if reason_code is not None:
+                payload["reason_code"] = reason_code
             if message is not None:
                 payload["message"] = message
             if action_hint is not None:
@@ -683,8 +799,13 @@ async def get_session_browser_action_requests(session_id: str) -> list[dict[str,
                     "message": request.message,
                     "action_hint": request.action_hint,
                     "target_url": request.target_url,
+                    "blocking_url": request.blocking_url,
+                    "blocking_fingerprint": request.blocking_fingerprint,
+                    "reason_code": request.reason_code,
                     "progress": request.progress,
                     "run_id": request.run_id,
+                    "task_id": request.task_id,
+                    "user_id": request.user_id,
                     "state": request.state
                     or infer_browser_action_state(request.action_type),
                     "takeover": dict(request.takeover) if request.takeover else None,
@@ -714,8 +835,13 @@ async def get_session_browser_action_requests(session_id: str) -> list[dict[str,
                 "message": request.message,
                 "action_hint": request.action_hint,
                 "target_url": request.target_url,
+                "blocking_url": request.blocking_url,
+                "blocking_fingerprint": request.blocking_fingerprint,
+                "reason_code": request.reason_code,
                 "progress": request.progress,
                 "run_id": request.run_id,
+                "task_id": request.task_id,
+                "user_id": request.user_id,
                 "state": request.state
                 or infer_browser_action_state(request.action_type),
                 "takeover": dict(request.takeover) if request.takeover else None,

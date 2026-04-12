@@ -105,6 +105,14 @@ export function buildBrowserState(
         takeoverId:
           typeof rawTakeover.takeover_id === 'string' ? rawTakeover.takeover_id : '',
         mode: normalizeAioTakeoverMode(rawTakeover.mode),
+        actionType:
+          rawTakeover.action_type === 'login' || rawTakeover.action_type === 'verify' || rawTakeover.action_type === 'modal'
+            ? rawTakeover.action_type
+            : undefined,
+        reasonCode:
+          typeof rawTakeover.reason_code === 'string'
+            ? rawTakeover.reason_code
+            : undefined,
         openPath:
           typeof rawTakeover.open_path === 'string'
             ? rawTakeover.open_path
@@ -137,6 +145,14 @@ export function buildBrowserState(
           typeof rawTakeover.target_url === 'string'
             ? rawTakeover.target_url
             : undefined,
+        blockingUrl:
+          typeof rawTakeover.blocking_url === 'string'
+            ? rawTakeover.blocking_url
+            : undefined,
+        blockingFingerprint:
+          typeof rawTakeover.blocking_fingerprint === 'string'
+            ? rawTakeover.blocking_fingerprint
+            : undefined,
       }
     : undefined;
 
@@ -155,6 +171,12 @@ export function buildBrowserState(
       typeof data.related_message_id === 'string'
         ? data.related_message_id
         : relatedMessageId,
+    reasonCode: typeof data.reason_code === 'string' ? data.reason_code : undefined,
+    blockingUrl: typeof data.blocking_url === 'string' ? data.blocking_url : undefined,
+    blockingFingerprint:
+      typeof data.blocking_fingerprint === 'string'
+        ? data.blocking_fingerprint
+        : undefined,
     takeover: takeover?.takeoverId ? takeover : undefined,
   };
 }

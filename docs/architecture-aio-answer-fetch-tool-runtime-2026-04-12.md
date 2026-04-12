@@ -1,7 +1,7 @@
 # AIO Answer Fetch Tool 架构归位
 
 > 日期：2026-04-12
-> 状态：Draft
+> 状态：In Progress（P0-P2 进行中）
 > 目的：把 AIO、Fetch Answer Agent、四平台浏览器抓取、Playwright、VNC 人工接管、用户登录态和 Artifact 写入放回同一张架构图里，作为后续讨论和实现的统一基准。
 
 ---
@@ -179,7 +179,7 @@ AIO Answer Fetch Tool
 
 - `BrowserAgentBootstrapPolicy`
 - `HybridBrowserAgentPolicy`
-- `LLMBrowserAgentPolicy`（默认关闭，仅作为可替换执行器）
+- `LLMBrowserAgentPolicy`
 - `LLMBrowserAgentPolicy` 现在已按 `preflight / wait_gate / resume_probe / empty_answer` 生成阶段化 prompt
 - `collect_browser_agent_step(...)`
 - `BaseBrowserHandler._run_browser_agent_preflight(...)`
@@ -200,8 +200,45 @@ AIO Answer Fetch Tool
   - 只对 `blank_page / navigation_error / target_closed` 这类瞬时状态继续轮询
 - 四个平台不再 override `probe_resume_gate_ready`；平台只补充自然语言恢复期望，不再各自维护 selector 轮询
 - parser 错误、wait blocker、空答案兜底继续往 Base 收，减少平台 handler 对 blocker 恢复的直接分叉
+- 默认执行链现在是 **LLM-first + deterministic fallback**：
+  - `LLMBrowserAgentPolicy` 默认只接管 `preflight / wait_gate / resume_probe`
+  - `empty_answer` 仍可生成阶段化 prompt，但不属于本轮默认接管目标
+  - LLM 只允许安全轻量动作：`click / press / wait / focus / close modal / safe navigate`
+  - 账号密码、短信码、验证码、任意跨站导航仍被禁止
+  - LLM 决策解析失败、超时、动作不安全时，立即回退到 bootstrap policy
+- `safe navigate` 现在只允许：
+  - 同 host 导航
+  - 或显式目标 URL 导航
+- 登录类 blocker 的分类优先级已上移到共享 policy，避免“登录弹窗因为含验证码输入框而被归成 verification”
 
 也就是说，下一阶段不需要先重写浏览器底层，而是把 handler 中的页面理解与 blocker 分类逐步迁移到 Browser Agent policy / executor，并把 stale page / live page resync 这类确定性问题继续留在 runtime / base handler 层。当前 Browser Agent 还不是最终的 LLM planner，但运行时已经具备“阶段上下文 + 可替换执行器”的骨架。
+
+### P0-P2 当前完成度
+
+这一轮已经落地的，不应再回退：
+
+1. 初始登录判定、late blocker、resume probe 的主控制面已经开始从平台 handler 收回到共享 Browser Agent runtime。
+2. 平台 handler 正在逐步削成“平台薄配置层”，当前主要保留：
+   - 平台入口 URL / 会话 URL 语义
+   - 平台自然语言提示与 profile hints
+   - 提交问题动作
+   - 答案抽取契约与平台特有归一化
+3. `takeover_required` 的结构化事实来源已扩展为：
+   - `platform`
+   - `action_type`
+   - `reason_code`
+   - `target_url`
+   - `blocking_url`
+   - `blocking_fingerprint`
+   - `resume_policy`
+4. 停止任务后的浏览器占用释放与卡片保留语义，已经开始围绕 settled state 建模，而不是粗暴清空前端状态。
+
+这一轮尚未完成的：
+
+1. 初始登录判定和 late blocker 仍有残留在平台 handler，尤其是平台特有首屏登录页与提交后弹窗。
+2. `LLMBrowserAgentPolicy` 目前只接管受控阶段，不是整条提问/抓取主流程的默认执行者。
+3. 平台 handler 还没有完全收敛为“纯配置 + 抽取契约”。
+4. 真实线上 UAT 还没有证明“首次登录 -> 我已完成 -> 继续抓取 -> 下次复用登录态”已经完全闭环。
 
 ## 4. AIO Runtime
 
@@ -250,6 +287,12 @@ AIO runtime unit
 3. 导航平台页面。
 4. 判断登录是否成功。
 5. 保存登录态。
+
+补充要求：
+
+1. 前端只 attach 后端已经准备好的 `surface_url`，不能再通过“打开后再导航平台主页”的方式制造新的阻塞现场。
+2. 停止任务后必须释放 browser workspace 与接管占用，不能继续劫持档案/问题导航。
+3. 登录、验证、验证码、安全确认统一收敛到单一结算卡片语义，不再保留额外说明消息。
 
 ---
 
@@ -394,6 +437,20 @@ AIO Playwright 已经跑到阻塞页面
 2. Browser Agent 先尝试自动关闭普通弹窗、恢复空白页、重新聚焦输入区。
 3. 只有 Browser Agent 明确判断为登录、验证码、人机验证、账号安全确认时，才生成 `takeover_required`。
 4. 用户点击“我已完成”后，恢复逻辑必须先走 `resume_probe`；只有 probe 通过，才允许继续抓取并持久化 AuthContext。
+5. 同一平台、同一任务、同一阻塞现场必须去重；默认去重键应包含：
+   - `platform`
+   - `specta_user_id`
+   - `task_id`
+   - `blocking_fingerprint`
+6. 接管卡片在聊天区采用统一结算态：
+   - `issued`
+   - `opened`
+   - `resolved`
+   - `skipped`
+   - `resume_failed`
+   - `expired`
+   - `cancelled`
+7. 结算后的卡片可以保留，但不应再残留额外说明消息。
 
 takeover event：
 

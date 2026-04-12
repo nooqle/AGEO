@@ -1483,7 +1483,7 @@ async def test_finish_user_action_gate_returns_user_skipped_event():
 
 
 @pytest.mark.asyncio
-async def test_emit_browser_action_prompt_only_replies_once_for_reused_request(
+async def test_emit_browser_action_handoff_uses_browser_events_for_reused_request(
     monkeypatch,
 ):
     reset_browser_action_test_state()
@@ -1507,8 +1507,6 @@ async def test_emit_browser_action_prompt_only_replies_once_for_reused_request(
     monkeypatch.setattr(
         browser_action_contract, "send_browser_user_action_event", AsyncMock()
     )
-    send_reply_event = AsyncMock()
-    monkeypatch.setattr(browser_action_contract, "send_reply_event", send_reply_event)
 
     await browser_action_contract.emit_browser_action_handoff(
         session_id="session_1",
@@ -1531,15 +1529,47 @@ async def test_emit_browser_action_prompt_only_replies_once_for_reused_request(
         reply_markdown="**DeepSeek** 需要登录",
     )
 
-    assert send_reply_event.await_count == 2
-    send_reply_event.assert_any_await(
-        "session_1",
-        "**DeepSeek** 需要登录",
-        is_delta=True,
-        is_new_round=True,
-    )
-    send_reply_event.assert_any_await("session_1", "", is_complete=True)
+    assert browser_action_contract.send_browser_state_event.await_count == 2
+    assert browser_action_contract.send_browser_user_action_event.await_count == 2
     reset_browser_action_test_state()
+
+
+@pytest.mark.asyncio
+async def test_persist_browser_action_takeover_uses_takeover_scene_metadata(monkeypatch):
+    update_request = AsyncMock()
+    monkeypatch.setattr(
+        browser_action_contract,
+        "update_browser_action_request",
+        update_request,
+    )
+
+    await browser_action_contract.persist_browser_action_takeover(
+        request_id="browser_action_1",
+        state="waiting_for_login",
+        takeover={
+            "takeover_id": "takeover_1",
+            "target_url": "https://kimi.com/",
+            "blocking_url": "https://kimi.com/login-modal",
+            "blocking_fingerprint": "fingerprint_1",
+            "reason_code": "login_required",
+        },
+    )
+
+    update_request.assert_awaited_once_with(
+        "browser_action_1",
+        state="waiting_for_login",
+        takeover={
+            "takeover_id": "takeover_1",
+            "target_url": "https://kimi.com/",
+            "blocking_url": "https://kimi.com/login-modal",
+            "blocking_fingerprint": "fingerprint_1",
+            "reason_code": "login_required",
+        },
+        target_url="https://kimi.com/",
+        blocking_url="https://kimi.com/login-modal",
+        blocking_fingerprint="fingerprint_1",
+        reason_code="login_required",
+    )
 
 
 @pytest.mark.asyncio
@@ -1551,7 +1581,6 @@ async def test_browser_action_handoff_serializes_takeover_prompts_per_run(
         browser_action_runtime, "_get_redis", AsyncMock(return_value=None)
     )
     send_browser_user_action_event = AsyncMock()
-    monkeypatch.setattr(browser_action_contract, "send_reply_event", AsyncMock())
     monkeypatch.setattr(
         browser_action_contract, "send_browser_state_event", AsyncMock()
     )
@@ -1622,7 +1651,6 @@ async def test_session_cancel_releases_handoff_slot_without_queued_prompt(
         browser_action_runtime, "_get_redis", AsyncMock(return_value=None)
     )
     send_browser_user_action_event = AsyncMock()
-    monkeypatch.setattr(browser_action_contract, "send_reply_event", AsyncMock())
     monkeypatch.setattr(
         browser_action_contract, "send_browser_state_event", AsyncMock()
     )

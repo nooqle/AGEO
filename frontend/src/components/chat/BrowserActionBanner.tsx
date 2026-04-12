@@ -73,11 +73,18 @@ export function BrowserActionBanner({
   const platformLabel = PLATFORM_LABELS[browserState.platform] || browserState.platform;
   const hasTakeover = Boolean(takeoverId);
   const takeoverState = takeoverRecord?.takeoverState ?? (hasTakeover ? 'issued' : null);
+  const blockingUrl =
+    takeoverRecord?.blockingUrl ??
+    takeoverRecord?.accessBundle.blockingUrl ??
+    browserState.takeover?.blockingUrl ??
+    browserState.blockingUrl ??
+    null;
   const targetUrl =
     takeoverRecord?.targetUrl ??
     takeoverRecord?.accessBundle.targetUrl ??
     browserState.takeover?.targetUrl ??
     null;
+  const sceneUrl = blockingUrl || targetUrl;
   const isTerminalTakeoverState =
     takeoverState === 'resolved' ||
     takeoverState === 'expired' ||
@@ -104,7 +111,11 @@ export function BrowserActionBanner({
         : `${platformLabel} 需要处理`;
   const detail = browserState.actionHint || browserState.message;
   const helperText = hasTakeover
-    ? takeoverState === 'expired' ||
+    ? takeoverState === 'cancelled'
+      ? '该平台已跳过，本轮不会再次请求人工接管。'
+      : takeoverState === 'resolved'
+        ? '该平台接管已完成，系统会继续后续抓取流程。'
+      : takeoverState === 'expired' ||
       takeoverState === 'resume_failed' ||
       isClientWindowExpired
       ? '本次浏览器会话已失效。如果还要继续，请重新打开浏览器；旧会话已经不会继续。'
@@ -124,7 +135,14 @@ export function BrowserActionBanner({
   const canResolve =
     Boolean(onResolve) &&
     (!hasTakeover || (isOpened && !isTerminalTakeoverState && !isClientWindowExpired));
-  const canSkip = Boolean(onSkip) && takeoverState !== 'resolved';
+  const canSkip =
+    Boolean(onSkip) &&
+    takeoverState !== 'resolved' &&
+    takeoverState !== 'cancelled';
+  const canOpenTakeover =
+    Boolean(onOpenTakeover) &&
+    takeoverState !== 'resolved' &&
+    takeoverState !== 'cancelled';
 
   const countdownLabel = useMemo(() => {
     if (!remainingLabel) return null;
@@ -192,27 +210,30 @@ export function BrowserActionBanner({
           <p className="mt-1 text-xs leading-5" style={{ color: 'var(--text-tertiary)' }}>
             {helperText}
           </p>
-          {targetUrl && (
+          {sceneUrl && (
             <p className="mt-1 truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
-              目标页面：{targetUrl}
+              {blockingUrl ? '当前阻塞页面：' : '目标页面：'}
+              {sceneUrl}
             </p>
           )}
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {hasTakeover ? (
               <>
-                <button
-                  type="button"
-                  onClick={() => runAction('open', onOpenTakeover)}
-                  disabled={!onOpenTakeover || localSubmitting !== null}
-                  className="rounded-full px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
-                  style={{
-                    background: 'var(--color-primary)',
-                    color: '#fff',
-                  }}
-                >
-                {openButtonLabel}
-                </button>
+                {canOpenTakeover && (
+                  <button
+                    type="button"
+                    onClick={() => runAction('open', onOpenTakeover)}
+                    disabled={!canOpenTakeover || localSubmitting !== null}
+                    className="rounded-full px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{
+                      background: 'var(--color-primary)',
+                      color: '#fff',
+                    }}
+                  >
+                    {openButtonLabel}
+                  </button>
+                )}
                 {isOpened && !isTerminalTakeoverState && !isClientWindowExpired && (
                   <button
                     type="button"
@@ -228,7 +249,7 @@ export function BrowserActionBanner({
                     {localSubmitting === 'completed' ? '正在提交完成...' : '我已完成'}
                   </button>
                 )}
-                {takeoverState !== 'resolved' && (
+                {canSkip && (
                   <button
                     type="button"
                     onClick={() => runAction('skip', onSkip)}

@@ -75,6 +75,17 @@ HUMAN_TAKEOVER_BLOCKERS: frozenset[BrowserBlockerKind] = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class PlatformBrowserProfile:
+    platform: str
+    entry_url: str
+    ready_url_patterns: tuple[str, ...] = ()
+    login_url_patterns: tuple[str, ...] = ()
+    ready_hints: tuple[str, ...] = ()
+    login_hints: tuple[str, ...] = ()
+    late_blocker_hints: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class BrowserAgentAction:
     action_type: BrowserActionType
     ref: str | None = None
@@ -90,7 +101,10 @@ class BrowserTakeoverNeed:
     blocker_kind: BrowserBlockerKind
     reason_code: str
     message: str
+    action_type: str | None = None
     target_url: str | None = None
+    blocking_url: str | None = None
+    blocking_fingerprint: str | None = None
     resume_expectation: str = "manual_resume_gate"
 
 
@@ -295,6 +309,18 @@ def loop_context_to_llm_payload(loop_context: BrowserAgentLoopContext) -> dict[s
         "target_url": loop_context.target_url,
         "note": loop_context.note,
         "meta": dict(loop_context.meta),
+    }
+
+
+def platform_profile_to_payload(profile: PlatformBrowserProfile) -> dict[str, Any]:
+    return {
+        "platform": profile.platform,
+        "entry_url": profile.entry_url,
+        "ready_url_patterns": list(profile.ready_url_patterns),
+        "login_url_patterns": list(profile.login_url_patterns),
+        "ready_hints": list(profile.ready_hints),
+        "login_hints": list(profile.login_hints),
+        "late_blocker_hints": list(profile.late_blocker_hints),
     }
 
 

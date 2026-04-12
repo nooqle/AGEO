@@ -27,6 +27,11 @@ class DoubaoHandler(BaseBrowserHandler):
     PLATFORM = Platform.DOUBAO
     PLATFORM_KEY = "doubao"
     DOUBLE_UTF8_FIX = True  # Doubao SSE body is double UTF-8 encoded
+    BROWSER_READY_URL_PATTERNS = ("/chat", "doubao.com/chat")
+    BROWSER_LOGIN_URL_PATTERNS = ("login", "signin", "auth")
+    BROWSER_READY_HINTS = ("新对话", "深入研究")
+    BROWSER_LOGIN_HINTS = ("登录", "手机号", "验证码")
+    BROWSER_LATE_BLOCKER_HINTS = ("安全验证", "verify", "人机验证", "验证码")
 
     _DEFAULTS: dict = {
         "input": "textarea.semi-input-textarea, textarea",
@@ -111,88 +116,7 @@ class DoubaoHandler(BaseBrowserHandler):
             if should_abort:
                 return
 
-            chat_ready = await self._wait_for_doubao_chat_ready(timeout=6)
-            if chat_ready:
-                logger.info("[Doubao] Chat page already ready after open, skipping manual prompts")
-            else:
-                detected_modal = await self._detect_blocking_modal()
-                if detected_modal:
-                    logger.info("[Doubao] Blocking modal detected before login check: %s", detected_modal)
-                    waiting_message = "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作"
-                    action_hint = "请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”"
-                    events, request_id = await self._begin_modal_takeover_gate(
-                        message=waiting_message,
-                        action_hint=action_hint,
-                        progress=0.25,
-                        url=self.URL,
-                        open_error_message="打开豆包浏览器窗口失败，请重试",
-                    )
-                    for event in events:
-                        yield event
-                    if not request_id:
-                        return
-                    return
-
-            # Step 3: Check login status
-            yield self._create_event(BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3)
-
-            login_needed = not chat_ready
-            if self.client.page is not None:
-                try:
-                    # Multi-signal login check: textarea alone is NOT enough
-                    # (landing page also has textarea when not logged in)
-                    logged_in = await self.client.page.evaluate("""() => {
-                        const textarea = document.querySelector('textarea.semi-input-textarea, textarea');
-                        if (!textarea) return false;
-                        // Signal 1: URL must contain /chat/ (logged-in chat page)
-                        if (!location.pathname.includes('/chat')) return false;
-                        // Signal 2: No visible login button
-                        const loginBtn = document.querySelector('[data-testid="to_login_button"], [class*="login-btn"]');
-                        if (loginBtn && loginBtn.offsetParent !== null) return false;
-                        return true;
-                    }""")
-                    login_needed = not logged_in
-                    logger.info("[Doubao] Login check: logged_in=%s (URL+textarea+no_login_btn)", logged_in)
-                except Exception as e:
-                    logger.debug("[Doubao] Login check failed: %s", e)
-
-            if login_needed:
-                waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
-                action_hint = "请在弹出的浏览器窗口中完成豆包登录，完成后点击“我已完成”"
-                events, request_id = await self._begin_login_takeover_gate(
-                    message=waiting_message,
-                    action_hint=action_hint,
-                    progress=0.35,
-                    url=self.URL,
-                    open_error_message="打开豆包浏览器窗口失败，请重试",
-                )
-                for event in events:
-                    yield event
-                if not request_id:
-                    return
-                return
-
-                detected_modal = ""
-                if not await self._wait_for_doubao_chat_ready(timeout=6):
-                    detected_modal = await self._detect_blocking_modal()
-                if detected_modal:
-                    logger.info("[Doubao] Blocking modal detected after login: %s", detected_modal)
-                    waiting_message = "检测到豆包页面弹窗需要确认，请在浏览器窗口中操作"
-                    action_hint = "请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”"
-                    events, request_id = await self._begin_modal_takeover_gate(
-                        message=waiting_message,
-                        action_hint=action_hint,
-                        progress=0.4,
-                        url=self.URL,
-                        open_error_message="打开豆包浏览器窗口失败，请重试",
-                    )
-                    for event in events:
-                        yield event
-                    if not request_id:
-                        return
-                    return
-
-            # Step 4: Enable web search
+            # Step 3: Enable web search
             yield self._create_event(BrowserState.ENABLING_SEARCH, "确认联网搜索...", progress=0.5)
             logger.info("[Doubao] Web search is on by default, skipping toggle")
 

@@ -23,6 +23,8 @@ from app.core.fetchers.browser.browser_agent_contract import (
     BrowserAgentAction,
     BrowserAgentDecision,
     BrowserAgentLoopContext,
+    PlatformBrowserProfile,
+    platform_profile_to_payload,
 )
 from app.core.fetchers.browser.browser_agent_loop import collect_browser_agent_step
 from app.core.fetchers.browser.parsers.base import (
@@ -128,6 +130,11 @@ class BaseBrowserHandler(ABC):
     PLATFORM_KEY: str = ""  # key in selectors.yaml
     _DEFAULTS: dict = {}
     DOUBLE_UTF8_FIX: bool = False  # Doubao needs double UTF-8 decoding
+    BROWSER_READY_URL_PATTERNS: tuple[str, ...] = ()
+    BROWSER_LOGIN_URL_PATTERNS: tuple[str, ...] = ()
+    BROWSER_READY_HINTS: tuple[str, ...] = ()
+    BROWSER_LOGIN_HINTS: tuple[str, ...] = ()
+    BROWSER_LATE_BLOCKER_HINTS: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -474,6 +481,17 @@ class BaseBrowserHandler(ABC):
         }
         return mapping.get(self.PLATFORM.value, self.PLATFORM.value)
 
+    def _browser_agent_profile(self) -> PlatformBrowserProfile:
+        return PlatformBrowserProfile(
+            platform=self.PLATFORM.value,
+            entry_url=self.URL,
+            ready_url_patterns=tuple(self.BROWSER_READY_URL_PATTERNS),
+            login_url_patterns=tuple(self.BROWSER_LOGIN_URL_PATTERNS),
+            ready_hints=tuple(self.BROWSER_READY_HINTS),
+            login_hints=tuple(self.BROWSER_LOGIN_HINTS),
+            late_blocker_hints=tuple(self.BROWSER_LATE_BLOCKER_HINTS),
+        )
+
     async def _browser_agent_screenshot_provider(self) -> dict | None:
         if not getattr(self.client, "aio_session_id", None):
             return None
@@ -566,6 +584,9 @@ class BaseBrowserHandler(ABC):
         resolved_meta = {
             "platform_display_name": self._platform_display_name(),
             "action_type": action_type,
+            "platform_profile": platform_profile_to_payload(
+                self._browser_agent_profile()
+            ),
         }
         if extra_meta:
             resolved_meta.update(dict(extra_meta))
@@ -630,6 +651,9 @@ class BaseBrowserHandler(ABC):
         self,
         *,
         blocker_kind: str,
+        reason_code: str | None = None,
+        blocking_url: str | None = None,
+        blocking_fingerprint: str | None = None,
         progress: float,
         url: str | None,
     ) -> tuple[list[BrowserEvent], str | None]:
@@ -641,6 +665,9 @@ class BaseBrowserHandler(ABC):
                 progress=progress,
                 url=url,
                 open_error_message=f"打开{platform_name}浏览器窗口失败，请重试",
+                reason_code=reason_code,
+                blocking_url=blocking_url,
+                blocking_fingerprint=blocking_fingerprint,
             )
 
         return await self._begin_login_takeover_gate(
@@ -649,6 +676,9 @@ class BaseBrowserHandler(ABC):
             progress=progress,
             url=url,
             open_error_message=f"打开{platform_name}浏览器窗口失败，请重试",
+            reason_code=reason_code,
+            blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
         )
 
     async def _run_browser_agent_preflight(
@@ -689,10 +719,24 @@ class BaseBrowserHandler(ABC):
                 continue
 
             if decision.outcome == "takeover_required":
+                takeover = decision.takeover
                 events, request_id = await self._begin_browser_agent_takeover_gate(
                     blocker_kind=decision.blocker_kind,
+                    reason_code=takeover.reason_code if takeover else None,
+                    blocking_url=(
+                        takeover.blocking_url
+                        if takeover and takeover.blocking_url
+                        else step.observation.current_url
+                    ),
+                    blocking_fingerprint=(
+                        takeover.blocking_fingerprint if takeover else None
+                    ),
                     progress=progress,
-                    url=decision.takeover.target_url if decision.takeover else (url or self.URL),
+                    url=(
+                        takeover.target_url
+                        if takeover and takeover.target_url
+                        else (url or self.URL)
+                    ),
                 )
                 return events, bool(request_id or events)
 
@@ -852,6 +896,15 @@ class BaseBrowserHandler(ABC):
         )
         return await self._begin_browser_agent_takeover_gate(
             blocker_kind=decision.blocker_kind,
+            reason_code=decision.takeover.reason_code if decision.takeover else None,
+            blocking_url=(
+                decision.takeover.blocking_url
+                if decision.takeover and decision.takeover.blocking_url
+                else None
+            ),
+            blocking_fingerprint=(
+                decision.takeover.blocking_fingerprint if decision.takeover else None
+            ),
             progress=progress,
             url=takeover_url,
         )
@@ -878,6 +931,7 @@ class BaseBrowserHandler(ABC):
             return [], None
         return await self._begin_browser_agent_takeover_gate(
             blocker_kind=blocker_kind,
+            reason_code=error_type or blocker_kind,
             progress=progress,
             url=fallback_url or self.URL,
         )
@@ -1333,6 +1387,9 @@ class BaseBrowserHandler(ABC):
         action_hint: str | None,
         progress: float,
         url: str | None = None,
+        reason_code: str | None = None,
+        blocking_url: str | None = None,
+        blocking_fingerprint: str | None = None,
     ) -> str | None:
         """Open a stable headed browser window, then register a user-action request."""
         ensure_remote_runtime = getattr(self.client, "_ensure_remote_runtime", None)
@@ -1352,7 +1409,12 @@ class BaseBrowserHandler(ABC):
             target_url=url,
             progress=progress,
             run_id=self.run_id,
+            task_id=str(getattr(self.client, "task_id", "") or "") or None,
+            user_id=str(getattr(self.client, "user_id", "") or "") or None,
             state=infer_browser_action_state(action_type),
+            reason_code=reason_code,
+            blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
         )
         return request.request_id
 
@@ -1426,6 +1488,9 @@ class BaseBrowserHandler(ABC):
         progress: float,
         url: str | None,
         open_error_message: str,
+        reason_code: str | None = None,
+        blocking_url: str | None = None,
+        blocking_fingerprint: str | None = None,
     ) -> tuple[list[BrowserEvent], str | None]:
         """Create and emit the waiting event before blocking on user input."""
 
@@ -1435,6 +1500,9 @@ class BaseBrowserHandler(ABC):
             action_hint=action_hint,
             progress=progress,
             url=url,
+            reason_code=reason_code,
+            blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
         )
         if not request_id:
             return [
@@ -1505,6 +1573,9 @@ class BaseBrowserHandler(ABC):
         progress: float,
         url: str | None = None,
         open_error_message: str,
+        reason_code: str | None = None,
+        blocking_url: str | None = None,
+        blocking_fingerprint: str | None = None,
     ) -> tuple[list[BrowserEvent], str | None]:
         """Emit the login waiting event immediately and return request context."""
 
@@ -1516,6 +1587,9 @@ class BaseBrowserHandler(ABC):
             progress=progress,
             url=url,
             open_error_message=open_error_message,
+            reason_code=reason_code,
+            blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
         )
 
     async def _finish_login_takeover_gate(
@@ -1545,6 +1619,9 @@ class BaseBrowserHandler(ABC):
         progress: float,
         url: str | None = None,
         open_error_message: str,
+        reason_code: str | None = None,
+        blocking_url: str | None = None,
+        blocking_fingerprint: str | None = None,
     ) -> tuple[list[BrowserEvent], str | None]:
         """Emit the modal waiting event immediately and return request context."""
 
@@ -1556,6 +1633,9 @@ class BaseBrowserHandler(ABC):
             progress=progress,
             url=url,
             open_error_message=open_error_message,
+            reason_code=reason_code,
+            blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
         )
 
     async def _finish_modal_takeover_gate(

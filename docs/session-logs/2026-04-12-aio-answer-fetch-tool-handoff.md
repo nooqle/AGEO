@@ -2,7 +2,7 @@
 
 ## Context Scope
 
-本记录覆盖 2026-04-12 这轮 AIO Answer Fetch Tool 迭代：从架构讨论、工具门面设计、过渡实现落地，到提交 `30abb2a feat(aio): add answer fetch tool facade`。
+本记录覆盖 2026-04-12 这轮 AIO Answer Fetch Tool 迭代：从架构讨论、工具门面设计、过渡实现落地，到当前 P0-P2 结构改造阶段。
 
 当前实现 worktree：
 
@@ -22,8 +22,11 @@ codex/aio-runtime-isolation
 30abb2a feat(aio): add answer fetch tool facade
 8833a4a docs(aio): add answer fetch handoff note
 a910e97 feat(aio): attach platform result packets
+dad6a19 feat(aio): prefer packet status in a4 flow
 b9b47a2 refactor(harness): align current-session followup tool surface
+5a4c3a8 refactor(browser): centralize browser-agent recovery loop
 9340aa7 refactor(browser): add stage-aware browser agent policy seam
+34a6a59 refactor(browser): centralize resume probe semantics
 ```
 
 ## User Goal & Constraints
@@ -59,6 +62,13 @@ Fetch Answer Agent
 4. 四平台完整采集应按平台级 job 并行；人工 takeover 对用户串行展示，避免焦点和 VNC 互抢。
 5. `hunyuan` 暂时保留在旧 API client / executor 层，业务展示与新契约统一为 `yuanbao / 元宝`。
 6. Redis 不是这轮核心阻塞；若后续多 worker 部署，再迁移 browser action request / takeover resolve 状态。
+7. 当前会话 follow-up 的问题，不再接受“模型先选错工具 -> runtime 再语义改写回来”的模式；改由 Harness 的 contextual tool exposure 在事前收窄真实工具面。
+8. Browser 页面理解不再继续往平台 handler 里堆 selector；生产级方向必须是共享 Browser Agent runtime + Human takeover 兜底。
+9. `LLMBrowserAgentPolicy` 采用分阶段接管，只允许接管：
+   - `preflight`
+   - `wait_gate`
+   - `resume_probe`
+10. 接管交互统一为单一 `BrowserActionBanner` 结算语义，不再发送额外说明消息与卡片双轨事件。
 
 ## Actions Taken
 
@@ -324,6 +334,73 @@ Select-String affected files -Pattern "\?\?\?"
 => no matches
 ```
 
+P0-P2 当前工作树增量：
+
+```text
+aeo-platform/backend/app/config.py
+aeo-platform/backend/app/core/fetchers/browser/browser_agent_policy.py
+aeo-platform/backend/app/core/fetchers/browser/browser_agent_loop.py
+aeo-platform/backend/app/core/fetchers/browser/browser_agent_contract.py
+aeo-platform/backend/app/core/fetchers/browser/base_handler.py
+aeo-platform/backend/app/core/fetchers/browser/kimi_handler.py
+aeo-platform/backend/app/core/fetchers/browser/doubao_handler.py
+aeo-platform/backend/app/core/fetchers/browser/yuanbao_handler.py
+aeo-platform/backend/app/core/fetchers/browser/deepseek_handler.py
+aeo-platform/backend/app/workflow/browser_action_runtime.py
+aeo-platform/backend/app/workflow/browser_action_contract.py
+aeo-platform/backend/app/workflow/events.py
+frontend/src/components/chat/BrowserActionBanner.tsx
+frontend/src/components/chat/ChatPanel.tsx
+frontend/src/stores/conversationStore.ts
+frontend/src/hooks/websocket/execution.ts
+frontend/src/services/api.ts
+frontend/src/types/agent.ts
+frontend/src/types/aio.ts
+aeo-platform/backend/tests/test_browser_agent_llm_policy.py
+aeo-platform/backend/tests/test_harness_refactor_foundations.py
+```
+
+P0 当前已完成：
+
+1. 初始登录判定与 late blocker 的主控制面开始从平台 handler 收回到共享 Browser Agent runtime。
+2. 登录类 blocker 的共享分类优先级已上移，避免“登录弹窗因为含验证码输入框而误判为 verification”。
+3. `target_closed / stale page` 继续留在 deterministic runtime 层修，不进入 LLM 决策。
+4. Kimi 旧的 `_detect_login_needed()` 一类平台私有登录入口逻辑已开始删除，平台 handler 继续变薄。
+5. 平台恢复探针已统一到 Base 的共享 `resume_probe` 链路。
+
+P1 当前已完成：
+
+1. `LLMBrowserAgentPolicy` 已进入默认执行链，但仅限：
+   - `preflight`
+   - `wait_gate`
+   - `resume_probe`
+2. 默认策略改为 **LLM-first + deterministic fallback**。
+3. LLM 动作已做安全收敛：
+   - 只允许 `click / press / wait / focus / close modal / safe navigate`
+   - 不允许输入账号密码/短信码/验证码
+   - 不允许无平台约束的任意导航
+4. `safe navigate` 只允许同 host 或显式目标页。
+5. LLM 决策解析失败、超时、动作不安全时，会立即回退到 bootstrap policy。
+
+P2 当前已完成：
+
+1. `browser_action_contract` 不再以“额外说明消息 + 可操作卡片”双轨发事件，测试已更新为单卡片语义。
+2. `blocking_url / blocking_fingerprint / action_type / reason_code` 已进入 request/runtime/front-end 传递链路。
+3. 同一阻塞现场已开始按 `blocking_fingerprint` 去重。
+4. 停止任务后：
+   - 释放 browser workspace
+   - 逐个释放接管注册
+   - 保留 settled 卡片，而不是清空全部 browser states
+5. 前端结算态已围绕：
+   - `issued`
+   - `opened`
+   - `resolved`
+   - `skipped`
+   - `resume_failed`
+   - `expired`
+   - `cancelled`
+6. “打开云电脑”优先 attach 到阻塞现场相关 URL，而不是重新打开平台主页。
+
 2026-04-12 晚间补充架构决策：
 
 ```text
@@ -388,19 +465,22 @@ aeo-platform/backend/scripts/probe_aio_parallel_contexts.py
 6. 如果底层只有一个可视 browser process，VNC focus / tab 互扰仍可能存在。
 7. 登录态复用闭环必须通过真实 UAT 验证：`takeover -> resume_probe -> persist auth state -> next run reuse`。
 8. 真实“雅姿”四平台全浏览器 UAT 尚未完成。
-9. 当前 Browser Agent 已经不再只有 bootstrap seam，而是具备“阶段上下文 + hybrid executor”骨架；但 LLM policy 默认仍关闭，避免未验证前直接进入生产路径。
-10. 当前这轮 Browser Agent 还不是最终的 LLM-driven browser loop；页面理解控制权已经开始从平台 handler 收回到公共层，但平台旧逻辑还没有完全删除。
-11. `network intercept -> ParsedResponse` 这一路仍然有平台 parser 差异；目前只是把其 `auth_required / verify` 结果先映射进公共 takeover，还没有完全进入统一 Browser Agent runtime。
-12. 共享 resume probe 已经统一到 Base，但平台登录“初始判定”和部分 late blocker 识别仍保留在 handler 中，页面理解控制权还没完全收回到 Browser Agent runtime。
-13. 当前本地 worktree 和共享 env 都没有配置 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`，因此真实 AIO probe / UAT 目前被运行时配置阻塞，而不是被代码测试阻塞。
+9. 当前 Browser Agent 已经不再只有 bootstrap seam，而是具备“阶段上下文 + hybrid executor”骨架；但它仍不是整条提问/抓取主链路的默认执行者。
+10. 平台 handler 还没有完全削成“纯配置 + 抽取契约”；初始登录判定和部分 late blocker 仍有残留。
+11. `network intercept -> ParsedResponse` 这一路仍然有平台 parser 差异；目前只是把其 `auth_required / verify` 结果映射进公共 takeover，还没有完全进入统一 Browser Agent runtime。
+12. 真实线上 UAT 仍未完成，尤其是：
+    - 首次登录 -> 我已完成 -> 继续抓取
+    - 下次复用登录态
+    - late verify -> 结算卡片
+    - 重复登录提示不再复发
+13. 当前本地 worktree 和共享 env 的 AIO 运行时配置仍需再次核对，真实 probe / UAT 仍可能被 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN` 这类配置阻塞。
 
 ## Next Step
 
-建议下一步不要直接迁 worker，先继续 P1b / P2：
+建议下一步不要直接迁 worker，先把 P0-P2 收口完：
 
-1. 先提交当前 Browser Agent resume/runtime 代码与测试，保留 `probe_aio_parallel_contexts.py` 为未跟踪诊断脚本。
-2. 继续把 Kimi / DeepSeek / Doubao / Yuanbao 的“初始登录判定”和 late blocker 识别从 handler 往共享 Browser Agent runtime 迁。
-3. 补齐 AIO 运行时配置：至少让当前 worktree 或共享 env 具备 `AIO_BASE_URL / AIO_ENABLED / AIO_AUTH_TOKEN`。
-4. P2：运行 AIO 并行 context probe，确认当前 runtime 支持多 context、多 page、多 browser process 还是必须多 sandbox lease。
-5. 在共享 env 补齐 AIO 运行时配置后，跑真实“雅姿”四平台完整采集 UAT，记录卡点并修复。
-6. P3：在 P1/P2 明确后，让 `LLMBrowserAgentPolicy` 真正接管默认执行路径，逐步替代 `BrowserAgentBootstrapPolicy` 只作为 deterministic guardrail。
+1. 先提交当前 P0-P2 工作树改动，保留 `probe_aio_parallel_contexts.py` 为未跟踪诊断脚本。
+2. 继续把 Kimi / DeepSeek / Doubao / Yuanbao 的“初始登录判定”和 late blocker 识别彻底从 handler 往共享 Browser Agent runtime 迁。
+3. 在受控场景里继续扩大 `LLMBrowserAgentPolicy` 的默认接管范围，但仍不接管答案提交/抽取主流程。
+4. 核对并补齐 AIO 运行时配置。
+5. 跑真实 AIO probe 与“雅姿”四平台完整采集 UAT，记录卡点并修复。

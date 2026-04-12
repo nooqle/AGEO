@@ -31,6 +31,23 @@ class KimiHandler(BaseBrowserHandler):
     URL = "https://kimi.com/"
     PLATFORM = Platform.KIMI
     PLATFORM_KEY = "kimi"
+    BROWSER_READY_URL_PATTERNS = ("kimi.com",)
+    BROWSER_LOGIN_URL_PATTERNS = ("login", "signin", "auth")
+    BROWSER_READY_HINTS = ("new chat", "chat history", "kimi code", "kimi claw")
+    BROWSER_LOGIN_HINTS = (
+        "wechat qr code",
+        "log in with phone number",
+        "verification code",
+        "扫码",
+        "二维码",
+        "手机号",
+    )
+    BROWSER_LATE_BLOCKER_HINTS = (
+        "wechat qr code",
+        "verification code",
+        "人机验证",
+        "安全验证",
+    )
 
     _DEFAULTS: dict = {
         "input": ".chat-input-editor, [class*='chat-input'], [contenteditable='true']",
@@ -200,31 +217,7 @@ class KimiHandler(BaseBrowserHandler):
             if should_abort:
                 return
 
-            # Step 3: Check login status (Kimi-specific multi-step detection)
-            yield self._create_event(
-                BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3
-            )
-            login_detected = await self._detect_login_needed()
-
-            if login_detected:
-                waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
-                action_hint = (
-                    "请在弹出的浏览器窗口中完成 Kimi 登录，完成后点击“我已完成”"
-                )
-                events, request_id = await self._begin_login_takeover_gate(
-                    message=waiting_message,
-                    action_hint=action_hint,
-                    progress=0.35,
-                    url=self.URL,
-                    open_error_message="打开 Kimi 浏览器窗口失败，请重试",
-                )
-                for event in events:
-                    yield event
-                if not request_id:
-                    return
-                return
-
-            # Step 3.5: Dismiss popups before interacting
+            # Step 3: Dismiss popups before interacting
             if self.client.page is not None:
                 try:
                     dismissed = await self.client.page.evaluate(
@@ -404,94 +397,6 @@ class KimiHandler(BaseBrowserHandler):
 
     # ------------------------------------------------------------------ Kimi-specific helpers
 
-    async def _detect_login_needed(self) -> bool:
-        """Detect if Kimi requires login (multi-step check).
-
-        Uses Playwright page.evaluate() to run JS in the browser context.
-        """
-        if self.client.page is None:
-            return False
-        try:
-            login_check = await self.client.page.evaluate(
-                """() => {
-                const selectors = [
-                    '.login-modal-content', '.wechat-login',
-                    '.phone-login-mobile-number', '[placeholder="请输入手机号"]',
-                    '[class*="login-modal"]', '[class*="login-dialog"]', '[class*="auth-modal"]',
-                ];
-                for (const sel of selectors) {
-                    const el = document.querySelector(sel);
-                    // Must check visibility — hidden login DOM shouldn't trigger login flow
-                    if (el && el.offsetParent !== null) return sel;
-                }
-                const notLogin = document.querySelector('.not-login-container');
-                if (notLogin && (notLogin.textContent || '').includes('登录')) {
-                    return '__need_login__';
-                }
-                const input = document.querySelector('.chat-input-editor')
-                    || document.querySelector('[class*="chat-input"]')
-                    || document.querySelector('[contenteditable="true"]')
-                    || document.querySelector('textarea');
-                if (input && input.offsetParent !== null) return '__input_ready__';
-                return '__no_input__';
-            }"""
-            )
-            result_str = (
-                login_check if isinstance(login_check, str) else str(login_check)
-            )
-
-            if result_str == "__input_ready__":
-                logger.info("[Kimi] Input ready, no login required")
-                return False
-            elif result_str == "__need_login__":
-                logger.info("[Kimi] Not logged in (.not-login-container detected)")
-                return True
-            elif result_str == "__no_input__":
-                logger.info(
-                    "[Kimi] No input found yet, waiting for SPA to finish loading..."
-                )
-                for _wait_round in range(4):
-                    await asyncio.sleep(2)
-                    retry_check = await self.client.page.evaluate(
-                        """() => {
-                        const input = document.querySelector('.chat-input-editor')
-                            || document.querySelector('[class*="chat-input"]')
-                            || document.querySelector('[contenteditable="true"]')
-                            || document.querySelector('textarea');
-                        if (input && input.offsetParent !== null) return '__input_ready__';
-                        const loginSels = ['.login-modal-content', '.wechat-login',
-                            '[class*="login-modal"]', '[class*="login-dialog"]'];
-                        for (const sel of loginSels) {
-                            const el = document.querySelector(sel);
-                            if (el && el.offsetParent !== null) return sel;
-                        }
-                        return '__no_input__';
-                    }"""
-                    )
-                    retry_str = (
-                        retry_check
-                        if isinstance(retry_check, str)
-                        else str(retry_check)
-                    )
-                    if retry_str == "__input_ready__":
-                        logger.info("[Kimi] Input became ready after extra wait")
-                        return False
-                    if retry_str != "__no_input__":
-                        logger.info(
-                            "[Kimi] Login modal appeared after wait: %s", retry_str
-                        )
-                        return True
-                logger.warning(
-                    "[Kimi] Input still unavailable after extended wait, assuming login required"
-                )
-                return True
-            else:
-                logger.info("[Kimi] Login modal detected via: %s", result_str)
-                return True
-        except Exception as e:
-            logger.debug("[Kimi] Login detection check failed: %s", e)
-            return False
-
     async def probe_takeover_ready(self, action_type: str) -> bool:
         if action_type == "login":
             return False
@@ -515,22 +420,6 @@ class KimiHandler(BaseBrowserHandler):
                 f"{note} Kimi 可能在提交后晚到弹出登录框；如果出现居中的登录弹窗或遮罩，不要继续当作正常回答页。"
             )
         return note
-
-    async def _wait_for_content_with_login_check(
-        self,
-        max_wait: float = 60,
-        detect_late_login: bool = True,
-    ) -> tuple[int, float, bool]:
-        """Legacy wrapper kept for compatibility with older call sites."""
-        prev_len, waited, blocker_decision = await self._wait_for_content_with_browser_agent(
-            max_wait=max_wait,
-            poll_interval=3,
-            min_content_len=100,
-            stable_rounds=2,
-            target_url=self.URL,
-            blocker_check_after_seconds=12 if detect_late_login else max_wait + 1,
-        )
-        return prev_len, waited, blocker_decision is not None
 
     async def _resubmit_question(self, question: str) -> None:
         """Re-submit the question after manual login recovery."""

@@ -28,6 +28,11 @@ class YuanbaoHandler(BaseBrowserHandler):
     PLATFORM = Platform.HUNYUAN
     PLATFORM_KEY = "yuanbao"
     DOUBLE_UTF8_FIX = True  # Yuanbao SSE body is double UTF-8 encoded
+    BROWSER_READY_URL_PATTERNS = ("yuanbao.tencent.com",)
+    BROWSER_LOGIN_URL_PATTERNS = ("login", "signin", "auth")
+    BROWSER_READY_HINTS = ("hunyuan", "新建对话", "联网搜索")
+    BROWSER_LOGIN_HINTS = ("登录", "手机号", "验证码", "扫码", "二维码")
+    BROWSER_LATE_BLOCKER_HINTS = ("安全验证", "人机验证", "验证码", "账号选择")
 
     _DEFAULTS: dict = {
         "input": ".ql-editor",
@@ -182,37 +187,7 @@ class YuanbaoHandler(BaseBrowserHandler):
             if should_abort:
                 return
 
-            # Step 3: Check login status
-            yield self._create_event(BrowserState.CHECKING_LOGIN, "检查登录状态...", progress=0.3)
-            login_needed = False
-            if self.client.page is not None:
-                try:
-                    surface_state = await self.client.page.evaluate(
-                        self._login_surface_state_js()
-                    )
-                    login_needed = bool(surface_state.get("loginNeeded")) and not bool(
-                        surface_state.get("ready")
-                    )
-                except Exception as e:
-                    logger.debug("[Yuanbao] Login check failed: %s", e)
-
-            if login_needed:
-                waiting_message = "检测到需要登录，请在浏览器窗口中完成登录"
-                action_hint = "请在弹出的浏览器窗口中完成元宝登录，完成后点击“我已完成”"
-                events, request_id = await self._begin_login_takeover_gate(
-                    message=waiting_message,
-                    action_hint=action_hint,
-                    progress=0.35,
-                    url=self.URL,
-                    open_error_message="打开元宝浏览器窗口失败，请重试",
-                )
-                for event in events:
-                    yield event
-                if not request_id:
-                    return
-                return
-
-            # Step 3.5: Dismiss popups after navigation / login
+            # Step 3: Dismiss popups after navigation / login
             if self.client.page is not None:
                 try:
                     dismissed = await self.client.page.evaluate(self._dismiss_popups_js())

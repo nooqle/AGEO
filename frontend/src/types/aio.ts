@@ -24,7 +24,11 @@ export interface AioTakeoverAccessBundle {
   heartbeatPath: string;
   resolvePath: string;
   cancelPath: string;
+  actionType?: string | null;
+  reasonCode?: string | null;
   targetUrl?: string | null;
+  blockingUrl?: string | null;
+  blockingFingerprint?: string | null;
 }
 
 export interface AioTakeoverRecord {
@@ -34,6 +38,8 @@ export interface AioTakeoverRecord {
   mode: AioTakeoverMode;
   reason: string;
   takeoverState: AioTakeoverState;
+  actionType?: string | null;
+  reasonCode?: string | null;
   frontendId?: string | null;
   requestedAt?: string | null;
   issuedAt?: string | null;
@@ -41,6 +47,8 @@ export interface AioTakeoverRecord {
   lastHeartbeatAt?: string | null;
   resumeGateResult?: string | null;
   targetUrl?: string | null;
+  blockingUrl?: string | null;
+  blockingFingerprint?: string | null;
   accessBundle: AioTakeoverAccessBundle;
 }
 

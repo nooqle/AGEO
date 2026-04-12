@@ -88,6 +88,7 @@ interface ConversationState {
   setBrowserState: (state: BrowserState | null) => void;
   updateBrowserState: (requestId: string, updates: Partial<BrowserState>) => void;
   clearBrowserStatesForPlatform: (platform: BrowserState['platform']) => void;
+  settleBrowserActionStates: (message: string, actionHint?: string) => void;
   clearBrowserStates: () => void;
   setStopState: (state: StopState | null) => void;
   setPendingConfirmation: (request: ConfirmationRequest | null) => void;
@@ -144,6 +145,45 @@ const initialTPAOR: CurrentTPAOR = {
   response: '',
   activePhase: null,
 };
+
+function getBrowserStateIdentityKey(browserState: BrowserState): string {
+  if (browserState.requestId) {
+    return `request:${browserState.requestId}`;
+  }
+  if (browserState.takeover?.takeoverId) {
+    return `takeover:${browserState.takeover.takeoverId}`;
+  }
+  if (browserState.blockingFingerprint) {
+    return `blocker:${browserState.platform}:${browserState.actionType || 'unknown'}:${browserState.blockingFingerprint}`;
+  }
+  return [
+    'fallback',
+    browserState.platform,
+    browserState.actionType || browserState.state,
+    browserState.message,
+    browserState.actionHint || '',
+  ].join(':');
+}
+
+function isSameBrowserStateIdentity(
+  incomingState: BrowserState,
+  existingState: BrowserState,
+): boolean {
+  if (incomingState.requestId && existingState.requestId) {
+    return incomingState.requestId === existingState.requestId;
+  }
+  if (incomingState.takeover?.takeoverId && existingState.takeover?.takeoverId) {
+    return incomingState.takeover.takeoverId === existingState.takeover.takeoverId;
+  }
+  if (incomingState.blockingFingerprint && existingState.blockingFingerprint) {
+    return (
+      incomingState.platform === existingState.platform &&
+      incomingState.actionType === existingState.actionType &&
+      incomingState.blockingFingerprint === existingState.blockingFingerprint
+    );
+  }
+  return getBrowserStateIdentityKey(incomingState) === getBrowserStateIdentityKey(existingState);
+}
 
 export const useConversationStore = create<ConversationState>((set, get) => ({
   messages: [],
@@ -273,33 +313,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     }
 
     set((state) => {
-      let nextStates = [...state.browserStates];
-      const requestId = browserState.requestId;
-      const fingerprint = requestId
-        ? `request:${requestId}`
-        : `${browserState.platform}:${browserState.state}:${browserState.message}:${browserState.actionHint || ''}`;
-      if (browserState.requiresAction) {
-        nextStates = nextStates.filter((existing) => {
-          if (requestId && existing.requestId === requestId) {
-            return true;
-          }
-          return !(
-            existing.requiresAction &&
-            existing.platform === browserState.platform &&
-            existing.actionType === browserState.actionType
-          );
-        });
-      }
-
-      const nextExistingIndex = nextStates.findIndex((existing) => {
-        if (requestId && existing.requestId) {
-          return existing.requestId === requestId;
-        }
-        const existingFingerprint = existing.requestId
-          ? `request:${existing.requestId}`
-          : `${existing.platform}:${existing.state}:${existing.message}:${existing.actionHint || ''}`;
-        return existingFingerprint === fingerprint;
-      });
+      const nextStates = [...state.browserStates];
+      const nextExistingIndex = nextStates.findIndex((existing) =>
+        isSameBrowserStateIdentity(browserState, existing)
+      );
 
       if (nextExistingIndex >= 0) {
         const existingState = nextStates[nextExistingIndex];
@@ -342,6 +359,34 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       );
       return {
         browserState: nextStates.find((item) => item.requiresAction) || nextStates[0] || null,
+        browserStates: nextStates,
+      };
+    });
+  },
+
+  settleBrowserActionStates: (message, actionHint) => {
+    set((state) => {
+      const nextStates = state.browserStates.map((browserState) => {
+        if (
+          !browserState.requiresAction
+          || !(
+            browserState.requestId
+            || browserState.takeover?.takeoverId
+            || browserState.actionType
+          )
+        ) {
+          return browserState;
+        }
+        return {
+          ...browserState,
+          requiresAction: false,
+          message,
+          actionHint: actionHint ?? message,
+        };
+      });
+      return {
+        browserState:
+          nextStates.find((item) => item.requiresAction) || nextStates[0] || null,
         browserStates: nextStates,
       };
     });

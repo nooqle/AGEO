@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     AIO_IDLE_TTL_SECONDS: int = 900
     AIO_TAKEOVER_HEARTBEAT_INTERVAL_MS: int = 10000
     AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS: int = 30
-    BROWSER_AGENT_LLM_ENABLED: bool = False
+    BROWSER_AGENT_LLM_ENABLED: bool = True
 
     # LLM Provider Selection
     LLM_PROVIDER: str = "glm5"

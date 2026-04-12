@@ -7,6 +7,7 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 from app.config import get_settings
 from app.core.llm import get_llm_model
@@ -21,9 +22,10 @@ from app.core.fetchers.browser.browser_agent_contract import (
     loop_context_to_llm_payload,
     observation_to_llm_payload,
 )
-from app.core.fetchers.browser.browser_agent_policy import decide_browser_preflight
+from app.core.fetchers.browser.browser_agent_policy import decide_browser_stage
 
 logger = logging.getLogger(__name__)
+_LLM_DEFAULT_STAGES = frozenset({"preflight", "wait_gate", "resume_probe"})
 
 
 class BrowserAgentPolicy(Protocol):
@@ -56,8 +58,9 @@ class BrowserAgentBootstrapPolicy:
         *,
         loop_context: BrowserAgentLoopContext,
     ) -> BrowserAgentDecision:
-        return decide_browser_preflight(
+        return decide_browser_stage(
             observation,
+            loop_context=loop_context,
             target_url=loop_context.target_url,
         )
 
@@ -71,7 +74,7 @@ def _build_llm_browser_agent_prompt(loop_context: BrowserAgentLoopContext) -> st
         "可用 blocker_kind: none/login/verification/captcha/security_confirmation/"
         "account_selection/consent_modal/popup/blank_page/navigation_error/rate_limit/"
         "target_closed/unknown。"
-        "如果给出 actions，只能使用 click_ref/fill_ref/press_key/wait/navigate/refresh/"
+        "如果给出 actions，只能使用 click_ref/press_key/wait/navigate/refresh/"
         "close_popup/complete/handoff。"
         "登录、验证码、人机验证、安全确认、账号选择必须交给人工接管。"
         "普通弹窗、协议弹窗、空白页、错误页、轻量恢复操作应优先自动处理。"
@@ -136,7 +139,6 @@ def _parse_llm_decision(payload: dict[str, Any]) -> BrowserAgentDecision | None:
             action_type = str(item.get("action_type") or "").strip()
             if action_type not in {
                 "click_ref",
-                "fill_ref",
                 "press_key",
                 "wait",
                 "navigate",
@@ -165,7 +167,22 @@ def _parse_llm_decision(payload: dict[str, Any]) -> BrowserAgentDecision | None:
             blocker_kind=str(raw_takeover.get("blocker_kind") or blocker_kind or "unknown"),
             reason_code=str(raw_takeover.get("reason_code") or "browser_agent_takeover"),
             message=str(raw_takeover.get("message") or "browser agent takeover required"),
+            action_type=(
+                str(raw_takeover.get("action_type"))
+                if raw_takeover.get("action_type") is not None
+                else None
+            ),
             target_url=raw_takeover.get("target_url"),
+            blocking_url=(
+                str(raw_takeover.get("blocking_url"))
+                if raw_takeover.get("blocking_url") is not None
+                else None
+            ),
+            blocking_fingerprint=(
+                str(raw_takeover.get("blocking_fingerprint"))
+                if raw_takeover.get("blocking_fingerprint") is not None
+                else None
+            ),
             resume_expectation=str(
                 raw_takeover.get("resume_expectation") or "manual_resume_gate"
             ),
@@ -187,6 +204,83 @@ def _parse_llm_decision(payload: dict[str, Any]) -> BrowserAgentDecision | None:
     )
 
 
+def _is_safe_navigate_target(
+    candidate_url: str | None,
+    *,
+    loop_context: BrowserAgentLoopContext,
+) -> bool:
+    if not candidate_url:
+        return False
+    if candidate_url == (loop_context.target_url or ""):
+        return True
+    target_url = loop_context.target_url
+    if not target_url:
+        return False
+    try:
+        candidate = urlparse(candidate_url)
+        target = urlparse(target_url)
+    except Exception:
+        return False
+    return bool(candidate.netloc and candidate.netloc == target.netloc)
+
+
+def _sanitize_llm_decision(
+    decision: BrowserAgentDecision,
+    *,
+    loop_context: BrowserAgentLoopContext,
+) -> BrowserAgentDecision | None:
+    sanitized_actions: list[BrowserAgentAction] = []
+    for action in decision.actions:
+        if action.action_type == "navigate":
+            target_url = action.target_url or loop_context.target_url
+            if not _is_safe_navigate_target(target_url, loop_context=loop_context):
+                continue
+            sanitized_actions.append(
+                BrowserAgentAction(
+                    action_type="navigate",
+                    target_url=target_url,
+                    reason=action.reason,
+                )
+            )
+            continue
+
+        if action.action_type == "wait":
+            wait_seconds = action.wait_seconds or 0.8
+            sanitized_actions.append(
+                BrowserAgentAction(
+                    action_type="wait",
+                    wait_seconds=max(0.2, min(wait_seconds, 3.0)),
+                    reason=action.reason,
+                )
+            )
+            continue
+
+        if action.action_type in {"click_ref", "close_popup"}:
+            if not action.ref:
+                continue
+            sanitized_actions.append(action)
+            continue
+
+        if action.action_type == "press_key":
+            if not action.key:
+                continue
+            sanitized_actions.append(action)
+            continue
+
+        if action.action_type in {"refresh", "complete", "handoff"}:
+            sanitized_actions.append(action)
+
+    return BrowserAgentDecision(
+        outcome=decision.outcome,
+        actions=tuple(sanitized_actions),
+        blocker_kind=decision.blocker_kind,
+        rationale=decision.rationale,
+        confidence=decision.confidence,
+        takeover=decision.takeover,
+        error=decision.error,
+    )
+
+
 class LLMBrowserAgentPolicy:
     """Optional LLM-backed browser policy.
 
@@ -205,29 +299,42 @@ class LLMBrowserAgentPolicy:
         *,
         loop_context: BrowserAgentLoopContext,
     ) -> BrowserAgentDecision | None:
-        model = get_llm_model()
+        settings = get_settings()
+        if not bool(getattr(settings, "BROWSER_AGENT_LLM_ENABLED", True)):
+            return None
+        if loop_context.stage not in _LLM_DEFAULT_STAGES:
+            return None
+        try:
+            model = get_llm_model()
+        except Exception as exc:
+            logger.warning("[BrowserAgentLoop] Failed to get browser-agent LLM model: %s", exc)
+            return None
         prompt = (
             f"{_build_llm_browser_agent_prompt(loop_context)} "
             "当缺少足够把握时，返回 outcome=continue、blocker_kind=none、actions=[]。"
         )
-        response = await model.async_call(
-            messages=[
-                {"role": "system", "content": prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "loop_context": loop_context_to_llm_payload(loop_context),
-                            "observation": observation_to_llm_payload(observation),
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                },
-            ],
-            temperature=0.1,
-            max_tokens=1200,
-        )
+        try:
+            response = await model.async_call(
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "loop_context": loop_context_to_llm_payload(loop_context),
+                                "observation": observation_to_llm_payload(observation),
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                    },
+                ],
+                temperature=0.1,
+                max_tokens=1200,
+            )
+        except Exception as exc:
+            logger.warning("[BrowserAgentLoop] LLM browser decision failed: %s", exc)
+            return None
         payload = _extract_json_object(response.content)
         if not payload:
             logger.warning("[BrowserAgentLoop] LLM policy returned non-JSON content")
@@ -242,11 +349,11 @@ class LLMBrowserAgentPolicy:
                 decision.confidence,
             )
             return None
-        return decision
+        return _sanitize_llm_decision(decision, loop_context=loop_context)
 
 
 class HybridBrowserAgentPolicy:
-    """Deterministic bootstrap first, optional LLM second."""
+    """LLM-first for browser blocker stages, deterministic fallback elsewhere."""
 
     def __init__(
         self,
@@ -263,19 +370,42 @@ class HybridBrowserAgentPolicy:
         *,
         loop_context: BrowserAgentLoopContext,
     ) -> BrowserAgentDecision:
+        def _is_noop(decision: BrowserAgentDecision | None) -> bool:
+            if decision is None:
+                return True
+            return (
+                decision.outcome == "continue"
+                and not decision.actions
+                and decision.blocker_kind == "none"
+            )
+
+        llm_first = (
+            self._llm_policy is not None
+            and loop_context.stage in _LLM_DEFAULT_STAGES
+        )
+
+        llm_decision: BrowserAgentDecision | None = None
+        if llm_first:
+            llm_decision = self._llm_policy.decide(
+                observation,
+                loop_context=loop_context,
+            )
+            if inspect.isawaitable(llm_decision):
+                llm_decision = await llm_decision
+            if not _is_noop(llm_decision):
+                return llm_decision
+
         bootstrap = self._bootstrap_policy.decide(
             observation,
             loop_context=loop_context,
         )
         if inspect.isawaitable(bootstrap):
             bootstrap = await bootstrap
-        if (
-            bootstrap.outcome != "continue"
-            or bootstrap.actions
-            or bootstrap.blocker_kind != "none"
-            or self._llm_policy is None
-        ):
+        if not _is_noop(bootstrap) or self._llm_policy is None:
             return bootstrap
+
+        if llm_decision is not None:
+            return llm_decision
 
         llm_decision = self._llm_policy.decide(
             observation,
@@ -287,12 +417,9 @@ class HybridBrowserAgentPolicy:
 
 
 def build_default_browser_agent_policy() -> BrowserAgentPolicy:
-    settings = get_settings()
-    if bool(getattr(settings, "BROWSER_AGENT_LLM_ENABLED", False)):
-        return HybridBrowserAgentPolicy(
-            llm_policy=LLMBrowserAgentPolicy(),
-        )
-    return BrowserAgentBootstrapPolicy()
+    return HybridBrowserAgentPolicy(
+        llm_policy=LLMBrowserAgentPolicy(),
+    )
 
 
 async def collect_browser_agent_step(

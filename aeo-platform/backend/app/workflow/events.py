@@ -573,6 +573,10 @@ async def send_browser_state_event(
     requires_action: bool = False,
     action_hint: str | None = None,
     request_id: str | None = None,
+    related_message_id: str | None = None,
+    reason_code: str | None = None,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
     takeover: dict[str, Any] | None = None,
 ) -> None:
     """Send browser state event to frontend.
@@ -601,6 +605,14 @@ async def send_browser_state_event(
         payload["action_hint"] = action_hint
     if request_id:
         payload["request_id"] = request_id
+    if related_message_id:
+        payload["related_message_id"] = related_message_id
+    if reason_code:
+        payload["reason_code"] = reason_code
+    if blocking_url:
+        payload["blocking_url"] = blocking_url
+    if blocking_fingerprint:
+        payload["blocking_fingerprint"] = blocking_fingerprint
     if takeover:
         payload["takeover"] = takeover
     await session_event_publisher.emit_to_session(session_id, "browser_state", payload)
@@ -615,6 +627,10 @@ async def send_browser_user_action_event(
     progress: float = 0.0,
     action_hint: str | None = None,
     request_id: str | None = None,
+    related_message_id: str | None = None,
+    reason_code: str | None = None,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
     takeover: dict[str, Any] | None = None,
 ) -> None:
     """Send a normalized browser user-action event to frontend.
@@ -637,6 +653,14 @@ async def send_browser_user_action_event(
         payload["action_hint"] = action_hint
     if request_id:
         payload["request_id"] = request_id
+    if related_message_id:
+        payload["related_message_id"] = related_message_id
+    if reason_code:
+        payload["reason_code"] = reason_code
+    if blocking_url:
+        payload["blocking_url"] = blocking_url
+    if blocking_fingerprint:
+        payload["blocking_fingerprint"] = blocking_fingerprint
     if takeover:
         payload["takeover"] = takeover
     await session_event_publisher.emit_to_session(

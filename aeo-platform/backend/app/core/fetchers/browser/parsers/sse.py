@@ -7,7 +7,6 @@ differ significantly.
 
 import json
 import logging
-from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from app.core.fetchers.browser.parsers.base import BaseResponseParser, ParsedResponse

@@ -1116,6 +1116,8 @@ class ApiService {
       mode: this.normalizeAioMode(raw.mode),
       reason: String(raw.reason || ''),
       takeoverState: (raw.takeover_state as AioTakeoverRecord['takeoverState']) || 'issued',
+      actionType: typeof raw.action_type === 'string' ? raw.action_type : null,
+      reasonCode: typeof raw.reason_code === 'string' ? raw.reason_code : null,
       frontendId: typeof raw.frontend_id === 'string' ? raw.frontend_id : null,
       requestedAt: typeof raw.requested_at === 'string' ? raw.requested_at : null,
       issuedAt: typeof raw.issued_at === 'string' ? raw.issued_at : null,
@@ -1124,6 +1126,11 @@ class ApiService {
       resumeGateResult:
         typeof raw.resume_gate_result === 'string' ? raw.resume_gate_result : null,
       targetUrl: typeof raw.target_url === 'string' ? raw.target_url : null,
+      blockingUrl: typeof raw.blocking_url === 'string' ? raw.blocking_url : null,
+      blockingFingerprint:
+        typeof raw.blocking_fingerprint === 'string'
+          ? raw.blocking_fingerprint
+          : null,
       accessBundle: {
         openPath: typeof bundle.open_path === 'string' ? bundle.open_path : null,
         canvasConfigPath: String(bundle.canvas_config_path || ''),
@@ -1131,7 +1138,15 @@ class ApiService {
         heartbeatPath: String(bundle.heartbeat_path || ''),
         resolvePath: String(bundle.resolve_path || ''),
         cancelPath: String(bundle.cancel_path || ''),
+        actionType: typeof bundle.action_type === 'string' ? bundle.action_type : null,
+        reasonCode: typeof bundle.reason_code === 'string' ? bundle.reason_code : null,
         targetUrl: typeof bundle.target_url === 'string' ? bundle.target_url : null,
+        blockingUrl:
+          typeof bundle.blocking_url === 'string' ? bundle.blocking_url : null,
+        blockingFingerprint:
+          typeof bundle.blocking_fingerprint === 'string'
+            ? bundle.blocking_fingerprint
+            : null,
       },
     };
   }

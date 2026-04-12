@@ -24,7 +24,6 @@ from app.workflow.browser_action_runtime import (
 from app.workflow.events import (
     send_browser_state_event,
     send_browser_user_action_event,
-    send_reply_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -183,6 +182,9 @@ async def ensure_aio_takeover_bundle(
     action_type: str,
     message: str,
     target_url: str | None = None,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
+    reason_code: str | None = None,
 ) -> dict[str, Any] | None:
     """Issue one AIO takeover bundle per browser-action request."""
 
@@ -214,23 +216,42 @@ async def ensure_aio_takeover_bundle(
         except Exception:
             current_page_url = None
 
-    resolved_target_url = current_page_url or target_url
+    resolved_blocking_url = current_page_url or blocking_url
+    resolved_target_url = resolved_blocking_url or target_url
     if not resolved_target_url:
         existing_request = await get_browser_action_request(request_id)
         if existing_request is not None:
             resolved_target_url = existing_request.target_url
+            resolved_blocking_url = (
+                existing_request.blocking_url or resolved_blocking_url
+            )
     if not resolved_target_url:
         resolved_target_url = getattr(handler, "URL", None)
 
     existing = _aio_takeover_by_request_id.get(request_id)
     if existing is not None:
-        if resolved_target_url and existing.get("target_url") != resolved_target_url:
-            existing = {**existing, "target_url": resolved_target_url}
+        if (
+            resolved_target_url and existing.get("target_url") != resolved_target_url
+        ) or (
+            resolved_blocking_url
+            and existing.get("blocking_url") != resolved_blocking_url
+        ):
+            existing = {
+                **existing,
+                "target_url": resolved_target_url,
+                "blocking_url": resolved_blocking_url,
+                "blocking_fingerprint": blocking_fingerprint,
+                "reason_code": reason_code,
+                "action_type": action_type,
+            }
             _aio_takeover_by_request_id[request_id] = existing
             await update_browser_action_request(
                 request_id,
                 takeover=existing,
                 target_url=resolved_target_url,
+                blocking_url=resolved_blocking_url,
+                blocking_fingerprint=blocking_fingerprint,
+                reason_code=reason_code,
             )
         return existing
 
@@ -301,7 +322,11 @@ async def ensure_aio_takeover_bundle(
         "resolve_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/resolve",
         "cancel_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/cancel",
         "expires_at": takeover.expires_at.isoformat(),
+        "action_type": action_type,
+        "reason_code": reason_code,
         "target_url": resolved_target_url,
+        "blocking_url": resolved_blocking_url,
+        "blocking_fingerprint": blocking_fingerprint,
     }
     _aio_takeover_by_request_id[request_id] = bundle
     logger.info(
@@ -321,16 +346,33 @@ async def persist_browser_action_takeover(
     state: str,
     takeover: dict[str, Any] | None,
     target_url: str | None = None,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
+    reason_code: str | None = None,
 ) -> None:
     """Persist reconnect-critical takeover metadata onto the request record."""
 
     if not request_id:
         return
+    resolved_target_url = target_url
+    resolved_blocking_url = blocking_url
+    resolved_blocking_fingerprint = blocking_fingerprint
+    resolved_reason_code = reason_code
+    if isinstance(takeover, dict):
+        resolved_target_url = resolved_target_url or takeover.get("target_url")
+        resolved_blocking_url = resolved_blocking_url or takeover.get("blocking_url")
+        resolved_blocking_fingerprint = (
+            resolved_blocking_fingerprint or takeover.get("blocking_fingerprint")
+        )
+        resolved_reason_code = resolved_reason_code or takeover.get("reason_code")
     await update_browser_action_request(
         request_id,
         state=state,
         takeover=takeover,
-        target_url=target_url,
+        target_url=resolved_target_url,
+        blocking_url=resolved_blocking_url,
+        blocking_fingerprint=resolved_blocking_fingerprint,
+        reason_code=resolved_reason_code,
     )
 
 
@@ -345,15 +387,21 @@ async def emit_browser_action_handoff(
     progress: float,
     reply_markdown: str,
     run_id: str | None = None,
+    task_id: str | None = None,
     handler: Any | None = None,
     user_id: str | None = None,
     takeover: dict[str, Any] | None = None,
     target_url: str | None = None,
+    blocking_url: str | None = None,
+    blocking_fingerprint: str | None = None,
+    reason_code: str | None = None,
+    related_message_id: str | None = None,
 ) -> str:
     """Emit one frontend-facing browser action handoff contract."""
 
     resolved_target_url = target_url or getattr(handler, "URL", None)
-    request, created_new = await get_or_register_browser_action_request(
+    resolved_task_id = task_id or str(getattr(getattr(handler, "client", None), "task_id", "") or "") or None
+    request, _created_new = await get_or_register_browser_action_request(
         session_id=session_id,
         platform=platform,
         action_type=action_type,
@@ -362,7 +410,12 @@ async def emit_browser_action_handoff(
         target_url=resolved_target_url,
         progress=progress,
         run_id=run_id,
+        task_id=resolved_task_id,
+        user_id=user_id,
         state=state,
+        reason_code=reason_code,
+        blocking_url=blocking_url,
+        blocking_fingerprint=blocking_fingerprint,
     )
     slot_acquired = False
     if request.request_id not in _handoff_slot_by_request_id:
@@ -387,6 +440,9 @@ async def emit_browser_action_handoff(
                 action_type=action_type,
                 message=message,
                 target_url=resolved_target_url,
+                blocking_url=blocking_url,
+                blocking_fingerprint=blocking_fingerprint,
+                reason_code=reason_code,
             )
         if not await _browser_action_request_is_active(request):
             await _release_browser_action_handoff_slot(request.request_id)
@@ -396,15 +452,9 @@ async def emit_browser_action_handoff(
             state=state,
             takeover=takeover,
             target_url=resolved_target_url,
+            blocking_url=blocking_url,
+            reason_code=reason_code,
         )
-        if created_new:
-            await send_reply_event(
-                session_id,
-                reply_markdown,
-                is_delta=True,
-                is_new_round=True,
-            )
-            await send_reply_event(session_id, "", is_complete=True)
         await send_browser_state_event(
             session_id=session_id,
             platform=platform,
@@ -414,6 +464,10 @@ async def emit_browser_action_handoff(
             requires_action=True,
             action_hint=action_hint,
             request_id=request.request_id,
+            related_message_id=related_message_id,
+            reason_code=reason_code,
+            blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
             takeover=takeover,
         )
         await send_browser_user_action_event(
@@ -425,6 +479,10 @@ async def emit_browser_action_handoff(
             progress=progress,
             action_hint=action_hint,
             request_id=request.request_id,
+            related_message_id=related_message_id,
+            reason_code=reason_code,
+            blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
             takeover=takeover,
         )
     except Exception:

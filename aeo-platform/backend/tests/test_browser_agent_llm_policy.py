@@ -81,7 +81,7 @@ async def test_llm_browser_agent_policy_parses_json_response(monkeypatch):
     assert decision.actions[0].ref == "@e0"
 
 
-async def test_hybrid_browser_agent_policy_keeps_bootstrap_takeover(monkeypatch):
+async def test_hybrid_browser_agent_policy_keeps_bootstrap_takeover_outside_llm_stage(monkeypatch):
     class _UnexpectedLLMPolicy:
         async def decide(self, observation, *, loop_context):
             raise AssertionError("llm policy should not run when bootstrap already decided")
@@ -102,7 +102,7 @@ async def test_hybrid_browser_agent_policy_keeps_bootstrap_takeover(monkeypatch)
         llm_policy=_UnexpectedLLMPolicy(),
     ).decide(
         observation,
-        loop_context=_loop_context(),
+        loop_context=_loop_context(stage="empty_answer"),
     )
 
     assert decision.outcome == "takeover_required"
@@ -141,3 +141,51 @@ async def test_hybrid_browser_agent_policy_uses_llm_when_bootstrap_is_clear():
 
     assert decision.blocker_kind == "popup"
     assert decision.rationale == "llm found popup"
+
+
+async def test_hybrid_browser_agent_policy_prefers_llm_first_for_supported_stage():
+    calls: list[str] = []
+
+    class _BootstrapPolicy:
+        async def decide(self, observation, *, loop_context):
+            calls.append("bootstrap")
+            return BrowserAgentDecision(
+                outcome="continue",
+                blocker_kind="none",
+                rationale="bootstrap clear",
+                confidence=0.2,
+            )
+
+    class _LLMPolicy:
+        async def decide(self, observation, *, loop_context):
+            calls.append("llm")
+            return BrowserAgentDecision(
+                outcome="takeover_required",
+                blocker_kind="login",
+                rationale="llm detected login blocker",
+                confidence=0.9,
+            )
+
+    decision = await HybridBrowserAgentPolicy(
+        bootstrap_policy=_BootstrapPolicy(),
+        llm_policy=_LLMPolicy(),
+    ).decide(
+        _observation(text="page looks normal"),
+        loop_context=_loop_context(stage="preflight"),
+    )
+
+    assert calls == ["llm"]
+    assert decision.outcome == "takeover_required"
+    assert decision.blocker_kind == "login"
+
+
+def test_build_default_browser_agent_policy_is_hybrid_by_default(monkeypatch):
+    monkeypatch.setattr(
+        browser_agent_loop,
+        "get_settings",
+        lambda: SimpleNamespace(BROWSER_AGENT_LLM_ENABLED=False),
+    )
+
+    policy = build_default_browser_agent_policy()
+
+    assert isinstance(policy, HybridBrowserAgentPolicy)
