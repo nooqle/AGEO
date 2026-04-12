@@ -9,11 +9,10 @@ public contract.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Awaitable, Literal, cast
 
 from app.core.config import settings
-from app.core.constants import PlatformConstants
 
 AioPublicPlatform = Literal["doubao", "yuanbao", "kimi", "deepseek"]
 AioExecutorPlatform = Literal["doubao", "hunyuan", "kimi", "deepseek"]
@@ -288,7 +287,10 @@ class AioAnswerFetchTool:
                 api_jobs.append(
                     self._build_job(request, public_platform, executor_platform, "api")
                 )
-            if request.mode == "full" or public_platform in _FAST_BROWSER_PUBLIC_PLATFORMS:
+            if (
+                request.mode == "full"
+                or public_platform in _FAST_BROWSER_PUBLIC_PLATFORMS
+            ):
                 browser_jobs.append(
                     self._build_job(
                         request,
@@ -420,6 +422,135 @@ class AioAnswerFetchTool:
             errors=errors or [],
             takeover=takeover,
         )
+
+    def classify_legacy_result_status(
+        self,
+        result: dict[str, Any],
+    ) -> AioPlatformStatus:
+        """Classify a legacy A4 platform result into the AIO packet status."""
+
+        if result.get("success"):
+            return "result"
+        error_type = str(result.get("error_type") or "").strip().lower()
+        if (
+            result.get("skipped_by_user")
+            or result.get("skipped_by_breaker")
+            or error_type == "user_skipped"
+        ):
+            return "skipped"
+        if (
+            error_type == "takeover_required"
+            or result.get("takeover_id")
+            or result.get("surface_url")
+        ):
+            return "takeover_required"
+        return "failed"
+
+    def build_result_packet_from_legacy(
+        self,
+        *,
+        result: dict[str, Any],
+        question: dict[str, Any] | None = None,
+        auth_context: AioAuthContext | None = None,
+        run_context: AioRunContext | None = None,
+    ) -> AioPlatformFetchResult:
+        """Adapt the current A4 result dict into the new tool packet contract."""
+
+        platform = result.get("platform")
+        status = self.classify_legacy_result_status(result)
+        answer = result.get("answer")
+        answers = [answer] if isinstance(answer, dict) and result.get("success") else []
+        citations = (
+            result.get("citations") if isinstance(result.get("citations"), list) else []
+        )
+        error = str(result.get("error") or "").strip()
+        error_type = str(result.get("error_type") or "").strip()
+        errors: list[dict[str, Any]] = []
+        if status in {"failed", "skipped", "takeover_required"} and (
+            error or error_type
+        ):
+            errors.append(
+                {
+                    "message": error,
+                    "error_type": error_type or None,
+                    "stop_platform": bool(result.get("stop_platform")),
+                    "skipped_by_user": bool(result.get("skipped_by_user")),
+                    "skipped_by_breaker": bool(result.get("skipped_by_breaker")),
+                }
+            )
+        takeover: AioTakeoverRequiredPacket | None = None
+        if status == "takeover_required":
+            takeover_platform = to_public_platform_id(platform)
+            takeover = AioTakeoverRequiredPacket(
+                takeover_id=str(
+                    result.get("takeover_id")
+                    or result.get("request_id")
+                    or f"legacy:{takeover_platform}:unknown"
+                ),
+                platform=takeover_platform,
+                reason_code=str(
+                    result.get("reason_code") or error_type or "takeover_required"
+                ),
+                surface_url=(
+                    str(result.get("surface_url"))
+                    if result.get("surface_url") is not None
+                    else None
+                ),
+                target_url=(
+                    str(result.get("target_url"))
+                    if result.get("target_url") is not None
+                    else None
+                ),
+                expires_at=(
+                    str(result.get("expires_at"))
+                    if result.get("expires_at") is not None
+                    else None
+                ),
+                resume_policy=str(result.get("resume_policy") or "manual_resume_gate"),
+            )
+
+        return self.build_result_packet(
+            platform=platform,
+            status=status,
+            questions=[question] if question else [],
+            answers=answers,
+            citations=citations,
+            evidence=citations,
+            auth_state_updated=bool(result.get("auth_state_updated")),
+            provenance={
+                "source": "aio_answer_fetch",
+                "source_type": result.get("fetch_method") or "unknown",
+                "platform_legacy_id": str(platform or ""),
+                "duration": result.get("duration"),
+                "auth_context": auth_context.context_key if auth_context else None,
+                "run_context": run_context.context_key if run_context else None,
+            },
+            errors=errors,
+            takeover=takeover,
+        )
+
+    def attach_result_packet_to_legacy(
+        self,
+        *,
+        result: dict[str, Any],
+        question: dict[str, Any] | None = None,
+        auth_context: AioAuthContext | None = None,
+        run_context: AioRunContext | None = None,
+    ) -> dict[str, Any]:
+        """Return a legacy A4 result with the AIO packet attached."""
+
+        enriched = dict(result)
+        try:
+            packet = self.build_result_packet_from_legacy(
+                result=result,
+                question=question,
+                auth_context=auth_context,
+                run_context=run_context,
+            )
+        except ValueError:
+            return enriched
+        enriched["aio_packet"] = asdict(packet)
+        return enriched
 
 
 def build_legacy_platform_configs() -> dict[str, dict[str, str]]:

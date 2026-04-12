@@ -16,10 +16,11 @@ D:\AGEO-worktrees\aio-runtime-isolation
 codex/aio-runtime-isolation
 ```
 
-当前最新提交：
+当前已确认的关键提交：
 
 ```text
 30abb2a feat(aio): add answer fetch tool facade
+8833a4a docs(aio): add answer fetch handoff note
 ```
 
 ## User Goal & Constraints
@@ -163,15 +164,50 @@ Select-String affected files -Pattern "\?\?\?"
 => no matches
 ```
 
+P1a 增量（与 `feat(aio): attach platform result packets` 同一提交落地）：
+
+```text
+aeo-platform/backend/app/tools/a4_fetch_agent.py
+aeo-platform/backend/app/workflow/nodes_a4.py
+aeo-platform/backend/tests/test_harness_refactor_foundations.py
+```
+
+已完成：
+
+1. 给 legacy A4 `platform_results` 附加 `aio_packet`，保持旧结构不变。
+2. `aio_packet` 支持 `result / skipped / takeover_required / failed` 状态分类。
+3. `hunyuan` legacy 平台在 packet 中归一为 `yuanbao`。
+4. `takeover_required` packet 包含 `takeover_id / platform / reason_code / surface_url / target_url / expires_at / resume_policy`。
+5. 每个 question-level `fetch_results` 增加 `aio_platform_packets` 汇总，便于后续 A4/A5 逐步切到新契约。
+6. 平台级 provenance 写入 `source / source_type / platform_legacy_id / duration / auth_context / run_context`。
+7. 新增 result、skip 终态、takeover_required packet 的单测。
+
 ## Current Known State
 
 已提交：
 
 ```text
 30abb2a feat(aio): add answer fetch tool facade
+8833a4a docs(aio): add answer fetch handoff note
 ```
 
-提交后仍有未跟踪文件：
+P1a 当前验证：
+
+```text
+python -m compileall app\tools\a4_fetch_agent.py app\workflow\nodes_a4.py
+=> passed
+
+pytest tests\test_harness_refactor_foundations.py -q
+=> 104 passed
+
+python -m ruff check app\tools\a4_fetch_agent.py app\workflow\nodes_a4.py tests\test_harness_refactor_foundations.py
+=> passed
+
+Select-String affected files -Pattern "\?\?\?"
+=> no matches
+```
+
+仍有未跟踪文件：
 
 ```text
 aeo-platform/backend/scripts/probe_aio_parallel_contexts.py
@@ -181,8 +217,8 @@ aeo-platform/backend/scripts/probe_aio_parallel_contexts.py
 
 ## Open Risks / Unknowns
 
-1. `AioPlatformFetchResult` 目前已定义，但还没有完全替代 A4 内部 legacy `fetch_results/platform_results` 合并结构。
-2. `takeover_required / skipped / failed / result` 还没有成为 A4 唯一平台状态机，仍与旧 browser action request/resolution 机制并存。
+1. `AioPlatformFetchResult` 已被附加到 legacy `platform_results`，但还没有完全替代 A4 内部 legacy `fetch_results/platform_results` 合并结构。
+2. `takeover_required / skipped / failed / result` 已进入 packet，但还没有成为 A4 唯一平台状态机，仍与旧 browser action request/resolution 机制并存。
 3. BlockerPolicy 还没有系统化；普通弹窗和轻量阻塞处理仍散落在各平台 handler 中。
 4. 当前后端仍通过 `connect_over_cdp` 控制远端 AIO Chromium，未下沉到 AIO Runtime worker。
 5. 当前 AIO 是否能稳定支持四平台多 Playwright context 并行，尚需 probe / UAT 验证。
@@ -192,11 +228,10 @@ aeo-platform/backend/scripts/probe_aio_parallel_contexts.py
 
 ## Next Step
 
-建议下一步不要直接迁 worker，先完成 P1 / P2：
+建议下一步不要直接迁 worker，先继续 P1b / P2：
 
-1. P1：把 A4 的 platform result 合并改为正式消费 `AioPlatformFetchResult`，让 `result / takeover_required / skipped / failed` 成为唯一平台级状态来源。
-2. P1：把 skip 终态、resume probe、auth state persist、error provenance 写进统一 packet。
+1. P1b：让 A4 downstream 正式消费 `aio_platform_packets`，逐步把 legacy `platform_results` 降级为兼容层。
+2. P1b：把 skip 终态、resume probe、auth state persist、error provenance 的写入与读取闭环统一到 packet。
 3. P2：运行 AIO 并行 context probe，确认当前 runtime 支持多 context、多 page、多 browser process 还是必须多 sandbox lease。
 4. P2：跑真实“雅姿”四平台完整采集 UAT，记录卡点并修复。
 5. P3：在 P1/P2 明确后，再设计并落地 Playwright executor 下沉到 AIO Runtime 内部 worker。
-

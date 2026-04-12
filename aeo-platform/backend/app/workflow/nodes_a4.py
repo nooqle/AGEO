@@ -280,6 +280,32 @@ def _create_browser_client(platform: str, state: AgentState):
     )
 
 
+def _attach_aio_platform_packet(
+    result: dict[str, Any],
+    *,
+    question: dict[str, Any] | None,
+    request: Any,
+) -> dict[str, Any]:
+    """Attach the new AIO result packet while preserving legacy A4 shape."""
+
+    return _AIO_ANSWER_FETCH_TOOL.attach_result_packet_to_legacy(
+        result=result,
+        question=question,
+        auth_context=getattr(request, "auth_context", None),
+        run_context=getattr(request, "run_context", None),
+    )
+
+
+def _collect_aio_platform_packets(
+    platform_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        packet
+        for packet in (result.get("aio_packet") for result in platform_results)
+        if isinstance(packet, dict)
+    ]
+
+
 class _ProgressTracker:
     """Track per-platform completion during Phase 1 API fetch and emit progress."""
 
@@ -927,13 +953,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         yuanbao_browser_client = _create_browser_client(
                             "yuanbao", state
                         )
-                        yuanbao_handler = (
-                            _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
-                                platform="yuanbao",
-                                browser_client=yuanbao_browser_client,
-                                session_id=session_id,
-                                run_id=state.get("run_id"),
-                            )
+                        yuanbao_handler = _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
+                            platform="yuanbao",
+                            browser_client=yuanbao_browser_client,
+                            session_id=session_id,
+                            run_id=state.get("run_id"),
                         )
                         browser_clients.append(yuanbao_browser_client)
                         logger.info("[A4] Yuanbao browser handler initialized")
@@ -1055,15 +1079,25 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             "[A4] API %s Q%d exception: %s", platform, q_idx + 1, result
                         )
                         question_results[q_idx].append(
-                            {
-                                "platform": platform,
-                                "fetch_method": "api",
-                                "success": False,
-                                "error": str(result),
-                            }
+                            _attach_aio_platform_packet(
+                                {
+                                    "platform": platform,
+                                    "fetch_method": "api",
+                                    "success": False,
+                                    "error": str(result),
+                                },
+                                question=questions[q_idx],
+                                request=aio_fetch_request,
+                            )
                         )
                     else:
-                        question_results[q_idx].append(result)
+                        question_results[q_idx].append(
+                            _attach_aio_platform_packet(
+                                result,
+                                question=questions[q_idx],
+                                request=aio_fetch_request,
+                            )
+                        )
                         if result.get("success"):
                             api_success_total += 1
 
@@ -1495,16 +1529,26 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     )
                     for idx in range(total):
                         question_results[idx].append(
-                            {
-                                "platform": platform,
-                                "fetch_method": "browser",
-                                "success": False,
-                                "error": str(browser_batch),
-                            }
+                            _attach_aio_platform_packet(
+                                {
+                                    "platform": platform,
+                                    "fetch_method": "browser",
+                                    "success": False,
+                                    "error": str(browser_batch),
+                                },
+                                question=questions[idx],
+                                request=aio_fetch_request,
+                            )
                         )
                 else:
                     for q_idx, r in browser_batch:
-                        question_results[q_idx].append(r)
+                        question_results[q_idx].append(
+                            _attach_aio_platform_packet(
+                                r,
+                                question=questions[q_idx],
+                                request=aio_fetch_request,
+                            )
+                        )
                         if r.get("success"):
                             browser_success_total += 1
 
@@ -1526,6 +1570,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         "question_id": question_id,
                         "question_text": question_text,
                         "platform_results": platform_results,
+                        "aio_platform_packets": _collect_aio_platform_packets(
+                            platform_results
+                        ),
                     }
                 )
 
@@ -1761,6 +1808,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             "question_id": existing_entry.get("question_id", ""),
                             "question_text": existing_entry.get("question_text", ""),
                             "platform_results": kept_platform_results,
+                            "aio_platform_packets": _collect_aio_platform_packets(
+                                kept_platform_results
+                            ),
                         }
                     )
         if platform_filter and baseline:
@@ -1785,6 +1835,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             "question_id": qid,
                             "question_text": fr.get("question_text", ""),
                             "platform_results": combined_pr,
+                            "aio_platform_packets": _collect_aio_platform_packets(
+                                combined_pr
+                            ),
                         }
                     )
                 else:

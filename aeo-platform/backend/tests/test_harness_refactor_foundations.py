@@ -235,6 +235,94 @@ def test_aio_answer_fetch_tool_builds_contexts_and_execution_paths(monkeypatch):
     ]
 
 
+def test_aio_answer_fetch_tool_attaches_legacy_result_packet(monkeypatch):
+    monkeypatch.setattr(nodes_a4.settings, "AIO_AUTH_ENV_SCOPE", "prod")
+    tool = AioAnswerFetchTool()
+    request = tool.build_request(
+        state={
+            "session_id": "session_1",
+            "user_id": "user_1",
+            "entity_id": "entity_1",
+            "task_id": "task_1",
+        },
+        questions=[{"id": "q1", "text": "test"}],
+        brand_profile={"brand_name": "雅姿"},
+        mode="fast",
+        platform_filter=["yuanbao"],
+    )
+
+    enriched = tool.attach_result_packet_to_legacy(
+        result={
+            "platform": "hunyuan",
+            "fetch_method": "api",
+            "success": True,
+            "answer": {"content": "answer"},
+            "citations": [{"url": "https://example.com"}],
+            "duration": 1.2,
+        },
+        question=request.questions[0],
+        auth_context=request.auth_context,
+        run_context=request.run_context,
+    )
+
+    assert enriched["aio_packet"]["platform"] == "yuanbao"
+    assert enriched["aio_packet"]["status"] == "result"
+    assert enriched["aio_packet"]["answers"] == [{"content": "answer"}]
+    assert enriched["aio_packet"]["provenance"]["source"] == "aio_answer_fetch"
+    assert enriched["aio_packet"]["provenance"]["source_type"] == "api"
+    assert enriched["aio_packet"]["provenance"]["auth_context"] == "prod/user_1"
+    assert enriched["aio_packet"]["provenance"]["run_context"] == "entity_1/task_1"
+
+
+def test_aio_answer_fetch_tool_classifies_skip_as_terminal_packet():
+    tool = AioAnswerFetchTool()
+
+    enriched = tool.attach_result_packet_to_legacy(
+        result={
+            "platform": "deepseek",
+            "fetch_method": "browser",
+            "success": False,
+            "error": "用户跳过该平台",
+            "error_type": "user_skipped",
+            "skipped_by_user": True,
+            "stop_platform": True,
+        },
+        question={"id": "q1", "text": "test"},
+    )
+
+    assert enriched["aio_packet"]["platform"] == "deepseek"
+    assert enriched["aio_packet"]["status"] == "skipped"
+    assert enriched["aio_packet"]["errors"][0]["error_type"] == "user_skipped"
+    assert enriched["aio_packet"]["errors"][0]["stop_platform"] is True
+
+
+def test_aio_answer_fetch_tool_attaches_takeover_required_packet():
+    tool = AioAnswerFetchTool()
+
+    enriched = tool.attach_result_packet_to_legacy(
+        result={
+            "platform": "kimi",
+            "fetch_method": "browser",
+            "success": False,
+            "error": "需要人工接管",
+            "error_type": "takeover_required",
+            "takeover_id": "takeover_1",
+            "surface_url": "http://127.0.0.1:18180/vnc/",
+            "target_url": "https://kimi.com/",
+            "expires_at": "2026-04-12T10:00:00Z",
+        },
+        question={"id": "q1", "text": "test"},
+    )
+
+    assert enriched["aio_packet"]["platform"] == "kimi"
+    assert enriched["aio_packet"]["status"] == "takeover_required"
+    assert enriched["aio_packet"]["takeover"]["takeover_id"] == "takeover_1"
+    assert enriched["aio_packet"]["takeover"]["platform"] == "kimi"
+    assert enriched["aio_packet"]["takeover"]["surface_url"].endswith("/vnc/")
+    assert enriched["aio_packet"]["takeover"]["target_url"] == "https://kimi.com/"
+    assert enriched["aio_packet"]["errors"][0]["error_type"] == "takeover_required"
+
+
 def test_aio_answer_fetch_tool_registered_as_internal_runtime_tool():
     capability = get_tool_capability("aio_answer_fetch")
 
