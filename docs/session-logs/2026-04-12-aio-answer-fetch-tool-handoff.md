@@ -254,6 +254,19 @@ git diff --check
 => only CRLF warnings
 ```
 
+2026-04-12 晚间补充架构决策：
+
+```text
+1. 不再接受“模型先选错工具 -> runtime 再 realign 改写回来”的 follow-up 控制方式。
+2. 当前会话追问场景改走 Harness contextual tool exposure：
+   - 当前会话细节追问时隐藏 knowledge_*
+   - 平台/情感等明确 drill-down 场景时进一步隐藏 compare_snapshots / post_analysis_skill
+   - Prompt 的“公共技能索引”与“当前回合工具面约束”也必须同步反映这套收口，不能再静态暴露已隐藏工具
+3. Browser 页面理解不应继续堆在 platform handler selector 里；
+   生产级方向是 AIO Tool 内部 Browser Agent loop 负责 observe / act / classify blocker。
+4. Human takeover 是最后兜底，不是默认浏览器驱动方。
+```
+
 仍有未跟踪文件：
 
 ```text

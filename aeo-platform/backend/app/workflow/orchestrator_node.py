@@ -66,8 +66,6 @@ from app.workflow.runtime_policy_executor import (
     summarize_alternative_actions,
 )
 from app.workflow.nodes_streaming import async_wrap_sync_gen
-from app.core.constants import PlatformConstants
-
 logger = logging.getLogger(__name__)
 
 SKILLIZED_TOOL_NAMES = {
@@ -97,6 +95,22 @@ _VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
     "fast": "快速采集",
     "full": "完整采集",
 }
+
+_CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES = frozenset(
+    {
+        "knowledge_lookup",
+        "knowledge_aggregate",
+        "knowledge_compare",
+        "knowledge_export",
+    }
+)
+
+_SPECIFIC_DRILL_DOWN_HIDDEN_TOOL_NAMES = frozenset(
+    {
+        "post_analysis_skill",
+        "compare_snapshots",
+    }
+)
 
 
 # =============================================================================
@@ -577,8 +591,12 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
 
 async def build_agent_tools(state: AgentState | None = None) -> list[dict[str, Any]]:
     """Build LLM tools format from static tools + dynamic public skills."""
+    hidden_tool_names = _get_contextual_hidden_tool_names(state)
     base_tools = [
-        agent for agent in AGENT_REGISTRY if agent["name"] not in SKILLIZED_TOOL_NAMES
+        agent
+        for agent in AGENT_REGISTRY
+        if agent["name"] not in SKILLIZED_TOOL_NAMES
+        and agent["name"] not in hidden_tool_names
     ]
     skill_tools: list[dict[str, Any]] = []
     try:
@@ -605,6 +623,11 @@ async def build_agent_tools(state: AgentState | None = None) -> list[dict[str, A
             exc,
         )
         skill_tools = build_builtin_skill_tool_definitions()
+    skill_tools = [
+        definition
+        for definition in skill_tools
+        if str(definition.get("name") or "") not in hidden_tool_names
+    ]
     return [
         {"type": "function", "function": agent} for agent in [*base_tools, *skill_tools]
     ]
@@ -996,6 +1019,19 @@ def _infer_current_session_followup_tool(
     return None
 
 
+def _get_contextual_hidden_tool_names(state: AgentState | None) -> set[str]:
+    if not state:
+        return set()
+
+    hidden: set[str] = set()
+    preferred_followup_tool = _infer_current_session_followup_tool(state)
+    if preferred_followup_tool is not None:
+        hidden.update(_CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES)
+        if preferred_followup_tool[0] == "drill_down_analysis":
+            hidden.update(_SPECIFIC_DRILL_DOWN_HIDDEN_TOOL_NAMES)
+    return hidden
+
+
 def _infer_knowledge_fallback_tool(
     state: AgentState,
 ) -> tuple[str, dict[str, Any]] | None:
@@ -1209,6 +1245,8 @@ def _build_context_summary(state: AgentState) -> str:
     available_tools = []
     unavailable_tools = []
     manifest = state.get("knowledge_manifest") or {}
+    hidden_tool_names = _get_contextual_hidden_tool_names(state)
+    preferred_followup_tool = _infer_current_session_followup_tool(state)
 
     if state.get("brand_profile"):
         brand = state["brand_profile"]
@@ -1221,9 +1259,16 @@ def _build_context_summary(state: AgentState) -> str:
 
     if state.get("fetch_results"):
         parts.append(f"- 抓取结果: {len(state['fetch_results'])} 组问题")
-        available_tools.append(
-            "post_analysis_skill (可对已有结果做深挖、对比、解释或风险提取)"
-        )
+        if "post_analysis_skill" not in hidden_tool_names:
+            available_tools.append(
+                "post_analysis_skill (可对已有结果做深挖、对比、解释或风险提取)"
+            )
+        if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
+            parts.append("- 当前问题命中本次结果深挖场景，优先使用 drill_down_analysis")
+            if "post_analysis_skill" in hidden_tool_names:
+                parts.append(
+                    "- 当前回合已收敛到 drill_down_analysis，泛化后续分析入口已从工具面隐藏"
+                )
     else:
         unavailable_tools.append("post_analysis_skill (尚无先前分析结果)")
 
@@ -1260,18 +1305,29 @@ def _build_context_summary(state: AgentState) -> str:
             if available_sources.get(key)
         ]
         if available_labels:
-            available_tools.append("knowledge_lookup (可查询跨历史事实材料)")
-            available_tools.append("knowledge_aggregate (可汇总历史材料)")
-            available_tools.append("knowledge_export (可导出历史材料数据表)")
-            if int(history_info.get("analysis_window_count") or 0) >= 2:
-                available_tools.append("knowledge_compare (可对比最近历史变化)")
-            else:
-                unavailable_tools.append("knowledge_compare (历史轮次不足，暂不可对比)")
+            if "knowledge_lookup" not in hidden_tool_names:
+                available_tools.append("knowledge_lookup (可查询跨历史事实材料)")
+            if "knowledge_aggregate" not in hidden_tool_names:
+                available_tools.append("knowledge_aggregate (可汇总历史材料)")
+            if "knowledge_export" not in hidden_tool_names:
+                available_tools.append("knowledge_export (可导出历史材料数据表)")
+            if "knowledge_compare" not in hidden_tool_names:
+                if int(history_info.get("analysis_window_count") or 0) >= 2:
+                    available_tools.append("knowledge_compare (可对比最近历史变化)")
+                else:
+                    unavailable_tools.append("knowledge_compare (历史轮次不足，暂不可对比)")
         else:
-            unavailable_tools.append("knowledge_lookup (当前尚无历史材料可复用)")
-            unavailable_tools.append("knowledge_aggregate (当前尚无历史材料可汇总)")
-            unavailable_tools.append("knowledge_export (当前尚无历史材料可导出)")
-            unavailable_tools.append("knowledge_compare (当前尚无历史材料可对比)")
+            if "knowledge_lookup" not in hidden_tool_names:
+                unavailable_tools.append("knowledge_lookup (当前尚无历史材料可复用)")
+            if "knowledge_aggregate" not in hidden_tool_names:
+                unavailable_tools.append("knowledge_aggregate (当前尚无历史材料可汇总)")
+            if "knowledge_export" not in hidden_tool_names:
+                unavailable_tools.append("knowledge_export (当前尚无历史材料可导出)")
+            if "knowledge_compare" not in hidden_tool_names:
+                unavailable_tools.append("knowledge_compare (当前尚无历史材料可对比)")
+
+    if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
+        parts.append("- 当前问题属于本次结果追问，历史知识工具已从可用工具面隐藏")
 
     if not parts:
         summary = "\n当前会话数据: 尚无分析数据。"
@@ -1378,9 +1434,20 @@ def _build_orchestrator_entity_context(state: AgentState) -> str:
 
 
 def _build_public_skill_index(state: AgentState) -> str:
+    hidden_tool_names = _get_contextual_hidden_tool_names(state)
+    preferred_followup_tool = _infer_current_session_followup_tool(state)
     lines: list[str] = []
+    note_lines: list[str] = []
+    if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
+        note_lines.append("- 当前问题属于本次结果追问，历史知识工具已从本轮公共技能面隐藏。")
+    if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
+        note_lines.append("- 当前回合已收敛到 drill_down_analysis，不再暴露泛化的后续分析入口。")
+    if note_lines:
+        note_lines.append("- 以下仅列出当前回合真实可调用的公共技能。")
     for definition in build_builtin_skill_tool_definitions():
         name = str(definition.get("name") or "")
+        if name in hidden_tool_names:
+            continue
         description = _compact_text(definition.get("description"), 160)
         availability = "可用"
         if name == "post_analysis_skill" and not state.get("fetch_results"):
@@ -1390,6 +1457,35 @@ def _build_public_skill_index(state: AgentState) -> str:
         elif name == "confidence_analysis_skill" and not state.get("fetch_results"):
             availability = "需要先有可评估的抓取结果"
         lines.append(f"- {name}: {description}（{availability}）")
+    return "\n".join([*note_lines, *lines])
+
+
+def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
+    hidden_tool_names = _get_contextual_hidden_tool_names(state)
+    preferred_followup_tool = _infer_current_session_followup_tool(state)
+    lines: list[str] = []
+
+    if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
+        lines.append("- 当前问题属于本次结果追问，历史知识工具已从当前回合工具面隐藏。")
+
+    if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
+        focus_args = preferred_followup_tool[1] or {}
+        focus_dimension = str(focus_args.get("focus_dimension") or "").strip()
+        focus_value = str(focus_args.get("focus_value") or "").strip()
+        if focus_dimension == "platform" and focus_value:
+            lines.append(
+                f"- 当前回合应直接使用 drill_down_analysis，聚焦平台维度：{focus_value}。"
+            )
+        elif focus_dimension == "sentiment" and focus_value:
+            lines.append(
+                f"- 当前回合应直接使用 drill_down_analysis，聚焦情感维度：{focus_value}。"
+            )
+        else:
+            lines.append("- 当前回合应直接使用 drill_down_analysis 处理本次结果追问。")
+        lines.append("- 不要再先走 post_analysis_skill 或 knowledge_*。")
+
+    if not lines:
+        return None
     return "\n".join(lines)
 
 
@@ -1409,6 +1505,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
     recent_evidence = render_recent_evidence_packet(context_packets.recent_evidence)
     context_summary = _build_context_summary(state)
     knowledge_hint = _build_knowledge_planning_hint(state)
+    contextual_tool_surface_note = _build_contextual_tool_surface_note(state)
     instruction_defense = render_instruction_defense_reminder(
         build_instruction_defense_context(state, context_packets.recent_evidence)
     )
@@ -1522,6 +1619,17 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
     )
 
     skill_sections = (
+        *(
+            (
+                PromptSection(
+                    key="contextual_tool_surface",
+                    title="当前回合工具面约束",
+                    body=contextual_tool_surface_note,
+                ),
+            )
+            if contextual_tool_surface_note
+            else ()
+        ),
         PromptSection(
             key="public_skill_index",
             title="公共技能索引",
@@ -3224,54 +3332,6 @@ async def _handle_tool_call(
     tool_args = tool_call.arguments or {}
     # F8: Extract retry counts once; propagate through all return paths
     current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
-
-    preferred_followup_tool = _infer_current_session_followup_tool(state)
-    if (
-        tool_name
-        in {
-            "knowledge_lookup",
-            "knowledge_aggregate",
-            "post_analysis_skill",
-            "drill_down_analysis",
-            "compare_snapshots",
-        }
-        and preferred_followup_tool is not None
-    ):
-        logger.warning(
-            "[Orchestrator] Realigning current-session follow-up %s -> %s",
-            tool_name,
-            preferred_followup_tool[0],
-        )
-        tool_name, tool_args = preferred_followup_tool
-        tool_call = SimpleNamespace(
-            name=tool_name,
-            arguments=tool_args,
-            id=tool_call.id,
-        )
-
-    preferred_knowledge_tool = _infer_knowledge_fallback_tool(state)
-    if (
-        tool_name
-        in {
-            "knowledge_lookup",
-            "knowledge_aggregate",
-            "knowledge_compare",
-            "knowledge_export",
-        }
-        and preferred_knowledge_tool is not None
-        and preferred_knowledge_tool[0] != tool_name
-    ):
-        logger.warning(
-            "[Orchestrator] Realigning knowledge tool %s -> %s for clearer intent match",
-            tool_name,
-            preferred_knowledge_tool[0],
-        )
-        tool_name, tool_args = preferred_knowledge_tool
-        tool_call = SimpleNamespace(
-            name=tool_name,
-            arguments=tool_args,
-            id=tool_call.id,
-        )
 
     logger.info(f"[Orchestrator] Tool call: {tool_name}, args: {tool_args}")
 

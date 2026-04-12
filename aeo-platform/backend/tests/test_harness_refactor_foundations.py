@@ -39,6 +39,7 @@ from app.services.task_service import TaskService
 from app.services.local_runtime_registry import LocalRuntimeRegistry
 from app.services.skill_contracts import build_skill_contract
 from app.services.skill_package_service import skill_package_service
+from app.services.skill_registry_service import build_builtin_skill_tool_definitions
 from app.services.tool_capability_matrix import (
     get_tool_capability,
     validate_tool_capability_access,
@@ -81,12 +82,16 @@ from app.workflow.orchestrator_context_packets import (
     render_recent_evidence_packet,
 )
 from app.workflow.orchestrator_node import (
+    _build_contextual_tool_surface_note,
     _build_error_recovery_message,
+    _build_context_summary,
+    _build_public_skill_index,
     _execute_runtime_policy_action,
     _handle_tool_call,
     _infer_brand_seed_candidate,
     _normalize_thought_text_for_stream,
     _route_brand_seed_without_llm,
+    build_agent_tools,
     build_orchestrator_prompt_assembly,
 )
 from app.workflow.runtime_policy_executor import (
@@ -3771,26 +3776,43 @@ async def test_answer_fetch_tool_call_does_not_emit_orchestrator_fallback(monkey
 
 
 @pytest.mark.asyncio
-async def test_current_session_followup_realigns_generic_followup_tool(monkeypatch):
+async def test_build_agent_tools_hides_history_tools_for_specific_current_followup(
+    monkeypatch,
+):
     monkeypatch.setattr(
-        "app.workflow.orchestrator_node.send_plan_event",
-        AsyncMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "app.workflow.orchestrator_node.send_action_log_event",
-        AsyncMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "app.workflow.events.send_progress_event",
-        AsyncMock(return_value=None),
+        "app.workflow.orchestrator_node.SkillRegistryService.get_tool_definitions",
+        AsyncMock(return_value=build_builtin_skill_tool_definitions()),
     )
 
-    command = await _handle_tool_call(
-        state={
-            "session_id": "session-followup-realign",
-            "orchestrator_history": [
-                {"role": "user", "content": "DeepSeek 这次表现怎么样？"}
+    tools = await build_agent_tools(
+        {
+            "user_id": "user_1",
+            "entity_id": "entity_1",
+            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "fetch_results": [
+                {
+                    "question_id": "q1",
+                    "question_text": "测试问题",
+                    "platform_results": [{"platform": "doubao", "success": True}],
+                }
             ],
+        }
+    )
+
+    names = [item["function"]["name"] for item in tools]
+    assert "answer_fetch" in names
+    assert "knowledge_lookup" not in names
+    assert "knowledge_aggregate" not in names
+    assert "knowledge_compare" not in names
+    assert "knowledge_export" not in names
+    assert "compare_snapshots" not in names
+    assert "post_analysis_skill" not in names
+
+
+def test_context_summary_marks_hidden_history_tools_for_specific_current_followup():
+    summary = _build_context_summary(
+        {
+            "orchestrator_history": [{"role": "user", "content": "DeepSeek 这次表现怎么样？"}],
             "fetch_results": [
                 {
                     "question_id": "q1",
@@ -3798,20 +3820,85 @@ async def test_current_session_followup_realigns_generic_followup_tool(monkeypat
                     "platform_results": [{"platform": "deepseek", "success": True}],
                 }
             ],
-        },
-        session_id="session-followup-realign",
-        tool_call=SimpleNamespace(
-            name="compare_snapshots",
-            arguments={},
-            id="call_followup",
-        ),
-        reply_text="我先看本次结果。",
-        new_history=[],
+            "knowledge_manifest": {
+                "available_sources": {
+                    "brand_profile": True,
+                    "competitor_profile": True,
+                    "fetch_answer": True,
+                    "fetch_citation": True,
+                },
+                "history": {"analysis_window_count": 3},
+            },
+        }
     )
 
-    assert command.goto == "drill_down"
-    assert command.update["tool_call_args"]["focus_dimension"] == "platform"
-    assert command.update["tool_call_args"]["focus_value"] == "deepseek"
+    assert "历史知识工具已从可用工具面隐藏" in summary
+    assert "knowledge_lookup" not in summary
+    assert "knowledge_aggregate" not in summary
+
+
+def test_public_skill_index_respects_contextual_hidden_tools():
+    rendered = _build_public_skill_index(
+        {
+            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "fetch_results": [
+                {
+                    "question_id": "q1",
+                    "question_text": "测试问题",
+                    "platform_results": [{"platform": "doubao", "success": True}],
+                }
+            ],
+        }
+    )
+
+    assert "以下仅列出当前回合真实可调用的公共技能" in rendered
+    assert "当前回合已收敛到 drill_down_analysis" in rendered
+    assert "knowledge_lookup" not in rendered
+    assert "knowledge_aggregate" not in rendered
+    assert "knowledge_compare" not in rendered
+    assert "knowledge_export" not in rendered
+    assert "post_analysis_skill" not in rendered
+
+
+def test_contextual_tool_surface_note_marks_current_followup_constraints():
+    note = _build_contextual_tool_surface_note(
+        {
+            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "fetch_results": [
+                {
+                    "question_id": "q1",
+                    "question_text": "测试问题",
+                    "platform_results": [{"platform": "doubao", "success": True}],
+                }
+            ],
+        }
+    )
+
+    assert note is not None
+    assert "历史知识工具已从当前回合工具面隐藏" in note
+    assert "应直接使用 drill_down_analysis" in note
+    assert "不要再先走 post_analysis_skill 或 knowledge_*" in note
+
+
+def test_prompt_assembly_includes_contextual_tool_surface_section_for_current_followup():
+    assembly = build_orchestrator_prompt_assembly(
+        {
+            "brand_name": "雅姿",
+            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "fetch_results": [
+                {
+                    "question_id": "q1",
+                    "question_text": "测试问题",
+                    "platform_results": [{"platform": "doubao", "success": True}],
+                }
+            ],
+        }
+    )
+
+    rendered = assembly.render()
+
+    assert "## 当前回合工具面约束" in rendered
+    assert "不要再先走 post_analysis_skill 或 knowledge_*" in rendered
 
 
 def test_infer_brand_seed_candidate_treats_bare_brand_as_seed():

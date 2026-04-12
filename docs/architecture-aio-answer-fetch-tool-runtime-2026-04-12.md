@@ -46,6 +46,45 @@ Orchestrator
 1. 直接操作浏览器。
 2. 直接拼接 CDP / VNC URL。
 3. 直接判断页面 DOM 是否登录成功。
+4. 在模型已经选错工具后，再做语义级 runtime 改写把它“改回来”。
+
+### 当前会话追问的 Harness 原则
+
+当用户是在追问**当前会话刚产生的 fetch_results / report / metrics** 时，Harness 的首选控制方式不是：
+
+```text
+先把所有工具都暴露给模型
+-> 模型选错 knowledge_*
+-> runtime 再 realign 成 drill_down_analysis
+```
+
+而应该是：
+
+```text
+先根据当前上下文裁剪 tool surface
+-> 当前会话追问时隐藏 knowledge_*
+-> 平台/情感等明确深挖场景时进一步隐藏 compare_snapshots / post_analysis_skill
+-> 让模型直接在正确工具面内规划
+```
+
+这属于 Harness 的 **contextual tool exposure**，不是业务层 hardcode。
+
+原因很直接：
+
+1. 事后 realign 会制造多控制器冲突。
+2. prompt、tool list、runtime rewrite 同时生效时，模型容易来回思考、重复调用、击中 retry blocker。
+3. Claude Code 风格的 Harness 更强调 **先收敛可选动作空间**，而不是等模型犯错后再修正。
+
+补充要求：
+
+1. Prompt 中的“公共技能索引”也必须遵循同一套 tool surface，不能继续静态展示已经被 Harness 隐藏的 `knowledge_* / post_analysis_skill`。
+2. 对于已经收敛到 `drill_down_analysis` 的当前会话追问，Prompt 应显式增加“当前回合工具面约束”段落，明确告诉模型：
+   - 当前问题属于本次结果追问
+   - 历史知识工具已隐藏
+   - 当前应直接使用 `drill_down_analysis`
+   - 不要再先走 `post_analysis_skill` 或 `knowledge_*`
+
+否则即使运行时真实工具面已经收口，Prompt 仍会继续给模型错误暗示，造成思考漂移。
 
 ## 2. Fetch Answer Agent / A4 Executor
 
@@ -88,6 +127,27 @@ AIO Answer Fetch Tool
 ```
 
 因此它可以比单个 click/fill 工具更粗，但仍然属于工具层，因为它对 Agent 暴露的是稳定输入输出合同，而不是新的业务 skill。
+
+## 3.1 Browser Agent 才负责页面理解
+
+平台 handler 不应该继续长期承担“页面理解”职责。生产级方向应改成：
+
+```text
+AIO Answer Fetch Tool
+  -> Browser Agent loop
+       observe(url / screenshot / DOM snapshot / aria tree)
+       decide(click / type / press / wait / close / retry / navigate)
+       classify blocker(auto-fix / human takeover / fatal)
+  -> stable result packet / takeover packet
+```
+
+也就是说：
+
+1. Harness / Tool 管契约、并发、持久化、恢复。
+2. Browser Agent 管页面理解和操作。
+3. Human takeover 只接管真正需要人的步骤。
+
+如果继续靠平台 handler 堆 selector、位置规则、登录按钮判断，系统只会不断为当下页面补丁，无法适应平台 UI 演化。
 
 ## 4. AIO Runtime
 
@@ -273,6 +333,13 @@ AIO Playwright 已经跑到阻塞页面
   -> 云电脑再导航到平台页面
   -> 用户等待 loading / about:blank
 ```
+
+接管原则补充：
+
+1. AIO 应优先把用户 attach 到 **阻塞现场**，而不是平台首页。
+2. Browser Agent 先尝试自动关闭普通弹窗、恢复空白页、重新聚焦输入区。
+3. 只有 Browser Agent 明确判断为登录、验证码、人机验证、账号安全确认时，才生成 `takeover_required`。
+4. 用户点击“我已完成”后，恢复逻辑必须先走 `resume_probe`；只有 probe 通过，才允许继续抓取并持久化 AuthContext。
 
 takeover event：
 
