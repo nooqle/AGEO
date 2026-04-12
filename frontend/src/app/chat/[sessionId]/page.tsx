@@ -19,9 +19,11 @@ function ChatPageContent() {
   const sessionId = params.sessionId as string;
   const isCreatingSessionRef = useRef(false);
   const queryEntityId = searchParams.get('entity_id') || undefined;
+  const queryBrand = searchParams.get('brand') || undefined;
   const [resolvedEntityId, setResolvedEntityId] = useState<string | undefined>(
     () => queryEntityId
   );
+  const [isResolvingSession, setIsResolvingSession] = useState(() => sessionId !== 'new');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     if (typeof window === 'undefined') {
       return false;
@@ -49,27 +51,66 @@ function ChatPageContent() {
       return;
     }
 
-    if (queryEntityId) {
-      return;
-    }
-
     let cancelled = false;
-    api.getSession(sessionId)
-      .then((session) => {
-        if (!cancelled) {
-          setResolvedEntityId(session.entity_id || undefined);
+    const restoreSessionForEntity = async () => {
+      if (!queryEntityId) {
+        return false;
+      }
+
+      const fallback = await api.getOrCreateSessionByEntity(queryEntityId);
+      if (cancelled) {
+        return true;
+      }
+      setResolvedEntityId(queryEntityId);
+      if (fallback.id !== sessionId) {
+        const nextQuery = new URLSearchParams();
+        nextQuery.set('entity_id', queryEntityId);
+        if (queryBrand) {
+          nextQuery.set('brand', queryBrand);
         }
-      })
-      .catch(() => {
-        if (!cancelled) {
+        router.replace(`/chat/${fallback.id}?${nextQuery.toString()}`);
+      }
+      return true;
+    };
+
+    const validateSession = async () => {
+      try {
+        const session = await api.getSession(sessionId);
+        if (cancelled) {
+          return;
+        }
+
+        const entityId = session.entity_id || undefined;
+        setResolvedEntityId(entityId);
+
+        if (queryEntityId && entityId && entityId !== queryEntityId) {
+          const restored = await restoreSessionForEntity();
+          if (!restored) {
+            setResolvedEntityId(queryEntityId);
+          }
+        }
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        const restored = await restoreSessionForEntity();
+        if (!restored) {
           setResolvedEntityId(undefined);
         }
-      });
+      } finally {
+        if (!cancelled) {
+          setIsResolvingSession(false);
+        }
+      }
+    };
+
+    setIsResolvingSession(true);
+    void validateSession();
 
     return () => {
       cancelled = true;
     };
-  }, [queryEntityId, sessionId]);
+  }, [queryBrand, queryEntityId, router, sessionId]);
 
   // Handle /chat/new - create a new session and redirect
   useEffect(() => {
@@ -96,8 +137,8 @@ function ChatPageContent() {
     }
   }, [sessionId, router, searchParams]);
 
-  // Show minimal loading state while creating session
-  if (sessionId === 'new') {
+  // Show minimal loading state while creating or restoring session
+  if (sessionId === 'new' || isResolvingSession) {
     return (
       <div className="h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <div className="text-center">
@@ -105,7 +146,9 @@ function ChatPageContent() {
             className="animate-spin rounded-full h-10 w-10 border-2 mx-auto mb-4"
             style={{ borderColor: 'var(--border-subtle)', borderTopColor: 'var(--color-primary)' }}
           />
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>创建新会话...</p>
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            {sessionId === 'new' ? '创建新会话...' : '正在恢复会话...'}
+          </p>
         </div>
       </div>
     );
