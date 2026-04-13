@@ -19,6 +19,7 @@ from app.core.fetchers.browser.browser_agent_contract import (
     BrowserTakeoverNeed,
     ScreenshotProvider,
     collect_browser_page_observation,
+    get_observation_slice_profile,
     loop_context_to_llm_payload,
     observation_to_llm_payload,
 )
@@ -26,6 +27,12 @@ from app.core.fetchers.browser.browser_agent_policy import decide_browser_stage
 
 logger = logging.getLogger(__name__)
 _LLM_DEFAULT_STAGES = frozenset({"preflight", "wait_gate", "resume_probe"})
+_BROWSER_AGENT_LLM_PAYLOAD_LIMIT = 2200
+_LLM_BROWSER_SYSTEM_PROMPT = (
+    "你是浏览器执行代理。"
+    "请只基于给定阶段指令和精简页面观测，判断当前是继续自动操作、需要人工接管、还是已经可以继续主流程。"
+    "只输出 JSON 对象。"
+)
 
 
 class BrowserAgentPolicy(Protocol):
@@ -66,42 +73,62 @@ class BrowserAgentBootstrapPolicy:
 
 
 def _build_llm_browser_agent_prompt(loop_context: BrowserAgentLoopContext) -> str:
-    base_rules = (
-        "你是浏览器执行代理。"
-        "请基于给定的页面观测，判断当前是否需要继续自动操作、交给人工接管、或已经可以继续主流程。"
-        "只能输出 JSON 对象，不要输出解释。"
-        "可用 outcome: continue/takeover_required/completed/failed。"
-        "可用 blocker_kind: none/login/verification/captcha/security_confirmation/"
-        "account_selection/consent_modal/popup/blank_page/navigation_error/rate_limit/"
-        "target_closed/unknown。"
-        "如果给出 actions，只能使用 click_ref/press_key/wait/navigate/refresh/"
-        "close_popup/complete/handoff。"
-        "登录、验证码、人机验证、安全确认、账号选择必须交给人工接管。"
-        "普通弹窗、协议弹窗、空白页、错误页、轻量恢复操作应优先自动处理。"
-    )
     stage_rules = {
         "preflight": (
-            "当前阶段是预检。重点判断页面是否已经偏离目标、存在普通弹窗、登录阻塞、验证阻塞、空白页或导航错误。"
+            "阶段=preflight。只判断是否已到可继续页面，或是否存在登录/验证/验证码/账号选择/安全确认/普通弹窗/空白页/导航错误。"
         ),
         "wait_gate": (
-            "当前阶段是等待回答。问题已经提交。"
-            "重点判断页面是在正常生成回答、仍需等待、还是已经转成 late login / verification / popup / blank / error。"
-            "不要因为短暂等待就误判为人工接管；但如果已经明显进入登录或验证阻塞，要及时要求接管。"
+            "阶段=wait_gate。问题已提交。只判断是继续等待、轻量恢复，还是进入 late login / verification / captcha / popup / blank / error。"
         ),
         "resume_probe": (
-            "当前阶段是人工接管后的恢复探针。"
-            "只有当人工阻塞已经真正清除、页面已经回到可继续提问或继续读取答案的主界面时，才返回可继续。"
-            "如果仍有任何登录、验证码、人机验证、安全确认、账号选择信号，必须继续保持 takeover_required。"
+            "阶段=resume_probe。用户刚完成接管。只有人工阻塞已清除、页面已回到可继续提问或继续读取答案的主界面时才可继续。"
         ),
         "empty_answer": (
-            "当前阶段是空答案兜底。"
-            "重点判断这是页面尚未完成、可自动恢复的异常，还是需要人工接管才能继续。"
+            "阶段=empty_answer。只判断空答案是暂时等待、可自动恢复异常，还是需要人工接管。"
         ),
     }
-    prompt = f"{base_rules} {stage_rules.get(loop_context.stage, '')}".strip()
+    prompt = (
+        "输出字段：outcome, blocker_kind, rationale, confidence, actions, takeover。"
+        "登录/验证码/人机验证/安全确认/账号选择必须人工接管。"
+        "普通弹窗、协议弹窗、空白页、轻量恢复优先自动处理。"
+        "允许动作仅限 click_ref/press_key/wait/navigate/refresh/close_popup/complete/handoff。"
+        f"{stage_rules.get(loop_context.stage, '')}"
+    ).strip()
     if loop_context.note:
         prompt = f"{prompt} 当前阶段补充要求：{loop_context.note}".strip()
     return prompt
+
+
+def _payload_char_length(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False))
+
+
+def _trim_browser_agent_payload(
+    payload: dict[str, Any],
+    *,
+    max_chars: int,
+) -> tuple[dict[str, Any], bool]:
+    compact = json.loads(json.dumps(payload, ensure_ascii=False))
+    observation = compact.get("observation") or {}
+
+    if _payload_char_length(compact) <= max_chars:
+        return compact, False
+
+    text = observation.get("visible_text_excerpt")
+    if isinstance(text, str) and text:
+        for text_limit in (180, 120, 80, 0):
+            observation["visible_text_excerpt"] = text[:text_limit] if text_limit > 0 else None
+            if _payload_char_length(compact) <= max_chars:
+                return compact, False
+
+    refs = list(observation.get("interactive_refs") or [])
+    if refs:
+        for ref_limit in (4, 3, 2, 0):
+            observation["interactive_refs"] = refs[:ref_limit]
+            if _payload_char_length(compact) <= max_chars:
+                return compact, False
+
+    return compact, _payload_char_length(compact) > max_chars
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -309,24 +336,41 @@ class LLMBrowserAgentPolicy:
         except Exception as exc:
             logger.warning("[BrowserAgentLoop] Failed to get browser-agent LLM model: %s", exc)
             return None
-        prompt = (
-            f"{_build_llm_browser_agent_prompt(loop_context)} "
-            "当缺少足够把握时，返回 outcome=continue、blocker_kind=none、actions=[]。"
+        compact_payload = {
+            "loop_context": loop_context_to_llm_payload(loop_context),
+            "observation": observation_to_llm_payload(
+                observation,
+                loop_context=loop_context,
+                stage_profile=get_observation_slice_profile(loop_context.stage),
+            ),
+        }
+        compact_payload, over_limit = _trim_browser_agent_payload(
+            compact_payload,
+            max_chars=_BROWSER_AGENT_LLM_PAYLOAD_LIMIT,
         )
+        if over_limit:
+            logger.info(
+                "[BrowserAgentLoop] Skipping LLM policy because compact payload still exceeds limit "
+                "(platform=%s, stage=%s, chars=%s)",
+                loop_context.platform,
+                loop_context.stage,
+                _payload_char_length(compact_payload),
+            )
+            return None
         try:
             response = await model.async_call(
                 messages=[
-                    {"role": "system", "content": prompt},
+                    {"role": "system", "content": _LLM_BROWSER_SYSTEM_PROMPT},
                     {
                         "role": "user",
-                        "content": json.dumps(
-                            {
-                                "loop_context": loop_context_to_llm_payload(loop_context),
-                                "observation": observation_to_llm_payload(observation),
-                            },
-                            ensure_ascii=False,
-                            indent=2,
+                        "content": (
+                            f"{_build_llm_browser_agent_prompt(loop_context)} "
+                            "当缺少足够把握时，返回 outcome=continue、blocker_kind=none、actions=[]。"
                         ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":")),
                     },
                 ],
                 temperature=0.1,

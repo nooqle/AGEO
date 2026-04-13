@@ -41,6 +41,7 @@ from app.workflow.events import (
     send_confirmation_request,
 )
 from app.workflow.orchestrator_context_packets import (
+    RecentEvidencePacket,
     build_entity_context_packet,
     build_orchestrator_context_packets,
     build_session_status_packet,
@@ -54,6 +55,7 @@ from app.workflow.orchestrator_context_packets import (
 from app.workflow.orchestrator_instruction_defense import (
     INSTRUCTION_SECURITY_POLICY,
     build_instruction_defense_context,
+    detect_instruction_injection,
     render_instruction_defense_reminder,
 )
 from app.workflow.prompt_assembly import PromptAssembly, PromptSection
@@ -111,6 +113,24 @@ _SPECIFIC_DRILL_DOWN_HIDDEN_TOOL_NAMES = frozenset(
         "compare_snapshots",
     }
 )
+
+_KNOWLEDGE_TOOL_NAMES = frozenset(
+    {
+        "knowledge_lookup",
+        "knowledge_aggregate",
+        "knowledge_compare",
+        "knowledge_export",
+    }
+)
+_RECENT_EVIDENCE_PROMPT_PRIORITY: dict[str, int] = {
+    "uploaded_input": 0,
+    "current_fetch": 1,
+    "current_artifact": 2,
+    "knowledge_lookup": 3,
+    "knowledge_compare": 4,
+    "knowledge_aggregate": 5,
+    "knowledge_export": 6,
+}
 
 
 # =============================================================================
@@ -1448,15 +1468,17 @@ def _build_public_skill_index(state: AgentState) -> str:
         name = str(definition.get("name") or "")
         if name in hidden_tool_names:
             continue
-        description = _compact_text(definition.get("description"), 160)
-        availability = "可用"
+        description = _compact_text(definition.get("description"), 56)
+        availability = "当前可用"
         if name == "post_analysis_skill" and not state.get("fetch_results"):
-            availability = "需要已有抓取结果或报告"
+            availability = "需已有抓取结果或报告"
         elif name == "analysis_report_skill" and not state.get("fetch_results"):
-            availability = "需要先完成答案抓取"
+            availability = "需先完成答案抓取"
         elif name == "confidence_analysis_skill" and not state.get("fetch_results"):
-            availability = "需要先有可评估的抓取结果"
-        lines.append(f"- {name}: {description}（{availability}）")
+            availability = "需先有可评估的抓取结果"
+        lines.append(f"- {name}: {description}；{availability}")
+        if len(lines) >= 6:
+            break
     return "\n".join([*note_lines, *lines])
 
 
@@ -1489,31 +1511,101 @@ def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
     return "\n".join(lines)
 
 
+def _render_recent_evidence_for_prompt(packet: RecentEvidencePacket) -> str:
+    if not packet.items:
+        return ""
+
+    ranked_items = sorted(
+        packet.items,
+        key=lambda item: (
+            _RECENT_EVIDENCE_PROMPT_PRIORITY.get(item.source, 99),
+            -int(item.relevance_score),
+            item.title,
+        ),
+    )
+    top_items = tuple(ranked_items[:3])
+    if not top_items:
+        return ""
+    return render_recent_evidence_packet(RecentEvidencePacket(items=top_items))
+
+
+def _should_render_history_availability(
+    state: AgentState,
+    hidden_tool_names: set[str],
+) -> bool:
+    if _KNOWLEDGE_TOOL_NAMES.issubset(hidden_tool_names):
+        return False
+    manifest = state.get("knowledge_manifest") or {}
+    available_sources = manifest.get("available_sources") or {}
+    return any(bool(value) for value in available_sources.values())
+
+
+def _should_render_instruction_defense(
+    state: AgentState,
+    recent_evidence_packet: RecentEvidencePacket,
+) -> bool:
+    defense_context = build_instruction_defense_context(state, recent_evidence_packet)
+    if defense_context.prompt_disclosure_request or defense_context.suspicious_evidence_count:
+        return True
+    latest_user_message = _get_latest_user_message(state)
+    return detect_instruction_injection(latest_user_message)
+
+
 def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
     """Build the orchestrator prompt as structured sections."""
 
     context_packets = build_orchestrator_context_packets(state)
+    hidden_tool_names = _get_contextual_hidden_tool_names(state)
     status_text = render_session_status_packet(context_packets.session_status)
     entity_context = render_entity_context_packet(context_packets.entity_context)
-    history_availability = render_history_availability_packet(
-        context_packets.history_availability
+    history_availability = (
+        render_history_availability_packet(context_packets.history_availability)
+        if _should_render_history_availability(state, hidden_tool_names)
+        else ""
     )
     active_skill_context = render_active_skill_packet(context_packets.active_skill)
     pending_decision = render_pending_decision_packet(
         context_packets.pending_decision
     )
-    recent_evidence = render_recent_evidence_packet(context_packets.recent_evidence)
-    context_summary = _build_context_summary(state)
+    recent_evidence = _render_recent_evidence_for_prompt(context_packets.recent_evidence)
+    context_summary = _compact_text(_build_context_summary(state), 500)
     knowledge_hint = _build_knowledge_planning_hint(state)
     contextual_tool_surface_note = _build_contextual_tool_surface_note(state)
-    instruction_defense = render_instruction_defense_reminder(
-        build_instruction_defense_context(state, context_packets.recent_evidence)
+    instruction_defense = (
+        render_instruction_defense_reminder(
+            build_instruction_defense_context(state, context_packets.recent_evidence)
+        )
+        if _should_render_instruction_defense(state, context_packets.recent_evidence)
+        else ""
     )
 
+    def _section(
+        *,
+        key: str,
+        title: str,
+        body: str | None,
+        group: str,
+        priority: int,
+        drop_policy: str = "compress",
+        budget_cost: int = 0,
+    ) -> PromptSection:
+        return PromptSection(
+            key=key,
+            title=title,
+            body=body or "",
+            group=group,
+            priority=priority,
+            drop_policy=drop_policy,
+            budget_cost=budget_cost,
+        )
+
     base_policy_sections = (
-        PromptSection(
+        _section(
             key="role_policy",
             title="角色与核心职责",
+            group="base_policy_sections",
+            priority=0,
+            drop_policy="keep",
             body=dedent(
                 """
                 你是 Specta AI 的智能编排助手。
@@ -1526,9 +1618,11 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 """
             ).strip(),
         ),
-        PromptSection(
+        _section(
             key="attachment_intake_policy",
             title="附件导入与理解路由",
+            group="base_policy_sections",
+            priority=1,
             body=dedent(
                 """
                 附件导入规则（高优先级）：
@@ -1543,9 +1637,11 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 """
             ).strip(),
         ),
-        PromptSection(
+        _section(
             key="workflow_routing_policy",
             title="流程路由规则",
+            group="base_policy_sections",
+            priority=2,
             body=dedent(
                 """
                 A1 完成后的流程（最高优先级）：
@@ -1563,15 +1659,16 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 用户基于已有结果要求深入分析、历史对比、解释原因、提炼风险时：post_analysis_skill。
                 - 用户要求重新抓取、重跑部分平台、全量重跑、或从 API 改为浏览器模式时：统一走 answer_fetch，不要再发明 refetch 类能力名。
                 - 用户选择“直接提问”时，禁止再次 ask_user 给子选项；直接自然语言引导用户在输入框中继续追问。
-                - 当前会话里如果已有 fetch_results 或 report，且用户是在追问“本次报告/本次抓取”的细节，应先依赖当前回合工具面收敛后的深挖入口；若已收敛到 drill_down_analysis，就直接使用它，不要再先走 knowledge_* 或泛化后续分析入口。
                 - 只有用户明确在问跨历史材料、历史月份、历史导出、最近两次变化时，才优先使用 knowledge_*。
                 - 围绕历史品牌/竞品/答案/引用时，优先 knowledge_lookup；围绕历史汇总时，优先 knowledge_aggregate；明确导出时，优先 knowledge_export；比较最近两轮变化时，优先 knowledge_compare。
                 """
             ).strip(),
         ),
-        PromptSection(
+        _section(
             key="behavior_policy",
             title="行为与 ask_user 规则",
+            group="base_policy_sections",
+            priority=3,
             body=dedent(
                 """
                 行为准则：
@@ -1593,9 +1690,11 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 """
             ).strip(),
         ),
-        PromptSection(
+        _section(
             key="guardrails_policy",
             title="边界与失败处理规则",
+            group="base_policy_sections",
+            priority=4,
             body=dedent(
                 """
                 绝对禁止：
@@ -1611,9 +1710,12 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 """
             ).strip(),
         ),
-        PromptSection(
+        _section(
             key="instruction_security_policy",
             title="指令安全与提示词保密",
+            group="base_policy_sections",
+            priority=5,
+            drop_policy="keep",
             body=INSTRUCTION_SECURITY_POLICY,
         ),
     )
@@ -1621,18 +1723,24 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
     skill_sections = (
         *(
             (
-                PromptSection(
+                _section(
                     key="contextual_tool_surface",
                     title="当前回合工具面约束",
+                    group="skill_sections",
+                    priority=0,
+                    drop_policy="keep",
                     body=contextual_tool_surface_note,
                 ),
             )
             if contextual_tool_surface_note
             else ()
         ),
-        PromptSection(
+        _section(
             key="public_skill_index",
             title="公共技能索引",
+            group="skill_sections",
+            priority=1,
+            drop_policy="compress",
             body=_build_public_skill_index(state),
         ),
     )
@@ -1640,39 +1748,54 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
     runtime_context_sections = tuple(
         section
         for section in (
-            PromptSection(
+            _section(
                 key="session_status",
                 title="会话状态",
+                group="runtime_context_sections",
+                priority=0,
                 body=status_text,
             ),
-            PromptSection(
+            _section(
                 key="entity_context",
                 title="实体上下文",
+                group="runtime_context_sections",
+                priority=1,
                 body=entity_context,
             ),
-            PromptSection(
+            _section(
                 key="active_skill_context",
                 title="当前技能上下文",
+                group="runtime_context_sections",
+                priority=2,
                 body=active_skill_context,
             ),
-            PromptSection(
+            _section(
                 key="pending_decision",
                 title="待处理决策",
+                group="runtime_context_sections",
+                priority=3,
                 body=pending_decision,
             ),
-            PromptSection(
+            _section(
                 key="context_summary",
                 title="当前会话摘要",
+                group="runtime_context_sections",
+                priority=4,
                 body=context_summary,
             ),
-            PromptSection(
+            _section(
                 key="history_availability",
                 title="历史材料可用性",
+                group="runtime_context_sections",
+                priority=8,
+                drop_policy="drop",
                 body=history_availability,
             ),
-            PromptSection(
+            _section(
                 key="recent_evidence_packet",
                 title="最近证据包",
+                group="runtime_context_sections",
+                priority=5,
                 body=recent_evidence,
             ),
         )
@@ -1682,14 +1805,20 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
     runtime_reminder_sections = tuple(
         section
         for section in (
-            PromptSection(
+            _section(
                 key="knowledge_planning_hint",
                 title="历史规划提示",
+                group="runtime_reminder_sections",
+                priority=1,
+                drop_policy="drop",
                 body=knowledge_hint,
             ),
-            PromptSection(
+            _section(
                 key="instruction_defense_reminder",
                 title="指令防守提醒",
+                group="runtime_reminder_sections",
+                priority=0,
+                drop_policy="drop",
                 body=instruction_defense,
             ),
         )

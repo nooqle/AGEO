@@ -140,6 +140,51 @@ class BrowserAgentLoopContext:
     meta: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class ObservationSliceProfile:
+    stage: BrowserAgentStage
+    visible_text_limit: int
+    interactive_ref_limit: int
+    include_screenshot: bool = False
+    loop_meta_keys: tuple[str, ...] = ()
+    observation_meta_keys: tuple[str, ...] = ()
+
+
+_OBSERVATION_SLICE_PROFILES: dict[BrowserAgentStage, ObservationSliceProfile] = {
+    "preflight": ObservationSliceProfile(
+        stage="preflight",
+        visible_text_limit=320,
+        interactive_ref_limit=8,
+        include_screenshot=False,
+        observation_meta_keys=("page_present", "page_closed", "snapshot_present"),
+    ),
+    "wait_gate": ObservationSliceProfile(
+        stage="wait_gate",
+        visible_text_limit=220,
+        interactive_ref_limit=6,
+        include_screenshot=False,
+        loop_meta_keys=("waited_seconds",),
+        observation_meta_keys=("page_present", "page_closed", "snapshot_present"),
+    ),
+    "resume_probe": ObservationSliceProfile(
+        stage="resume_probe",
+        visible_text_limit=220,
+        interactive_ref_limit=6,
+        include_screenshot=False,
+        loop_meta_keys=("action_type",),
+        observation_meta_keys=("page_present", "page_closed", "snapshot_present"),
+    ),
+    "empty_answer": ObservationSliceProfile(
+        stage="empty_answer",
+        visible_text_limit=260,
+        interactive_ref_limit=6,
+        include_screenshot=False,
+        loop_meta_keys=("force_visual",),
+        observation_meta_keys=("page_present", "page_closed", "snapshot_present"),
+    ),
+}
+
+
 ScreenshotProvider = Callable[[], Awaitable[dict[str, Any] | None]]
 
 
@@ -151,6 +196,111 @@ def _unwrap_client_output(value: Any) -> Any:
     if isinstance(value, dict) and "output" in value:
         return value.get("output")
     return value
+
+
+def _compact_text(value: Any, limit: int) -> str | None:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return None
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return text[:limit]
+    return text[: limit - 1] + "…"
+
+
+def _matches_keywords(value: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in value for keyword in keywords)
+
+
+def _ref_priority(item: dict[str, Any]) -> tuple[int, str]:
+    haystack = " ".join(
+        str(item.get(key) or "").strip().lower()
+        for key in ("text", "placeholder", "role", "tag")
+    )
+    login_keywords = ("log in", "login", "登录", "sign in", "wechat qr", "二维码", "账号")
+    verify_keywords = ("验证", "captcha", "verification", "短信", "code", "安全确认", "人机")
+    dismiss_keywords = ("关闭", "稍后", "以后", "skip", "later", "close", "dismiss", "同意", "accept")
+    input_keywords = ("input", "textarea", "textbox", "submit", "send", "ask", "search", "问题", "发送", "输入")
+
+    if _matches_keywords(haystack, login_keywords):
+        return (0, haystack)
+    if _matches_keywords(haystack, verify_keywords):
+        return (1, haystack)
+    if _matches_keywords(haystack, dismiss_keywords):
+        return (2, haystack)
+    if _matches_keywords(haystack, input_keywords):
+        return (3, haystack)
+    return (4, haystack)
+
+
+def get_observation_slice_profile(stage: BrowserAgentStage) -> ObservationSliceProfile:
+    return _OBSERVATION_SLICE_PROFILES[stage]
+
+
+def _slice_interactive_refs(
+    refs: dict[str, Any] | None,
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(refs, dict):
+        return []
+    ranked_items: list[tuple[tuple[int, str], str, dict[str, Any]]] = []
+    for ref_id, item in refs.items():
+        if not isinstance(item, dict):
+            continue
+        ranked_items.append((_ref_priority(item), str(ref_id), item))
+    ranked_items.sort(key=lambda item: (item[0][0], item[0][1], item[1]))
+
+    preview_refs: list[dict[str, Any]] = []
+    for _, ref_id, item in ranked_items[:limit]:
+        preview_refs.append(
+            {
+                "ref": ref_id,
+                "role": item.get("role"),
+                "tag": item.get("tag"),
+                "text": _compact_text(item.get("text"), 80),
+                "placeholder": _compact_text(item.get("placeholder"), 60),
+            }
+        )
+    return preview_refs
+
+
+def build_observation_slice(
+    observation: BrowserPageObservation,
+    *,
+    loop_context: BrowserAgentLoopContext | None = None,
+    stage_profile: ObservationSliceProfile | None = None,
+) -> dict[str, Any]:
+    profile = stage_profile or get_observation_slice_profile(
+        loop_context.stage if loop_context is not None else "preflight"
+    )
+    include_screenshot = profile.include_screenshot
+    if loop_context and loop_context.stage == "empty_answer":
+        include_screenshot = include_screenshot or bool(loop_context.meta.get("force_visual"))
+
+    observation_meta = {
+        key: observation.meta.get(key)
+        for key in profile.observation_meta_keys
+        if key in observation.meta
+    }
+
+    return {
+        "platform": observation.platform,
+        "current_url": observation.current_url,
+        "title": _compact_text(observation.title, 80),
+        "interactive_ref_count": observation.interactive_ref_count,
+        "interactive_refs": _slice_interactive_refs(
+            observation.interactive_snapshot.get("refs"),
+            limit=profile.interactive_ref_limit,
+        ),
+        "visible_text_excerpt": _compact_text(
+            observation.visible_text_excerpt,
+            profile.visible_text_limit,
+        ),
+        "meta": observation_meta,
+        "screenshot": observation.screenshot if include_screenshot else None,
+    }
 
 
 async def collect_browser_page_observation(
@@ -271,44 +421,34 @@ async def collect_browser_page_observation(
     )
 
 
-def observation_to_llm_payload(observation: BrowserPageObservation) -> dict[str, Any]:
+def observation_to_llm_payload(
+    observation: BrowserPageObservation,
+    *,
+    loop_context: BrowserAgentLoopContext | None = None,
+    stage_profile: ObservationSliceProfile | None = None,
+) -> dict[str, Any]:
     """Convert one observation into a compact LLM-friendly payload."""
 
-    refs = observation.interactive_snapshot.get("refs")
-    preview_refs: list[dict[str, Any]] = []
-    if isinstance(refs, dict):
-        for ref_id, item in list(refs.items())[:20]:
-            if not isinstance(item, dict):
-                continue
-            preview_refs.append(
-                {
-                    "ref": ref_id,
-                    "role": item.get("role"),
-                    "tag": item.get("tag"),
-                    "text": item.get("text"),
-                    "placeholder": item.get("placeholder"),
-                }
-            )
-
-    return {
-        "platform": observation.platform,
-        "current_url": observation.current_url,
-        "title": observation.title,
-        "interactive_ref_count": observation.interactive_ref_count,
-        "interactive_refs": preview_refs,
-        "visible_text_excerpt": observation.visible_text_excerpt,
-        "meta": dict(observation.meta),
-        "screenshot": observation.screenshot,
-    }
+    return build_observation_slice(
+        observation,
+        loop_context=loop_context,
+        stage_profile=stage_profile,
+    )
 
 
 def loop_context_to_llm_payload(loop_context: BrowserAgentLoopContext) -> dict[str, Any]:
+    stage_profile = get_observation_slice_profile(loop_context.stage)
+    compact_meta = {
+        key: loop_context.meta.get(key)
+        for key in stage_profile.loop_meta_keys
+        if key in loop_context.meta
+    }
     return {
         "platform": loop_context.platform,
         "stage": loop_context.stage,
         "target_url": loop_context.target_url,
-        "note": loop_context.note,
-        "meta": dict(loop_context.meta),
+        "note": _compact_text(loop_context.note, 160),
+        "meta": compact_meta,
     }
 
 
@@ -316,11 +456,11 @@ def platform_profile_to_payload(profile: PlatformBrowserProfile) -> dict[str, An
     return {
         "platform": profile.platform,
         "entry_url": profile.entry_url,
-        "ready_url_patterns": list(profile.ready_url_patterns),
-        "login_url_patterns": list(profile.login_url_patterns),
-        "ready_hints": list(profile.ready_hints),
-        "login_hints": list(profile.login_hints),
-        "late_blocker_hints": list(profile.late_blocker_hints),
+        "ready_url_patterns": list(profile.ready_url_patterns[:3]),
+        "login_url_patterns": list(profile.login_url_patterns[:3]),
+        "ready_hints": list(profile.ready_hints[:4]),
+        "login_hints": list(profile.login_hints[:4]),
+        "late_blocker_hints": list(profile.late_blocker_hints[:4]),
     }
 
 
