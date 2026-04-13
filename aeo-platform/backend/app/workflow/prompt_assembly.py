@@ -3,7 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+
+PromptDropPolicy = Literal["keep", "compress", "drop"]
+
+_GROUP_BUDGETS: dict[str, int] = {
+    "base_policy_sections": 2200,
+    "skill_sections": 900,
+    "runtime_context_sections": 2200,
+    "runtime_reminder_sections": 500,
+}
+_GROUP_ORDER: tuple[str, ...] = (
+    "base_policy_sections",
+    "skill_sections",
+    "runtime_context_sections",
+    "runtime_reminder_sections",
+)
+_SOFT_PROMPT_LIMIT = 5200
+_HARD_PROMPT_LIMIT = 6500
+_SECTION_SEPARATOR = "\n\n"
 
 
 @dataclass(frozen=True)
@@ -13,16 +32,34 @@ class PromptSection:
     key: str
     title: str
     body: str
+    priority: int = 100
+    budget_cost: int = 0
+    drop_policy: PromptDropPolicy = "compress"
+    group: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def normalized_body(self) -> str:
         return str(self.body or "").strip()
+
+    def header(self) -> str:
+        if not self.title:
+            return ""
+        return f"## {self.title}\n"
+
+    def estimated_cost(self) -> int:
+        if self.budget_cost > 0:
+            return self.budget_cost
+        return len(self.render())
 
     def to_state_payload(self) -> dict[str, Any]:
         return {
             "key": self.key,
             "title": self.title,
             "body": self.normalized_body(),
+            "priority": self.priority,
+            "budget_cost": self.estimated_cost(),
+            "drop_policy": self.drop_policy,
+            "group": self.group,
             "metadata": dict(self.metadata or {}),
         }
 
@@ -32,7 +69,122 @@ class PromptSection:
             return ""
         if not self.title:
             return body
-        return f"## {self.title}\n{body}"
+        return f"{self.header()}{body}"
+
+
+def _compact_text(value: str, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if limit <= 0 or not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return text[:limit]
+    return text[: limit - 1] + "…"
+
+
+def _separator_cost(count: int) -> int:
+    return max(0, count - 1) * len(_SECTION_SEPARATOR)
+
+
+def _render_section_with_limit(section: PromptSection, limit: int) -> str:
+    full = section.render()
+    if len(full) <= limit:
+        return full
+    if section.drop_policy == "keep":
+        return full
+
+    header = section.header()
+    if not section.title:
+        header = ""
+    available_body = limit - len(header)
+    min_body_chars = 48 if section.drop_policy == "compress" else 24
+    if available_body < min_body_chars:
+        return ""
+
+    compact_body = _compact_text(section.normalized_body(), available_body)
+    if not compact_body:
+        return ""
+    return f"{header}{compact_body}" if header else compact_body
+
+
+def _group_total_length(rendered_parts: list[str]) -> int:
+    if not rendered_parts:
+        return 0
+    return sum(len(part) for part in rendered_parts) + _separator_cost(len(rendered_parts))
+
+
+def _render_group_with_budget(
+    sections: tuple[PromptSection, ...],
+    *,
+    budget: int,
+) -> list[str]:
+    filtered = [section for section in sections if section.normalized_body()]
+    if not filtered:
+        return []
+
+    keep_indices = list(range(len(filtered)))
+    rendered = {index: filtered[index].render() for index in keep_indices}
+
+    def _current_total() -> int:
+        return _group_total_length([rendered[index] for index in keep_indices if rendered[index]])
+
+    while _current_total() > budget:
+        droppable = [
+            index
+            for index in keep_indices
+            if filtered[index].drop_policy == "drop"
+        ]
+        if not droppable:
+            break
+        victim = max(
+            droppable,
+            key=lambda index: (filtered[index].priority, len(rendered.get(index, ""))),
+        )
+        keep_indices.remove(victim)
+        rendered.pop(victim, None)
+
+    if not keep_indices:
+        return []
+
+    overflow = _current_total() - budget
+    if overflow > 0:
+        compressible = sorted(
+            [
+                index
+                for index in keep_indices
+                if filtered[index].drop_policy in {"compress", "drop"}
+            ],
+            key=lambda index: (filtered[index].priority, len(rendered.get(index, ""))),
+            reverse=True,
+        )
+        for index in compressible:
+            current = rendered.get(index, "")
+            if not current:
+                continue
+            minimum_length = len(filtered[index].header()) + (
+                48 if filtered[index].drop_policy == "compress" else 24
+            )
+            minimum_length = max(minimum_length, len(filtered[index].header()) + 1)
+            available_reduction = len(current) - minimum_length
+            if available_reduction <= 0:
+                continue
+            reduction = min(overflow, available_reduction)
+            candidate = _render_section_with_limit(filtered[index], len(current) - reduction)
+            if not candidate:
+                if filtered[index].drop_policy == "drop":
+                    keep_indices.remove(index)
+                    rendered.pop(index, None)
+                    overflow = _current_total() - budget
+                    if overflow <= 0:
+                        break
+                continue
+            rendered[index] = candidate
+            overflow = _current_total() - budget
+            if overflow <= 0:
+                break
+
+    return [rendered[index] for index in keep_indices if rendered.get(index)]
 
 
 @dataclass(frozen=True)
@@ -73,5 +225,53 @@ class PromptAssembly:
         }
 
     def render(self) -> str:
-        rendered = [section.render() for section in self.ordered_sections()]
-        return "\n\n".join(part for part in rendered if part).strip()
+        grouped_rendered: dict[str, list[str]] = {}
+        for group_name in _GROUP_ORDER:
+            sections = tuple(getattr(self, group_name))
+            grouped_rendered[group_name] = _render_group_with_budget(
+                sections,
+                budget=_GROUP_BUDGETS[group_name],
+            )
+
+        ordered_parts: list[str] = []
+        for group_name in _GROUP_ORDER:
+            ordered_parts.extend(grouped_rendered[group_name])
+
+        total_length = _group_total_length(ordered_parts)
+        if total_length > _SOFT_PROMPT_LIMIT:
+            for group_name in ("runtime_reminder_sections", "runtime_context_sections", "skill_sections"):
+                current_parts = grouped_rendered[group_name]
+                if not current_parts:
+                    continue
+                overflow = total_length - _SOFT_PROMPT_LIMIT
+                if overflow <= 0:
+                    break
+                current_length = _group_total_length(current_parts)
+                target_budget = max(0, current_length - overflow)
+                grouped_rendered[group_name] = _render_group_with_budget(
+                    tuple(getattr(self, group_name)),
+                    budget=target_budget,
+                )
+                ordered_parts = []
+                for ordered_group in _GROUP_ORDER:
+                    ordered_parts.extend(grouped_rendered[ordered_group])
+                total_length = _group_total_length(ordered_parts)
+
+        if total_length > _HARD_PROMPT_LIMIT:
+            hard_clamped: list[str] = []
+            remaining = _HARD_PROMPT_LIMIT
+            for part in ordered_parts:
+                if not part or remaining <= 0:
+                    continue
+                separator_cost = len(_SECTION_SEPARATOR) if hard_clamped else 0
+                if remaining <= separator_cost:
+                    break
+                allowed = remaining - separator_cost
+                compact = _compact_text(part, allowed)
+                if not compact:
+                    continue
+                hard_clamped.append(compact)
+                remaining -= separator_cost + len(compact)
+            ordered_parts = hard_clamped
+
+        return _SECTION_SEPARATOR.join(part for part in ordered_parts if part).strip()

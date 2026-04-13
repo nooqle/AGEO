@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from app.core.fetchers.browser.browser_agent_contract import (
     BrowserAgentLoopContext,
+    PlatformBrowserProfile,
+    build_observation_slice,
     collect_browser_page_observation,
+    get_observation_slice_profile,
     loop_context_to_llm_payload,
     observation_to_llm_payload,
+    platform_profile_to_payload,
     requires_human_takeover,
 )
 
@@ -84,13 +88,21 @@ async def test_observation_to_llm_payload_compacts_refs():
         platform="kimi",
     )
 
-    payload = observation_to_llm_payload(observation)
+    payload = observation_to_llm_payload(
+        observation,
+        loop_context=BrowserAgentLoopContext(platform="kimi", stage="preflight"),
+    )
 
     assert payload["platform"] == "kimi"
     assert payload["interactive_ref_count"] == 2
     assert len(payload["interactive_refs"]) == 2
-    assert payload["interactive_refs"][0]["ref"] == "e0"
-    assert payload["interactive_refs"][1]["placeholder"] == "Ask Anything..."
+    assert {item["ref"] for item in payload["interactive_refs"]} == {"e0", "e1"}
+    assert any(
+        item["placeholder"] == "Ask Anything..."
+        for item in payload["interactive_refs"]
+    )
+    assert payload["screenshot"] is None
+    assert set(payload["meta"].keys()) == {"page_present", "page_closed", "snapshot_present"}
 
 
 def test_requires_human_takeover_marks_only_hard_blockers():
@@ -118,4 +130,50 @@ def test_loop_context_to_llm_payload_preserves_stage_and_meta():
     assert payload["stage"] == "resume_probe"
     assert payload["target_url"] == "https://kimi.com/"
     assert payload["note"] == "after manual resolve"
-    assert payload["meta"]["waited_seconds"] == 12
+    assert payload["meta"] == {}
+
+
+async def test_build_observation_slice_uses_stage_limits_and_no_default_screenshot():
+    observation = await collect_browser_page_observation(
+        client=_FakeClient(),
+        platform="kimi",
+        screenshot_provider=_fake_screenshot_provider,
+    )
+
+    payload = build_observation_slice(
+        observation,
+        loop_context=BrowserAgentLoopContext(platform="kimi", stage="wait_gate"),
+    )
+
+    assert payload["screenshot"] is None
+    assert len(payload["interactive_refs"]) <= 6
+    assert len(payload["visible_text_excerpt"]) <= 220
+    assert set(payload["meta"].keys()) == {"page_present", "page_closed", "snapshot_present"}
+
+
+def test_get_observation_slice_profile_exposes_stage_defaults():
+    profile = get_observation_slice_profile("resume_probe")
+
+    assert profile.visible_text_limit == 220
+    assert profile.interactive_ref_limit == 6
+    assert profile.loop_meta_keys == ("action_type",)
+
+
+def test_platform_profile_to_payload_trims_patterns_and_hints():
+    payload = platform_profile_to_payload(
+        PlatformBrowserProfile(
+            platform="kimi",
+            entry_url="https://kimi.com/",
+            ready_url_patterns=("a", "b", "c", "d"),
+            login_url_patterns=("l1", "l2", "l3", "l4"),
+            ready_hints=("h1", "h2", "h3", "h4", "h5"),
+            login_hints=("i1", "i2", "i3", "i4", "i5"),
+            late_blocker_hints=("x1", "x2", "x3", "x4", "x5"),
+        )
+    )
+
+    assert payload["ready_url_patterns"] == ["a", "b", "c"]
+    assert payload["login_url_patterns"] == ["l1", "l2", "l3"]
+    assert payload["ready_hints"] == ["h1", "h2", "h3", "h4"]
+    assert payload["login_hints"] == ["i1", "i2", "i3", "i4"]
+    assert payload["late_blocker_hints"] == ["x1", "x2", "x3", "x4"]
