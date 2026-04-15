@@ -31,7 +31,7 @@ export const FEATURE_HIGHLIGHTS: FeatureHighlight[] = [
 
 // Input area placeholders
 export const INPUT_PLACEHOLDERS = {
-  executing: 'Agent 正在分析品牌数据，您可查看右侧报告面板...',
+  executing: '当前分析仍在进行中，您可先查看右侧结果面板...',
   confirmation: '输入回复或点击上方按钮确认...',
   default: '输入品牌名称开始分析，如：观夏',
 } as const;

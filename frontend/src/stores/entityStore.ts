@@ -17,19 +17,48 @@ interface EntityState {
   fetchEntities: () => Promise<void>;
 }
 
+function parseEntityTimestamp(value?: string | null): number {
+  if (!value) return 0;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function sortEntities(entities: Entity[]): Entity[] {
+  return [...entities].sort((left, right) => {
+    const updatedDiff =
+      parseEntityTimestamp(right.updatedAt) - parseEntityTimestamp(left.updatedAt);
+    if (updatedDiff !== 0) return updatedDiff;
+
+    const createdDiff =
+      parseEntityTimestamp(right.createdAt) - parseEntityTimestamp(left.createdAt);
+    if (createdDiff !== 0) return createdDiff;
+
+    return right.id.localeCompare(left.id);
+  });
+}
+
 export const useEntityStore = create<EntityState>((set) => ({
   entities: [],
   isLoading: false,
   error: null,
   hasFetched: false,
 
-  setEntities: (entities) => set({ entities, isLoading: false, error: null, hasFetched: true }),
+  setEntities: (entities) =>
+    set({
+      entities: sortEntities(entities),
+      isLoading: false,
+      error: null,
+      hasFetched: true,
+    }),
   addEntity: (entity) =>
-    set((state) => ({ entities: [...state.entities, entity], hasFetched: true })),
+    set((state) => ({
+      entities: sortEntities([...state.entities, entity]),
+      hasFetched: true,
+    })),
   updateEntity: (id, updates) =>
     set((state) => ({
-      entities: state.entities.map((e) =>
-        e.id === id ? { ...e, ...updates } : e
+      entities: sortEntities(
+        state.entities.map((e) => (e.id === id ? { ...e, ...updates } : e))
       ),
     })),
   removeEntity: (id) =>
@@ -43,7 +72,12 @@ export const useEntityStore = create<EntityState>((set) => ({
     set({ isLoading: true, error: null });
     try {
       const entities = await api.listEntities();
-      set({ entities, isLoading: false, error: null, hasFetched: true });
+      set({
+        entities: sortEntities(entities),
+        isLoading: false,
+        error: null,
+        hasFetched: true,
+      });
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : '加载品牌列表失败',

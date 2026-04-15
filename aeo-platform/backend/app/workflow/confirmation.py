@@ -93,7 +93,7 @@ def resolve_confirmation_selection(
             logger.info("[LangGraph] Inline confirmation: persona_focused mode")
         elif opt_id == "brand_panorama":
             clear_question_import_state()
-            resolved_user_content = "先做品牌全景问题分析吧。"
+            resolved_user_content = "先做品牌全景分析吧。"
             decisions["a3_mode"] = "brand"
             logger.info("[LangGraph] Inline confirmation: brand_panorama mode")
         elif opt_id == "fast":
@@ -161,7 +161,7 @@ def resolve_confirmation_selection(
     elif isinstance(selection, str) and selection in ("品牌全景分析",):
         clear_question_import_state()
         decisions["a3_mode"] = "brand"
-        resolved_user_content = "先做品牌全景问题分析吧。"
+        resolved_user_content = "先做品牌全景分析吧。"
         logger.info("[LangGraph] Text confirmation mapped to brand mode: %s", selection)
     elif isinstance(selection, str) and selection in ("快速采集（推荐）", "快速采集"):
         decisions["fetch_mode_pending"] = False

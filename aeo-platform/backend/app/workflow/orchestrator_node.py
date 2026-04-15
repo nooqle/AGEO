@@ -2264,7 +2264,11 @@ async def _force_fetch_mode_confirmation(
             "description": "对模拟问题不满意，返回重新生成",
         },
     ]
-    defense_msg = "问题模拟已完成，请选择采集模式："
+    defense_msg = (
+        "品牌全景分析的问题准备已完成。接下来可以进入答案抓取："
+        "您会得到各平台对同一组问题的回答、引用来源与品牌提及情况，"
+        "后续还可以继续生成分析报告。请选择采集模式："
+    )
     visible_reply = reply_text.strip() or _build_ask_user_fallback_reply(
         state,
         "question_simulation",
@@ -3970,7 +3974,12 @@ async def _handle_tool_call(
                     },
                 ]
                 defense_request_id = tool_call.id or f"defense_a3_{id(tool_call)}"
-                defense_msg = "请选择问题模拟的分析路径："
+                defense_msg = (
+                    "品牌全景分析会先梳理品牌定位、核心产品与主要竞品，"
+                    "再生成一组可用于后续抓取的行业全景问题。"
+                    "您会先得到品牌档案和问题列表，后续还可以继续做答案抓取、对比分析和报告生成。"
+                    "请选择分析路径："
+                )
                 await session_event_publisher.emit_to_session(
                     session_id,
                     "inline_confirmation",
@@ -4074,7 +4083,11 @@ async def _handle_tool_call(
                     },
                 ]
                 defense_request_id = tool_call.id or f"defense_fetch_{id(tool_call)}"
-                defense_msg = "问题模拟已完成，请选择采集模式："
+                defense_msg = (
+                    "品牌全景分析的问题准备已完成。接下来可以进入答案抓取："
+                    "您会得到各平台对同一组问题的回答、引用来源与品牌提及情况，"
+                    "后续还可以继续生成分析报告。请选择采集模式："
+                )
                 await session_event_publisher.emit_to_session(
                     session_id,
                     "inline_confirmation",

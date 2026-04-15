@@ -7,8 +7,6 @@ Pure question-generation logic is delegated to the internal `question_generation
 import logging
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
-
 from langgraph.types import Command
 
 from app.workflow.state import AgentState
@@ -29,10 +27,13 @@ from app.tools.question_generation import (
     fix_persona_categories as normalize_persona_questions,
     merge_uploaded_questions as merge_uploaded_question_payload,
     normalize_uploaded_question_payload as normalize_uploaded_questions,
+    sanitize_panorama_questions as sanitize_generated_panorama_questions,
     validate_baseline_questions as validate_generated_baseline_questions,
 )
 
 from app.core.constants import PlatformConstants, WorkflowConstants
+
+logger = logging.getLogger(__name__)
 
 # Platforms to distribute questions across
 _PLATFORMS = PlatformConstants.SUPPORTED_PLATFORMS
@@ -86,7 +87,6 @@ async def a3_question_node(state: AgentState) -> Command:
     Routes to brand panorama mode (template) or persona focused mode (LLM)
     based on user_decisions.a3_mode.
     """
-    session_id = state["session_id"]
     user_decisions = state.get("user_decisions", {})
     a3_mode = user_decisions.get("a3_mode", "brand")
 
@@ -264,12 +264,12 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
         step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
-        message=f"品牌全景模式：正在通过 LLM 生成问题{_identity_suffix(identity)}",
+        message=f"品牌全景分析：正在生成问题{_identity_suffix(identity)}",
     )
 
     await send_tpaor_event(
         session_id, "thought",
-        f"正在为「{brand_name}」生成品牌全景问题{_identity_suffix(identity)}，覆盖品牌认知、产品特性、竞品对比等维度...",
+        f"正在为「{brand_name}」整理品牌全景问题{_identity_suffix(identity)}，覆盖品牌认知、产品特性、使用场景与后续抓取方向...",
     )
 
     try:
@@ -310,6 +310,11 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             raise ValueError("LLM returned empty questions for brand panorama")
 
         raw_questions = raw_questions[:_MAX_QUESTIONS]
+        raw_questions = sanitize_generated_panorama_questions(
+            raw_questions,
+            brand_name,
+            competitors,
+        )
 
         # Build simulated_questions and flattened_questions
         simulated_questions = []
@@ -351,11 +356,11 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             step="question_simulation",
             step_name="问题模拟生成",
             progress=1.0,
-            message=f"品牌全景模式：生成 {question_count} 个问题",
+            message=f"品牌全景分析：已生成 {question_count} 个问题",
             status="completed",
         )
 
-        detailed_response = f"已为「{brand_name}」生成 {question_count} 个模拟问题，详见右侧问题列表。"
+        detailed_response = f"已为「{brand_name}」完成品牌全景问题整理，共 {question_count} 个问题，详见右侧问题列表。"
 
         await send_action_log_event(
             session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
@@ -370,11 +375,11 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
         await save_and_send_artifact(
             session_id=session_id,
             output_type="questionList",
-            title="模拟问题列表",
+            title="品牌全景问题列表",
             data={
                 "simulatedQuestions": generated_payload,
                 "questions": flattened_questions,
-                "generationMode": "品牌全景模式（LLM生成）",
+                "generationMode": "品牌全景分析",
             },
         )
 
@@ -784,12 +789,12 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
-        message=f"基线全景模式：正在生成行业全景问题{_identity_suffix(identity)}",
+        message=f"品牌全景分析：正在生成行业全景问题{_identity_suffix(identity)}",
     )
 
     await send_tpaor_event(
         session_id, "thought",
-        f"正在为「{brand_name}」生成行业全景基线问题{_identity_suffix(identity)}，覆盖品类需求、场景选购、竞品对比等维度...",
+        f"正在为「{brand_name}」整理行业全景问题{_identity_suffix(identity)}，覆盖品类需求、场景选购、产品比较与后续抓取方向...",
     )
 
     try:
@@ -835,6 +840,11 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
 
         # Enforce hard limit
         raw_questions = raw_questions[:_MAX_QUESTIONS]
+        raw_questions = sanitize_generated_panorama_questions(
+            raw_questions,
+            brand_name,
+            competitors,
+        )
 
         # Validate brand question ratio
         validate_generated_baseline_questions(raw_questions, brand_name)
@@ -880,12 +890,12 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             step="question_simulation",
             step_name="问题模拟生成",
             progress=1.0,
-            message=f"基线全景模式：生成 {question_count} 个行业全景问题",
+            message=f"品牌全景分析：已生成 {question_count} 个行业全景问题",
             status="completed",
         )
 
         detailed_response = (
-            f"已为「{brand_name}」生成 {question_count} 个行业全景基线问题，"
+            f"已为「{brand_name}」生成 {question_count} 个行业全景问题，"
             f"详见右侧问题列表。"
         )
 
@@ -903,11 +913,11 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         await save_and_send_artifact(
             session_id=session_id,
             output_type="questionList",
-            title="基线问题列表",
+            title="品牌全景问题列表",
             data={
                 "simulatedQuestions": generated_payload,
                 "questions": flattened_questions,
-                "generationMode": "基线全景模式（LLM生成）",
+                "generationMode": "品牌全景分析（行业全景问题）",
             },
         )
 

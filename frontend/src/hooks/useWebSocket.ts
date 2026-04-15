@@ -509,6 +509,7 @@ export function useWebSocket(sessionId: string | null) {
 
         addContent(payload.content);
         const isFinalReportArtifact = payload.content.type === 'report';
+        const isWorkflowArtifact = payload.content.type === 'workflow';
         if (targetMessageId) {
           const state = useConversationStore.getState();
           const msg = state.messages.find((m) => m.id === targetMessageId);
@@ -539,14 +540,24 @@ export function useWebSocket(sessionId: string | null) {
             payload.outputId,
           );
         }
-        if (isFinalReportArtifact && useConversationStore.getState().isAgentExecuting) {
+        if ((isFinalReportArtifact || isWorkflowArtifact) && useConversationStore.getState().isAgentExecuting) {
           const currentProgress = useConversationStore.getState().executionProgress;
           const stage = String(currentProgress?.stage || '').toLowerCase();
           const isReportTerminalStage =
             stage.includes('data_analytics')
             || stage.includes('a5')
             || stage.includes('analysis_report');
-          if (isReportTerminalStage || (currentProgress?.progress ?? 0) >= 1) {
+          const outputTitle = String(payload.content.title || '');
+          const isBrandAnalysisTerminalStage =
+            stage.includes('brand_analysis')
+            || stage.includes('brand_profile')
+            || stage === 'a1';
+          const shouldFinalizeWorkflowArtifact =
+            isWorkflowArtifact
+            && outputTitle.includes('品牌档案')
+            && (isBrandAnalysisTerminalStage || (currentProgress?.progress ?? 0) >= 1);
+          if ((isFinalReportArtifact && (isReportTerminalStage || (currentProgress?.progress ?? 0) >= 1))
+            || shouldFinalizeWorkflowArtifact) {
             completePendingActionLogs();
             finalizeCurrentMessage();
             resetStreamingState();
@@ -554,6 +565,11 @@ export function useWebSocket(sessionId: string | null) {
             setExecutionProgress(null);
             clearBrowserStates();
             setStopState(null);
+            const currentTask = useConversationStore.getState().activeTask;
+            const completedTask = buildCompletedTask(currentTask, data);
+            if (completedTask) {
+              setActiveTask(completedTask);
+            }
           }
         }
         break;

@@ -22,6 +22,22 @@ _PERSONA_CATEGORY_ALIAS_MAP = {
     "选购对比": "品类选购对比",
     "行业趋势": "行业趋势认知",
 }
+_PANORAMA_COMPARE_CUES = (
+    "谁家",
+    "谁更",
+    "哪家",
+    "哪个牌子",
+    "哪个品牌",
+    "更好",
+    "更强",
+    "更厉害",
+    "谁更强",
+    "性价比更高",
+    "值不值得",
+    "排名",
+    "vs",
+    "VS",
+)
 
 
 def normalize_uploaded_question_payload(
@@ -337,7 +353,7 @@ def _build_baseline_system_prompt(platforms: list[str] | tuple[str, ...]) -> str
         PlatformConstants.PLATFORM_DISPLAY_NAMES.get(platform, platform)
         for platform in platforms
     )
-    return f"""你是一个消费者行为研究专家。请基于以下品牌信息和竞品列表，生成模拟用户在 AI 平台（如 {platform_list}）中会提问的行业基线全景问题。
+    return f"""你是一个消费者行为研究专家。请基于以下品牌信息和竞品列表，生成模拟用户在 AI 平台（如 {platform_list}）中会提问的行业全景问题。
 
 ## 核心规则
 1. 问题必须是用户视角，模拟真实消费者的搜索行为
@@ -345,7 +361,7 @@ def _build_baseline_system_prompt(platforms: list[str] | tuple[str, ...]) -> str
 3. 问题必须覆盖品牌的主要产品领域
 4. 包含预算、场景、用途等真实决策因素
 5. 问题要口语化，像真实用户会在 AI 平台中输入的
-6. 可以出现竞品名称用于对比，但不能出现目标品牌名称
+6. 优先生成产品形态、成分、功能、使用场景、价格带等品类层面的比较问题，避免直接列出多个品牌做“谁更好、谁更强、谁更值得买”的比较
 
 ## 问题分类比例
 - 品类需求咨询 (30%)
@@ -374,7 +390,8 @@ def _build_baseline_system_prompt(platforms: list[str] | tuple[str, ...]) -> str
 2. 不需要指定平台，系统会自动在 {platform_list} 之间轮转分配
 3. 问题要覆盖品牌的核心产品线
 4. 避免重复或过于笼统的问题
-5. 竞品名称可以出现在对比类问题中，但目标品牌名称不能出现在任何问题中"""
+5. 竞品名称最多只作为行业背景提示，不要把多个品牌直接拼成“孰优孰劣式”的题目
+6. 目标品牌名称不能出现在任何问题中"""
 
 
 def _build_baseline_user_content(
@@ -398,7 +415,7 @@ def _build_baseline_user_content(
                 competitor_names.append(str(competitor))
         competitor_text = ", ".join(competitor_names)
 
-    return f"""请为以下品牌生成行业全景基线问题。
+    return f"""请为以下品牌生成行业全景问题。
 
 ## 品牌信息
 - 品牌名称: {brand_name}
@@ -415,7 +432,8 @@ def _build_baseline_user_content(
 - 【强制约束】任何问题都不要直接出现「{brand_name}」这个品牌名
 - 覆盖核心产品线: {products}
 - 问题要口语化，像真实用户会搜索的
-- 允许出现竞品名称做对比，但不要把目标品牌名写进问题
+- 竞品名称最多只作为行业背景提示，避免把多个品牌直接写成“谁更好、谁更强、谁更值得买”的比较题
+- 优先生成产品形态、成分、功能、使用场景、价格带等品类问题，而不是品牌孰优孰劣题
 
 请直接输出 JSON，不要有其他文字。"""
 
@@ -435,6 +453,73 @@ def validate_baseline_questions(questions: list[dict], brand_name: str) -> None:
         raise ValueError(
             f"基线问题出现目标品牌直问: {brand_direct_count}/{total}"
         )
+
+
+def _normalize_brand_term(term: str) -> str:
+    return " ".join(str(term or "").strip().lower().split())
+
+
+def _collect_panorama_brand_terms(brand_name: str, competitors: list[Any]) -> list[str]:
+    brand_terms: list[str] = []
+
+    def add_term(raw: str) -> None:
+        normalized = _normalize_brand_term(raw)
+        if normalized and normalized not in brand_terms:
+            brand_terms.append(normalized)
+
+    add_term(brand_name)
+    for competitor in competitors:
+        if isinstance(competitor, dict):
+            add_term(
+                str(
+                    competitor.get("name")
+                    or competitor.get("brand_name")
+                    or competitor.get("label")
+                    or ""
+                )
+            )
+        else:
+            add_term(str(competitor))
+
+    return brand_terms
+
+
+def _find_panorama_brand_mentions(text: str, brand_terms: list[str]) -> list[str]:
+    normalized_text = _normalize_brand_term(text)
+    if not normalized_text:
+        return []
+    return [term for term in brand_terms if term and term in normalized_text]
+
+
+def sanitize_panorama_questions(
+    questions: list[dict],
+    brand_name: str,
+    competitors: list[Any],
+) -> list[dict]:
+    if not questions:
+        return questions
+
+    brand_terms = _collect_panorama_brand_terms(brand_name, competitors)
+    if len(brand_terms) < 2:
+        return questions
+
+    filtered_questions: list[dict] = []
+    for question in questions:
+        question_text = str(
+            question.get("core_question")
+            or question.get("question")
+            or ""
+        )
+        category = str(question.get("category") or "")
+        mentions = _find_panorama_brand_mentions(question_text, brand_terms)
+        compare_like = category == "品类对比排名" or any(
+            cue in question_text for cue in _PANORAMA_COMPARE_CUES
+        )
+        if compare_like and len(mentions) >= 2:
+            continue
+        filtered_questions.append(question)
+
+    return filtered_questions or questions
 
 
 # Backward-compatible alias for callers that want to treat generation as a tool.

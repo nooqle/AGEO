@@ -767,6 +767,21 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     updateBrowserWorkspace,
   ]);
 
+  useEffect(() => {
+    const currentTakeoverId =
+      browserWorkspace?.type === 'browser' ? browserWorkspace.data.takeoverId : null;
+    if (!currentTakeoverId) {
+      return;
+    }
+
+    const isStillActionable = actionableTakeoverStates.some(
+      (state) => state.takeover?.takeoverId === currentTakeoverId,
+    );
+    if (!isStillActionable) {
+      clearBrowserWorkspace();
+    }
+  }, [actionableTakeoverStates, browserWorkspace, clearBrowserWorkspace]);
+
   const reopenTakeover = useCallback(async (state: BrowserState) => {
     const takeover = state.takeover;
     if (!takeover?.takeoverId) return;
