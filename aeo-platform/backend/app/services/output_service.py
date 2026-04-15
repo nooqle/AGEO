@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.message import Message, MessageType
+from app.services.fetch_run_platform_state_service import FetchRunPlatformStateService
 
 
 class OutputService:
@@ -45,7 +46,11 @@ class OutputService:
         )
         result = await self.db.execute(query)
         messages = result.scalars().all()
-        return [self._output_to_dict(msg) for msg in messages]
+        outputs = [self._output_to_dict(msg) for msg in messages]
+        return await self._merge_authoritative_fetch_results_output(
+            session_id=session_id,
+            outputs=outputs,
+        )
 
     async def get_output(
         self,
@@ -67,6 +72,11 @@ class OutputService:
             or message.session_id != session_id
             or message.type != MessageType.OUTPUT
         ):
+            synthetic = await self._get_authoritative_fetch_results_output(
+                session_id=session_id,
+            )
+            if synthetic and synthetic["id"] == str(output_id):
+                return synthetic
             return None
         return self._output_to_dict(message)
 
@@ -163,3 +173,67 @@ class OutputService:
             "category": category,
             "created_at": message.created_at.isoformat(),
         }
+
+    async def _get_authoritative_fetch_results_output(
+        self,
+        *,
+        session_id: UUID,
+    ) -> dict[str, Any] | None:
+        state_service = FetchRunPlatformStateService(self.db)
+        rows = await state_service.list_latest_for_session(session_id)
+        if not rows:
+            return None
+
+        projection = state_service.build_summary_projection(rows)
+        fetch_results = projection.get("fetch_results") or []
+        if not fetch_results:
+            return None
+
+        latest_row = max(
+            rows,
+            key=lambda row: (
+                row.updated_at or row.created_at,
+                row.created_at,
+            ),
+        )
+        return {
+            "id": str(latest_row.task_run_id),
+            "artifact_id": f"{session_id}_fetchResults",
+            "message_id": None,
+            "session_id": str(session_id),
+            "type": "fetchResults",
+            "title": "AI答案抓取结果",
+            "data": {
+                "fetchResults": fetch_results,
+                "platformStatus": projection.get("platform_status") or {},
+                "timingSummary": projection.get("timing_summary") or {},
+            },
+            "metadata": {
+                "synthetic": True,
+                "source": "fetch_run_platform_states",
+                "task_run_id": str(latest_row.task_run_id),
+            },
+            "category": None,
+            "created_at": (latest_row.updated_at or latest_row.created_at).isoformat(),
+        }
+
+    async def _merge_authoritative_fetch_results_output(
+        self,
+        *,
+        session_id: UUID,
+        outputs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        authoritative_fetch_results = await self._get_authoritative_fetch_results_output(
+            session_id=session_id,
+        )
+        if not authoritative_fetch_results:
+            return outputs
+
+        non_fetch_outputs = [
+            output for output in outputs if output.get("type") != "fetchResults"
+        ]
+        non_fetch_outputs.append(authoritative_fetch_results)
+        non_fetch_outputs.sort(
+            key=lambda output: str(output.get("created_at") or ""),
+        )
+        return non_fetch_outputs

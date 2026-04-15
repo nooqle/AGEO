@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { RiCheckDoubleLine } from '@remixicon/react';
 import { useAlertStore } from '@/stores/alertStore';
@@ -11,10 +12,38 @@ import type { MonitoringAlert } from '@/types/monitoring';
 interface NotificationPanelProps {
   /** Alignment direction of the dropdown relative to the bell */
   align?: 'left' | 'right';
+  anchorRef: RefObject<HTMLElement | null>;
   className?: string;
 }
 
-export function NotificationPanel({ align = 'right', className }: NotificationPanelProps) {
+type PanelPosition = {
+  top: number;
+  left: number;
+};
+
+function resolvePanelPosition(
+  anchorRect: DOMRect,
+  align: 'left' | 'right',
+): PanelPosition {
+  const panelWidth = 380;
+  const gap = 8;
+  const viewportPadding = 12;
+  const preferredLeft =
+    align === 'left'
+      ? anchorRect.left
+      : anchorRect.right - panelWidth;
+  const maxLeft = Math.max(viewportPadding, window.innerWidth - panelWidth - viewportPadding);
+  return {
+    top: Math.min(anchorRect.bottom + gap, Math.max(16, window.innerHeight - 96)),
+    left: Math.min(Math.max(preferredLeft, viewportPadding), maxLeft),
+  };
+}
+
+export function NotificationPanel({
+  align = 'right',
+  anchorRef,
+  className,
+}: NotificationPanelProps) {
   const router = useRouter();
   const panelRef = useRef<HTMLDivElement>(null);
   const {
@@ -72,18 +101,48 @@ export function NotificationPanel({ align = 'right', className }: NotificationPa
   const [isClosing, setIsClosing] = useState(false);
   // Keep panel mounted while the close animation plays
   const [shouldRender, setShouldRender] = useState(isPanelOpen);
-  const [prevIsPanelOpen, setPrevIsPanelOpen] = useState(isPanelOpen);
+  const [panelPosition, setPanelPosition] = useState<PanelPosition | null>(null);
 
-  // Sync animation state with open/close transitions (derived state during render)
-  if (prevIsPanelOpen !== isPanelOpen) {
-    setPrevIsPanelOpen(isPanelOpen);
+  useEffect(() => {
+    let frameId: number | null = null;
     if (isPanelOpen) {
-      setIsClosing(false);
-      setShouldRender(true);
+      frameId = window.requestAnimationFrame(() => {
+        setIsClosing(false);
+        setShouldRender(true);
+      });
     } else if (shouldRender) {
-      setIsClosing(true);
+      frameId = window.requestAnimationFrame(() => {
+        setIsClosing(true);
+      });
     }
-  }
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [isPanelOpen, shouldRender]);
+
+  useEffect(() => {
+    if (!shouldRender) {
+      return;
+    }
+
+    const updatePosition = () => {
+      const anchor = anchorRef.current;
+      if (!anchor) {
+        return;
+      }
+      setPanelPosition(resolvePanelPosition(anchor.getBoundingClientRect(), align));
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [align, anchorRef, shouldRender]);
 
   const handleAnimationEnd = useCallback(() => {
     if (isClosing) {
@@ -112,22 +171,23 @@ export function NotificationPanel({ align = 'right', className }: NotificationPa
     router.push('/dashboard?tab=monitoring');
   }, [closePanel, router]);
 
-  if (!shouldRender) return null;
+  if (!shouldRender || !panelPosition) return null;
 
-  return (
+  return createPortal(
     <div
       ref={panelRef}
       role="region"
       aria-label="通知面板"
       aria-live="polite"
       onAnimationEnd={handleAnimationEnd}
-      className={`absolute z-50 ${isClosing ? 'animate-panel-close' : 'animate-scale-in'} ${className ?? ''}`}
+      className={`${isClosing ? 'animate-panel-close' : 'animate-scale-in'} ${className ?? ''}`}
       style={{
+        position: 'fixed',
+        zIndex: 1200,
         width: '380px',
         maxHeight: 'min(480px, calc(100vh - 80px))',
-        top: '100%',
-        marginTop: '8px',
-        [align === 'right' ? 'right' : 'left']: 0,
+        top: `${panelPosition.top}px`,
+        left: `${panelPosition.left}px`,
         backgroundColor: 'var(--bg-secondary)',
         border: '1px solid var(--border-subtle)',
         borderRadius: '12px',
@@ -223,6 +283,7 @@ export function NotificationPanel({ align = 'right', className }: NotificationPa
           </button>
         </div>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }

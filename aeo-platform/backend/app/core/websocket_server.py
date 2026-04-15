@@ -228,5 +228,12 @@ async def rehydrate_runtime_events(websocket: WebSocket, session_id: str) -> Non
         replay_pending_confirmation_to_websocket,
     )
 
-    await replay_pending_browser_actions_to_websocket(websocket, session_id)
-    await replay_pending_confirmation_to_websocket(websocket, session_id)
+    replayed_browser_actions = await replay_pending_browser_actions_to_websocket(
+        websocket,
+        session_id,
+    )
+    await replay_pending_confirmation_to_websocket(
+        websocket,
+        session_id,
+        skip_if_browser_actions_replayed=replayed_browser_actions > 0,
+    )

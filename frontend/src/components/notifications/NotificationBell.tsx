@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { RiNotification3Line } from '@remixicon/react';
 import { useAlertStore } from '@/stores/alertStore';
 import { NotificationPanel } from './NotificationPanel';
@@ -14,6 +14,7 @@ interface NotificationBellProps {
 export function NotificationBell({ align = 'right', className }: NotificationBellProps) {
   const { unreadCount, isPanelOpen, togglePanel, startPolling, stopPolling } =
     useAlertStore();
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
 
   // Start polling on mount, stop on unmount
   useEffect(() => {
@@ -27,6 +28,7 @@ export function NotificationBell({ align = 'right', className }: NotificationBel
   return (
     <div className={`relative ${className ?? ''}`}>
       <button
+        ref={buttonRef}
         data-notification-bell
         onClick={togglePanel}
         className="p-2 rounded-lg transition-colors relative"
@@ -64,7 +66,7 @@ export function NotificationBell({ align = 'right', className }: NotificationBel
       </button>
 
       {/* Dropdown Panel */}
-      <NotificationPanel align={align} />
+      <NotificationPanel align={align} anchorRef={buttonRef} />
     </div>
   );
 }

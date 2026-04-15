@@ -50,10 +50,14 @@ export const BROWSER_STATES: BrowserState['state'][] = [
   'waiting_for_modal',
   'logged_in',
   'enabling_search',
-  'submitting',
   'waiting_response',
   'extracting',
   'completed',
   'error',
 ];
-export const BROWSER_PLATFORMS: BrowserState['platform'][] = ['kimi', 'deepseek', 'doubao', 'hunyuan'];
+export const BROWSER_PLATFORMS: BrowserState['platform'][] = [
+  'kimi',
+  'deepseek',
+  'doubao',
+  'yuanbao',
+];

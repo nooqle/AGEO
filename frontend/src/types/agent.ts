@@ -54,7 +54,6 @@ export type BrowserStateType =
   | 'waiting_for_modal'
   | 'logged_in'
   | 'enabling_search'
-  | 'submitting'
   | 'waiting_response'
   | 'extracting'
   | 'completed'
@@ -81,7 +80,7 @@ export interface BrowserTakeoverAccess {
 
 export interface BrowserState {
   state: BrowserStateType;
-  platform: 'kimi' | 'deepseek' | 'doubao' | 'yuanbao' | 'hunyuan';
+  platform: 'kimi' | 'deepseek' | 'doubao' | 'yuanbao';
   message: string;
   requiresAction: boolean;
   actionType?: BrowserActionType;

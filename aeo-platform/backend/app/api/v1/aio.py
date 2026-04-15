@@ -7,6 +7,7 @@ import logging
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 import httpx
 import websockets
@@ -36,6 +37,9 @@ from app.services.aio_session_manager import (
     SpectaAioSession,
     SpectaAioTakeover,
     aio_session_manager,
+)
+from app.services.fetch_run_platform_state_service import (
+    FetchRunPlatformStateService,
 )
 from app.workflow.browser_action_runtime import (
     get_browser_action_request,
@@ -91,7 +95,6 @@ class TakeoverResolveRequest(BaseModel):
     frontend_id: str
     mode: str = "vnc_fallback"
     client_observation: str | None = None
-    resume_gate_result: str | None = None
 
 
 class TakeoverCancelRequest(BaseModel):
@@ -146,7 +149,6 @@ def _serialize_takeover(takeover: SpectaAioTakeover) -> dict[str, Any]:
         "issued_at": _serialize_datetime(takeover.issued_at),
         "expires_at": _serialize_datetime(takeover.expires_at),
         "last_heartbeat_at": _serialize_datetime(takeover.last_heartbeat_at),
-        "resume_gate_result": takeover.resume_gate_result,
         "access_bundle": {
             "open_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/open",
             "canvas_config_path": f"/api/v1/aio/takeovers/{takeover.takeover_id}/canvas-config",
@@ -192,7 +194,8 @@ def _decorate_novnc_url(url: str) -> str:
     parsed = urlparse(url)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query.setdefault("autoconnect", "1")
-    query.setdefault("resize", "remote")
+    query.setdefault("resize", "scale")
+    query.setdefault("view_clip", "1")
     query.setdefault("reconnect", "1")
     query.setdefault("reconnect_delay", "1000")
     query.setdefault("show_dot", "0")
@@ -205,7 +208,8 @@ def _build_takeover_vnc_proxy_url(*, takeover_id: str, ticket: str) -> str:
     ws_path = f"api/v1/aio/takeovers/{takeover_id}/vnc-websockify"
     query = {
         "autoconnect": "1",
-        "resize": "remote",
+        "resize": "scale",
+        "view_clip": "1",
         "reconnect": "1",
         "reconnect_delay": "1000",
         "show_dot": "0",
@@ -288,6 +292,26 @@ async def _settle_takeover_request(
             "aio.takeover.request_settle_missing takeover_id=%s request_id=%s resolution=%s",
             takeover.takeover_id,
             takeover.request_id,
+            resolution,
+        )
+    if not takeover.run_id:
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            service = FetchRunPlatformStateService(db)
+            await service.mark_browser_action_resolution(
+                task_run_id=UUID(str(takeover.run_id)),
+                platform=takeover.platform,
+                resolution=resolution,
+                request_id=takeover.request_id,
+            )
+            await db.commit()
+    except Exception:
+        logger.exception(
+            "aio.takeover.authoritative_settle_failed takeover_id=%s request_id=%s run_id=%s resolution=%s",
+            takeover.takeover_id,
+            takeover.request_id,
+            takeover.run_id,
             resolution,
         )
 
@@ -1028,7 +1052,6 @@ async def resolve_takeover(
             takeover_id=takeover_id,
             user_id=str(current_user.id),
             frontend_id=body.frontend_id,
-            resume_gate_result=body.resume_gate_result,
         )
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))

@@ -1,7 +1,17 @@
 ﻿'use client';
 
 import { useState, useMemo, useCallback } from 'react';
-import type { FetchResultsCanvasContent, FetchResultItem, FetchPlatformResult, FetchCitation } from '@/types/canvas';
+import { buildFetchExportViewModel } from '@/adapters/exportArtifacts';
+import type {
+  FetchResultsCanvasContent,
+  FetchResultItem,
+  FetchPlatformResult,
+  FetchCitation,
+  FetchPlatformStatusProjection,
+  FetchPlatformStatusSummary,
+  FetchPlatformStatusValue,
+  FetchTimingSummary,
+} from '@/types/canvas';
 import { ReportHero, ReportMetricCard, ReportPage, ReportSection } from './ReportScaffold';
 
 // ---------------------------------------------------------------------------
@@ -15,10 +25,68 @@ interface FetchResultsContentProps {
 
 const PLATFORM_CONFIG: Record<string, { label: string; color: string; dotColor: string }> = {
   doubao:    { label: '豆包',     color: 'var(--color-accent-cyan)',   dotColor: '#06B6D4' },
-  hunyuan:   { label: '元宝',     color: 'var(--color-accent-purple)', dotColor: '#A855F7' },
+  yuanbao:   { label: '元宝',     color: 'var(--color-accent-purple)', dotColor: '#A855F7' },
   kimi:      { label: 'Kimi',    color: 'var(--color-secondary)',     dotColor: '#10B981' },
   deepseek:  { label: 'DeepSeek',color: 'var(--color-primary)',       dotColor: '#6366F1' },
 };
+
+const PLATFORM_ORDER = ['doubao', 'yuanbao', 'kimi', 'deepseek'] as const;
+
+function normalizeFetchStatus(value: string | undefined): FetchPlatformStatusValue {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'success') return 'success';
+  if (normalized === 'skipped') return 'skipped';
+  if (normalized === 'running') return 'running';
+  if (normalized === 'pending') return 'pending';
+  if (normalized === 'takeover_required') return 'takeover_required';
+  return 'failed';
+}
+
+function getStatusBadge(status: FetchPlatformStatusValue): {
+  label: string;
+  color: string;
+  backgroundColor: string;
+  borderColor: string;
+} {
+  if (status === 'success') {
+    return {
+      label: '成功',
+      color: 'var(--status-success)',
+      backgroundColor: 'rgba(16,185,129,0.10)',
+      borderColor: 'rgba(16,185,129,0.22)',
+    };
+  }
+  if (status === 'skipped') {
+    return {
+      label: '已跳过',
+      color: 'var(--text-muted)',
+      backgroundColor: 'var(--bg-elevated)',
+      borderColor: 'var(--border-subtle)',
+    };
+  }
+  if (status === 'running') {
+    return {
+      label: '进行中',
+      color: 'var(--status-info)',
+      backgroundColor: 'rgba(59,130,246,0.10)',
+      borderColor: 'rgba(59,130,246,0.22)',
+    };
+  }
+  if (status === 'pending' || status === 'takeover_required') {
+    return {
+      label: status === 'takeover_required' ? '待接管' : '待处理',
+      color: 'var(--status-warning)',
+      backgroundColor: 'rgba(245,158,11,0.10)',
+      borderColor: 'rgba(245,158,11,0.22)',
+    };
+  }
+  return {
+    label: '失败',
+    color: 'var(--status-error)',
+    backgroundColor: 'rgba(239,68,68,0.06)',
+    borderColor: 'rgba(239,68,68,0.20)',
+  };
+}
 
 function getPlatformLabel(platform: string): string {
   return PLATFORM_CONFIG[platform]?.label ?? platform;
@@ -187,24 +255,35 @@ interface PlatformPaneProps {
 }
 
 function PlatformPane({ platformResult: pr }: PlatformPaneProps) {
-  if (!pr.success) {
+  const status = normalizeFetchStatus(pr.status ?? (pr.success ? 'success' : 'failed'));
+  const badge = getStatusBadge(status);
+
+  if (status !== 'success') {
     return (
       <div
         style={{
           padding: '1rem',
           borderRadius: 'var(--radius-md)',
-          backgroundColor: 'rgba(239,68,68,0.06)',
-          border: '1px solid rgba(239,68,68,0.2)',
+          backgroundColor: badge.backgroundColor,
+          border: `1px solid ${badge.borderColor}`,
         }}
       >
         <p
           style={{
             margin: 0,
             fontSize: '0.8125rem',
-            color: 'var(--status-error)',
+            color: badge.color,
           }}
         >
-          {pr.error || '抓取失败'}
+          {status === 'skipped'
+            ? '该平台已跳过'
+            : status === 'running'
+              ? '该平台仍在抓取中'
+              : status === 'pending'
+                ? '该平台尚未开始处理'
+                : status === 'takeover_required'
+                  ? '该平台等待人工接管'
+                  : pr.error || '抓取失败'}
         </p>
         {pr.duration !== undefined && (
           <p
@@ -380,7 +459,10 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
   const activePlatformResult = activeTab ? resultsByPlatform[activeTab] : undefined;
 
   // Success count for this question
-  const successCount = item.platform_results?.filter((pr) => pr.success).length ?? 0;
+  const successCount =
+    item.platform_results?.filter((pr) => normalizeFetchStatus(pr.status ?? (pr.success ? 'success' : 'failed')) === 'success').length ?? 0;
+  const skippedCount =
+    item.platform_results?.filter((pr) => normalizeFetchStatus(pr.status ?? (pr.success ? 'success' : 'failed')) === 'skipped').length ?? 0;
   const totalCount = item.platform_results?.length ?? 0;
 
   if (printMode) {
@@ -405,7 +487,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
                     successCount === totalCount ? 'rgba(16,185,129,0.22)' : 'rgba(245,158,11,0.22)',
                 }}
               >
-                {successCount}/{totalCount} 平台
+                {successCount}/{totalCount} 平台{skippedCount > 0 ? ` · ${skippedCount} 已跳过` : ''}
               </span>
             </div>
           </div>
@@ -427,7 +509,10 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
                         width: '6px',
                         height: '6px',
                         borderRadius: '50%',
-                        backgroundColor: result.success ? getPlatformDotColor(platform) : 'var(--status-error)',
+                        backgroundColor:
+                          normalizeFetchStatus(result.status ?? (result.success ? 'success' : 'failed')) === 'success'
+                            ? getPlatformDotColor(platform)
+                            : 'var(--status-error)',
                         flexShrink: 0,
                       }}
                     />
@@ -490,7 +575,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
                 successCount === totalCount ? 'rgba(16,185,129,0.22)' : 'rgba(245,158,11,0.22)',
             }}
           >
-            {successCount}/{totalCount} 平台
+            {successCount}/{totalCount} 平台{skippedCount > 0 ? ` · ${skippedCount} 已跳过` : ''}
           </span>
           {/* Chevron icon via SVG to avoid adding deps */}
           <svg
@@ -563,7 +648,10 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
                         width: '6px',
                         height: '6px',
                         borderRadius: '50%',
-                        backgroundColor: pr?.success ? dotColor : 'var(--status-error)',
+                        backgroundColor:
+                          normalizeFetchStatus(pr?.status ?? (pr?.success ? 'success' : 'failed')) === 'success'
+                            ? dotColor
+                            : 'var(--status-error)',
                         flexShrink: 0,
                       }}
                     />
@@ -584,9 +672,13 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
                   width: '6px',
                   height: '6px',
                   borderRadius: '50%',
-                  backgroundColor: resultsByPlatform[availablePlatforms[0]]?.success
-                    ? getPlatformDotColor(availablePlatforms[0])
-                    : 'var(--status-error)',
+                  backgroundColor:
+                    normalizeFetchStatus(
+                      resultsByPlatform[availablePlatforms[0]]?.status ??
+                        (resultsByPlatform[availablePlatforms[0]]?.success ? 'success' : 'failed')
+                    ) === 'success'
+                      ? getPlatformDotColor(availablePlatforms[0])
+                      : 'var(--status-error)',
                 }}
               />
               <span
@@ -631,36 +723,73 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
 interface StatsPanelProps {
   fetchResults: FetchResultItem[];
   platforms: string[];
+  successCount: number;
+  failedCount: number;
+  skippedCount: number;
+  platformStatus?: FetchPlatformStatusProjection;
+  timingSummary?: FetchTimingSummary;
   printMode?: boolean;
 }
 
-function StatsPanel({ fetchResults, platforms, printMode = false }: StatsPanelProps) {
+function StatsPanel({
+  fetchResults,
+  platforms,
+  successCount,
+  failedCount,
+  skippedCount,
+  platformStatus,
+  timingSummary,
+  printMode = false,
+}: StatsPanelProps) {
   const [open, setOpen] = useState(false);
 
   const stats = useMemo(() => {
     let total = 0;
-    let success = 0;
-    const platformStats: Record<string, { total: number; success: number }> = {};
+    const platformStats: Record<string, { total: number; success: number; skipped: number; status?: FetchPlatformStatusValue; totalMs?: number }> = {};
 
     fetchResults.forEach((item) => {
       item.platform_results?.forEach((pr) => {
         total++;
-        if (pr.success) success++;
         const p = pr.platform || 'unknown';
-        if (!platformStats[p]) platformStats[p] = { total: 0, success: 0 };
+        if (!platformStats[p]) {
+          platformStats[p] = { total: 0, success: 0, skipped: 0 };
+        }
         platformStats[p].total++;
-        if (pr.success) platformStats[p].success++;
+        const status = normalizeFetchStatus(pr.status ?? (pr.success ? 'success' : 'failed'));
+        if (status === 'success') platformStats[p].success++;
+        if (status === 'skipped') platformStats[p].skipped++;
       });
+    });
+
+    platformStatus?.platforms?.forEach((summary) => {
+      const platform = summary.platform;
+      const existing = platformStats[platform] || { total: 0, success: 0, skipped: 0 };
+      platformStats[platform] = {
+        ...existing,
+        total: summary.questions_total ?? existing.total,
+        success: summary.questions_completed ?? existing.success,
+        status: normalizeFetchStatus(summary.status),
+        totalMs: typeof summary.timing?.total_ms === 'number' ? summary.timing.total_ms : existing.totalMs,
+      };
+    });
+
+    Object.entries(timingSummary?.platforms || {}).forEach(([platform, timing]) => {
+      const existing = platformStats[platform] || { total: 0, success: 0, skipped: 0 };
+      platformStats[platform] = {
+        ...existing,
+        totalMs: typeof timing.total_ms === 'number' ? timing.total_ms : existing.totalMs,
+      };
     });
 
     return {
       total,
-      success,
-      failed: total - success,
-      successRate: total > 0 ? Math.round((success / total) * 100) : 0,
+      success: successCount,
+      failed: failedCount,
+      skipped: skippedCount,
+      successRate: total > 0 ? Math.round((successCount / total) * 100) : 0,
       platformStats,
     };
-  }, [fetchResults]);
+  }, [failedCount, fetchResults, platformStatus?.platforms, skippedCount, successCount, timingSummary?.platforms]);
 
   if (printMode) {
     return (
@@ -700,8 +829,8 @@ function StatsPanel({ fetchResults, platforms, printMode = false }: StatsPanelPr
             {[
               { label: '总抓取', value: stats.total, color: 'var(--status-info)' },
               { label: '成功', value: stats.success, color: 'var(--status-success)' },
+              { label: '已跳过', value: stats.skipped, color: 'var(--text-muted)' },
               { label: '失败', value: stats.failed, color: 'var(--status-error)' },
-              { label: '成功率', value: `${stats.successRate}%`, color: 'var(--text-primary)' },
             ].map(({ label, value, color }) => (
               <div key={label}>
                 <ReportMetricCard
@@ -748,7 +877,8 @@ function StatsPanel({ fetchResults, platforms, printMode = false }: StatsPanelPr
                         {ps.success}/{ps.total} 成功
                       </div>
                       <div className="text-[12px] text-[var(--text-tertiary)]">
-                        {rate}% 成功率
+                        {ps.skipped > 0 ? `已跳过 ${ps.skipped} · ` : ''}{rate}% 成功率
+                        {typeof ps.totalMs === 'number' ? ` · ${(ps.totalMs / 1000).toFixed(1)}s` : ''}
                       </div>
                     </div>
                   );
@@ -838,8 +968,8 @@ function StatsPanel({ fetchResults, platforms, printMode = false }: StatsPanelPr
             {[
               { label: '总抓取', value: stats.total, color: 'var(--status-info)' },
               { label: '成功', value: stats.success, color: 'var(--status-success)' },
+              { label: '已跳过', value: stats.skipped, color: 'var(--text-muted)' },
               { label: '失败', value: stats.failed, color: 'var(--status-error)' },
-              { label: '成功率', value: `${stats.successRate}%`, color: 'var(--text-primary)' },
             ].map(({ label, value, color }) => (
               <div key={label}>
                 <ReportMetricCard
@@ -887,7 +1017,8 @@ function StatsPanel({ fetchResults, platforms, printMode = false }: StatsPanelPr
                         {ps.success}/{ps.total} 成功
                       </div>
                       <div className="text-[12px] text-[var(--text-tertiary)]">
-                        {rate}% 成功率
+                        {ps.skipped > 0 ? `已跳过 ${ps.skipped} · ` : ''}{rate}% 成功率
+                        {typeof ps.totalMs === 'number' ? ` · ${(ps.totalMs / 1000).toFixed(1)}s` : ''}
                       </div>
                     </div>
                   );
@@ -906,24 +1037,32 @@ function StatsPanel({ fetchResults, platforms, printMode = false }: StatsPanelPr
 // ---------------------------------------------------------------------------
 
 export function FetchResultsContent({ content, printMode = false }: FetchResultsContentProps) {
-  const { fetchResults } = content.data;
+  const view = useMemo(() => buildFetchExportViewModel(content), [content]);
+  const fetchResults = view.items;
 
   // All unique platforms in a stable display order
   const platforms = useMemo<string[]>(() => {
-    const ORDER = ['doubao', 'hunyuan', 'kimi', 'deepseek'];
     const seen = new Set<string>();
+    view.platformStatus?.platforms?.forEach((summary) => {
+      seen.add(summary.platform);
+    });
+    Object.keys(view.platformStatus?.platform_statuses || {}).forEach((platform) => {
+      seen.add(platform);
+    });
     fetchResults?.forEach((item) => {
       item.platform_results?.forEach((pr) => {
         if (pr.platform) seen.add(pr.platform);
       });
     });
     // Return known platforms in preferred order first, then any unknowns
-    const ordered = ORDER.filter((p) => seen.has(p));
+    const ordered: string[] = [...PLATFORM_ORDER.filter((p) => seen.has(p))];
     seen.forEach((p) => {
-      if (!ordered.includes(p)) ordered.push(p);
+      if (!ordered.includes(p)) {
+        ordered.push(p);
+      }
     });
     return ordered;
-  }, [fetchResults]);
+  }, [fetchResults, view.platformStatus?.platform_statuses, view.platformStatus?.platforms]);
 
   // Empty state
   if (!fetchResults || fetchResults.length === 0) {
@@ -940,17 +1079,29 @@ export function FetchResultsContent({ content, printMode = false }: FetchResults
     <ReportPage>
       <ReportHero
         eyebrow="抓取结果"
-        title={content.title || 'AI答案抓取结果'}
+        title={content.title || view.title || 'AI答案抓取结果'}
         meta={
           <>
             <span>共 {fetchResults.length} 个问题</span>
             <span>覆盖 {platforms.length} 个平台</span>
+            {typeof view.timingSummary?.total_ms === 'number' && (
+              <span>总耗时 {(view.timingSummary.total_ms / 1000).toFixed(1)}s</span>
+            )}
           </>
         }
       />
 
       <ReportSection eyebrow="抓取概览">
-        <StatsPanel fetchResults={fetchResults} platforms={platforms} printMode={printMode} />
+        <StatsPanel
+          fetchResults={fetchResults}
+          platforms={platforms}
+          successCount={view.successCount}
+          failedCount={view.failedCount}
+          skippedCount={view.skippedCount}
+          platformStatus={view.platformStatus}
+          timingSummary={view.timingSummary}
+          printMode={printMode}
+        />
       </ReportSection>
 
       <ReportSection eyebrow="逐题查看" title="按问题查看各平台回答">

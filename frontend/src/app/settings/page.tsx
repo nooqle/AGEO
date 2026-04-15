@@ -30,7 +30,7 @@ import {
 } from '@/types/monitoring';
 
 const SETTINGS_STORAGE_KEY = 'specta-settings-v1';
-const MONITORING_PLATFORM_KEYS = ['doubao', 'hunyuan', 'kimi', 'deepseek'] as const;
+const MONITORING_PLATFORM_KEYS = ['doubao', 'yuanbao', 'kimi', 'deepseek'] as const;
 const DEFAULT_MONITORING_PLATFORMS = ['doubao', 'kimi'] as const;
 const PLATFORM_OPTIONS = MONITORING_PLATFORM_KEYS.map((platformKey) => [
   platformKey,

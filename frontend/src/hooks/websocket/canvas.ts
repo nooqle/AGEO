@@ -426,6 +426,16 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
       : Array.isArray(data.fetch_results)
       ? (data.fetch_results as CanvasContentDataMap['fetchResults']['fetchResults'])
       : undefined,
+    platformStatus: isRecord(data.platformStatus)
+      ? (data.platformStatus as CanvasContentDataMap['fetchResults']['platformStatus'])
+      : isRecord(data.platform_status)
+      ? (data.platform_status as CanvasContentDataMap['fetchResults']['platformStatus'])
+      : undefined,
+    timingSummary: isRecord(data.timingSummary)
+      ? (data.timingSummary as CanvasContentDataMap['fetchResults']['timingSummary'])
+      : isRecord(data.timing_summary)
+      ? (data.timing_summary as CanvasContentDataMap['fetchResults']['timingSummary'])
+      : undefined,
   } as CanvasContentDataMap[T];
 };
 

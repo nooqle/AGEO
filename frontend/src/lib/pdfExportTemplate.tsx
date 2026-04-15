@@ -455,6 +455,19 @@ function extractHostname(url: string) {
   }
 }
 
+function getFetchResultStatusLabel(result: {
+  status?: string;
+  success?: boolean;
+}) {
+  const status = typeof result.status === 'string' ? result.status.trim().toLowerCase() : '';
+  if (status === 'success' || (!status && result.success)) return '成功';
+  if (status === 'skipped') return '已跳过';
+  if (status === 'running') return '进行中';
+  if (status === 'pending') return '待处理';
+  if (status === 'takeover_required') return '待接管';
+  return '失败';
+}
+
 function DocumentFrame({
   descriptor,
   title,
@@ -759,10 +772,15 @@ function FetchPdfDocument({ content, descriptor }: { content: Extract<CanvasCont
           <div className="grid grid-2">
             {item.platform_results.map((result, resultIndex) => (
               <div key={`${result.platform}-${resultIndex}`} className="platform-card">
+                {(() => {
+                  const statusLabel = getFetchResultStatusLabel(result);
+                  const isSuccess = statusLabel === '成功';
+                  return (
+                    <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                   <div className="platform-name">{result.platform_name || result.platform}</div>
-                  <span className={result.success ? 'tag tag-good' : 'tag tag-risk'}>
-                    {result.success ? '成功' : '失败'}
+                  <span className={isSuccess ? 'tag tag-good' : statusLabel === '已跳过' ? 'tag' : 'tag tag-risk'}>
+                    {statusLabel}
                   </span>
                 </div>
                 <div className="list-meta" style={{ marginTop: 6 }}>
@@ -773,10 +791,20 @@ function FetchPdfDocument({ content, descriptor }: { content: Extract<CanvasCont
                     typeof result.answer?.has_brand_mention === 'boolean' ? (result.answer.has_brand_mention ? '提到品牌' : '未提到品牌') : undefined,
                   ]) || '--'}
                 </div>
-                {result.success ? (
+                {isSuccess ? (
                   <div className="answer">{result.answer?.content || '无答案内容'}</div>
                 ) : (
-                  <div className="answer">{result.error || '抓取失败'}</div>
+                  <div className="answer">
+                    {statusLabel === '已跳过'
+                      ? '该平台已跳过'
+                      : statusLabel === '进行中'
+                        ? '该平台仍在抓取中'
+                        : statusLabel === '待处理'
+                          ? '该平台尚未开始处理'
+                          : statusLabel === '待接管'
+                            ? '该平台等待人工接管'
+                            : result.error || '抓取失败'}
+                  </div>
                 )}
                 {result.citations && result.citations.length > 0 ? (
                   <div className="small-list">
@@ -793,6 +821,9 @@ function FetchPdfDocument({ content, descriptor }: { content: Extract<CanvasCont
                     ))}
                   </div>
                 ) : null}
+                    </>
+                  );
+                })()}
               </div>
             ))}
           </div>

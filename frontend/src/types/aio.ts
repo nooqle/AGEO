@@ -9,14 +9,6 @@ export type AioTakeoverState =
   | 'cancelled'
   | 'resume_failed';
 
-export type AioResumeGateResult =
-  | 'pass'
-  | 'fail_login_required'
-  | 'fail_captcha_required'
-  | 'fail_ui_not_ready'
-  | 'fail_state_corrupt'
-  | 'fail_unknown';
-
 export interface AioTakeoverAccessBundle {
   openPath?: string | null;
   canvasConfigPath: string;
@@ -45,7 +37,6 @@ export interface AioTakeoverRecord {
   issuedAt?: string | null;
   expiresAt?: string | null;
   lastHeartbeatAt?: string | null;
-  resumeGateResult?: string | null;
   targetUrl?: string | null;
   blockingUrl?: string | null;
   blockingFingerprint?: string | null;

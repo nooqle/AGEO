@@ -16,6 +16,7 @@ import { InputArea } from './InputArea';
 import { cn } from '@/lib/cn';
 import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
 import { DEFAULT_EXAMPLE_BRANDS, ExampleBrand } from '@/config/brands';
+import { normalizePublicPlatformId } from '@/config/platformLabel';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { DEFAULT_FOLLOWUPS } from '@/types/task';
@@ -63,10 +64,6 @@ const BROWSER_MESSAGE_KEYWORDS: Record<
   },
   yuanbao: {
     labels: ['元宝', 'Yuanbao'],
-    actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
-  },
-  hunyuan: {
-    labels: ['元宝', 'Hunyuan', 'Yuanbao'],
     actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
   },
 };
@@ -164,7 +161,7 @@ function buildCancelledTakeoverRecord(
   return {
     takeoverId: takeover.takeoverId,
     sessionId,
-    platform: state.platform,
+    platform: normalizePublicPlatformId(state.platform) || state.platform,
     mode: takeover.mode ?? STABLE_AIO_TAKEOVER_MODE,
     reason: state.actionHint || state.message,
     takeoverState: 'cancelled',
@@ -175,7 +172,6 @@ function buildCancelledTakeoverRecord(
     issuedAt: null,
     expiresAt: takeover.expiresAt ?? null,
     lastHeartbeatAt: null,
-    resumeGateResult: null,
     targetUrl: takeover.targetUrl ?? null,
     blockingUrl: takeover.blockingUrl ?? state.blockingUrl ?? null,
     blockingFingerprint:
@@ -860,7 +856,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         const next = await api.resolveAioTakeover(takeover.resolvePath, {
           frontendId: registration.frontendId,
           mode: STABLE_AIO_TAKEOVER_MODE,
-          resumeGateResult: 'pass',
           clientObservation: 'user_confirmed_done_from_chat',
         });
         upsertTakeoverRecord(next);
@@ -885,20 +880,11 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           toast.success('已收到完成确认，Agent 正在继续当前平台抓取。');
           return;
         }
-
-        const resumeFailureMessage =
-          next.resumeGateResult === 'fail_login_required'
-            ? '还没有检测到当前平台已登录完成，请完成登录后再点“我已完成”。'
-            : next.resumeGateResult === 'fail_captcha_required'
-              ? '还没有检测到当前平台的验证已完成，请先完成验证后再继续。'
-              : next.resumeGateResult === 'fail_ui_not_ready'
-                ? '当前页面还没恢复到可继续抓取的状态，请完成操作后再试。'
-                : '当前接管尚未完成，请稍后重试。';
         updateBrowserState(requestId, {
           state: state.state,
           requiresAction: true,
-          message: resumeFailureMessage,
-          actionHint: resumeFailureMessage,
+          message: '当前接管尚未完成，请稍后重试。',
+          actionHint: '当前接管尚未完成，请稍后重试。',
           takeover: buildBrowserTakeoverFromRecord(next),
           blockingUrl:
             next.blockingUrl ??
@@ -910,7 +896,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             state.blockingFingerprint,
           reasonCode: next.reasonCode ?? next.accessBundle.reasonCode ?? state.reasonCode,
         });
-        toast.error(resumeFailureMessage);
+        toast.error('当前接管尚未完成，请稍后重试。');
       } catch (error) {
         updateBrowserState(requestId, {
           state: state.state,
