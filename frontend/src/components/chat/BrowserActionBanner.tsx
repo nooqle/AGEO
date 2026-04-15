@@ -314,7 +314,7 @@ export function BrowserActionBanner({
                     color: '#fff',
                   }}
                 >
-                  {localSubmitting === 'completed' ? '已提交，Agent 继续中...' : '我已完成'}
+                  {localSubmitting === 'completed' ? '已提交，正在继续处理...' : '我已完成'}
                 </button>
                 <button
                   type="button"
