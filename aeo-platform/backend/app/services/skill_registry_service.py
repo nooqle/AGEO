@@ -95,7 +95,7 @@ BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
         display_name="后续分析",
         description=(
             "面向已有分析结果后的继续任务的公共 Skill。"
-            "适用于深入分析、历史对比、结论解释和风险提取等场景。"
+            "适用于深入分析、历次对比、结论解释和风险提取等场景。"
         ),
         executor_kind=SkillExecutorKind.BUILTIN,
         executor_ref="post_analysis_executor",
@@ -352,7 +352,7 @@ def _build_analysis_report_tool(
         "report_type": {
             "type": "string",
             "enum": ["baseline", "persona"],
-            "description": "报告类型：baseline=行业基线报告, persona=场景分析报告（默认）",
+            "description": "报告类型：baseline=品牌全景分析报告, persona=场景分析报告（默认）",
         },
     }
     return {

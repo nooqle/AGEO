@@ -103,7 +103,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             }
         )
 
-    step_message = "开始基线全景分析..." if is_baseline else "开始分析抓取数据..."
+    step_message = "开始品牌全景分析..." if is_baseline else "开始分析抓取数据..."
     await send_progress_event(
         session_id=session_id,
         step="data_analytics",
@@ -488,7 +488,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         from app.workflow.events import save_and_send_artifact
 
         report_output_type = "report_baseline" if is_baseline else "report"
-        report_title = "基线全景分析报告" if is_baseline else "AI 可见性分析报告"
+        report_title = "品牌全景分析报告" if is_baseline else "AI 可见性分析报告"
         report_category = "baseline" if is_baseline else "scenario"
         artifact_key = f"{session_id}_{report_output_type}"
         report_artifact_data = build_report_artifact_data(

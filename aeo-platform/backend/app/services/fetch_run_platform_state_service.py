@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fetch_run_platform_state import FetchRunPlatformState
@@ -30,6 +30,14 @@ class FetchRunPlatformStateService:
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def delete_for_session(self, session_id: UUID) -> int:
+        stmt = delete(FetchRunPlatformState).where(
+            FetchRunPlatformState.session_id == session_id
+        )
+        result = await self.db.execute(stmt)
+        await self.db.commit()
+        return result.rowcount or 0
 
     @staticmethod
     def canonicalize_platform(platform: Any) -> str:

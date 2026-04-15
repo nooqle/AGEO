@@ -72,7 +72,7 @@ const A5_FAILURE_PATTERNS = [
   /无法用于分析/,
   /重新抓取数据/,
   /检查抓取结果/,
-  /跳过基线分析/,
+  /跳过(?:基线分析|品牌全景分析)/,
 ];
 
 export function isSupersededA5FailureText(content: string | undefined): boolean {

@@ -17,7 +17,7 @@ const showcaseItems: Array<{
 }> = [
   {
     key: 'baseline',
-    title: '基线分析',
+    title: '品牌全景分析',
     description: '先看品牌在多平台回答中的提及、引用和主题覆盖。',
     icon: RiRadarLine,
   },
@@ -46,7 +46,7 @@ function BaselinePanel() {
   return (
     <div className="grid h-full gap-0 lg:grid-cols-[0.92fr_1.08fr]">
       <div className="border-b border-[#eceff4] px-8 py-8 lg:border-b-0 lg:border-r">
-        <div className="text-[18px] font-semibold text-[#111827]">基线分析，先看整体位置</div>
+        <div className="text-[18px] font-semibold text-[#111827]">品牌全景分析，先看整体位置</div>
         <p className="mt-4 max-w-[320px] text-[18px] leading-[1.9] text-[#5b6472]">
           先建立品牌在主流 AI 平台里的基线，确认提及率、引用分布和主题覆盖处在哪个位置。
         </p>

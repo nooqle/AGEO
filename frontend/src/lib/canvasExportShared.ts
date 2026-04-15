@@ -17,10 +17,10 @@ export type SupportedExportFormat = 'pdf' | 'md' | 'csv';
 
 export type SupportedDeliverable =
   | 'AI答案抓取'
-  | '基线全景分析'
+  | '品牌全景分析'
   | '用户场景细分分析'
   | '置信度报告'
-  | '历史知识导出';
+  | '过往资料表';
 
 export type ExportDescriptor = {
   brandName: string;
@@ -184,7 +184,7 @@ function inferBrandFromHeadline(headline?: string): string | null {
   }
 
   const normalized = headline.trim();
-  const keywordIndex = ['基线全景分析报告', 'AI 可见性分析报告', '置信度报告', '分析报告']
+  const keywordIndex = ['品牌全景分析报告', 'AI 可见性分析报告', '置信度报告', '分析报告']
     .map((keyword) => normalized.indexOf(keyword))
     .find((index) => typeof index === 'number' && index > 0);
 
@@ -210,7 +210,7 @@ export function getDeliverableName(content: CanvasContent): SupportedDeliverable
   }
 
   if (content.type === 'dataTable') {
-    return '历史知识导出';
+    return '过往资料表';
   }
 
   if (content.type !== 'report') {
@@ -222,7 +222,7 @@ export function getDeliverableName(content: CanvasContent): SupportedDeliverable
   }
 
   if (content.category === 'baseline') {
-    return '基线全景分析';
+    return '品牌全景分析';
   }
 
   return '用户场景细分分析';

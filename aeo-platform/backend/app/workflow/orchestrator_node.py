@@ -89,10 +89,10 @@ _VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
     "post_analysis_skill": "后续分析",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
-    "knowledge_lookup": "历史知识检索",
-    "knowledge_aggregate": "历史知识聚合",
-    "knowledge_compare": "历史知识对比",
-    "knowledge_export": "历史知识导出",
+    "knowledge_lookup": "过往资料检索",
+    "knowledge_aggregate": "过往资料整理",
+    "knowledge_compare": "过往资料对比",
+    "knowledge_export": "过往资料表",
     "ask_user": "用户确认",
     "fast": "快速采集",
     "full": "完整采集",
@@ -193,7 +193,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                         "baseline_dynamic",
                         "uploaded_list",
                     ],
-                    "description": "生成模式：brand_panorama=品牌全景, persona_focused=画像聚焦, baseline_dynamic=行业基线全景, uploaded_list=导入用户上传的问题列表",
+                    "description": "生成模式：brand_panorama=品牌全景, persona_focused=画像聚焦, baseline_dynamic=品牌全景问题, uploaded_list=导入用户上传的问题列表",
                 },
                 "persona_id": {
                     "type": "string",
@@ -256,7 +256,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 "report_type": {
                     "type": "string",
                     "enum": ["baseline", "persona"],
-                    "description": "报告类型：baseline=行业基线报告, persona=场景分析报告（默认）",
+                    "description": "报告类型：baseline=品牌全景分析报告, persona=场景分析报告（默认）",
                 },
             },
         },
@@ -264,10 +264,10 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
     {
         "name": "knowledge_lookup",
         "description": (
-            "查询同一品牌跨历史分析中已经沉淀的事实材料。"
-            "适用于品牌信息、竞品信息、历史抓取答案、历史引用来源、"
+            "查询同一品牌过往分析中已经沉淀的事实资料。"
+            "适用于品牌信息、竞品信息、过往抓取回答、过往引用来源、"
             "以及基于已有材料的问答、分析和导出任务。"
-            "这是低成本优先路径：当用户问题明显围绕历史材料展开时，应优先尝试此工具。"
+            "这是低成本优先路径：当用户问题明显围绕过往资料展开时，应优先尝试此工具。"
             "如果返回 miss 或证据不足，再考虑 brand_analysis、answer_fetch 或 ask_user。"
         ),
         "parameters": {
@@ -275,7 +275,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "要查询的历史事实、分析主题或导出主题",
+                    "description": "要查询的过往事实、分析主题或导出主题",
                 },
                 "source_types": {
                     "type": "array",
@@ -313,9 +313,9 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
     {
         "name": "knowledge_aggregate",
         "description": (
-            "按时间、平台、竞品、问题或域名聚合历史事实材料。"
-            "适用于导出、汇总、盘点和基于历史材料的结构化分析。"
-            "当用户要求导出某一时间范围内的信息、统计某类材料、或按某个维度做历史汇总时优先使用。"
+            "按时间、平台、竞品、问题或域名聚合过往事实资料。"
+            "适用于导出、汇总、盘点和基于过往资料的结构化分析。"
+            "当用户要求导出某一时间范围内的信息、统计某类资料、或按某个维度做过往汇总时优先使用。"
         ),
         "parameters": {
             "type": "object",
@@ -379,8 +379,8 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
     {
         "name": "knowledge_compare",
         "description": (
-            "对同一品牌最近两次历史材料窗口做对比。"
-            "适用于跨历史分析、变化解释、平台差异和对比汇总。"
+            "对同一品牌最近两次过往资料窗口做对比。"
+            "适用于历次分析对比、变化解释、平台差异和对比汇总。"
             "当用户要求比较最近两轮分析、看哪些平台/竞品/域名变化最大时优先使用。"
         ),
         "parameters": {
@@ -420,8 +420,8 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
     {
         "name": "knowledge_export",
         "description": (
-            "把历史知识材料整理成可交付的数据表 artifact。"
-            "适用于用户明确要求导出、下载、生成文件、拉清单或交付历史材料。"
+            "把过往资料整理成可交付的数据表 artifact。"
+            "适用于用户明确要求导出、下载、生成文件、拉清单或交付过往资料。"
             "执行后会生成一个可在前端继续导出为 md/pdf 的数据表。"
         ),
         "parameters": {
@@ -726,7 +726,7 @@ def _build_recent_knowledge_context(state: AgentState) -> str:
         matches = lookup_result.get("matches") or []
         lines = [_format_knowledge_lookup_match(match) for match in matches[:3]]
         if lines:
-            return "\n最近一次历史检索结果:\n" + "\n".join(lines)
+            return "\n最近一次过往资料检索结果:\n" + "\n".join(lines)
 
     aggregate_result = state.get("knowledge_aggregate_result") or {}
     if aggregate_result.get("status") == "hit":
@@ -734,7 +734,7 @@ def _build_recent_knowledge_context(state: AgentState) -> str:
         lines = [_format_knowledge_group(group) for group in groups[:4]]
         if lines:
             return (
-                "\n最近一次历史聚合结果"
+                "\n最近一次过往资料整理结果"
                 f"（group_by={aggregate_result.get('group_by', 'source_type')}）:\n"
                 + "\n".join(lines)
             )
@@ -742,8 +742,8 @@ def _build_recent_knowledge_context(state: AgentState) -> str:
     export_result = state.get("knowledge_export_result") or {}
     if export_result.get("status") == "hit":
         return (
-            "\n最近一次历史导出结果:\n"
-            f"- 标题={export_result.get('title', '历史知识导出')}；"
+            "\n最近一次资料表结果:\n"
+            f"- 标题={export_result.get('title', '过往资料表')}；"
             f"记录数={export_result.get('item_count', 0)}；"
             f"artifact={export_result.get('artifact_id', 'unknown')}"
         )
@@ -754,7 +754,7 @@ def _build_recent_knowledge_context(state: AgentState) -> str:
         lines = [_format_knowledge_comparison(item) for item in comparisons[:4]]
         if lines:
             return (
-                "\n最近一次历史对比结果"
+                "\n最近一次过往资料对比结果"
                 f"（{compare_result.get('previous_label', 'previous')} -> "
                 f"{compare_result.get('latest_label', 'latest')}）:\n"
                 + "\n".join(lines)
@@ -882,12 +882,20 @@ def _has_terminal_knowledge_result(state: AgentState) -> bool:
     return False
 
 
+def _session_was_recalled(state: AgentState | None) -> bool:
+    return bool((state or {}).get("session_recalled"))
+
+
 def _build_knowledge_planning_hint(state: AgentState) -> str:
     """Provide a lightweight planning hint without hard-forcing tool choice."""
     latest_user_message = _get_latest_user_message(state)
     if not latest_user_message:
         return ""
-    if _is_current_report_follow_up(state) or _has_terminal_knowledge_result(state):
+    if (
+        _session_was_recalled(state)
+        or _is_current_report_follow_up(state)
+        or _has_terminal_knowledge_result(state)
+    ):
         return ""
 
     manifest = state.get("knowledge_manifest") or {}
@@ -947,25 +955,25 @@ def _build_knowledge_planning_hint(state: AgentState) -> str:
         keyword in text for keyword in compare_keywords
     ):
         return (
-            "\n当前用户请求明显属于“历史对比/变化解释”任务。"
+            "\n当前用户请求明显属于“过往资料对比/变化解释”任务。"
             "优先考虑 knowledge_compare；若结果不足，再决定是否补抓。"
         )
 
     if any(keyword in text for keyword in export_keywords):
         return (
-            "\n当前用户请求明显属于“历史材料导出/交付”任务。"
+            "\n当前用户请求明显属于“过往资料导出/交付”任务。"
             "优先考虑 knowledge_export；必要时再用 knowledge_lookup 或 knowledge_aggregate 补证据。"
         )
 
     if any(keyword in text for keyword in aggregate_keywords):
         return (
-            "\n当前用户请求明显属于“历史汇总/导出/盘点”任务。"
+            "\n当前用户请求明显属于“过往资料汇总/导出/盘点”任务。"
             "优先考虑 knowledge_aggregate；必要时再结合 knowledge_lookup 补证据。"
         )
 
     if any(keyword in text for keyword in lookup_keywords):
         return (
-            "\n当前用户请求明显围绕“历史事实/答案/引用”展开。"
+            "\n当前用户请求明显围绕“过往事实/回答/引用”展开。"
             "优先考虑 knowledge_lookup；如果命中不足，再决定是否调用 brand_analysis 或 answer_fetch。"
         )
 
@@ -1044,6 +1052,8 @@ def _get_contextual_hidden_tool_names(state: AgentState | None) -> set[str]:
         return set()
 
     hidden: set[str] = set()
+    if _session_was_recalled(state):
+        hidden.update(_KNOWLEDGE_TOOL_NAMES)
     preferred_followup_tool = _infer_current_session_followup_tool(state)
     if preferred_followup_tool is not None:
         hidden.update(_CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES)
@@ -1059,7 +1069,7 @@ def _infer_knowledge_fallback_tool(
     latest_user_message = _get_latest_user_message(state)
     if not latest_user_message:
         return None
-    if _is_current_report_follow_up(state):
+    if _session_was_recalled(state) or _is_current_report_follow_up(state):
         return None
     if _has_terminal_knowledge_result(state):
         return None
@@ -1302,11 +1312,11 @@ def _build_context_summary(state: AgentState) -> str:
 
     if state.get("baseline_metrics"):
         bm = state["baseline_metrics"]
-        parts.append(f"- 基线提及率: {bm.get('mention_rate', 'N/A')}")
-        parts.append("- 基线报告: 已完成")
+        parts.append(f"- 品牌全景提及率: {bm.get('mention_rate', 'N/A')}")
+        parts.append("- 品牌全景分析: 已完成")
 
     if state.get("entity_id"):
-        parts.append(f"- 品牌实体ID: {state['entity_id']} (有历史快照)")
+        parts.append(f"- 品牌实体ID: {state['entity_id']} (已有过往快照)")
         available_tools.append("create_monitoring_schedule (可创建定时监测计划)")
     else:
         unavailable_tools.append("create_monitoring_schedule (尚无品牌实体)")
@@ -1319,35 +1329,35 @@ def _build_context_summary(state: AgentState) -> str:
             for key, label in [
                 ("brand_profile", "品牌档案"),
                 ("competitor_profile", "竞品档案"),
-                ("fetch_answer", "历史答案"),
-                ("fetch_citation", "历史引用"),
+                ("fetch_answer", "过往回答"),
+                ("fetch_citation", "过往引用"),
             ]
             if available_sources.get(key)
         ]
         if available_labels:
             if "knowledge_lookup" not in hidden_tool_names:
-                available_tools.append("knowledge_lookup (可查询跨历史事实材料)")
+                available_tools.append("knowledge_lookup (可查询过往事实资料)")
             if "knowledge_aggregate" not in hidden_tool_names:
-                available_tools.append("knowledge_aggregate (可汇总历史材料)")
+                available_tools.append("knowledge_aggregate (可汇总过往资料)")
             if "knowledge_export" not in hidden_tool_names:
-                available_tools.append("knowledge_export (可导出历史材料数据表)")
+                available_tools.append("knowledge_export (可导出过往资料表)")
             if "knowledge_compare" not in hidden_tool_names:
                 if int(history_info.get("analysis_window_count") or 0) >= 2:
-                    available_tools.append("knowledge_compare (可对比最近历史变化)")
+                    available_tools.append("knowledge_compare (可对比最近变化)")
                 else:
-                    unavailable_tools.append("knowledge_compare (历史轮次不足，暂不可对比)")
+                    unavailable_tools.append("knowledge_compare (过往轮次不足，暂不可对比)")
         else:
             if "knowledge_lookup" not in hidden_tool_names:
-                unavailable_tools.append("knowledge_lookup (当前尚无历史材料可复用)")
+                unavailable_tools.append("knowledge_lookup (当前尚无过往资料可复用)")
             if "knowledge_aggregate" not in hidden_tool_names:
-                unavailable_tools.append("knowledge_aggregate (当前尚无历史材料可汇总)")
+                unavailable_tools.append("knowledge_aggregate (当前尚无过往资料可汇总)")
             if "knowledge_export" not in hidden_tool_names:
-                unavailable_tools.append("knowledge_export (当前尚无历史材料可导出)")
+                unavailable_tools.append("knowledge_export (当前尚无过往资料可导出)")
             if "knowledge_compare" not in hidden_tool_names:
-                unavailable_tools.append("knowledge_compare (当前尚无历史材料可对比)")
+                unavailable_tools.append("knowledge_compare (当前尚无过往资料可对比)")
 
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
-        parts.append("- 当前问题属于本次结果追问，历史知识工具已从可用工具面隐藏")
+        parts.append("- 当前问题属于本次结果追问，过往资料工具已从可用工具面隐藏")
 
     if not parts:
         summary = "\n当前会话数据: 尚无分析数据。"
@@ -1378,7 +1388,7 @@ DIRECTIVE_A1_HAS_BASELINE = (
     "然后在消息末尾用自然语言列出选项：\n"
     "1. 做一次引用内容置信度评估（可选）— 检查当前引用来源的可信度、结构化质量与可核查性\n"
     "2. 生成用户画像，进入场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现\n"
-    "3. 重新运行基线分析 — 使用最新数据重新评估品牌在各AI平台上的基线表现\n"
+    "3. 重新运行品牌全景分析 — 使用最新数据重新评估品牌在各AI平台上的整体表现\n"
     "4. 直接提问 — 针对已有数据自由提问\n"
     "您可以回复序号，或者直接说您的想法。\n"
     "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
@@ -1386,15 +1396,15 @@ DIRECTIVE_A1_HAS_BASELINE = (
 )
 
 DIRECTIVE_A1_NO_BASELINE = (
-    "【强制操作】当前仅完成了品牌分析，还没有建立行业基线。\\n"
-    "你必须先向用户说明：“基线分析会用行业通用问题建立品牌在各个AI平台的全景基线，后续画像和场景分析都会基于它进行对比。”\\n"
-    "1) 基线分析会采集行业通用问题的AI回答，建立品牌全局基线\\n"
-    "2) 基线分析完成后，再生成用户画像可以做场景对比\\n"
+    "【强制操作】当前仅完成了品牌分析，还没有建立品牌全景分析结果。\\n"
+    "你必须先向用户说明：“品牌全景分析会用行业通用问题建立品牌在各个AI平台的整体认知参考，后续画像和场景分析都会基于它进行对比。”\\n"
+    "1) 品牌全景分析会采集行业通用问题的AI回答，建立品牌整体认知\\n"
+    "2) 品牌全景分析完成后，再生成用户画像可以做场景对比\\n"
     "3) 完整采集模式下需要约10-20分钟\\n"
     "请向用户给出两个选择：\\n"
-    "1. 先运行基线分析\\n"
+    "1. 先运行品牌全景分析\\n"
     "2. 暂不\\n"
-    "然后调用 ask_user(message='是否先运行基线分析？')，不要传 options 参数。不要跳过这一确认步骤。"
+    "然后调用 ask_user(message='是否先运行品牌全景分析？')，不要传 options 参数。不要跳过这一确认步骤。"
 )
 
 DIRECTIVE_A2_ASK_PATH = (
@@ -1424,11 +1434,11 @@ DIRECTIVE_A3_NEXT_FETCH = (
 )
 
 DIRECTIVE_A5_BASELINE_NEXT = (
-    "【强制操作】你必须先用 3-5 句话向用户汇报基线报告结果，至少包含 1 个具体指标或风险发现。"
+    "【强制操作】你必须先用 3-5 句话向用户汇报品牌全景分析结果，至少包含 1 个具体指标或风险发现。"
     "然后在消息末尾用自然语言列出以下编号选项，每个选项都要说明作用：\n"
     "1. 做一次引用内容置信度评估（可选）— 检查当前报告中引用来源的可信度、结构化质量和可核查性\n"
-    "2. 生成用户画像，进入场景细化分析（推荐）— 在基线之上继续看不同人群场景中的品牌表现\n"
-    "3. 重新运行基线分析 — 用新的问题或新的采集结果重建当前基线\n"
+    "2. 生成用户画像，进入场景细化分析（推荐）— 在品牌全景分析之上继续看不同人群场景中的品牌表现\n"
+    "3. 重新运行品牌全景分析 — 用新的问题或新的采集结果重建当前整体分析\n"
     "4. 直接提问 — 基于当前报告继续追问任何具体问题\n"
     "您可以回复序号，或者直接说您的想法。\n"
     "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
@@ -1459,7 +1469,7 @@ def _build_public_skill_index(state: AgentState) -> str:
     lines: list[str] = []
     note_lines: list[str] = []
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
-        note_lines.append("- 当前问题属于本次结果追问，历史知识工具已从本轮公共技能面隐藏。")
+        note_lines.append("- 当前问题属于本次结果追问，过往资料工具已从本轮公共技能面隐藏。")
     if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
         note_lines.append("- 当前回合已收敛到 drill_down_analysis，不再暴露泛化的后续分析入口。")
     if note_lines:
@@ -1488,7 +1498,7 @@ def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
     lines: list[str] = []
 
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
-        lines.append("- 当前问题属于本次结果追问，历史知识工具已从当前回合工具面隐藏。")
+        lines.append("- 当前问题属于本次结果追问，过往资料工具已从当前回合工具面隐藏。")
 
     if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
         focus_args = preferred_followup_tool[1] or {}
@@ -1533,6 +1543,8 @@ def _should_render_history_availability(
     state: AgentState,
     hidden_tool_names: set[str],
 ) -> bool:
+    if _session_was_recalled(state):
+        return False
     if _KNOWLEDGE_TOOL_NAMES.issubset(hidden_tool_names):
         return False
     manifest = state.get("knowledge_manifest") or {}
@@ -1646,21 +1658,21 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 """
                 A1 完成后的流程（最高优先级）：
                 - A1 完成后，必须先汇报结果并 ask_user，绝不直接调用 persona_generation 或 question_simulation。
-                - 尚无基线分析时，必须按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline") 执行。
-                - 已有基线分析时，用户可进入引用置信度评估、场景细化、重跑基线或直接提问。
+                - 尚无品牌全景分析时，必须按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline") 执行。
+                - 已有品牌全景分析时，用户可进入引用置信度评估、场景细化、重跑品牌全景分析或直接提问。
 
                 场景细化流程：
                 - 用户选择场景细化时：persona_generation -> 用户选择画像 -> question_simulation(mode="persona_focused") -> answer_fetch -> analysis_report_skill(report_type="persona")。
                 - 如果用户明确要求“以某个身份 / 职业 / 角色生成问题”，仍调用 question_simulation，并通过 identity 传入该身份；若用户未明确要求，默认消费者视角，不要擅自加身份。
 
                 其他固定路径：
-                - 用户说“重跑基线”时：question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline")。
+                - 用户说“重跑品牌全景分析”时：question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline")。
                 - 用户明确要检查引用可信度时：confidence_analysis_skill。
-                - 用户基于已有结果要求深入分析、历史对比、解释原因、提炼风险时：post_analysis_skill。
+                - 用户基于已有结果要求深入分析、历次对比、解释原因、提炼风险时：post_analysis_skill。
                 - 用户要求重新抓取、重跑部分平台、全量重跑、或从 API 改为浏览器模式时：统一走 answer_fetch，不要再发明 refetch 类能力名。
                 - 用户选择“直接提问”时，禁止再次 ask_user 给子选项；直接自然语言引导用户在输入框中继续追问。
-                - 只有用户明确在问跨历史材料、历史月份、历史导出、最近两次变化时，才优先使用 knowledge_*。
-                - 围绕历史品牌/竞品/答案/引用时，优先 knowledge_lookup；围绕历史汇总时，优先 knowledge_aggregate；明确导出时，优先 knowledge_export；比较最近两轮变化时，优先 knowledge_compare。
+                - 只有用户明确在问过往资料、历史月份、导出记录、最近两次变化时，才优先使用 knowledge_*。
+                - 围绕过往品牌/竞品/回答/引用时，优先 knowledge_lookup；围绕过往汇总时，优先 knowledge_aggregate；明确导出时，优先 knowledge_export；比较最近两轮变化时，优先 knowledge_compare。
                 """
             ).strip(),
         ),
@@ -1699,7 +1711,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 """
                 绝对禁止：
                 - 你没有实时数据，不要自行编造品牌信息、竞品数据或用户画像。
-                - 当用户首次提供品牌名称且系统没有足够历史事实时，必须调用 brand_analysis 获取真实数据。
+                - 当用户首次提供品牌名称且系统没有足够过往事实时，必须调用 brand_analysis 获取真实数据。
                 - 不要在回复中直接给出“品牌分析结果”，所有分析数据必须通过工具获取。
                 - 不要编造具体耗时；如需提及耗时，只使用工具描述中的时间范围。
 
@@ -1785,7 +1797,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
             ),
             _section(
                 key="history_availability",
-                title="历史材料可用性",
+                title="过往资料可用性",
                 group="runtime_context_sections",
                 priority=8,
                 drop_policy="drop",
@@ -1807,7 +1819,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
         for section in (
             _section(
                 key="knowledge_planning_hint",
-                title="历史规划提示",
+                title="过往资料规划提示",
                 group="runtime_reminder_sections",
                 priority=1,
                 drop_policy="drop",
@@ -1869,7 +1881,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             if not personas:
                 return (
                     "画像生成暂未拿到有效结果。"
-                    "更合适的下一步是先补充品牌信息，或先运行基线分析后再重新生成画像。"
+                    "更合适的下一步是先补充品牌信息，或先运行品牌全景分析后再重新生成画像。"
                 )
             persona_names = [
                 p.get("persona_name", p.get("name", f"画像{i+1}"))
@@ -1882,7 +1894,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             )
         return (
             "画像生成暂未成功。"
-            "请告诉用户可以先补充品牌信息、先运行基线分析，或稍后重新尝试画像生成。"
+            "请告诉用户可以先补充品牌信息、先运行品牌全景分析，或稍后重新尝试画像生成。"
         )
 
     if tool_name == "table_intake_skill":
@@ -1943,7 +1955,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 else "persona"
             )
             report_label = (
-                "基线分析报告" if report_type == "baseline" else "场景分析报告"
+                "品牌全景分析报告" if report_type == "baseline" else "场景分析报告"
             )
             return (
                 f"AI答案抓取完成。共抓取 {len(fr)} 组问题结果。"
@@ -1990,7 +2002,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             high_risk_count = int(
                 summary_metrics.get("high_risk_scenario_count", 0) or 0
             )
-            mode_label = "基线" if current_mode == "baseline" else "场景"
+            mode_label = "品牌全景分析" if current_mode == "baseline" else "场景"
             summary = (
                 f"{mode_label}数据分析完成。"
                 f"品牌提及率：{mention_rate:.1f}％，"
@@ -2014,7 +2026,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 _format_knowledge_lookup_match(match) for match in matches[:3]
             )
             return (
-                f"历史知识检索完成，共命中 {len(matches)} 条材料。"
+                f"过往资料检索完成，共命中 {len(matches)} 条记录。"
                 f"最高相关来源类型：{top.get('source_type', 'unknown')}。"
                 "\n可直接使用的证据如下：\n"
                 f"{evidence_lines}\n"
@@ -2022,7 +2034,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 "只有当证据仍然不足时，再决定是否调用 brand_analysis / answer_fetch。"
             )
         return (
-            "历史知识检索未命中足够材料。"
+            "过往资料检索未命中足够记录。"
             "如果用户的问题仍需真实数据，请根据问题类型决定是否调用 brand_analysis 或 answer_fetch；"
             "如果该动作链路较长或模式不明确，再使用 ask_user。"
         )
@@ -2036,7 +2048,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 _format_knowledge_group(group) for group in groups[:5]
             )
             return (
-                f"历史知识聚合完成，共统计 {result.get('total_records', 0)} 条材料，"
+                f"过往资料整理完成，共统计 {result.get('total_records', 0)} 条记录，"
                 f"得到 {len(groups)} 个分组。"
                 f"当前最大分组是 {top.get('group_key', 'unknown')}，数量 {top.get('count', 0)}。"
                 "\n关键分组如下：\n"
@@ -2044,7 +2056,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 "请基于这些分组继续汇总、分析、导出或生成交付结果。"
             )
         return (
-            "历史知识聚合未得到有效分组。"
+            "过往资料整理未得到有效分组。"
             "如果用户仍需要结果，请判断是缩小筛选条件、改用 knowledge_lookup，"
             "还是通过 brand_analysis / answer_fetch 先补齐缺失材料。"
         )
@@ -2053,13 +2065,13 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         result = state.get("knowledge_export_result") or {}
         if result.get("status") == "hit":
             return (
-                f"历史知识导出已完成，共整理 {result.get('item_count', 0)} 条记录。"
-                f"交付物标题：{result.get('title', '历史知识导出')}。"
+                f"过往资料表已生成，共整理 {result.get('item_count', 0)} 条记录。"
+                f"交付物标题：{result.get('title', '过往资料表')}。"
                 "数据表 artifact 已经生成，请向用户说明已可查看并继续导出为 md/pdf，"
                 "同时用 1-2 句话概括本次导出的范围。"
             )
         return (
-            "历史知识导出未生成有效结果。"
+            "过往资料表未生成有效结果。"
             "请判断是缩小导出范围、先用 knowledge_lookup / knowledge_aggregate 查看材料，"
             "还是先通过 brand_analysis / answer_fetch 补齐缺失材料。"
         )
@@ -2073,7 +2085,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 _format_knowledge_comparison(item) for item in comparisons[:5]
             )
             return (
-                f"历史知识对比完成。"
+                f"过往资料对比完成。"
                 f"已比较 {result.get('latest_label', 'latest')} 与 {result.get('previous_label', 'previous')}。"
                 f"变化最大项是 {top.get('group_key', 'unknown')}，增量 {top.get('delta', 0)}。"
                 "\n关键变化如下：\n"
@@ -2081,8 +2093,8 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 "请基于这些变化继续解释趋势、给出分析结论或建议下一步动作。"
             )
         return (
-            "历史知识对比未得到有效变化结果。"
-            "如果是因为历史轮次不足，请直接向用户说明；"
+            "过往资料对比未得到有效变化结果。"
+            "如果是因为过往轮次不足，请直接向用户说明；"
             "如果是因为材料不足，请考虑先补齐 brand_analysis 或 answer_fetch。"
         )
 
@@ -2181,12 +2193,12 @@ def _build_ask_user_fallback_reply(
             return (
                 f"{brand_name}的品牌分析已完成，我已经整理出品牌画像和竞品格局。"
                 "接下来您可以先做一次引用内容置信度评估，"
-                "也可以继续生成用户画像做场景细化分析、重新运行基线分析，"
+                "也可以继续生成用户画像做场景细化分析、重新运行品牌全景分析，"
                 "或者直接基于已有结果提问。"
             )
         return (
-            f"{brand_name}的品牌分析已完成，但当前还没有行业基线。"
-            "建议先运行基线分析，建立各 AI 平台对该品牌的全景认知基线，"
+            f"{brand_name}的品牌分析已完成，但当前还没有品牌全景分析结果。"
+            "建议先运行品牌全景分析，建立各 AI 平台对该品牌的整体认知参考，"
             "后续再做画像和场景分析会更有对照价值。"
         )
 
@@ -2624,10 +2636,10 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "table_intake_skill": "表格导入理解",
     "analysis_report_skill": "完整分析报告",
     "data_analytics": "数据分析报告",
-    "knowledge_lookup": "历史知识检索",
-    "knowledge_aggregate": "历史知识聚合",
-    "knowledge_compare": "历史知识对比",
-    "knowledge_export": "历史知识导出",
+    "knowledge_lookup": "过往资料检索",
+    "knowledge_aggregate": "过往资料整理",
+    "knowledge_compare": "过往资料对比",
+    "knowledge_export": "过往资料表",
     "confidence_signal_skill": "引用置信度评估",
     "citation_confidence_analysis": "引用内容置信度评估",
     "confidence_analysis_skill": "引用置信度评估",
@@ -2832,12 +2844,15 @@ async def _route_brand_seed_without_llm(
         seeded_state = {**seeded_state, "knowledge_manifest": manifest}
 
     available_sources = ((manifest or {}).get("available_sources") or {})
-    has_history_materials = any(bool(value) for value in available_sources.values())
+    has_history_materials = (
+        not _session_was_recalled(seeded_state)
+        and any(bool(value) for value in available_sources.values())
+    )
 
     if has_history_materials:
         reply_text = (
-            f"我先查看历史里和「{brand_seed}」相关的材料，"
-            "如果已有品牌档案、竞品信息或历史抓取结果，就优先复用这些事实继续分析。"
+            f"我先查看过往资料里和「{brand_seed}」相关的记录，"
+            "如果已有品牌档案、竞品信息或过往抓取结果，就优先复用这些事实继续分析。"
         )
         tool_name = "knowledge_lookup"
         tool_args = {
@@ -3082,7 +3097,7 @@ async def orchestrator_node(state: AgentState) -> Command:
                 is_new_round=True,
             )
             await send_reply_event(session_id, "", is_complete=True)
-            await send_execution_complete(session_id, "历史知识导出完成")
+            await send_execution_complete(session_id, "过往资料表生成完成")
 
             return Command(
                 goto=END,

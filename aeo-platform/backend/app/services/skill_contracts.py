@@ -128,7 +128,7 @@ _CONTRACT_BLUEPRINTS: dict[str, dict[str, Any]] = {
         ),
     },
     "post_analysis_skill": {
-        "intent_scope": "在已有结果基础上做深入分析、历史对比、结论解释和风险提取。该技能只读取已有结果，不重新采集外部数据。",
+        "intent_scope": "在已有结果基础上做深入分析、历次对比、结论解释和风险提取。该技能只读取已有结果，不重新采集外部数据。",
         "required_inputs": ("fetch_results_or_metrics",),
         "allowed_tools": (
             "drill_down_analysis",

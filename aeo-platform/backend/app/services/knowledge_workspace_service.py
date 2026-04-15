@@ -196,8 +196,8 @@ def _source_type_label(source_type: str) -> str:
     return {
         "brand_profile": "品牌档案",
         "competitor_profile": "竞品档案",
-        "fetch_answer": "历史答案",
-        "fetch_citation": "历史引用",
+        "fetch_answer": "过往回答",
+        "fetch_citation": "过往引用",
     }.get(source_type, source_type)
 
 
@@ -880,10 +880,10 @@ class KnowledgeWorkspaceService:
 
         return {
             "status": "hit",
-            "title": f"{effective_brand} 历史知识导出",
+            "title": f"{effective_brand} 过往资料表",
             "brand_name": effective_brand,
             "description": "；".join(description_parts)
-            or "基于历史知识材料整理的数据表",
+            or "基于过往品牌资料整理的数据表",
             "columns": self._export_columns(),
             "rows": rows,
             "item_count": len(rows),
@@ -895,7 +895,7 @@ class KnowledgeWorkspaceService:
             "analysis_period": (
                 " 至 ".join(part for part in [start_date, end_date] if part)
                 if start_date or end_date
-                else "跨历史分析"
+                else "历次分析汇总"
             ),
             "summary_metrics": {
                 "导出条数": len(rows),
@@ -1283,7 +1283,7 @@ class KnowledgeWorkspaceService:
         sentiment_terms = "、".join(_sentiment_terms(sentiment, has_brand_mention))
         return _join_non_empty(
             [
-                "类型：历史答案",
+                "类型：过往回答",
                 "抓取结果",
                 f"品牌：{brand_name}",
                 f"平台：{platform}",
@@ -1311,7 +1311,7 @@ class KnowledgeWorkspaceService:
             {
                 "content": _join_non_empty(
                     [
-                        "类型：历史答案",
+                        "类型：过往回答",
                         "抓取结果",
                         f"品牌：{brand_name}",
                         f"平台：{platform}",
@@ -1339,7 +1339,7 @@ class KnowledgeWorkspaceService:
     ) -> str:
         return _join_non_empty(
             [
-                "类型：历史引用",
+                "类型：过往引用",
                 "引用来源",
                 "抓取结果",
                 f"品牌：{brand_name}",
@@ -1366,7 +1366,7 @@ class KnowledgeWorkspaceService:
             {
                 "content": _join_non_empty(
                     [
-                        "类型：历史引用",
+                        "类型：过往引用",
                         "引用来源",
                         "抓取结果",
                         f"平台：{platform}",

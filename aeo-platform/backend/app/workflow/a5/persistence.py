@@ -17,7 +17,7 @@ def build_report_artifact_data(
     mention_sentiment_analysis: dict[str, Any],
 ) -> dict[str, Any]:
     report_headline = (
-        f"{brand_name or '品牌'} 基线全景分析报告"
+        f"{brand_name or '品牌'} 品牌全景分析报告"
         if is_baseline
         else f"{brand_name or '品牌'} AI 可见性分析报告"
     )

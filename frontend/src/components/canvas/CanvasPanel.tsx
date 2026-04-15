@@ -28,7 +28,11 @@ export function CanvasPanel() {
   const hasArtifacts = contents.length > 0;
   const hasBrowserWorkspace = Boolean(browserWorkspace);
 
-  if (!isOpen || (!hasArtifacts && !hasBrowserWorkspace)) {
+  if (!isOpen) {
+    return null;
+  }
+
+  if (!hasArtifacts && !hasBrowserWorkspace) {
     return (
       <div className="flex flex-col h-full shadow-[-2px_0_16px_rgba(0,0,0,0.08)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
         {/* 空状态 / 分析中间态 */}

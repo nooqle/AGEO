@@ -11,8 +11,8 @@ from app.workflow.orchestrator_instruction_defense import detect_instruction_inj
 _HISTORY_SOURCE_LABELS: tuple[tuple[str, str], ...] = (
     ("brand_profile", "品牌档案"),
     ("competitor_profile", "竞品档案"),
-    ("fetch_answer", "历史答案"),
-    ("fetch_citation", "历史引用"),
+    ("fetch_answer", "过往回答"),
+    ("fetch_citation", "过往引用"),
 )
 _MAX_RECENT_EVIDENCE_ITEMS = 5
 _MAX_RECENT_EVIDENCE_CANDIDATES = 24
@@ -20,10 +20,10 @@ _RECENT_EVIDENCE_SOURCE_LABELS: dict[str, str] = {
     "current_fetch": "当前抓取",
     "current_artifact": "当前产物",
     "uploaded_input": "上传输入",
-    "knowledge_lookup": "历史检索",
-    "knowledge_aggregate": "历史聚合",
-    "knowledge_export": "历史导出",
-    "knowledge_compare": "历史对比",
+    "knowledge_lookup": "过往资料检索",
+    "knowledge_aggregate": "过往资料整理",
+    "knowledge_export": "过往资料表",
+    "knowledge_compare": "过往资料对比",
 }
 _RECENT_EVIDENCE_TYPE_LABELS: dict[str, str] = {
     "fetch_answer": "抓取答案",
@@ -42,12 +42,12 @@ _RECENT_EVIDENCE_TYPE_LABELS: dict[str, str] = {
 }
 _TRUST_LEVEL_LABELS: dict[str, str] = {
     "external_untrusted": "外部证据（未校验）",
-    "workspace_memory": "历史工作区材料",
+    "workspace_memory": "工作区资料",
     "derived_summary": "派生摘要",
 }
 _REPORT_TYPE_LABELS: dict[str, str] = {
     "persona": "场景分析",
-    "baseline": "基线分析",
+    "baseline": "品牌全景分析",
     "report": "正式报告",
 }
 _TABLE_KIND_LABELS: dict[str, str] = {
@@ -142,7 +142,7 @@ def _build_relevance(item: "RecentEvidenceItem", latest_user_message: str) -> tu
     reasons = [
         "当前会话证据优先"
         if item.source in {"uploaded_input", "current_fetch", "current_artifact"}
-        else "历史证据回放"
+        else "过往证据回放"
     ]
 
     if item.freshness == "latest":
@@ -312,12 +312,12 @@ def build_session_status_packet(state: dict[str, Any]) -> SessionStatusPacket:
         )
         mention_rate = baseline_summary.get("brand_mention_rate")
         if isinstance(mention_rate, (int, float)):
-            completed_items.append(f"✓ 基线分析已完成，基线提及率={mention_rate:.1%}")
+            completed_items.append(f"✓ 品牌全景分析已完成，品牌提及率={mention_rate:.1%}")
         else:
-            completed_items.append("✓ 基线分析已完成")
+            completed_items.append("✓ 品牌全景分析已完成")
     elif brand_profile and not state.get("baseline_questions") and not personas:
         blocked_items.append(
-            "⚠ 基线分析待执行 — 必须先执行基线分析流程（question_simulation mode=baseline_dynamic → answer_fetch → analysis_report_skill report_type=baseline）"
+            "⚠ 品牌全景分析待执行 — 必须先执行品牌全景分析流程（question_simulation mode=baseline_dynamic → answer_fetch → analysis_report_skill report_type=baseline）"
         )
 
     metrics = state.get("metrics") or {}
@@ -679,7 +679,7 @@ def _build_recent_lookup_items(lookup_result: dict[str, Any]) -> tuple[RecentEvi
     for match in (lookup_result.get("matches") or [])[:3]:
         source_type = str(match.get("source_type") or "unknown")
         title = _compact_text(
-            match.get("title") or match.get("question_text") or "历史材料",
+            match.get("title") or match.get("question_text") or "过往资料",
             64,
         )
         snippet = _compact_text(
@@ -748,7 +748,7 @@ def _build_recent_aggregate_items(
                 freshness="latest",
                 trust_level="derived_summary",
                 instruction_authority=False,
-                title=_compact_text(group.get("group_key") or "历史聚合", 64),
+                title=_compact_text(group.get("group_key") or "过往整理", 64),
                 summary=summary,
                 artifact_ref=None,
                 suspicious_instruction=detect_instruction_injection(summary),
@@ -762,7 +762,7 @@ def _build_recent_aggregate_items(
 def _build_recent_export_items(export_result: dict[str, Any]) -> tuple[RecentEvidenceItem, ...]:
     if export_result.get("status") != "hit":
         return ()
-    title = _compact_text(export_result.get("title") or "历史知识导出", 64)
+    title = _compact_text(export_result.get("title") or "过往资料表", 64)
     artifact_ref = str(export_result.get("artifact_id") or "").strip() or None
     summary = (
         f"记录数={_safe_int(export_result.get('item_count'))}"
@@ -811,7 +811,7 @@ def _build_recent_compare_items(compare_result: dict[str, Any]) -> tuple[RecentE
                 freshness="latest",
                 trust_level="derived_summary",
                 instruction_authority=False,
-                title=_compact_text(item.get("group_key") or "历史对比", 64),
+                title=_compact_text(item.get("group_key") or "过往对比", 64),
                 summary=summary,
                 artifact_ref=None,
                 suspicious_instruction=detect_instruction_injection(summary),
@@ -1015,13 +1015,13 @@ def render_history_availability_packet(packet: HistoryAvailabilityPacket) -> str
         return ""
 
     lines = [
-        f"- 可用历史来源：{'、'.join(packet.available_sources)}",
-        f"- 历史材料总量：{packet.total_items} 条",
+        f"- 可用过往资料来源：{'、'.join(packet.available_sources)}",
+        f"- 过往资料总量：{packet.total_items} 条",
     ]
     if packet.recent_months:
         lines.append(f"- 覆盖月份：{'、'.join(packet.recent_months[:3])}")
     if packet.analysis_window_count:
-        lines.append(f"- 可对比历史轮次：{packet.analysis_window_count}")
+        lines.append(f"- 可对比过往轮次：{packet.analysis_window_count}")
     return "\n".join(lines)
 
 
