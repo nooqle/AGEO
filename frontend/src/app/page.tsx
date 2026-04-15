@@ -17,7 +17,7 @@ const trackedPlatforms = ['豆包', '元宝', 'Kimi', 'DeepSeek'];
 const analysisTracks = [
   {
     badge: '01',
-    title: '基线分析',
+    title: '品牌全景分析',
     subtitle: '全景掌控',
     description: '先看品牌在 4 个主流 AI 平台里的提及、引用和主题覆盖。',
     tone: 'amber',
@@ -41,7 +41,7 @@ const analysisTracks = [
 const workflowSteps = [
   {
     step: '01',
-    title: '基线分析 · 全景掌控',
+    title: '品牌全景分析 · 全景掌控',
     description: '先建立品牌在主流 AI 平台里的整体位置，掌握提及、引用和主题覆盖。',
   },
   {
@@ -58,7 +58,7 @@ const workflowSteps = [
 
 const faqs = [
   {
-    question: '基线分析会先告诉我什么？',
+    question: '品牌全景分析会先告诉我什么？',
     answer:
       '它会先告诉你品牌在主流 AI 平台里的整体位置：提及率、引用来源分布，以及已经覆盖和仍然缺失的主题。',
   },
@@ -310,7 +310,7 @@ function WhyNowShowcase() {
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4">
-                <div className="text-sm font-semibold text-[#111827]">基线分析</div>
+                <div className="text-sm font-semibold text-[#111827]">品牌全景分析</div>
                 <div className="mt-2 text-sm leading-7 text-[#5b6472]">先判断品牌在 4 个平台里的整体位置。</div>
                 <div className="mt-4 h-2 rounded-full bg-[#edf1f5]">
                   <div className="h-2 rounded-full bg-[#111827]" style={{ width: '42%' }} />
@@ -503,12 +503,12 @@ function AgentCapabilityStories() {
   const stories = [
     {
       index: '01',
-      title: '从对话里发起基线分析',
+      title: '从对话里发起品牌全景分析',
       description: '用户直接在对话里提出分析目标，Agent 识别意图后生成问题并启动全景分析。',
       visual: (
         <div className="space-y-3 rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
           <div className="max-w-[82%] rounded-[16px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-6 text-[#344054]">
-            先做一轮基线分析，看看某汽车品牌在 4 个 AI 平台里的整体位置。
+            先做一轮品牌全景分析，看看某汽车品牌在 4 个 AI 平台里的整体位置。
           </div>
           <div className="ml-auto max-w-[88%] rounded-[16px] border border-[#e8ebf2] bg-[#eef2ff] px-4 py-3 text-sm leading-6 text-[#344054]">
             已生成问题列表，正在进入答案抓取，采集 4 个平台的真实回答。
@@ -736,7 +736,7 @@ export default function HomePage() {
               让品牌进入 AI 的推荐答案
             </h1>
             <p className="mt-6 max-w-[760px] text-[19px] leading-[1.92] text-[#5b6472]">
-              基线分析先看整体位置，用户画像分析继续聚焦场景，再判断哪些来源真正影响 AI 的推荐。
+              品牌全景分析先看整体位置，用户画像分析继续聚焦场景，再判断哪些来源真正影响 AI 的推荐。
             </p>
             <div className="mt-10 flex flex-wrap gap-3">
               <Link

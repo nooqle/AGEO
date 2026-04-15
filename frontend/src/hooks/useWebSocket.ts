@@ -682,6 +682,12 @@ export function useWebSocket(sessionId: string | null) {
       case 'recall_complete': {
         // Backend has deleted DB messages. Now clean up frontend state.
         const recallMessageId = data.message_id as string;
+        suppressRuntimeStreamRef.current = true;
+        agentMessageIdRef.current = null;
+        completePendingActionLogs('（已回退）');
+        finalizeCurrentMessage();
+        resetStreamingState();
+
         // 1. Clear messages from store (target + everything after)
         clearMessagesAfter(recallMessageId);
         removeMessage(recallMessageId);

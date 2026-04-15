@@ -48,11 +48,18 @@ export function ChatLayout({
   sidebar,
   sidebarCollapsed = false,
 }: ChatLayoutProps) {
-  const { isOpen, setOpen, contents, activeContentIndex } = useCanvasStore();
+  const {
+    isOpen,
+    setOpen,
+    contents,
+    activeContentIndex,
+    browserWorkspace,
+  } = useCanvasStore();
   const { isMobile, isTablet, canShowSplitCanvas, isDesktop } = useResponsive();
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const hasSidebar = !!sidebar;
-  const showSplitCanvas = isOpen && canShowSplitCanvas && canvas;
+  const hasCanvasSurface = contents.length > 0 || Boolean(browserWorkspace);
+  const showSplitCanvas = isOpen && canShowSplitCanvas && hasCanvasSurface && canvas;
   const splitHostRef = useRef<HTMLDivElement>(null);
   const availableSplitWidthRef = useRef(CANVAS_DEFAULT_TABLET);
   const desktopSidebarWidth =
@@ -286,7 +293,7 @@ export function ChatLayout({
 
       {/* Canvas Sheet — Tablet/Mobile overlay */}
       <AnimatePresence>
-        {isOpen && !canShowSplitCanvas && canvas && (
+        {isOpen && !canShowSplitCanvas && hasCanvasSurface && canvas && (
           <>
             <motion.div
               className={modalScrimClassName('z-40')}

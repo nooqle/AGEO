@@ -6,14 +6,14 @@ from typing import Any
 def _get_a5_report_context_intro(report_type: str) -> str:
     """Get context intro section based on report type."""
     if report_type == "baseline":
-        return """## 报告类型：行业全景基线分析
-本次分析是品牌的行业全景基线分析。问题来源是行业通用的用户搜索问题（非特定画像）。
+        return """## 报告类型：品牌全景分析
+本次分析是品牌的品牌全景分析。问题来源是行业通用的用户搜索问题（非特定画像）。
 请从行业全景视角分析品牌的 AI 平台可见性。
 
 """
     return """## 报告类型：场景分析报告
 本次分析基于特定用户画像/场景。请从目标用户群体视角分析品牌表现。
-如果提供了基线参考数据，请在报告中对比场景表现与行业基线的差异。
+如果提供了品牌全景分析参考数据，请在报告中对比场景表现与全景分析基准的差异。
 
 """
 
@@ -229,7 +229,7 @@ def _build_a5_user_content(
                 "核心竞品": [item.get("name", "") for item in top_competitors],
                 "监测范围": {
                     "总问题数": metrics.get("total_questions", 0),
-                    "报告类型": "行业全景基线分析" if analysis_mode == "baseline" else "场景分析报告",
+                    "报告类型": "品牌全景分析" if analysis_mode == "baseline" else "场景分析报告",
                 },
                 "核心指标表现": {
                     "提及率": summary_metrics.get("brand_mention_rate", metrics.get("mention_rate", 0)) if summary_metrics else metrics.get("mention_rate", 0),
@@ -359,11 +359,11 @@ def _build_a5_user_content(
             if findings:
                 baseline_findings = "\n".join(f"- {f}" for f in findings)
         sections.append(
-            f"## 基线报告参考数据\n"
-            f"- 基线提及率: {baseline_mention:.1%}\n"
-            f"- 基线内容引用率: {baseline_content_citation:.1%}\n"
-            f"- 基线核心发现:\n{baseline_findings}\n\n"
-            f"请在场景报告中对比基线数据，说明该场景表现与行业基线的差异。"
+            f"## 品牌全景分析参考数据\n"
+            f"- 全景分析提及率: {baseline_mention:.1%}\n"
+            f"- 全景分析内容引用率: {baseline_content_citation:.1%}\n"
+            f"- 全景分析核心发现:\n{baseline_findings}\n\n"
+            f"请在场景报告中对比品牌全景分析数据，说明该场景表现与全景分析基准的差异。"
             f"重点比较场景覆盖、内容引用和竞品提及事实，不要输出综合分数对比。"
         )
 

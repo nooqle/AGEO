@@ -1,7 +1,6 @@
 'use client';
 
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { Message } from '@/types/message';
 import { PlanCard } from './PlanCard';
 import { ActionLog } from './ActionLog';
@@ -14,7 +13,7 @@ import { CompletionChecklist } from './CompletionChecklist';
 import { AttachmentList } from './AttachmentList';
 import { formatTime } from '@/lib/utils';
 import { cn } from '@/lib/cn';
-import { RiSparklingLine, RiArrowDownSLine, RiBrainLine } from '@remixicon/react';
+import { RiSparklingLine, RiBrainLine } from '@remixicon/react';
 
 interface AgentMessageProps {
   message: Message;
@@ -22,22 +21,11 @@ interface AgentMessageProps {
   isStreaming?: boolean;
 }
 
-function buildSafeThoughtSummary(isThinking: boolean): string {
-  if (isThinking) {
-    return '系统正在整理本轮分析过程，仅展示当前阶段和结论，不展示内部提示与执行规则。';
-  }
-
-  return '本轮分析已完成。出于安全与产品稳定性考虑，内部提示词、结构化约束和执行规则不会向用户展示。';
-}
-
 export function AgentMessage({ message, onConfirmation, isStreaming = false }: AgentMessageProps) {
-  const [showThought, setShowThought] = useState(false);
-
   const mainContent = message.content || '';
   const layers = message.layers;
   const hasThought = Boolean(layers?.thought);
   const isThinking = isStreaming && hasThought;
-  const safeThoughtSummary = hasThought ? buildSafeThoughtSummary(isThinking) : '';
 
   // Don't render empty messages (only thought, no content/plan/action/confirmation/output)
   const hasVisibleContent = mainContent
@@ -216,43 +204,11 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
           </motion.div>
         )}
 
-        {/* Thought process — collapsible, very subtle */}
-        {hasThought && (
-          <div className="space-y-1.5">
-            <button
-              onClick={() => setShowThought(!showThought)}
-              className={cn(
-                'flex items-center gap-1.5 text-[11px] transition-colors cursor-pointer',
-                'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
-              )}
-            >
-              <RiBrainLine className="w-3 h-3" />
-              <span>{isThinking ? '思考中...' : '查看思考过程'}</span>
-              <motion.div
-                animate={{ rotate: showThought ? 180 : 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <RiArrowDownSLine className="w-3 h-3" />
-              </motion.div>
-            </button>
-
-            <AnimatePresence>
-              {showThought && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.25 }}
-                  className="overflow-hidden"
-                >
-                  <div className="ml-4 pl-3 border-l-2 border-[var(--border-subtle)]">
-                    <p className="text-[11px] text-[var(--text-tertiary)] whitespace-pre-wrap leading-relaxed">
-                      {safeThoughtSummary}
-                    </p>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+        {/* Thought state — user-facing UI only shows a minimal thinking marker */}
+        {isThinking && (
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)]">
+            <RiBrainLine className="w-3 h-3" />
+            <span>正在思考</span>
           </div>
         )}
 

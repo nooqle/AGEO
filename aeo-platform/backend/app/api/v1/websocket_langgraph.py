@@ -1532,7 +1532,11 @@ async def handle_user_message_langgraph(
         existing_state = None
         from app.services.runtime_coordinator import runtime_coordinator
 
-        if await runtime_coordinator.consume_recalled_session(session_id):
+        session_was_recalled = await runtime_coordinator.consume_recalled_session(
+            session_id
+        )
+
+        if session_was_recalled:
             logger.info(
                 f"[LangGraph] Session {session_id} was recalled, bypassing checkpointer"
             )
@@ -1632,6 +1636,7 @@ async def handle_user_message_langgraph(
                     "run_id": resumed_run_id or state_values.get("run_id"),
                     "selected_tool_mode": tool_mode,
                     "latest_user_input": content,
+                    "session_recalled": session_was_recalled,
                 }
                 _reset_follow_up_runtime_state(update_state)
                 if attachments:
@@ -1728,6 +1733,7 @@ async def handle_user_message_langgraph(
                     restored["run_id"] = resumed_run_id or restored.get("run_id")
                     restored["selected_tool_mode"] = tool_mode
                     restored["latest_user_input"] = content
+                    restored["session_recalled"] = session_was_recalled
                     # Set A3 mode based on context profiles
                     profile_contexts = [
                         c for c in context if c.get("type") == "profile"
@@ -1883,6 +1889,7 @@ async def handle_user_message_langgraph(
                 ),
                 "selected_tool_mode": tool_mode,
                 "latest_user_input": content,
+                "session_recalled": session_was_recalled,
                 # Cycle 3: Task persistence + multi-turn
                 "task_id": created_task_id,
                 "run_id": created_run_id,
@@ -2290,12 +2297,33 @@ async def handle_recall_langgraph(
     deleted = result.get("deleted_count", 0)
     logger.info(f"[Recall] Deleted {deleted} messages from session {session_id}")
 
-    # 2. Mark session so next handle_user_message bypasses stale checkpointer
+    # 2. Cancel active downstream state so recall is a true reset, not only a
+    # message timeline rollback.
     from app.services.runtime_coordinator import runtime_coordinator
+    from app.services.task_service import TaskService
+    from app.services.fetch_run_platform_state_service import (
+        FetchRunPlatformStateService,
+    )
 
+    async with AsyncSessionLocal() as db:
+        task_service = TaskService(db)
+        await task_service.cancel_session_active_tasks(UUID(session_id))
+
+        platform_state_service = FetchRunPlatformStateService(db)
+        await platform_state_service.delete_for_session(UUID(session_id))
+
+    await runtime_coordinator.cancel_session_execution(session_id)
+    await clear_session_browser_action_requests(
+        session_id,
+        unresolved_status=TaskRunChildAttemptStatus.CANCELLED,
+        error_message="因回退会话已取消",
+    )
+    await release_session_browser_action_handoff_slots(session_id)
+
+    # 3. Mark session so next handle_user_message bypasses stale checkpointer
     await runtime_coordinator.mark_session_recalled(session_id)
 
-    # 3. Notify frontend
+    # 4. Notify frontend
     await session_event_publisher.emit_to_session(
         session_id,
         "recall_complete",

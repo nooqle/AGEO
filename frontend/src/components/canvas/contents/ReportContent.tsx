@@ -191,7 +191,7 @@ export function ReportContent({ content, printMode = false }: ReportContentProps
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="text-[12px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
-              {view.isBaseline ? '基线分析报告' : '品牌表现报告'}
+              {view.isBaseline ? '品牌全景分析报告' : '品牌表现报告'}
             </div>
             <h1 className="mt-3 text-[30px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
               {view.headline || '品牌分析报告'}

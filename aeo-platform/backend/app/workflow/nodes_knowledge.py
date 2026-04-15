@@ -236,7 +236,7 @@ async def knowledge_export_node(state: AgentState) -> Command:
         artifact_message_id = await save_and_send_artifact(
             session_id=state["session_id"],
             output_type="dataTable",
-            title=str(result.get("title") or "历史知识导出"),
+            title=str(result.get("title") or "过往资料表"),
             data=artifact_data,
             artifact_key=artifact_id,
         )

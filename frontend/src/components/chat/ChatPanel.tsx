@@ -438,7 +438,10 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const upsertTakeoverRecord = useAioTakeoverStore((state) => state.upsertRecord);
   const removeTakeoverRegistration = useAioTakeoverStore((state) => state.removeRegistration);
   const clearTakeover = useAioTakeoverStore((state) => state.clearTakeover);
-  const hydrateArtifacts = useCallback(async (force = false) => {
+  const hydrateArtifacts = useCallback(async (
+    force = false,
+    options?: { keepClosed?: boolean },
+  ) => {
     if (artifactsHydratedRef.current && !force) {
       return;
     }
@@ -475,6 +478,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             category,
           } as CanvasContent);
         }
+        if (options?.keepClosed) {
+          store.setOpen(false);
+        }
         artifactsHydratedRef.current = true;
       } catch {
         // Silently ignore — artifacts will be populated via WebSocket events or retried on demand
@@ -505,9 +511,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const handler = async () => {
       try {
         artifactsHydratedRef.current = false;
-        await hydrateArtifacts(true);
+        await hydrateArtifacts(true, { keepClosed: true });
         if (cancelled) return;
-        useCanvasStore.getState().setOpen(true);
+        setReconnectionTask(null);
       } catch {
         // Silently ignore — Canvas stays empty, user can refresh to recover
       }
@@ -533,9 +539,15 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           const { tasks } = await api.getSessionTasks(sessionId, { limit: 1 });
           if (cancelled) return;
           const latestTask = tasks[0] ?? null;
-          setActiveTask(latestTask);
           if (latestTask && (latestTask.status === 'completed' || latestTask.status === 'failed')) {
-            setReconnectionTask(latestTask);
+            const outputs = await api.getOutputs(sessionId);
+            if (cancelled) return;
+            const hasRecoverableOutputs = (outputs || []).length > 0;
+            setActiveTask(hasRecoverableOutputs ? latestTask : null);
+            setReconnectionTask(hasRecoverableOutputs ? latestTask : null);
+          } else {
+            setActiveTask(latestTask);
+            setReconnectionTask(null);
           }
           return;
         }
