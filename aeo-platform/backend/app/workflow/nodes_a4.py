@@ -1714,19 +1714,140 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 except BaseException as e:
                     logger.debug("[A4] Browser client close failed: %s", e)
 
-        # Calculate downstream status from the AIO packet contract. The legacy
+        # When platform_filter is active, merge new platform results with preserved baseline results.
+        final_fetch_results = fetch_results
+        baseline = state.get("preserved_fetch_results")
+        if platform_filter and baseline is None and state.get("fetch_results"):
+            baseline = []
+            selected_platforms = {str(platform).lower() for platform in platform_filter}
+            for existing_entry in state.get("fetch_results") or []:
+                kept_platform_results = [
+                    platform_result
+                    for platform_result in existing_entry.get("platform_results", []) or []
+                    if str(platform_result.get("platform") or "").lower()
+                    not in selected_platforms
+                ]
+                if kept_platform_results:
+                    baseline.append(
+                        {
+                            "question_id": existing_entry.get("question_id", ""),
+                            "question_text": existing_entry.get("question_text", ""),
+                            "platform_results": kept_platform_results,
+                            "aio_platform_packets": _collect_aio_platform_packets(
+                                kept_platform_results
+                            ),
+                        }
+                    )
+        if platform_filter and baseline:
+            baseline_map: dict[str, dict[str, Any]] = {}
+            for baseline_entry in baseline:
+                question_id = baseline_entry.get("question_id", "")
+                if question_id:
+                    baseline_map[question_id] = baseline_entry
+
+            merged_results: list[dict[str, Any]] = []
+            for fetch_result in fetch_results:
+                question_id = fetch_result.get("question_id", "")
+                new_platform_results = fetch_result.get("platform_results", []) or []
+                if question_id in baseline_map:
+                    old_platform_results = (
+                        baseline_map.pop(question_id).get("platform_results", []) or []
+                    )
+                    combined_platform_results = (
+                        new_platform_results + old_platform_results
+                    )
+                    merged_results.append(
+                        {
+                            "question_id": question_id,
+                            "question_text": fetch_result.get("question_text", ""),
+                            "platform_results": combined_platform_results,
+                            "aio_platform_packets": _collect_aio_platform_packets(
+                                combined_platform_results
+                            ),
+                        }
+                    )
+                else:
+                    merged_results.append(fetch_result)
+
+            for _, baseline_entry in baseline_map.items():
+                merged_results.append(baseline_entry)
+
+            final_fetch_results = merged_results
+            logger.info(
+                "[A4] Merged %d new + %d baseline = %d total results",
+                len(fetch_results),
+                len(baseline),
+                len(final_fetch_results),
+            )
+
+        merge_validation = validate_scoped_fetch_merge(
+            platform_filter=platform_filter,
+            preserved_results=baseline,
+            merged_results=final_fetch_results,
+        )
+        if not merge_validation.passed:
+            raise RuntimeError(merge_validation.reason)
+
+        projected_fetch_results = final_fetch_results
+        authoritative_projection: dict[str, Any] | None = None
+        task_run_id = state.get("run_id")
+        entity_id = state.get("entity_id")
+        user_id = state.get("user_id")
+        if task_id and task_run_id and user_id:
+            try:
+                from uuid import UUID as _UUID
+
+                from app.core.database import AsyncSessionLocal
+                from app.services.fetch_run_platform_state_service import (
+                    FetchRunPlatformStateService,
+                )
+
+                async with AsyncSessionLocal() as db:
+                    state_service = FetchRunPlatformStateService(db)
+                    rows = await state_service.sync_fetch_results(
+                        task_run_id=_UUID(str(task_run_id)),
+                        task_id=_UUID(str(task_id)),
+                        session_id=_UUID(str(session_id)) if session_id else None,
+                        entity_id=_UUID(str(entity_id)) if entity_id else None,
+                        user_id=_UUID(str(user_id)),
+                        fetch_results=final_fetch_results,
+                    )
+                    authoritative_projection = state_service.build_summary_projection(
+                        rows
+                    )
+                    projected_fetch_results = (
+                        authoritative_projection.get("fetch_results")
+                        or final_fetch_results
+                    )
+                    await db.commit()
+            except Exception as authoritative_err:
+                logger.warning(
+                    "[A4] Authoritative platform-state sync failed: %s",
+                    authoritative_err,
+                )
+
+        # Calculate downstream status from the authoritative projection. The legacy
         # platform_results shape remains in artifacts for compatibility only.
         packet_summary = _build_aio_packet_fetch_summary(
-            fetch_results,
+            projected_fetch_results,
             brand_profile=brand_profile,
         )
         total_fetches = int(packet_summary["total_fetches"])
         successful_fetches = int(packet_summary["successful_fetches"])
         successful_platforms = set(packet_summary["successful_platforms"])
         platform_fetch_stats = packet_summary["platform_fetch_stats"]
-        platform_statuses = packet_summary["platform_statuses"]
+        platform_statuses = dict(packet_summary["platform_statuses"])
         total_answers = int(packet_summary["total_answers"])
         brand_mentions = int(packet_summary["brand_mentions"])
+        if authoritative_projection:
+            projected_statuses = (
+                authoritative_projection.get("platform_status", {}).get(
+                    "platform_statuses"
+                )
+                or {}
+            )
+            if projected_statuses:
+                platform_statuses = dict(projected_statuses)
 
         for pname, pstats in platform_fetch_stats.items():
             p_status = platform_statuses.get(pname, "failed")
@@ -1873,83 +1994,40 @@ async def a4_fetch_node(state: AgentState) -> Command:
             output_type="fetchResults",
             title="AI答案抓取结果",
             data={
-                "fetchResults": fetch_results,
+                "fetchResults": projected_fetch_results,
+                "platformStatus": (
+                    authoritative_projection.get("platform_status", {})
+                    if authoritative_projection
+                    else {}
+                ),
+                "timingSummary": (
+                    authoritative_projection.get("timing_summary", {})
+                    if authoritative_projection
+                    else {}
+                ),
             },
         )
+        if task_id and task_run_id:
+            try:
+                from uuid import UUID as _UUID
 
-        # When platform_filter is active, merge new platform results with preserved baseline results.
-        final_fetch_results = fetch_results
-        baseline = state.get("preserved_fetch_results")
-        if platform_filter and baseline is None and state.get("fetch_results"):
-            baseline = []
-            selected_platforms = {str(platform).lower() for platform in platform_filter}
-            for existing_entry in state.get("fetch_results") or []:
-                kept_platform_results = [
-                    platform_result
-                    for platform_result in existing_entry.get("platform_results", [])
-                    if str(platform_result.get("platform") or "").lower()
-                    not in selected_platforms
-                ]
-                if kept_platform_results:
-                    baseline.append(
-                        {
-                            "question_id": existing_entry.get("question_id", ""),
-                            "question_text": existing_entry.get("question_text", ""),
-                            "platform_results": kept_platform_results,
-                            "aio_platform_packets": _collect_aio_platform_packets(
-                                kept_platform_results
-                            ),
-                        }
+                from app.core.database import AsyncSessionLocal
+                from app.services.fetch_run_platform_state_service import (
+                    FetchRunPlatformStateService,
+                )
+
+                async with AsyncSessionLocal() as db:
+                    state_service = FetchRunPlatformStateService(db)
+                    await state_service.mark_artifact_write_status(
+                        task_run_id=_UUID(str(task_run_id)),
+                        status="written",
                     )
-        if platform_filter and baseline:
-            # Merge: new results (from filtered platforms) + baseline (unselected)
-            # Build a map of question_id -> baseline entry for merging
-            baseline_map: dict[str, dict] = {}
-            for br in baseline:
-                qid = br.get("question_id", "")
-                if qid:
-                    baseline_map[qid] = br
-
-            merged: list[dict[str, Any]] = []
-            for fr in fetch_results:
-                qid = fr.get("question_id", "")
-                new_pr = fr.get("platform_results", [])
-                if qid in baseline_map:
-                    # Combine: new platform results + baseline platform results
-                    old_pr = baseline_map.pop(qid).get("platform_results", [])
-                    combined_pr = new_pr + old_pr
-                    merged.append(
-                        {
-                            "question_id": qid,
-                            "question_text": fr.get("question_text", ""),
-                            "platform_results": combined_pr,
-                            "aio_platform_packets": _collect_aio_platform_packets(
-                                combined_pr
-                            ),
-                        }
-                    )
-                else:
-                    merged.append(fr)
-
-            # Add any remaining baseline entries (questions not in new results)
-            for qid, br in baseline_map.items():
-                merged.append(br)
-
-            final_fetch_results = merged
-            logger.info(
-                "[A4] Merged %d new + %d baseline = %d total results",
-                len(fetch_results),
-                len(baseline),
-                len(final_fetch_results),
-            )
-
-        merge_validation = validate_scoped_fetch_merge(
-            platform_filter=platform_filter,
-            preserved_results=baseline,
-            merged_results=final_fetch_results,
-        )
-        if not merge_validation.passed:
-            raise RuntimeError(merge_validation.reason)
+                    await db.commit()
+            except Exception as artifact_status_err:
+                logger.warning(
+                    "[A4] Failed to mark fetch artifact write status: %s",
+                    artifact_status_err,
+                )
         completion_decision = decide_a4_completion_policy(
             success_count=len(successful_platforms),
             fail_count=fail_count,
@@ -2002,6 +2080,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
                                 "total_fetches": total_fetches,
                                 "successful_fetches": successful_fetches,
                                 "platforms": list(successful_platforms),
+                                "platform_states": (
+                                    authoritative_projection.get(
+                                        "platform_status", {}
+                                    ).get("platforms", [])
+                                    if authoritative_projection
+                                    else list(successful_platforms)
+                                ),
                             },
                         },
                     )
@@ -2009,7 +2094,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 logger.warning("[A4] TaskService milestone failed: %s", te)
 
         update_dict: dict[str, Any] = {
-            "fetch_results": final_fetch_results,
+            "fetch_results": projected_fetch_results,
             "current_step": "A4",
             "progress": 0.6,
         }
@@ -2056,10 +2141,19 @@ async def a4_fetch_node(state: AgentState) -> Command:
         if task_id:
             try:
                 from app.core.database import AsyncSessionLocal
+                from app.services.fetch_run_platform_state_service import (
+                    FetchRunPlatformStateService,
+                )
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
 
                 async with AsyncSessionLocal() as db:
+                    if state.get("run_id"):
+                        state_service = FetchRunPlatformStateService(db)
+                        await state_service.mark_artifact_write_status(
+                            task_run_id=_UUID(str(state.get("run_id"))),
+                            status="failed",
+                        )
                     task_svc = TaskService(db)
                     await task_svc.fail_task(
                         _UUID(task_id),

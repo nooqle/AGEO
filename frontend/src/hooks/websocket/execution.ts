@@ -8,6 +8,7 @@ import type {
 } from '@/types/agent';
 import type { WebSocketEventData } from '@/types/websocket';
 import { BROWSER_PLATFORMS, BROWSER_STATES, EXECUTION_STATUSES, mapStepStatus } from './protocol';
+import { normalizePublicPlatformId } from '@/config/platformLabel';
 
 function normalizeAioTakeoverMode(
   value: unknown,
@@ -156,11 +157,15 @@ export function buildBrowserState(
       }
     : undefined;
 
+  const normalizedPlatform = normalizePublicPlatformId(
+    typeof data.platform === 'string' ? data.platform : undefined,
+  );
+
   return {
     state,
     message,
-    platform: BROWSER_PLATFORMS.includes((data.platform || '') as BrowserState['platform'])
-      ? ((data.platform || '') as BrowserState['platform'])
+    platform: normalizedPlatform && BROWSER_PLATFORMS.includes(normalizedPlatform as BrowserState['platform'])
+      ? (normalizedPlatform as BrowserState['platform'])
       : 'kimi',
     requiresAction: typeof data.requires_action === 'boolean' ? data.requires_action : false,
     actionType,

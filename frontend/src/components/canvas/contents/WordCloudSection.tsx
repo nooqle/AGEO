@@ -8,7 +8,8 @@ interface WordCloudSectionProps {
   analysis: KeywordAnalysis;
 }
 
-import { PLATFORM_NAMES, PLATFORM_COLORS } from '@/config/platforms';
+import { getPlatformDisplayName } from '@/config/platformLabel';
+import { getPlatformColor } from '@/config/platforms';
 
 const TOP_N = 15;
 const MIN_FONT_SIZE = 14;
@@ -114,16 +115,16 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
                   : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:text-[var(--text-primary)]'
               )}
               style={selectedPlatform === plat ? {
-                backgroundColor: `${PLATFORM_COLORS[plat] || '#6366F1'}15`,
-                color: PLATFORM_COLORS[plat] || '#6366F1',
-                borderColor: `${PLATFORM_COLORS[plat] || '#6366F1'}30`,
+                backgroundColor: `${getPlatformColor(plat) || '#6366F1'}15`,
+                color: getPlatformColor(plat) || '#6366F1',
+                borderColor: `${getPlatformColor(plat) || '#6366F1'}30`,
               } : undefined}
             >
               <span
                 className="w-2 h-2 rounded-full flex-shrink-0"
-                style={{ backgroundColor: PLATFORM_COLORS[plat] || '#6366F1' }}
+                style={{ backgroundColor: getPlatformColor(plat) || '#6366F1' }}
               />
-              {PLATFORM_NAMES[plat] || plat}
+              {getPlatformDisplayName(plat)}
             </button>
           ))}
         </div>
@@ -147,7 +148,7 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
                   color: valueToColor(kw.value),
                   fontWeight: kw.value >= 60 ? 700 : kw.value >= 35 ? 500 : 400,
                 }}
-                title={`${kw.word} (${kw.value.toFixed(0)}) - ${kw.platforms.map(p => PLATFORM_NAMES[p] || p).join(', ')}`}
+                title={`${kw.word} (${kw.value.toFixed(0)}) - ${kw.platforms.map((p) => getPlatformDisplayName(p)).join(', ')}`}
               >
                 {kw.word}
               </button>
@@ -193,8 +194,8 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
                           <span
                             key={plat}
                             className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: PLATFORM_COLORS[plat] || '#6366F1' }}
-                            title={PLATFORM_NAMES[plat] || plat}
+                            style={{ backgroundColor: getPlatformColor(plat) || '#6366F1' }}
+                            title={getPlatformDisplayName(plat)}
                           />
                         ))}
                       </div>
@@ -223,11 +224,11 @@ export function WordCloudSection({ analysis }: WordCloudSectionProps) {
                           <div key={ci} className="flex items-start gap-2">
                             <span
                               className="mt-0.5 w-2 h-2 rounded-full flex-shrink-0"
-                              style={{ backgroundColor: PLATFORM_COLORS[ctx.platform] || '#6366F1' }}
+                              style={{ backgroundColor: getPlatformColor(ctx.platform) || '#6366F1' }}
                             />
                             <div className="min-w-0">
-                              <span className="text-[10px] font-medium" style={{ color: PLATFORM_COLORS[ctx.platform] || '#6366F1' }}>
-                                {PLATFORM_NAMES[ctx.platform] || ctx.platform}
+                              <span className="text-[10px] font-medium" style={{ color: getPlatformColor(ctx.platform) || '#6366F1' }}>
+                                {getPlatformDisplayName(ctx.platform)}
                               </span>
                               <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed mt-0.5 break-all">
                                 {highlightWord(ctx.text, kw.word)}
@@ -289,11 +290,11 @@ function ExpandedKeywordDetail({
             key={plat}
             className="text-[10px] font-medium px-2 py-0.5 rounded-full"
             style={{
-              backgroundColor: `${PLATFORM_COLORS[plat] || '#6366F1'}15`,
-              color: PLATFORM_COLORS[plat] || '#6366F1',
+              backgroundColor: `${getPlatformColor(plat) || '#6366F1'}15`,
+              color: getPlatformColor(plat) || '#6366F1',
             }}
           >
-            {PLATFORM_NAMES[plat] || plat}
+            {getPlatformDisplayName(plat)}
           </span>
         ))}
       </div>
@@ -305,7 +306,7 @@ function ExpandedKeywordDetail({
             <div key={i} className="flex items-start gap-2">
               <span
                 className="mt-1 w-2 h-2 rounded-full flex-shrink-0"
-                style={{ backgroundColor: PLATFORM_COLORS[ctx.platform] || '#6366F1' }}
+                style={{ backgroundColor: getPlatformColor(ctx.platform) || '#6366F1' }}
               />
               <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed break-all">
                 {highlightWord(ctx.text, keyword.word)}

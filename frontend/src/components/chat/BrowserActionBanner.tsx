@@ -4,14 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import type { BrowserState } from '@/types/agent';
 import { useAioTakeoverStore } from '@/stores/aioTakeoverStore';
-
-const PLATFORM_LABELS: Record<BrowserState['platform'], string> = {
-  doubao: '豆包',
-  deepseek: 'DeepSeek',
-  kimi: 'Kimi',
-  yuanbao: '元宝',
-  hunyuan: '元宝',
-};
+import { getPlatformDisplayName } from '@/config/platformLabel';
 
 const TAKEOVER_STATE_LABELS = {
   requested: '待签发',
@@ -70,7 +63,7 @@ export function BrowserActionBanner({
     return () => window.clearInterval(timer);
   }, [takeoverId]);
 
-  const platformLabel = PLATFORM_LABELS[browserState.platform] || browserState.platform;
+  const platformLabel = getPlatformDisplayName(browserState.platform);
   const hasTakeover = Boolean(takeoverId);
   const takeoverState = takeoverRecord?.takeoverState ?? (hasTakeover ? 'issued' : null);
   const blockingUrl =

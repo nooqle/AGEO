@@ -12,6 +12,7 @@ import asyncio
 import logging
 import time
 from typing import Any
+from uuid import UUID
 
 from app.core.config import settings
 from app.workflow.browser_action_runtime import (
@@ -80,60 +81,6 @@ async def _browser_action_request_is_active(request: Any) -> bool:
         return True
     active_request = await get_browser_action_request(request.request_id)
     return active_request is not None and active_request.resolution is None
-
-
-def _build_aio_readiness_probe(handler: Any, action_type: str):
-    """Build a process-local readiness probe for one live browser handoff."""
-
-    probe = getattr(handler, "probe_takeover_ready", None)
-    if not callable(probe):
-        return None
-
-    async def _run_probe() -> bool:
-        return bool(await probe(action_type))
-
-    return _run_probe
-
-
-def _build_aio_resume_gate_probe(handler: Any, action_type: str):
-    """Build the explicit manual-resume probe for one live browser handoff."""
-
-    probe = getattr(handler, "probe_resume_gate_ready", None)
-    if not callable(probe):
-        return None
-
-    client = getattr(handler, "client", None)
-    persist_runtime_state = getattr(client, "persist_runtime_state", None)
-    sync_to_existing_target_page = getattr(client, "sync_to_existing_target_page", None)
-    target_url = getattr(handler, "URL", None)
-
-    async def _run_probe() -> bool:
-        if callable(sync_to_existing_target_page):
-            try:
-                await sync_to_existing_target_page(target_url)
-            except Exception as exc:
-                logger.warning(
-                    "[BrowserActionContract] Failed to sync live AIO page "
-                    "(platform=%s action=%s): %s",
-                    getattr(handler, "PLATFORM", None),
-                    action_type,
-                    exc,
-                )
-        ready = bool(await probe(action_type))
-        if ready and callable(persist_runtime_state):
-            try:
-                await persist_runtime_state()
-            except Exception as exc:
-                logger.warning(
-                    "[BrowserActionContract] Failed to persist AIO runtime state "
-                    "(platform=%s action=%s): %s",
-                    getattr(handler, "PLATFORM", None),
-                    action_type,
-                    exc,
-                )
-        return ready
-
-    return _run_probe
 
 
 async def _resolve_user_id_from_handler(
@@ -293,9 +240,6 @@ async def ensure_aio_takeover_bundle(
 
     task_id = getattr(client, "task_id", None)
     run_id = getattr(handler, "run_id", None)
-    readiness_probe = _build_aio_readiness_probe(handler, action_type)
-    resume_probe = _build_aio_resume_gate_probe(handler, action_type)
-
     from app.services.aio_session_manager import aio_session_manager
 
     takeover = await aio_session_manager.create_takeover_access(
@@ -308,8 +252,6 @@ async def ensure_aio_takeover_bundle(
         task_id=str(task_id) if task_id else None,
         run_id=str(run_id) if run_id else None,
         action_type=action_type,
-        readiness_probe=readiness_probe,
-        resume_probe=resume_probe,
     )
 
     bundle = {
@@ -338,6 +280,68 @@ async def ensure_aio_takeover_bundle(
         aio_session_id,
     )
     return bundle
+
+
+async def _sync_authoritative_browser_action_issue(
+    *,
+    session_id: str,
+    request_id: str,
+    platform: str,
+    state: str,
+    run_id: str | None,
+    task_id: str | None,
+    user_id: str | None,
+    target_url: str | None,
+    blocking_url: str | None,
+    blocking_fingerprint: str | None,
+    action_type: str | None,
+    reason_code: str | None,
+) -> None:
+    """Write one authoritative takeover-required row when a browser action is issued."""
+
+    if not run_id or not task_id or not user_id:
+        return
+
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.fetch_run_platform_state_service import (
+            FetchRunPlatformStateService,
+        )
+
+        normalized_state = (
+            "takeover_required" if state == "waiting_for_login" else state
+        )
+        normalized_platform = FetchRunPlatformStateService.canonicalize_platform(
+            platform
+        )
+
+        async with AsyncSessionLocal() as db:
+            service = FetchRunPlatformStateService(db)
+            await service.upsert_browser_action_state(
+                task_run_id=UUID(str(run_id)),
+                task_id=UUID(str(task_id)),
+                session_id=UUID(str(session_id)) if session_id else None,
+                entity_id=None,
+                user_id=UUID(str(user_id)),
+                platform=normalized_platform,
+                status=normalized_state,
+                request_id=request_id,
+                action_type=action_type,
+                reason_code=reason_code,
+                target_url=target_url,
+                blocking_url=blocking_url,
+                blocking_fingerprint=blocking_fingerprint,
+            )
+            await db.commit()
+    except Exception as exc:
+        logger.warning(
+            "[BrowserActionContract] Failed to sync authoritative browser-action issue "
+            "(request_id=%s platform=%s state=%s): %s",
+            request_id,
+            platform,
+            state,
+            exc,
+        )
 
 
 async def persist_browser_action_takeover(
@@ -453,6 +457,21 @@ async def emit_browser_action_handoff(
             takeover=takeover,
             target_url=resolved_target_url,
             blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
+            reason_code=reason_code,
+        )
+        await _sync_authoritative_browser_action_issue(
+            session_id=session_id,
+            request_id=request.request_id,
+            platform=platform,
+            state=state,
+            run_id=run_id,
+            task_id=resolved_task_id,
+            user_id=user_id,
+            target_url=resolved_target_url,
+            blocking_url=blocking_url,
+            blocking_fingerprint=blocking_fingerprint,
+            action_type=action_type,
             reason_code=reason_code,
         )
         await send_browser_state_event(
@@ -543,7 +562,7 @@ async def wait_for_browser_action_resume(
     on_completed: Any | None = None,
     skip_readiness_probe: bool = False,
 ) -> tuple[bool, str | None]:
-    """Wait for the user action and then validate executor-side readiness."""
+    """Wait for the user action and hand browser control back to the executor."""
 
     async def _persist_handler_runtime_state() -> None:
         client = getattr(handler, "client", None)
@@ -579,10 +598,9 @@ async def wait_for_browser_action_resume(
 
     client = getattr(handler, "client", None)
     if getattr(client, "aio_session_id", None):
-        # AIO resolve already validated the manual resume gate before settling
-        # the request as completed. Avoid running a second long readiness probe
-        # here, otherwise the next platform appears minutes later even though
-        # the user has already finished the current takeover.
+        # AIO resolve is immediate-ack. Once the user marks the blocker as
+        # completed, hand control back to the executor and let the next browser
+        # step surface a fresh blocker if the scene is still not ready.
         await _persist_handler_runtime_state()
         return True, resolution
 

@@ -441,7 +441,7 @@ function shortenScenarioLabel(value: string | undefined, limit = 42): string | u
   return trimmed.length > limit ? `${trimmed.slice(0, limit).trim()}...` : trimmed;
 }
 
-const REPORT_PLATFORM_ORDER = ['doubao', 'yuanbao', 'kimi', 'deepseek', 'hunyuan'];
+const REPORT_PLATFORM_ORDER = ['doubao', 'yuanbao', 'kimi', 'deepseek'];
 
 function getReportPlatformLabel(platform: string): string {
   const normalized = platform.trim().toLowerCase();
@@ -820,12 +820,33 @@ function buildFetchCitationLine(citation: FetchCitation): string {
   ], ' ｜ ') || citation.title || citation.url;
 }
 
+function getFetchResultStatusLabel(result: FetchPlatformResult): string {
+  const status = typeof result.status === 'string' ? result.status.trim().toLowerCase() : '';
+  if (status === 'success' || (!status && result.success)) {
+    return '成功';
+  }
+  if (status === 'skipped') {
+    return '已跳过';
+  }
+  if (status === 'running') {
+    return '进行中';
+  }
+  if (status === 'pending') {
+    return '待处理';
+  }
+  if (status === 'takeover_required') {
+    return '待接管';
+  }
+  return '失败';
+}
+
 function buildFetchPlatformBlock(result: FetchPlatformResult): string[] {
   const lines: string[] = [];
   lines.push(`### ${result.platform || '未知平台'}`);
+  const statusLabel = getFetchResultStatusLabel(result);
 
-  if (!result.success) {
-    lines.push('- 状态：失败');
+  if (statusLabel !== '成功') {
+    lines.push(`- 状态：${statusLabel}`);
     if (result.error) {
       lines.push(`- 原因：${result.error}`);
     }

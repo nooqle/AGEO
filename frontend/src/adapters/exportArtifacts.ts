@@ -9,9 +9,14 @@ import type {
   ConfidenceStrategicRecommendation,
   ConfidenceSignalSummary,
   FetchCitation,
+  FetchPlatformPacket,
   FetchPlatformResult,
+  FetchPlatformStatusProjection,
+  FetchPlatformStatusSummary,
+  FetchPlatformStatusValue,
   FetchResultItem,
   FetchResultsCanvasContent,
+  FetchTimingSummary,
   ReportCanvasContent,
 } from '@/types/canvas';
 
@@ -23,7 +28,11 @@ export type FetchExportViewModel = {
   totalQuestions: number;
   totalPlatforms: number;
   successCount: number;
+  failedCount: number;
+  skippedCount: number;
   items: FetchResultItem[];
+  platformStatus?: FetchPlatformStatusProjection;
+  timingSummary?: FetchTimingSummary;
 };
 
 export type ConfidenceExportViewModel = {
@@ -144,6 +153,41 @@ function uniqueByKey<T>(items: T[], getKey: (item: T) => string): T[] {
   });
 }
 
+function canonicalizeFetchPlatform(platform: string | undefined): string {
+  const normalized = platform?.trim().toLowerCase();
+  if (!normalized) {
+    return 'unknown';
+  }
+  return normalized === 'hunyuan' ? 'yuanbao' : normalized;
+}
+
+function normalizeFetchStatus(value: unknown): FetchPlatformStatusValue {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (['success', 'succeeded', 'result'].includes(normalized)) {
+    return 'success';
+  }
+  if (normalized === 'skipped') {
+    return 'skipped';
+  }
+  if (normalized === 'running') {
+    return 'running';
+  }
+  if (normalized === 'pending') {
+    return 'pending';
+  }
+  if (normalized === 'takeover_required') {
+    return 'takeover_required';
+  }
+  return 'failed';
+}
+
+function isFetchSuccessStatus(status: FetchPlatformStatusValue | undefined, success: boolean | undefined): boolean {
+  if (status) {
+    return status === 'success';
+  }
+  return Boolean(success);
+}
+
 function normalizeFetchCitation(record: UnknownRecord, index: number): FetchCitation {
   return {
     index: readNumber(record, 'index', 'order') ?? index + 1,
@@ -155,42 +199,152 @@ function normalizeFetchCitation(record: UnknownRecord, index: number): FetchCita
   };
 }
 
+function normalizeAnswerPayload(value: unknown): FetchPlatformResult['answer'] | undefined {
+  if (typeof value === 'string') {
+    const content = value.trim();
+    return content ? { content } : undefined;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return {
+    content: readString(value, 'content', 'text', 'answer'),
+    word_count: readNumber(value, 'word_count', 'wordCount', 'length'),
+    has_brand_mention: readBoolean(value, 'has_brand_mention', 'hasBrandMention'),
+  };
+}
+
+function normalizeFetchPlatformPacket(record: UnknownRecord): FetchPlatformPacket | null {
+  const platform =
+    readString(record, 'platform', 'provider', 'engine', 'name', 'platform_id') || undefined;
+  const status =
+    readString(record, 'status') ||
+    (readBoolean(record, 'skipped_by_user') ? 'skipped' : undefined);
+
+  if (!platform && status === undefined && !readString(record, 'error', 'message')) {
+    return null;
+  }
+
+  return {
+    platform: canonicalizeFetchPlatform(platform),
+    status: normalizeFetchStatus(status),
+    auth_state: readString(record, 'auth_state', 'authState'),
+    action_type: readString(record, 'action_type', 'actionType'),
+    reason_code: readString(record, 'reason_code', 'reasonCode'),
+    request_id: readString(record, 'request_id', 'requestId'),
+    target_url: readString(record, 'target_url', 'targetUrl'),
+    blocking_url: readString(record, 'blocking_url', 'blockingUrl'),
+    blocking_fingerprint: readString(record, 'blocking_fingerprint', 'blockingFingerprint'),
+    fetch_method: readString(record, 'fetch_method', 'fetchMethod', 'method'),
+    answer: normalizeAnswerPayload(readField(record, 'answer', 'result')),
+    citations: toRecordArray(readField(record, 'citations', 'references', 'sources')).map(normalizeFetchCitation),
+    error: readString(record, 'error', 'message'),
+    duration: readNumber(record, 'duration', 'latency', 'elapsed'),
+    timing_json: isRecord(readField(record, 'timing_json', 'timingJson'))
+      ? ((readField(record, 'timing_json', 'timingJson') as UnknownRecord) as Record<string, number | string>)
+      : undefined,
+  };
+}
+
 function normalizeFetchPlatformResult(record: UnknownRecord): FetchPlatformResult | null {
   const platform =
     readString(record, 'platform', 'provider', 'engine', 'name', 'platform_id') || undefined;
-  const answerRecord = isRecord(readField(record, 'answer', 'result')) ? (readField(record, 'answer', 'result') as UnknownRecord) : undefined;
+  const status = readString(record, 'status');
+  const answerRecord = readField(record, 'answer', 'result');
   const success =
-    readBoolean(record, 'success', 'ok') ??
-    Boolean(answerRecord || readString(record, 'error', 'message') === undefined);
+    isFetchSuccessStatus(
+      status ? normalizeFetchStatus(status) : undefined,
+      readBoolean(record, 'success', 'ok') ?? undefined
+    ) ||
+    (!status &&
+      (readBoolean(record, 'success', 'ok') ??
+        Boolean(answerRecord || readString(record, 'error', 'message') === undefined)));
 
   if (!platform && !answerRecord && !readString(record, 'error', 'message')) {
     return null;
   }
 
   return {
-    platform: platform || 'unknown',
-    platform_name: readString(record, 'platform_name', 'platformName', 'display_name', 'displayName') || platform,
+    platform: canonicalizeFetchPlatform(platform),
+    platform_name:
+      readString(record, 'platform_name', 'platformName', 'display_name', 'displayName') ||
+      platform,
+    status: status ? normalizeFetchStatus(status) : success ? 'success' : 'failed',
     fetch_method: readString(record, 'fetch_method', 'fetchMethod', 'method'),
     success,
-    answer: answerRecord
-      ? {
-          content: readString(answerRecord, 'content', 'text', 'answer'),
-          word_count: readNumber(answerRecord, 'word_count', 'wordCount', 'length'),
-          has_brand_mention: readBoolean(answerRecord, 'has_brand_mention', 'hasBrandMention'),
-        }
-      : undefined,
+    answer: normalizeAnswerPayload(answerRecord),
     citations: toRecordArray(readField(record, 'citations', 'references', 'sources')).map(normalizeFetchCitation),
     error: readString(record, 'error', 'message'),
     duration: readNumber(record, 'duration', 'latency', 'elapsed'),
   };
 }
 
+function mergeFetchPlatformResult(
+  legacy: FetchPlatformResult | undefined,
+  packet: FetchPlatformPacket | undefined
+): FetchPlatformResult | null {
+  if (!legacy && !packet) {
+    return null;
+  }
+  const status = packet?.status ?? legacy?.status ?? (legacy?.success ? 'success' : 'failed');
+  const normalizedStatus = normalizeFetchStatus(status);
+  const platform = canonicalizeFetchPlatform(packet?.platform || legacy?.platform);
+  return {
+    platform,
+    platform_name: legacy?.platform_name || packet?.platform || legacy?.platform || platform,
+    status: normalizedStatus,
+    fetch_method: packet?.fetch_method || legacy?.fetch_method,
+    success: normalizedStatus === 'success',
+    answer: packet?.answer || legacy?.answer,
+    citations: packet?.citations?.length ? packet.citations : legacy?.citations,
+    error:
+      packet?.error ||
+      legacy?.error ||
+      (normalizedStatus === 'skipped' ? '已跳过该平台' : undefined),
+    duration: packet?.duration ?? legacy?.duration,
+  };
+}
+
+function normalizePlatformStatusSummary(record: UnknownRecord): FetchPlatformStatusSummary | null {
+  const platform = canonicalizeFetchPlatform(readString(record, 'platform'));
+  if (platform === 'unknown') {
+    return null;
+  }
+  return {
+    platform,
+    status: normalizeFetchStatus(readField(record, 'status')),
+    questions_completed: readNumber(record, 'questions_completed', 'questionsCompleted'),
+    questions_total: readNumber(record, 'questions_total', 'questionsTotal'),
+    mention_count: readNumber(record, 'mention_count', 'mentionCount'),
+    error: readString(record, 'error') ?? null,
+    auth_state: readString(record, 'auth_state', 'authState'),
+    artifact_write_status: readString(record, 'artifact_write_status', 'artifactWriteStatus') ?? null,
+    timing: isRecord(readField(record, 'timing')) ? (readField(record, 'timing') as Record<string, number | string>) : undefined,
+  };
+}
+
 function normalizeFetchItem(record: UnknownRecord, index: number): FetchResultItem | null {
   const questionText =
     readString(record, 'question_text', 'questionText', 'question', 'query', 'title') || undefined;
-  const platformResults = toRecordArray(readField(record, 'platform_results', 'platformResults', 'results', 'answers'))
+  const legacyResults = toRecordArray(readField(record, 'platform_results', 'platformResults', 'results', 'answers'))
     .map(normalizeFetchPlatformResult)
     .filter((item): item is FetchPlatformResult => Boolean(item));
+  const packetResults = toRecordArray(readField(record, 'aio_platform_packets', 'aioPlatformPackets'))
+    .map(normalizeFetchPlatformPacket)
+    .filter((item): item is FetchPlatformPacket => Boolean(item));
+
+  const mergedByPlatform = new Map<string, FetchPlatformResult>();
+  legacyResults.forEach((result) => {
+    mergedByPlatform.set(canonicalizeFetchPlatform(result.platform), result);
+  });
+  packetResults.forEach((packet) => {
+    const platform = canonicalizeFetchPlatform(packet.platform);
+    const merged = mergeFetchPlatformResult(mergedByPlatform.get(platform), packet);
+    if (merged) {
+      mergedByPlatform.set(platform, merged);
+    }
+  });
+  const platformResults = Array.from(mergedByPlatform.values());
 
   if (!questionText && platformResults.length === 0) {
     return null;
@@ -200,6 +354,7 @@ function normalizeFetchItem(record: UnknownRecord, index: number): FetchResultIt
     question_id: readString(record, 'question_id', 'questionId', 'id') || `question_${index + 1}`,
     question_text: questionText || `问题 ${index + 1}`,
     platform_results: platformResults,
+    aio_platform_packets: packetResults,
   };
 }
 
@@ -211,13 +366,49 @@ export function buildFetchExportViewModel(content: FetchResultsCanvasContent): F
     .map(normalizeFetchItem)
     .filter((item): item is FetchResultItem => Boolean(item));
 
+  const rawPlatformStatus = isRecord(
+    readField(content.data as UnknownRecord, 'platformStatus', 'platform_status')
+  )
+    ? (readField(content.data as UnknownRecord, 'platformStatus', 'platform_status') as UnknownRecord)
+    : undefined;
+  const platformStatusPlatforms = toRecordArray(readField(rawPlatformStatus, 'platforms'))
+    .map(normalizePlatformStatusSummary)
+    .filter((item): item is FetchPlatformStatusSummary => Boolean(item));
+  const platformStatuses = isRecord(readField(rawPlatformStatus, 'platform_statuses', 'platformStatuses'))
+    ? Object.fromEntries(
+        Object.entries(
+          readField(rawPlatformStatus, 'platform_statuses', 'platformStatuses') as Record<string, unknown>
+        ).map(([platform, value]) => [canonicalizeFetchPlatform(platform), normalizeFetchStatus(value)])
+      )
+    : undefined;
+  const platformStatus: FetchPlatformStatusProjection | undefined =
+    platformStatusPlatforms.length > 0 || platformStatuses
+      ? {
+          platforms: platformStatusPlatforms,
+          platform_statuses: platformStatuses,
+        }
+      : undefined;
+
+  const timingSummary = isRecord(
+    readField(content.data as UnknownRecord, 'timingSummary', 'timing_summary')
+  )
+    ? ((readField(content.data as UnknownRecord, 'timingSummary', 'timing_summary') as UnknownRecord) as FetchTimingSummary)
+    : undefined;
+
   const platformSet = new Set<string>();
   let successCount = 0;
+  let failedCount = 0;
+  let skippedCount = 0;
   items.forEach((item) => {
     item.platform_results.forEach((result) => {
-      platformSet.add(result.platform_name || result.platform);
-      if (result.success) {
+      platformSet.add(canonicalizeFetchPlatform(result.platform_name || result.platform));
+      const status = normalizeFetchStatus(result.status ?? (result.success ? 'success' : 'failed'));
+      if (status === 'success') {
         successCount += 1;
+      } else if (status === 'skipped') {
+        skippedCount += 1;
+      } else if (status === 'failed') {
+        failedCount += 1;
       }
     });
   });
@@ -228,7 +419,11 @@ export function buildFetchExportViewModel(content: FetchResultsCanvasContent): F
     totalQuestions: items.length,
     totalPlatforms: platformSet.size,
     successCount,
+    failedCount,
+    skippedCount,
     items,
+    platformStatus,
+    timingSummary,
   };
 }
 

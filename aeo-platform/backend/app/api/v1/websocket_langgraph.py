@@ -250,7 +250,7 @@ async def _rehydrate_aio_takeover_bundle(
 async def replay_pending_browser_actions_to_websocket(
     websocket: WebSocket,
     session_id: str,
-) -> None:
+) -> int:
     """Replay unresolved browser-action requests to a freshly connected socket."""
 
     raw_pending_requests = await get_session_browser_action_requests(session_id)
@@ -260,10 +260,15 @@ async def replay_pending_browser_actions_to_websocket(
     try:
         async with AsyncSessionLocal() as db:
             task_service = TaskService(db)
+            from app.services.fetch_run_platform_state_service import (
+                FetchRunPlatformStateService,
+            )
+
             await task_service.reconcile_terminal_task_live_runs(UUID(session_id))
             active_task = await task_service.get_session_active_task(UUID(session_id))
             authoritative_task_id = active_task.id if active_task is not None else None
             authoritative_run_id = None
+            authoritative_rows = []
             if active_task is not None:
                 loaded_runs = active_task.__dict__.get("task_runs") or []
                 live_run = next(
@@ -275,6 +280,11 @@ async def replay_pending_browser_actions_to_websocket(
                     None,
                 )
                 authoritative_run_id = getattr(live_run, "id", None)
+                if authoritative_run_id is not None:
+                    platform_state_service = FetchRunPlatformStateService(db)
+                    authoritative_rows = await platform_state_service.list_for_task_run(
+                        authoritative_run_id
+                    )
 
             service = TaskRunChildAttemptService(db)
             if authoritative_task_id is None:
@@ -294,6 +304,7 @@ async def replay_pending_browser_actions_to_websocket(
         )
         db_attempts = []
         authoritative_run_id = None
+        authoritative_rows = []
 
     attempts_by_request_id = {
         attempt.request_id: attempt
@@ -301,6 +312,11 @@ async def replay_pending_browser_actions_to_websocket(
         if getattr(attempt, "request_id", None)
     }
     authoritative_request_ids = set(attempts_by_request_id.keys())
+    authoritative_rows_by_request_id = {
+        row.latest_takeover_request_id: row
+        for row in authoritative_rows
+        if getattr(row, "latest_takeover_request_id", None)
+    }
 
     filtered_runtime_count = 0
     for request in raw_pending_requests:
@@ -324,6 +340,11 @@ async def replay_pending_browser_actions_to_websocket(
             filtered_runtime_count += 1
             continue
         elif not authoritative_request_ids:
+            filtered_runtime_count += 1
+            continue
+
+        authoritative_row = authoritative_rows_by_request_id.get(request_id)
+        if authoritative_row is not None and authoritative_row.status != "takeover_required":
             filtered_runtime_count += 1
             continue
 
@@ -382,6 +403,9 @@ async def replay_pending_browser_actions_to_websocket(
         request_id = attempt.request_id
         if not request_id or request_id in seen_request_ids:
             continue
+        authoritative_row = authoritative_rows_by_request_id.get(request_id)
+        if authoritative_row is not None and authoritative_row.status != "takeover_required":
+            continue
         takeover = await _rehydrate_aio_takeover_bundle(
             request_id=request_id,
             platform=attempt.platform,
@@ -407,7 +431,7 @@ async def replay_pending_browser_actions_to_websocket(
         db_fallback_count += 1
 
     if not pending_requests:
-        return
+        return 0
 
     logger.info(
         "[WebSocket] Replaying %d browser-action request(s) for session %s "
@@ -459,13 +483,23 @@ async def replay_pending_browser_actions_to_websocket(
                 "action_type": action_type,
             },
         )
+    return len(pending_requests)
 
 
 async def replay_pending_confirmation_to_websocket(
     websocket: WebSocket,
     session_id: str,
+    *,
+    skip_if_browser_actions_replayed: bool = False,
 ) -> None:
     """Replay durable non-browser confirmation state after reconnect."""
+
+    if skip_if_browser_actions_replayed:
+        logger.info(
+            "[WebSocket] Skip generic confirmation replay for session %s because browser-action requests were already replayed",
+            session_id,
+        )
+        return
 
     try:
         workflow = await get_compiled_workflow()
@@ -1261,6 +1295,43 @@ async def rebuild_state_from_db(
                     )
                     if not highest_step or highest_step < "A7":
                         highest_step = "A7"
+
+    if state.get("run_id") or state.get("task_id"):
+        try:
+            from app.services.fetch_run_platform_state_service import (
+                FetchRunPlatformStateService,
+            )
+
+            async with AsyncSessionLocal() as db:
+                platform_state_service = FetchRunPlatformStateService(db)
+                authoritative_rows = []
+                if state.get("run_id"):
+                    authoritative_rows = await platform_state_service.list_for_task_run(
+                        UUID(state["run_id"])
+                    )
+                elif state.get("task_id"):
+                    authoritative_rows = await platform_state_service.list_latest_for_task(
+                        UUID(state["task_id"])
+                    )
+
+                if authoritative_rows:
+                    authoritative_projection = (
+                        platform_state_service.build_summary_projection(
+                            authoritative_rows
+                        )
+                    )
+                    authoritative_fetch_results = (
+                        authoritative_projection.get("fetch_results") or []
+                    )
+                    if authoritative_fetch_results:
+                        state["fetch_results"] = authoritative_fetch_results
+                        if "A4" > highest_step:
+                            highest_step = "A4"
+        except Exception as e:
+            logger.warning(
+                "[Restore] Failed to rebuild fetch results from authoritative state: %s",
+                e,
+            )
 
     if (
         latest_attachment_turn
@@ -2424,6 +2495,10 @@ async def handle_browser_action_resolution_langgraph(
             request.session_id if request is not None else None,
         )
         async with AsyncSessionLocal() as db:
+            from app.services.fetch_run_platform_state_service import (
+                FetchRunPlatformStateService,
+            )
+
             service = TaskRunChildAttemptService(db)
             fallback_attempt = (
                 await service.get_waiting_input_for_session_by_request_id(
@@ -2438,6 +2513,14 @@ async def handle_browser_action_resolution_langgraph(
                 )
                 return
             await service.resolve_by_request_id(request_id, resolution=resolution)
+            platform_state_service = FetchRunPlatformStateService(db)
+            await platform_state_service.mark_browser_action_resolution(
+                task_run_id=fallback_attempt.task_run_id,
+                platform=fallback_attempt.platform,
+                resolution=resolution,
+                request_id=request_id,
+            )
+            await db.commit()
             await session_event_publisher.emit_to_session(
                 session_id,
                 "browser_user_action_ack",
@@ -2452,6 +2535,20 @@ async def handle_browser_action_resolution_langgraph(
             return
 
     await resolve_browser_action_request(request_id, resolution)
+    if request.run_id:
+        async with AsyncSessionLocal() as db:
+            from app.services.fetch_run_platform_state_service import (
+                FetchRunPlatformStateService,
+            )
+
+            platform_state_service = FetchRunPlatformStateService(db)
+            await platform_state_service.mark_browser_action_resolution(
+                task_run_id=UUID(request.run_id),
+                platform=request.platform,
+                resolution=resolution,
+                request_id=request_id,
+            )
+            await db.commit()
     await session_event_publisher.emit_to_session(
         session_id,
         "browser_user_action_ack",

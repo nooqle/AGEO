@@ -50,7 +50,6 @@ import type {
 } from '@/types/monitoring';
 import type {
   AioCanvasConfig,
-  AioResumeGateResult,
   AioTakeoverMode,
   AioTakeoverRecord,
   AioVncUrl,
@@ -313,7 +312,6 @@ class ApiService {
     payload: {
       frontendId: string;
       mode: 'canvas_cdp' | 'vnc_fallback';
-      resumeGateResult?: AioResumeGateResult;
       clientObservation?: string;
     },
   ) {
@@ -322,7 +320,6 @@ class ApiService {
       body: JSON.stringify({
         frontend_id: payload.frontendId,
         mode: payload.mode,
-        resume_gate_result: payload.resumeGateResult ?? 'pass',
         client_observation: payload.clientObservation ?? 'user_claimed_done',
       }),
     });
@@ -1123,8 +1120,6 @@ class ApiService {
       issuedAt: typeof raw.issued_at === 'string' ? raw.issued_at : null,
       expiresAt: typeof raw.expires_at === 'string' ? raw.expires_at : null,
       lastHeartbeatAt: typeof raw.last_heartbeat_at === 'string' ? raw.last_heartbeat_at : null,
-      resumeGateResult:
-        typeof raw.resume_gate_result === 'string' ? raw.resume_gate_result : null,
       targetUrl: typeof raw.target_url === 'string' ? raw.target_url : null,
       blockingUrl: typeof raw.blocking_url === 'string' ? raw.blocking_url : null,
       blockingFingerprint:

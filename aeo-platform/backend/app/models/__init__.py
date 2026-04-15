@@ -7,6 +7,7 @@ from app.models.aio_runtime_session import (
 )
 from app.models.brand import BrandProfile
 from app.models.entity import Entity, EntityVisibilityScope
+from app.models.fetch_run_platform_state import FetchRunPlatformState
 from app.models.file_metadata import FileMetadata
 from app.models.knowledge import KnowledgeRecord, KnowledgeSegment
 from app.models.llm_usage import LLMUsageRecord
@@ -74,6 +75,7 @@ __all__ = [
     "VerificationPurpose",
     "Entity",
     "EntityVisibilityScope",
+    "FetchRunPlatformState",
     "FileMetadata",
     "KnowledgeRecord",
     "KnowledgeSegment",

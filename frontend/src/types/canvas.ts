@@ -837,16 +837,45 @@ export type FetchCitation = {
   is_official?: boolean;
 };
 
+export type FetchPlatformStatusValue =
+  | 'success'
+  | 'failed'
+  | 'skipped'
+  | 'running'
+  | 'pending'
+  | 'takeover_required';
+
+export type FetchAnswerPayload = {
+  content?: string;
+  word_count?: number;
+  has_brand_mention?: boolean;
+};
+
+export type FetchPlatformPacket = {
+  platform: string;
+  status?: FetchPlatformStatusValue | string;
+  auth_state?: string;
+  action_type?: string;
+  reason_code?: string;
+  request_id?: string;
+  target_url?: string;
+  blocking_url?: string;
+  blocking_fingerprint?: string;
+  fetch_method?: string;
+  answer?: FetchAnswerPayload;
+  citations?: FetchCitation[];
+  error?: string;
+  duration?: number;
+  timing_json?: Record<string, number | string>;
+};
+
 export type FetchPlatformResult = {
   platform: string;
   platform_name?: string;
+  status?: FetchPlatformStatusValue | string;
   fetch_method?: string;
   success: boolean;
-  answer?: {
-    content?: string;
-    word_count?: number;
-    has_brand_mention?: boolean;
-  };
+  answer?: FetchAnswerPayload;
   citations?: FetchCitation[];
   error?: string;
   duration?: number;
@@ -856,10 +885,36 @@ export type FetchResultItem = {
   question_id: string;
   question_text: string;
   platform_results: FetchPlatformResult[];
+  aio_platform_packets?: FetchPlatformPacket[];
+};
+
+export type FetchPlatformStatusSummary = {
+  platform: string;
+  status: FetchPlatformStatusValue | string;
+  questions_completed?: number;
+  questions_total?: number;
+  mention_count?: number;
+  error?: string | null;
+  auth_state?: string;
+  artifact_write_status?: string | null;
+  timing?: Record<string, number | string>;
+};
+
+export type FetchPlatformStatusProjection = {
+  platforms?: FetchPlatformStatusSummary[];
+  platform_statuses?: Record<string, FetchPlatformStatusValue | string>;
+};
+
+export type FetchTimingSummary = {
+  total_ms?: number;
+  platforms?: Record<string, Record<string, number | string>>;
+  stage_totals_ms?: Record<string, number | string>;
 };
 
 export type FetchResultsCanvasData = CanvasPreviewData & {
   fetchResults?: FetchResultItem[];
+  platformStatus?: FetchPlatformStatusProjection;
+  timingSummary?: FetchTimingSummary;
 };
 
 export type BrowserCanvasData = CanvasPreviewData & {

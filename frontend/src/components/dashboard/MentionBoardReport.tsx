@@ -25,7 +25,7 @@ const sentimentTone = {
     'bg-[var(--bg-secondary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]',
 } as const;
 
-const PLATFORM_ORDER = ['doubao', 'kimi', 'hunyuan', 'deepseek'] as const;
+const PLATFORM_ORDER = ['doubao', 'kimi', 'yuanbao', 'deepseek'] as const;
 
 type ScenarioGroup = {
   scenarioId: string;

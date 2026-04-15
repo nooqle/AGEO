@@ -10,6 +10,7 @@ import {
 import { api, getApiBaseUrl } from '@/services/api';
 import { getStoredAccessToken } from '@/lib/auth-storage';
 import { useAioTakeoverStore } from '@/stores/aioTakeoverStore';
+import { getPlatformDisplayName } from '@/config/platformLabel';
 import type { BrowserCanvasContent } from '@/types/canvas';
 import type {
   AioCanvasConfig,
@@ -22,20 +23,11 @@ type RenderState =
   | 'opening'
   | 'canvas_ready'
   | 'vnc_ready'
-  | 'submitting'
   | 'error';
 
 type BrowserUiController = {
   destroy: () => Promise<void>;
 };
-
-const PLATFORM_LABELS = {
-  doubao: '豆包',
-  deepseek: 'DeepSeek',
-  kimi: 'Kimi',
-  yuanbao: '元宝',
-  hunyuan: '元宝',
-} as const;
 
 const DEFAULT_RENDER_MODE: 'canvas_cdp' | 'vnc_fallback' = 'vnc_fallback';
 const CANVAS_BOOT_TIMEOUT_MS = 12000;
@@ -155,8 +147,7 @@ export function BrowserTakeoverContent({
     (state) => state.removeRegistration,
   );
 
-  const platformLabel =
-    PLATFORM_LABELS[browserState.platform] || browserState.platform;
+  const platformLabel = getPlatformDisplayName(browserState.platform);
 
   const [canvasConfig, setCanvasConfig] = useState<AioCanvasConfig | null>(null);
   const [vncConfig, setVncConfig] = useState<AioVncUrl | null>(null);
@@ -281,16 +272,6 @@ export function BrowserTakeoverContent({
   }, [takeoverId, takeoverRegistration?.mode]);
 
   useEffect(() => {
-    if (browserState.state !== 'submitting') {
-      return;
-    }
-
-    setRenderState('submitting');
-    setStatusText('正在确认当前平台操作，马上继续抓取...');
-    void destroyBrowserUi();
-  }, [browserState.state, destroyBrowserUi]);
-
-  useEffect(() => {
     if (!takeoverId) {
       return;
     }
@@ -374,7 +355,6 @@ export function BrowserTakeoverContent({
     if (
       !takeoverId ||
       currentMode !== 'canvas_cdp' ||
-      browserState.state === 'submitting' ||
       !canvasCdpEndpoint ||
       !canvasRootRef.current
     ) {
@@ -640,28 +620,6 @@ export function BrowserTakeoverContent({
             </div>
           )}
 
-          {renderState === 'submitting' && (
-            <div className="flex h-full items-center justify-center bg-[#f8fafc]">
-              <div className="flex min-w-[280px] flex-col items-center gap-3 rounded-2xl border bg-white px-8 py-7 text-center shadow-sm">
-                <div
-                  className="h-9 w-9 animate-spin rounded-full border-2"
-                  style={{
-                    borderColor: 'rgba(99, 102, 241, 0.16)',
-                    borderTopColor: 'var(--color-primary)',
-                  }}
-                />
-                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                  正在确认当前平台操作...
-                </div>
-                {targetUrl && (
-                  <div className="max-w-[420px] truncate text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                    {targetUrl}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {renderState === 'vnc_ready' && vncConfig?.url && (
             <div className="relative h-full w-full bg-[#f8fafc]">
               <iframe
@@ -741,7 +699,6 @@ export function BrowserTakeoverContent({
               <button
                 type="button"
                 onClick={handleSwitchToVnc}
-                disabled={renderState === 'submitting'}
                 className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
                 style={{
                   borderColor: 'var(--border-subtle)',
