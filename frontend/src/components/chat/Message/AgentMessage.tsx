@@ -1,6 +1,6 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { Message } from '@/types/message';
 import { PlanCard } from './PlanCard';
 import { ActionLog } from './ActionLog';
@@ -26,6 +26,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
   const layers = message.layers;
   const hasThought = Boolean(layers?.thought);
   const isThinking = isStreaming && hasThought;
+  const prefersReducedMotion = useReducedMotion();
 
   // Don't render empty messages (only thought, no content/plan/action/confirmation/output)
   const hasVisibleContent = mainContent
@@ -206,10 +207,31 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
 
         {/* Thought state — user-facing UI only shows a minimal thinking marker */}
         {isThinking && (
-          <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)]">
-            <RiBrainLine className="w-3 h-3" />
-            <span>正在思考</span>
-          </div>
+          <motion.div
+            className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-elevated)_78%,transparent)] px-2.5 py-1 text-[11px] text-[var(--text-tertiary)] shadow-[0_0_0_1px_rgba(255,255,255,0.01)]"
+            animate={prefersReducedMotion ? undefined : { opacity: [0.78, 1, 0.82] }}
+            transition={prefersReducedMotion ? undefined : { duration: 1.6, repeat: Infinity, ease: [0.25, 1, 0.5, 1] }}
+          >
+            <motion.div
+              animate={prefersReducedMotion ? undefined : { rotate: [0, -8, 8, 0], scale: [1, 1.04, 1] }}
+              transition={prefersReducedMotion ? undefined : { duration: 1.8, repeat: Infinity, ease: [0.25, 1, 0.5, 1] }}
+            >
+              <RiBrainLine className="h-3 w-3 text-[var(--brand-hover)]" />
+            </motion.div>
+
+            <span className="text-[var(--text-secondary)]">正在思考</span>
+
+            <div className="flex items-center gap-1">
+              {[0, 1, 2].map((dot) => (
+                <motion.span
+                  key={dot}
+                  className="h-1 w-1 rounded-full bg-[var(--brand-hover)]"
+                  animate={prefersReducedMotion ? { opacity: 0.7 } : { opacity: [0.28, 1, 0.38], y: [0, -1.5, 0], scale: [0.9, 1.25, 0.95] }}
+                  transition={prefersReducedMotion ? undefined : { duration: 1.05, repeat: Infinity, delay: dot * 0.15, ease: [0.25, 1, 0.5, 1] }}
+                />
+              ))}
+            </div>
+          </motion.div>
         )}
 
       </div>

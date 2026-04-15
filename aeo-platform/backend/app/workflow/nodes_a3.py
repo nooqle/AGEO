@@ -30,6 +30,7 @@ from app.tools.question_generation import (
     sanitize_panorama_questions as sanitize_generated_panorama_questions,
     validate_baseline_questions as validate_generated_baseline_questions,
 )
+from app.workflow.brand_state import build_effective_brand_profile
 
 from app.core.constants import PlatformConstants, WorkflowConstants
 
@@ -242,7 +243,7 @@ async def _a3_uploaded_list_mode(state: AgentState) -> Command:
 async def _a3_brand_panorama_mode(state: AgentState) -> Command:
     """A3 brand panorama mode: LLM generates brand panorama questions."""
     session_id = state["session_id"]
-    brand_profile = state.get("brand_profile") or {}
+    brand_profile = build_effective_brand_profile(state)
     competitors = state.get("competitors") or []
     brand_name = _extract_brand_name(brand_profile, state)
     identity = _get_identity_override(state)
@@ -414,6 +415,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
 
         return Command(
             update={
+                "brand_profile": brand_profile,
                 "simulated_questions": generated_payload,
                 "questions": flattened_questions,
                 "current_step": "A3",
@@ -474,7 +476,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
 async def _a3_persona_focused_mode(state: AgentState) -> Command:
     """A3 persona focused mode: LLM generates questions based on selected personas."""
     session_id = state["session_id"]
-    brand_profile = state.get("brand_profile") or {}
+    brand_profile = build_effective_brand_profile(state)
     identity = _get_identity_override(state)
     brand_name = brand_profile.get("brand_name", "") or brand_profile.get("name", "")
     if not brand_name:
@@ -682,6 +684,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 
         return Command(
             update={
+                "brand_profile": brand_profile,
                 "simulated_questions": generated_payload,
                 "questions": flattened_questions,
                 "current_step": "A3",
@@ -767,7 +770,7 @@ def _extract_brand_name(brand_profile: dict, state: AgentState) -> str:
 async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
     """A3 baseline dynamic mode: LLM generates industry panorama questions."""
     session_id = state["session_id"]
-    brand_profile = state.get("brand_profile") or {}
+    brand_profile = build_effective_brand_profile(state)
     competitors = state.get("competitors") or []
     brand_name = _extract_brand_name(brand_profile, state)
     identity = _get_identity_override(state)
@@ -957,6 +960,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         # Dual-write: baseline_questions + questions
         return Command(
             update={
+                "brand_profile": brand_profile,
                 "simulated_questions": generated_payload,
                 "baseline_questions": flattened_questions,  # Baseline channel (long-term)
                 "questions": flattened_questions,            # Standard channel (A4 reads this)

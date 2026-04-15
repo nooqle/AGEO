@@ -48,6 +48,7 @@ from app.workflow.runtime_policy_executor import (
     get_user_visible_runtime_label,
 )
 from app.workflow.confirmation import resolve_confirmation_selection
+from app.workflow.brand_state import seed_effective_brand_profile
 
 from sqlalchemy import select
 
@@ -669,6 +670,24 @@ def _reset_follow_up_runtime_state(state_values: dict[str, Any]) -> None:
     state_values["execution_status"] = "running"
 
 
+def _should_seed_follow_up_brand_profile(state_values: dict[str, Any]) -> bool:
+    """Only seed minimal brand context for downstream analysis follow-ups."""
+
+    if state_values.get("next_action") == "a3_question":
+        return True
+
+    reusable_keys = (
+        "simulated_questions",
+        "questions",
+        "fetch_results",
+        "report",
+        "baseline_questions",
+        "baseline_fetch_results",
+        "baseline_report",
+    )
+    return any(state_values.get(key) for key in reusable_keys)
+
+
 def _normalize_attachment_refs(raw_attachments: Any) -> list[dict[str, Any]]:
     """Normalize attachment refs from websocket payload."""
 
@@ -1085,6 +1104,8 @@ async def rebuild_state_from_db(
         "baseline_report": None,
     }
 
+    entity_data: dict[str, Any] | None = None
+
     async with AsyncSessionLocal() as db:
         # 1. Fetch entity info for brand_name / domain / industry
         if entity_id:
@@ -1366,6 +1387,9 @@ async def rebuild_state_from_db(
                 f"[Restore] Backfilled brand_name from brand_profile: {bp_name}"
             )
 
+    if _should_seed_follow_up_brand_profile(state):
+        seed_effective_brand_profile(state, entity_data=entity_data)
+
     logger.info(
         f"[Restore] Rebuilt state for session {session_id}: "
         f"step={highest_step}, history_len={len(state['orchestrator_history'])}, "
@@ -1448,6 +1472,7 @@ async def handle_user_message_langgraph(
     # Save user message to database + lookup entity from session
     entity_id: str | None = None
     session_user_id: UUID | None = None
+    entity_data: dict[str, Any] | None = None
     async with AsyncSessionLocal() as db:
         if persist_user_message:
             message_service = MessageService(db)
@@ -1638,6 +1663,11 @@ async def handle_user_message_langgraph(
                     "latest_user_input": content,
                     "session_recalled": session_was_recalled,
                 }
+                if _should_seed_follow_up_brand_profile(state_values):
+                    seed_effective_brand_profile(
+                        update_state,
+                        entity_data=entity_data,
+                    )
                 _reset_follow_up_runtime_state(update_state)
                 if attachments:
                     update_state["pending_table_intake"] = {
@@ -1734,6 +1764,11 @@ async def handle_user_message_langgraph(
                     restored["selected_tool_mode"] = tool_mode
                     restored["latest_user_input"] = content
                     restored["session_recalled"] = session_was_recalled
+                    if _should_seed_follow_up_brand_profile(restored):
+                        seed_effective_brand_profile(
+                            restored,
+                            entity_data=entity_data,
+                        )
                     # Set A3 mode based on context profiles
                     profile_contexts = [
                         c for c in context if c.get("type") == "profile"
