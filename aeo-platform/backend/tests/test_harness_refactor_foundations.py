@@ -3586,7 +3586,7 @@ def test_question_generation_tool_preserves_persona_and_baseline_contracts():
 
     assert "category" in persona_system
     assert "都市白领" in persona_user
-    assert "行业基线全景问题" in baseline_system
+    assert "行业全景问题" in baseline_system
     assert "闻献" in baseline_user
     assert "绝对禁止在问题中直接提及目标品牌名称" in baseline_system
     assert "直接提及目标品牌的问题不超过总数的 10%" not in baseline_user

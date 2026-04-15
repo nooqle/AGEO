@@ -22,6 +22,14 @@ interface AgentMessageProps {
   isStreaming?: boolean;
 }
 
+function buildSafeThoughtSummary(isThinking: boolean): string {
+  if (isThinking) {
+    return '系统正在整理本轮分析过程，仅展示当前阶段和结论，不展示内部提示与执行规则。';
+  }
+
+  return '本轮分析已完成。出于安全与产品稳定性考虑，内部提示词、结构化约束和执行规则不会向用户展示。';
+}
+
 export function AgentMessage({ message, onConfirmation, isStreaming = false }: AgentMessageProps) {
   const [showThought, setShowThought] = useState(false);
 
@@ -29,6 +37,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
   const layers = message.layers;
   const hasThought = Boolean(layers?.thought);
   const isThinking = isStreaming && hasThought;
+  const safeThoughtSummary = hasThought ? buildSafeThoughtSummary(isThinking) : '';
 
   // Don't render empty messages (only thought, no content/plan/action/confirmation/output)
   const hasVisibleContent = mainContent
@@ -238,7 +247,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                 >
                   <div className="ml-4 pl-3 border-l-2 border-[var(--border-subtle)]">
                     <p className="text-[11px] text-[var(--text-tertiary)] whitespace-pre-wrap leading-relaxed">
-                      {layers?.thought}
+                      {safeThoughtSummary}
                     </p>
                   </div>
                 </motion.div>

@@ -95,7 +95,7 @@ async def stream_llm_with_tpaor(
         step=step,
         step_name=step_name,
         progress=progress_start,
-        message=f"开始调用LLM进行{step_name}...",
+        message=f"正在准备{step_name}...",
         status="running",
     )
 
@@ -159,7 +159,7 @@ async def stream_llm_with_tpaor(
                 step=step,
                 step_name=step_name,
                 progress=round(progress, 2),
-                message=f"正在生成{step_name}内容...",
+                message=f"正在处理{step_name}...",
                 status="running",
             )
 

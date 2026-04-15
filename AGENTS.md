@@ -174,6 +174,24 @@ Required API keys: MiniMax API key, optionally DashScope for backup LLM.
   4. only then create a fully separate branch runtime
 - When real GLM5 credentials are available in the shared AGEO env, do not replace real runtime/E2E with a fake LLM path by default.
 
+## Validation Protocol (Important)
+
+- Every non-trivial change must pass a shared validation flow before it is described as done.
+- Use `python scripts/validate_change.py` from the active feature worktree as the default validation entry point.
+- The minimum validation flow is:
+  1. verify worktree and branch
+  2. inspect changed files
+  3. scan changed source files for `???`
+  4. run backend/frontend static checks relevant to the change
+  5. run targeted tests when behavior or prompt/copy contracts changed
+- Do **not** claim deployment success until all of the following are true:
+  - remote revision is confirmed
+  - backend local health endpoint is healthy
+  - frontend local health endpoint is healthy
+  - external entry URL responds successfully
+- If a previously tried path is already known-bad (for example unsafe PowerShell Chinese writes, stale SSH credential retries, or using old task logs as if they were live), stop and switch paths instead of repeating it.
+- The detailed runbook lives in `docs/design-validation-runtime-and-deploy-protocol-2026-04-15.md`.
+
 
 ## Encoding Safety Rule (Important)
 

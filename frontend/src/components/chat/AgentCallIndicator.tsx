@@ -37,6 +37,28 @@ const agentNameMap: Record<string, string> = {
   'DataAnalyticsAgent': '报告生成',
 };
 
+function looksInternalAgentLabel(label?: string): boolean {
+  if (!label) return false;
+  if (/^A\d+$/i.test(label)) return true;
+  return /(BrandCompetitionAgent|MarketingPersonaAgent|QuestionSimulationAgent|FetchAgent|DataAnalyticsAgent)/i.test(
+    label
+  );
+}
+
+function resolveAgentDisplayName(call: AgentCall): string {
+  const byCode = agentNameMap[call.agentCode || ''];
+  if (byCode) return byCode;
+
+  const byName = agentNameMap[call.agentName];
+  if (byName) return byName;
+
+  if (looksInternalAgentLabel(call.agentName)) {
+    return '分析助手';
+  }
+
+  return call.agentName || '分析助手';
+}
+
 // 状态配置
 const statusConfig = {
   running: {
@@ -94,9 +116,7 @@ export function AgentCallIndicator({
 }: AgentCallIndicatorProps) {
   const config = statusConfig[call.status];
   const Icon = config.icon;
-  const displayName = agentNameMap[call.agentCode || ''] || 
-                      agentNameMap[call.agentName] || 
-                      call.agentName;
+  const displayName = resolveAgentDisplayName(call);
 
   return (
     <div
