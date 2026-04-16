@@ -877,8 +877,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         updateBrowserState(requestId, {
           state: 'waiting_response',
           requiresAction: false,
-          message: '已收到完成确认，Agent 正在继续当前平台抓取...',
-          actionHint: '已收到完成确认，Agent 正在继续当前平台抓取...',
+          message: '已收到完成确认，正在继续当前平台抓取...',
+          actionHint: '已收到完成确认，正在继续当前平台抓取...',
         });
         const next = await api.resolveAioTakeover(takeover.resolvePath, {
           frontendId: registration.frontendId,
@@ -891,8 +891,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           updateBrowserState(requestId, {
             state: 'waiting_response',
             requiresAction: false,
-            message: '已收到完成确认，Agent 正在继续当前平台抓取...',
-            actionHint: '已收到完成确认，Agent 正在继续当前平台抓取...',
+            message: '已收到完成确认，正在继续当前平台抓取...',
+            actionHint: '已收到完成确认，正在继续当前平台抓取...',
             takeover: buildBrowserTakeoverFromRecord(next),
             blockingUrl:
               next.blockingUrl ??
@@ -904,7 +904,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
               state.blockingFingerprint,
             reasonCode: next.reasonCode ?? next.accessBundle.reasonCode ?? state.reasonCode,
           });
-          toast.success('已收到完成确认，Agent 正在继续当前平台抓取。');
+          toast.success('已收到完成确认，正在继续当前平台抓取。');
           return;
         }
         updateBrowserState(requestId, {
@@ -939,7 +939,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     wsBrowserActionResolution?.(requestId, 'completed');
     updateBrowserState(requestId, {
       requiresAction: false,
-      message: '已收到完成确认，Agent 正在继续当前平台抓取...',
+      message: '已收到完成确认，正在继续当前平台抓取...',
     });
   }, [
     removeTakeoverRegistration,

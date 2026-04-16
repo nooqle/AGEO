@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS: int = 30
     AIO_MAX_PARALLEL_BROWSER_SESSIONS: int = 4
     AIO_AUTH_ENV_SCOPE: str = "default"
+    AIO_BROWSER_LOCALE: str = "zh-CN"
+    AIO_BROWSER_ACCEPT_LANGUAGE: str = "zh-CN,zh;q=0.9,en;q=0.8"
+    AIO_BROWSER_TIMEZONE_ID: str = "Asia/Shanghai"
 
     # LLM Orchestration Mode (v2)
     USE_LLM_ORCHESTRATION: bool = False

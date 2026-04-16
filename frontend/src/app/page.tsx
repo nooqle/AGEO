@@ -73,9 +73,9 @@ const faqs = [
       '因为不是所有引用都同样有价值。你需要知道哪些来源真正影响 AI 的推荐，哪些来源更值得优先补强。',
   },
   {
-    question: '为什么强调 Agent 持续推进？',
+    question: '为什么强调分析会持续推进？',
     answer:
-      '因为 Specta 不是停在一张静态报告上。Agent 会在同一条对话里继续抓取、追问、判断，并把结果推进成交付物。',
+      '因为 Specta 不是停在一张静态报告上。系统会在同一条对话里继续抓取、追问、判断，并把结果推进成交付物。',
   },
   {
     question: '如何获得邀请码？',
@@ -127,7 +127,7 @@ function HeroPreview() {
               放在更靠前的位置，并引用了两家汽车媒体。
             </div>
             <div className="rounded-[18px] border border-[#dbe4f3] bg-white px-4 py-4 text-sm leading-7 text-[#475467]">
-              Agent 已识别出 <span className="font-semibold text-[#111827]">品牌被提及</span>、<span className="font-semibold text-[#111827]">竞品压制</span> 与 <span className="font-semibold text-[#111827]">媒体引用</span>，正在继续生成品牌表现报告。
+              已识别出 <span className="font-semibold text-[#111827]">品牌被提及</span>、<span className="font-semibold text-[#111827]">竞品压制</span> 与 <span className="font-semibold text-[#111827]">媒体引用</span>，正在继续生成品牌表现报告。
             </div>
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
@@ -380,10 +380,10 @@ function WorkflowGrid() {
 
 function AgentOrchestrationMock() {
   const nodes = [
-    ['基线 Agent', '品牌档案', '已完成', '建立品牌与竞品上下文'],
-    ['问题 Agent', '问题列表', '已生成', '输出高意图问题清单'],
-    ['答案 Agent', '答案抓取', '进行中', '从真实平台采集回答'],
-    ['报告 Agent', '品牌表现报告', '待更新', '沉淀报告并继续追问'],
+    ['全景分析', '品牌档案', '已完成', '建立品牌与竞品上下文'],
+    ['问题生成', '问题列表', '已生成', '输出高意图问题清单'],
+    ['答案抓取', '答案抓取', '进行中', '从真实平台采集回答'],
+    ['报告整理', '品牌表现报告', '待更新', '沉淀报告并继续追问'],
   ] as const;
 
   return (
@@ -392,7 +392,7 @@ function AgentOrchestrationMock() {
         <div className="rounded-[24px] border border-[#eceff4] bg-[#fbfbfd] p-5">
           <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-[#8d95a4]">
             <span>对话编排</span>
-            <span>Agent 正在推进</span>
+            <span>分析持续推进中</span>
           </div>
           <div className="mt-5 space-y-3">
             <div className="max-w-[82%] rounded-[18px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-7 text-[#344054]">
@@ -488,7 +488,7 @@ function AgentOrchestrationMock() {
               <div className="mt-3 rounded-[16px] bg-[#fbfbfd] px-4 py-4">
                 <div className="text-sm font-semibold text-[#111827]">正在定位高意图家庭场景</div>
                 <div className="mt-2 text-sm leading-7 text-[#5b6472]">
-                  Agent 会把竞品压制最明显的问法补进报告，并继续支持追问。
+                  系统会把竞品压制最明显的问法补进报告，并继续支持追问。
                 </div>
               </div>
             </div>
@@ -504,7 +504,7 @@ function AgentCapabilityStories() {
     {
       index: '01',
       title: '从对话里发起品牌全景分析',
-      description: '用户直接在对话里提出分析目标，Agent 识别意图后生成问题并启动全景分析。',
+      description: '用户直接在对话里提出分析目标，系统识别意图后生成问题并启动全景分析。',
       visual: (
         <div className="space-y-3 rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
           <div className="max-w-[82%] rounded-[16px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-6 text-[#344054]">
@@ -703,7 +703,7 @@ export default function HomePage() {
               如何使用
             </a>
             <a href="#agent" className="transition-colors hover:text-[#111827]">
-              Agent 优势
+              持续推进
             </a>
             <a href="#faq" className="transition-colors hover:text-[#111827]">
               FAQ
@@ -827,7 +827,7 @@ export default function HomePage() {
               核心能力
             </SectionTag>
           <h2 className="mt-5 max-w-[1180px] text-[40px] font-semibold leading-[1.12] tracking-[-0.06em] text-[#111827] lg:text-[68px]">
-            Agent 在一条对话里推进分析
+            分析会在一条对话里持续推进
           </h2>
           <p className="mt-6 max-w-[920px] text-[19px] leading-[1.95] text-[#5b6472]">
             不停在一张报告上，而是继续抓取、继续追问、继续更新交付物。

@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from patchright.async_api import Browser, BrowserContext
 
+from app.core.config import settings
 from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
 from app.services.aio_runtime_contracts import AioPlatformRoots
 from app.services.aio_session_manager import aio_session_manager
@@ -315,11 +316,16 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         self._context_owned_by_client = True
         context_options: dict[str, Any] = {
             "viewport": {"width": 1280, "height": 720},
+            "locale": settings.AIO_BROWSER_LOCALE,
+            "timezone_id": settings.AIO_BROWSER_TIMEZONE_ID,
             "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
+            "extra_http_headers": {
+                "Accept-Language": settings.AIO_BROWSER_ACCEPT_LANGUAGE,
+            },
         }
         storage_state = await self._load_storage_state()
         if storage_state:

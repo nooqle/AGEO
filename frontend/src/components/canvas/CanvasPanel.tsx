@@ -58,7 +58,7 @@ export function CanvasPanel() {
                 暂无分析报告
               </h3>
               <p className="text-sm text-[var(--text-tertiary)] max-w-[280px]">
-                开始与 Agent 对话，分析完成后可在此处查看详细报告
+                开始发起分析，完成后可在此处查看详细报告
               </p>
             </>
           )}

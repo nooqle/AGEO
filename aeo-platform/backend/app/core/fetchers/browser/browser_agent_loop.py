@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -28,6 +29,8 @@ from app.core.fetchers.browser.browser_agent_policy import decide_browser_stage
 logger = logging.getLogger(__name__)
 _LLM_DEFAULT_STAGES = frozenset({"preflight", "wait_gate", "resume_probe"})
 _BROWSER_AGENT_LLM_PAYLOAD_LIMIT = 2200
+_BROWSER_AGENT_LLM_SEMAPHORE: asyncio.Semaphore | None = None
+_BROWSER_AGENT_LLM_SEMAPHORE_SIZE = 0
 _LLM_BROWSER_SYSTEM_PROMPT = (
     "你是浏览器执行代理。"
     "请只基于给定阶段指令和精简页面观测，判断当前是继续自动操作、需要人工接管、还是已经可以继续主流程。"
@@ -117,7 +120,9 @@ def _trim_browser_agent_payload(
     text = observation.get("visible_text_excerpt")
     if isinstance(text, str) and text:
         for text_limit in (180, 120, 80, 0):
-            observation["visible_text_excerpt"] = text[:text_limit] if text_limit > 0 else None
+            observation["visible_text_excerpt"] = (
+                text[:text_limit] if text_limit > 0 else None
+            )
             if _payload_char_length(compact) <= max_chars:
                 return compact, False
 
@@ -191,9 +196,15 @@ def _parse_llm_decision(payload: dict[str, Any]) -> BrowserAgentDecision | None:
     raw_takeover = payload.get("takeover")
     if isinstance(raw_takeover, dict):
         takeover = BrowserTakeoverNeed(
-            blocker_kind=str(raw_takeover.get("blocker_kind") or blocker_kind or "unknown"),
-            reason_code=str(raw_takeover.get("reason_code") or "browser_agent_takeover"),
-            message=str(raw_takeover.get("message") or "browser agent takeover required"),
+            blocker_kind=str(
+                raw_takeover.get("blocker_kind") or blocker_kind or "unknown"
+            ),
+            reason_code=str(
+                raw_takeover.get("reason_code") or "browser_agent_takeover"
+            ),
+            message=str(
+                raw_takeover.get("message") or "browser agent takeover required"
+            ),
             action_type=(
                 str(raw_takeover.get("action_type"))
                 if raw_takeover.get("action_type") is not None
@@ -249,6 +260,21 @@ def _is_safe_navigate_target(
     except Exception:
         return False
     return bool(candidate.netloc and candidate.netloc == target.netloc)
+
+
+def _get_browser_agent_llm_semaphore() -> asyncio.Semaphore:
+    global _BROWSER_AGENT_LLM_SEMAPHORE, _BROWSER_AGENT_LLM_SEMAPHORE_SIZE
+
+    settings = get_settings()
+    configured = int(getattr(settings, "BROWSER_AGENT_LLM_MAX_CONCURRENCY", 1) or 1)
+    limit = max(1, configured)
+    if (
+        _BROWSER_AGENT_LLM_SEMAPHORE is None
+        or _BROWSER_AGENT_LLM_SEMAPHORE_SIZE != limit
+    ):
+        _BROWSER_AGENT_LLM_SEMAPHORE = asyncio.Semaphore(limit)
+        _BROWSER_AGENT_LLM_SEMAPHORE_SIZE = limit
+    return _BROWSER_AGENT_LLM_SEMAPHORE
 
 
 def _sanitize_llm_decision(
@@ -334,7 +360,9 @@ class LLMBrowserAgentPolicy:
         try:
             model = get_llm_model()
         except Exception as exc:
-            logger.warning("[BrowserAgentLoop] Failed to get browser-agent LLM model: %s", exc)
+            logger.warning(
+                "[BrowserAgentLoop] Failed to get browser-agent LLM model: %s", exc
+            )
             return None
         compact_payload = {
             "loop_context": loop_context_to_llm_payload(loop_context),
@@ -357,25 +385,47 @@ class LLMBrowserAgentPolicy:
                 _payload_char_length(compact_payload),
             )
             return None
+        semaphore = _get_browser_agent_llm_semaphore()
+        max_tokens = max(
+            64,
+            int(getattr(settings, "BROWSER_AGENT_LLM_MAX_TOKENS", 384) or 384),
+        )
+        thinking_enabled = bool(
+            getattr(settings, "BROWSER_AGENT_LLM_THINKING_ENABLED", False)
+        )
+        model_name = str(
+            getattr(settings, "BROWSER_AGENT_LLM_MODEL_NAME", "") or ""
+        ).strip()
+        call_kwargs: dict[str, Any] = {
+            "temperature": 0.1,
+            "max_tokens": max_tokens,
+            "thinking_enabled": thinking_enabled,
+        }
+        if model_name:
+            call_kwargs["model"] = model_name
         try:
-            response = await model.async_call(
-                messages=[
-                    {"role": "system", "content": _LLM_BROWSER_SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"{_build_llm_browser_agent_prompt(loop_context)} "
-                            "当缺少足够把握时，返回 outcome=continue、blocker_kind=none、actions=[]。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":")),
-                    },
-                ],
-                temperature=0.1,
-                max_tokens=1200,
-            )
+            async with semaphore:
+                response = await model.async_call(
+                    messages=[
+                        {"role": "system", "content": _LLM_BROWSER_SYSTEM_PROMPT},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"{_build_llm_browser_agent_prompt(loop_context)} "
+                                "当缺少足够把握时，返回 outcome=continue、blocker_kind=none、actions=[]。"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                compact_payload,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        },
+                    ],
+                    **call_kwargs,
+                )
         except Exception as exc:
             logger.warning("[BrowserAgentLoop] LLM browser decision failed: %s", exc)
             return None
@@ -424,8 +474,7 @@ class HybridBrowserAgentPolicy:
             )
 
         llm_first = (
-            self._llm_policy is not None
-            and loop_context.stage in _LLM_DEFAULT_STAGES
+            self._llm_policy is not None and loop_context.stage in _LLM_DEFAULT_STAGES
         )
 
         llm_decision: BrowserAgentDecision | None = None

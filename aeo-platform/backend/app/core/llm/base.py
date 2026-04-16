@@ -111,7 +111,13 @@ class BaseLLMConfig(ABC):
 class BaseLLMModel(ABC):
     """Abstract base for LLM provider model."""
 
-    ALLOWED_KWARGS: set[str] = {"temperature", "max_tokens", "tool_choice", "timeout"}
+    ALLOWED_KWARGS: set[str] = {
+        "temperature",
+        "max_tokens",
+        "tool_choice",
+        "timeout",
+        "model",
+    }
 
     def _filter_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Filter kwargs to only allow known parameters."""

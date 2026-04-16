@@ -1133,7 +1133,7 @@ async def test_aio_open_headed_for_user_action_does_not_close_active_takeover_su
 
 
 @pytest.mark.asyncio
-async def test_wait_for_browser_action_resume_skips_second_probe_for_aio_completed(
+async def test_wait_for_browser_action_resume_uses_probe_for_aio_completed(
     monkeypatch,
 ):
     persist_runtime_state = AsyncMock()
@@ -1146,7 +1146,7 @@ async def test_wait_for_browser_action_resume_skips_second_probe_for_aio_complet
     handler = SimpleNamespace(
         client=client,
         URL="https://chat.deepseek.com/",
-        probe_resume_gate_ready=AsyncMock(return_value=False),
+        probe_resume_gate_ready=AsyncMock(return_value=True),
     )
 
     monkeypatch.setattr(
@@ -1165,7 +1165,7 @@ async def test_wait_for_browser_action_resume_skips_second_probe_for_aio_complet
 
     assert resumed is True
     assert resolution == "completed"
-    handler.probe_resume_gate_ready.assert_not_awaited()
+    handler.probe_resume_gate_ready.assert_awaited_once_with("login")
     sync_to_existing_target_page.assert_awaited_once_with("https://chat.deepseek.com/")
     persist_runtime_state.assert_awaited_once()
 
@@ -1569,7 +1569,68 @@ async def test_emit_browser_action_handoff_uses_browser_events_for_reused_reques
 
 
 @pytest.mark.asyncio
-async def test_persist_browser_action_takeover_uses_takeover_scene_metadata(monkeypatch):
+async def test_emit_browser_action_handoff_resolves_user_id_for_authoritative_sync(
+    monkeypatch,
+):
+    reset_browser_action_test_state()
+    request = SimpleNamespace(request_id="browser_action_existing")
+    register_request = AsyncMock(return_value=(request, True))
+    sync_authoritative = AsyncMock()
+
+    monkeypatch.setattr(
+        browser_action_contract,
+        "_resolve_user_id_from_handler",
+        AsyncMock(return_value="resolved_user_1"),
+    )
+    monkeypatch.setattr(
+        browser_action_contract,
+        "get_or_register_browser_action_request",
+        register_request,
+    )
+    monkeypatch.setattr(
+        browser_action_contract,
+        "ensure_aio_takeover_bundle",
+        AsyncMock(return_value={"takeover_id": "takeover_1"}),
+    )
+    monkeypatch.setattr(
+        browser_action_contract, "persist_browser_action_takeover", AsyncMock()
+    )
+    monkeypatch.setattr(
+        browser_action_contract,
+        "_sync_authoritative_browser_action_issue",
+        sync_authoritative,
+    )
+    monkeypatch.setattr(
+        browser_action_contract, "send_browser_state_event", AsyncMock()
+    )
+    monkeypatch.setattr(
+        browser_action_contract, "send_browser_user_action_event", AsyncMock()
+    )
+
+    await browser_action_contract.emit_browser_action_handoff(
+        session_id="session_1",
+        platform="deepseek",
+        state="waiting_for_login",
+        action_type="login",
+        message="DeepSeek 需要登录",
+        action_hint="请先登录",
+        progress=0.3,
+        reply_markdown="**DeepSeek** 需要登录",
+        handler=SimpleNamespace(
+            URL="https://chat.deepseek.com/",
+            client=SimpleNamespace(task_id="task_1"),
+        ),
+    )
+
+    assert register_request.await_args.kwargs["user_id"] == "resolved_user_1"
+    assert sync_authoritative.await_args.kwargs["user_id"] == "resolved_user_1"
+    reset_browser_action_test_state()
+
+
+@pytest.mark.asyncio
+async def test_persist_browser_action_takeover_uses_takeover_scene_metadata(
+    monkeypatch,
+):
     update_request = AsyncMock()
     monkeypatch.setattr(
         browser_action_contract,
@@ -3858,7 +3919,9 @@ async def test_build_agent_tools_hides_history_tools_for_specific_current_follow
         {
             "user_id": "user_1",
             "entity_id": "entity_1",
-            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "豆包这次表现怎么样？"}
+            ],
             "fetch_results": [
                 {
                     "question_id": "q1",
@@ -3882,7 +3945,9 @@ async def test_build_agent_tools_hides_history_tools_for_specific_current_follow
 def test_context_summary_marks_hidden_history_tools_for_specific_current_followup():
     summary = _build_context_summary(
         {
-            "orchestrator_history": [{"role": "user", "content": "DeepSeek 这次表现怎么样？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "DeepSeek 这次表现怎么样？"}
+            ],
             "fetch_results": [
                 {
                     "question_id": "q1",
@@ -3910,7 +3975,9 @@ def test_context_summary_marks_hidden_history_tools_for_specific_current_followu
 def test_public_skill_index_respects_contextual_hidden_tools():
     rendered = _build_public_skill_index(
         {
-            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "豆包这次表现怎么样？"}
+            ],
             "fetch_results": [
                 {
                     "question_id": "q1",
@@ -3933,7 +4000,9 @@ def test_public_skill_index_respects_contextual_hidden_tools():
 def test_contextual_tool_surface_note_marks_current_followup_constraints():
     note = _build_contextual_tool_surface_note(
         {
-            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "豆包这次表现怎么样？"}
+            ],
             "fetch_results": [
                 {
                     "question_id": "q1",
@@ -3954,7 +4023,9 @@ def test_prompt_assembly_includes_contextual_tool_surface_section_for_current_fo
     assembly = build_orchestrator_prompt_assembly(
         {
             "brand_name": "雅姿",
-            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "豆包这次表现怎么样？"}
+            ],
             "fetch_results": [
                 {
                     "question_id": "q1",
@@ -3975,7 +4046,9 @@ def test_prompt_assembly_budget_preserves_core_and_current_tool_surface():
     assembly = build_orchestrator_prompt_assembly(
         {
             "brand_name": "雅姿",
-            "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "豆包这次表现怎么样？"}
+            ],
             "fetch_results": [
                 {
                     "question_id": f"q{i}",
@@ -3995,7 +4068,8 @@ def test_prompt_assembly_budget_preserves_core_and_current_tool_surface():
             },
             "report": {
                 "report_type": "persona",
-                "executive_summary": "品牌在礼赠场景中稳定提及，但引用质量波动较大。" * 20,
+                "executive_summary": "品牌在礼赠场景中稳定提及，但引用质量波动较大。"
+                * 20,
             },
         }
     )
@@ -4012,7 +4086,9 @@ def test_prompt_assembly_hides_history_availability_when_knowledge_tools_hidden(
     assembly = build_orchestrator_prompt_assembly(
         {
             "brand_name": "雅姿",
-            "orchestrator_history": [{"role": "user", "content": "DeepSeek 这次表现怎么样？"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "DeepSeek 这次表现怎么样？"}
+            ],
             "fetch_results": [
                 {
                     "question_id": "q1",
@@ -4040,7 +4116,9 @@ def test_prompt_assembly_instruction_defense_only_renders_on_trigger():
     clean_rendered = build_orchestrator_prompt_assembly(
         {
             "brand_name": "雅姿",
-            "orchestrator_history": [{"role": "user", "content": "帮我继续分析这个品牌"}],
+            "orchestrator_history": [
+                {"role": "user", "content": "帮我继续分析这个品牌"}
+            ],
         }
     ).render()
     risky_rendered = build_orchestrator_prompt_assembly(

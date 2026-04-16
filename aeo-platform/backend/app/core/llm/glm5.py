@@ -46,25 +46,15 @@ class GLM5Config(BaseLLMConfig):
         if self.api_key is None:
             self.api_key = getattr(settings, "GLM5_API_KEY", None)
         if self.base_url == "https://open.bigmodel.cn/api/paas/v4":
-            self.base_url = getattr(
-                settings, "GLM5_BASE_URL", self.base_url
-            )
+            self.base_url = getattr(settings, "GLM5_BASE_URL", self.base_url)
         if self.model_name == "glm-5":
-            self.model_name = getattr(
-                settings, "GLM5_MODEL_NAME", self.model_name
-            )
+            self.model_name = getattr(settings, "GLM5_MODEL_NAME", self.model_name)
         if self.thinking_enabled:
-            self.thinking_enabled = getattr(
-                settings, "GLM5_THINKING_ENABLED", True
-            )
+            self.thinking_enabled = getattr(settings, "GLM5_THINKING_ENABLED", True)
         if self.temperature == 0.7:
-            self.temperature = getattr(
-                settings, "GLM5_TEMPERATURE", self.temperature
-            )
+            self.temperature = getattr(settings, "GLM5_TEMPERATURE", self.temperature)
         if self.max_tokens == 16384:
-            self.max_tokens = getattr(
-                settings, "GLM5_MAX_TOKENS", self.max_tokens
-            )
+            self.max_tokens = getattr(settings, "GLM5_MAX_TOKENS", self.max_tokens)
 
     def to_openai_kwargs(self) -> dict[str, Any]:
         return {
@@ -135,18 +125,37 @@ class GLM5Model(BaseLLMModel):
             request_kwargs["timeout"] = self.config.timeout
         return self.client.chat.completions.create(**request_kwargs)
 
+    @staticmethod
+    def _apply_thinking_override(
+        request_kwargs: dict[str, Any],
+        thinking_enabled: bool | None,
+    ) -> None:
+        if thinking_enabled is None:
+            return
+        extra_body = dict(request_kwargs.get("extra_body") or {})
+        if thinking_enabled:
+            extra_body["thinking"] = {"type": "enabled", "clear_thinking": True}
+        else:
+            extra_body.pop("thinking", None)
+        if extra_body:
+            request_kwargs["extra_body"] = extra_body
+        else:
+            request_kwargs.pop("extra_body", None)
+
     def __call__(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
+        thinking_enabled_override = kwargs.pop("thinking_enabled", None)
         request_kwargs = self.config.to_completion_kwargs()
         request_kwargs["messages"] = self._build_messages(messages)
         if tools:
             fn_tools = [t for t in tools if t.get("type") == "function"]
             if fn_tools:
                 request_kwargs["tools"] = fn_tools
+        self._apply_thinking_override(request_kwargs, thinking_enabled_override)
         request_kwargs.update(self._filter_kwargs(kwargs))
 
         started_at = perf_counter()
@@ -176,9 +185,11 @@ class GLM5Model(BaseLLMModel):
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> Generator[LLMResponse, None, None]:
+        thinking_enabled_override = kwargs.pop("thinking_enabled", None)
         request_kwargs = self.config.to_completion_kwargs()
         request_kwargs["messages"] = self._build_messages(messages)
         request_kwargs["stream"] = True
+        self._apply_thinking_override(request_kwargs, thinking_enabled_override)
 
         # GLM5 needs tool_stream for streaming tool calls
         if tools:
@@ -201,7 +212,10 @@ class GLM5Model(BaseLLMModel):
 
         for chunk in stream_response:
             delta = chunk.choices[0].delta
-            if hasattr(chunk.choices[0], "finish_reason") and chunk.choices[0].finish_reason:
+            if (
+                hasattr(chunk.choices[0], "finish_reason")
+                and chunk.choices[0].finish_reason
+            ):
                 last_finish_reason = chunk.choices[0].finish_reason
             if getattr(chunk, "usage", None):
                 final_usage = self._parse_usage(chunk.usage)
@@ -257,9 +271,7 @@ class GLM5Model(BaseLLMModel):
             yield LLMResponse(
                 content="",  # GLM5: no content duplication in final chunk
                 thinking_blocks=(
-                    [ThinkingBlock(text=reasoning_buffer)]
-                    if reasoning_buffer
-                    else []
+                    [ThinkingBlock(text=reasoning_buffer)] if reasoning_buffer else []
                 ),
                 tool_calls=tool_blocks,
                 usage=final_usage,

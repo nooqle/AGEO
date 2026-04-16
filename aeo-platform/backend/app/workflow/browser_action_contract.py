@@ -365,8 +365,8 @@ async def persist_browser_action_takeover(
     if isinstance(takeover, dict):
         resolved_target_url = resolved_target_url or takeover.get("target_url")
         resolved_blocking_url = resolved_blocking_url or takeover.get("blocking_url")
-        resolved_blocking_fingerprint = (
-            resolved_blocking_fingerprint or takeover.get("blocking_fingerprint")
+        resolved_blocking_fingerprint = resolved_blocking_fingerprint or takeover.get(
+            "blocking_fingerprint"
         )
         resolved_reason_code = resolved_reason_code or takeover.get("reason_code")
     await update_browser_action_request(
@@ -404,7 +404,14 @@ async def emit_browser_action_handoff(
     """Emit one frontend-facing browser action handoff contract."""
 
     resolved_target_url = target_url or getattr(handler, "URL", None)
-    resolved_task_id = task_id or str(getattr(getattr(handler, "client", None), "task_id", "") or "") or None
+    resolved_task_id = (
+        task_id
+        or str(getattr(getattr(handler, "client", None), "task_id", "") or "")
+        or None
+    )
+    resolved_user_id = user_id
+    if handler is not None:
+        resolved_user_id = await _resolve_user_id_from_handler(handler, user_id)
     request, _created_new = await get_or_register_browser_action_request(
         session_id=session_id,
         platform=platform,
@@ -415,7 +422,7 @@ async def emit_browser_action_handoff(
         progress=progress,
         run_id=run_id,
         task_id=resolved_task_id,
-        user_id=user_id,
+        user_id=resolved_user_id,
         state=state,
         reason_code=reason_code,
         blocking_url=blocking_url,
@@ -438,7 +445,7 @@ async def emit_browser_action_handoff(
         if takeover is None and handler is not None:
             takeover = await ensure_aio_takeover_bundle(
                 handler=handler,
-                user_id=user_id,
+                user_id=resolved_user_id,
                 platform=platform,
                 request_id=request.request_id,
                 action_type=action_type,
@@ -467,7 +474,7 @@ async def emit_browser_action_handoff(
             state=state,
             run_id=run_id,
             task_id=resolved_task_id,
-            user_id=user_id,
+            user_id=resolved_user_id,
             target_url=resolved_target_url,
             blocking_url=blocking_url,
             blocking_fingerprint=blocking_fingerprint,
@@ -597,13 +604,6 @@ async def wait_for_browser_action_resume(
         return False, resolution
 
     client = getattr(handler, "client", None)
-    if getattr(client, "aio_session_id", None):
-        # AIO resolve is immediate-ack. Once the user marks the blocker as
-        # completed, hand control back to the executor and let the next browser
-        # step surface a fresh blocker if the scene is still not ready.
-        await _persist_handler_runtime_state()
-        return True, resolution
-
     if callable(on_completed):
         completed = bool(await on_completed())
         if completed:
@@ -614,16 +614,69 @@ async def wait_for_browser_action_resume(
         await _persist_handler_runtime_state()
         return True, resolution
 
-    probe = getattr(handler, "probe_resume_gate_ready", None)
-    if not callable(probe):
+    probe: Any | None = None
+    probe_persists_runtime = False
+    if getattr(client, "aio_session_id", None):
+        probe = _build_aio_resume_gate_probe(handler, action_type)
+        probe_persists_runtime = True
+    else:
+        handler_probe = getattr(handler, "probe_resume_gate_ready", None)
+        if callable(handler_probe):
+
+            async def _handler_probe() -> bool:
+                return bool(await handler_probe(action_type))
+
+            probe = _handler_probe
+
+    if probe is None:
         await _persist_handler_runtime_state()
         return True, resolution
 
     deadline = time.monotonic() + max(float(ready_timeout), 0.0)
     while True:
-        if bool(await probe(action_type)):
-            await _persist_handler_runtime_state()
+        if bool(await probe()):
+            if not probe_persists_runtime:
+                await _persist_handler_runtime_state()
             return True, resolution
         if time.monotonic() >= deadline:
             return False, resolution
         await asyncio.sleep(poll_interval)
+
+
+def _build_aio_resume_gate_probe(handler: Any, action_type: str) -> Any:
+    async def _probe() -> bool:
+        client = getattr(handler, "client", None)
+        sync_page = getattr(client, "sync_to_existing_target_page", None)
+        if callable(sync_page):
+            try:
+                await sync_page(getattr(handler, "URL", None))
+            except Exception as exc:
+                logger.warning(
+                    "[BrowserActionContract] Failed to sync live page before "
+                    "resume probe (action=%s): %s",
+                    action_type,
+                    exc,
+                )
+        probe_ready = getattr(handler, "probe_resume_gate_ready", None)
+        if not callable(probe_ready):
+            persist = getattr(client, "persist_runtime_state", None)
+            if callable(persist):
+                await persist()
+            return True
+        ready = bool(await probe_ready(action_type))
+        if not ready:
+            return False
+        persist = getattr(client, "persist_runtime_state", None)
+        if callable(persist):
+            try:
+                await persist()
+            except Exception as exc:
+                logger.warning(
+                    "[BrowserActionContract] Failed to persist browser runtime state "
+                    "after AIO resume probe (action=%s): %s",
+                    action_type,
+                    exc,
+                )
+        return True
+
+    return _probe
