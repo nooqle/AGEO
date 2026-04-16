@@ -88,7 +88,10 @@ class GLM5Config(BaseLLMConfig):
 class GLM5Model(BaseLLMModel):
     """GLM5 model wrapper using OpenAI compatible API."""
 
-    ALLOWED_KWARGS = BaseLLMModel.ALLOWED_KWARGS | {"tool_stream"}
+    ALLOWED_KWARGS = BaseLLMModel.ALLOWED_KWARGS | {
+        "tool_stream",
+        "response_format",
+    }
 
     def __init__(self, config: GLM5Config | None = None):
         self.config = config or GLM5Config()
