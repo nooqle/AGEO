@@ -5,6 +5,7 @@ import io
 import asyncio
 import json
 import os
+import re
 
 # Fix Windows console encoding for Chinese characters
 if sys.platform == "win32":
@@ -55,6 +56,29 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 _WS_AUTH_COOKIE_NAME = "specta_access_token"
+_TOKEN_QUERY_RE = re.compile(r"(?i)(token=)[^&\\s\"']+")
+
+
+class _TokenRedactingFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        def scrub(value):
+            if isinstance(value, str):
+                return _TOKEN_QUERY_RE.sub(r"\1<redacted>", value)
+            if isinstance(value, tuple):
+                return tuple(scrub(item) for item in value)
+            if isinstance(value, list):
+                return [scrub(item) for item in value]
+            if isinstance(value, dict):
+                return {key: scrub(item) for key, item in value.items()}
+            return value
+
+        record.msg = scrub(record.msg)
+        if record.args:
+            record.args = scrub(record.args)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_TokenRedactingFilter())
 
 
 def _mask_value(value: str | None, *, visible_prefix: int = 6) -> str:
