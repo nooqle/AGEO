@@ -45,6 +45,14 @@ interface ChatPanelProps {
 
 const INITIAL_HISTORY_MESSAGE_LIMIT = 30;
 const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
+const WAITING_STAGE_PROGRESS: Record<string, number> = {
+  A1: 0.2,
+  A2: 0.35,
+  A3: 0.5,
+  A4: 0.6,
+  A7: 0.75,
+  A5: 0.9,
+};
 
 const BROWSER_MESSAGE_KEYWORDS: Record<
   BrowserState['platform'],
@@ -383,6 +391,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           // Reconstruct layers and stage results from persisted metadata
           const reconstructed = rebuildPersistedLayers(msg.metadata as Record<string, unknown> | null);
           const layers = reconstructed.layers;
+          const inlineConfirmation = reconstructed.inlineConfirmation;
           for (const sr of reconstructed.stageResults) {
             addStageResult(sr);
           }
@@ -404,6 +413,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             ),
             ...(outputCards ? { outputCards } : {}),
             ...(layers ? { layers } : {}),
+            ...(inlineConfirmation ? { inlineConfirmation } : {}),
           });
         }
       } catch {
@@ -1196,7 +1206,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       setOptimisticExecutionProgress(optionId);
 
       // Send confirmation to backend — selection must be a plain string
-      sendConfirmation('', label);
+      sendConfirmation(inlineConf.requestId || '', label);
     }
   }, [
     pendingConfirmation,
@@ -1309,16 +1319,27 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return undefined;
   };
 
+  const waitingCheckpointStage = activeTask?.latest_run?.checkpoint_stage;
+  const waitingProgressMessage = activeTask?.progress_message
+    || (activeTask?.latest_run?.status === 'waiting_input' ? '等待用户确认' : undefined);
   const isWaitingForInput = !isAgentExecuting && activeTask?.latest_run?.status === 'waiting_input';
   const liveCurrentStage = isAgentExecuting
     ? executionProgress?.stage
-    : activeTask?.current_stage ?? executionProgress?.stage;
+    : (isWaitingForInput
+      ? waitingCheckpointStage || activeTask?.current_stage || executionProgress?.stage
+      : activeTask?.current_stage ?? executionProgress?.stage);
   const liveProgress = isAgentExecuting
     ? executionProgress?.progress
-    : activeTask?.progress ?? executionProgress?.progress;
+    : (isWaitingForInput
+      ? WAITING_STAGE_PROGRESS[
+          (waitingCheckpointStage || activeTask?.current_stage || '').toUpperCase()
+        ] ?? activeTask?.progress ?? executionProgress?.progress
+      : activeTask?.progress ?? executionProgress?.progress);
   const liveProgressMessage = isAgentExecuting
     ? executionProgress?.details
-    : activeTask?.progress_message ?? executionProgress?.details;
+    : (isWaitingForInput
+      ? waitingProgressMessage ?? executionProgress?.details
+      : activeTask?.progress_message ?? executionProgress?.details);
   const hasBrowserWorkspace = Boolean(browserWorkspace);
   const handleFocusBrowserWorkspace = useCallback(() => {
     if (!browserWorkspace) {

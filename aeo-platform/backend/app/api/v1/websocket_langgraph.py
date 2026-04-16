@@ -146,6 +146,52 @@ def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
     return "等待用户输入..."
 
 
+def _build_persisted_inline_confirmation(
+    state_values: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Build durable inline-confirmation metadata from workflow state."""
+
+    pending_confirmation = state_values.get("pending_confirmation")
+    if not isinstance(pending_confirmation, dict) or not pending_confirmation:
+        return None
+
+    options = pending_confirmation.get("options")
+    if not isinstance(options, list):
+        options = []
+
+    message = pending_confirmation.get("message")
+    if not isinstance(message, str) or not message.strip():
+        message = _build_waiting_input_message(state_values)
+
+    payload: dict[str, Any] = {
+        "message": _sanitize_user_visible_runtime_text(message),
+        "options": options,
+        "type": (
+            pending_confirmation.get("type")
+            if isinstance(pending_confirmation.get("type"), str)
+            else "simple"
+        ),
+    }
+
+    request_id = pending_confirmation.get("request_id")
+    if isinstance(request_id, str) and request_id.strip():
+        payload["request_id"] = request_id
+
+    waiting_tips = pending_confirmation.get("waiting_tips")
+    if isinstance(waiting_tips, list) and waiting_tips:
+        payload["waiting_tips"] = waiting_tips
+
+    checklist = pending_confirmation.get("checklist")
+    if isinstance(checklist, list) and checklist:
+        payload["checklist"] = checklist
+
+    estimated_time = pending_confirmation.get("estimated_time")
+    if isinstance(estimated_time, str) and estimated_time.strip():
+        payload["estimated_time"] = estimated_time
+
+    return payload
+
+
 async def _get_workflow_state(workflow: Any, config: dict[str, Any]) -> Any:
     """Read LangGraph state without using sync APIs on async checkpointers."""
 
@@ -2046,15 +2092,21 @@ async def _save_final_message(session_id: str, workflow, config: dict):
 
             async with AsyncSessionLocal() as db:
                 message_service = MessageService(db)
+                inline_confirmation = _build_persisted_inline_confirmation(
+                    state_values
+                )
+                metadata: dict[str, Any] = {
+                    "metrics": metrics,
+                    "report_summary": report.get("key_findings", []),
+                    "layers": layers,
+                }
+                if inline_confirmation is not None:
+                    metadata["inline_confirmation"] = inline_confirmation
                 await message_service.save_message(
                     session_id=UUID(session_id),
                     role="agent",
                     content=content,
-                    metadata={
-                        "metrics": metrics,
-                        "report_summary": report.get("key_findings", []),
-                        "layers": layers,
-                    },
+                    metadata=metadata,
                 )
             logger.info(f"[LangGraph] Agent message saved for session {session_id}")
         else:

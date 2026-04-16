@@ -82,6 +82,36 @@ def _identity_suffix(identity: str | None) -> str:
     return f"（以“{identity}”身份视角）" if identity else ""
 
 
+async def _persist_a3_task_progress(
+    state: AgentState,
+    *,
+    progress: float,
+    message: str,
+) -> None:
+    """Persist A3 task progress so active-task polling reflects the real stage."""
+
+    task_id = state.get("task_id")
+    if not task_id:
+        return
+
+    try:
+        from uuid import UUID as _UUID
+
+        from app.core.database import AsyncSessionLocal
+        from app.services.task_service import TaskService
+
+        async with AsyncSessionLocal() as db:
+            task_svc = TaskService(db)
+            await task_svc.update_progress(
+                _UUID(task_id),
+                stage="A3",
+                progress=progress,
+                message=message,
+            )
+    except Exception as exc:
+        logger.warning("[A3] TaskService update_progress failed: %s", exc)
+
+
 async def a3_question_node(state: AgentState) -> Command:
     """A3: Generate simulated questions.
 
@@ -147,6 +177,11 @@ async def _a3_uploaded_list_mode(state: AgentState) -> Command:
         step_name="问题列表导入",
         progress=0.65,
         message=f"正在将上传表格映射为 A3 问题列表，共 {len(uploaded_questions)} 条问题...",
+    )
+    await _persist_a3_task_progress(
+        state,
+        progress=0.45,
+        message=f"正在导入 A3 问题列表，共 {len(uploaded_questions)} 条问题",
     )
 
     existing_uploaded_questions = []
@@ -226,6 +261,11 @@ async def _a3_uploaded_list_mode(state: AgentState) -> Command:
         message=f"已按{import_mode_label}更新 A3 问题列表，共 {len(flattened_questions)} 条问题",
         status="completed",
     )
+    await _persist_a3_task_progress(
+        state,
+        progress=0.5,
+        message=f"A3 问题列表已更新，共 {len(flattened_questions)} 条问题",
+    )
 
     return Command(
         update={
@@ -264,6 +304,11 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
         session_id=session_id,
         step="question_simulation",
         step_name="问题模拟生成",
+        progress=0.45,
+        message=f"品牌全景分析：正在生成问题{_identity_suffix(identity)}",
+    )
+    await _persist_a3_task_progress(
+        state,
         progress=0.45,
         message=f"品牌全景分析：正在生成问题{_identity_suffix(identity)}",
     )
@@ -359,6 +404,11 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             progress=1.0,
             message=f"品牌全景分析：已生成 {question_count} 个问题",
             status="completed",
+        )
+        await _persist_a3_task_progress(
+            state,
+            progress=0.5,
+            message=f"品牌全景分析：已生成 {question_count} 个问题",
         )
 
         detailed_response = f"已为「{brand_name}」完成品牌全景问题整理，共 {question_count} 个问题，详见右侧问题列表。"
@@ -522,6 +572,11 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
         progress=0.45,
         message=f"画像聚焦模式：为 {len(selected_personas)} 个画像生成问题{_identity_suffix(identity)}",
     )
+    await _persist_a3_task_progress(
+        state,
+        progress=0.45,
+        message=f"画像聚焦模式：为 {len(selected_personas)} 个画像生成问题{_identity_suffix(identity)}",
+    )
 
     await send_tpaor_event(
         session_id, "thought",
@@ -625,6 +680,11 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             progress=1.0,
             message=f"画像聚焦模式：生成 {question_count} 个问题",
             status="completed",
+        )
+        await _persist_a3_task_progress(
+            state,
+            progress=0.5,
+            message=f"画像聚焦模式：已生成 {question_count} 个问题",
         )
 
         detailed_response = f"已基于「{', '.join(persona_names)}」生成 {question_count} 个聚焦问题，详见右侧问题列表。"
@@ -794,6 +854,11 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
         progress=0.45,
         message=f"品牌全景分析：正在生成行业全景问题{_identity_suffix(identity)}",
     )
+    await _persist_a3_task_progress(
+        state,
+        progress=0.45,
+        message=f"品牌全景分析：正在生成行业全景问题{_identity_suffix(identity)}",
+    )
 
     await send_tpaor_event(
         session_id, "thought",
@@ -895,6 +960,11 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             progress=1.0,
             message=f"品牌全景分析：已生成 {question_count} 个行业全景问题",
             status="completed",
+        )
+        await _persist_a3_task_progress(
+            state,
+            progress=0.5,
+            message=f"品牌全景分析：已生成 {question_count} 个行业全景问题",
         )
 
         detailed_response = (

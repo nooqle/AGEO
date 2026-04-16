@@ -36,6 +36,7 @@ export interface AgentMessageLayers {
 
 // New: Inline confirmation (Layer 4, replaces modal)
 export interface InlineConfirmation {
+  requestId?: string;
   message: string;
   options: Array<{ id: string; label: string; description?: string; recommended?: boolean }>;
   selectedOptionId?: string;      // Set after user selects

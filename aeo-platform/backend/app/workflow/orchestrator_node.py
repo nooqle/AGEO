@@ -2579,6 +2579,29 @@ def build_orchestrator_messages(state: AgentState) -> list[dict[str, Any]]:
     return messages
 
 
+def _get_pending_question_simulation_request_id(state: AgentState) -> str | None:
+    """Return the pending A3 tool_call_id before the orchestrator asks for fetch mode."""
+
+    history = state.get("orchestrator_history") or []
+    if not history:
+        return None
+
+    last_item = history[-1]
+    if last_item.get("role") != "assistant":
+        return None
+
+    tool_calls = last_item.get("tool_calls") or []
+    if not tool_calls:
+        return None
+
+    first_tool = tool_calls[0] or {}
+    function_name = ((first_tool.get("function") or {}).get("name") or "").strip()
+    if function_name != "question_simulation":
+        return None
+
+    return str(first_tool.get("id") or state.get("tool_call_id") or "").strip() or None
+
+
 async def _hydrate_knowledge_manifest(state: AgentState) -> dict[str, Any] | None:
     """Load a lightweight history-availability summary for planning."""
 
@@ -3177,6 +3200,27 @@ async def orchestrator_node(state: AgentState) -> Command:
     if runtime_policy_command is not None:
         return runtime_policy_command
 
+    user_decisions = dict(state.get("user_decisions", {}) or {})
+    pending_a3_request_id = _get_pending_question_simulation_request_id(state)
+    if (
+        pending_a3_request_id
+        and state.get("simulated_questions")
+        and not state.get("awaiting_user")
+        and not user_decisions.get("fetch_mode_pending")
+        and not user_decisions.get("fetch_mode_confirmed")
+    ):
+        logger.info(
+            "[Orchestrator] Shortcutting post-A3 fetch-mode confirmation without extra LLM round"
+        )
+        return await _force_fetch_mode_confirmation(
+            state=state,
+            session_id=session_id,
+            reply_text="",
+            new_history=build_orchestrator_messages(state),
+            request_id=pending_a3_request_id,
+            current_retry_counts=dict(state.get("agent_retry_counts", {}) or {}),
+        )
+
     brand_seed_command = await _route_brand_seed_without_llm(
         state=state,
         session_id=session_id,
@@ -3670,15 +3714,19 @@ async def _handle_tool_call(
             reply_text = fallback_reply
 
         # Enhanced inline confirmation with type, tips, and checklist
+        estimated_time = tool_args.get("estimated_time")
         payload: dict[str, Any] = {
             "message": msg,
             "options": options,
             "type": confirm_type,
+            "request_id": request_id,
         }
         if waiting_tips:
             payload["waiting_tips"] = waiting_tips
         if checklist:
             payload["checklist"] = checklist
+        if isinstance(estimated_time, str) and estimated_time.strip():
+            payload["estimated_time"] = estimated_time
         await session_event_publisher.emit_to_session(
             session_id, "inline_confirmation", payload
         )
@@ -3718,10 +3766,15 @@ async def _handle_tool_call(
                 "orchestrator_reply": reply_text,
                 "orchestrator_history": new_history,
                 "pending_confirmation": {
+                    "request_id": request_id,
                     "step_id": "orchestrator",
                     "step_name": "等待用户确认",
                     "message": msg,
                     "options": options,
+                    "type": confirm_type,
+                    "waiting_tips": waiting_tips,
+                    "checklist": checklist,
+                    "estimated_time": estimated_time,
                 },
                 "agent_retry_counts": current_retry_counts,
             },

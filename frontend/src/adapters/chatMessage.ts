@@ -1,5 +1,5 @@
 ﻿import type { Message as ApiMessage } from '@/types/api';
-import type { Message as UiMessage, ActionLogEntry, AgentMessageLayers, OutputCard } from '@/types/message';
+import type { Message as UiMessage, ActionLogEntry, AgentMessageLayers, InlineConfirmation, OutputCard } from '@/types/message';
 import type { StageResult } from '@/types/snapshot';
 import type { CanvasContentType, CanvasPreviewMetricValue } from '@/types/canvas';
 import { normalizePreviewData } from '@/hooks/websocket/canvas';
@@ -158,17 +158,19 @@ export function buildRealtimeOutputCard(outputId: string, outputType: CanvasCont
 export function rebuildPersistedLayers(metadata: Record<string, unknown> | null | undefined): {
   layers?: AgentMessageLayers;
   stageResults: StageResult[];
+  inlineConfirmation?: InlineConfirmation;
 } {
   const persistedLayers = metadata?.layers as Record<string, unknown> | undefined;
-  if (!persistedLayers) {
-    return { layers: undefined, stageResults: [] };
+  const persistedInlineConfirmation = metadata?.inline_confirmation as Record<string, unknown> | undefined;
+  if (!persistedLayers && !persistedInlineConfirmation) {
+    return { layers: undefined, stageResults: [], inlineConfirmation: undefined };
   }
 
-  const actionLogs: ActionLogEntry[] = Array.isArray(persistedLayers.actionLogs)
+  const actionLogs: ActionLogEntry[] = Array.isArray(persistedLayers?.actionLogs)
     ? reconcilePersistedActionLogs(persistedLayers.actionLogs as Array<Record<string, unknown>>)
     : [];
 
-  const stageResults: StageResult[] = Array.isArray(persistedLayers.stageResults)
+  const stageResults: StageResult[] = Array.isArray(persistedLayers?.stageResults)
     ? (persistedLayers.stageResults as Array<Record<string, unknown>>).map((sr) => ({
         stage: (sr.stage as string) || '',
         stageName: (sr.stage_name as string) || '',
@@ -178,13 +180,53 @@ export function rebuildPersistedLayers(metadata: Record<string, unknown> | null 
       }))
     : [];
 
+  const inlineConfirmation: InlineConfirmation | undefined = persistedInlineConfirmation
+    ? {
+        requestId: typeof persistedInlineConfirmation.request_id === 'string'
+          ? persistedInlineConfirmation.request_id
+          : undefined,
+        message: (persistedInlineConfirmation.message as string) || '',
+        options: Array.isArray(persistedInlineConfirmation.options)
+          ? (persistedInlineConfirmation.options as Array<Record<string, unknown>>).map((option) => ({
+              id: typeof option.id === 'string' ? option.id : String(option.label || ''),
+              label: typeof option.label === 'string' ? option.label : '',
+              description: typeof option.description === 'string' ? option.description : undefined,
+              recommended: Boolean(option.recommended),
+            }))
+          : [],
+        type: persistedInlineConfirmation.type === 'guided' ? 'guided' : 'simple',
+        waitingTips: Array.isArray(persistedInlineConfirmation.waiting_tips)
+          ? (persistedInlineConfirmation.waiting_tips as string[])
+          : undefined,
+        estimatedTime: typeof persistedInlineConfirmation.estimated_time === 'string'
+          ? persistedInlineConfirmation.estimated_time
+          : undefined,
+        checklist: Array.isArray(persistedInlineConfirmation.checklist)
+          ? (persistedInlineConfirmation.checklist as Array<Record<string, unknown>>).map((item, index) => ({
+              id: typeof item.id === 'string' ? item.id : `checklist_${index}`,
+              label: typeof item.label === 'string' ? item.label : '',
+              status:
+                item.status === 'completed'
+                || item.status === 'in_progress'
+                || item.status === 'pending'
+                || item.status === 'failed'
+                  ? item.status
+                  : 'pending',
+            }))
+          : undefined,
+      }
+    : undefined;
+
   return {
-    layers: {
-      thought: (persistedLayers.thought as string) || undefined,
-      planText: (persistedLayers.planText as string) || undefined,
-      actionLogs,
-    },
+    layers: persistedLayers
+      ? {
+          thought: (persistedLayers.thought as string) || undefined,
+          planText: (persistedLayers.planText as string) || undefined,
+          actionLogs,
+        }
+      : undefined,
     stageResults,
+    inlineConfirmation,
   };
 }
 
