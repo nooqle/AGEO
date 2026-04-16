@@ -34,7 +34,9 @@ async def test_login_resume_probe_uses_browser_agent_when_page_is_ready(monkeypa
             )
         )
 
-    monkeypatch.setattr(base_handler_module, "collect_browser_agent_step", _fake_collect)
+    monkeypatch.setattr(
+        base_handler_module, "collect_browser_agent_step", _fake_collect
+    )
 
     handler = _DummyHandler(client=SimpleNamespace(page=None))
 
@@ -54,7 +56,9 @@ async def test_login_resume_probe_stays_blocked_when_browser_agent_still_needs_t
             )
         )
 
-    monkeypatch.setattr(base_handler_module, "collect_browser_agent_step", _fake_collect)
+    monkeypatch.setattr(
+        base_handler_module, "collect_browser_agent_step", _fake_collect
+    )
 
     handler = _DummyHandler(client=SimpleNamespace(page=None))
 
@@ -93,14 +97,18 @@ async def test_login_resume_probe_runs_auto_action_before_ready(monkeypatch):
     async def _fake_collect(**kwargs):
         return next(decisions)
 
-    monkeypatch.setattr(base_handler_module, "collect_browser_agent_step", _fake_collect)
+    monkeypatch.setattr(
+        base_handler_module, "collect_browser_agent_step", _fake_collect
+    )
 
     handler = _DummyHandler(client=SimpleNamespace(page=None))
 
     assert await handler.probe_resume_gate_ready("login") is True
 
 
-async def test_modal_resume_probe_prefers_browser_agent_ready_over_modal_scan(monkeypatch):
+async def test_modal_resume_probe_prefers_browser_agent_ready_over_modal_scan(
+    monkeypatch,
+):
     async def _fake_collect(**kwargs):
         return SimpleNamespace(
             decision=BrowserAgentDecision(
@@ -111,7 +119,9 @@ async def test_modal_resume_probe_prefers_browser_agent_ready_over_modal_scan(mo
             )
         )
 
-    monkeypatch.setattr(base_handler_module, "collect_browser_agent_step", _fake_collect)
+    monkeypatch.setattr(
+        base_handler_module, "collect_browser_agent_step", _fake_collect
+    )
 
     handler = _DummyHandler(client=SimpleNamespace(page=None))
 
@@ -208,6 +218,8 @@ def test_kimi_resume_probe_context_uses_platform_specific_note():
     )
 
     assert context.note is not None
+    assert "继续提问" in context.note
+    assert "新建对话" in context.note
     assert "Ask Anything" in context.note
     assert context.meta["action_type"] == "login"
 

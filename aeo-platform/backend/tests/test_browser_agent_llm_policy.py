@@ -81,10 +81,52 @@ async def test_llm_browser_agent_policy_parses_json_response(monkeypatch):
     assert decision.actions[0].ref == "@e0"
 
 
-async def test_hybrid_browser_agent_policy_keeps_bootstrap_takeover_outside_llm_stage(monkeypatch):
+async def test_llm_browser_agent_policy_uses_browser_agent_limits(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeModel:
+        async def async_call(self, messages, tools=None, **kwargs):
+            captured["messages"] = messages
+            captured["kwargs"] = kwargs
+            return SimpleNamespace(
+                content='{"outcome":"continue","blocker_kind":"none","confidence":0.8,"actions":[]}'
+            )
+
+    monkeypatch.setattr(browser_agent_loop, "get_llm_model", lambda: _FakeModel())
+    monkeypatch.setattr(
+        browser_agent_loop,
+        "get_settings",
+        lambda: SimpleNamespace(
+            BROWSER_AGENT_LLM_ENABLED=True,
+            BROWSER_AGENT_LLM_MAX_CONCURRENCY=2,
+            BROWSER_AGENT_LLM_MAX_TOKENS=320,
+            BROWSER_AGENT_LLM_THINKING_ENABLED=False,
+            BROWSER_AGENT_LLM_MODEL_NAME="glm-4.7",
+        ),
+    )
+
+    decision = await LLMBrowserAgentPolicy().decide(
+        _observation(),
+        loop_context=_loop_context(),
+    )
+
+    assert decision is not None
+    assert captured["kwargs"] == {
+        "temperature": 0.1,
+        "max_tokens": 320,
+        "thinking_enabled": False,
+        "model": "glm-4.7",
+    }
+
+
+async def test_hybrid_browser_agent_policy_keeps_bootstrap_takeover_outside_llm_stage(
+    monkeypatch,
+):
     class _UnexpectedLLMPolicy:
         async def decide(self, observation, *, loop_context):
-            raise AssertionError("llm policy should not run when bootstrap already decided")
+            raise AssertionError(
+                "llm policy should not run when bootstrap already decided"
+            )
 
     observation = BrowserPageObservation(
         platform="kimi",

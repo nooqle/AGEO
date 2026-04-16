@@ -33,7 +33,16 @@ class KimiHandler(BaseBrowserHandler):
     PLATFORM_KEY = "kimi"
     BROWSER_READY_URL_PATTERNS = ("kimi.com",)
     BROWSER_LOGIN_URL_PATTERNS = ("login", "signin", "auth")
-    BROWSER_READY_HINTS = ("new chat", "chat history", "kimi code", "kimi claw")
+    BROWSER_READY_HINTS = (
+        "new chat",
+        "chat history",
+        "kimi code",
+        "kimi claw",
+        "新建对话",
+        "历史记录",
+        "继续提问",
+        "开始新对话",
+    )
     BROWSER_LOGIN_HINTS = (
         "wechat qr code",
         "log in with phone number",
@@ -411,14 +420,12 @@ class KimiHandler(BaseBrowserHandler):
         note = super()._browser_agent_stage_note(stage=stage, action_type=action_type)
         if stage == "resume_probe" and action_type == "login":
             return (
-                f"{note} Kimi 的就绪信号通常是已经回到聊天主页，可见 Ask Anything 输入区，"
-                "或者可见 New Chat / Chat History / Docs / Slides / Deep Research 等已登录 shell。"
+                f"{note} Kimi 的就绪信号通常是已经回到聊天主页，可见“继续提问”或 Ask Anything 输入区，"
+                "或者可见“新建对话”/ New Chat、“历史记录”/ Chat History 等已登录 shell。"
                 "如果页面中央仍有登录弹窗、微信二维码、手机号或验证码输入，则仍需人工接管。"
             )
         if stage == "wait_gate":
-            return (
-                f"{note} Kimi 可能在提交后晚到弹出登录框；如果出现居中的登录弹窗或遮罩，不要继续当作正常回答页。"
-            )
+            return f"{note} Kimi 可能在提交后晚到弹出登录框；如果出现居中的登录弹窗或遮罩，不要继续当作正常回答页。"
         return note
 
     async def _resubmit_question(self, question: str) -> None:
