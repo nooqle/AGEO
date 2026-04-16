@@ -127,7 +127,7 @@ function HeroPreview() {
               放在更靠前的位置，并引用了两家汽车媒体。
             </div>
             <div className="rounded-[18px] border border-[#dbe4f3] bg-white px-4 py-4 text-sm leading-7 text-[#475467]">
-              已识别出 <span className="font-semibold text-[#111827]">品牌被提及</span>、<span className="font-semibold text-[#111827]">竞品压制</span> 与 <span className="font-semibold text-[#111827]">媒体引用</span>，正在继续生成品牌表现报告。
+              已识别出 <span className="font-semibold text-[#111827]">品牌被提及</span>、<span className="font-semibold text-[#111827]">竞品压制</span> 与 <span className="font-semibold text-[#111827]">媒体引用</span>，正在继续生成用户画像场景分析报告。
             </div>
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
@@ -144,7 +144,7 @@ function HeroPreview() {
 
         <div className="rounded-[22px] bg-[#f7f8fb] px-5 py-5">
           <div className="flex items-center justify-between">
-            <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">品牌表现报告</div>
+            <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">用户画像场景分析报告</div>
             <div className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[#111827]">
               已生成
             </div>
@@ -383,7 +383,7 @@ function AgentOrchestrationMock() {
     ['全景分析', '品牌档案', '已完成', '建立品牌与竞品上下文'],
     ['问题生成', '问题列表', '已生成', '输出高意图问题清单'],
     ['答案抓取', '答案抓取', '进行中', '从真实平台采集回答'],
-    ['报告整理', '品牌表现报告', '待更新', '沉淀报告并继续追问'],
+    ['报告整理', '用户画像场景分析报告', '待更新', '沉淀报告并继续追问'],
   ] as const;
 
   return (
@@ -619,7 +619,7 @@ function AgentCapabilityStories() {
                 {[
                   ['基线问题列表', '已生成'],
                   ['AI 答案抓取结果', '已完成'],
-                  ['品牌表现报告', '持续更新'],
+                  ['用户画像场景分析报告', '持续更新'],
                 ].map(([name, status]) => (
                   <div key={name} className="rounded-[16px] border border-[#eceff4] bg-[#fbfbfd] px-4 py-3">
                     <div className="text-sm font-semibold text-[#111827]">{name}</div>

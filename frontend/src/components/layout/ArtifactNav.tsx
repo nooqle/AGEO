@@ -52,7 +52,7 @@ function getReportMeta(content: CanvasContent) {
     return { icon: RiShieldCheckLine, label: '置信' };
   }
   if (content.category === 'baseline') {
-    return { icon: RiFileChartLine, label: '基准' };
+    return { icon: RiFileChartLine, label: '全景' };
   }
   return { icon: RiPieChartLine, label: '分析' };
 }

@@ -360,6 +360,122 @@ def _build_platform_preference_text(platform: str) -> str:
     return "偏向中文综合内容与高频可访问来源。"
 
 
+def _collect_platform_availability(metrics: dict[str, Any]) -> dict[str, list[str]]:
+    platform_breakdown = metrics.get("platform_breakdown", {}) or {}
+    available: list[str] = []
+    unavailable: list[str] = []
+
+    for platform in PLATFORMS:
+        stats = (
+            platform_breakdown.get(platform, {})
+            if isinstance(platform_breakdown, dict)
+            else {}
+        )
+        success_count = int(stats.get("success", 0) or 0)
+        label = _display_platform_name(platform)
+        if success_count > 0:
+            available.append(label)
+        else:
+            unavailable.append(label)
+
+    return {"available": available, "unavailable": unavailable}
+
+
+def _build_reliability_notice(metrics: dict[str, Any]) -> str:
+    availability = _collect_platform_availability(metrics)
+    available = availability.get("available", [])
+    unavailable = availability.get("unavailable", [])
+    if not unavailable:
+        return ""
+
+    available_text = "、".join(available) if available else "暂无"
+    unavailable_text = "、".join(unavailable)
+    return (
+        f"数据边界：本轮仅获得 {available_text} 的有效平台数据；"
+        f"{unavailable_text} 平台本轮暂未成功获取有效结果，以下结论不代表这些平台的真实品牌表现。"
+    )
+
+
+def _summary_overclaims_unavailable_platforms(
+    summary: str, unavailable_platforms: list[str]
+) -> bool:
+    normalized = " ".join(str(summary or "").split())
+    risk_markers = ("完全缺位", "提及率 0", "提及率0", "0%", "零提及", "没有提及")
+    return any(
+        platform in normalized and any(marker in normalized for marker in risk_markers)
+        for platform in unavailable_platforms
+    )
+
+
+def _build_guarded_summary_text(
+    *,
+    executive_summary: str,
+    default_summary: str,
+    metrics: dict[str, Any],
+) -> str:
+    availability = _collect_platform_availability(metrics)
+    unavailable = availability.get("unavailable", [])
+    candidate = " ".join(str(executive_summary or "").split()).strip() or default_summary
+    if unavailable and _summary_overclaims_unavailable_platforms(candidate, unavailable):
+        candidate = default_summary
+    return _clip_text(candidate, 220)
+
+
+def _format_delta_label(current: float, baseline: float) -> str:
+    delta = current - baseline
+    if abs(delta) < 0.005:
+        return "与品牌全景分析基本持平"
+    direction = "提升" if delta > 0 else "回落"
+    return f"较品牌全景分析{direction} {abs(delta):.1%}"
+
+
+def _build_baseline_comparison_lines(
+    *,
+    analysis_mode: str,
+    summary_metrics: dict[str, Any],
+    baseline_metrics: dict[str, Any] | None,
+    baseline_report: dict[str, Any] | None,
+) -> list[str]:
+    if analysis_mode != "persona":
+        return []
+
+    if not baseline_metrics:
+        return [
+            "### 与品牌全景分析对比",
+            "- 当前缺少品牌全景分析基线，本次仅能做场景内诊断，暂时无法判断该画像场景相对品牌整体表现是提升还是回落。",
+        ]
+
+    baseline_summary = baseline_metrics.get("summary_metrics", {}) or {}
+    current_mention = float(summary_metrics.get("brand_mention_rate", 0) or 0)
+    baseline_mention = float(baseline_metrics.get("mention_rate", 0) or 0)
+    current_content = float(summary_metrics.get("content_citation_rate", 0) or 0)
+    baseline_content = float(baseline_summary.get("content_citation_rate", 0) or 0)
+    current_hit = int(summary_metrics.get("scenario_hit_count", 0) or 0)
+    current_total = int(summary_metrics.get("scenario_total", 0) or 0)
+    baseline_hit = int(baseline_summary.get("scenario_hit_count", 0) or 0)
+    baseline_total = int(baseline_summary.get("scenario_total", 0) or 0)
+
+    lines = [
+        "### 与品牌全景分析对比",
+        f"- 提及率：当前场景 {current_mention:.1%}，品牌全景分析 {baseline_mention:.1%}，{_format_delta_label(current_mention, baseline_mention)}。",
+        f"- 内容引用率：当前场景 {current_content:.1%}，品牌全景分析 {baseline_content:.1%}，{_format_delta_label(current_content, baseline_content)}。",
+        f"- 场景进入情况：当前画像场景覆盖 {current_hit}/{current_total}，品牌全景分析覆盖 {baseline_hit}/{baseline_total}。",
+    ]
+
+    findings = (
+        baseline_report.get("key_findings", [])[:2]
+        if isinstance(baseline_report, dict)
+        else []
+    )
+    finding_text = "；".join(
+        str(item).strip() for item in findings if str(item).strip()
+    )
+    if finding_text:
+        lines.append(f"- 全景分析的核心提醒：{finding_text}。")
+
+    return lines
+
+
 def _build_aeo_report_facts(
     *,
     fetch_results: list[dict[str, Any]],
@@ -522,7 +638,10 @@ def _build_aeo_report_facts(
             for item in (citation_stats.get("top_domains", []) or [])[:3]
             if isinstance(item, dict) and item.get("domain")
         ]
-        if mention_count <= 0:
+        if success_count <= 0:
+            status = "本轮该平台暂未成功获取到有效数据，当前无法判断品牌在该平台的真实占位。"
+            problem = "优先修复该平台的抓取稳定性，再判断品牌是否真实缺席或被竞品压制。"
+        elif mention_count <= 0:
             status = f"本轮 {success_count}/{total_count or '--'} 次成功回答里尚未稳定提及本品牌。"
             problem = (
                 "当前更像收录或语料缺口问题，应优先补齐该平台可抓取的高质量品牌内容。"
@@ -704,6 +823,9 @@ def build_report_markdown(
     competitor_metrics: list[dict[str, Any]],
     executive_summary: str,
     key_findings: list[str],
+    analysis_mode: str = "persona",
+    baseline_metrics: dict[str, Any] | None = None,
+    baseline_report: dict[str, Any] | None = None,
 ) -> str:
     facts = _build_aeo_report_facts(
         fetch_results=fetch_results,
@@ -769,19 +891,24 @@ def build_report_markdown(
     default_summary = (
         f"本轮共监测 {total_questions or '若干'} 个核心问题。{brand_name} 当前提及率为 {mention_rate}，"
         f"官网引用占比 {official_ratio}，品牌内容引用占比 {brand_content_ratio}。"
-        f"最大压力集中在品牌缺位场景与竞品同框场景，说明品牌虽然已经被部分平台识别，"
+        f"最大压力集中在品牌待补场景与竞品同框场景，说明品牌虽然已经被部分平台识别，"
         f"但尚未形成稳定、可复用的高置信信源与对比语料，业务上会直接影响高意图问题下的优先推荐。"
     )
-    summary_text = (
-        " ".join(str(executive_summary or "").split()).strip() or default_summary
+    summary_text = _build_guarded_summary_text(
+        executive_summary=executive_summary,
+        default_summary=default_summary,
+        metrics=metrics,
     )
-    summary_text = _clip_text(summary_text, 200)
+    reliability_notice = _build_reliability_notice(metrics)
 
     lines: list[str] = [
         "## 一、核心执行摘要",
         summary_text,
         "",
     ]
+
+    if reliability_notice:
+        lines.extend(["### 数据可靠性说明", f"- {reliability_notice}", ""])
 
     if key_findings:
         lines.append("### 关键发现")
@@ -793,7 +920,7 @@ def build_report_markdown(
 
     lines.extend(
         [
-            "## 二、核心数据基准看板",
+            "## 二、核心数据对比看板",
             "| 指标名称 | 指标定义 | "
             f"{brand_name} 数据 | {competitor_a_name} 数据 | {competitor_b_name} 数据 | 诊断结论 |",
             "| --- | --- | ---: | ---: | ---: | --- |",
@@ -814,6 +941,15 @@ def build_report_markdown(
             )
             + " |"
         )
+
+    baseline_comparison_lines = _build_baseline_comparison_lines(
+        analysis_mode=analysis_mode,
+        summary_metrics=summary_metrics,
+        baseline_metrics=baseline_metrics,
+        baseline_report=baseline_report,
+    )
+    if baseline_comparison_lines:
+        lines.extend(["", *baseline_comparison_lines])
 
     lines.extend(
         [
@@ -862,7 +998,7 @@ def build_report_markdown(
             + " |"
         )
 
-    lines.extend(["", "## 四、主题场景诊断：缺位与竞争图谱", "### 品牌缺位场景"])
+    lines.extend(["", "## 四、主题场景诊断：机会与竞争图谱", "### 品牌待补场景"])
     if missing_examples:
         for index, item in enumerate(missing_examples[:3], start=1):
             examples = [
@@ -874,7 +1010,7 @@ def build_report_markdown(
                 examples[0]
                 if examples
                 else str(item.get("scenario_label", "") or "").strip()
-                or f"缺位场景 {index}"
+                or f"待补场景 {index}"
             )
             evidence = str(item.get("evidence", "") or "").strip()
             action_hint = str(item.get("action_hint", "") or "").strip()
@@ -885,7 +1021,7 @@ def build_report_markdown(
                     f"- 数据依据：{evidence or 'AI 已回答该类问题，但品牌未进入最终答案。'}",
                     (
                         "- 业务影响：在这类场景里，用户已经带着明确需求来提问，"
-                        "品牌如果完全缺位，流量与心智会直接被竞品或替代方案截走。"
+                        "品牌如果迟迟未进入答案，流量与心智会直接被竞品或替代方案截走。"
                     ),
                 ]
             )
@@ -893,7 +1029,7 @@ def build_report_markdown(
                 lines.append(f"- 需要补齐的语料方向：{action_hint}")
     else:
         lines.append(
-            "- 本轮未发现完全缺位的典型场景，但仍建议扩大问题样本，继续排查长尾场景。"
+            "- 本轮未发现典型的待补场景，但仍建议扩大问题样本，继续排查长尾场景。"
         )
 
     lines.extend(["", "### 竞争胶着场景"])
@@ -964,12 +1100,12 @@ def build_report_markdown(
             "- 要把品牌自己的权威说法、医生或专家背书、场景化证据和对比论点，持续铺到更高权重的内容阵地里，用更稳定的 EEAT 信号去对冲竞品和负向语料。",
             "",
             "### 3. 填补盲区漏洞（拓展增量流量）",
-            "- 针对缺位场景，定向产出首发内容，让品牌先进入答案，再争取主胜排序。",
+            "- 针对待补场景，定向产出首发内容，让品牌先进入答案，再争取主胜排序。",
             "- 内容选题要直接对应问题表达，而不是泛泛做品牌宣传；重点补齐用户高意图问题和场景化推荐问题。",
             "",
             "### 4. 按月度 / 双周回测监测",
             "- 持续回测四个核心指标：提及率、官网引用占比、品牌内容引用占比、负向情感占比。",
-            "- 同时追踪各平台表现、缺位场景与竞争胶着场景的变化，验证新增语料是否真的进入了答案与引用链。",
+            "- 同时追踪各平台表现、待补场景与竞争胶着场景的变化，验证新增语料是否真的进入了答案与引用链。",
         ]
     )
 
@@ -988,6 +1124,9 @@ def ensure_report_markdown(
     source_overview: dict[str, Any],
     mention_sentiment_analysis: dict[str, Any],
     competitor_metrics: list[dict[str, Any]],
+    analysis_mode: str = "persona",
+    baseline_metrics: dict[str, Any] | None = None,
+    baseline_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     report_data["aeo_report_facts"] = _build_aeo_report_facts(
         fetch_results=fetch_results,
@@ -1002,11 +1141,22 @@ def ensure_report_markdown(
     markdown = str(report_data.get("report_markdown", "") or "").strip()
     required_headers = [
         "## 一、核心执行摘要",
-        "## 二、核心数据基准看板",
+        "## 二、核心数据对比看板",
         "## 三、跨大模型平台表现拆解",
-        "## 四、主题场景诊断：缺位与竞争图谱",
+        "## 四、主题场景诊断：机会与竞争图谱",
         "## 五、AEO 常态化运营与优化策略",
     ]
+    default_summary = (
+        f"本轮品牌提及率 {float(summary_metrics.get('brand_mention_rate', 0) or 0):.1%}，"
+        f"内容引用率 {float(summary_metrics.get('content_citation_rate', 0) or 0):.1%}，"
+        f"场景覆盖 {int(summary_metrics.get('scenario_hit_count', 0) or 0)}/"
+        f"{int(summary_metrics.get('scenario_total', 0) or 0)}。"
+    )
+    report_data["executive_summary"] = _build_guarded_summary_text(
+        executive_summary=str(report_data.get("executive_summary", "") or ""),
+        default_summary=default_summary,
+        metrics=metrics,
+    )
     if (
         len(markdown) < 120
         or any(header not in markdown for header in required_headers)
@@ -1030,6 +1180,9 @@ def ensure_report_markdown(
                 for item in report_data.get("key_findings", []) or []
                 if str(item or "").strip()
             ],
+            analysis_mode=analysis_mode,
+            baseline_metrics=baseline_metrics,
+            baseline_report=baseline_report,
         )
     return report_data
 

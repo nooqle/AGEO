@@ -42,7 +42,15 @@ export function buildExecutionProgress(
 
   const oldProgress = previous?.progress ?? 0;
   const newProgress = data.progress ?? 0;
-  const safeProgress = Math.max(oldProgress, newProgress);
+  const previousStage = typeof previous?.stage === 'string' ? previous.stage : '';
+  const nextStage = typeof data.stage === 'string' ? data.stage : '';
+  const stageChanged =
+    Boolean(previousStage) &&
+    Boolean(nextStage) &&
+    previousStage !== nextStage;
+  const safeProgress = stageChanged
+    ? newProgress
+    : Math.max(oldProgress, newProgress);
 
   return {
     stage: data.stage || '',

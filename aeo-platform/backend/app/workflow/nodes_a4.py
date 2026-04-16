@@ -440,6 +440,44 @@ def _build_aio_packet_fetch_summary(
     }
 
 
+def _should_count_browser_failure_for_breaker(result: dict[str, Any]) -> bool:
+    """Decide whether a browser failure should trip the platform breaker.
+
+    Browser breaker should only open for platform-availability problems, not for
+    softer extraction misses where the page loaded but we failed to collect a
+    usable answer on the current question.
+    """
+
+    if result.get("success"):
+        return False
+
+    error_type = str(result.get("error_type") or "").strip().lower()
+    if error_type in {
+        "rate_limit",
+        "user_skipped",
+        "user_action_timeout",
+        "resume_gate_failed",
+        "modal_timeout",
+    }:
+        return False
+
+    if error_type == "verify":
+        return True
+
+    error_message = " ".join(str(result.get("error") or "").split()).lower()
+    extraction_miss_markers = (
+        "未能提取到有效回答",
+        "empty answer",
+        "empty response",
+        "no content",
+        "content_len=0",
+    )
+    if any(marker.lower() in error_message for marker in extraction_miss_markers):
+        return False
+
+    return True
+
+
 class _ProgressTracker:
     """Track per-platform completion during Phase 1 API fetch and emit progress."""
 
@@ -1420,7 +1458,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         breaker.record_failure()
                         breaker.record_failure()  # Force OPEN
                     else:
-                        breaker.record_failure()
+                        if _should_count_browser_failure_for_breaker(r):
+                            breaker.record_failure()
+                        else:
+                            logger.info(
+                                "[A4] %s soft browser failure on Q%d won't trip breaker (%s / %s)",
+                                platform_name,
+                                idx + 1,
+                                error_type or "no_error_type",
+                                str(r.get("error") or "").strip() or "no_error_message",
+                            )
 
                     results.append((idx, r))
 
