@@ -884,9 +884,19 @@ def _is_current_report_follow_up(state: AgentState) -> bool:
         "这次抓取",
         "当前分析",
     ]
-    history_markers = [
+    current_fetch_reference_markers = [
+        "上次抓取",
+        "上轮抓取",
+        "刚才抓取",
+        "上一轮抓取",
+        "平台答案",
+        "抓取的平台答案",
+        "抓取结果",
+        "上次的报告",
+        "上一轮的报告",
+    ]
+    strong_history_markers = [
         "历史",
-        "上次",
         "最近两次",
         "之前",
         "月份",
@@ -897,9 +907,15 @@ def _is_current_report_follow_up(state: AgentState) -> bool:
         "过去",
         "过往",
     ]
+    mentions_current_report = any(
+        marker in latest_user_message for marker in current_markers
+    )
+    mentions_current_fetch = any(
+        marker in latest_user_message for marker in current_fetch_reference_markers
+    )
     return (
-        any(marker in latest_user_message for marker in current_markers)
-        and not any(marker in latest_user_message for marker in history_markers)
+        (mentions_current_report or mentions_current_fetch)
+        and not any(marker in latest_user_message for marker in strong_history_markers)
     )
 
 
@@ -1049,7 +1065,10 @@ def _infer_current_session_followup_tool(
         "4月",
         "5月",
     ]
-    if any(keyword in latest_user_message for keyword in history_keywords):
+    if (
+        not _is_current_report_follow_up(state)
+        and any(keyword in latest_user_message for keyword in history_keywords)
+    ):
         return None
 
     sentiment_value = _normalize_sentiment_followup_value(latest_user_message)
