@@ -78,7 +78,27 @@ class _TokenRedactingFilter(logging.Filter):
         return True
 
 
-logging.getLogger("uvicorn.access").addFilter(_TokenRedactingFilter())
+def _install_token_redaction_filters() -> None:
+    token_filter = _TokenRedactingFilter()
+    logger_names = (
+        "uvicorn.access",
+        "uvicorn.error",
+        "uvicorn.asgi",
+    )
+
+    for logger_name in logger_names:
+        target_logger = logging.getLogger(logger_name)
+        target_logger.addFilter(token_filter)
+        for handler in target_logger.handlers:
+            handler.addFilter(token_filter)
+
+    root_logger = logging.getLogger()
+    root_logger.addFilter(token_filter)
+    for handler in root_logger.handlers:
+        handler.addFilter(token_filter)
+
+
+_install_token_redaction_filters()
 
 
 def _mask_value(value: str | None, *, visible_prefix: int = 6) -> str:
