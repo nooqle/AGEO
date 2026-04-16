@@ -68,6 +68,17 @@ async def test_llm_browser_agent_policy_parses_json_response(monkeypatch):
             )
 
     monkeypatch.setattr(browser_agent_loop, "get_llm_model", lambda: _FakeModel())
+    monkeypatch.setattr(
+        browser_agent_loop,
+        "get_settings",
+        lambda: SimpleNamespace(
+            BROWSER_AGENT_LLM_ENABLED=True,
+            BROWSER_AGENT_LLM_MAX_CONCURRENCY=1,
+            BROWSER_AGENT_LLM_MAX_TOKENS=384,
+            BROWSER_AGENT_LLM_THINKING_ENABLED=False,
+            BROWSER_AGENT_LLM_MODEL_NAME="glm-5",
+        ),
+    )
 
     decision = await LLMBrowserAgentPolicy().decide(
         _observation(),
@@ -116,6 +127,7 @@ async def test_llm_browser_agent_policy_uses_browser_agent_limits(monkeypatch):
         "max_tokens": 320,
         "thinking_enabled": False,
         "model": "glm-4.7",
+        "response_format": {"type": "json_object"},
     }
 
 
