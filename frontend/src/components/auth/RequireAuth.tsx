@@ -1,9 +1,10 @@
 'use client';
 
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { api } from '@/services/api';
-import { clearStoredAccessToken, getStoredAccessToken } from '@/lib/auth-storage';
+import { getStoredAccessToken } from '@/lib/auth-storage';
+import { redirectToLogin, redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 import type { AuthUser } from '@/types/auth';
 
 interface RequireAuthProps {
@@ -11,7 +12,6 @@ interface RequireAuthProps {
 }
 
 export function RequireAuth({ children }: RequireAuthProps) {
-  const router = useRouter();
   const pathname = usePathname();
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [isChecking, setIsChecking] = useState(true);
@@ -22,12 +22,9 @@ export function RequireAuth({ children }: RequireAuthProps) {
     const token = getStoredAccessToken();
     const allowDevBypass = process.env.NODE_ENV === 'development';
     const nextPath = pathname || '/dashboard';
-    const loginPath = isControlPlanePath
-      ? `/control-plane/login?next=${encodeURIComponent(nextPath)}`
-      : `/auth?next=${encodeURIComponent(nextPath)}`;
 
     if (!token && (!allowDevBypass || isControlPlanePath)) {
-      router.replace(loginPath);
+      redirectToLogin(nextPath);
       return;
     }
 
@@ -39,14 +36,13 @@ export function RequireAuth({ children }: RequireAuthProps) {
       })
       .catch(() => {
         if (cancelled) return;
-        clearStoredAccessToken();
-        router.replace(loginPath);
+        redirectToLoginForExpiredAuth('您需要重新登录才能继续操作', nextPath);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [isControlPlanePath, pathname, router]);
+  }, [isControlPlanePath, pathname]);
 
   if (isChecking || !currentUser) {
     return (

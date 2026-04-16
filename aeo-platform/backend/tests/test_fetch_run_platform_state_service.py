@@ -266,6 +266,52 @@ def test_build_rows_from_fetch_results_aggregates_packet_timing_across_questions
     assert row["latest_packet"]["stats"]["total"] == 2
 
 
+def test_build_rows_from_fetch_results_preserves_platform_success_when_latest_question_failed():
+    service = FetchRunPlatformStateService(db=None)  # type: ignore[arg-type]
+
+    rows = service._build_rows_from_fetch_results(
+        task_run_id=uuid4(),
+        task_id=uuid4(),
+        session_id=uuid4(),
+        entity_id=uuid4(),
+        user_id=uuid4(),
+        fetch_results=[
+            {
+                "question_id": "q1",
+                "question_text": "问题1",
+                "aio_platform_packets": [
+                    {
+                        "platform": "doubao",
+                        "status": "result",
+                        "answer": {"has_brand_mention": True},
+                    }
+                ],
+                "platform_results": [],
+            },
+            {
+                "question_id": "q2",
+                "question_text": "问题2",
+                "aio_platform_packets": [
+                    {
+                        "platform": "doubao",
+                        "status": "failed",
+                        "error": "timeout",
+                    }
+                ],
+                "platform_results": [],
+            },
+        ],
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["platform"] == "doubao"
+    assert row["status"] == "succeeded"
+    assert row["latest_packet"]["status"] == "succeeded"
+    assert row["latest_packet"]["stats"]["completed"] == 1
+    assert row["latest_packet"]["stats"]["total"] == 2
+
+
 def test_build_rows_from_fetch_results_does_not_fabricate_timestamps_without_source_times():
     service = FetchRunPlatformStateService(db=None)  # type: ignore[arg-type]
 

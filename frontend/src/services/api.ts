@@ -55,6 +55,7 @@ import type {
   AioVncUrl,
 } from '@/types/aio';
 import { getStoredAccessToken } from '@/lib/auth-storage';
+import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
@@ -66,6 +67,10 @@ export function getApiBaseUrl(): string {
 type RequestOptions = Pick<RequestInit, 'signal'>;
 
 class ApiService {
+  private handleUnauthorized() {
+    redirectToLoginForExpiredAuth();
+  }
+
   private normalizeAioMode(value: unknown): AioTakeoverMode {
     if (value === 'vnc' || value === 'vnc_fallback') {
       return 'vnc_fallback';
@@ -104,6 +109,9 @@ class ApiService {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        this.handleUnauthorized();
+      }
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || `Request failed: ${response.status}`);
     }
@@ -126,6 +134,9 @@ class ApiService {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        this.handleUnauthorized();
+      }
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || `Request failed: ${response.status}`);
     }
@@ -429,6 +440,9 @@ class ApiService {
       `${API_URL}/sessions/${sessionId}/outputs/${outputId}/export?format=${format}`,
       { headers }
     );
+    if (response.status === 401) {
+      this.handleUnauthorized();
+    }
     if (!response.ok) throw new Error('Export failed');
     return response.blob();
   }
@@ -1070,6 +1084,9 @@ class ApiService {
       } as HeadersInit,
     });
     if (!response.ok) {
+      if (response.status === 401) {
+        this.handleUnauthorized();
+      }
       throw new Error(`Scheduler health check failed: ${response.status}`);
     }
     return response.json();
@@ -1097,6 +1114,9 @@ class ApiService {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        this.handleUnauthorized();
+      }
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || `Upload failed: ${response.status}`);
     }

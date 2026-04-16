@@ -423,6 +423,34 @@ class FetchRunPlatformStateService:
         }
 
     @classmethod
+    def _aggregate_platform_status(cls, packets: list[dict[str, Any]]) -> str:
+        statuses = [cls._derive_status_from_packet(packet) for packet in packets]
+        if any(status == "succeeded" for status in statuses):
+            return "succeeded"
+        if any(status == "skipped" for status in statuses):
+            return "skipped"
+        if any(status == "takeover_required" for status in statuses):
+            return "takeover_required"
+        if any(status == "running" for status in statuses):
+            return "running"
+        if any(status == "pending" for status in statuses):
+            return "pending"
+        return "failed"
+
+    @classmethod
+    def _select_representative_packet(
+        cls,
+        packets: list[dict[str, Any]],
+        *,
+        aggregated_status: str,
+    ) -> dict[str, Any]:
+        normalized_status = cls._normalize_status(aggregated_status)
+        for packet in reversed(packets):
+            if cls._derive_status_from_packet(packet) == normalized_status:
+                return packet
+        return packets[-1]
+
+    @classmethod
     def _normalize_packet_projection(
         cls,
         packet: dict[str, Any],
@@ -569,9 +597,12 @@ class FetchRunPlatformStateService:
 
         rows: list[dict[str, Any]] = []
         for platform, packets in platform_packets.items():
-            latest_packet = packets[-1]
-            status = cls._derive_status_from_packet(latest_packet)
-            auth_state = cls._project_auth_state(latest_packet, status)
+            status = cls._aggregate_platform_status(packets)
+            representative_packet = cls._select_representative_packet(
+                packets,
+                aggregated_status=status,
+            )
+            auth_state = cls._project_auth_state(representative_packet, status)
             timing_json = cls._aggregate_packet_timing(packets)
             packet_entries: list[dict[str, Any]] = []
             for fetch_result in fetch_results:
@@ -638,13 +669,13 @@ class FetchRunPlatformStateService:
                             fetch_results=fetch_results,
                         ),
                     },
-                    "latest_takeover_request_id": latest_packet.get("request_id"),
-                    "latest_blocking_fingerprint": latest_packet.get(
+                    "latest_takeover_request_id": representative_packet.get("request_id"),
+                    "latest_blocking_fingerprint": representative_packet.get(
                         "blocking_fingerprint"
                     ),
                     "artifact_write_status": None,
-                    "error_kind": latest_packet.get("error_type"),
-                    "error_message": latest_packet.get("error"),
+                    "error_kind": representative_packet.get("error_type"),
+                    "error_message": representative_packet.get("error"),
                     "timing_json": timing_json,
                     "started_at": started_at,
                     "finished_at": finished_at,

@@ -55,9 +55,16 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
     def _page_matches_target_host(page_url: str | None, target_url: str | None) -> bool:
         if not page_url or not target_url:
             return False
-        page_host = (urlparse(page_url).netloc or "").lower()
-        target_host = (urlparse(target_url).netloc or "").lower()
+        page_host = AioConnectedBrowserClient._normalize_host(page_url)
+        target_host = AioConnectedBrowserClient._normalize_host(target_url)
         return bool(page_host and target_host and page_host == target_host)
+
+    @staticmethod
+    def _normalize_host(url: str | None) -> str:
+        host = (urlparse(url or "").netloc or "").lower().strip()
+        if host.startswith("www."):
+            return host[4:]
+        return host
 
     async def _ensure_playwright(self):
         """Ensure Patchright is initialized for CDP attachment."""
@@ -255,10 +262,42 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             )
             fallback_options = dict(context_options)
             fallback_options.pop("storage_state", None)
-            return await self.browser.new_context(**fallback_options)
+            context = await self.browser.new_context(**fallback_options)
+            await self._apply_language_init_script(context)
+            return context
 
         self._storage_state_loaded_into_context = "storage_state" in context_options
+        await self._apply_language_init_script(context)
         return context
+
+    async def _apply_language_init_script(self, context: BrowserContext) -> None:
+        try:
+            await context.add_init_script(
+                """
+(() => {
+  const language = 'zh-CN';
+  const languages = ['zh-CN', 'zh', 'en'];
+  try {
+    Object.defineProperty(navigator, 'language', {
+      configurable: true,
+      get: () => language,
+    });
+    Object.defineProperty(navigator, 'languages', {
+      configurable: true,
+      get: () => languages,
+    });
+  } catch (_) {
+    // Ignore init-script failures; locale/header settings still apply.
+  }
+})();
+"""
+            )
+        except Exception as exc:
+            logger.warning(
+                "[AIO Browser:%s] Failed to add language init script: %s",
+                self.session_name,
+                exc,
+            )
 
     async def _get_or_create_remote_context(
         self, target_url: str | None = None
@@ -267,7 +306,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             raise RuntimeError("AIO 浏览器未连接")
 
         existing_contexts = list(getattr(self.browser, "contexts", []) or [])
-        target_host = (urlparse(target_url).netloc or "").lower() if target_url else ""
+        target_host = self._normalize_host(target_url)
         logger.info(
             "[AIO Browser:%s] remote contexts discovered=%d target_host=%s",
             self.session_name,
@@ -281,7 +320,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                     page for page in candidate.pages if not page.is_closed()
                 ]
                 for page in reversed(existing_pages):
-                    page_host = (urlparse(page.url or "").netloc or "").lower()
+                    page_host = self._normalize_host(page.url)
                     if page_host == target_host:
                         self._context_owned_by_client = False
                         self._storage_state_loaded_into_context = False
@@ -345,7 +384,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             len(existing_pages),
             [candidate.url for candidate in existing_pages],
         )
-        target_host = (urlparse(target_url).netloc or "").lower() if target_url else ""
+        target_host = self._normalize_host(target_url)
         if existing_pages:
             usable = [
                 candidate
@@ -355,9 +394,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             preferred = None
             if target_host:
                 for candidate in usable:
-                    candidate_host = (
-                        urlparse(candidate.url or "").netloc or ""
-                    ).lower()
+                    candidate_host = self._normalize_host(candidate.url)
                     if candidate_host == target_host:
                         preferred = candidate
                         break
@@ -418,9 +455,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             if self.browser is None:
                 return False
 
-            target_host = (
-                (urlparse(target_url).netloc or "").lower() if target_url else ""
-            )
+            target_host = self._normalize_host(target_url)
             contexts = list(getattr(self.browser, "contexts", []) or [])
             for context in reversed(contexts):
                 pages = [
@@ -432,7 +467,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                     page_url = page.url or ""
                     if not page_url or page_url == "about:blank":
                         continue
-                    page_host = (urlparse(page_url).netloc or "").lower()
+                    page_host = self._normalize_host(page_url)
                     if target_host and page_host != target_host:
                         continue
                     self.context = context

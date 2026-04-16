@@ -403,9 +403,9 @@ def test_a4_packet_fetch_summary_prefers_packet_status_over_legacy_success():
     )
 
     assert summary["total_fetches"] == 2
-    assert summary["successful_fetches"] == 0
-    assert summary["successful_platforms"] == set()
-    assert summary["platform_statuses"]["deepseek"] == "failed"
+    assert summary["successful_fetches"] == 1
+    assert summary["successful_platforms"] == {"deepseek"}
+    assert summary["platform_statuses"]["deepseek"] == "success"
     assert summary["platform_statuses"]["yuanbao"] == "skipped"
     assert summary["platform_fetch_stats"]["yuanbao"]["skipped"] == 1
 
@@ -438,6 +438,16 @@ def test_a4_fetch_result_success_prefers_packet_status():
                     }
                 ],
             }
+        )
+        is True
+    )
+
+
+def test_aio_connected_browser_client_normalizes_www_target_hosts():
+    assert (
+        AioConnectedBrowserClient._page_matches_target_host(
+            "https://www.kimi.com/",
+            "https://kimi.com/",
         )
         is True
     )
