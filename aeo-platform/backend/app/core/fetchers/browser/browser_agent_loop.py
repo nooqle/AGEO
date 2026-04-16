@@ -36,6 +36,7 @@ _LLM_BROWSER_SYSTEM_PROMPT = (
     "你是浏览器执行代理。"
     "请只基于给定阶段指令和精简页面观测，判断当前是继续自动操作、需要人工接管、还是已经可以继续主流程。"
     "只输出 JSON 对象。"
+    "不要输出 Markdown 代码块、解释性文字或任何 JSON 之外的前后缀。"
 )
 
 
@@ -424,6 +425,7 @@ class LLMBrowserAgentPolicy:
             "temperature": 0.1,
             "max_tokens": max_tokens,
             "thinking_enabled": thinking_enabled,
+            "response_format": {"type": "json_object"},
         }
         if model_name:
             call_kwargs["model"] = model_name
