@@ -136,6 +136,7 @@ app = FastAPI(
 @app.on_event("startup")
 async def on_startup():
     """应用启动时执行的初始化任务"""
+    _install_token_redaction_filters()
     logger.info("应用启动中...")
     if not settings.REDIS_URL:
         worker_hint = (
