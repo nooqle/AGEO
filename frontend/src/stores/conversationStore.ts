@@ -76,7 +76,7 @@ interface ConversationState {
   currentAgentMessageId: string | null;
 
   // Actions
-  addMessage: (message: Omit<Message, 'id' | 'timestamp' | 'metadata'> & Partial<Pick<Message, 'id' | 'metadata'>>) => string;
+  addMessage: (message: Omit<Message, 'id' | 'timestamp' | 'metadata'> & Partial<Pick<Message, 'id' | 'timestamp' | 'metadata'>>) => string;
   updateMessage: (id: string, updates: Partial<Message>) => void;
   replaceMessageId: (oldId: string, newId: string) => void;
   removeMessage: (id: string) => void;
@@ -226,7 +226,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     const id = messageData.id || generateId();
     const message: Message = {
       id,
-      timestamp: new Date(),
+      timestamp: messageData.timestamp || new Date(),
       metadata: {
         canEdit: messageData.type === 'user',
         canRollback: true,
@@ -479,6 +479,9 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       tpaorPhaseHistory: [],
       stopState: null,
       executionProgress: null,
+      browserState: null,
+      browserStates: [],
+      pendingConfirmation: null,
       stageResults: [],
       followUpSuggestions: [],
       // Reset streaming state

@@ -8,7 +8,7 @@ This is the standard Playwright pattern, not Python's built-in eval().
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
 from app.core.fetchers.browser.parsers.base import BaseResponseParser
@@ -147,17 +147,56 @@ class DeepSeekHandler(BaseBrowserHandler):
                 )
 
             # Step 5b: Submit question
-            snapshot = await self.client.snapshot(interactive_only=True)
-            textarea_ref = self._find_textarea_ref(snapshot)
-            if textarea_ref:
-                await self.client.fill(textarea_ref, question)
-                await asyncio.sleep(0.5)
-                await self.client.press("Enter")
-                logger.info("[DeepSeek] Question submitted via snapshot ref %s", textarea_ref)
-            else:
-                await self.client.find_and_fill("发送消息", question)
-                await self.client.press("Enter")
-                logger.info("[DeepSeek] Question submitted via find_and_fill fallback")
+            submitted = False
+            baseline_probe = await self._capture_submission_probe()
+            if self.client.page is not None:
+                try:
+                    editor = self.client.page.locator(self._sel("input")).last
+                    if await editor.count() > 0:
+                        await editor.click()
+                        await asyncio.sleep(0.2)
+                        await editor.fill(question)
+                        await asyncio.sleep(0.2)
+                        await editor.press("Enter")
+                        submitted = await self._submission_looks_started(
+                            baseline_probe, question
+                        )
+                        logger.info(
+                            "[DeepSeek] Question submitted via locator Enter (confirmed=%s)",
+                            submitted,
+                        )
+                except Exception as e:
+                    logger.debug("[DeepSeek] Direct locator submit failed: %s", e)
+
+            if not submitted:
+                snapshot = await self.client.snapshot(interactive_only=True)
+                textarea_ref = self._find_textarea_ref(snapshot)
+                if textarea_ref:
+                    await self.client.fill(textarea_ref, question)
+                    await asyncio.sleep(0.3)
+                    await self.client.press("Enter")
+                    submitted = await self._submission_looks_started(
+                        baseline_probe, question
+                    )
+                    logger.info(
+                        "[DeepSeek] Question submitted via snapshot ref %s (confirmed=%s)",
+                        textarea_ref,
+                        submitted,
+                    )
+
+            if not submitted and await self._click_send_button_near_input():
+                submitted = await self._submission_looks_started(
+                    baseline_probe, question
+                )
+                logger.info(
+                    "[DeepSeek] Question submitted via send-button fallback (confirmed=%s)",
+                    submitted,
+                )
+
+            if not submitted:
+                logger.warning(
+                    "[DeepSeek] Submission could not be confirmed; downstream DOM extraction may stay empty"
+                )
 
             # Step 6: Wait for response (try network interception first, fallback to DOM)
             yield self._create_event(BrowserState.WAITING_RESPONSE, "等待 AI 回复...", progress=0.7)
@@ -235,6 +274,119 @@ class DeepSeekHandler(BaseBrowserHandler):
             yield self._create_event(BrowserState.ERROR, f"抓取失败: {str(e)}", progress=0)
 
     # ------------------------------------------------------------------ DeepSeek-specific
+
+    async def _capture_submission_probe(self) -> dict[str, Any]:
+        if self.client.page is None:
+            return {"message_count": 0, "answer_count": 0, "input_len": 0}
+        input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
+        probe = await self.client.page.evaluate(
+            f"""() => {{
+                const textarea = document.querySelector({input_sel});
+                const readValue = textarea
+                    ? String(textarea.value || textarea.textContent || '').trim()
+                    : '';
+                return {{
+                    message_count: document.querySelectorAll('.ds-message').length,
+                    answer_count: document.querySelectorAll('div.ds-markdown').length,
+                    input_len: readValue.length,
+                }};
+            }}"""
+        )
+        return probe if isinstance(probe, dict) else {}
+
+    async def _submission_looks_started(
+        self,
+        baseline_probe: dict[str, Any],
+        question: str,
+        *,
+        timeout_seconds: float = 4.0,
+    ) -> bool:
+        if self.client.page is None:
+            return False
+        input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
+        question_prefix = json.dumps(question[:16], ensure_ascii=False)
+        waited = 0.0
+        while waited <= timeout_seconds:
+            await asyncio.sleep(0.5)
+            waited += 0.5
+            probe = await self.client.page.evaluate(
+                f"""() => {{
+                    const textarea = document.querySelector({input_sel});
+                    const readValue = textarea
+                        ? String(textarea.value || textarea.textContent || '').trim()
+                        : '';
+                    const bodyText = String(document.body?.innerText || '');
+                    return {{
+                        message_count: document.querySelectorAll('.ds-message').length,
+                        answer_count: document.querySelectorAll('div.ds-markdown').length,
+                        input_len: readValue.length,
+                        body_has_prefix: bodyText.includes({question_prefix}),
+                    }};
+                }}"""
+            )
+            if not isinstance(probe, dict):
+                continue
+            if bool(probe.get("body_has_prefix")):
+                return True
+            if int(probe.get("message_count") or 0) > int(
+                baseline_probe.get("message_count") or 0
+            ):
+                return True
+            if int(probe.get("answer_count") or 0) > int(
+                baseline_probe.get("answer_count") or 0
+            ):
+                return True
+            if int(probe.get("input_len") or 0) == 0:
+                return True
+        return False
+
+    async def _click_send_button_near_input(self) -> bool:
+        if self.client.page is None:
+            return False
+        input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
+        clicked = await self.client.page.evaluate(
+            f"""() => {{
+                const textarea = document.querySelector({input_sel});
+                if (!textarea) return false;
+                const interactive = [
+                    "button",
+                    "[role='button']",
+                    "div[class*='icon-button']",
+                ].join(", ");
+                let container = textarea.parentElement;
+                while (container && container !== document.body) {{
+                    const candidates = Array.from(container.querySelectorAll(interactive));
+                    const enabled = candidates.filter((el) => {{
+                        const cls = String(el.className || '').toLowerCase();
+                        const aria = String(el.getAttribute('aria-label') || '').toLowerCase();
+                        const title = String(el.getAttribute('title') || '').toLowerCase();
+                        const text = String(el.textContent || '').trim().toLowerCase();
+                        const disabled = el.hasAttribute('disabled')
+                            || el.getAttribute('aria-disabled') === 'true'
+                            || cls.includes('disabled');
+                        if (disabled) return false;
+                        return (
+                            aria.includes('send')
+                            || aria.includes('发送')
+                            || title.includes('send')
+                            || title.includes('发送')
+                            || text.includes('send')
+                            || text.includes('发送')
+                            || cls.includes('send')
+                            || cls.includes('submit')
+                            || cls.includes('icon-button')
+                        );
+                    }});
+                    if (enabled.length > 0) {{
+                        enabled[enabled.length - 1].click();
+                        return true;
+                    }}
+                    container = container.parentElement;
+                }}
+                return false;
+            }}"""
+        )
+        return bool(clicked)
 
     async def _ensure_web_search_on(self) -> None:
         """Ensure the web search toggle is ON in the input toolbar.

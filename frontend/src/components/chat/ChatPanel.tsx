@@ -395,6 +395,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             id: msg.id || undefined,
             type: role,
             content: msg.content || '',
+            timestamp: msg.created_at ? new Date(msg.created_at) : undefined,
             ...(
               Array.isArray((msg.metadata as Record<string, unknown> | null)?.attachments)
                 ? {
@@ -1318,7 +1319,16 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     : activeTask?.progress ?? executionProgress?.progress;
   const liveProgressMessage = isAgentExecuting
     ? executionProgress?.details
-    : activeTask?.progress_message ?? executionProgress?.details;
+    : (isWaitingForInput
+      ? waitingProgressMessage ?? executionProgress?.details
+      : activeTask?.progress_message ?? executionProgress?.details);
+  const inputPlaceholder = !isConnected
+    ? '正在重新连接...'
+    : isWaitingForInput
+      ? '请继续补充信息，或点击上方按钮确认...'
+      : messages.length > 0
+        ? '继续追问当前结果，或输入新的分析问题...'
+        : undefined;
   const hasBrowserWorkspace = Boolean(browserWorkspace);
   const handleFocusBrowserWorkspace = useCallback(() => {
     if (!browserWorkspace) {
@@ -1600,7 +1610,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         onConfirmation={handleConfirmation}
         value={inputValue}
         onChange={handleInputChange}
-        placeholder={!isConnected ? '正在重新连接...' : undefined}
+        placeholder={inputPlaceholder}
         progressMessage={liveProgressMessage}
         selectedToolMode={selectedToolMode}
         onToolModeChange={setSelectedToolMode}

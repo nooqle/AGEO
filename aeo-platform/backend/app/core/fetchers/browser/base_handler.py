@@ -1046,6 +1046,7 @@ class BaseBrowserHandler(ABC):
                 BrowserState.ERROR,
                 "未能提取到有效回答",
                 progress=0,
+                error_type="empty_answer",
             )
         ], True
 
