@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     BROWSER_AGENT_LLM_MAX_CONCURRENCY: int = 2
     BROWSER_AGENT_LLM_MAX_TOKENS: int = 384
     BROWSER_AGENT_LLM_THINKING_ENABLED: bool = False
-    BROWSER_AGENT_LLM_MODEL_NAME: str | None = None
+    BROWSER_AGENT_LLM_MODEL_NAME: str | None = "glm-5"
 
     # LLM Provider Selection
     LLM_PROVIDER: str = "glm5"
@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     # GLM5 (智谱AI)
     GLM5_API_KEY: str | None = None
     GLM5_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
-    GLM5_MODEL_NAME: str = "glm-5"
+    GLM5_MODEL_NAME: str = "glm-5.1"
     GLM5_THINKING_ENABLED: bool = True
     GLM5_TEMPERATURE: float = 0.7
     GLM5_MAX_TOKENS: int = 16384
