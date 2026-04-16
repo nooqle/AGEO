@@ -56,7 +56,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 _WS_AUTH_COOKIE_NAME = "specta_access_token"
-_TOKEN_QUERY_RE = re.compile(r"(?i)(token=)[^&\\s\"']+")
+_TOKEN_QUERY_RE = re.compile(r"(?i)(token=)(?!%s)[^&\s\"']+")
 
 
 class _TokenRedactingFilter(logging.Filter):
@@ -80,21 +80,9 @@ class _TokenRedactingFilter(logging.Filter):
 
 def _install_token_redaction_filters() -> None:
     token_filter = _TokenRedactingFilter()
-    logger_names = (
-        "uvicorn.access",
-        "uvicorn.error",
-        "uvicorn.asgi",
-    )
-
-    for logger_name in logger_names:
-        target_logger = logging.getLogger(logger_name)
-        target_logger.addFilter(token_filter)
-        for handler in target_logger.handlers:
-            handler.addFilter(token_filter)
-
-    root_logger = logging.getLogger()
-    root_logger.addFilter(token_filter)
-    for handler in root_logger.handlers:
+    target_logger = logging.getLogger("uvicorn.access")
+    target_logger.addFilter(token_filter)
+    for handler in target_logger.handlers:
         handler.addFilter(token_filter)
 
 
