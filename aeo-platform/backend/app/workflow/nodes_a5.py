@@ -591,7 +591,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
             },
         )
         update_dict.update(skill_update)
-        artifact_validation_update = build_validation_result_update(state, artifact_validation)
+        artifact_validation_update = build_validation_result_update(
+            state, artifact_validation
+        )
         validation_state = {**state, **update_dict, **artifact_validation_update}
         postcondition_result = evaluate_skill_postconditions(
             state=state,
@@ -658,7 +660,10 @@ async def a5_analytics_node(state: AgentState) -> Command:
     except Exception as e:
         error_text = str(e)
         error_category = "system"
-        if "artifact writeback" in error_text.lower() or "artifact persistence" in error_text.lower():
+        if (
+            "artifact writeback" in error_text.lower()
+            or "artifact persistence" in error_text.lower()
+        ):
             error_category = "system_persistence"
 
         await send_error_event(session_id, "A5", str(e), recoverable=True)
@@ -691,6 +696,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
         return Command(
             update={
+                "current_step": "A5",
                 "error_info": {
                     "step": "A5",
                     "error": error_text,
@@ -880,9 +886,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                     platform_citation_stats[platform]["answers_with_citations"] += 1
 
     # ---- Dimension 1: Mention score ----
-    mention_rate = (
-        total_mentions / successful_answers if successful_answers > 0 else 0
-    )
+    mention_rate = total_mentions / successful_answers if successful_answers > 0 else 0
     # Amplification factor 1.2: 83.3% mention rate = full score
     mention_score = min(100.0, mention_rate * 120)
 
