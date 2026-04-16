@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     BROWSER_AGENT_LLM_MAX_TOKENS: int = 384
     BROWSER_AGENT_LLM_THINKING_ENABLED: bool = False
     BROWSER_AGENT_LLM_MODEL_NAME: str | None = "glm-5"
+    BROWSER_AGENT_LLM_API_KEY: str | None = None
 
     # LLM Provider Selection
     LLM_PROVIDER: str = "glm5"

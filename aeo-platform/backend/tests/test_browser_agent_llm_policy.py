@@ -119,6 +119,48 @@ async def test_llm_browser_agent_policy_uses_browser_agent_limits(monkeypatch):
     }
 
 
+def test_get_browser_agent_llm_model_uses_dedicated_api_key(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeGLM5Model:
+        def __init__(self, config):
+            captured["config"] = config
+
+    monkeypatch.setattr(browser_agent_loop, "GLM5Model", _FakeGLM5Model)
+    monkeypatch.setattr(
+        browser_agent_loop,
+        "get_settings",
+        lambda: SimpleNamespace(
+            LLM_PROVIDER="glm5",
+            BROWSER_AGENT_LLM_API_KEY="browser-key",
+            GLM5_BASE_URL="https://open.bigmodel.cn/api/paas/v4",
+        ),
+    )
+
+    model = browser_agent_loop._get_browser_agent_llm_model()
+
+    assert isinstance(model, _FakeGLM5Model)
+    assert captured["config"].api_key == "browser-key"
+
+
+def test_get_browser_agent_llm_model_falls_back_without_dedicated_key(monkeypatch):
+    fallback_model = object()
+
+    monkeypatch.setattr(browser_agent_loop, "get_llm_model", lambda: fallback_model)
+    monkeypatch.setattr(
+        browser_agent_loop,
+        "get_settings",
+        lambda: SimpleNamespace(
+            LLM_PROVIDER="glm5",
+            BROWSER_AGENT_LLM_API_KEY="",
+        ),
+    )
+
+    model = browser_agent_loop._get_browser_agent_llm_model()
+
+    assert model is fallback_model
+
+
 async def test_hybrid_browser_agent_policy_keeps_bootstrap_takeover_outside_llm_stage(
     monkeypatch,
 ):

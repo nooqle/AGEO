@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from app.config import get_settings
 from app.core.llm import get_llm_model
+from app.core.llm.glm5 import GLM5Config, GLM5Model
 from app.core.fetchers.browser.browser_agent_contract import (
     BrowserAgentAction,
     BrowserAgentDecision,
@@ -277,6 +278,29 @@ def _get_browser_agent_llm_semaphore() -> asyncio.Semaphore:
     return _BROWSER_AGENT_LLM_SEMAPHORE
 
 
+def _get_browser_agent_llm_model() -> Any:
+    settings = get_settings()
+    browser_api_key = str(
+        getattr(settings, "BROWSER_AGENT_LLM_API_KEY", "") or ""
+    ).strip()
+    provider = str(getattr(settings, "LLM_PROVIDER", "minimax") or "minimax").lower()
+    if not browser_api_key or provider != "glm5":
+        return get_llm_model()
+    return GLM5Model(
+        GLM5Config(
+            api_key=browser_api_key,
+            base_url=str(
+                getattr(
+                    settings,
+                    "GLM5_BASE_URL",
+                    "https://open.bigmodel.cn/api/paas/v4",
+                )
+                or "https://open.bigmodel.cn/api/paas/v4"
+            ),
+        )
+    )
+
+
 def _sanitize_llm_decision(
     decision: BrowserAgentDecision,
     *,
@@ -358,7 +382,7 @@ class LLMBrowserAgentPolicy:
         if loop_context.stage not in _LLM_DEFAULT_STAGES:
             return None
         try:
-            model = get_llm_model()
+            model = _get_browser_agent_llm_model()
         except Exception as exc:
             logger.warning(
                 "[BrowserAgentLoop] Failed to get browser-agent LLM model: %s", exc
