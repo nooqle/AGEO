@@ -1029,7 +1029,9 @@ export function useWebSocket(sessionId: string | null) {
           return;
         }
 
-        const wsUrl = `${WS_URL}/ws/${sessionId}?token=${encodeURIComponent(token)}`;
+        const wsUrl = token === 'dev-token'
+          ? `${WS_URL}/ws/${sessionId}?token=${encodeURIComponent(token)}`
+          : `${WS_URL}/ws/${sessionId}`;
 
         // 关闭旧连接（移除事件监听器以防止触发重连）
         if (wsRef.current) {

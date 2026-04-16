@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from calendar import monthrange
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -173,6 +174,18 @@ def _chunk_text(content: str, max_chars: int = 900) -> list[str]:
             normalized.append(chunk[start : start + max_chars])
             start += max_chars - 120
     return normalized
+
+
+def _normalize_dedupe_key(dedupe_key: str, max_chars: int = 255) -> str:
+    normalized = _text(dedupe_key)
+    if len(normalized) <= max_chars:
+        return normalized
+
+    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+    prefix_budget = max_chars - len(digest) - 1
+    if prefix_budget <= 0:
+        return digest[:max_chars]
+    return f"{normalized[:prefix_budget]}:{digest}"
 
 
 def _infer_month_range(query: str) -> tuple[str | None, str | None]:
@@ -1071,6 +1084,7 @@ class KnowledgeWorkspaceService:
         competitor_name: str | None = None,
         domain: str | None = None,
     ) -> KnowledgeRecord:
+        dedupe_key = _normalize_dedupe_key(dedupe_key)
         stmt = select(KnowledgeRecord).where(KnowledgeRecord.dedupe_key == dedupe_key)
         existing = (await self.db.execute(stmt)).scalar_one_or_none()
         if existing is None:

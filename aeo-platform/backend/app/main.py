@@ -54,6 +54,45 @@ logging.basicConfig(level=logging.DEBUG)
 
 logger = logging.getLogger(__name__)
 
+_WS_AUTH_COOKIE_NAME = "specta_access_token"
+
+
+def _mask_value(value: str | None, *, visible_prefix: int = 6) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "<empty>"
+    if len(raw) <= visible_prefix:
+        return raw
+    return f"{raw[:visible_prefix]}..."
+
+
+def _extract_websocket_token(websocket: WebSocket) -> tuple[str | None, str]:
+    cookie_token = websocket.cookies.get(_WS_AUTH_COOKIE_NAME)
+    if cookie_token:
+        return cookie_token, "cookie"
+    query_token = websocket.query_params.get("token")
+    if query_token:
+        return query_token, "query"
+    return None, "missing"
+
+
+def _sanitized_websocket_headers(websocket: WebSocket) -> dict[str, str]:
+    allowed_keys = (
+        "host",
+        "origin",
+        "user-agent",
+        "x-real-ip",
+        "x-forwarded-for",
+        "x-forwarded-proto",
+        "accept-language",
+    )
+    sanitized: dict[str, str] = {}
+    for key in allowed_keys:
+        value = websocket.headers.get(key)
+        if value:
+            sanitized[key] = value
+    return sanitized
+
 app = FastAPI(
     title="Specta AI API",
     description="Specta AI - 品牌声量智能分析平台",
@@ -229,6 +268,7 @@ async def websocket_test_endpoint(websocket: WebSocket):
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket connection handler."""
+    token, token_source = _extract_websocket_token(websocket)
     logger.info("=" * 80)
     logger.info(f"[WebSocket] 🔌 New connection request for session: {session_id}")
     logger.info(
@@ -237,17 +277,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     logger.info(
         f"[WebSocket] 📋 Client port: {websocket.client.port if websocket.client else 'unknown'}"
     )
-    logger.info(f"[WebSocket] 📋 Headers: {dict(websocket.headers)}")
-    logger.info(f"[WebSocket] 📋 Query params: {dict(websocket.query_params)}")
-
-    token = websocket.query_params.get("token")
-    logger.info(f"[WebSocket] 🔑 Token received: {'Yes' if token else 'No'}")
-    if token:
-        logger.info(
-            f"[WebSocket] 🔑 Token value: {token[:10]}..."
-            if len(token) > 10
-            else f"[WebSocket] 🔑 Token value: {token}"
-        )
+    logger.info(f"[WebSocket] 📋 Headers: {_sanitized_websocket_headers(websocket)}")
+    logger.info(
+        "[WebSocket] 📋 Auth transport: source=%s query_keys=%s has_cookie=%s token=%s",
+        token_source,
+        list(websocket.query_params.keys()),
+        _WS_AUTH_COOKIE_NAME in websocket.cookies,
+        _mask_value(token),
+    )
 
     # Development mode: Allow connection with dev-token
     is_dev_mode = settings.DEBUG and settings.DEV_MODE_ENABLED
