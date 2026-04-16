@@ -320,6 +320,10 @@ def _packet_status(packet: dict[str, Any]) -> str:
     return str(packet.get("status") or "").strip().lower()
 
 
+def _packet_status_is_success(status: str) -> bool:
+    return status in {"result", "success"}
+
+
 def _packet_platform(packet: dict[str, Any]) -> str:
     return str(packet.get("platform") or "unknown").strip().lower() or "unknown"
 
@@ -364,7 +368,7 @@ def _status_priority(status: str) -> int:
 def _fetch_result_has_success(fetch_result: dict[str, Any]) -> bool:
     packets = _packets_for_fetch_result(fetch_result)
     if packets:
-        return any(_packet_status(packet) == "result" for packet in packets)
+        return any(_packet_status_is_success(_packet_status(packet)) for packet in packets)
     return bool(fetch_result.get("success"))
 
 
@@ -401,7 +405,7 @@ def _build_aio_packet_fetch_summary(
             platform_fetch_stats[platform]["total"] += 1
 
             next_platform_status = "failed"
-            if status == "result":
+            if _packet_status_is_success(status):
                 successful_fetches += 1
                 total_answers += 1
                 successful_platforms.add(platform)

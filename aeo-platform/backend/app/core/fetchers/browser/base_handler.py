@@ -1365,8 +1365,13 @@ class BaseBrowserHandler(ABC):
 
         current_url = page.url or ""
         target_url = url or self.URL
-        current_host = (urlparse(current_url).netloc or "").lower()
-        target_host = (urlparse(target_url).netloc or "").lower()
+        normalize_host = getattr(self.client, "_normalize_host", None)
+        if callable(normalize_host):
+            current_host = normalize_host(current_url)
+            target_host = normalize_host(target_url)
+        else:
+            current_host = (urlparse(current_url).netloc or "").lower()
+            target_host = (urlparse(target_url).netloc or "").lower()
         if not current_host or not target_host or current_host != target_host:
             return False
         if current_url == "about:blank":

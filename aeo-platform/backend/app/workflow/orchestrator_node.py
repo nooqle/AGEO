@@ -665,6 +665,40 @@ def _compact_text(value: Any, limit: int = 140) -> str:
     return text[: limit - 1] + "…"
 
 
+def _build_panorama_step_intro(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    reply_text: str,
+    state: AgentState,
+) -> str:
+    if tool_name != "question_simulation":
+        return ""
+    if str(tool_args.get("mode") or "").strip().lower() != "baseline_dynamic":
+        return ""
+
+    existing_text = str(reply_text or "")
+    if (
+        "品牌全景分析" in existing_text
+        and "第二步" in existing_text
+        and "第三步" in existing_text
+    ):
+        return ""
+
+    brand_name = (
+        str((state.get("brand_profile") or {}).get("brand_name") or "").strip()
+        or str(state.get("brand_name") or "").strip()
+        or "该品牌"
+    )
+    return (
+        f"开始运行{brand_name}的品牌全景分析。\n"
+        "本次分析会分 3 步推进：\n"
+        "1. 生成行业通用问题集\n"
+        "2. 抓取 4 个 AI 平台对同一组问题的真实回答\n"
+        "3. 汇总品牌提及、引用来源和风险信号，输出品牌全景分析报告\n"
+        "现在先开始第 1 步：生成行业通用问题集。"
+    )
+
+
 def _format_knowledge_lookup_match(match: dict[str, Any]) -> str:
     parts = [f"类型={match.get('source_type', 'unknown')}"]
     if match.get("platform"):
@@ -3877,6 +3911,21 @@ async def _handle_tool_call(
             status="running",
             steps=workflow_steps,
         )
+
+        panorama_intro = _build_panorama_step_intro(
+            effective_tool_name,
+            tool_args,
+            reply_text,
+            state,
+        )
+        if panorama_intro:
+            await send_reply_event(
+                session_id,
+                panorama_intro,
+                is_delta=False,
+                is_new_round=True,
+            )
+            await send_reply_event(session_id, "", is_complete=True)
 
         # Fallback: if LLM produced no reply text, emit a short status line
         # so the user sees something before the long-running agent starts.

@@ -27,6 +27,7 @@ import {
   getStoredAccessToken,
   setStoredAccessToken,
 } from '@/lib/auth-storage';
+import { consumeAuthRedirectToast } from '@/lib/auth-expiry';
 import { PublicBrand } from '@/components/layout/PublicBrand';
 import { api } from '@/services/api';
 import type { VerificationChannel } from '@/types/auth';
@@ -354,6 +355,13 @@ function AuthPageContent() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginCode, setLoginCode] = useState('');
   const [loginDebugCode, setLoginDebugCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    const message = consumeAuthRedirectToast();
+    if (message) {
+      toast.error(message, 3000);
+    }
+  }, []);
 
   useEffect(() => {
     const storedToken = getStoredAccessToken();

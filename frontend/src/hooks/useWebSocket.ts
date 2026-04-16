@@ -18,6 +18,7 @@ import { buildOutputReadyPayload } from '@/hooks/websocket/output';
 import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmation';
 import { isSupersededA5FailureText } from '@/adapters/chatMessage';
 import { api } from '@/services/api';
+import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 import type { AnalysisTask } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import type { ToolMode } from '@/types/toolMode';
@@ -1023,6 +1024,7 @@ export function useWebSocket(sessionId: string | null) {
         if (!token) {
           console.error('[WebSocket] Missing auth token');
           setIsConnected(false);
+          redirectToLoginForExpiredAuth();
           return;
         }
 
@@ -1079,6 +1081,11 @@ export function useWebSocket(sessionId: string | null) {
           }
           setIsConnected(false);
           wsRef.current = null;
+
+          if (event.code === 1008 && event.reason === 'Unauthorized') {
+            redirectToLoginForExpiredAuth();
+            return;
+          }
 
           // Auto reconnect with exponential backoff
           if (reconnectCountRef.current < maxReconnectAttempts) {

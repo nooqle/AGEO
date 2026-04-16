@@ -16,6 +16,7 @@ import {
   getStoredAccessToken,
   setStoredAccessToken,
 } from '@/lib/auth-storage';
+import { consumeAuthRedirectToast } from '@/lib/auth-expiry';
 import { api } from '@/services/api';
 import type { AuthUser, VerificationChannel } from '@/types/auth';
 
@@ -115,6 +116,13 @@ function ControlPlaneLoginContent() {
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+
+  useEffect(() => {
+    const message = consumeAuthRedirectToast();
+    if (message) {
+      toast.error(message, 3000);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
