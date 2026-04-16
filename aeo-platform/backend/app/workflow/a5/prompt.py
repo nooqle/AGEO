@@ -13,7 +13,7 @@ def _get_a5_report_context_intro(report_type: str) -> str:
 """
     return """## 报告类型：场景分析报告
 本次分析基于特定用户画像/场景。请从目标用户群体视角分析品牌表现。
-如果提供了品牌全景分析参考数据，请在报告中对比场景表现与全景分析基准的差异。
+如果提供了品牌全景分析参考数据，必须在报告中默认对比场景表现与品牌全景分析的差异；如果没有提供，也要明确说明当前缺少品牌全景分析对比基线。
 
 """
 
@@ -32,9 +32,9 @@ def _get_a5_core_prompt(report_type: str = "persona") -> str:
 
 ## report_markdown 必须严格采用以下五个一级章节
 1. `## 一、核心执行摘要`
-2. `## 二、核心数据基准看板`
+2. `## 二、核心数据对比看板`
 3. `## 三、跨大模型平台表现拆解`
-4. `## 四、主题场景诊断：缺位与竞争图谱`
+4. `## 四、主题场景诊断：机会与竞争图谱`
 5. `## 五、AEO 常态化运营与优化策略`
 
 ## 各章节写作要求
@@ -44,7 +44,7 @@ def _get_a5_core_prompt(report_type: str = "persona") -> str:
 - 用一段话概括品牌当前在 DeepSeek、Kimi、豆包、混元上的整体占位情况。
 - 必须点出最大的结构性痛点，以及对业务的潜在影响。
 
-### 二、核心数据基准看板
+### 二、核心数据对比看板
 - 必须使用 Markdown 表格。
 - 表头固定为：
   `| 指标名称 | 指标定义 | 本品牌数据 | 竞品A数据 | 竞品B数据 | 诊断结论 |`
@@ -54,6 +54,8 @@ def _get_a5_core_prompt(report_type: str = "persona") -> str:
   - 品牌内容引用占比
   - 负向情感占比
 - “诊断结论”必须是精准的一句话，指出优势或短板。
+- 如果当前是场景分析报告且提供了品牌全景分析数据，必须在该章节下方追加 `### 与品牌全景分析对比` 小节。
+- 该小节至少比较：提及率、内容引用率、场景覆盖或场景进入情况，并明确写出场景结果相对全景分析是提升、持平还是回落。
 
 ### 三、跨大模型平台表现拆解
 - 必须使用 Markdown 表格。
@@ -62,9 +64,9 @@ def _get_a5_core_prompt(report_type: str = "persona") -> str:
 - 平台抓取偏好要用中文表达，不允许出现中英文夹杂词句。
 - 对表现最差的平台，必须给出具体的内容投放或信源补强建议。
 
-### 四、主题场景诊断：缺位与竞争图谱
+### 四、主题场景诊断：机会与竞争图谱
 - 必须分成两个小节：
-  - `### 品牌缺位场景`
+  - `### 品牌待补场景`
   - `### 竞争胶着场景`
 - 每个小节至少列出 2 个真实问题示例；如果不足 2 个，要如实说明样本不足。
 - 不能只列标签，必须解释这些问题为什么意味着流量流失或竞争压力。
@@ -260,7 +262,7 @@ def _build_a5_user_content(
                     for platform, stats in platform_stats.items()
                     if isinstance(stats, dict)
                 },
-                "品牌完全缺位的问题示例": [
+                "品牌待补场景问题示例": [
                     item.get("scenario_label", "")
                     for item in missing_examples
                     if isinstance(item, dict) and item.get("scenario_label")
@@ -353,6 +355,12 @@ def _build_a5_user_content(
     if analysis_mode == "persona" and baseline_metrics:
         baseline_mention = baseline_metrics.get("mention_rate", 0)
         baseline_content_citation = (baseline_metrics.get("summary_metrics", {}) or {}).get("content_citation_rate", 0)
+        current_mention = (summary_metrics or {}).get("brand_mention_rate", metrics.get("mention_rate", 0))
+        current_content_citation = (summary_metrics or {}).get("content_citation_rate", 0)
+        current_scenario_hit = (summary_metrics or {}).get("scenario_hit_count", 0)
+        current_scenario_total = (summary_metrics or {}).get("scenario_total", 0)
+        baseline_scenario_hit = (baseline_metrics.get("summary_metrics", {}) or {}).get("scenario_hit_count", 0)
+        baseline_scenario_total = (baseline_metrics.get("summary_metrics", {}) or {}).get("scenario_total", 0)
         baseline_findings = ""
         if baseline_report:
             findings = baseline_report.get("key_findings", [])[:3]
@@ -362,9 +370,19 @@ def _build_a5_user_content(
             f"## 品牌全景分析参考数据\n"
             f"- 全景分析提及率: {baseline_mention:.1%}\n"
             f"- 全景分析内容引用率: {baseline_content_citation:.1%}\n"
+            f"- 本次场景提及率: {current_mention:.1%}\n"
+            f"- 本次场景内容引用率: {current_content_citation:.1%}\n"
+            f"- 本次场景覆盖: {current_scenario_hit}/{current_scenario_total}\n"
+            f"- 全景分析覆盖: {baseline_scenario_hit}/{baseline_scenario_total}\n"
             f"- 全景分析核心发现:\n{baseline_findings}\n\n"
-            f"请在场景报告中对比品牌全景分析数据，说明该场景表现与全景分析基准的差异。"
-            f"重点比较场景覆盖、内容引用和竞品提及事实，不要输出综合分数对比。"
+            f"请在场景报告中默认增加“与品牌全景分析对比”内容，说明该场景表现与全景分析的差异。"
+            f"重点比较提及率、场景覆盖、内容引用和竞品提及事实，不要输出综合分数对比。"
+        )
+    elif analysis_mode == "persona":
+        sections.append(
+            "## 品牌全景分析参考数据\n"
+            "- 当前未提供品牌全景分析基线。\n"
+            "请在场景报告中明确说明：本次仅能做场景内诊断，暂时无法判断该场景相对品牌整体表现是提升还是回落。"
         )
 
     sections.append(

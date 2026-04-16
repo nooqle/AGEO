@@ -184,7 +184,7 @@ function inferBrandFromHeadline(headline?: string): string | null {
   }
 
   const normalized = headline.trim();
-  const keywordIndex = ['品牌全景分析报告', 'AI 可见性分析报告', '置信度报告', '分析报告']
+  const keywordIndex = ['品牌全景分析报告', '用户画像场景分析报告', 'AI 可见性分析报告', '置信度报告', '分析报告']
     .map((keyword) => normalized.indexOf(keyword))
     .find((index) => typeof index === 'number' && index > 0);
 
@@ -672,7 +672,7 @@ function buildCustomerReportMarkdown(content: ReportCanvasContent): string {
   lines.push('## 一、核心执行摘要');
   lines.push(summaryText);
   lines.push('');
-  lines.push('## 二、核心数据基准看板');
+  lines.push('## 二、核心数据对比看板');
   lines.push(`| 指标名称 | 指标定义 | ${brandName} 数据 | ${competitorAName} 数据 | ${competitorBName} 数据 | 诊断结论 |`);
   lines.push('| --- | --- | ---: | ---: | ---: | --- |');
   if (factMetricRows.length > 0) {
@@ -748,8 +748,8 @@ function buildCustomerReportMarkdown(content: ReportCanvasContent): string {
         };
       });
 
-  lines.push('## 四、主题场景诊断：缺位与竞争图谱');
-  lines.push('### 品牌缺位场景');
+  lines.push('## 四、主题场景诊断：机会与竞争图谱');
+  lines.push('### 品牌待补场景');
   if (missingExamples.length > 0) {
     missingExamples.slice(0, 3).forEach((item, index) => {
       const examples = Array.isArray(item.query_examples) ? item.query_examples.filter(isNonEmptyString) : [];

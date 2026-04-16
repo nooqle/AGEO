@@ -86,6 +86,30 @@ def _resolved_running_progress_message(
     return progress_message
 
 
+def _infer_terminal_stage(
+    task: AnalysisTask,
+    latest_run: TaskRun | None = None,
+) -> str:
+    """Infer the most accurate terminal stage for a finished task."""
+
+    stage_results = getattr(task, "stage_results_cache", None) or []
+    for stage_result in reversed(stage_results):
+        if isinstance(stage_result, dict):
+            stage = str(stage_result.get("stage") or "").strip()
+            if stage:
+                return stage
+
+    checkpoint_stage = getattr(latest_run, "checkpoint_stage", None)
+    if checkpoint_stage:
+        return str(checkpoint_stage)
+
+    current_stage = getattr(task, "current_stage", None)
+    if current_stage:
+        return str(current_stage)
+
+    return "A5"
+
+
 class TaskService:
     """Manages AnalysisTask CRUD and lifecycle transitions."""
 
@@ -393,6 +417,7 @@ class TaskService:
 
         task.status = TaskStatus.COMPLETED
         task.progress = 1.0
+        task.current_stage = _infer_terminal_stage(task, run)
         task.progress_message = "分析完成"
         task.completed_at = now
         task.updated_at = now
@@ -858,12 +883,15 @@ class TaskService:
 
             latest_status = getattr(latest_run, "status", None)
             if latest_status == TaskRunStatus.COMPLETED:
+                terminal_stage = _infer_terminal_stage(task, latest_run)
                 if (
                     task.status != TaskStatus.COMPLETED
                     or task.progress_message != "分析完成"
+                    or task.current_stage != terminal_stage
                 ):
                     task.status = TaskStatus.COMPLETED
                     task.progress = 1.0
+                    task.current_stage = terminal_stage
                     task.progress_message = "分析完成"
                     task.completed_at = (
                         task.completed_at

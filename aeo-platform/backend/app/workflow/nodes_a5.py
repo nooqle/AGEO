@@ -336,6 +336,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
             source_overview=source_overview,
             mention_sentiment_analysis=mention_sentiment_analysis,
             competitor_metrics=competitor_metrics,
+            analysis_mode=analysis_mode,
+            baseline_metrics=state.get("baseline_metrics"),
+            baseline_report=state.get("baseline_report"),
         )
         report_data = a5_sanitizer._sanitize_user_facing_report(report_data)
 
@@ -488,7 +491,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         from app.workflow.events import save_and_send_artifact
 
         report_output_type = "report_baseline" if is_baseline else "report"
-        report_title = "品牌全景分析报告" if is_baseline else "AI 可见性分析报告"
+        report_title = "品牌全景分析报告" if is_baseline else "用户画像场景分析报告"
         report_category = "baseline" if is_baseline else "scenario"
         artifact_key = f"{session_id}_{report_output_type}"
         report_artifact_data = build_report_artifact_data(

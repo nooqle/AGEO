@@ -19,7 +19,7 @@ def build_report_artifact_data(
     report_headline = (
         f"{brand_name or '品牌'} 品牌全景分析报告"
         if is_baseline
-        else f"{brand_name or '品牌'} AI 可见性分析报告"
+        else f"{brand_name or '品牌'} 用户画像场景分析报告"
     )
     return {
         'headline': report_headline,
