@@ -530,13 +530,23 @@ def _get_browser_human_action_timeout(platform: str) -> float:
 
 
 def _get_browser_pipeline_timeout(platform: str, question_count: int) -> float:
-    """Scale the pipeline timeout to the platform's worst-case question budget."""
+    """Derive a bounded browser pipeline timeout.
+
+    For multi-question runs, keep the platform-level timeout as a real cap so one
+    browser does not stall the whole A4 stage for tens of minutes. For a
+    single-question run, still allow the longer human-action budget because the
+    user may be actively completing a login or verification step for that one
+    question.
+    """
 
     configured_timeout = float(PlatformConstants.BROWSER_PIPELINE_TIMEOUT)
     if question_count <= 0:
         return configured_timeout
 
-    first_question_timeout = max(300.0, _get_browser_human_action_timeout(platform))
+    if question_count == 1:
+        return max(configured_timeout, _get_browser_human_action_timeout(platform))
+
+    first_question_timeout = max(300.0, _get_browser_timeout(platform))
     per_question_timeout = _get_browser_timeout(platform)
     inter_question_delay = float(
         PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
@@ -548,7 +558,7 @@ def _get_browser_pipeline_timeout(platform: str, question_count: int) -> float:
         + remaining_questions * (per_question_timeout + inter_question_delay)
         + 30.0
     )
-    return max(configured_timeout, derived_timeout)
+    return min(configured_timeout, derived_timeout)
 
 
 _platform_semaphores: dict[str, asyncio.Semaphore] = {}
