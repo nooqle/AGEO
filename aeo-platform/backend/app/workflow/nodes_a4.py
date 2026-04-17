@@ -454,6 +454,7 @@ def _should_count_browser_failure_for_breaker(result: dict[str, Any]) -> bool:
     error_type = str(result.get("error_type") or "").strip().lower()
     if error_type in {
         "empty_answer",
+        "submission_not_confirmed",
         "rate_limit",
         "user_skipped",
         "user_action_timeout",
@@ -570,6 +571,17 @@ def _get_browser_human_action_timeout(platform: str) -> float:
         + _BROWSER_ACTION_RESUME_BUFFER_SECONDS
         + _get_browser_timeout(platform)
     )
+
+
+def _get_browser_action_wait_timeout(platform: str, question_count: int) -> int:
+    """Bound browser handoff waits so multi-question runs cannot stall a platform."""
+
+    if question_count <= 1:
+        return int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS)
+
+    per_question_timeout = _get_browser_timeout(platform)
+    capped_wait = max(180.0, per_question_timeout + 60.0)
+    return int(min(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS, capped_wait))
 
 
 def _get_browser_pipeline_timeout(platform: str, question_count: int) -> float:
@@ -866,9 +878,6 @@ async def _browser_fetch_with_timeout(
             )
 
     try:
-        if _is_aio_browser_handler(handler):
-            return await fetch_fn(*args, **kwargs)
-
         result = await asyncio.wait_for(
             fetch_fn(*args, **kwargs),
             timeout=timeout,
@@ -884,6 +893,7 @@ async def _browser_fetch_with_timeout(
             "fetch_method": "browser",
             "success": False,
             "error": f"超时（{timeout:.0f}s）",
+            "error_type": "question_timeout",
             "duration": timeout,
         }
     except Exception as e:
@@ -1402,6 +1412,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             str(state.get("user_id")) if state.get("user_id") else None
                         ),
                         run_id=state.get("run_id"),
+                        question_count=total,
+                        action_wait_timeout=_get_browser_action_wait_timeout(
+                            platform, total
+                        ),
                     )
 
                     # Update circuit breaker state — distinguish failure types
@@ -2601,6 +2615,8 @@ async def _fetch_from_browser(
     session_id: str = "",
     user_id: str | None = None,
     run_id: str | None = None,
+    question_count: int = 1,
+    action_wait_timeout: int | None = None,
     _is_retry: bool = False,
     _verify_recovery_count: int = 0,
     _auth_state_updated: bool = False,
@@ -2611,6 +2627,9 @@ async def _fetch_from_browser(
     error_type = ""
     max_verify_recoveries = 3
     pending_action: dict[str, Any] | None = None
+    resolved_action_wait_timeout = action_wait_timeout or _get_browser_action_wait_timeout(
+        platform, question_count
+    )
 
     try:
         async for event in handler.fetch(question):
@@ -2795,7 +2814,7 @@ async def _fetch_from_browser(
             handler=handler,
             request_id=pending_action["request_id"],
             action_type=pending_action["action_type"],
-            timeout=int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS),
+            timeout=resolved_action_wait_timeout,
         )
         if resumed:
             if session_id:
@@ -2817,6 +2836,8 @@ async def _fetch_from_browser(
                 session_id=session_id,
                 user_id=user_id,
                 run_id=run_id,
+                question_count=question_count,
+                action_wait_timeout=resolved_action_wait_timeout,
                 _is_retry=True,
                 _verify_recovery_count=(
                     _verify_recovery_count + 1
@@ -2899,6 +2920,8 @@ async def _fetch_from_browser(
                 session_id=session_id,
                 user_id=user_id,
                 run_id=run_id,
+                question_count=question_count,
+                action_wait_timeout=resolved_action_wait_timeout,
                 _is_retry=True,
                 _auth_state_updated=_auth_state_updated,
             )
@@ -2975,7 +2998,7 @@ async def _fetch_from_browser(
                     target_url=getattr(handler, "URL", None),
                 )
                 resolution = await wait_for_browser_action_outcome(
-                    request_id, timeout=int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS)
+                    request_id, timeout=resolved_action_wait_timeout
                 )
                 if resolution == "completed":
                     recovered = await handler.recover_after_verify(prepare_window=False)
@@ -3005,6 +3028,8 @@ async def _fetch_from_browser(
                 session_id=session_id,
                 user_id=user_id,
                 run_id=run_id,
+                question_count=question_count,
+                action_wait_timeout=resolved_action_wait_timeout,
                 _is_retry=True,
                 _verify_recovery_count=_verify_recovery_count + 1,
                 _auth_state_updated=_auth_state_updated,
@@ -3069,7 +3094,7 @@ async def _fetch_from_browser(
                     target_url=getattr(handler, "URL", None),
                 )
                 resolution = await wait_for_browser_action_outcome(
-                    request_id, timeout=int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS)
+                    request_id, timeout=resolved_action_wait_timeout
                 )
                 modal_cleared = (
                     resolution == "completed"
@@ -3091,6 +3116,8 @@ async def _fetch_from_browser(
                     session_id=session_id,
                     user_id=user_id,
                     run_id=run_id,
+                    question_count=question_count,
+                    action_wait_timeout=resolved_action_wait_timeout,
                     _is_retry=True,
                     _auth_state_updated=_auth_state_updated,
                 )

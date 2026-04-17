@@ -195,8 +195,15 @@ class DeepSeekHandler(BaseBrowserHandler):
 
             if not submitted:
                 logger.warning(
-                    "[DeepSeek] Submission could not be confirmed; downstream DOM extraction may stay empty"
+                    "[DeepSeek] Submission could not be confirmed; skipping DOM wait for this question"
                 )
+                yield self._create_event(
+                    BrowserState.ERROR,
+                    "提交后页面未进入回答状态，本题已跳过",
+                    progress=0,
+                    error_type="submission_not_confirmed",
+                )
+                return
 
             # Step 6: Wait for response (try network interception first, fallback to DOM)
             yield self._create_event(BrowserState.WAITING_RESPONSE, "等待 AI 回复...", progress=0.7)
@@ -326,8 +333,6 @@ class DeepSeekHandler(BaseBrowserHandler):
             )
             if not isinstance(probe, dict):
                 continue
-            if bool(probe.get("body_has_prefix")):
-                return True
             if int(probe.get("message_count") or 0) > int(
                 baseline_probe.get("message_count") or 0
             ):
@@ -335,8 +340,6 @@ class DeepSeekHandler(BaseBrowserHandler):
             if int(probe.get("answer_count") or 0) > int(
                 baseline_probe.get("answer_count") or 0
             ):
-                return True
-            if int(probe.get("input_len") or 0) == 0:
                 return True
         return False
 
