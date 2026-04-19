@@ -22,6 +22,7 @@ import { api } from '@/services/api';
 import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 import type { AnalysisTask } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
+import type { ToolMode } from '@/types/toolMode';
 
 function normalizeWebSocketBase(rawUrl: string | undefined): string {
   const value = (rawUrl || 'ws://localhost:8001').trim().replace(/\/+$/, '');
@@ -67,6 +68,7 @@ interface QueuedUserMessage {
   content: string;
   context?: Array<{ id: string; type: string; label: string }>;
   attachments?: AttachmentRefPayload[];
+  tool_mode?: ToolMode;
 }
 
 export function useWebSocket(sessionId: string | null) {
@@ -1211,6 +1213,7 @@ export function useWebSocket(sessionId: string | null) {
     content: string,
     context?: Array<{ id: string; type: string; label: string }>,
     attachments?: Attachment[],
+    toolMode?: ToolMode | null,
   ) => {
     const clientMessageId = generateClientMessageId();
     const payload: QueuedUserMessage = {
@@ -1234,6 +1237,9 @@ export function useWebSocket(sessionId: string | null) {
           size: typeof attachment.size === 'number' ? attachment.size : 0,
         }));
       }
+    }
+    if (toolMode) {
+      payload.tool_mode = toolMode;
     }
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       pendingMessagesRef.current.push(payload);
