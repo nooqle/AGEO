@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
+import { Suspense, useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
@@ -357,7 +357,7 @@ function PanoramaStatusBlock({
   );
 }
 
-export default function SettingsPage() {
+function SettingsPageContent() {
   const searchParams = useSearchParams();
   const timezone = getDefaultTimezone();
   const requestedEntityId = searchParams.get('entity_id');
@@ -873,5 +873,13 @@ export default function SettingsPage() {
         </div>
       </div>
     </RequireAuth>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SettingsPageContent />
+    </Suspense>
   );
 }
