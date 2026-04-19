@@ -356,6 +356,19 @@ export interface DashboardLatestReport {
   action_label?: string;
 }
 
+export interface DashboardSiteConfidenceLatestReport {
+  session_id: string;
+  artifact_id: string;
+  created_at?: string | null;
+}
+
+export interface DashboardSiteConfidenceCard {
+  score: number | null;
+  latest_evaluated_at?: string | null;
+  trend?: DashboardBoardTrend | null;
+  latest_report?: DashboardSiteConfidenceLatestReport | null;
+}
+
 export interface DashboardCitationSourceType {
   key: string;
   label: string;
