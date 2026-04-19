@@ -53,7 +53,7 @@ _USER_VISIBLE_STAGE_LABELS = {
     "A3": "问题生成",
     "A4": "答案抓取",
     "A5": "报告生成",
-    "A7": "可信度分析",
+    "A7": "官网 AI 友好度",
 }
 
 
@@ -61,7 +61,13 @@ def _sanitize_user_visible_task_text(message: str | None) -> str:
     text = message or ""
     for raw_step, label in _USER_VISIBLE_STAGE_LABELS.items():
         text = text.replace(raw_step, label)
-    return text
+    return (
+        text.replace("site_confidence_assessment_skill", "官网 AI 友好度")
+        .replace("site_confidence_assessment_executor", "官网 AI 友好度")
+        .replace("官网置信度评估", "官网 AI 友好度")
+        .replace("官网置信度报告", "官网 AI 友好度报告")
+        .replace("引用置信度评估", "来源引用分析")
+    )
 
 
 def _is_stale_waiting_message(message: str | None) -> bool:

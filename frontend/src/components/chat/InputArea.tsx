@@ -7,9 +7,6 @@ import {
   RiAttachmentLine,
   RiLoader4Line,
   RiCloseLine,
-  RiToolsLine,
-  RiArrowDownSLine,
-  RiShieldCheckLine,
 } from '@remixicon/react';
 import { ConfirmationRequest } from '@/types/message';
 import { useFileUpload } from '@/hooks/useFileUpload';
@@ -17,8 +14,6 @@ import { cn } from '@/lib/cn';
 import { INPUT_PLACEHOLDERS } from '@/config/brands';
 import { useContextStore, type ContextTag } from '@/stores/contextStore';
 import { toast } from '@/components/ui/toast';
-import type { ToolMode } from '@/types/toolMode';
-import { CONFIDENCE_ANALYSIS_TOOL_MODE } from '@/types/toolMode';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 
 const TABLE_UPLOAD_HINT_SEEN_KEY = 'specta.table-upload-hint-seen';
@@ -28,7 +23,6 @@ interface InputAreaProps {
     content: string,
     attachments?: Attachment[],
     context?: ContextTag[],
-    toolMode?: ToolMode | null,
   ) => void;
   onStop: () => void;
   isExecuting: boolean;
@@ -39,8 +33,6 @@ interface InputAreaProps {
   onChange?: (value: string) => void;
   placeholder?: string;
   progressMessage?: string;
-  selectedToolMode?: ToolMode | null;
-  onToolModeChange?: (mode: ToolMode | null) => void;
   previousUserMessage?: string | null;
 }
 
@@ -55,16 +47,12 @@ export function InputArea({
   onChange,
   placeholder: customPlaceholder,
   progressMessage,
-  selectedToolMode,
-  onToolModeChange,
   previousUserMessage,
 }: InputAreaProps) {
   const [internalContent, setInternalContent] = useState('');
-  const [toolMenuOpen, setToolMenuOpen] = useState(false);
   const content = controlledValue !== undefined ? controlledValue : internalContent;
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const toolMenuRef = useRef<HTMLDivElement>(null);
 
   const { attachments, isUploading, inputRef, openFilePicker, removeAttachment, clearAttachments, handleFileChange } = useFileUpload({
     maxFiles: 1,
@@ -98,19 +86,6 @@ export function InputArea({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isExecuting, onStop]);
-
-  useEffect(() => {
-    if (!toolMenuOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!toolMenuRef.current?.contains(event.target as Node)) {
-        setToolMenuOpen(false);
-      }
-    };
-
-    window.addEventListener('mousedown', handlePointerDown);
-    return () => window.removeEventListener('mousedown', handlePointerDown);
-  }, [toolMenuOpen]);
 
   const handleOpenFilePicker = useCallback(() => {
     try {
@@ -149,7 +124,6 @@ export function InputArea({
       trimmedContent,
       atts,
       contextTags.length > 0 ? [...contextTags] : undefined,
-      selectedToolMode ?? null,
     );
     if (onChange) {
       onChange('');
@@ -198,21 +172,10 @@ export function InputArea({
     }
   };
 
-  const handleToolModeSelect = (mode: ToolMode) => {
-    onToolModeChange?.(mode);
-    setToolMenuOpen(false);
-  };
-
-  const handleToolModeClear = () => {
-    onToolModeChange?.(null);
-  };
-
   const placeholder = customPlaceholder || (isExecuting
     ? INPUT_PLACEHOLDERS.executing
     : pendingConfirmation
     ? INPUT_PLACEHOLDERS.confirmation
-    : selectedToolMode === CONFIDENCE_ANALYSIS_TOOL_MODE
-    ? '粘贴链接、引用列表、一段文本，或说明要分析当前会话里的引用来源'
     : INPUT_PLACEHOLDERS.default);
 
   return (
@@ -407,89 +370,8 @@ export function InputArea({
             )}
           </div>
 
-          <div className="mt-3 flex items-center gap-2" ref={toolMenuRef}>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setToolMenuOpen((open) => !open)}
-                disabled={isExecuting || disabled}
-                className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  backgroundColor: 'var(--bg-secondary)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                <RiToolsLine className="h-3.5 w-3.5" />
-                工具
-                <RiArrowDownSLine className="h-3.5 w-3.5" />
-              </button>
-
-              {toolMenuOpen && !isExecuting && !disabled ? (
-                <div
-                  className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[220px] rounded-2xl border p-2 shadow-[0_16px_40px_rgba(15,23,42,0.18)]"
-                  style={{
-                    borderColor: 'var(--border-subtle)',
-                    backgroundColor: 'var(--bg-primary)',
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => handleToolModeSelect(CONFIDENCE_ANALYSIS_TOOL_MODE)}
-                    className="flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-colors"
-                    style={{
-                      backgroundColor:
-                        selectedToolMode === CONFIDENCE_ANALYSIS_TOOL_MODE
-                          ? 'var(--bg-secondary)'
-                          : 'transparent',
-                    }}
-                  >
-                    <span
-                      className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full"
-                      style={{
-                        backgroundColor: 'rgba(37,99,235,0.12)',
-                        color: '#2563eb',
-                      }}
-                    >
-                      <RiShieldCheckLine className="h-4 w-4" />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                        置信度分析
-                      </span>
-                      <span className="mt-1 block text-xs leading-5" style={{ color: 'var(--text-secondary)' }}>
-                        评估链接、引用来源或导入链接清单的可信度、结构化质量与可核查性
-                      </span>
-                    </span>
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            {selectedToolMode === CONFIDENCE_ANALYSIS_TOOL_MODE ? (
-              <span
-                className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs"
-                style={{
-                  borderColor: 'rgba(37,99,235,0.22)',
-                  backgroundColor: 'rgba(37,99,235,0.08)',
-                  color: '#1d4ed8',
-                }}
-              >
-                <RiShieldCheckLine className="h-3.5 w-3.5" />
-                置信度分析
-                <button
-                  type="button"
-                  onClick={handleToolModeClear}
-                  className="rounded-full p-0.5 transition-colors hover:bg-white/40"
-                >
-                  <RiCloseLine className="h-3.5 w-3.5" />
-                </button>
-              </span>
-            ) : null}
-          </div>
-
           {/* 提示文字 */}
-          <div className="flex items-center justify-center gap-4 mt-2 text-xs">
+          <div className="mt-2 flex items-center justify-center gap-4 text-xs">
             {!isExecuting ? (
               <>
                 <span className="flex items-center gap-1" style={{ color: 'var(--text-tertiary)' }}>

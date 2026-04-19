@@ -155,8 +155,10 @@ class OutputService:
             else None
         )
         if (
-            artifact_kind not in {"confidence_signal", "confidence_analysis"}
-            and report_kind not in {"confidence_signal", "confidence_analysis"}
+            artifact_kind
+            not in {"confidence_signal", "confidence_analysis", "site_confidence_report"}
+            and report_kind
+            not in {"confidence_signal", "confidence_analysis", "site_confidence_report"}
             and message.output_type
             and message.output_type.startswith("report")
         ):

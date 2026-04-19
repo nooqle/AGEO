@@ -12,15 +12,14 @@ _USER_VISIBLE_RUNTIME_LABELS: dict[str, str] = {
     "A3": "问题模拟",
     "A4": "答案抓取",
     "A5": "分析报告",
-    "A7": "引用置信度评估",
+    "A7": "官网 AI 友好度",
     "brand_analysis": "品牌分析",
     "persona_generation": "用户画像生成",
     "question_simulation": "问题模拟",
     "answer_fetch": "答案抓取",
     "analysis_report_skill": "分析报告",
     "data_analytics": "分析报告",
-    "confidence_analysis_skill": "引用置信度评估",
-    "confidence_signal_skill": "引用置信度评估",
+    "site_confidence_assessment_skill": "官网 AI 友好度",
     "post_analysis_skill": "后续分析",
 }
 
@@ -226,22 +225,6 @@ def build_alternative_action_catalog(
                     "description": "沿用当前抓取结果，刷新正式报告与关键结论",
                     "action_type": "run_tool",
                     "tool_name": "analysis_report_skill",
-                    "tool_args": {},
-                }
-            )
-
-    if step == "A7" or (
-        blocker == "artifact_writeback_failed"
-        and str((state.get("current_step") or "")).strip() == "A7"
-    ):
-        if has_fetch_results:
-            _append(
-                {
-                    "id": "run_confidence_signal",
-                    "label": "重新执行引用置信度评估",
-                    "description": "沿用当前抓取结果，刷新引用可信度分析",
-                    "action_type": "run_tool",
-                    "tool_name": "confidence_analysis_skill",
                     "tool_args": {},
                 }
             )

@@ -14,7 +14,7 @@ import { FollowUpChips } from './FollowUpChips';
 import { BrowserActionBanner } from './BrowserActionBanner';
 import { InputArea } from './InputArea';
 import { cn } from '@/lib/cn';
-import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
+import { getUserFacingStageLabel, sanitizeUserFacingWorkflowText } from '@/lib/workflowStageLabels';
 import { DEFAULT_EXAMPLE_BRANDS, ExampleBrand } from '@/config/brands';
 import { normalizePublicPlatformId } from '@/config/platformLabel';
 import { api } from '@/services/api';
@@ -25,7 +25,6 @@ import type { ContextTag } from '@/stores/contextStore';
 import type { StageResult } from '@/types/snapshot';
 import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
-import type { ToolMode } from '@/types/toolMode';
 import type { BrowserState } from '@/types/agent';
 import type { Message as ChatMessage } from '@/types/message';
 import type { AioTakeoverRecord } from '@/types/aio';
@@ -209,7 +208,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const artifactsHydratedRef = useRef(false);
   const artifactsHydratingPromiseRef = useRef<Promise<void> | null>(null);
   const [inputValue, setInputValue] = useState('');
-  const [selectedToolMode, setSelectedToolMode] = useState<ToolMode | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -545,7 +543,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             if (cancelled) return;
             const hasRecoverableOutputs = (outputs || []).length > 0;
             setActiveTask(hasRecoverableOutputs ? latestTask : null);
-            setReconnectionTask(hasRecoverableOutputs ? latestTask : null);
+            setReconnectionTask(
+              hasRecoverableOutputs && latestTask.status === 'failed' ? latestTask : null
+            );
           } else {
             setActiveTask(latestTask);
             setReconnectionTask(null);
@@ -567,7 +567,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
               totalStages: 5,
               progress: task.progress,
               status: 'running',
-              details: task.progress_message,
+              details: sanitizeUserFacingWorkflowText(task.progress_message) || task.progress_message || '',
               steps: [],
               subTasks: [],
             });
@@ -601,8 +601,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         } else if (waitingForInput) {
           stopExecutionAction();
           setExecutionProgress(null);
-        } else if (task.status === 'completed' || task.status === 'failed') {
-          // Show reconnection banner
+        } else if (task.status === 'failed') {
+          // Show reconnection banner for failures only
           setReconnectionTask(task);
         }
       } catch {
@@ -1031,7 +1031,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     content: string,
     attachments?: Attachment[],
     context?: ContextTag[],
-    toolMode?: ToolMode | null,
   ) => {
     if ((!content.trim() && (!attachments || attachments.length === 0)) || isAgentExecuting) return;
 
@@ -1054,7 +1053,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     startExecution();
 
     // Send message via WebSocket (with optional context)
-    sendMessage(content.trim(), context, attachments, toolMode);
+    sendMessage(content.trim(), context, attachments);
   }, [addMessage, startExecution, sendMessage, isAgentExecuting, pendingConfirmation, setPendingConfirmation]);
 
   // Auto-send brand name when navigating from Dashboard with ?brand= param
@@ -1311,6 +1310,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   };
 
   const isWaitingForInput = !isAgentExecuting && activeTask?.latest_run?.status === 'waiting_input';
+  const waitingProgressMessage = activeTask?.progress_message;
   const liveCurrentStage = isAgentExecuting
     ? executionProgress?.stage
     : activeTask?.current_stage ?? executionProgress?.stage;
@@ -1320,8 +1320,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const liveProgressMessage = isAgentExecuting
     ? executionProgress?.details
     : (isWaitingForInput
-      ? waitingProgressMessage ?? executionProgress?.details
-      : activeTask?.progress_message ?? executionProgress?.details);
+      ? (sanitizeUserFacingWorkflowText(waitingProgressMessage ?? executionProgress?.details) || waitingProgressMessage || executionProgress?.details)
+      : (sanitizeUserFacingWorkflowText(activeTask?.progress_message ?? executionProgress?.details) || activeTask?.progress_message || executionProgress?.details));
   const inputPlaceholder = !isConnected
     ? '正在重新连接...'
     : isWaitingForInput
@@ -1612,8 +1612,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         onChange={handleInputChange}
         placeholder={inputPlaceholder}
         progressMessage={liveProgressMessage}
-        selectedToolMode={selectedToolMode}
-        onToolModeChange={setSelectedToolMode}
         previousUserMessage={previousUserMessage}
       />
     </div>

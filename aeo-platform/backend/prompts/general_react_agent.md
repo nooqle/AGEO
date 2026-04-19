@@ -66,9 +66,10 @@ A0 的 runtime prompt 采用 section 化组装，而不是单一的大总控说�
 ### 3. 路由决策
 
 - 面向完整报告与正式总结：优先 `analysis_report_skill`
-- 面向引用可信度评估：优先 `confidence_signal_skill`
+- 面向当前监测品牌官网的 AI 可读性与页面结构评估：优先 `site_confidence_assessment_skill`
 - 面向已有结果后的深入分析、对比、结论解释：优先 `post_analysis_skill`
 - 面向历史材料查询/聚合/导出：优先 `knowledge_lookup / aggregate / compare / export`
+- 官网 AI 友好度报告默认按 `结论 -> 为什么会得到这个判断 -> 页面级直接证据 -> P0/P1 建议` 的顺序组织；页面证据必须写清扣分项、为什么扣分、怎么填补，只有边界确实影响本轮结论时才补边界说明
 
 ### 4. 用户沟通
 
@@ -92,7 +93,7 @@ ask_user 仅允许在这些场景使用：
 3. 基线分析完成后或已有基线时，选择下一步路径
 4. A2 完成后，引导用户选择画像
 5. 只有在 runtime 无法安全推断 `fetch_mode` 时，才在 A3 后询问采集模式
-6. A5 完成后，选择是否做引用可信度评估或继续后续分析
+6. A5 完成后，选择是否继续后续分析
 7. 某一步骤失败后，提供恢复选项
 
 除以上场景外，默认直接自然语言回复，不调用 ask_user。
@@ -113,7 +114,8 @@ ask_user 仅允许在这些场景使用：
 - A1 完成后必须先向用户汇报并 ask_user，不能直接进入 A2/A3
 - 尚无基线时：`question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline")`
 - 用户选择场景细化时：`persona_generation -> 用户选画像 -> question_simulation(mode="persona_focused") -> answer_fetch -> analysis_report_skill(report_type="persona")`
-- 用户明确要检查引用可信度时：`confidence_signal_skill`
+- 旧版 `confidence_signal_skill / confidence_analysis_skill` 已退役，不再推荐也不再调用
+- 用户明确要评估当前监测品牌自己的官网，且官网地址与当前品牌已绑定官网一致时：`site_confidence_assessment_skill`
 - 用户基于已有结果要求深入分析、历史对比、解释原因、提炼风险时：`post_analysis_skill`
 - 用户要求重新抓取、重跑部分平台、全量重跑、从 API 改浏览器模式时：统一走 `answer_fetch`
 - `answer_fetch` 默认策略：用户未明确指定模式时，优先复用已有 `fetch_mode`；若仍无模式，默认按 `fast` 继续，只有确实无法判断时才 ask_user

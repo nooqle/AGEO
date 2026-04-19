@@ -29,9 +29,6 @@ from app.services.task_run_child_attempt_service import TaskRunChildAttemptServi
 from app.services.aio_session_manager import aio_session_manager
 from app.models.session import Session
 from app.models.message import Message, MessageType
-from app.workflow.confidence_analysis import (
-    append_confidence_analysis_manual_items_async,
-)
 from app.workflow.browser_action_runtime import (
     clear_session_browser_action_requests,
     get_browser_action_request,
@@ -93,7 +90,7 @@ _STEP_PROGRESS: dict[str, float] = {
     "A5": 0.9,
 }
 
-_SUPPORTED_TOOL_MODES = {"confidence_analysis"}
+_SUPPORTED_TOOL_MODES: set[str] = set()
 
 
 async def _emit_session_error(
@@ -741,14 +738,6 @@ def _resolve_task_label(
     candidate_brand = brand_name.strip()
     if candidate_brand:
         return candidate_brand
-
-    if tool_mode == "confidence_analysis":
-        if attachments:
-            attachment_name = str(attachments[0].get("name") or "").strip()
-            attachment_stem = Path(attachment_name).stem.strip()
-            if attachment_stem:
-                return f"置信度分析：{attachment_stem}"
-        return "置信度分析"
 
     candidate_content = content.strip()
     if candidate_content:
@@ -1850,10 +1839,7 @@ async def handle_user_message_langgraph(
                 "user_id": str(session_user_id) if session_user_id else None,
                 "entity_id": entity_id,
                 "messages": [HumanMessage(content=enhanced_content)],
-                "brand_name": (
-                    brand_name
-                    or (content if tool_mode != "confidence_analysis" else "")
-                ),
+                "brand_name": brand_name or content,
                 "official_website": official_website,
                 "industry_hint": industry_hint,
                 # A1 outputs
@@ -2028,10 +2014,15 @@ async def _save_final_message(session_id: str, workflow, config: dict):
             report = state_values.get("report") or {}
             metrics = state_values.get("metrics") or {}
             layered_reply = ""
+            site_confidence_reply = str(
+                state_values.get("site_confidence_report_message", "") or ""
+            ).strip()
             if isinstance(layers, dict):
                 layered_reply = str(layers.get("replyText", "") or "").strip()
 
-            if layered_reply:
+            if site_confidence_reply:
+                content = site_confidence_reply
+            elif layered_reply:
                 content = layered_reply
             elif orchestrator_reply:
                 content = orchestrator_reply
@@ -2198,16 +2189,6 @@ async def handle_confirmation_langgraph(
                 source_step="error_recovery",
             )
             logger.info("[LangGraph] Inline confirmation: run_analysis_report")
-        elif selected_option_id == "run_confidence_signal":
-            user_content = "用户选择重新执行引用置信度评估"
-            state_values["next_required_action"] = build_next_required_action(
-                tool_name="confidence_analysis_skill",
-                reason="用户在恢复面板中选择重新执行引用置信度评估。",
-                reply_text="已按您的选择，重新执行引用置信度评估。",
-                source_step="error_recovery",
-            )
-            logger.info("[LangGraph] Inline confirmation: run_confidence_signal")
-
         # Persist the normalized confirmation as a chat message so it survives refresh
         async with AsyncSessionLocal() as db:
             message_service = MessageService(db)
@@ -2455,10 +2436,6 @@ async def handle_artifact_action_langgraph(
     """Handle artifact-scoped actions without polluting the chat transcript."""
     artifact_id = data.get("artifact_id", "")
     action = data.get("action", "")
-    payload = data.get("payload", {}) or {}
-    raw_input = payload.get("raw_input", "") if isinstance(payload, dict) else ""
-
-    from app.workflow.events import save_and_send_artifact, send_artifact_patch
 
     if not artifact_id:
         await _emit_session_error(
@@ -2473,66 +2450,14 @@ async def handle_artifact_action_langgraph(
             {"message": "不支持的交付物动作", "recoverable": True},
         )
         return
-
-    message, existing_report = await _load_output_by_artifact_id(
-        session_id, artifact_id
-    )
-    if not existing_report:
-        await _emit_session_error(
-            session_id,
-            {"message": "未找到对应的置信度报告交付物", "recoverable": True},
-        )
-        return
-
-    if existing_report.get("report_kind") not in {
-        "confidence_signal",
-        "confidence_analysis",
-    }:
-        await _emit_session_error(
-            session_id,
-            {"message": "当前交付物不支持额外评估", "recoverable": True},
-        )
-        return
-
-    await send_artifact_patch(
-        session_id=session_id,
-        artifact_id=artifact_id,
-        patch={
-            "status": {
-                "phase": "running",
-                "message": "正在生成额外评估…",
-            }
+    await _emit_session_error(
+        session_id,
+        {
+                            "message": "旧版引用来源评估已退役，当前不再支持额外评估动作。",
+            "recoverable": True,
         },
-        status="running",
-        message="正在生成额外评估…",
     )
-
-    try:
-        updated_report = await append_confidence_analysis_manual_items_async(
-            existing_report, raw_input=raw_input
-        )
-    except ValueError as exc:
-        await send_artifact_patch(
-            session_id=session_id,
-            artifact_id=artifact_id,
-            patch={
-                "status": {
-                    "phase": "error",
-                    "message": str(exc),
-                }
-            },
-            status="error",
-            message=str(exc),
-        )
-        return
-
-    await save_and_send_artifact(
-        session_id=session_id,
-        output_type="report",
-        title=message.content if message else "置信度报告",
-        data=updated_report,
-        artifact_key=artifact_id,
-    )
+    return
 
 
 async def handle_browser_action_resolution_langgraph(

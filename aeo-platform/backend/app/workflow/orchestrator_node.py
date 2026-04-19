@@ -83,9 +83,7 @@ _VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
     "answer_fetch": "答案抓取",
     "analysis_report_skill": "分析报告",
     "data_analytics": "分析报告",
-    "confidence_analysis_skill": "引用置信度评估",
-    "confidence_signal_skill": "引用置信度评估",
-    "citation_confidence_analysis": "引用置信度评估",
+    "site_confidence_assessment_skill": "官网 AI 友好度",
     "post_analysis_skill": "后续分析",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
@@ -665,38 +663,52 @@ def _compact_text(value: Any, limit: int = 140) -> str:
     return text[: limit - 1] + "…"
 
 
-def _build_panorama_step_intro(
+def _build_tool_start_intro(
     tool_name: str,
     tool_args: dict[str, Any],
     reply_text: str,
     state: AgentState,
 ) -> str:
-    if tool_name != "question_simulation":
-        return ""
-    if str(tool_args.get("mode") or "").strip().lower() != "baseline_dynamic":
-        return ""
+    if tool_name == "question_simulation":
+        if str(tool_args.get("mode") or "").strip().lower() != "baseline_dynamic":
+            return ""
 
-    existing_text = str(reply_text or "")
-    if (
-        "品牌全景分析" in existing_text
-        and "第二步" in existing_text
-        and "第三步" in existing_text
-    ):
-        return ""
+        existing_text = str(reply_text or "")
+        if (
+            "品牌全景分析" in existing_text
+            and "第二步" in existing_text
+            and "第三步" in existing_text
+        ):
+            return ""
 
-    brand_name = (
-        str((state.get("brand_profile") or {}).get("brand_name") or "").strip()
-        or str(state.get("brand_name") or "").strip()
-        or "该品牌"
-    )
-    return (
-        f"开始运行{brand_name}的品牌全景分析。\n"
-        "本次分析会分 3 步推进：\n"
-        "1. 生成行业通用问题集\n"
-        "2. 抓取 4 个 AI 平台对同一组问题的真实回答\n"
-        "3. 汇总品牌提及、引用来源和风险信号，输出品牌全景分析报告\n"
-        "现在先开始第 1 步：生成行业通用问题集。"
-    )
+        brand_name = (
+            str((state.get("brand_profile") or {}).get("brand_name") or "").strip()
+            or str(state.get("brand_name") or "").strip()
+            or "该品牌"
+        )
+        return (
+            f"开始运行{brand_name}的品牌全景分析。\n"
+            "本次分析会分 3 步推进：\n"
+            "1. 生成行业通用问题集\n"
+            "2. 抓取 4 个 AI 平台对同一组问题的真实回答\n"
+            "3. 汇总品牌提及、引用来源和风险信号，输出品牌全景分析报告\n"
+            "现在先开始第 1 步：生成行业通用问题集。"
+        )
+
+    if tool_name == "site_confidence_assessment_skill":
+        root_url = str(tool_args.get("root_url") or "").strip()
+        if not root_url:
+            return ""
+        existing_text = str(reply_text or "")
+        if "官网 AI 友好度" in existing_text and "Canvas" in existing_text:
+            return ""
+        return (
+            f"开始扫描 {root_url}，生成官网 AI 友好度报告。\n"
+            "我会先发现官网页面，再按默认抓取方式检查页面结构、正文表达和抓取治理情况。\n"
+            "整个过程会在后台异步执行，完成后可以直接回到右侧 Canvas 查看正式报告。"
+        )
+
+    return ""
 
 
 def _format_knowledge_lookup_match(match: dict[str, Any]) -> str:
@@ -1537,8 +1549,8 @@ def _build_public_skill_index(state: AgentState) -> str:
             availability = "需已有抓取结果或报告"
         elif name == "analysis_report_skill" and not state.get("fetch_results"):
             availability = "需先完成答案抓取"
-        elif name == "confidence_analysis_skill" and not state.get("fetch_results"):
-            availability = "需先有可评估的抓取结果"
+        elif name == "site_confidence_assessment_skill":
+            availability = "需当前品牌官网已绑定且地址明确"
         lines.append(f"- {name}: {description}；{availability}")
         if len(lines) >= 6:
             break
@@ -1698,7 +1710,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 如果识别结果是 link_list：先 ask_user 确认是否作为链接清单继续分析，不可自动套用到其他流程。
                 - 如果用户没有文本消息，只上传了表格：也要基于 context + table_intake_skill 结果给出初步判断，并 ask_user 确认。
                 - 如果 user_decisions.table_import_confirmed=true 且 confirmed_table_kind=question_list，而当前还没有新的 A3 结果，必须立即调用 question_simulation(mode="uploaded_list")。
-                - 如果链接清单已经导入并生成交付物：先告诉用户链接清单已整理完成，再根据后续说明继续；当前不要自动调用 confidence_analysis_skill。
+                - 如果链接清单已经导入并生成交付物：先告诉用户链接清单已整理完成，再根据后续说明继续；不要再进入旧的引用来源评估链路。
                 """
             ).strip(),
         ),
@@ -1712,7 +1724,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 A1 完成后的流程（最高优先级）：
                 - A1 完成后，必须先汇报结果并 ask_user，绝不直接调用 persona_generation 或 question_simulation。
                 - 尚无品牌全景分析时，必须按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline") 执行。
-                - 已有品牌全景分析时，用户可进入引用置信度评估、场景细化、重跑品牌全景分析或直接提问。
+                - 已有品牌全景分析时，用户可进入来源引用分析、场景细化、重跑品牌全景分析或直接提问。
 
                 场景细化流程：
                 - 用户选择场景细化时：persona_generation -> 用户选择画像 -> question_simulation(mode="persona_focused") -> answer_fetch -> analysis_report_skill(report_type="persona")。
@@ -1720,7 +1732,9 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
 
                 其他固定路径：
                 - 用户说“重跑品牌全景分析”时：question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline")。
-                - 用户明确要检查引用可信度时：confidence_analysis_skill。
+                - 旧 confidence_analysis / confidence_signal 已退役，不要再调用，也不要再向用户推荐。
+                - 用户明确要对当前监测品牌自己的官网做评估，且官网地址与当前品牌官网一致时：site_confidence_assessment_skill(root_url=官网地址)。
+                - 如果当前品牌官网未绑定，或用户给出的域名不属于当前品牌官网：不要执行扫描，先说明当前能力只服务于被监测品牌自己的官网，再让用户修正品牌上下文。
                 - 用户基于已有结果要求深入分析、历次对比、解释原因、提炼风险时：post_analysis_skill。
                 - 用户要求重新抓取、重跑部分平台、全量重跑、或从 API 改为浏览器模式时：统一走 answer_fetch，不要再发明 refetch 类能力名。
                 - 用户选择“直接提问”时，禁止再次 ask_user 给子选项；直接自然语言引导用户在输入框中继续追问。
@@ -1741,7 +1755,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 所有对用户可见的回复、计划、提示、说明和思考流都必须使用中文；不要输出英文草稿或英文推理片段。
                 - 在回复中说明打算做什么，然后调用对应工具。
                 - 不要一次调用多个工具，每轮只执行一个步骤。
-                - 画像生成完成后必须 ask_user 引导用户选画像；问题生成完成后必须 ask_user 让用户选择采集模式；答案抓取完成后不要 ask_user，必须立即调用 analysis_report_skill；分析报告完成后必须 ask_user 让用户决定是否做引用置信度评估或继续后续分析。
+                - 画像生成完成后必须 ask_user 引导用户选画像；问题生成完成后必须 ask_user 让用户选择采集模式；答案抓取完成后不要 ask_user，必须立即调用 analysis_report_skill；分析报告完成后必须 ask_user 让用户决定是否继续做来源引用分析或后续追问。
                 - 如果用户请求不明确，用自然语言追问，不要调用 ask_user。
                 - 步骤完成后的回复应包含 1 个具体数据点或风险发现，不要只报“完成了”。
                 - 如果用户直接提供问题文本并要求抓取答案，可通过 answer_fetch 的 custom_questions 传入，无需先调用 question_simulation，但仍需明确 fetch_mode。
@@ -2151,10 +2165,10 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             "如果是因为材料不足，请考虑先补齐 brand_analysis 或 answer_fetch。"
         )
 
-    if tool_name == "confidence_analysis_skill":
+    if tool_name == "site_confidence_assessment_skill":
         return (
-            "引用内容置信度评估已完成。"
-            "结果已经展示在画布中，您可以继续查看各引用来源的可信度、结构化质量和可核查性差异。"
+            "官网 AI 友好度已完成。"
+            "正式报告已经写入画布，您可以继续查看重点页面的问题、证据和优先动作。"
         )
 
     if tool_name in {
@@ -2219,8 +2233,7 @@ def _get_tool_name_from_node(node_name: str) -> str | None:
     """Reverse lookup: node name → tool name."""
     preferred = {
         "a5_analytics": "analysis_report_skill",
-        "confidence_analysis_executor": "confidence_analysis_skill",
-        "a7_confidence_signal": "confidence_analysis_skill",
+        "site_confidence_assessment_executor": "site_confidence_assessment_skill",
         "post_analysis_executor": "post_analysis_skill",
     }
     if node_name in preferred:
@@ -2277,21 +2290,14 @@ def _build_ask_user_fallback_reply(
         return (
             "答案抓取已完成。"
             "我会基于当前抓取结果立即继续生成分析报告，"
-            "报告出来后您再决定是否继续做引用内容置信度评估或进入后续分析。"
+            "报告出来后您再决定是否继续做官网评估或进入后续分析。"
         )
 
     if tool_name in {"data_analytics", "analysis_report_skill"}:
         return (
             "分析报告已生成。"
-            "您现在可以选择继续做一次引用内容置信度评估，"
+            "您现在可以选择继续做当前监测品牌官网评估，"
             "或者基于当前报告进入下一步画像分析、深入分析或直接提问。"
-        )
-
-    if tool_name == "confidence_analysis_skill":
-        return (
-            "引用内容置信度评估已完成。"
-            "您现在可以继续基于这份评估追问具体来源问题，"
-            "或者回到主报告继续后续分析。"
         )
 
     return message or "请继续告诉我您的选择。"
@@ -2673,7 +2679,7 @@ TOOL_TO_NODE: dict[str, str] = {
     "knowledge_aggregate": "knowledge_aggregate",
     "knowledge_compare": "knowledge_compare",
     "knowledge_export": "knowledge_export",
-    "confidence_analysis_skill": "confidence_analysis_executor",
+    "site_confidence_assessment_skill": "site_confidence_assessment_executor",
     "post_analysis_skill": "post_analysis_executor",
     "drill_down_analysis": "drill_down",
     "compare_snapshots": "compare_snapshots",
@@ -2693,9 +2699,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "knowledge_aggregate": "过往资料整理",
     "knowledge_compare": "过往资料对比",
     "knowledge_export": "过往资料表",
-    "confidence_signal_skill": "引用置信度评估",
-    "citation_confidence_analysis": "引用内容置信度评估",
-    "confidence_analysis_skill": "引用置信度评估",
+    "site_confidence_assessment_skill": "官网 AI 友好度",
     "post_analysis_skill": "后续分析",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
@@ -2765,7 +2769,7 @@ def _matches_failed_step(tool_name: str, failed_step: str) -> bool:
         "answer_fetch": "A4",
         "analysis_report_skill": "A5",
         "data_analytics": "A5",
-        "confidence_analysis_skill": "A7",
+        "site_confidence_assessment_skill": "A7",
     }
     expected_step = step_id_map.get(tool_name, "")
     return failed_step in {tool_name, expected_step}
@@ -3071,6 +3075,15 @@ async def orchestrator_node(state: AgentState) -> Command:
         completed_count = sum(1 for s in workflow_steps if s["status"] == "completed")
         skipped_count = sum(1 for s in workflow_steps if s["status"] == "skipped")
         total_count = len(workflow_steps)
+        progress_step = {
+            "brand_analysis": "A1",
+            "persona_generation": "A2",
+            "question_simulation": "A3",
+            "answer_fetch": "A4",
+            "analysis_report_skill": "A5",
+            "data_analytics": "A5",
+            "site_confidence_assessment_skill": "A7",
+        }.get(last_tool, last_tool)
         # In baseline mode, Phase 1 completion is not "all done" — Phase 2 may follow
         is_baseline_phase = state.get("analysis_mode") == "baseline"
         all_done = (
@@ -3083,10 +3096,10 @@ async def orchestrator_node(state: AgentState) -> Command:
         ):
             await send_progress_event(
                 session_id,
-                step=last_tool,
+                step=progress_step,
                 step_name=display_name,
                 progress=completed_count / total_count,
-                message=f"执行失败：{display_name}",
+                message=f"{display_name}执行失败",
                 status="error",
                 steps=workflow_steps,
             )
@@ -3100,10 +3113,10 @@ async def orchestrator_node(state: AgentState) -> Command:
         else:
             await send_progress_event(
                 session_id,
-                step=last_tool,
+                step=progress_step,
                 step_name=display_name,
                 progress=completed_count / total_count,
-                message=f"完成：{display_name}",
+                message=f"{display_name}已完成",
                 status="completed" if all_done else "running",
                 steps=workflow_steps,
             )
@@ -3116,7 +3129,7 @@ async def orchestrator_node(state: AgentState) -> Command:
             )
             await send_plan_event(
                 session_id,
-                f"已完成：{display_name}",
+                f"{display_name}已完成",
             )
 
     if has_agent_error:
@@ -3906,32 +3919,32 @@ async def _handle_tool_call(
             "answer_fetch": "A4",
             "analysis_report_skill": "A5",
             "data_analytics": "A5",
-            "confidence_analysis_skill": "A7",
+            "site_confidence_assessment_skill": "A7",
         }
         workflow_steps = _build_workflow_steps(state)
         current_step_id = tool_to_step_id.get(effective_tool_name)
         if current_step_id is None and resolved_skill is not None:
             current_step_id = {
                 "a5_data_analytics": "A5",
-                "confidence_analysis_executor": "A7",
-                "a7_confidence_signal": "A7",
+                "site_confidence_assessment_executor": "A7",
             }.get(resolved_skill.executor_ref)
         for s in workflow_steps:
             if s["id"] == current_step_id:
                 s["status"] = "in_progress"
         completed_count = sum(1 for s in workflow_steps if s["status"] == "completed")
         total_count = len(workflow_steps)
+        progress_step = current_step_id or effective_tool_name
         await send_progress_event(
             session_id,
-            step=effective_tool_name,
+            step=progress_step,
             step_name=display_name,
             progress=completed_count / total_count,
-            message=f"正在执行：{display_name}",
+            message=f"{display_name}进行中",
             status="running",
             steps=workflow_steps,
         )
 
-        panorama_intro = _build_panorama_step_intro(
+        panorama_intro = _build_tool_start_intro(
             effective_tool_name,
             tool_args,
             reply_text,
@@ -3955,17 +3968,16 @@ async def _handle_tool_call(
                 "question_simulation": "正在模拟真实用户可能在 AI 平台中提出的问题，请稍候...",
                 "analysis_report_skill": "正在整理场景、风险与优先动作建议，请稍候…",
                 "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
-                "confidence_analysis_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
+                "site_confidence_assessment_skill": "正在扫描官网页面，并生成官网 AI 友好度报告，请稍候...",
                 "post_analysis_skill": "正在基于已有结果执行后续分析，请稍候...",
             }
             fallback_text = FALLBACK_TEXTS.get(effective_tool_name)
             if fallback_text is None and resolved_skill is not None:
                 fallback_text = {
                     "a5_data_analytics": FALLBACK_TEXTS["analysis_report_skill"],
-                    "confidence_analysis_executor": FALLBACK_TEXTS[
-                        "confidence_analysis_skill"
+                    "site_confidence_assessment_executor": FALLBACK_TEXTS[
+                        "site_confidence_assessment_skill"
                     ],
-                    "a7_confidence_signal": FALLBACK_TEXTS["confidence_analysis_skill"],
                     "post_analysis_executor": FALLBACK_TEXTS["post_analysis_skill"],
                 }.get(resolved_skill.executor_ref)
             fallback_text = fallback_text or f"正在执行：{display_name}，请稍候..."
@@ -3975,10 +3987,7 @@ async def _handle_tool_call(
             await send_reply_event(session_id, "", is_complete=True)
 
         # Layer 2: plan event
-        await send_plan_event(
-            session_id,
-            f"正在执行：{display_name}",
-        )
+        await send_plan_event(session_id, f"{display_name}进行中")
 
         # Layer 3: action log
         await send_action_log_event(
@@ -4227,6 +4236,50 @@ async def _handle_tool_call(
         ):
             report_type = tool_args.get("report_type", "persona")
             extra_updates["analysis_mode"] = report_type
+
+        if effective_tool_name == "site_confidence_assessment_skill":
+            root_url = str(tool_args.get("root_url") or "").strip()
+            if not root_url:
+                defense_request_id = tool_call.id or f"defense_site_confidence_{id(tool_call)}"
+                defense_msg = (
+                    "要启动官网 AI 友好度评估，我还需要一个明确的官网根地址。"
+                    "请直接回复官网 URL，我会据此发现首页及关键一二级页面，并在后台生成报告。"
+                )
+                await session_event_publisher.emit_to_session(
+                    session_id,
+                    "confirmation_request",
+                    {
+                        "request_id": defense_request_id,
+                        "type": "step_confirmation",
+                        "message": defense_msg,
+                        "options": [],
+                        "allow_text_input": True,
+                        "step_id": "orchestrator",
+                        "step_name": "补充官网地址",
+                    },
+                )
+                new_history.append(
+                    {
+                        "role": "tool",
+                        "content": "等待用户补充官网地址...",
+                        "tool_call_id": tool_call.id or "call_1",
+                    }
+                )
+                return Command(
+                    goto="wait_for_user",
+                    update={
+                        "awaiting_user": True,
+                        "orchestrator_reply": reply_text,
+                        "orchestrator_history": new_history,
+                        "pending_confirmation": {
+                            "step_id": "orchestrator",
+                            "step_name": "补充官网地址",
+                            "message": defense_msg,
+                            "options": [],
+                        },
+                        "agent_retry_counts": current_retry_counts,
+                    },
+                )
 
         return Command(
             goto=node_name,

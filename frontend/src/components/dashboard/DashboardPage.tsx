@@ -210,6 +210,19 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     router.push('/dashboard?tab=monitoring');
   };
 
+  const handleOpenLatestSiteConfidenceReport = () => {
+    const latestReport = home?.site_confidence_card?.latest_report;
+    if (!selectedBrand || !latestReport?.session_id || !latestReport?.artifact_id) {
+      return;
+    }
+
+    const nextQuery = new URLSearchParams();
+    nextQuery.set('entity_id', selectedBrand.id);
+    nextQuery.set('brand', selectedBrand.name);
+    nextQuery.set('artifact_id', latestReport.artifact_id);
+    router.push(`/chat/${latestReport.session_id}?${nextQuery.toString()}`);
+  };
+
   const allSources = data?.sources || [];
   const sourceTotalCount = allSources.reduce((sum, item) => sum + item.count, 0);
   const officialSourceCount = allSources
@@ -450,6 +463,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
                 home={home}
                 onSelectBoard={handleSelectBoard}
                 onOpenMonitoring={handleOpenMonitoring}
+                onOpenLatestSiteConfidenceReport={handleOpenLatestSiteConfidenceReport}
               />
               <DashboardBoardDialog open={dialogOpen} board={activeBoard} home={home} onClose={() => setDialogOpen(false)} />
             </div>

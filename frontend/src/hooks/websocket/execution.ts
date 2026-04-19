@@ -9,6 +9,7 @@ import type {
 import type { WebSocketEventData } from '@/types/websocket';
 import { BROWSER_PLATFORMS, BROWSER_STATES, EXECUTION_STATUSES, mapStepStatus } from './protocol';
 import { normalizePublicPlatformId } from '@/config/platformLabel';
+import { getUserFacingStageLabel, sanitizeUserFacingWorkflowText } from '@/lib/workflowStageLabels';
 
 function normalizeAioTakeoverMode(
   value: unknown,
@@ -53,15 +54,22 @@ export function buildExecutionProgress(
     : Math.max(oldProgress, newProgress);
 
   return {
-    stage: data.stage || '',
-    stageName: data.stage_name || '',
+    stage: typeof data.stage === 'string' ? data.stage : '',
+    stageName:
+      sanitizeUserFacingWorkflowText(
+        (typeof data.stage_name === 'string' ? data.stage_name : '')
+        || getUserFacingStageLabel(typeof data.stage === 'string' ? data.stage : '')
+      ) || '',
     stageIndex: data.current_step_index ?? 0,
     totalStages: data.total_steps ?? 5,
     progress: safeProgress,
     status: EXECUTION_STATUSES.includes((data.status || 'running') as ExecutionProgress['status'])
       ? ((data.status || 'running') as ExecutionProgress['status'])
       : 'running',
-    details: data.message || data.details || '',
+    details: sanitizeUserFacingWorkflowText(
+      (typeof data.message === 'string' ? data.message : '')
+      || (typeof data.details === 'string' ? data.details : '')
+    ) || '',
     steps: mergedSteps,
     subTasks: Array.isArray(data.sub_tasks)
       ? (data.sub_tasks.map((t, index) => ({

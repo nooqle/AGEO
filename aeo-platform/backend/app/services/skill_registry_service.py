@@ -29,6 +29,12 @@ from app.services.skill_package_service import (
 )
 
 
+_RETIRED_PUBLIC_SKILL_KEYS = {
+    "confidence_analysis_skill",
+    "confidence_signal_skill",
+}
+
+
 BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
     BuiltinSkillSpec(
         skill_key="table_intake_skill",
@@ -67,24 +73,19 @@ BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
         confirmation_policy=SkillConfirmationPolicy.OPTIONAL,
     ),
     BuiltinSkillSpec(
-        skill_key="confidence_analysis_skill",
-        display_name="引用置信度评估",
+        skill_key="site_confidence_assessment_skill",
+        display_name="官网 AI 友好度",
         description=(
-            "面向引用内容可信度、来源质量与结构化质量评估的公共 Skill。"
-            "不会重新抓取；可评估当前会话里已有的引用来源，也可评估用户直接提供的链接、文本或导入链接清单。"
+            "面向当前监测品牌官网的 AI 友好度评估公共 Skill。"
+            "只允许扫描当前品牌自己的官网，不面向任意第三方网站。"
+            "输入官网根地址后，自动发现官网页面并生成官网 AI 友好度报告。"
         ),
         executor_kind=SkillExecutorKind.BUILTIN,
-        executor_ref="confidence_analysis_executor",
-        intent_signals=[
-            "引用可信度",
-            "来源质量",
-            "结构化质量",
-            "置信度",
-            "citation confidence",
-        ],
+        executor_ref="site_confidence_assessment_executor",
+        intent_signals=["官网 AI 友好度", "官网评估", "brand site confidence"],
         prerequisites=[],
-        artifact_types=["confidence_analysis"],
-        default_params={"source_mode": "auto"},
+        artifact_types=["report"],
+        default_params={"scan_mode": "standard"},
         prompt_overlay=None,
         cost_class=SkillCostClass.MEDIUM,
         latency_class=SkillLatencyClass.MEDIUM,
@@ -457,6 +458,44 @@ def _build_post_analysis_tool(
     }
 
 
+def _build_site_confidence_tool(
+    skill: SkillDefinition | BuiltinSkillSpec,
+    *,
+    profiles: list[SkillDefinition] | None = None,
+    package: SkillPackageManifest | None = None,
+) -> dict[str, Any]:
+    description = _with_package_hint(skill.description, package)
+    if skill.prompt_overlay:
+        description = f"{description} 当前策略补充：{skill.prompt_overlay}"
+    description = (
+        f"{description} 只允许针对当前监测品牌自己的官网。"
+        "如果当前品牌官网未绑定，或用户给出的域名不属于当前品牌官网，不能直接执行。"
+    )
+    return {
+        "name": skill.skill_key,
+        "description": description,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "root_url": {
+                    "type": "string",
+                    "description": "待评估的官网根地址，例如 https://example.com 。",
+                },
+                "scan_mode": {
+                    "type": "string",
+                    "enum": ["standard"],
+                    "description": "评估模式。当前 Phase 1 仅支持 standard。",
+                },
+                "max_pages": {
+                    "type": "integer",
+                    "description": "可选，限制本轮最多评估的页面数。默认扫描首页及最多 7 个核心页面。",
+                },
+            },
+            "required": ["root_url"],
+        },
+    }
+
+
 def build_skill_tool_definition(
     skill: SkillDefinition | BuiltinSkillSpec,
     *,
@@ -467,8 +506,8 @@ def build_skill_tool_definition(
         return _build_table_intake_tool(skill, profiles=profiles, package=package)
     if skill.executor_ref == "a5_data_analytics":
         return _build_analysis_report_tool(skill, profiles=profiles, package=package)
-    if skill.executor_ref in {"confidence_analysis_executor", "a7_confidence_signal"}:
-        return _build_confidence_tool(skill, profiles=profiles, package=package)
+    if skill.executor_ref == "site_confidence_assessment_executor":
+        return _build_site_confidence_tool(skill, profiles=profiles, package=package)
     if skill.executor_ref == "post_analysis_executor":
         return _build_post_analysis_tool(skill, profiles=profiles, package=package)
     raise ValueError(f"Unsupported skill executor_ref: {skill.executor_ref}")
@@ -637,7 +676,10 @@ class SkillRegistryService:
             )
         )
         if builtin_only:
-            stmt = stmt.where(SkillDefinition.is_builtin.is_(True))
+            stmt = stmt.where(
+                SkillDefinition.is_builtin.is_(True),
+                SkillDefinition.skill_key.notin_(_RETIRED_PUBLIC_SKILL_KEYS),
+            )
         result = await self.db.execute(stmt)
         skills = result.scalars().all()
         return [_serialize_skill(skill) for skill in skills]
@@ -660,7 +702,9 @@ class SkillRegistryService:
         filtered = [
             skill
             for skill in skills
-            if skill.enabled and _assignment_enabled(skill, scope_context)
+            if skill.skill_key not in _RETIRED_PUBLIC_SKILL_KEYS
+            and skill.enabled
+            and _assignment_enabled(skill, scope_context)
         ]
         return sorted(
             filtered,
@@ -968,6 +1012,7 @@ class SkillRegistryService:
         skill = await self.get_skill_by_key(tool_name)
         if (
             skill is None
+            or skill.skill_key in _RETIRED_PUBLIC_SKILL_KEYS
             or not skill.is_builtin
             or not skill.enabled
             or not _assignment_enabled(skill, scope_context)

@@ -26,8 +26,6 @@ _PACKAGE_ROOT = _BACKEND_ROOT / "skill_packages"
 
 _FAMILY_TO_PACKAGE: dict[str, str] = {
     "analysis_report_skill": "analysis-report",
-    "confidence_analysis_skill": "confidence-signal",
-    "confidence_signal_skill": "confidence-signal",
     "post_analysis_skill": "post-analysis",
 }
 

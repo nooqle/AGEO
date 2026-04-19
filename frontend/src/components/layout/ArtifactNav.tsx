@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { CanvasContentType } from '@/types/canvas';
-import { isConfidenceCanvasReport } from '@/adapters/exportArtifacts';
+import { isConfidenceCanvasReport, isSiteConfidenceCanvasReport } from '@/adapters/exportArtifacts';
 import { cn } from '@/lib/cn';
 import {
   RiFileChartLine,
@@ -17,6 +17,7 @@ import {
   RiTableLine,
   RiGitBranchLine,
   RiPieChartLine,
+  RiRobot2Line,
   RiShieldCheckLine,
 } from '@remixicon/react';
 import type { CanvasContent } from '@/types/canvas';
@@ -47,6 +48,9 @@ const TYPE_LABELS: Record<CanvasContentType, string> = {
 function getReportMeta(content: CanvasContent) {
   if (content.type !== 'report') {
     return { icon: TYPE_ICONS[content.type] || RiFileTextLine, label: TYPE_LABELS[content.type] || '' };
+  }
+  if (isSiteConfidenceCanvasReport(content)) {
+    return { icon: RiRobot2Line, label: '官网' };
   }
   if (isConfidenceCanvasReport(content)) {
     return { icon: RiShieldCheckLine, label: '置信' };
@@ -158,6 +162,8 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
             const Icon = meta.icon;
             const isActive = index === activeContentIndex;
             const hasGlow = glowIds.has(content.id);
+            const isSiteConfidenceReport =
+              content.type === 'report' && isSiteConfidenceCanvasReport(content);
 
             return (
               <motion.button
@@ -185,7 +191,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
                     className="text-xs truncate"
                     style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)' }}
                   >
-                    {content.title}
+                    {isSiteConfidenceReport ? '官网 AI 友好度' : content.title}
                   </p>
                   <p
                     className="text-xs truncate"

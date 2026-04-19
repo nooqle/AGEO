@@ -3,7 +3,7 @@
 import { useCallback } from 'react';
 import { RiLoader4Line, RiCheckLine, RiAlertLine, RiIndeterminateCircleLine } from '@remixicon/react';
 import { cn } from '@/lib/cn';
-import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
+import { getUserFacingStageLabel, sanitizeUserFacingWorkflowText } from '@/lib/workflowStageLabels';
 import type { TaskStatus } from '@/types/task';
 
 interface TaskStatusBadgeProps {
@@ -43,11 +43,15 @@ export function TaskStatusBadge({
   );
 
   const stageLabel = getUserFacingStageLabel(currentStage);
+  const safeProgressMessage = sanitizeUserFacingWorkflowText(progressMessage) || '';
+  const shouldShowStageLabel = Boolean(
+    stageLabel && !safeProgressMessage.includes(stageLabel)
+  );
 
   // Build aria-label for screen readers
   const getAriaLabel = (): string => {
     if (waitingForInput) {
-      return progressMessage || '等待用户确认';
+      return safeProgressMessage || '等待用户确认';
     }
 
     switch (status) {
@@ -118,7 +122,7 @@ export function TaskStatusBadge({
         }}
       >
         <RiIndeterminateCircleLine className="w-3 h-3" />
-        {progressMessage || '等待用户确认'}
+        {safeProgressMessage || '等待用户确认'}
       </div>
     );
   }
@@ -169,8 +173,8 @@ export function TaskStatusBadge({
         }}
       >
         <RiLoader4Line className="w-3 h-3 animate-spin" />
-        {progressMessage || '正在分析...'}
-        {stageLabel && (
+        {safeProgressMessage || '正在分析...'}
+        {shouldShowStageLabel && (
           <span className="font-semibold">{stageLabel}</span>
         )}
         {progress !== undefined && progress > 0 && (

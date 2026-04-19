@@ -51,11 +51,7 @@ export function TaskNotificationPoller({
         // Skip notifications for the session the user is currently viewing
         if (task.session_id === activeSessionId) continue;
 
-        if (task.status === 'completed') {
-          toast.success(
-            `「${task.brand_name}」分析已完成`,
-          );
-        } else if (task.status === 'failed') {
+        if (task.status === 'failed') {
           const errorStageLabel = getUserFacingStageLabel(task.error_stage);
           toast.error(
             `「${task.brand_name}」分析失败${errorStageLabel ? ` (${errorStageLabel})` : ''}`,
