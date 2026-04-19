@@ -51,7 +51,12 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
 
   const handleOpenMonitoring = (entity: Entity) => {
     setSelectedBrandId(entity.id);
-    router.push('/dashboard?tab=monitoring');
+    const target = `/settings?section=monitoring&entity_id=${encodeURIComponent(entity.id)}`;
+    if (typeof window !== 'undefined') {
+      window.location.assign(target);
+      return;
+    }
+    router.push(target);
   };
 
   const openBrandCreator = () => {
@@ -68,7 +73,7 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
     >
       <div>
         <DashboardSectionHeader
-          title="品牌与监测入口"
+          title="品牌"
           action={
             entities.length > 0 ? (
               <button
@@ -112,7 +117,7 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
         </div>
       ) : entities.length === 0 ? (
           <p className="mb-4 text-[13px] leading-7" style={{ color: 'var(--text-tertiary)' }}>
-            创建品牌后可使用对话分析和持续监测。
+            创建品牌后即可开始分析和设置监测。
           </p>
       ) : null}
 

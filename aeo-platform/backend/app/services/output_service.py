@@ -142,7 +142,7 @@ class OutputService:
             if isinstance(metadata, dict) and isinstance(metadata.get("output_id"), str)
             else f"{message.session_id}_{message.output_type}"
         )
-        # Derive category from output_type (report_baseline → baseline, report → scenario)
+        # Derive category from canonical report metadata first, then legacy output_type.
         category = None
         artifact_kind = (
             metadata.get("artifact_kind")
@@ -162,7 +162,10 @@ class OutputService:
             and message.output_type
             and message.output_type.startswith("report")
         ):
-            category = "baseline" if message.output_type == "report_baseline" else "scenario"
+            if report_kind in {"panorama", "scenario"}:
+                category = report_kind
+            else:
+                category = "scenario"
         return {
             "id": str(message.id),
             "artifact_id": artifact_id,
@@ -173,6 +176,7 @@ class OutputService:
             "data": data,
             "metadata": metadata,
             "category": category,
+            "sequence": message.sequence,
             "created_at": message.created_at.isoformat(),
         }
 
@@ -198,13 +202,30 @@ class OutputService:
                 row.created_at,
             ),
         )
+        fetch_anchor_query = (
+            select(Message)
+            .where(
+                Message.session_id == session_id,
+                Message.type == MessageType.OUTPUT,
+                Message.output_type == "fetchResults",
+            )
+            .order_by(Message.sequence.asc())
+            .limit(1)
+        )
+        fetch_anchor_result = await self.db.execute(fetch_anchor_query)
+        fetch_anchor_message = fetch_anchor_result.scalar_one_or_none()
+
         return {
             "id": str(latest_row.task_run_id),
             "artifact_id": f"{session_id}_fetchResults",
-            "message_id": None,
+            "message_id": str(fetch_anchor_message.id) if fetch_anchor_message else None,
             "session_id": str(session_id),
             "type": "fetchResults",
-            "title": "AI答案抓取结果",
+            "title": (
+                fetch_anchor_message.content
+                if fetch_anchor_message and fetch_anchor_message.content
+                else "AI答案抓取结果"
+            ),
             "data": {
                 "fetchResults": fetch_results,
                 "platformStatus": projection.get("platform_status") or {},
@@ -216,7 +237,12 @@ class OutputService:
                 "task_run_id": str(latest_row.task_run_id),
             },
             "category": None,
-            "created_at": (latest_row.updated_at or latest_row.created_at).isoformat(),
+            "sequence": fetch_anchor_message.sequence if fetch_anchor_message else None,
+            "created_at": (
+                fetch_anchor_message.created_at
+                if fetch_anchor_message
+                else (latest_row.updated_at or latest_row.created_at)
+            ).isoformat(),
         }
 
     async def _merge_authoritative_fetch_results_output(
@@ -236,6 +262,11 @@ class OutputService:
         ]
         non_fetch_outputs.append(authoritative_fetch_results)
         non_fetch_outputs.sort(
-            key=lambda output: str(output.get("created_at") or ""),
+            key=lambda output: (
+                output.get("sequence")
+                if isinstance(output.get("sequence"), int)
+                else 10**9,
+                str(output.get("created_at") or ""),
+            ),
         )
         return non_fetch_outputs

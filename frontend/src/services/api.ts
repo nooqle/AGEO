@@ -1,7 +1,7 @@
 import type { Session, Message, Output, AgentControlResponse, ConfirmationResponse } from '@/types/api';
-import type { DashboardData } from '@/types/dashboard';
+import type { DashboardData, DashboardHomeData } from '@/types/dashboard';
 import { buildDashboardV2Data } from '@/adapters/dashboardV2';
-import { buildDashboardHomeData, enrichDashboardHomeWithMonitoringTrends } from '@/adapters/dashboardHome';
+import { buildDashboardHomeData } from '@/adapters/dashboardHome';
 import { normalizeEntity } from '@/types/entity';
 import type { CreateEntityInput, UpdateEntityInput } from '@/types/entity';
 import type { TouchpointTree } from '@/types/touchpoint';
@@ -41,6 +41,7 @@ import type {
   MonitoringSchedule,
   MonitoringAlert,
   BaselineData,
+  PanoramaAnalysisStatus,
   TrendDataPoint,
   TrendSummaryResponse,
   RunHistoryEntry,
@@ -606,6 +607,14 @@ class ApiService {
     );
   }
 
+  async getDashboardHomeSummary(
+    brandId?: string,
+    options?: RequestOptions,
+  ): Promise<DashboardHomeData | null> {
+    const raw = await this.getAnalyticsDashboardHomeV2(brandId, options).catch(() => undefined);
+    return buildDashboardHomeData(raw) ?? null;
+  }
+
   async getAnalyticsRisksActionsV2(
     brandId?: string,
     options?: RequestOptions,
@@ -624,7 +633,7 @@ class ApiService {
     dateRange: string = 'month',
     options?: RequestOptions,
   ): Promise<DashboardData> {
-    const [overview, visibility, platforms, sources, aeo, sentiment, competitors, overviewV2, scenariosV2, competitorBattlesV2, sourcesV2, risksActionsV2, homeV2, monitoringTrendSummary, mentionTrend, contentCitationTrend, bwvsTrend] = await Promise.allSettled([
+    const [overview, visibility, platforms, sources, aeo, sentiment, competitors, overviewV2, scenariosV2, competitorBattlesV2, sourcesV2, risksActionsV2, homeV2] = await Promise.allSettled([
       this.getAnalyticsOverview(brandId, dateRange, options),
       this.getAnalyticsVisibility(brandId, dateRange, options),
       this.getAnalyticsPlatforms(brandId, options),
@@ -638,10 +647,6 @@ class ApiService {
       this.getAnalyticsSourcesV2(brandId, options),
       this.getAnalyticsRisksActionsV2(brandId, options),
       this.getAnalyticsDashboardHomeV2(brandId, options),
-      brandId ? this.getMonitoringTrendSummary(brandId, options) : Promise.resolve(undefined),
-      brandId ? this.getMonitoringTrend(brandId, 'mention_rate', 8, options) : Promise.resolve(undefined),
-      brandId ? this.getMonitoringTrend(brandId, 'content_citation_rate', 8, options) : Promise.resolve(undefined),
-      brandId ? this.getMonitoringTrend(brandId, 'bwvs_index', 8, options) : Promise.resolve(undefined),
     ]);
 
     const ensure = <T,>(result: PromiseSettledResult<T>, fallback: T): T =>
@@ -649,23 +654,17 @@ class ApiService {
     const optional = <T,>(result: PromiseSettledResult<T>): T | undefined =>
       result.status === 'fulfilled' ? result.value : undefined;
 
-    const v2 = buildDashboardV2Data({
+    const homeData = buildDashboardHomeData(optional(homeV2));
+    const v2 =
+      buildDashboardV2Data({
       overview: optional(overviewV2),
       scenarios: optional(scenariosV2),
       competitorBattles: optional(competitorBattlesV2),
       sources: optional(sourcesV2),
       risksActions: optional(risksActionsV2),
-    });
-    if (v2) {
-      v2.home = enrichDashboardHomeWithMonitoringTrends(
-        buildDashboardHomeData(optional(homeV2)),
-        optional(monitoringTrendSummary),
-        {
-          mention_rate: optional(mentionTrend)?.trend,
-          content_citation_rate: optional(contentCitationTrend)?.trend,
-          bwvs_index: optional(bwvsTrend)?.trend,
-        },
-      );
+      }) ?? (homeData ? { home: homeData } : null);
+    if (v2 && homeData) {
+      v2.home = homeData;
     }
 
     return {
@@ -895,6 +894,14 @@ class ApiService {
       `/monitoring/schedules/entity/${entityId}`
     );
     return resp.schedules?.[0] ?? null;
+  }
+
+  /** Get latest panorama analysis status for an entity */
+  async getPanoramaAnalysisStatus(entityId: string): Promise<PanoramaAnalysisStatus | null> {
+    const resp = await this.request<{ panorama_status: PanoramaAnalysisStatus }>(
+      `/monitoring/entities/${entityId}/panorama-status`
+    );
+    return resp.panorama_status ?? null;
   }
 
   /** Create a new monitoring schedule */

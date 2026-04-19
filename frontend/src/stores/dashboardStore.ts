@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DashboardData } from '@/types/dashboard';
+import type { DashboardData, DashboardHomeData } from '@/types/dashboard';
 import { api } from '@/services/api';
 
 type DashboardDateRange = 'week' | 'month' | 'quarter';
@@ -12,33 +12,48 @@ function buildCacheKey(
 }
 
 let activeDashboardRequestController: AbortController | null = null;
+let activeDashboardHomeRequestController: AbortController | null = null;
 
 interface DashboardState {
   data: DashboardData | null;
+  home: DashboardHomeData | null;
   isLoading: boolean;
+  isHomeLoading: boolean;
   error: string | null;
+  homeError: string | null;
   selectedBrandId: string | null;
   dateRange: DashboardDateRange;
   cache: Record<string, DashboardData>;
+  homeCache: Record<string, DashboardHomeData | null>;
   activeRequestId: number;
+  activeHomeRequestId: number;
 
   setData: (data: DashboardData) => void;
+  setHome: (home: DashboardHomeData | null) => void;
   setLoading: (loading: boolean) => void;
+  setHomeLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+  setHomeError: (error: string | null) => void;
   setSelectedBrandId: (id: string | null) => void;
   setDateRange: (range: DashboardDateRange) => void;
   fetchData: () => Promise<void>;
+  fetchHome: () => Promise<void>;
   reset: () => void;
 }
 
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   data: null,
+  home: null,
   isLoading: false,
+  isHomeLoading: false,
   error: null,
+  homeError: null,
   selectedBrandId: null,
   dateRange: 'month',
   cache: {},
+  homeCache: {},
   activeRequestId: 0,
+  activeHomeRequestId: 0,
 
   setData: (data) =>
     set((state) => {
@@ -53,15 +68,32 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         },
       };
     }),
+  setHome: (home) =>
+    set((state) => {
+      const cacheKey = buildCacheKey(state.selectedBrandId, state.dateRange);
+      return {
+        home,
+        isHomeLoading: false,
+        homeError: null,
+        homeCache: {
+          ...state.homeCache,
+          [cacheKey]: home,
+        },
+      };
+    }),
   setLoading: (isLoading) => set({ isLoading }),
+  setHomeLoading: (isHomeLoading) => set({ isHomeLoading }),
   setError: (error) => set({ error, isLoading: false }),
+  setHomeError: (homeError) => set({ homeError, isHomeLoading: false }),
   setSelectedBrandId: (selectedBrandId) =>
     set((state) => {
       const cacheKey = buildCacheKey(selectedBrandId, state.dateRange);
       return {
         selectedBrandId,
         data: state.cache[cacheKey] ?? null,
+        home: state.homeCache[cacheKey] ?? null,
         error: null,
+        homeError: null,
       };
     }),
   setDateRange: (dateRange) =>
@@ -70,7 +102,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       return {
         dateRange,
         data: state.cache[cacheKey] ?? null,
+        home: state.homeCache[cacheKey] ?? null,
         error: null,
+        homeError: null,
       };
     }),
 
@@ -132,9 +166,68 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
+  fetchHome: async () => {
+    const { selectedBrandId, dateRange, homeCache, activeHomeRequestId } = get();
+    const cacheKey = buildCacheKey(selectedBrandId, dateRange);
+    const requestId = activeHomeRequestId + 1;
+    const cachedHome = homeCache[cacheKey] ?? null;
+    activeDashboardHomeRequestController?.abort();
+    const controller = new AbortController();
+    activeDashboardHomeRequestController = controller;
+    set({
+      activeHomeRequestId: requestId,
+      isHomeLoading: true,
+      homeError: null,
+      home: cachedHome,
+    });
+    try {
+      const home = await api.getDashboardHomeSummary(
+        selectedBrandId || undefined,
+        { signal: controller.signal },
+      );
+      const latest = get();
+      if (
+        activeDashboardHomeRequestController !== controller ||
+        latest.activeHomeRequestId !== requestId ||
+        latest.selectedBrandId !== selectedBrandId ||
+        latest.dateRange !== dateRange
+      ) {
+        return;
+      }
+      activeDashboardHomeRequestController = null;
+      set((state) => ({
+        home,
+        isHomeLoading: false,
+        homeError: null,
+        homeCache: {
+          ...state.homeCache,
+          [cacheKey]: home,
+        },
+      }));
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      const latest = get();
+      if (
+        activeDashboardHomeRequestController !== controller ||
+        latest.activeHomeRequestId !== requestId
+      ) {
+        return;
+      }
+      activeDashboardHomeRequestController = null;
+      set({
+        homeError: err instanceof Error ? err.message : 'Failed to load dashboard home',
+        isHomeLoading: false,
+      });
+    }
+  },
+
   reset: () => {
     activeDashboardRequestController?.abort();
+    activeDashboardHomeRequestController?.abort();
     activeDashboardRequestController = null;
+    activeDashboardHomeRequestController = null;
     set({
       data: null,
       isLoading: false,
@@ -143,6 +236,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       dateRange: 'month',
       cache: {},
       activeRequestId: 0,
+      activeHomeRequestId: 0,
+      home: null,
+      isHomeLoading: false,
+      homeError: null,
+      homeCache: {},
     });
   },
 }));

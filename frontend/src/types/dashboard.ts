@@ -334,28 +334,79 @@ export interface DashboardMonitoringEntry {
   cta_label: string;
 }
 
-export interface DashboardSiteConfidenceLatestReport {
-  session_id: string;
-  artifact_id: string;
-  created_at?: string | null;
+export interface DashboardHomeMetric {
+  id: string;
+  label: string;
+  value: number | null;
+  format: 'percent' | 'rank' | 'count';
+  subtitle?: string;
 }
 
-export interface DashboardSiteConfidenceCard {
-  score: number | null;
-  latest_evaluated_at?: string | null;
-  trend?: DashboardBoardTrend | null;
-  latest_report?: DashboardSiteConfidenceLatestReport | null;
+export interface DashboardLatestReport {
+  title: string;
+  subtitle?: string;
+  report_kind?: string | null;
+  report_kind_label?: string | null;
+  badge_label?: string | null;
+  triggered_by?: string | null;
+  session_id?: string;
+  artifact_id?: string;
+  output_id?: string;
+  created_at?: string;
+  action_label?: string;
+}
+
+export interface DashboardCitationSourceType {
+  key: string;
+  label: string;
+  share: number | null;
+}
+
+export interface DashboardCitationDomain {
+  domain: string;
+  display_name: string;
+  count: number;
+  share: number | null;
+  is_official?: boolean;
+  source_type?: string;
+  source_type_label?: string;
+}
+
+export interface DashboardRelatedQuestion {
+  question_id: string;
+  question_text: string;
+  scene?: string;
 }
 
 export interface DashboardHomeData {
   summary: {
     headline: string;
   };
+  latest_report?: DashboardLatestReport;
+  metrics?: DashboardHomeMetric[];
+  citation_distribution?: {
+    summary: string;
+    source_types: DashboardCitationSourceType[];
+    top_domains: DashboardCitationDomain[];
+  };
+  related_questions?: {
+    summary: string;
+    items: DashboardRelatedQuestion[];
+  };
+  /**
+   * Compatibility-only legacy homepage fields.
+   *
+   * The canonical homepage path should use `summary`, `latest_report`,
+   * `metrics`, `citation_distribution`, and `related_questions`.
+   *
+   * These fields are intentionally retained during controlled rollout so that
+   * older dialog/reporting surfaces and monitoring-adjacent views are not
+   * broken before their replacement path is finalized.
+   */
   mention_board: DashboardMentionBoard;
   source_board: DashboardSourceBoard;
   radar_board: DashboardRadarBoard;
   monitoring_entry: DashboardMonitoringEntry;
-  site_confidence_card?: DashboardSiteConfidenceCard | null;
 }
 export interface DashboardData {
   kpi: KPIData;

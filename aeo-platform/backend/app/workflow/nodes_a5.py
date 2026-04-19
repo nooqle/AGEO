@@ -7,6 +7,7 @@ and generating comprehensive reports with BWVS metrics.
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 from langgraph.graph import END
 from langgraph.types import Command
@@ -16,14 +17,12 @@ from app.workflow.brand_mentions import content_mentions_brand, extract_brand_al
 
 # A5 is being split by responsibility: scenario/report contracts, prompt assembly,
 # user-facing sanitization, and persistence are kept in dedicated modules.
-from app.workflow.a5 import contract as a5_contract
 from app.workflow.a5 import metrics as a5_metrics
 from app.workflow.a5 import keywords as a5_keywords
-from app.workflow.a5 import prompt as a5_prompt
-from app.workflow.a5 import postprocess as a5_postprocess
-from app.workflow.a5 import sanitizer as a5_sanitizer
-from app.workflow.a5 import sentiment as a5_sentiment
-from app.workflow.a5.persistence import build_report_artifact_data
+from app.workflow.a5.canonical import (
+    build_canonical_report_artifact,
+    normalize_report_kind,
+)
 from app.workflow.events import (
     send_error_event,
     send_execution_complete,
@@ -37,11 +36,8 @@ from app.workflow.harness_validation import (
     evaluate_skill_preconditions,
     validate_artifact_writeback,
 )
-from app.workflow.nodes import get_llm_model_compat, parse_llm_response
 from app.workflow.nodes_a4 import PLATFORMS
-from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.skill_state import (
-    apply_skill_prompt_context,
     build_harness_decision_update,
     build_skill_result_update,
     build_validation_result_update,
@@ -53,6 +49,101 @@ from app.workflow.summaries import generate_a5_summary
 logger = logging.getLogger(__name__)
 
 # Shared BWVS weights and sentiment helpers now live in app.workflow.a5.metrics.
+
+
+def _resolved_report_kind_from_output(
+    metadata: dict[str, Any], output_data: dict[str, Any]
+) -> str | None:
+    return (
+        str(
+            metadata.get("report_kind")
+            or output_data.get("report_kind")
+            or (output_data.get("meta") or {}).get("report_kind")
+            or ""
+        ).strip()
+        or None
+    )
+
+
+def _pick_latest_panorama_baseline_report(
+    messages: list[dict[str, Any]],
+    existing_report: dict[str, Any] | None = None,
+    existing_report_id: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    resolved_existing_report = dict(existing_report or {})
+    resolved_existing_id = (
+        str(
+            existing_report_id
+            or resolved_existing_report.get("artifact_id")
+            or resolved_existing_report.get("report_id")
+            or ""
+        ).strip()
+        or None
+    )
+    if isinstance(resolved_existing_report.get("metric_bundle"), dict):
+        return resolved_existing_report, resolved_existing_id
+
+    latest_payload: dict[str, Any] | None = None
+    latest_id: str | None = None
+    for message in messages:
+        if str(message.get("output_type") or "") != "report":
+            continue
+        metadata = dict(message.get("metadata") or {})
+        output_data = dict(message.get("output_data") or {})
+        if _resolved_report_kind_from_output(metadata, output_data) != "panorama":
+            continue
+        if not isinstance(output_data.get("metric_bundle"), dict):
+            continue
+        latest_payload = {
+            **output_data,
+            "artifact_id": metadata.get("artifact_id") or output_data.get("artifact_id"),
+            "report_id": message.get("id") or output_data.get("report_id"),
+        }
+        latest_id = (
+            str(
+                latest_payload.get("artifact_id")
+                or latest_payload.get("report_id")
+                or ""
+            ).strip()
+            or None
+        )
+
+    if latest_payload:
+        return latest_payload, latest_id
+    return resolved_existing_report, resolved_existing_id
+
+
+async def _resolve_scenario_baseline_context(
+    session_id: str,
+    existing_report: dict[str, Any] | None = None,
+    existing_report_id: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    resolved_existing_report, resolved_existing_id = _pick_latest_panorama_baseline_report(
+        [],
+        existing_report=existing_report,
+        existing_report_id=existing_report_id,
+    )
+    if isinstance(resolved_existing_report.get("metric_bundle"), dict):
+        return resolved_existing_report, resolved_existing_id
+
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.message_service import MessageService
+
+        async with AsyncSessionLocal() as db:
+            message_service = MessageService(db)
+            messages = await message_service.get_messages(UUID(session_id), limit=300)
+        return _pick_latest_panorama_baseline_report(
+            messages,
+            existing_report=existing_report,
+            existing_report_id=existing_report_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[A5] Failed to resolve latest panorama baseline for scenario report: %s",
+            exc,
+        )
+        return resolved_existing_report, resolved_existing_id
 
 
 async def a5_analytics_node(state: AgentState) -> Command:
@@ -69,9 +160,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
     brand_profile = facts.brand_profile
     fetch_results = facts.fetch_results
     competitors = facts.competitors
-    marketing_personas = state.get("marketing_personas")
-    analysis_mode = facts.analysis_mode or "persona"
-    is_baseline = analysis_mode == "baseline"
+    report_kind = normalize_report_kind(facts.analysis_mode or "scenario")
+    analysis_mode = "baseline" if report_kind == "panorama" else "persona"
+    is_baseline = report_kind == "panorama"
     precondition_result = evaluate_skill_preconditions(
         state, state.get("current_skill_contract")
     )
@@ -120,28 +211,65 @@ async def a5_analytics_node(state: AgentState) -> Command:
         # included in the prompt (was previously done after LLM, too late)
         competitor_metrics = _calculate_competitor_metrics(fetch_results, competitors)
 
-        # Precompute fact-layer structures before the LLM call so the agent can
-        # generate the report directly from scenarios, mentions, and sources.
-        source_overview = a5_contract._build_source_overview(
-            metrics.get("citation_analysis", {})
+        baseline_report = state.get("baseline_report")
+        baseline_report_id = state.get("baseline_report_id")
+        if report_kind == "scenario":
+            baseline_report, baseline_report_id = await _resolve_scenario_baseline_context(
+                session_id=session_id,
+                existing_report=baseline_report if isinstance(baseline_report, dict) else None,
+                existing_report_id=(
+                    str(baseline_report_id).strip() if baseline_report_id else None
+                ),
+            )
+
+        canonical_report = build_canonical_report_artifact(
+            session_id=session_id,
+            entity_id=entity_id,
+            analysis_mode=analysis_mode,
+            brand_profile=brand_profile,
+            competitors=competitors,
+            fetch_results=fetch_results,
+            simulated_questions=state.get("simulated_questions"),
+            base_metrics=metrics,
+            baseline_report=baseline_report if isinstance(baseline_report, dict) else None,
+            baseline_report_id=baseline_report_id if isinstance(baseline_report_id, str) else None,
         )
-        mention_sentiment_analysis = a5_sentiment.build_mention_sentiment_analysis(
-            fetch_results,
-            brand_profile,
-            competitors,
+        summary_metrics = canonical_report.get("metric_bundle", {})
+        skill_outputs = canonical_report.get("skill_outputs", {})
+        question_mapper = (
+            skill_outputs.get("question_coverage_mapper", {})
+            if isinstance(skill_outputs, dict)
+            else {}
         )
-        scenario_matrix = a5_contract._build_scenario_matrix(
-            fetch_results,
-            brand_profile,
-            competitors,
-            source_overview,
+        sentiment_parser = (
+            skill_outputs.get("sentiment_reason_parser", {})
+            if isinstance(skill_outputs, dict)
+            else {}
         )
-        summary_metrics = a5_contract._build_summary_metrics(
-            metrics,
-            scenario_matrix,
-            source_overview,
-            mention_sentiment_analysis,
+        scenario_matrix = (
+            question_mapper.get("question_rows", [])
+            if isinstance(question_mapper, dict)
+            else []
         )
+        source_overview = (
+            summary_metrics.get("source_summary", {})
+            if isinstance(summary_metrics, dict)
+            else {}
+        )
+        mention_sentiment_analysis = {
+            "brand": {
+                "summary": (
+                    summary_metrics.get("sentiment_distribution", {})
+                    if isinstance(summary_metrics, dict)
+                    else {}
+                ),
+                "items": (
+                    sentiment_parser.get("items", [])
+                    if isinstance(sentiment_parser, dict)
+                    else []
+                ),
+            }
+        }
 
         await send_progress_event(
             session_id=session_id,
@@ -149,21 +277,21 @@ async def a5_analytics_node(state: AgentState) -> Command:
             step_name="数据分析报告",
             progress=0.75,
             message=(
-                f"提及率: {metrics.get('mention_rate', 0):.1%} | "
-                f"内容引用率: {summary_metrics.get('content_citation_rate', 0):.1%} | "
+                f"提及率: {(summary_metrics.get('mention_rate') or 0):.1%} | "
+                f"内容引用率: {(summary_metrics.get('content_citation_rate') or 0):.1%} | "
                 f"场景覆盖: {summary_metrics.get('scenario_hit_count', 0)}/{summary_metrics.get('scenario_total', 0)}"
             ),
         )
 
         # Stage result: metrics preview before LLM report generation
         metrics_preview_data = {
-            "mention_rate": f"{metrics.get('mention_rate', 0):.1%}",
+            "mention_rate": f"{(summary_metrics.get('mention_rate') or 0):.1%}",
             "content_citation_rate": f"{summary_metrics.get('content_citation_rate', 0):.1%}",
             "scenario_hit_count": summary_metrics.get("scenario_hit_count", 0),
             "scenario_total": summary_metrics.get("scenario_total", 0),
-            "accuracy_status": summary_metrics.get("accuracy_status"),
-            "total_mentions": metrics.get("total_mentions", 0),
-            "total_questions": metrics.get("total_questions", 0),
+            "accuracy_status": None,
+            "total_mentions": summary_metrics.get("brand_mentioned_answer_count", 0),
+            "total_questions": summary_metrics.get("total_questions", 0),
         }
         await send_stage_result(
             session_id,
@@ -206,7 +334,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     snap_service = SnapshotService(db)
                     prev_snap = await snap_service.get_previous_snapshot(
                         entity_id=entity_id,
-                        snapshot_type="baseline" if is_baseline else "persona",
+                        snapshot_type="panorama" if is_baseline else "scenario",
                     )
                     if prev_snap and prev_snap.bwvs_index is not None:
                         previous_snapshot_data = {
@@ -224,123 +352,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             except Exception as snap_err:
                 logger.warning("[A5] Failed to query previous snapshot: %s", snap_err)
 
-        # Generate the A5 customer-facing report payload.
-        # The agent now owns the report judgement layer; runtime only prepares
-        # factual inputs and validates the returned JSON.
-        report_data = None
-        try:
-            user_content = a5_prompt._build_a5_user_content(
-                brand_profile,
-                metrics,
-                fetch_results,
-                competitors,
-                marketing_personas=marketing_personas,
-                previous_snapshot=previous_snapshot_data,
-                competitor_metrics=competitor_metrics,
-                analysis_mode=analysis_mode,
-                baseline_metrics=state.get("baseline_metrics"),
-                baseline_report=state.get("baseline_report"),
-                summary_metrics=summary_metrics,
-                scenario_matrix=scenario_matrix,
-                source_overview=source_overview,
-                mention_sentiment_analysis=mention_sentiment_analysis,
-            )
-            model = get_llm_model_compat()
-
-            # --- Call 1: Core report sections ---
-            core_prompt = a5_prompt._get_a5_core_prompt(report_type=analysis_mode)
-            core_prompt = apply_skill_prompt_context(state, core_prompt)
-            response1 = await call_llm_streaming(
-                session_id=session_id,
-                model=model,
-                messages=[
-                    {"role": "system", "content": core_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                step="data_analytics",
-                step_name="数据分析报告（核心章节）",
-                task_id=state.get("task_id"),
-                skill_key=state.get("current_skill"),
-                progress_start=0.82,
-                progress_end=0.90,
-                max_tokens=8192,
-            )
-            core_data = parse_llm_response(response1)
-
-            if core_data:
-                report_data = core_data
-                logger.info(
-                    "[A5] Agent report generated: summary=%d chars, findings=%d",
-                    len(core_data.get("executive_summary", "")),
-                    len(core_data.get("key_findings", [])),
-                )
-
-            # Partial degradation validation: only reject if executive_summary is missing
-            if report_data:
-                executive_summary = report_data.get("executive_summary", "")
-                if len(executive_summary) < 30:
-                    logger.warning(
-                        "[A5] executive_summary too short (%d chars), triggering fallback",
-                        len(executive_summary),
-                    )
-                    report_data = None
-                else:
-                    missing = []
-                    if not report_data.get("key_findings"):
-                        missing.append("key_findings")
-                    if not report_data.get("report_markdown"):
-                        missing.append("report_markdown")
-                    if missing:
-                        logger.warning(
-                            "[A5] Report partial: missing sections: %s",
-                            ", ".join(missing),
-                        )
-
-        except Exception as llm_err:
-            logger.warning(
-                "[A5] LLM report generation failed, using fallback: %s",
-                llm_err,
-            )
-
-        if not report_data:
-            report_data = a5_postprocess.generate_fallback_report(
-                metrics,
-                brand_profile,
-                summary_metrics=summary_metrics,
-                scenario_matrix=scenario_matrix,
-                source_overview=source_overview,
-                mention_sentiment_analysis=mention_sentiment_analysis,
-                competitor_metrics=competitor_metrics,
-            )
-            report_data["_degraded"] = True
-            report_data["_degradation_note"] = (
-                "本报告基于原始数据自动生成，未经 AI 深度分析"
-            )
-            from app.workflow.resilience import DegradationRegistry
-
-            await DegradationRegistry.send_degradation_notice(session_id, "A5")
-
-        # Normalize report data: ensure all new fields have safe defaults
-        report_data = a5_sanitizer._normalize_report_data(report_data)
-        report_data = a5_postprocess.enrich_report_data(
-            report_data, metrics, competitor_metrics, fetch_results, brand_profile
-        )
-        report_data = a5_postprocess.ensure_report_markdown(
-            report_data,
-            brand_profile=brand_profile,
-            metrics=metrics,
-            fetch_results=fetch_results,
-            competitors=competitors,
-            summary_metrics=summary_metrics,
-            scenario_matrix=scenario_matrix,
-            source_overview=source_overview,
-            mention_sentiment_analysis=mention_sentiment_analysis,
-            competitor_metrics=competitor_metrics,
-            analysis_mode=analysis_mode,
-            baseline_metrics=state.get("baseline_metrics"),
-            baseline_report=state.get("baseline_report"),
-        )
-        report_data = a5_sanitizer._sanitize_user_facing_report(report_data)
+        report_data = canonical_report
 
         await send_progress_event(
             session_id=session_id,
@@ -400,28 +412,17 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 recovered_brand_mentions,
             )
 
-        # Build Report V2 contract fields (thread 5)
-        report_v2_sections = a5_contract._build_report_v2_sections(
-            report_data,
-            summary_metrics,
-            scenario_matrix,
-            source_overview,
-            metrics.get("citation_analysis", {}),
-            mention_sentiment_analysis,
-        )
-
-        report_data["summary_metrics"] = summary_metrics
-        report_data["scenario_matrix"] = scenario_matrix
-        report_data["source_overview"] = source_overview
-        report_data["mention_sentiment_analysis"] = mention_sentiment_analysis
-
-        # Persist lightweight V2 fields into metrics/raw_data as well so
-        # snapshots and downstream analytics can read them without reparsing
-        # the full report payload.
-        metrics["summary_metrics"] = summary_metrics
-        metrics["scenario_matrix"] = scenario_matrix
-        metrics["source_overview"] = source_overview
-        metrics["mention_sentiment_analysis"] = mention_sentiment_analysis
+        metric_bundle = report_data.get("metric_bundle", {})
+        metrics_for_state = {
+            **metric_bundle,
+            "platform_breakdown": metrics.get("platform_breakdown", {}),
+            "citation_analysis": metrics.get("citation_analysis", {}),
+            "keyword_analysis": metrics.get("keyword_analysis", {}),
+            "summary_metrics": summary_metrics,
+            "scenario_matrix": scenario_matrix,
+            "source_overview": source_overview,
+            "mention_sentiment_analysis": mention_sentiment_analysis,
+        }
 
         # --- Snapshot writing + Delta vs previous (single DB session) ---
         is_degraded = report_data.get("_degraded", False)
@@ -437,12 +438,12 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     snapshot = await snap_service.create_completed_snapshot(
                         entity_id=entity_id,
                         session_id=session_id,
-                        metrics=metrics,
+                        metrics=metrics_for_state,
                         report_data=report_data,
                         competitor_metrics=competitor_metrics,
                         fetch_results_summary=fetch_results_summary,
                         is_degraded=is_degraded,
-                        snapshot_type="baseline" if is_baseline else "persona",
+                        snapshot_type="panorama" if is_baseline else "scenario",
                     )
                     logger.info(
                         "[A5] Snapshot created: id=%s, bwvs=%.1f",
@@ -454,7 +455,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                     previous = await snap_service.get_previous_snapshot(
                         entity_id=entity_id,
                         exclude_snapshot_id=snapshot.id,
-                        snapshot_type="baseline" if is_baseline else "persona",
+                        snapshot_type="panorama" if is_baseline else "scenario",
                     )
                     if previous and previous.bwvs_index is not None:
                         current_bwvs = metrics.get("bwvs_index", 0)
@@ -490,24 +491,23 @@ async def a5_analytics_node(state: AgentState) -> Command:
         # Save and send artifact to Canvas
         from app.workflow.events import save_and_send_artifact
 
-        report_output_type = "report_baseline" if is_baseline else "report"
-        report_title = "品牌全景分析报告" if is_baseline else "用户画像场景分析报告"
-        report_category = "baseline" if is_baseline else "scenario"
-        artifact_key = f"{session_id}_{report_output_type}"
-        report_artifact_data = build_report_artifact_data(
-            brand_name=brand_profile.get("brand_name", "品牌"),
-            is_baseline=is_baseline,
-            metrics=metrics,
-            report_data=report_data,
-            summary_metrics=summary_metrics,
-            fetch_results_summary=fetch_results_summary,
-            competitor_metrics=competitor_metrics,
-            delta_vs_previous=delta_vs_previous,
-            report_v2_sections=report_v2_sections,
-            scenario_matrix=scenario_matrix,
-            source_overview=source_overview,
-            mention_sentiment_analysis=mention_sentiment_analysis,
+        report_output_type = "report"
+        report_kind = "panorama" if is_baseline else "scenario"
+        report_title = "品牌全景分析报告" if is_baseline else "用户场景分析报告"
+        report_category = report_kind
+        artifact_key = f"{session_id}_{report_output_type}_{report_kind}"
+        triggered_by = (
+            "scheduled"
+            if state.get("headless_mode") or state.get("monitoring_schedule_id")
+            else "manual"
         )
+        report_artifact_data = {
+            **report_data,
+            "fetch_results_summary": fetch_results_summary,
+            "competitors": competitor_metrics,
+            "delta_vs_previous": delta_vs_previous,
+            "triggered_by": triggered_by,
+        }
         artifact_message_id = await save_and_send_artifact(
             session_id=session_id,
             output_type=report_output_type,
@@ -520,8 +520,12 @@ async def a5_analytics_node(state: AgentState) -> Command:
             gate_name="artifact_writeback_gate",
             artifact_message_id=artifact_message_id,
             artifact_key=artifact_key,
-            artifact_kind=report_output_type,
-            metadata={"analysis_mode": analysis_mode},
+            artifact_kind="geo_report",
+            metadata={
+                "analysis_mode": analysis_mode,
+                "report_kind": report_kind,
+                "triggered_by": triggered_by,
+            },
         )
         if not artifact_validation.passed:
             raise RuntimeError(artifact_validation.reason)
@@ -575,8 +579,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 logger.warning("[A5] TaskService complete_task failed: %s", te)
 
         update_dict: dict[str, Any] = {
-            "metrics": metrics,
-            "report": report_data,
+            "metrics": metrics_for_state,
+            "report": report_artifact_data,
             "current_step": "A5",
             "progress": 1.0,
         }
@@ -589,8 +593,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
             executor_ref="a5_data_analytics",
             metadata={
                 "analysis_mode": analysis_mode,
-                "mention_rate": metrics.get("mention_rate"),
-                "report_type": report_data.get("report_type"),
+                "mention_rate": metrics_for_state.get("mention_rate"),
+                "report_type": report_artifact_data.get("report_kind"),
             },
         )
         update_dict.update(skill_update)
@@ -624,8 +628,8 @@ async def a5_analytics_node(state: AgentState) -> Command:
         update_dict.update(decision_update)
         # Baseline mode: also write to baseline_* fields for long-term storage
         if is_baseline:
-            update_dict["baseline_metrics"] = metrics
-            update_dict["baseline_report"] = report_data
+            update_dict["baseline_metrics"] = metrics_for_state
+            update_dict["baseline_report"] = report_artifact_data
             update_dict["baseline_fetch_results"] = fetch_results
 
         await send_progress_event(

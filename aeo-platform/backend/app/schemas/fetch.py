@@ -11,7 +11,8 @@ class Platform(str, Enum):
     """Supported platforms for answer fetching."""
 
     DOUBAO = "doubao"
-    HUNYUAN = "hunyuan"
+    YUANBAO = "yuanbao"
+    HUNYUAN = "yuanbao"
     KIMI = "kimi"
     DEEPSEEK = "deepseek"
 
@@ -81,7 +82,7 @@ class FetchInput(BaseModel):
     platforms: list[Platform] = Field(
         default=[
             Platform.DOUBAO,
-            Platform.HUNYUAN,
+            Platform.YUANBAO,
             Platform.KIMI,
             Platform.DEEPSEEK,
         ],

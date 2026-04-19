@@ -64,7 +64,7 @@ _CONTRACT_BLUEPRINTS: dict[str, dict[str, Any]] = {
         "required_inputs": ("brand_profile", "fetch_results", "competitors"),
         "allowed_tools": (
             "fact_snapshot",
-            "llm_report_generation",
+            "deterministic_geo_analysis",
             "report_artifact_writeback",
         ),
         "expected_outputs": ("report", "dashboard"),

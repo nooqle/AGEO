@@ -12,8 +12,6 @@ import { MetricDeltaCard } from './MetricDeltaCard';
 import { RunHistoryTable } from './RunHistoryTable';
 import { AlertCard } from '../notifications/AlertCard';
 import { EmptyState } from '@/components/ui/empty-state';
-import { toast } from '@/components/ui/toast';
-import { api } from '@/services/api';
 import type { UpdateScheduleInput } from '@/types/monitoring';
 
 interface MonitoringTabProps {
@@ -104,23 +102,11 @@ export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTa
 
   const handleStartChat = useCallback(async () => {
     if (!activeEntityId) {
-      router.push('/dashboard');
+      router.push('/settings?section=monitoring');
       return;
     }
-
-    try {
-      const session = await api.getOrCreateSessionByEntity(activeEntityId);
-      const query = new URLSearchParams({
-        entity_id: activeEntityId,
-      });
-      if (brandName) {
-        query.set('brand', brandName);
-      }
-      router.push(`/chat/${session.id}?${query.toString()}`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '进入品牌对话失败');
-    }
-  }, [activeEntityId, brandName, router]);
+    router.push(`/settings?section=monitoring&entity_id=${encodeURIComponent(activeEntityId)}`);
+  }, [activeEntityId, router]);
 
   if (isScheduleLoading) {
     return (
@@ -140,10 +126,10 @@ export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTa
     return (
       <EmptyState
         icon={RiCalendar2Line}
-        title="尚未设置自动监测"
-        description="通过对话设置品牌的自动监测计划，持续跟踪品牌提及率、官网引用率、关键风险和场景表现变化。"
+        title="尚未启用全景自动监测"
+        description="先在设置页配置监测频率和平台，再按固定节奏重跑全景问题并生成新的全景分析报告。"
         action={{
-          label: '进入对话设置',
+          label: '进入监测设置',
           onClick: () => {
             void handleStartChat();
           },

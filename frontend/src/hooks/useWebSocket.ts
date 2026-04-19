@@ -23,7 +23,15 @@ import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 import type { AnalysisTask } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
+function normalizeWebSocketBase(rawUrl: string | undefined): string {
+  const value = (rawUrl || 'ws://localhost:8001').trim().replace(/\/+$/, '');
+  if (value.endsWith('/ws')) {
+    return value.slice(0, -3);
+  }
+  return value;
+}
+
+const WS_URL = normalizeWebSocketBase(process.env.NEXT_PUBLIC_WS_URL);
 const RUNTIME_STREAM_EVENTS = new Set([
   'action_log',
   'artifact_patch',

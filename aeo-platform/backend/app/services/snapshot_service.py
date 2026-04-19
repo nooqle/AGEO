@@ -10,6 +10,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.snapshot import AnalysisSnapshot, SnapshotStatus
+from app.workflow.a5.canonical import normalize_report_kind
 
 
 class SnapshotService:
@@ -61,6 +62,7 @@ class SnapshotService:
 
         breakdown = metrics.get("bwvs_breakdown", {})
 
+        normalized_snapshot_type = normalize_report_kind(snapshot_type)
         snapshot = AnalysisSnapshot(
             entity_id=entity_id,
             session_id=session_id,
@@ -77,13 +79,19 @@ class SnapshotService:
                 if isinstance(p, dict) and p.get("success", 0) > 0
             ]),
             raw_data={
+                "artifact_kind": "geo_report",
+                "report_kind": normalized_snapshot_type,
                 "metrics": metrics,
                 "report_data": report_data,
                 "competitor_metrics": competitor_metrics,
                 "fetch_results_summary": fetch_results_summary,
+                "metric_bundle": report_data.get("metric_bundle") if isinstance(report_data, dict) else None,
+                "comparison_bundle": report_data.get("comparison_bundle") if isinstance(report_data, dict) else None,
+                "dashboard_projection": report_data.get("dashboard_projection") if isinstance(report_data, dict) else None,
+                "sections": report_data.get("sections") if isinstance(report_data, dict) else None,
             },
             triggered_by=triggered_by,
-            snapshot_type=snapshot_type,
+            snapshot_type=normalized_snapshot_type,
             completed_at=datetime.now(timezone.utc),
         )
 

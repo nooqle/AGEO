@@ -38,6 +38,21 @@ _SENTIMENT_ALIASES = {
 }
 
 
+def _resolve_metric_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    metric_bundle = payload.get("metric_bundle")
+    if isinstance(metric_bundle, dict):
+        merged = dict(metric_bundle)
+        if "platform_breakdown" not in merged and isinstance(payload.get("metrics"), dict):
+            merged["platform_breakdown"] = payload["metrics"].get("platform_breakdown", {})
+        if "summary_metrics" not in merged:
+            merged["summary_metrics"] = payload.get("summary_metrics") or merged
+        if "mention_sentiment_analysis" not in merged and payload.get("mention_sentiment_analysis"):
+            merged["mention_sentiment_analysis"] = payload.get("mention_sentiment_analysis")
+        return merged
+    metrics = payload.get("metrics")
+    return metrics if isinstance(metrics, dict) else payload
+
+
 def _normalize_sentiment_focus(value: str) -> str:
     text = str(value or "").strip().lower()
     for canonical, aliases in _SENTIMENT_ALIASES.items():
@@ -66,7 +81,7 @@ async def drill_down_node(state: AgentState) -> Command:
 
     facts = build_skill_fact_snapshot(state)
     fetch_results = facts.fetch_results
-    metrics = facts.metrics
+    metrics = _resolve_metric_payload(facts.metrics)
     report = facts.report
     brand_profile = facts.brand_profile
     simulated_questions = state.get("simulated_questions") or {}
@@ -235,7 +250,12 @@ def _filter_by_dimension(
         normalized_focus = _normalize_sentiment_focus(focus_value)
         mention_analysis = {}
         if isinstance(report, dict):
-            mention_analysis = report.get("mention_sentiment_analysis") or {}
+            mention_analysis = (
+                report.get("mention_sentiment_analysis")
+                or report.get("skill_outputs", {})
+                .get("sentiment_risk_analyzer", {})
+                .get("summary", {})
+            ) or {}
         if not mention_analysis and isinstance(metrics, dict):
             mention_analysis = metrics.get("mention_sentiment_analysis") or {}
 
@@ -526,8 +546,8 @@ async def _generate_comparison(
     """Use LLM to generate a snapshot comparison analysis."""
     brand_name = brand_profile.get("brand_name", "品牌")
 
-    old_metrics = old_data.get("metrics", {})
-    new_metrics = new_data.get("metrics", {})
+    old_metrics = _resolve_metric_payload(old_data)
+    new_metrics = _resolve_metric_payload(new_data)
 
     def _safe_delta(key: str) -> str:
         old_val = old_metrics.get(key, 0) or 0

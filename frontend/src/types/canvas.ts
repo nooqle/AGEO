@@ -588,6 +588,7 @@ export type ConfidenceSignalComposerState = {
 export type ReportCanvasData = CanvasPreviewData & {
   report_kind?: string;
   artifact_kind?: string;
+  title?: string;
   headline?: string;
   subtitle?: string;
   overallScore?: number;
@@ -598,6 +599,11 @@ export type ReportCanvasData = CanvasPreviewData & {
   content?: string;
   executive_summary?: string;
   report_markdown?: string;
+  full_markdown?: string;
+  sections?: unknown;
+  metric_bundle?: unknown;
+  comparison_bundle?: unknown;
+  dashboard_projection?: unknown;
   bwvs_breakdown?: import('@/types/dashboard').BwvsBreakdown;
   brand_name?: string;
   analysis_period?: string;
@@ -1007,6 +1013,7 @@ export type ContentVersion = {
   timestamp: string;
   data: Record<string, unknown>;
   linkedMessageId?: string;
+  sourceSequence?: number;
 };
 
 export type CanvasContentDataMap = {
@@ -1031,7 +1038,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
-      category?: 'baseline' | 'scenario';
+      outputSequence?: number;
+      category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }
@@ -1045,7 +1053,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
-      category?: 'baseline' | 'scenario';
+      outputSequence?: number;
+      category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }
@@ -1059,7 +1068,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
-      category?: 'baseline' | 'scenario';
+      outputSequence?: number;
+      category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }
@@ -1073,7 +1083,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
-      category?: 'baseline' | 'scenario';
+      outputSequence?: number;
+      category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }
@@ -1087,7 +1098,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
-      category?: 'baseline' | 'scenario';
+      outputSequence?: number;
+      category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }
@@ -1101,7 +1113,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
-      category?: 'baseline' | 'scenario';
+      outputSequence?: number;
+      category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }
@@ -1115,7 +1128,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
-      category?: 'baseline' | 'scenario';
+      outputSequence?: number;
+      category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }
@@ -1129,7 +1143,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
-      category?: 'baseline' | 'scenario';
+      outputSequence?: number;
+      category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
       hasNewVersion?: boolean;
     }

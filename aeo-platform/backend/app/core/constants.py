@@ -117,7 +117,7 @@ class PlatformConstants:
 
     # Per-platform HTTP timeouts for API clients (seconds)
     PLATFORM_API_TIMEOUTS: Final[dict[str, float]] = {
-        "doubao": 90.0,
+        "doubao": 35.0,
         "yuanbao": 60.0,
         "hunyuan": 60.0,
         "kimi": 60.0,

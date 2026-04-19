@@ -1,81 +1,91 @@
 'use client';
 
-import { buildReportViewModel } from '@/adapters/reportV2';
-import { isConfidenceCanvasReport, isSiteConfidenceCanvasReport } from '@/adapters/exportArtifacts';
-import { buildCustomerReportMarkdown } from '@/lib/canvasExportShared';
-import type { ReportCanvasContent, ReportSummaryData, ReportV2Metric } from '@/types/canvas';
+import { isConfidenceCanvasReport } from '@/adapters/exportArtifacts';
+import type { ReportCanvasContent } from '@/types/canvas';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ConfidenceSignalContent } from './ConfidenceSignalContent';
 import { ReportPage } from './ReportScaffold';
-import { SiteConfidenceReportContent } from './SiteConfidenceReportContent';
 
-interface ReportContentProps {
-  content: ReportCanvasContent;
-  printMode?: boolean;
+type CanonicalSection = {
+  section_name?: string;
+  title?: string;
+  markdown?: string;
+  data?: unknown;
+};
+
+type SummaryMetricRow = [string, string, string];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function formatMetricValue(metric: ReportV2Metric): string {
-  if (metric.value === null || metric.value === undefined || metric.value === '') {
-    return '--';
+function getCanonicalSections(content: ReportCanvasContent): CanonicalSection[] {
+  return Array.isArray(content.data.sections)
+    ? content.data.sections.filter(isRecord) as CanonicalSection[]
+    : [];
+}
+
+function getFullMarkdown(content: ReportCanvasContent, sections: CanonicalSection[]): string {
+  const bodySections = sections.filter((section) => section.section_name !== 'header');
+  if (bodySections.length > 0) {
+    return bodySections
+      .map((section) => (typeof section.markdown === 'string' ? section.markdown.trim() : ''))
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
   }
-
-  if (typeof metric.value === 'number') {
-    if (metric.unit === '%' || metric.unit === 'ratio') {
-      const ratioValue = metric.value <= 1 ? metric.value * 100 : metric.value;
-      return `${ratioValue.toFixed(1)}%`;
-    }
-    const formatted = Number.isInteger(metric.value) ? String(metric.value) : metric.value.toFixed(1);
-    return metric.unit ? `${formatted}${metric.unit}` : formatted;
+  if (typeof content.data.full_markdown === 'string' && content.data.full_markdown.trim()) {
+    return content.data.full_markdown.trim();
   }
-
-  const raw = String(metric.value);
-  return metric.unit && !raw.endsWith(metric.unit) ? `${raw}${metric.unit}` : raw;
+  if (typeof content.data.report_markdown === 'string' && content.data.report_markdown.trim()) {
+    return content.data.report_markdown.trim();
+  }
+  return sections
+    .map((section) => (typeof section.markdown === 'string' ? section.markdown.trim() : ''))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
 }
 
-function joinText(values: Array<string | undefined | null>, fallback = '暂无'): string {
-  const resolved = values
-    .map((value) => (typeof value === 'string' ? value.trim() : ''))
-    .filter(Boolean);
-  return resolved.length > 0 ? resolved.join('；') : fallback;
-}
-
-function splitExecutiveSummary(summary?: string): string[] {
-  if (!summary) {
+function getSummaryMetrics(sections: CanonicalSection[]): SummaryMetricRow[] {
+  const summarySection = sections.find((section) => section.section_name === 'summary');
+  const data = isRecord(summarySection?.data) ? summarySection.data : {};
+  const rows = data.metrics;
+  if (!Array.isArray(rows)) {
     return [];
   }
-  return summary
-    .split(/\n+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 2);
+  return rows.filter(
+    (row): row is SummaryMetricRow =>
+      Array.isArray(row) &&
+      row.length >= 3 &&
+      typeof row[0] === 'string' &&
+      typeof row[1] === 'string' &&
+      typeof row[2] === 'string'
+  );
 }
 
-function SummaryMetricStrip({ summary }: { summary: ReportSummaryData }) {
-  const metrics = (summary.metrics ?? []).slice(0, 3);
-  if (metrics.length === 0) {
+function SummaryMetricStrip({ rows }: { rows: SummaryMetricRow[] }) {
+  if (rows.length === 0) {
     return null;
   }
 
   return (
-    <section
-      className="grid gap-3 md:grid-cols-3"
-      aria-label="核心指标"
-    >
-      {metrics.map((metric) => (
+    <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-5" aria-label="核心指标">
+      {rows.map(([label, value, description]) => (
         <article
-          key={metric.id}
-          className="rounded-[18px] border bg-[var(--bg-tertiary)] px-5 py-5"
+          key={label}
+          className="rounded-[20px] border bg-[var(--bg-tertiary)] px-6 py-6"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
-          <div className="text-[12px] font-medium tracking-[0.08em] text-[var(--text-tertiary)]">
-            {metric.label}
+          <div className="text-[13px] font-medium tracking-[0.08em] text-[var(--text-tertiary)]">
+            {label}
           </div>
-          <div className="mt-3 text-[30px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-            {formatMetricValue(metric)}
+          <div className="mt-4 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+            {value}
           </div>
-          <p className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">
-            {metric.description || metric.assessment || '可结合正文继续追问具体原因。'}
+          <p className="mt-3 text-[15px] leading-7 text-[var(--text-secondary)]">
+            {description}
           </p>
         </article>
       ))}
@@ -86,56 +96,62 @@ function SummaryMetricStrip({ summary }: { summary: ReportSummaryData }) {
 function MarkdownDocument({ markdown }: { markdown: string }) {
   return (
     <section
-      className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-6 md:px-8 md:py-8"
+      className="rounded-[24px] border bg-[var(--bg-tertiary)] px-7 py-8 md:px-10 md:py-10"
       style={{ borderColor: 'var(--border-subtle)' }}
     >
-      <div className="report-markdown text-[15px] leading-8 text-[var(--text-primary)]">
+      <div className="report-markdown text-[17px] leading-9 text-[var(--text-primary)]">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
+            h1: ({ children }) => (
+              <h1 className="text-[40px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
+                {children}
+              </h1>
+            ),
             h2: ({ children }) => (
-              <h2 className="mt-10 border-t border-[var(--border-subtle)] pt-6 text-[22px] font-semibold tracking-[-0.03em] text-[var(--text-primary)] first:mt-0 first:border-t-0 first:pt-0">
+              <h2 className="mt-14 pt-1 text-[30px] font-semibold tracking-[-0.04em] text-[var(--text-primary)] first:mt-0">
                 {children}
               </h2>
             ),
             h3: ({ children }) => (
-              <h3 className="mt-6 text-[17px] font-semibold text-[var(--text-primary)]">{children}</h3>
+              <h3 className="mt-8 text-[22px] font-semibold text-[var(--text-primary)]">
+                {children}
+              </h3>
             ),
             p: ({ children }) => (
-              <p className="mt-3 text-[15px] leading-8 text-[var(--text-primary)] first:mt-0">{children}</p>
+              <p className="mt-4 text-[17px] leading-9 text-[var(--text-primary)] first:mt-0">{children}</p>
             ),
             ul: ({ children }) => (
-              <ul className="mt-3 space-y-2 pl-5 text-[15px] leading-8 text-[var(--text-primary)]">{children}</ul>
+              <ul className="mt-4 list-disc space-y-3 pl-6 text-[17px] leading-9 text-[var(--text-primary)]">{children}</ul>
             ),
             ol: ({ children }) => (
-              <ol className="mt-3 space-y-2 pl-5 text-[15px] leading-8 text-[var(--text-primary)]">{children}</ol>
+              <ol className="mt-4 list-decimal space-y-3 pl-6 text-[17px] leading-9 text-[var(--text-primary)]">{children}</ol>
             ),
-            li: ({ children }) => <li className="marker:text-[var(--text-tertiary)]">{children}</li>,
+            li: ({ children }) => <li className="pl-1 marker:text-[var(--text-tertiary)]">{children}</li>,
             table: ({ children }) => (
-              <div className="mt-4 overflow-x-auto rounded-[16px] border border-[var(--border-subtle)]">
-                <table className="min-w-full border-collapse text-left text-[14px] leading-7">{children}</table>
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full border-collapse text-left text-[15px] leading-8">{children}</table>
               </div>
             ),
-            thead: ({ children }) => <thead className="bg-[var(--bg-secondary)] text-[var(--text-secondary)]">{children}</thead>,
-            th: ({ children }) => <th className="px-4 py-3 font-medium">{children}</th>,
+            thead: ({ children }) => <thead className="border-b border-[var(--border-subtle)] text-[var(--text-secondary)]">{children}</thead>,
+            th: ({ children }) => <th className="px-3 py-2 text-[14px] font-medium">{children}</th>,
             td: ({ children }) => (
-              <td className="border-t border-[var(--border-subtle)] px-4 py-3 align-top text-[var(--text-primary)]">
+              <td className="border-t border-[var(--border-subtle)] px-3 py-2 align-top text-[15px] text-[var(--text-primary)]">
                 {children}
               </td>
             ),
             blockquote: ({ children }) => (
-              <blockquote className="mt-4 rounded-[16px] border-l-4 border-[var(--text-accent)] bg-[var(--bg-secondary)] px-4 py-3 text-[14px] leading-7 text-[var(--text-secondary)]">
+              <blockquote className="mt-5 border-l-2 border-[var(--border-strong)] pl-4 text-[16px] leading-8 text-[var(--text-secondary)]">
                 {children}
               </blockquote>
             ),
-            strong: ({ children }) => <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>,
-            a: ({ href, children }) => (
-              <a href={href} className="text-[var(--text-accent)] underline underline-offset-4" target="_blank" rel="noreferrer">
-                {children}
-              </a>
+            strong: ({ children }) => (
+              <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>
             ),
             code: ({ children }) => (
-              <code className="rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[13px] text-[var(--text-primary)]">{children}</code>
+              <code className="rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[14px] text-[var(--text-primary)]">
+                {children}
+              </code>
             ),
           }}
         >
@@ -146,108 +162,58 @@ function MarkdownDocument({ markdown }: { markdown: string }) {
   );
 }
 
-function LegacyFallback({ content }: { content: ReportCanvasContent }) {
-  const view = buildReportViewModel(content);
-  const fallbackLines = [
-    view.summary.summary,
-    view.summary.status_summary,
-    ...(view.summary.highlights ?? []),
-    view.scenarioCoverage.summary,
-    view.mentions.description,
-    view.sources.summary,
-  ].filter((item): item is string => Boolean(item && item.trim()));
-
+function MissingCanonicalReport() {
   return (
     <section
       className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-6 md:px-8 md:py-8"
       style={{ borderColor: 'var(--border-subtle)' }}
     >
       <div className="space-y-3 text-[15px] leading-8 text-[var(--text-primary)]">
-        {fallbackLines.length > 0 ? (
-          fallbackLines.map((line) => <p key={line}>{line}</p>)
-        ) : (
-          <p>本轮报告已更新，可继续在对话中追问品牌提及、引用来源和主题覆盖的具体细节。</p>
-        )}
+        <p>当前报告产物缺失 canonical `full_markdown / sections`，已阻止旧报告 fallback 渲染。</p>
+        <p>需要回到后端 A5 canonical pipeline 重新生成报告。</p>
       </div>
     </section>
   );
 }
 
-export function ReportContent({ content, printMode = false }: ReportContentProps) {
+export function ReportContent({ content, printMode = false }: { content: ReportCanvasContent; printMode?: boolean }) {
   if (isConfidenceCanvasReport(content)) {
     return <ConfidenceSignalContent content={content} printMode={printMode} />;
   }
 
-  if (isSiteConfidenceCanvasReport(content)) {
-    return <SiteConfidenceReportContent content={content} printMode={printMode} />;
-  }
-
-  const view = buildReportViewModel(content);
-  const reportMarkdown = buildCustomerReportMarkdown(content);
-  const hasReportMarkdown = Boolean(reportMarkdown);
-  const executiveSummaryLines = splitExecutiveSummary(content.data.executive_summary || content.data.content);
+  const sections = getCanonicalSections(content);
+  const markdown = getFullMarkdown(content, sections);
+  const metrics = getSummaryMetrics(sections);
+  const headline = content.data.title || content.data.headline || 'GEO 评估报告';
+  const subtitle =
+    content.data.subtitle ||
+    content.data.executive_summary ||
+    '本页只渲染后端输出的 canonical GEO 报告，不再拼接旧版 report_v2。';
+  const updatedAt = content.data.updated_at;
 
   return (
-    <ReportPage className="max-w-[980px] space-y-5">
+    <ReportPage className="w-full max-w-[1320px] space-y-6">
       <header
-        className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-6 md:px-8 md:py-7"
+        className="rounded-[26px] border bg-[var(--bg-tertiary)] px-7 py-7 md:px-10 md:py-10"
         style={{ borderColor: 'var(--border-subtle)' }}
       >
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
-              {view.isBaseline ? '品牌全景分析报告' : '用户画像场景分析报告'}
-            </div>
-            <h1 className="mt-3 text-[30px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
-              {view.headline || '品牌分析报告'}
-            </h1>
-            {view.updatedAt ? (
-              <div className="mt-3 text-[13px] text-[var(--text-secondary)]">更新于 {view.updatedAt}</div>
-            ) : null}
-          </div>
+        <div className="text-[12px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
+          {content.category === 'scenario' ? 'GEO 场景分析报告' : 'GEO 全景分析报告'}
         </div>
-        {!hasReportMarkdown && executiveSummaryLines.length > 0 ? (
-          <div className="mt-5 space-y-2 text-[15px] leading-8 text-[var(--text-primary)]">
-            {executiveSummaryLines.map((line) => (
-              <p key={line}>{line}</p>
-            ))}
-          </div>
-        ) : !hasReportMarkdown && view.summary.summary ? (
-          <p className="mt-5 text-[15px] leading-8 text-[var(--text-primary)]">{view.summary.summary}</p>
-        ) : null}
-        {view.degradationNote ? (
-          <p className="mt-4 text-[13px] leading-7 text-[var(--text-secondary)]">{view.degradationNote}</p>
+        <h1 className="mt-3 text-[38px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
+          {headline}
+        </h1>
+        <p className="mt-5 max-w-[980px] text-[17px] leading-9 text-[var(--text-secondary)]">
+          {subtitle}
+        </p>
+        {updatedAt ? (
+          <div className="mt-5 text-[14px] text-[var(--text-secondary)]">更新于 {updatedAt}</div>
         ) : null}
       </header>
 
-      <SummaryMetricStrip summary={view.summary} />
+      <SummaryMetricStrip rows={metrics} />
 
-      {hasReportMarkdown ? <MarkdownDocument markdown={reportMarkdown} /> : <LegacyFallback content={content} />}
-
-      {!hasReportMarkdown && (view.summary.highlights ?? []).length > 0 ? (
-        <section
-          className="rounded-[18px] border bg-[var(--bg-tertiary)] px-5 py-5"
-          style={{ borderColor: 'var(--border-subtle)' }}
-        >
-          <div className="text-[14px] font-medium text-[var(--text-primary)]">重点提醒</div>
-          <ul className="mt-3 space-y-2 pl-5 text-[14px] leading-7 text-[var(--text-secondary)]">
-            {view.summary.highlights!.slice(0, 4).map((highlight) => (
-              <li key={highlight}>{highlight}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {!hasReportMarkdown && (
-        <section className="px-1 text-[13px] leading-7 text-[var(--text-secondary)]">
-          {joinText(
-            [
-              '如需继续追问某个平台、具体负向提及、竞品压制场景或官网引用缺失原因，直接在对话里继续问即可。',
-            ],
-            ''
-          )}
-        </section>
-      )}
+      {markdown ? <MarkdownDocument markdown={markdown} /> : <MissingCanonicalReport />}
     </ReportPage>
   );
 }
