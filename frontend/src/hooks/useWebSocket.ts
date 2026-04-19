@@ -17,11 +17,11 @@ import { isRecord } from '@/hooks/websocket/canvas';
 import { buildOutputReadyPayload } from '@/hooks/websocket/output';
 import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmation';
 import { isSupersededA5FailureText } from '@/adapters/chatMessage';
+import { sanitizeUserFacingWorkflowText } from '@/lib/workflowStageLabels';
 import { api } from '@/services/api';
 import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 import type { AnalysisTask } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
-import type { ToolMode } from '@/types/toolMode';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
 const RUNTIME_STREAM_EVENTS = new Set([
@@ -59,7 +59,6 @@ interface QueuedUserMessage {
   content: string;
   context?: Array<{ id: string; type: string; label: string }>;
   attachments?: AttachmentRefPayload[];
-  tool_mode?: ToolMode;
 }
 
 export function useWebSocket(sessionId: string | null) {
@@ -320,8 +319,12 @@ export function useWebSocket(sessionId: string | null) {
 
       case 'action_log': {
         const actionType = typeof data.action_type === 'string' ? data.action_type : 'generic';
-        const message = typeof data.message === 'string' ? data.message : '';
-        const step = typeof data.step === 'string' ? data.step : '';
+        const message = sanitizeUserFacingWorkflowText(
+          typeof data.message === 'string' ? data.message : ''
+        ) || '';
+        const step = sanitizeUserFacingWorkflowText(
+          typeof data.step === 'string' ? data.step : ''
+        ) || '';
         const isComplete = data.is_complete === true;
         const timestamp = typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString();
 
@@ -368,7 +371,9 @@ export function useWebSocket(sessionId: string | null) {
       }
 
       case 'inline_confirmation': {
-        const confirmMessage = typeof data.message === 'string' ? data.message : '';
+        const confirmMessage = sanitizeUserFacingWorkflowText(
+          typeof data.message === 'string' ? data.message : ''
+        ) || '';
         const options = Array.isArray(data.options) ? data.options : [];
 
         // 确保有 agent message
@@ -414,7 +419,10 @@ export function useWebSocket(sessionId: string | null) {
         updateActiveTaskProgress(
           data.stage || '',
           data.progress ?? 0,
-          data.message || data.details || ''
+          sanitizeUserFacingWorkflowText(
+            (typeof data.message === 'string' ? data.message : '')
+            || (typeof data.details === 'string' ? data.details : '')
+          ) || ''
         );
         break;
       }
@@ -422,11 +430,15 @@ export function useWebSocket(sessionId: string | null) {
       case 'step_started': {
         const step: ExecutionStep = {
           stepId: data.step_id || '',
-          stepName: data.message || '',
+          stepName: sanitizeUserFacingWorkflowText(
+            typeof data.message === 'string' ? data.message : ''
+          ) || '',
           stepIndex: (typeof data.step_index === 'number' ? data.step_index : 1),
           totalSteps: (typeof data.total_steps === 'number' ? data.total_steps : 5),
           status: 'running',
-          description: data.description as string | undefined,
+          description: sanitizeUserFacingWorkflowText(
+            typeof data.description === 'string' ? data.description : ''
+          ) || undefined,
           startTime: new Date(),
         };
         addExecutionStep(step);
@@ -456,13 +468,17 @@ export function useWebSocket(sessionId: string | null) {
           setPendingConfirmation({
             requestId: typeof data.request_id === 'string' ? data.request_id : '',
             type: 'step_confirmation',
-            message: data.message || '',
+            message: sanitizeUserFacingWorkflowText(
+              typeof data.message === 'string' ? data.message : ''
+            ) || '',
             options: Array.isArray((data.confirmation_data as Record<string, unknown>).options)
               ? ((data.confirmation_data as Record<string, unknown>).options as ConfirmationOption[])
               : [],
             allowTextInput: false,
             stepId: data.step_id,
-            stepName: data.step_name,
+            stepName: sanitizeUserFacingWorkflowText(
+              typeof data.step_name === 'string' ? data.step_name : ''
+            ) || undefined,
           });
         }
         break;
@@ -470,7 +486,7 @@ export function useWebSocket(sessionId: string | null) {
       case 'step_log':
         appendExecutionLog(
           (typeof data.step_id === 'string' ? data.step_id : ''),
-          (typeof data.log === 'string' ? data.log : '')
+          sanitizeUserFacingWorkflowText(typeof data.log === 'string' ? data.log : '') || ''
         );
         break;
 
@@ -607,11 +623,13 @@ export function useWebSocket(sessionId: string | null) {
         const options = Array.isArray(data.options) ? data.options : [];
         const allowTextInput = typeof data.allow_text_input === 'boolean' ? data.allow_text_input : false;
         const stepId = typeof data.step_id === 'string' ? data.step_id : undefined;
-        const stepName = typeof data.step_name === 'string' ? data.step_name : undefined;
+        const stepName = sanitizeUserFacingWorkflowText(
+          typeof data.step_name === 'string' ? data.step_name : ''
+        ) || undefined;
         setPendingConfirmation({
           requestId,
           type,
-          message,
+          message: sanitizeUserFacingWorkflowText(message) || message,
           options,
           allowTextInput,
           stepId,
@@ -630,6 +648,15 @@ export function useWebSocket(sessionId: string | null) {
       }
 
       case 'execution_complete': {
+        const completionMessage = sanitizeUserFacingWorkflowText(
+          typeof data.message === 'string' ? data.message.trim() : ''
+        );
+        const currentAgentMessageId = useConversationStore.getState().currentAgentMessageId;
+        const streamingReply = useConversationStore.getState().streamingReply.trim();
+        if (currentAgentMessageId && completionMessage && !streamingReply) {
+          updateMessage(currentAgentMessageId, { content: completionMessage });
+          useConversationStore.setState({ streamingReply: completionMessage });
+        }
         completePendingActionLogs();
         finalizeCurrentMessage();
         resetStreamingState();
@@ -886,6 +913,13 @@ export function useWebSocket(sessionId: string | null) {
           setActiveTask({
             ...(currentTask ?? {}),
             ...(taskData as unknown as AnalysisTask),
+            progress_message: sanitizeUserFacingWorkflowText(
+              typeof taskData.progress_message === 'string'
+                ? taskData.progress_message
+                : currentTask?.progress_message || ''
+            ) || (typeof taskData.progress_message === 'string'
+                ? taskData.progress_message
+                : currentTask?.progress_message || ''),
             status: (taskStatus || taskData.status || currentTask?.status || 'pending') as AnalysisTask['status'],
           } as AnalysisTask);
         }
@@ -897,7 +931,9 @@ export function useWebSocket(sessionId: string | null) {
           updateActiveTaskProgress(
             typeof taskData.current_stage === 'string' ? taskData.current_stage : '',
             typeof taskData.progress === 'number' ? taskData.progress : 0,
-            typeof taskData.progress_message === 'string' ? taskData.progress_message : '分析中...'
+            sanitizeUserFacingWorkflowText(
+              typeof taskData.progress_message === 'string' ? taskData.progress_message : '分析中...'
+            ) || (typeof taskData.progress_message === 'string' ? taskData.progress_message : '分析中...')
           );
         } else if (taskStatus === 'completed') {
           const ct = useConversationStore.getState().activeTask;
@@ -924,7 +960,9 @@ export function useWebSocket(sessionId: string | null) {
             setActiveTask({
               ...ct,
               status: 'cancelled',
-              progress_message: typeof taskData.progress_message === 'string' ? taskData.progress_message : '任务已取消',
+              progress_message: sanitizeUserFacingWorkflowText(
+                typeof taskData.progress_message === 'string' ? taskData.progress_message : '任务已取消'
+              ) || (typeof taskData.progress_message === 'string' ? taskData.progress_message : '任务已取消'),
               completed_at: typeof taskData.completed_at === 'string' ? taskData.completed_at : new Date().toISOString(),
             });
           }
@@ -1168,7 +1206,6 @@ export function useWebSocket(sessionId: string | null) {
     content: string,
     context?: Array<{ id: string; type: string; label: string }>,
     attachments?: Attachment[],
-    toolMode?: ToolMode | null,
   ) => {
     const clientMessageId = generateClientMessageId();
     const payload: QueuedUserMessage = {
@@ -1193,10 +1230,6 @@ export function useWebSocket(sessionId: string | null) {
         }));
       }
     }
-    if (toolMode) {
-      payload.tool_mode = toolMode;
-    }
-
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       pendingMessagesRef.current.push(payload);
       return;

@@ -130,7 +130,14 @@ function normalizePreviewMetrics(raw: Record<string, unknown>): Record<string, C
 }
 
 export const normalizePreviewData = (raw: Record<string, unknown>) => ({
-  description: typeof raw.description === 'string' ? raw.description : undefined,
+  description:
+    typeof raw.preview_description === 'string'
+      ? raw.preview_description
+      : typeof raw.description === 'string'
+      ? raw.description
+      : typeof raw.executive_summary === 'string'
+      ? raw.executive_summary
+      : undefined,
   metrics: normalizePreviewMetrics(raw),
   itemCount: typeof raw.itemCount === 'number'
     ? raw.itemCount

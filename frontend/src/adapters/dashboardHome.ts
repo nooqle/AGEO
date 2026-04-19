@@ -7,6 +7,7 @@ import type {
   DashboardRadarBoard,
   DashboardRadarDimension,
   DashboardSentimentSummary,
+  DashboardSiteConfidenceCard,
   DashboardSourceBoard,
   DashboardSourceCitationCase,
   DashboardSourceContent,
@@ -32,6 +33,37 @@ function toNumber(value: unknown): number | null {
 
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
+function normalizeBoardTrend(value: unknown): DashboardBoardTrend | null {
+  const row = value && typeof value === 'object' ? (value as UnknownRecord) : null;
+  if (!row) {
+    return null;
+  }
+
+  const points = Array.isArray(row.points)
+    ? row.points.map((item) => {
+        const point = item && typeof item === 'object' ? (item as UnknownRecord) : {};
+        return {
+          date: String(point.date ?? ''),
+          value: toNumber(point.value),
+        };
+      }).filter((item) => item.date)
+    : [];
+
+  return {
+    metric_key: String(row.metric_key ?? ''),
+    metric_label: String(row.metric_label ?? ''),
+    value_format: row.value_format === 'percent' ? 'percent' : 'score',
+    current_value: toNumber(row.current_value),
+    previous_value: toNumber(row.previous_value),
+    change_absolute: toNumber(row.change_absolute),
+    change_percentage: toNumber(row.change_percentage),
+    direction: typeof row.direction === 'string' ? row.direction : null,
+    data_point_count: Number(row.data_point_count ?? points.length),
+    period_label: String(row.period_label ?? ''),
+    points,
+  };
 }
 
 function normalizeSentimentSummary(value: unknown): DashboardSentimentSummary {
@@ -206,6 +238,30 @@ function normalizeMonitoringEntry(value: unknown): DashboardMonitoringEntry {
   };
 }
 
+function normalizeSiteConfidenceCard(value: unknown): DashboardSiteConfidenceCard | null {
+  const row = value && typeof value === 'object' ? (value as UnknownRecord) : null;
+  if (!row) {
+    return null;
+  }
+
+  const latestReport = row.latestReport && typeof row.latestReport === 'object'
+    ? (row.latestReport as UnknownRecord)
+    : null;
+
+  return {
+    score: toNumber(row.score),
+    latest_evaluated_at: typeof row.latestEvaluatedAt === 'string' ? row.latestEvaluatedAt : null,
+    trend: normalizeBoardTrend(row.trend),
+    latest_report: latestReport
+      ? {
+          session_id: String(latestReport.sessionId ?? ''),
+          artifact_id: String(latestReport.artifactId ?? ''),
+          created_at: typeof latestReport.createdAt === 'string' ? latestReport.createdAt : null,
+        }
+      : null,
+  };
+}
+
 function buildBoardTrend(
   metricKey: HomeTrendMetricKey,
   summary: TrendMetricSummary | undefined,
@@ -254,6 +310,7 @@ export function buildDashboardHomeData(value: unknown): DashboardHomeData | unde
     source_board: normalizeSourceBoard(row.sourceBoard),
     radar_board: normalizeRadarBoard(row.radarBoard),
     monitoring_entry: normalizeMonitoringEntry(row.monitoringEntry),
+    site_confidence_card: normalizeSiteConfidenceCard(row.siteConfidenceCard),
   };
 }
 

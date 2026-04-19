@@ -141,6 +141,10 @@ export function isConfidenceReportKind(value: string | undefined): boolean {
   return value === 'confidence_signal' || value === 'confidence_analysis';
 }
 
+export function isSiteConfidenceReportKind(value: string | undefined): boolean {
+  return value === 'site_confidence_report';
+}
+
 function uniqueByKey<T>(items: T[], getKey: (item: T) => string): T[] {
   const seen = new Set<string>();
   return items.filter((item) => {
@@ -678,6 +682,13 @@ export function isConfidenceCanvasReport(content: ReportCanvasContent): boolean 
     readField(data, 'auto_items', 'autoItems') ||
     readField(data, 'manual_items', 'manualItems')
   );
+}
+
+export function isSiteConfidenceCanvasReport(content: ReportCanvasContent): boolean {
+  const data = content.data as UnknownRecord;
+  const reportKind = readString(data, 'report_kind', 'reportKind');
+  const artifactKind = readString(data, 'artifact_kind', 'artifactKind');
+  return isSiteConfidenceReportKind(reportKind) || isSiteConfidenceReportKind(artifactKind);
 }
 
 export function buildConfidenceExportViewModel(content: ReportCanvasContent): ConfidenceExportViewModel {

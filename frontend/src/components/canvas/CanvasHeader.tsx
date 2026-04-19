@@ -16,6 +16,7 @@ import {
   RiChatForwardLine,
   RiHistoryLine,
   RiShieldCheckLine,
+  RiRobot2Line,
   RiLinkM,
   RiSparklingLine,
   RiLoader4Line,
@@ -27,7 +28,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import { toast } from '@/components/ui/toast';
-import { isConfidenceCanvasReport } from '@/adapters/exportArtifacts';
+import { isConfidenceCanvasReport, isSiteConfidenceCanvasReport } from '@/adapters/exportArtifacts';
 import {
   exportCanvasContent,
   getCanvasContentText,
@@ -73,6 +74,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
     return content;
   }, [content, isViewingHistory, versions]);
   const isConfidenceSignal = effectiveContent.type === 'report' && isConfidenceCanvasReport(effectiveContent);
+  const isSiteConfidence = effectiveContent.type === 'report' && isSiteConfidenceCanvasReport(effectiveContent);
   const confidenceComposer = isConfidenceSignal ? effectiveContent.data?.composer : undefined;
   const confidenceStatus = isConfidenceSignal ? effectiveContent.data?.status : undefined;
   const isArtifactActionRunning = confidenceStatus?.phase === 'running';
@@ -205,6 +207,9 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
   const getTypeIcon = () => {
     switch (content.type) {
       case 'report':
+        if (isSiteConfidenceCanvasReport(content)) {
+          return <RiRobot2Line className="w-4 h-4" style={{ color: 'var(--color-primary)' }} />;
+        }
         if (isConfidenceCanvasReport(content)) {
           return <RiShieldCheckLine className="w-4 h-4" style={{ color: 'var(--warning)' }} />;
         }
@@ -264,13 +269,15 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
             <h2 className="font-semibold truncate text-sm" style={{ color: 'var(--text-primary)' }}>
               {isBrowserTakeover
                 ? `云电脑工作区${browserPlatformLabel ? ` · ${browserPlatformLabel}` : ''}`
-                : content.title}
+                : isSiteConfidence
+                  ? '官网 AI 友好度'
+                  : content.title}
             </h2>
             <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-tertiary)' }}>
               <span className="capitalize">
                 {content.type === 'dataTable' ? '数据表格' :
                  effectiveContent.type === 'report' ? (
-                   isConfidenceSignal ? '置信度报告' : '分析报告'
+                   isSiteConfidence ? '报告' : isConfidenceSignal ? '置信度报告' : '分析报告'
                  ) :
                  effectiveContent.type === 'chart' ? '数据图表' :
                  effectiveContent.type === 'questionList' ? '问题列表' :

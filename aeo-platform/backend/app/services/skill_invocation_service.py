@@ -14,17 +14,12 @@ from app.services.skill_registry_service import SkillRegistryService, SkillScope
 SKILL_EXECUTOR_TO_NODE: dict[str, str] = {
     "table_intake_executor": "table_intake",
     "a5_data_analytics": "a5_analytics",
-    "confidence_analysis_executor": "confidence_analysis_executor",
-    "a7_confidence_signal": "confidence_analysis_executor",
+    "site_confidence_assessment_executor": "site_confidence_assessment_executor",
     "post_analysis_executor": "post_analysis_executor",
 }
 
 LEGACY_SKILL_TOOL_ALIASES: dict[str, dict[str, Any]] = {
     "data_analytics": {"skill_key": "analysis_report_skill", "extra_args": {}},
-    "confidence_signal_skill": {
-        "skill_key": "confidence_analysis_skill",
-        "extra_args": {},
-    },
     "drill_down_analysis": {
         "skill_key": "post_analysis_skill",
         "extra_args": {"analysis_mode": "drill_down"},

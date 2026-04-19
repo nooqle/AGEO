@@ -18,7 +18,6 @@ function DashboardContent({ currentUser }: { currentUser: AuthUser }) {
   const entityError = useEntityStore((s) => s.error);
   const entitiesLoading = useEntityStore((s) => s.isLoading);
   const hasFetchedEntities = useEntityStore((s) => s.hasFetched);
-  const [hasDismissedAutoPrompt, setHasDismissedAutoPrompt] = useState(false);
 
   const handleNewAnalysis = useCallback(() => {
     setEntityFormOpen(true);
@@ -27,8 +26,11 @@ function DashboardContent({ currentUser }: { currentUser: AuthUser }) {
     hasFetchedEntities &&
     !entitiesLoading &&
     !entityError &&
-    entities.length === 0 &&
-    !hasDismissedAutoPrompt;
+    entities.length === 0;
+
+  const handleBlockedAutoPromptClose = useCallback(() => {
+    toast.info('目前还没有任何品牌，需要新建一个品牌。');
+  }, []);
 
   const handleCreateBrand = async (data: CreateEntityInput) => {
     try {
@@ -50,12 +52,11 @@ function DashboardContent({ currentUser }: { currentUser: AuthUser }) {
         open={entityFormOpen || shouldAutoPrompt}
         onClose={() => {
           setEntityFormOpen(false);
-          if (shouldAutoPrompt) {
-            setHasDismissedAutoPrompt(true);
-          }
         }}
         onSubmit={handleCreateBrand}
         allowOrganizationScope={Boolean(currentUser.organization_id)}
+        preventClose={shouldAutoPrompt}
+        onPreventClose={handleBlockedAutoPromptClose}
       />
     </div>
   );

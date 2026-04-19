@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { RiFileTextLine, RiBarChartBoxLine, RiTableLine, RiGroupLine, RiArrowRightLine } from '@remixicon/react';
+import { RiFileTextLine, RiBarChartBoxLine, RiTableLine, RiGroupLine, RiArrowRightLine, RiRobot2Line } from '@remixicon/react';
 import { OutputCard as OutputCardType } from '@/types/message';
 import type { CanvasContent, CanvasContentDataMap } from '@/types/canvas';
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -106,8 +106,26 @@ const typeConfig = {
 
 export function OutputCard({ card }: OutputCardProps) {
   const { openCanvas, setActiveContentById, contents } = useCanvasStore();
-  const config = typeConfig[card.type as keyof typeof typeConfig] || typeConfig.report;
+  const isSiteConfidenceCard = (
+    (card.id || '').toLowerCase().includes('site_confidence') ||
+    (card.title || '').includes('官网 AI 友好度')
+  );
+  const config = isSiteConfidenceCard
+    ? {
+        ...typeConfig.report,
+        icon: RiRobot2Line,
+        label: '官网',
+        colors: {
+          ...typeConfig.report.colors,
+          hoverBorder: 'hover:border-sky-500/60',
+          icon: 'text-sky-300',
+          label: 'text-sky-300',
+          glow: 'group-hover:shadow-[0_0_0_1px_rgba(56,189,248,0.35),0_10px_30px_rgba(14,165,233,0.2)]',
+        },
+      }
+    : typeConfig[card.type as keyof typeof typeConfig] || typeConfig.report;
   const Icon = config.icon;
+  const displayTitle = isSiteConfidenceCard ? '官网 AI 友好度' : card.title;
 
   const handleClick = () => {
     const existing = contents.find((content) => content.id === card.id);
@@ -125,7 +143,7 @@ export function OutputCard({ card }: OutputCardProps) {
     const content = {
       id: card.id,
       type: card.type,
-      title: card.title,
+      title: displayTitle,
       data: previewData,
       createdAt: new Date(),
       relatedMessageId: '',
@@ -156,7 +174,7 @@ export function OutputCard({ card }: OutputCardProps) {
           </div>
           <div>
             <div className={cn('font-medium', config.colors.title)}>
-              {card.title}
+              {displayTitle}
             </div>
             <div className={cn('text-xs', config.colors.label)}>{config.label}</div>
           </div>

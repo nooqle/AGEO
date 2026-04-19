@@ -12,6 +12,8 @@ interface EntityFormDialogProps {
   onSubmit: (data: CreateEntityInput) => void;
   entity?: Entity | null;
   allowOrganizationScope?: boolean;
+  preventClose?: boolean;
+  onPreventClose?: () => void;
 }
 
 export function EntityFormDialog({
@@ -20,6 +22,8 @@ export function EntityFormDialog({
   onSubmit,
   entity,
   allowOrganizationScope = false,
+  preventClose = false,
+  onPreventClose,
 }: EntityFormDialogProps) {
   if (!open) return null;
 
@@ -30,6 +34,8 @@ export function EntityFormDialog({
       onClose={onClose}
       onSubmit={onSubmit}
       allowOrganizationScope={allowOrganizationScope}
+      preventClose={preventClose}
+      onPreventClose={onPreventClose}
     />
   );
 }
@@ -39,11 +45,15 @@ function EntityFormDialogInner({
   onClose,
   onSubmit,
   allowOrganizationScope,
+  preventClose,
+  onPreventClose,
 }: {
   entity?: Entity | null;
   onClose: () => void;
   onSubmit: (data: CreateEntityInput) => void;
   allowOrganizationScope: boolean;
+  preventClose: boolean;
+  onPreventClose?: () => void;
 }) {
   const [name, setName] = useState(entity?.name ?? '');
   const [aliases, setAliases] = useState<string[]>(entity?.aliases ?? []);
@@ -56,6 +66,14 @@ function EntityFormDialogInner({
 
   const isEdit = !!entity;
 
+  const handleRequestClose = useCallback(() => {
+    if (preventClose) {
+      onPreventClose?.();
+      return;
+    }
+    onClose();
+  }, [onClose, onPreventClose, preventClose]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({ name, aliases, domain, industry, description, visibilityScope });
@@ -63,9 +81,9 @@ function EntityFormDialogInner({
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
-      onClose();
+      handleRequestClose();
     }
-  }, [onClose]);
+  }, [handleRequestClose]);
 
   useEffect(() => {
     document.addEventListener('keydown', handleKeyDown);
@@ -75,7 +93,7 @@ function EntityFormDialogInner({
   return (
     <div
       className={modalScrimClassName('z-50 flex items-center justify-center p-4')}
-      onClick={onClose}
+      onClick={handleRequestClose}
     >
       <div
         className="rounded-xl w-full max-w-lg shadow-2xl"
@@ -94,7 +112,7 @@ function EntityFormDialogInner({
             {isEdit ? '编辑品牌' : '新建品牌'}
           </h2>
           <button
-            onClick={onClose}
+            onClick={handleRequestClose}
             className="p-1 rounded-lg transition-colors cursor-pointer"
             style={{ color: 'var(--text-tertiary)' }}
           >
@@ -244,7 +262,7 @@ function EntityFormDialogInner({
           <div className="flex justify-end gap-3 pt-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleRequestClose}
               className="px-4 py-2 text-sm transition-colors cursor-pointer"
               style={{ color: 'var(--text-secondary)' }}
             >

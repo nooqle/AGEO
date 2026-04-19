@@ -134,10 +134,16 @@ export function buildOutputCardsFromApiMessage(msg: ApiMessage, sessionId: strin
     (typeof (parsed as UnknownRecord).output_id === 'string' ? (parsed as UnknownRecord).output_id as string : undefined) ||
     `${sessionId}_${msg.output_type}`;
 
+  const isSiteConfidenceReport =
+    typeof (parsed as UnknownRecord).report_kind === 'string'
+    && (parsed as UnknownRecord).report_kind === 'site_confidence_report';
+
   return [{
     id: outputId,
     type: outputType,
-    title: (parsed as UnknownRecord).headline as string || (parsed as UnknownRecord).title as string || msg.content || '分析结果',
+    title: isSiteConfidenceReport
+      ? '官网 AI 友好度'
+      : ((parsed as UnknownRecord).headline as string || (parsed as UnknownRecord).title as string || msg.content || '分析结果'),
     preview,
   } satisfies OutputCard];
 }

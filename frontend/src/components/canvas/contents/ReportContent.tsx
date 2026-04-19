@@ -1,13 +1,14 @@
 'use client';
 
 import { buildReportViewModel } from '@/adapters/reportV2';
-import { isConfidenceCanvasReport } from '@/adapters/exportArtifacts';
+import { isConfidenceCanvasReport, isSiteConfidenceCanvasReport } from '@/adapters/exportArtifacts';
 import { buildCustomerReportMarkdown } from '@/lib/canvasExportShared';
 import type { ReportCanvasContent, ReportSummaryData, ReportV2Metric } from '@/types/canvas';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ConfidenceSignalContent } from './ConfidenceSignalContent';
 import { ReportPage } from './ReportScaffold';
+import { SiteConfidenceReportContent } from './SiteConfidenceReportContent';
 
 interface ReportContentProps {
   content: ReportCanvasContent;
@@ -175,6 +176,10 @@ function LegacyFallback({ content }: { content: ReportCanvasContent }) {
 export function ReportContent({ content, printMode = false }: ReportContentProps) {
   if (isConfidenceCanvasReport(content)) {
     return <ConfidenceSignalContent content={content} printMode={printMode} />;
+  }
+
+  if (isSiteConfidenceCanvasReport(content)) {
+    return <SiteConfidenceReportContent content={content} printMode={printMode} />;
   }
 
   const view = buildReportViewModel(content);

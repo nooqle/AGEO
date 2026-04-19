@@ -83,47 +83,36 @@ _CONTRACT_BLUEPRINTS: dict[str, dict[str, Any]] = {
             "skill_result_recorded",
         ),
     },
-    "confidence_analysis_skill": {
-        "intent_scope": "评估当前引用来源的可信度、结构化质量和可核查性。",
-        "required_inputs": ("confidence_fetch_results",),
+    "site_confidence_assessment_skill": {
+        "intent_scope": "仅针对当前监测品牌自己的官网，自动发现官网页面并生成官网 AI 友好度报告。",
+        "required_inputs": (),
         "allowed_tools": (
-            "fact_snapshot",
-            "confidence_signal_generation",
-            "confidence_artifact_writeback",
+            "site_page_discovery",
+            "site_page_evaluation",
+            "report_artifact_writeback",
         ),
-        "expected_outputs": ("confidence_signal",),
+        "expected_outputs": ("report",),
         "artifact_writeback_rules": (
-            "must_persist_confidence_artifact_before_complete",
+            "must_persist_site_confidence_report_before_complete",
             "must_record_skill_result_after_artifact_writeback",
         ),
+        "user_facing_report_structure": (
+            "结论先行",
+            "先解释为什么会得到这个判断",
+            "页面级直接证据必须列出扣分项、原因和修复动作",
+            "下一步建议必须按 P0 / P1 分组并绑定优先页面",
+            "只有边界确实影响本轮判断时才展示边界说明",
+        ),
         "known_blockers": (
-            "fetch_results_missing",
+            "brand_context_missing",
+            "official_website_missing",
+            "root_url_out_of_scope",
+            "root_url_missing",
+            "homepage_unreachable",
             "artifact_writeback_failed",
         ),
         "postconditions": (
-            "confidence_artifact_persisted",
-            "skill_result_recorded",
-        ),
-    },
-    "confidence_signal_skill": {
-        "intent_scope": "评估当前引用来源的可信度、结构化质量和可核查性。",
-        "required_inputs": ("confidence_fetch_results",),
-        "allowed_tools": (
-            "fact_snapshot",
-            "confidence_signal_generation",
-            "confidence_artifact_writeback",
-        ),
-        "expected_outputs": ("confidence_signal",),
-        "artifact_writeback_rules": (
-            "must_persist_confidence_artifact_before_complete",
-            "must_record_skill_result_after_artifact_writeback",
-        ),
-        "known_blockers": (
-            "fetch_results_missing",
-            "artifact_writeback_failed",
-        ),
-        "postconditions": (
-            "confidence_artifact_persisted",
+            "site_confidence_report_persisted",
             "skill_result_recorded",
         ),
     },

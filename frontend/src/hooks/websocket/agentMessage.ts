@@ -1,5 +1,6 @@
 import type { ConfirmationRequest, Message } from '@/types/message';
 import type { WebSocketEventData } from '@/types/websocket';
+import { sanitizeUserFacingWorkflowText } from '@/lib/workflowStageLabels';
 
 const VALID_CONFIRMATION_TYPES: ConfirmationRequest['type'][] = [
   'brand_info',
@@ -27,7 +28,9 @@ function buildConfirmationRequest(data: WebSocketEventData): ConfirmationRequest
     type: VALID_CONFIRMATION_TYPES.includes(rawType as ConfirmationRequest['type'])
       ? (rawType as ConfirmationRequest['type'])
       : 'step_confirmation',
-    message: typeof request.message === 'string' ? request.message : '',
+    message: sanitizeUserFacingWorkflowText(
+      typeof request.message === 'string' ? request.message : ''
+    ) || '',
     options: Array.isArray(request.options) ? request.options : [],
     allowTextInput:
       typeof request.allow_text_input === 'boolean'
@@ -42,11 +45,13 @@ function buildConfirmationRequest(data: WebSocketEventData): ConfirmationRequest
           ? request.stepId
           : undefined,
     stepName:
-      typeof request.step_name === 'string'
-        ? request.step_name
-        : typeof request.stepName === 'string'
-          ? request.stepName
-          : undefined,
+      sanitizeUserFacingWorkflowText(
+        typeof request.step_name === 'string'
+          ? request.step_name
+          : typeof request.stepName === 'string'
+            ? request.stepName
+            : undefined,
+      ),
   };
 }
 
@@ -56,7 +61,9 @@ export function buildAgentMessage(data: WebSocketEventData): Message {
   return {
     id: typeof data.id === 'string' ? data.id : `agent_${Date.now()}`,
     type: 'agent',
-    content: typeof data.content === 'string' ? data.content : '',
+    content: sanitizeUserFacingWorkflowText(
+      typeof data.content === 'string' ? data.content : ''
+    ) || '',
     timestamp: data.timestamp ? new Date(data.timestamp as string) : new Date(),
     tpaor: typeof data.tpaor === 'object' && data.tpaor !== null ? data.tpaor : undefined,
     outputCards: Array.isArray(data.output_cards) ? data.output_cards : undefined,

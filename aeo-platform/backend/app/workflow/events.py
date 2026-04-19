@@ -16,6 +16,13 @@ from app.services.session_event_publisher import session_event_publisher
 
 logger = logging.getLogger(__name__)
 
+_USER_VISIBLE_TEXT_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("site_confidence_assessment_skill", "官网 AI 友好度"),
+    ("site_confidence_assessment_executor", "官网 AI 友好度"),
+    ("官网置信度评估", "官网 AI 友好度"),
+    ("官网置信度报告", "官网 AI 友好度报告"),
+)
+
 
 # =============================================================================
 # Session-level Layer Accumulator
@@ -28,6 +35,27 @@ logger = logging.getLogger(__name__)
 _session_layers: dict[str, dict[str, Any]] = {}
 
 _SESSION_LAYER_TTL_SECONDS = 1800  # 30 minutes
+
+
+def _sanitize_user_visible_text(value: str | None) -> str:
+    text = str(value or "")
+    for raw, display in _USER_VISIBLE_TEXT_REPLACEMENTS:
+        text = text.replace(raw, display)
+    return text
+
+
+def _sanitize_confirmation_options(
+    options: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for option in options or []:
+        item = dict(option or {})
+        if "label" in item:
+            item["label"] = _sanitize_user_visible_text(item.get("label"))
+        if "description" in item:
+            item["description"] = _sanitize_user_visible_text(item.get("description"))
+        sanitized.append(item)
+    return sanitized
 
 
 def _get_layers(session_id: str) -> dict[str, Any]:
@@ -111,6 +139,8 @@ async def send_reply_event(
     """
     if _is_headless(session_id):
         return
+
+    content = _sanitize_user_visible_text(content)
 
     if not is_complete:
         layers = _get_layers(session_id)
@@ -230,6 +260,8 @@ async def send_inline_confirmation(
     """Layer 4: Send inline confirmation request."""
     if _is_headless(session_id):
         return
+    message = _sanitize_user_visible_text(message)
+    options = _sanitize_confirmation_options(options)
     await session_event_publisher.emit_to_session(
         session_id,
         "inline_confirmation",
@@ -257,6 +289,8 @@ async def send_progress_event(
     """Send execution progress event to frontend."""
     if _is_headless(session_id):
         return
+    step_name = _sanitize_user_visible_text(step_name)
+    message = _sanitize_user_visible_text(message)
     payload: dict[str, Any] = {
         "stage": step,
         "stage_name": step_name,
@@ -287,10 +321,11 @@ async def send_output_ready(
     """Send output ready event for Canvas artifacts."""
     if _is_headless(session_id):
         return
+    title = _sanitize_user_visible_text(title or "分析结果")
     payload: dict[str, Any] = {
         "output_id": output_id,
         "type": output_type,
-        "title": title or "分析结果",
+        "title": title,
         "data": data,
         "auto_open_canvas": True,
         "related_message_id": related_message_id,
@@ -330,6 +365,19 @@ async def save_and_send_artifact(
     Returns:
         The output message ID (str).
     """
+    title = _sanitize_user_visible_text(title)
+    if isinstance(data, dict):
+        data = dict(data)
+        for key in ("headline", "description", "preview_description", "subtitle"):
+            if key in data:
+                data[key] = _sanitize_user_visible_text(data.get(key))
+        status = data.get("status")
+        if isinstance(status, dict) and "message" in status:
+            data["status"] = {
+                **status,
+                "message": _sanitize_user_visible_text(status.get("message")),
+            }
+
     # Headless mode: skip Message save, rely on Snapshot only
     if session_id.startswith("headless-"):
         logger.info(
@@ -410,6 +458,7 @@ async def send_execution_complete(session_id: str, message: str = "分析完成"
     """Send execution complete event."""
     if _is_headless(session_id):
         return
+    message = _sanitize_user_visible_text(message)
     await session_event_publisher.emit_to_session(
         session_id, "execution_complete", {"message": message}
     )
@@ -427,6 +476,8 @@ async def send_error_event(
         logger.warning(
             "[Events] send_error_event called with empty error for step %s", step
         )
+    step = _sanitize_user_visible_text(step)
+    error = _sanitize_user_visible_text(error)
     await session_event_publisher.emit_to_session(
         session_id,
         "error",

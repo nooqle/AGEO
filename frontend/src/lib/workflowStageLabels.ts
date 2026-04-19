@@ -19,6 +19,10 @@ const STAGE_LABELS: Record<string, string> = {
   analysis_report: '报告生成',
   analysis_report_skill: '报告生成',
   a5: '报告生成',
+  site_confidence_assessment_skill: '官网 AI 友好度',
+  site_confidence_assessment_executor: '官网 AI 友好度',
+  site_confidence_assessment: '官网 AI 友好度',
+  a7: '官网 AI 友好度',
   wait_for_user: '等待你的确认',
   waiting_input: '等待你的确认',
   post_analysis_skill: '追问分析',
@@ -51,4 +55,15 @@ export function getUserFacingStageLabel(stage?: string | null): string | undefin
   }
 
   return stage;
+}
+
+export function sanitizeUserFacingWorkflowText(text?: string | null): string | undefined {
+  if (!text) return undefined;
+
+  return text
+    .replace(/site_confidence_assessment_skill/g, '官网 AI 友好度')
+    .replace(/site_confidence_assessment_executor/g, '官网 AI 友好度')
+    .replace(/官网置信度报告/g, '官网 AI 友好度报告')
+    .replace(/官网置信度评估/g, '官网 AI 友好度')
+    .replace(/引用置信度评估/g, '来源引用分析');
 }

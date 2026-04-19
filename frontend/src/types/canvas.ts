@@ -666,6 +666,82 @@ export type ReportCanvasData = CanvasPreviewData & {
   brand_keywords?: string[];
   competitor_names?: string[];
   diagnosis?: string;
+  site_root_url?: string;
+  root_domain?: string;
+  scan_mode?: string;
+  scanner_runtime?: string;
+  overall_score?: number;
+  dashboard_score?: number;
+  scan_quality_status?: 'healthy' | 'degraded' | 'insufficient';
+  coverage_summary?: {
+    candidate_url_count?: number;
+    eligible_url_count?: number;
+    discovered_url_count?: number;
+    page_budget?: number;
+    fetched_page_count?: number;
+    evaluated_page_count?: number;
+    excluded_page_count?: number;
+    coverage_rate?: number;
+    excluded_reason_counts?: Record<string, number>;
+  };
+  max_pages_requested?: number;
+  max_pages_applied?: number;
+  hard_max_scan_pages?: number;
+  dimension_summary?: {
+    dimensions?: Array<{
+      id?: string;
+      label?: string;
+      average_score?: number;
+      risk_level?: 'high' | 'watch' | 'healthy';
+    }>;
+    top_risk_dimensions?: Array<{
+      id?: string;
+      label?: string;
+      average_score?: number;
+      risk_level?: 'high' | 'watch' | 'healthy';
+    }>;
+    gate_failure_summary?: {
+      c6?: number;
+      c9a?: number;
+      c9b?: number;
+    };
+  };
+  prioritized_actions?: Array<{
+    priority?: string;
+    title?: string;
+    summary?: string;
+  }>;
+  pages?: Array<{
+    url?: string;
+    page_type?: string;
+    page_label?: string;
+    title?: string;
+    page_status?: 'strong' | 'watch' | 'risk';
+    confidence_score?: number;
+    crawl_readable?: boolean;
+    findings?: string[];
+    recommendations?: string[];
+    has_h1?: boolean;
+    has_main?: boolean;
+    has_article?: boolean;
+    body_text_length?: number;
+    script_count?: number;
+    schema_types?: string[];
+    fetch_failure_reason?: string;
+    dimension_scores?: Array<{
+      id?: string;
+      label?: string;
+      score?: number;
+      assessment?: string;
+    }>;
+    gate_scores?: {
+      c6?: number;
+      c9a?: number;
+      c9b?: number;
+      gate_pass?: boolean;
+      failed_gates?: string[];
+    };
+  }>;
 };
 export type ChartSeries = { key: string; name: string };
 export type ChartDataItem = Record<string, string | number>;

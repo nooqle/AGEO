@@ -61,7 +61,9 @@ def _parse_html_attrs(tag_html: str) -> dict[str, str]:
 
 def _extract_meta_content(html: str, names: tuple[str, ...]) -> str:
     target_names = {name.lower() for name in names}
-    for meta_tag in re.findall(r"<meta\b[^>]*>", html or "", flags=re.IGNORECASE | re.DOTALL):
+    for meta_tag in re.findall(
+        r"<meta\b[^>]*>", html or "", flags=re.IGNORECASE | re.DOTALL
+    ):
         attrs = _parse_html_attrs(meta_tag)
         meta_name = attrs.get("name") or attrs.get("property")
         if meta_name and meta_name.lower() in target_names and attrs.get("content"):
@@ -136,11 +138,17 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
         "crawl_readable": False,
         "http_status": None,
         "final_url": url,
+        "content_type": "",
+        "fetch_failure_reason": "",
         "fetched_title": "",
         "has_h1": False,
         "h1_count": 0,
+        "h2_count": 0,
         "has_main": False,
         "has_article": False,
+        "body_text_length": 0,
+        "script_count": 0,
+        "has_noscript": False,
         "schema_types": [],
         "published_at": "",
     }
@@ -175,7 +183,7 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
     try:
         headers = {
             "User-Agent": (
-                "Mozilla/5.0 (compatible; SpectaA7/1.0; "
+                "Mozilla/5.0 (compatible; SpectaSiteConfidence/1.0; "
                 "+https://specta.ai/)"
             )
         }
@@ -187,23 +195,38 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
             response = await client.get(url)
         content_type = response.headers.get("content-type", "").lower()
         is_html_like = (
-            "text/html" in content_type
-            or "application/xhtml+xml" in content_type
+            "text/html" in content_type or "application/xhtml+xml" in content_type
         )
         if response.status_code >= 400 or not is_html_like:
+            failure_reason = (
+                f"http_{response.status_code}"
+                if response.status_code >= 400
+                else "non_html_content"
+            )
             result = {
                 **default,
                 "http_status": response.status_code,
                 "final_url": str(response.url),
+                "content_type": content_type,
+                "fetch_failure_reason": failure_reason,
             }
             _page_feature_cache[url] = (now, result)
             return dict(result)
 
         html = response.text or ""
+        body_text_length = len(_strip_html(html))
         has_main = bool(re.search(r"<main\b", html, flags=re.IGNORECASE))
         has_article = bool(re.search(r"<article\b", html, flags=re.IGNORECASE))
+        script_count = len(
+            re.findall(r"<script\b", html, flags=re.IGNORECASE | re.DOTALL)
+        )
         h1_matches = re.findall(
             r"<h1\b[^>]*>.*?</h1>",
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        h2_matches = re.findall(
+            r"<h2\b[^>]*>.*?</h2>",
             html,
             flags=re.IGNORECASE | re.DOTALL,
         )
@@ -211,16 +234,37 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
             "crawl_readable": True,
             "http_status": response.status_code,
             "final_url": str(response.url),
+            "content_type": content_type,
+            "fetch_failure_reason": "",
             "fetched_title": _extract_tag_text(html, "title"),
             "has_h1": len(h1_matches) > 0,
             "h1_count": len(h1_matches),
+            "h2_count": len(h2_matches),
             "has_main": has_main,
             "has_article": has_article,
+            "body_text_length": body_text_length,
+            "script_count": script_count,
+            "has_noscript": bool(
+                re.search(r"<noscript\b", html, flags=re.IGNORECASE | re.DOTALL)
+            ),
             "schema_types": _extract_schema_types(html),
             "published_at": _extract_published_at(html),
         }
         _page_feature_cache[url] = (now, result)
         return dict(result)
-    except Exception:
-        _page_feature_cache[url] = (now, default)
-        return dict(default)
+    except Exception as exc:
+        failure_reason = (
+            "request_timeout"
+            if isinstance(exc, httpx.TimeoutException)
+            else (
+                "too_many_redirects"
+                if isinstance(exc, httpx.TooManyRedirects)
+                else "request_error"
+            )
+        )
+        result = {
+            **default,
+            "fetch_failure_reason": failure_reason,
+        }
+        _page_feature_cache[url] = (now, result)
+        return dict(result)
