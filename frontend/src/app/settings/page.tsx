@@ -227,11 +227,11 @@ function NativeSelect({
   children: ReactNode;
 }) {
   return (
-    <div className="relative">
+    <div className="relative overflow-hidden rounded-2xl">
       <select
         value={value}
         onChange={onChange}
-        className="h-11 w-full appearance-none rounded-2xl border px-3 pr-11 text-sm outline-none"
+        className="h-11 w-full appearance-none rounded-2xl border bg-transparent px-3 pr-12 text-sm outline-none"
         style={{
           backgroundColor: 'var(--bg-tertiary)',
           borderColor: 'var(--border-subtle)',
@@ -241,8 +241,12 @@ function NativeSelect({
         {children}
       </select>
       <span
-        className="pointer-events-none absolute inset-y-0 right-4 flex items-center"
-        style={{ color: 'var(--text-secondary)' }}
+        className="pointer-events-none absolute inset-y-0 right-0 flex w-11 items-center justify-center border-l"
+        style={{
+          color: 'var(--text-secondary)',
+          borderColor: 'var(--border-subtle)',
+          backgroundColor: 'var(--bg-tertiary)',
+        }}
       >
         <RiArrowDownSLine className="h-4 w-4" />
       </span>
