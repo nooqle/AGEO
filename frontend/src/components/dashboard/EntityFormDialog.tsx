@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RiCloseLine } from '@remixicon/react';
 import { AliasTagInput } from './AliasTagInput';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
@@ -55,6 +55,7 @@ function EntityFormDialogInner({
   preventClose: boolean;
   onPreventClose?: () => void;
 }) {
+  const lastPreventCloseAtRef = useRef(0);
   const [name, setName] = useState(entity?.name ?? '');
   const [aliases, setAliases] = useState<string[]>(entity?.aliases ?? []);
   const [domain, setDomain] = useState(entity?.domain ?? '');
@@ -68,7 +69,11 @@ function EntityFormDialogInner({
 
   const handleRequestClose = useCallback(() => {
     if (preventClose) {
-      onPreventClose?.();
+      const now = Date.now();
+      if (now - lastPreventCloseAtRef.current >= 1500) {
+        lastPreventCloseAtRef.current = now;
+        onPreventClose?.();
+      }
       return;
     }
     onClose();
