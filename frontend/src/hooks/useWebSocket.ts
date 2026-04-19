@@ -244,36 +244,33 @@ export function useWebSocket(sessionId: string | null) {
         const isComplete = data.is_complete === true;
         const isNewRound = data.is_new_round === true;
 
-        // 如果还没有 agent message，创建一个
-        if (!agentMessageIdRef.current) {
+        const createAgentMessage = (initialContent = '') => {
           const newId = addMessage({
             type: 'agent',
-            content: isDelta ? content : content,
+            content: initialContent,
             layers: { actionLogs: [] },
           });
           agentMessageIdRef.current = newId;
-          // 同步到 store 的 currentAgentMessageId
-          useConversationStore.setState({ currentAgentMessageId: newId });
-        }
-
-        // 新一轮编排器回复：finalize 当前消息，创建新消息
-        // 这样上一轮 Agent 的内容保留在独立消息中，不会被覆盖
-        if (isNewRound && agentMessageIdRef.current) {
-          completePendingActionLogs();
-          finalizeCurrentMessage();
           useConversationStore.setState({
-            streamingReply: '',
-            streamingThought: '',
-            currentActionLogs: [],
-            currentPlanText: null,
+            currentAgentMessageId: newId,
+            ...(initialContent ? { streamingReply: initialContent } : {}),
           });
-          const newId = addMessage({
-            type: 'agent',
-            content: '',
-            layers: { actionLogs: [] },
-          });
-          agentMessageIdRef.current = newId;
-          useConversationStore.setState({ currentAgentMessageId: newId });
+        };
+
+        if (isNewRound) {
+          if (agentMessageIdRef.current) {
+            completePendingActionLogs();
+            finalizeCurrentMessage();
+            useConversationStore.setState({
+              streamingReply: '',
+              streamingThought: '',
+              currentActionLogs: [],
+              currentPlanText: null,
+            });
+          }
+          createAgentMessage(isDelta ? '' : content);
+        } else if (!agentMessageIdRef.current) {
+          createAgentMessage(isDelta ? '' : content);
         }
 
         if (isDelta && content) {
