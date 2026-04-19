@@ -9,10 +9,13 @@ public contract.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Awaitable, Literal, cast
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 AioPublicPlatform = Literal["doubao", "yuanbao", "kimi", "deepseek"]
 AioExecutorPlatform = Literal["doubao", "hunyuan", "kimi", "deepseek"]
@@ -378,23 +381,58 @@ class AioAnswerFetchTool:
     async def gather_browser_tasks(
         self,
         browser_tasks: list[BrowserTask],
+        *,
+        timeout_seconds: float | None = None,
     ) -> list[Any]:
         """Run browser platform jobs with the configured AIO concurrency cap."""
 
+        if not browser_tasks:
+            return []
+
+        semaphore: asyncio.Semaphore | None = None
         if settings.AIO_ENABLED and settings.AIO_BASE_URL:
             max_parallel = max(1, settings.AIO_MAX_PARALLEL_BROWSER_SESSIONS)
             semaphore = asyncio.Semaphore(max_parallel)
 
-            async def _bounded(task: BrowserTask) -> Any:
-                async with semaphore:
-                    return await task
+        async def _bounded(task: BrowserTask) -> Any:
+            if semaphore is None:
+                return await task
+            async with semaphore:
+                return await task
 
-            return await asyncio.gather(
-                *[_bounded(task) for task in browser_tasks],
-                return_exceptions=True,
-            )
+        scheduled = [asyncio.create_task(_bounded(task)) for task in browser_tasks]
+        pending: set[asyncio.Task[Any]] = set()
 
-        return await asyncio.gather(*browser_tasks, return_exceptions=True)
+        try:
+            if timeout_seconds is None:
+                return await asyncio.gather(*scheduled, return_exceptions=True)
+
+            done, pending = await asyncio.wait(scheduled, timeout=timeout_seconds)
+            if pending:
+                logger.warning(
+                    "[A4] Browser task batch hit hard timeout (%.0fs); forcing %d pending task(s) to timeout",
+                    timeout_seconds,
+                    len(pending),
+                )
+
+            results: list[Any] = []
+            for task in scheduled:
+                if task in done:
+                    try:
+                        results.append(task.result())
+                    except BaseException as exc:  # surfaced as gather-style result
+                        results.append(exc)
+                else:
+                    task.cancel()
+                    results.append(
+                        asyncio.TimeoutError(
+                            f"browser task batch exceeded {timeout_seconds:.0f}s hard timeout"
+                        )
+                    )
+            return results
+        finally:
+            for task in pending:
+                task.cancel()
 
     def build_result_packet(
         self,

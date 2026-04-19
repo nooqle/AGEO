@@ -20,6 +20,9 @@ function ChatPageContent() {
   const isCreatingSessionRef = useRef(false);
   const queryEntityId = searchParams.get('entity_id') || undefined;
   const queryBrand = searchParams.get('brand') || undefined;
+  const queryArtifactId = searchParams.get('artifact_id') || undefined;
+  const queryDraft = searchParams.get('draft') || undefined;
+  const queryAutoSend = searchParams.get('autosend') || undefined;
   const [resolvedEntityId, setResolvedEntityId] = useState<string | undefined>(
     () => queryEntityId
   );
@@ -68,6 +71,15 @@ function ChatPageContent() {
         if (queryBrand) {
           nextQuery.set('brand', queryBrand);
         }
+        if (queryArtifactId) {
+          nextQuery.set('artifact_id', queryArtifactId);
+        }
+        if (queryDraft) {
+          nextQuery.set('draft', queryDraft);
+        }
+        if (queryAutoSend) {
+          nextQuery.set('autosend', queryAutoSend);
+        }
         router.replace(`/chat/${fallback.id}?${nextQuery.toString()}`);
       }
       return true;
@@ -110,7 +122,7 @@ function ChatPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [queryBrand, queryEntityId, router, sessionId]);
+  }, [queryArtifactId, queryAutoSend, queryBrand, queryDraft, queryEntityId, router, sessionId]);
 
   // Handle /chat/new - create a new session and redirect
   useEffect(() => {

@@ -70,6 +70,52 @@ function mergeCanvasData(
   return merged as CanvasContent['data'];
 }
 
+function getArtifactSortTimestamp(content: CanvasContent): number {
+  const source = content.createdAt;
+  const parsed =
+    source instanceof Date ? source.getTime() : new Date(String(source || Date.now())).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getArtifactSortSequence(content: CanvasContent): number | null {
+  const source =
+    typeof content.outputSequence === 'number' && Number.isFinite(content.outputSequence)
+      ? content.outputSequence
+      : content.versions.length > 0 &&
+          typeof content.versions[0]?.sourceSequence === 'number' &&
+          Number.isFinite(content.versions[0].sourceSequence)
+        ? content.versions[0].sourceSequence
+        : null;
+  return source;
+}
+
+function sortArtifactContents(contents: CanvasContent[]): CanvasContent[] {
+  return [...contents].sort((a, b) => {
+    const sequenceDelta = (() => {
+      const aSequence = getArtifactSortSequence(a);
+      const bSequence = getArtifactSortSequence(b);
+      if (aSequence !== null && bSequence !== null && aSequence !== bSequence) {
+        return aSequence - bSequence;
+      }
+      if (aSequence !== null && bSequence === null) {
+        return -1;
+      }
+      if (aSequence === null && bSequence !== null) {
+        return 1;
+      }
+      return 0;
+    })();
+    if (sequenceDelta !== 0) {
+      return sequenceDelta;
+    }
+    const delta = getArtifactSortTimestamp(a) - getArtifactSortTimestamp(b);
+    if (delta !== 0) {
+      return delta;
+    }
+    return a.title.localeCompare(b.title, 'zh-CN');
+  });
+}
+
 function shouldPreserveArtifactFocus(
   state: Pick<CanvasState, 'isOpen' | 'contents' | 'activeContentIndex' | 'activeSurface'>,
 ): boolean {
@@ -204,6 +250,7 @@ export const useCanvasStore = create<CanvasState>((set) => ({
         timestamp: existing.createdAt?.toISOString?.() || new Date().toISOString(),
         data: existing.data as Record<string, unknown>,
         linkedMessageId: existing.linkedMessageId,
+        sourceSequence: existing.outputSequence,
       };
       // Prepend old version (newest-first order), cap at MAX_VERSIONS
       const updatedVersions = [oldVersion, ...(existing.versions || [])].slice(0, MAX_VERSIONS);
@@ -213,6 +260,8 @@ export const useCanvasStore = create<CanvasState>((set) => ({
       newContents[existingIndex] = {
         ...existing,
         ...content,
+        createdAt: existing.createdAt,
+        outputSequence: content.outputSequence ?? existing.outputSequence,
         versions: updatedVersions,
         currentVersionIndex: -1, // -1 = show latest
         hasNewVersion: !isCurrentlyViewing,
@@ -235,11 +284,13 @@ export const useCanvasStore = create<CanvasState>((set) => ({
       versions: content.versions || [],
       currentVersionIndex: content.currentVersionIndex ?? -1,
     } as CanvasContent;
+    const nextContents = sortArtifactContents([...state.contents, newContent]);
+    const nextIndex = nextContents.findIndex((item) => item.id === newContent.id);
     return {
-      contents: [...state.contents, newContent],
+      contents: nextContents,
       activeContentIndex: shouldPreserveArtifactFocus(state)
         ? state.activeContentIndex
-        : state.contents.length,
+        : Math.max(nextIndex, 0),
       isOpen: true,
       mode: state.mode === 'hidden' ? 'split' : state.mode,
       activeSurface: shouldPreserveArtifactFocus(state)
@@ -254,11 +305,13 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     }
     const existingIndex = state.contents.findIndex((c) => c.id === content.id);
     if (existingIndex === -1) {
+      const nextContents = sortArtifactContents([...state.contents, content]);
+      const nextIndex = nextContents.findIndex((item) => item.id === content.id);
       return {
-        contents: [...state.contents, content],
+        contents: nextContents,
         activeContentIndex: shouldPreserveArtifactFocus(state)
           ? state.activeContentIndex
-          : state.contents.length,
+          : Math.max(nextIndex, 0),
         isOpen: true,
         mode: state.mode === 'hidden' ? 'split' : state.mode,
         activeSurface: shouldPreserveArtifactFocus(state)
@@ -268,9 +321,21 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     }
 
     const nextContents = [...state.contents];
-    nextContents[existingIndex] = content;
+    nextContents[existingIndex] = {
+      ...nextContents[existingIndex],
+      ...content,
+      createdAt: content.createdAt ?? nextContents[existingIndex].createdAt,
+      outputSequence: content.outputSequence ?? nextContents[existingIndex].outputSequence,
+      versions:
+        content.versions && content.versions.length > 0
+          ? content.versions
+          : nextContents[existingIndex].versions,
+      currentVersionIndex:
+        content.currentVersionIndex ?? nextContents[existingIndex].currentVersionIndex,
+      hasNewVersion: content.hasNewVersion ?? nextContents[existingIndex].hasNewVersion,
+    } as CanvasContent;
     return {
-      contents: nextContents,
+      contents: sortArtifactContents(nextContents),
       isOpen: state.isOpen,
       mode: state.mode,
     };

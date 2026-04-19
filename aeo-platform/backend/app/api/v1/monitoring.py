@@ -8,10 +8,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
-from app.core.constants import PlatformConstants
+from app.models.snapshot import AnalysisSnapshot
 from app.models.monitoring_schedule import ScheduleFrequency, ScheduleStatus
 from app.services.entity_service import EntityService
 from app.services.monitoring_service import MonitoringService
@@ -35,6 +36,7 @@ class CreateScheduleRequest(BaseModel):
     frequency: str = "weekly"
     preferred_hour: int = Field(default=3, ge=0, le=23)
     timezone: str = "Asia/Shanghai"
+    status: str = "active"
     platforms: list[str] | None = None
     alert_on_significant_change: bool = True
     alert_threshold_bwvs: float = 10.0
@@ -47,6 +49,7 @@ class UpdateScheduleRequest(BaseModel):
     frequency: str | None = None
     preferred_hour: int | None = Field(default=None, ge=0, le=23)
     timezone: str | None = None
+    status: str | None = None
     platforms: list[str] | None = None
     alert_on_significant_change: bool | None = None
     alert_threshold_bwvs: float | None = None
@@ -61,6 +64,19 @@ def _parse_uuid(value: str, field_name: str = "id") -> UUID:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid UUID for {field_name}: {value}",
         )
+
+
+def _parse_schedule_status(value: str) -> ScheduleStatus:
+    try:
+        parsed = ScheduleStatus(value)
+    except ValueError:
+        parsed = None
+    if parsed not in {ScheduleStatus.ACTIVE, ScheduleStatus.PAUSED}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status: {value}. Must be one of: active, paused",
+        )
+    return parsed
 
 
 def schedule_to_dict(schedule) -> dict[str, Any]:
@@ -90,7 +106,8 @@ def schedule_to_dict(schedule) -> dict[str, Any]:
     normalized_platforms: list[str] = []
     for raw_platform in schedule.platforms or []:
         platform = str(raw_platform).strip().lower()
-        if platform in PlatformConstants.SUPPORTED_PLATFORMS:
+        platform = MonitoringService.MONITORING_PLATFORM_ALIASES.get(platform, platform)
+        if platform in MonitoringService.SUPPORTED_PLATFORM_SET:
             if platform not in normalized_platforms:
                 normalized_platforms.append(platform)
             continue
@@ -171,6 +188,7 @@ async def create_schedule(
             detail=f"Invalid frequency: {body.frequency}. "
             f"Must be one of: daily, weekly, biweekly, monthly",
         )
+    sched_status = _parse_schedule_status(body.status)
 
     service = MonitoringService(db)
     try:
@@ -180,6 +198,7 @@ async def create_schedule(
             frequency=freq,
             preferred_hour=body.preferred_hour,
             timezone_str=body.timezone,
+            status=sched_status,
             platforms=body.platforms,
             alert_on_significant_change=body.alert_on_significant_change,
             alert_threshold_bwvs=body.alert_threshold_bwvs,
@@ -318,6 +337,8 @@ async def update_schedule(
         update_kwargs["preferred_hour"] = body.preferred_hour
     if body.timezone is not None:
         update_kwargs["timezone"] = body.timezone
+    if body.status is not None:
+        update_kwargs["status"] = _parse_schedule_status(body.status)
     if body.platforms is not None:
         update_kwargs["platforms"] = body.platforms
     if body.alert_on_significant_change is not None:
@@ -332,6 +353,116 @@ async def update_schedule(
             detail="Schedule not found",
         )
     return {"schedule": schedule_to_dict(updated)}
+
+
+@router.get("/entities/{entity_id}/panorama-status")
+async def get_panorama_status(
+    entity_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get latest panorama analysis status for an entity."""
+    eid = _parse_uuid(entity_id, "entity_id")
+    entity_service = EntityService(db)
+    entity = await entity_service.get_entity(str(eid), current_user)
+    if entity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entity not found",
+        )
+
+    query = (
+        select(AnalysisSnapshot)
+        .where(
+            AnalysisSnapshot.entity_id == eid,
+            AnalysisSnapshot.snapshot_type.in_(["panorama", "baseline"]),
+        )
+        .order_by(desc(AnalysisSnapshot.created_at))
+        .limit(1)
+    )
+    result = await db.execute(query)
+    snapshot = result.scalar_one_or_none()
+    if snapshot is None:
+        return {
+            "panorama_status": {
+                "has_report": False,
+                "mention_rate": None,
+                "brand_rank": None,
+                "brand_rank_total": None,
+                "brand_rank_label": None,
+                "created_at": None,
+                "triggered_by": None,
+                "session_id": None,
+            }
+        }
+
+    raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
+    report_data = raw_data.get("report_data", {})
+    report_data = report_data if isinstance(report_data, dict) else {}
+    metric_bundle = raw_data.get("metric_bundle", {})
+    metric_bundle = metric_bundle if isinstance(metric_bundle, dict) else {}
+    summary_metrics = raw_data.get("metrics", {})
+    summary_metrics = summary_metrics if isinstance(summary_metrics, dict) else {}
+
+    mention_rate = metric_bundle.get("brand_visibility")
+    if not isinstance(mention_rate, (int, float)):
+        mention_rate = metric_bundle.get("mention_rate")
+    if not isinstance(mention_rate, (int, float)):
+        mention_rate = snapshot.mention_rate
+    if not isinstance(mention_rate, (int, float)):
+        mention_rate = summary_metrics.get("mention_rate")
+
+    brand_rank = metric_bundle.get("brand_rank")
+    if not isinstance(brand_rank, int):
+        brand_rank = (
+            summary_metrics.get("brand_rank")
+            if isinstance(summary_metrics.get("brand_rank"), int)
+            else None
+        )
+
+    brand_rank_total = metric_bundle.get("ranked_brand_count")
+    if not isinstance(brand_rank_total, int):
+        brand_rank_total = (
+            report_data.get("metric_bundle", {}).get("ranked_brand_count")
+            if isinstance(report_data.get("metric_bundle"), dict)
+            and isinstance(report_data.get("metric_bundle", {}).get("ranked_brand_count"), int)
+            else None
+        )
+    if not isinstance(brand_rank_total, int):
+        top_brand_ranking = metric_bundle.get("top_brand_ranking")
+        if isinstance(top_brand_ranking, list) and top_brand_ranking:
+            brand_rank_total = len(top_brand_ranking)
+    if not isinstance(brand_rank_total, int):
+        dashboard_projection = report_data.get("dashboard_projection", {})
+        visibility_board = (
+            dashboard_projection.get("boards", {}).get("visibility", {})
+            if isinstance(dashboard_projection, dict)
+            else {}
+        )
+        ranking_rows = visibility_board.get("ranking_rows")
+        if isinstance(ranking_rows, list) and ranking_rows:
+            brand_rank_total = len(ranking_rows)
+
+    brand_rank_label = None
+    if isinstance(brand_rank, int):
+        brand_rank_label = (
+            f"{brand_rank}/{brand_rank_total}"
+            if isinstance(brand_rank_total, int) and brand_rank_total > 0
+            else f"#{brand_rank}"
+        )
+
+    return {
+        "panorama_status": {
+            "has_report": True,
+            "mention_rate": mention_rate if isinstance(mention_rate, (int, float)) else None,
+            "brand_rank": brand_rank if isinstance(brand_rank, int) else None,
+            "brand_rank_total": brand_rank_total if isinstance(brand_rank_total, int) else None,
+            "brand_rank_label": brand_rank_label,
+            "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "triggered_by": snapshot.triggered_by,
+            "session_id": str(snapshot.session_id) if snapshot.session_id else None,
+        }
+    }
 
 
 @router.patch("/schedules/{schedule_id}")

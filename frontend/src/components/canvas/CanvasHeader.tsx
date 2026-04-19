@@ -278,9 +278,9 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                  effectiveContent.type === 'browser' ? '当前平台人工接管中' :
                  '选择项'}
               </span>
-              {!isBrowserTakeover && content.category === 'baseline' && (
+              {!isBrowserTakeover && (content.category === 'baseline' || content.category === 'panorama') && (
                 <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-500/15 text-violet-300 border border-violet-500/30">
-                  基线
+                  全景
                 </span>
               )}
               {!isBrowserTakeover && content.category === 'scenario' && (

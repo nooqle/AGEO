@@ -4,11 +4,9 @@ import {
   buildFetchExportViewModel,
   isConfidenceCanvasReport,
 } from '@/adapters/exportArtifacts';
-import { buildReportViewModel } from '@/adapters/reportV2';
 import type {
   CanvasContent,
   ReportCanvasContent,
-  ReportV2Metric,
 } from '@/types/canvas';
 import {
   buildCanvasContentTextFromDescriptor,
@@ -419,32 +417,9 @@ function joinInline(values: Array<string | undefined | null>, separator = ' · '
   return values.filter((value): value is string => Boolean(value && value.trim())).join(separator);
 }
 
-function formatPercent(value?: number) {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '--';
-  const normalized = value <= 1 ? value * 100 : value;
-  return `${normalized.toFixed(1)}%`;
-}
-
 function formatScore(value?: number) {
   if (typeof value !== 'number' || Number.isNaN(value)) return '--';
   return value.toFixed(1);
-}
-
-function formatMetricValue(metric: ReportV2Metric) {
-  if (metric.value === undefined || metric.value === null || metric.value === '') {
-    return '--';
-  }
-  if (metric.unit === 'ratio' && typeof metric.value === 'number') {
-    return `${(metric.value <= 1 ? metric.value * 100 : metric.value).toFixed(1)}%`;
-  }
-  return `${metric.value}${metric.unit && metric.unit !== 'ratio' ? metric.unit : ''}`;
-}
-
-function formatAssessmentClass(status?: string) {
-  if (status === 'good') return 'tag tag-good';
-  if (status === 'warning') return 'tag tag-warn';
-  if (status === 'risk') return 'tag tag-risk';
-  return 'tag';
 }
 
 function extractHostname(url: string) {
@@ -608,145 +583,134 @@ function AppendixSection({ content, descriptor }: { content: CanvasContent; desc
   );
 }
 
+type CanonicalSection = {
+  section_name?: string;
+  title?: string;
+  markdown?: string;
+  data?: unknown;
+};
+
+type SummaryMetricRow = [string, string, string];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getCanonicalSections(content: ReportCanvasContent): CanonicalSection[] {
+  return Array.isArray(content.data.sections)
+    ? content.data.sections.filter(isRecord) as CanonicalSection[]
+    : [];
+}
+
+function getCanonicalSummaryMetrics(sections: CanonicalSection[]): SummaryMetricRow[] {
+  const summary = sections.find((section) => section.section_name === 'summary');
+  const data = isRecord(summary?.data) ? summary.data : {};
+  const metrics = data.metrics;
+  if (!Array.isArray(metrics)) {
+    return [];
+  }
+  return metrics.filter(
+    (row): row is SummaryMetricRow =>
+      Array.isArray(row) &&
+      row.length >= 3 &&
+      typeof row[0] === 'string' &&
+      typeof row[1] === 'string' &&
+      typeof row[2] === 'string'
+  );
+}
+
+function getCanonicalReportMarkdown(content: ReportCanvasContent, sections: CanonicalSection[]): string {
+  if (typeof content.data.full_markdown === 'string' && content.data.full_markdown.trim()) {
+    return content.data.full_markdown.trim();
+  }
+  if (typeof content.data.report_markdown === 'string' && content.data.report_markdown.trim()) {
+    return content.data.report_markdown.trim();
+  }
+  return sections
+    .map((section) => (typeof section.markdown === 'string' ? section.markdown.trim() : ''))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+}
+
+function normalizeMarkdownForPdf(markdown: string): string {
+  return markdown
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\|(.+)\|$/gm, '$1')
+    .replace(/^\|?\s*---.*$/gm, '')
+    .replace(/^\d+\.\s+/gm, '• ')
+    .replace(/^- /gm, '• ')
+    .replace(/^\> /gm, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .trim();
+}
+
 function ReportPdfDocument({ content, descriptor }: { content: ReportCanvasContent; descriptor: ExportDescriptor }) {
-  const view = buildReportViewModel(content);
+  const sections = getCanonicalSections(content);
+  const summaryMetrics = getCanonicalSummaryMetrics(sections);
+  const canonicalMarkdown = getCanonicalReportMarkdown(content, sections);
+  const renderedSections = sections.filter(
+    (section) =>
+      section.section_name !== 'header' &&
+      section.section_name !== 'appendix' &&
+      typeof section.markdown === 'string' &&
+      section.markdown.trim()
+  );
   const platforms = content.data.platform_scope && content.data.platform_scope.length > 0
     ? [`平台：${content.data.platform_scope.join(' / ')}`]
     : [];
+  const title = content.data.title || content.data.headline || descriptor.title || descriptor.deliverableName;
+  const subtitle = content.data.subtitle || content.data.executive_summary || content.data.content;
 
   return (
     <DocumentFrame
       descriptor={descriptor}
-      title={view.headline || descriptor.title || descriptor.deliverableName}
-      subtitle={view.subtitle || content.data.content}
+      title={title}
+      subtitle={subtitle}
       extraMeta={platforms}
     >
-      {view.summary.metrics && view.summary.metrics.length > 0 ? (
+      {summaryMetrics.length > 0 ? (
         <Section title="核心指标" subtitle="本次交付的关键指标">
           <div className="grid grid-3">
-            {view.summary.metrics.map((metric) => (
-              <div key={metric.id} className="metric-card">
-                <div className="metric-label">{metric.label}</div>
-                <div className="metric-value">{formatMetricValue(metric)}</div>
-                {metric.status ? <div style={{ marginTop: 8 }}><span className={formatAssessmentClass(metric.status)}>{metric.assessment || metric.status}</span></div> : null}
-                {metric.description ? <div className="metric-note">{metric.description}</div> : null}
+            {summaryMetrics.map(([label, value, description]) => (
+              <div key={label} className="metric-card">
+                <div className="metric-label">{label}</div>
+                <div className="metric-value">{value}</div>
+                <div className="metric-note">{description}</div>
               </div>
             ))}
           </div>
         </Section>
       ) : null}
 
-      {(view.summary.status_summary || view.summary.highlights?.length) ? (
-        <Section title="执行摘要" subtitle="把当前结果压缩成可快速传阅的结论">
-          <div className="grid grid-2">
-            {view.summary.status_summary ? (
-              <div className="info-card">
-                <div className="metric-label">状态总结</div>
-                <div className="prose" style={{ marginTop: 8 }}>{view.summary.status_summary}</div>
-              </div>
-            ) : null}
-            {view.summary.highlights && view.summary.highlights.length > 0 ? (
-              <div className="info-card">
-                <div className="metric-label">重点高亮</div>
-                <div className="list" style={{ marginTop: 8 }}>
-                  {view.summary.highlights.map((item) => (
-                    <div key={item} className="list-item">
-                      <div className="list-body" style={{ marginTop: 0 }}>{item}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </Section>
-      ) : null}
+      {renderedSections.map((section, index) => {
+        const normalized = normalizeMarkdownForPdf(section.markdown || '');
+        const blocks = buildAppendixBlocks(normalized);
+        return (
+          <Section
+            key={`${section.section_name || section.title || 'section'}-${index}`}
+            title={section.title || `章节 ${index + 1}`}
+            subtitle={section.section_name === 'summary' ? '本节由后端 canonical builder 直接生成。' : undefined}
+          >
+            <div className="appendix-section">
+              {blocks.length > 0 ? (
+                blocks.map((block, blockIndex) => (
+                  <div key={`${block.title}-${blockIndex}`} className="appendix-block">
+                    <div className="appendix-title">{block.title}</div>
+                    <div className="appendix-body">{block.body}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="prose">{normalized || '当前章节暂无可导出的正文。'}</div>
+              )}
+            </div>
+          </Section>
+        );
+      })}
 
-      {view.scenarioCoverage.items && view.scenarioCoverage.items.length > 0 ? (
-        <Section title={view.scenarioCoverage.title || '用户场景覆盖'} subtitle={view.scenarioCoverage.summary}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th style={{ width: '24%' }}>场景</th>
-                <th style={{ width: '14%' }}>优先级</th>
-                <th style={{ width: '22%' }}>平台</th>
-                <th>结论</th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.scenarioCoverage.items.map((item, index) => (
-                <tr key={`${item.scenario_label}-${index}`}>
-                  <td>{item.scenario_label}</td>
-                  <td>{item.scenario_priority || '--'}</td>
-                  <td>{item.present_platforms?.join('、') || '--'}</td>
-                  <td>{item.evidence || item.battle_status || '--'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-      ) : null}
-
-
-      {(view.mentions.brand_mentions?.length || view.mentions.competitor_mentions?.length) ? (
-        <Section title="提及与引用样本" subtitle="记录品牌和竞品在问答中的真实进入方式">
-          <div className="grid grid-2">
-            {view.mentions.brand_mentions && view.mentions.brand_mentions.length > 0 ? (
-              <div className="tone-card">
-                <div className="metric-label">品牌提及</div>
-                <div className="list" style={{ marginTop: 8 }}>
-                  {view.mentions.brand_mentions.map((item, index) => (
-                    <div key={`${item.scenario_label}-${index}`} className="list-item">
-                      <div className="list-title">{item.scenario_label}</div>
-                      <div className="list-meta">{joinInline([item.platform, item.sentiment, item.official_citation_present ? '官网引用' : undefined])}</div>
-                      {item.evidence ? <div className="list-body">{item.evidence}</div> : null}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {view.mentions.competitor_mentions && view.mentions.competitor_mentions.length > 0 ? (
-              <div className="tone-card">
-                <div className="metric-label">竞品提及</div>
-                <div className="list" style={{ marginTop: 8 }}>
-                  {view.mentions.competitor_mentions.map((item, index) => (
-                    <div key={`${item.scenario_label}-${index}`} className="list-item">
-                      <div className="list-title">{item.scenario_label}</div>
-                      <div className="list-meta">{joinInline([item.competitor, item.platform, item.sentiment])}</div>
-                      {item.evidence ? <div className="list-body">{item.evidence}</div> : null}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </Section>
-      ) : null}
-
-      {view.sources.citation_analysis?.top_domains && view.sources.citation_analysis.top_domains.length > 0 ? (
-        <Section
-          title={view.sources.title || '信息源分析'}
-          subtitle={joinInline([view.sources.summary, `官网引用率 ${formatPercent(view.sources.official_citation_rate)}`])}
-        >
-          <table className="table">
-            <thead>
-              <tr>
-                <th style={{ width: '28%' }}>来源域名</th>
-                <th style={{ width: '14%' }}>引用次数</th>
-                <th style={{ width: '14%' }}>官方性</th>
-                <th>代表样本</th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.sources.citation_analysis.top_domains.map((domain) => (
-                <tr key={domain.domain}>
-                  <td>{domain.domain}</td>
-                  <td>{domain.count}</td>
-                  <td>{domain.is_official ? '官网' : '第三方'}</td>
-                  <td>{domain.sample_titles?.slice(0, 3).join('；') || '--'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {!renderedSections.length && canonicalMarkdown ? (
+        <Section title="报告正文" subtitle="当前 PDF 直接导出 canonical markdown。">
+          <div className="prose">{normalizeMarkdownForPdf(canonicalMarkdown)}</div>
         </Section>
       ) : null}
 

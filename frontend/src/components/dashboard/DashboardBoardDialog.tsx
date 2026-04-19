@@ -3,11 +3,12 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { RiBookMarkedLine, RiChatQuoteLine, RiCloseLine, RiRadarLine } from '@remixicon/react';
 import type { DashboardHomeData } from '@/types/dashboard';
-import type { DashboardBoardId } from './DashboardHomeBoards';
 import { MentionBoardReport } from './MentionBoardReport';
 import { SourceBoardReport } from './SourceBoardReport';
 import { RadarBoardReport } from './RadarBoardReport';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
+
+type DashboardBoardId = 'mention' | 'source' | 'radar';
 
 interface DashboardBoardDialogProps {
   open: boolean;

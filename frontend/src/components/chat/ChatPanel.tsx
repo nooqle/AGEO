@@ -21,6 +21,7 @@ import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { DEFAULT_FOLLOWUPS } from '@/types/task';
 import type { CanvasContent, CanvasContentDataMap, CanvasContentType } from '@/types/canvas';
+import type { Output } from '@/types/api';
 import type { ContextTag } from '@/stores/contextStore';
 import type { StageResult } from '@/types/snapshot';
 import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
@@ -35,6 +36,7 @@ import {
   rebuildPersistedLayers,
   VALID_OUTPUT_TYPES,
 } from '@/adapters/chatMessage';
+import { normalizeCanvasData } from '@/hooks/websocket/canvas';
 
 
 interface ChatPanelProps {
@@ -45,6 +47,7 @@ interface ChatPanelProps {
 
 const INITIAL_HISTORY_MESSAGE_LIMIT = 30;
 const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
+type ArtifactCategory = 'baseline' | 'panorama' | 'scenario';
 
 const BROWSER_MESSAGE_KEYWORDS: Record<
   BrowserState['platform'],
@@ -97,6 +100,89 @@ function resolveBrowserActionMessageId(
   }
 
   return null;
+}
+
+function normalizeArtifactCategory(value: unknown): ArtifactCategory | undefined {
+  if (value === 'baseline' || value === 'panorama' || value === 'scenario') {
+    return value;
+  }
+  return undefined;
+}
+
+function buildHydratedCanvasContents(outputs: Output[]): CanvasContent[] {
+  const sortedOutputs = [...(outputs || [])].sort((left, right) => {
+    const leftSequence =
+      typeof left.sequence === 'number' && Number.isFinite(left.sequence)
+        ? left.sequence
+        : Number.MAX_SAFE_INTEGER;
+    const rightSequence =
+      typeof right.sequence === 'number' && Number.isFinite(right.sequence)
+        ? right.sequence
+        : Number.MAX_SAFE_INTEGER;
+    if (leftSequence !== rightSequence) {
+      return leftSequence - rightSequence;
+    }
+    return new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+  });
+  const grouped = new Map<string, CanvasContent>();
+
+  for (const output of sortedOutputs) {
+    const artifactId = output.artifact_id || output.id;
+    const rawType = typeof output.type === 'string' ? output.type : 'report';
+    const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
+    const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(
+      canvasTypeStr as CanvasContentType,
+    )
+      ? (canvasTypeStr as CanvasContentType)
+      : 'report';
+    const createdAt = new Date(output.created_at);
+    const normalizedData = normalizeCanvasData(
+      outputType,
+      output.data || {},
+    ) as CanvasContentDataMap['report'];
+    const category = normalizeArtifactCategory(output.category);
+    const nextContent = {
+      id: artifactId,
+      type: outputType,
+      title: output.title || output.type || '分析结果',
+      data: normalizedData,
+      createdAt,
+      relatedMessageId: '',
+      linkedMessageId: output.message_id,
+      versions: [],
+      currentVersionIndex: -1,
+      outputSequence:
+        typeof output.sequence === 'number' && Number.isFinite(output.sequence)
+          ? output.sequence
+          : undefined,
+      category,
+    } as CanvasContent;
+
+    const existing = grouped.get(artifactId);
+    if (!existing) {
+      grouped.set(artifactId, nextContent);
+      continue;
+    }
+
+    const previousVersion = {
+      versionNumber: (existing.versions?.length ?? 0) + 1,
+      timestamp: existing.createdAt.toISOString(),
+      data: existing.data as Record<string, unknown>,
+      linkedMessageId: existing.linkedMessageId,
+      sourceSequence: existing.outputSequence,
+    };
+
+    grouped.set(artifactId, {
+      ...existing,
+      ...nextContent,
+      outputSequence: nextContent.outputSequence ?? existing.outputSequence,
+      versions: [previousVersion, ...(existing.versions || [])],
+      currentVersionIndex: -1,
+      hasNewVersion: existing.hasNewVersion,
+    } as CanvasContent);
+  }
+
+  return Array.from(grouped.values());
 }
 
 function buildBrowserCanvasContent(state: BrowserState): CanvasContent | null {
@@ -207,15 +293,16 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const autoScrollEnabledRef = useRef(true);
   const lastBrowserActionScrollKeyRef = useRef<string | null>(null);
   const artifactsHydratedRef = useRef(false);
-  const artifactsHydratingPromiseRef = useRef<Promise<void> | null>(null);
+  const artifactsHydratingPromiseRef = useRef<Promise<CanvasContent[]> | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [selectedToolMode, setSelectedToolMode] = useState<ToolMode | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const autoStartBrand = searchParams.get('brand');
-  const autoStartDraft = searchParams.get('draft');
-  const shouldAutoSendDraft = searchParams.get('autosend') === '1';
+  const initialArtifactId = searchParams.get('artifact_id');
+  const autoStartBrand = initialArtifactId ? null : searchParams.get('brand');
+  const autoStartDraft = initialArtifactId ? null : searchParams.get('draft');
+  const shouldAutoSendDraft = !initialArtifactId && searchParams.get('autosend') === '1';
   const autoSentRef = useRef(false);
   const [isAutoStartingPrompt, setIsAutoStartingPrompt] = useState(Boolean(autoStartBrand || autoStartDraft));
   const safeToLeaveShownRef = useRef(false);
@@ -422,6 +509,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const {
     browserWorkspace,
     clearBrowserWorkspace,
+    contents: canvasContents,
+    activeContentIndex: activeCanvasContentIndex,
     activeSurface,
     isOpen: isCanvasOpen,
     openBrowserWorkspace,
@@ -442,62 +531,139 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const hydrateArtifacts = useCallback(async (
     force = false,
     options?: { keepClosed?: boolean },
-  ) => {
+  ): Promise<CanvasContent[]> => {
     if (artifactsHydratedRef.current && !force) {
-      return;
+      return useCanvasStore.getState().contents;
     }
 
     if (artifactsHydratingPromiseRef.current && !force) {
       await artifactsHydratingPromiseRef.current;
-      return;
+      return useCanvasStore.getState().contents;
     }
 
-    const promise = (async () => {
+    const promise = (async (): Promise<CanvasContent[]> => {
       try {
         const outputs = await api.getOutputs(sessionId);
-        const store = useCanvasStore.getState();
-        for (const output of outputs || []) {
-          const artifactId = output.artifact_id || output.id;
-          const rawType = typeof output.type === 'string' ? output.type : 'report';
-          const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
-          const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(canvasTypeStr as CanvasContentType)
-            ? (canvasTypeStr as CanvasContentType)
-            : 'report';
-          const category = typeof output.category === 'string'
-            ? output.category as 'baseline' | 'scenario'
-            : undefined;
-          store.upsertContent({
-            id: artifactId,
-            type: outputType,
-            title: output.title || output.type || '分析结果',
-            data: (output.data || {}) as CanvasContentDataMap['report'],
-            createdAt: new Date(output.created_at),
-            relatedMessageId: '',
-            linkedMessageId: output.message_id,
-            versions: [],
-            currentVersionIndex: -1,
-            category,
-          } as CanvasContent);
-        }
+        const hydratedContents = buildHydratedCanvasContents(outputs || []);
+        let nextContents: CanvasContent[] = hydratedContents;
+        useCanvasStore.setState((state) => {
+          const existingById = new Map(state.contents.map((content) => [content.id, content]));
+          const mergedContents = hydratedContents.map((content) => {
+            const existing = existingById.get(content.id);
+            if (!existing) {
+              return content;
+            }
+            const nextVersionIndex =
+              existing.currentVersionIndex >= 0
+              && existing.currentVersionIndex < content.versions.length
+                ? existing.currentVersionIndex
+                : -1;
+            return {
+              ...content,
+              currentVersionIndex: nextVersionIndex,
+              hasNewVersion: existing.hasNewVersion ?? content.hasNewVersion,
+            } as CanvasContent;
+          });
+          nextContents = mergedContents;
+          const activeId = state.contents[state.activeContentIndex]?.id;
+          const nextActiveIndex = activeId
+            ? mergedContents.findIndex((content) => content.id === activeId)
+            : -1;
+          const resolvedActiveIndex =
+            nextActiveIndex >= 0
+              ? nextActiveIndex
+              : Math.min(
+                  state.activeContentIndex,
+                  Math.max(0, mergedContents.length - 1),
+                );
+          return {
+            contents: mergedContents,
+            activeContentIndex: resolvedActiveIndex,
+            activeSurface:
+              mergedContents.length === 0 && state.browserWorkspace
+                ? 'browser'
+                : state.activeSurface,
+          };
+        });
         if (options?.keepClosed) {
-          store.setOpen(false);
+          useCanvasStore.getState().setOpen(false);
         }
         artifactsHydratedRef.current = true;
-      } catch {
+        return nextContents;
+      } catch (error) {
         // Silently ignore — artifacts will be populated via WebSocket events or retried on demand
+        console.error('[ChatPanel] Failed to hydrate artifacts:', error);
+        return useCanvasStore.getState().contents;
       } finally {
         artifactsHydratingPromiseRef.current = null;
       }
     })();
 
     artifactsHydratingPromiseRef.current = promise;
-    await promise;
+    return await promise;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!initialArtifactId) {
+      return;
+    }
+
+    useCanvasStore.setState((state) => ({
+      activeSurface: 'artifact',
+      isOpen: true,
+      mode: state.mode === 'hidden' ? 'split' : state.mode,
+    }));
+
+    const focusArtifact = async () => {
+      const hydratedContents = await hydrateArtifacts();
+      const targetIndex = hydratedContents.findIndex((content) => content.id === initialArtifactId);
+      if (targetIndex === -1) {
+        return;
+      }
+      useCanvasStore.setState((state) => ({
+        activeContentIndex: targetIndex,
+        activeSurface: 'artifact',
+        isOpen: true,
+        mode: state.mode === 'hidden' ? 'split' : state.mode,
+      }));
+    };
+
+    void focusArtifact();
+  }, [hydrateArtifacts, initialArtifactId]);
 
   useEffect(() => {
     artifactsHydratedRef.current = false;
     artifactsHydratingPromiseRef.current = null;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!initialArtifactId) {
+      return;
+    }
+
+    const targetIndex = canvasContents.findIndex((content) => content.id === initialArtifactId);
+    if (targetIndex === -1) {
+      return;
+    }
+
+    const activeId = canvasContents[activeCanvasContentIndex]?.id;
+    if (isCanvasOpen && activeSurface === 'artifact' && activeId === initialArtifactId) {
+      return;
+    }
+
+    useCanvasStore.setState((state) => ({
+      activeContentIndex: targetIndex,
+      activeSurface: 'artifact',
+      isOpen: true,
+      mode: state.mode === 'hidden' ? 'split' : state.mode,
+    }));
+  }, [
+    activeCanvasContentIndex,
+    activeSurface,
+    canvasContents,
+    initialArtifactId,
+    isCanvasOpen,
+  ]);
 
   useEffect(() => {
     if (!isCanvasOpen || activeSurface !== 'artifact' || artifactsHydratedRef.current) {
@@ -1320,7 +1486,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const liveProgressMessage = isAgentExecuting
     ? executionProgress?.details
     : (isWaitingForInput
-      ? waitingProgressMessage ?? executionProgress?.details
+      ? activeTask?.progress_message ?? executionProgress?.details
       : activeTask?.progress_message ?? executionProgress?.details);
   const inputPlaceholder = !isConnected
     ? '正在重新连接...'

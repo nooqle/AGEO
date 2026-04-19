@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -16,6 +16,7 @@ from app.models.monitoring_schedule import (
     ScheduleFrequency,
     ScheduleStatus,
 )
+from app.models.snapshot import AnalysisSnapshot
 from app.models.task import AnalysisTask
 from app.models.user import User
 from app.services.access_scope_service import AccessScopeService
@@ -28,8 +29,11 @@ class MonitoringService:
 
     MAX_SCHEDULES_PER_USER = 10
     MAX_SCHEDULES_GLOBAL = 100
-    DEFAULT_PLATFORMS = ["doubao", "hunyuan"]
-    SUPPORTED_PLATFORM_SET = frozenset(PlatformConstants.SUPPORTED_PLATFORMS)
+    DEFAULT_PLATFORMS = ["doubao", "yuanbao", "kimi"]
+    MONITORING_PLATFORM_ALIASES = {
+        "hunyuan": "yuanbao",
+    }
+    SUPPORTED_PLATFORM_SET = frozenset({"doubao", "yuanbao", "hunyuan", "kimi"})
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -51,6 +55,7 @@ class MonitoringService:
         alert_threshold_bwvs: float = 10.0,
         max_runs: int | None = None,
         end_date: datetime | None = None,
+        status: ScheduleStatus = ScheduleStatus.ACTIVE,
     ) -> MonitoringSchedule:
         """Create a new monitoring schedule.
 
@@ -87,7 +92,11 @@ class MonitoringService:
         normalized_platforms = self._normalize_platforms(
             platforms, use_default_when_missing=True
         )
-        next_run = self.calculate_next_run(frequency, preferred_hour, timezone_str)
+        next_run = (
+            self.calculate_next_run(frequency, preferred_hour, timezone_str)
+            if status == ScheduleStatus.ACTIVE
+            else None
+        )
 
         schedule = MonitoringSchedule(
             user_id=user_id,
@@ -101,18 +110,32 @@ class MonitoringService:
             max_runs=max_runs,
             end_date=end_date,
             next_run_at=next_run,
-            status=ScheduleStatus.ACTIVE,
+            status=status,
         )
         self.db.add(schedule)
         await self.db.commit()
         await self.db.refresh(schedule)
 
+        if schedule.baseline_data is None:
+            try:
+                await self.seed_baseline_from_latest_panorama(
+                    schedule_id=schedule.id,
+                    require_report=status == ScheduleStatus.ACTIVE,
+                )
+                await self.db.refresh(schedule)
+            except ValueError:
+                if status == ScheduleStatus.ACTIVE:
+                    await self.db.delete(schedule)
+                    await self.db.commit()
+                raise
+
         logger.info(
             "[MonitoringService] Created schedule %s for entity %s "
-            "(freq=%s, next_run=%s)",
+            "(freq=%s, status=%s, next_run=%s)",
             schedule.id,
             entity_id,
             frequency.value,
+            status.value,
             next_run,
         )
         return schedule
@@ -243,15 +266,18 @@ class MonitoringService:
                         value, use_default_when_missing=False
                     )
                 setattr(schedule, key, value)
-                if key in ("frequency", "preferred_hour", "timezone"):
+                if key in ("frequency", "preferred_hour", "timezone", "status"):
                     recalculate_next = True
 
-        if recalculate_next and schedule.status == ScheduleStatus.ACTIVE:
-            schedule.next_run_at = self.calculate_next_run(
-                schedule.frequency,
-                schedule.preferred_hour,
-                schedule.timezone,
-            )
+        if recalculate_next:
+            if schedule.status == ScheduleStatus.ACTIVE:
+                schedule.next_run_at = self.calculate_next_run(
+                    schedule.frequency,
+                    schedule.preferred_hour,
+                    schedule.timezone,
+                )
+            else:
+                schedule.next_run_at = None
 
         schedule.updated_at = datetime.now(timezone.utc)
         await self.db.commit()
@@ -294,6 +320,19 @@ class MonitoringService:
         schedule.updated_at = datetime.now(timezone.utc)
         await self.db.commit()
         await self.db.refresh(schedule)
+        try:
+            await self.seed_baseline_from_latest_panorama(
+                schedule_id=schedule.id,
+                require_report=True,
+            )
+            await self.db.refresh(schedule)
+        except ValueError:
+            schedule.status = ScheduleStatus.PAUSED
+            schedule.next_run_at = None
+            schedule.updated_at = datetime.now(timezone.utc)
+            await self.db.commit()
+            await self.db.refresh(schedule)
+            raise
         logger.info("[MonitoringService] Resumed schedule %s", schedule_id)
         return schedule
 
@@ -503,9 +542,115 @@ class MonitoringService:
             schedule_id,
         )
 
+    async def seed_baseline_from_latest_panorama(
+        self,
+        *,
+        schedule_id: UUID,
+        require_report: bool,
+    ) -> bool:
+        """Seed schedule baseline from the latest panorama snapshot.
+
+        Panorama auto-monitoring should always reuse the latest panorama question
+        set. If no panorama snapshot exists and *require_report* is True, raise a
+        ValueError so the caller can block activation.
+        """
+        schedule = await self.get_schedule(schedule_id)
+        if schedule is None:
+            logger.warning(
+                "[MonitoringService] Cannot seed baseline: schedule %s not found",
+                schedule_id,
+            )
+            return False
+
+        current_baseline = schedule.baseline_data or {}
+        if current_baseline.get("questions"):
+            return True
+
+        stmt = (
+            select(AnalysisSnapshot)
+            .where(
+                AnalysisSnapshot.entity_id == schedule.entity_id,
+                AnalysisSnapshot.snapshot_type.in_(["panorama", "baseline"]),
+            )
+            .order_by(desc(AnalysisSnapshot.created_at))
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        snapshot = result.scalar_one_or_none()
+
+        if snapshot is None:
+            if require_report:
+                raise ValueError("请先完成一次品牌全景分析，再启用自动监测。")
+            return False
+
+        seeded_baseline = self._build_baseline_from_snapshot(snapshot)
+        if seeded_baseline is None:
+            if require_report:
+                raise ValueError("最近一次品牌全景分析缺少可复用的问题基线，请先重新生成全景分析。")
+            return False
+
+        await self.save_baseline(schedule_id, seeded_baseline)
+        return True
+
     # =========================================================================
     # Helpers
     # =========================================================================
+
+    @staticmethod
+    def _build_baseline_from_snapshot(snapshot: AnalysisSnapshot) -> dict | None:
+        raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
+        report_data = raw_data.get("report_data", {})
+        input_bundle = (
+            report_data.get("input_bundle", {})
+            if isinstance(report_data, dict)
+            else {}
+        )
+        brand_master = (
+            input_bundle.get("brand_master", {})
+            if isinstance(input_bundle, dict)
+            else {}
+        )
+
+        questions = None
+        if isinstance(input_bundle.get("questions"), list):
+            questions = input_bundle.get("questions")
+        elif isinstance(report_data.get("questions"), list):
+            questions = report_data.get("questions")
+        elif isinstance(raw_data.get("questions"), list):
+            questions = raw_data.get("questions")
+
+        if not questions:
+            return None
+
+        monitor_brand = brand_master.get("monitor_brand")
+        aliases = brand_master.get("monitor_brand_aliases") or []
+        official_domains = brand_master.get("official_domains") or []
+        competitor_names = brand_master.get("competitor_brands") or []
+
+        official_website = None
+        if official_domains:
+            first_domain = str(official_domains[0]).strip()
+            if first_domain:
+                official_website = (
+                    first_domain
+                    if first_domain.startswith("http://")
+                    or first_domain.startswith("https://")
+                    else f"https://{first_domain}"
+                )
+
+        return {
+            "questions": questions,
+            "simulated_questions": None,
+            "brand_profile": {
+                "brand_name": monitor_brand,
+                "brand_keywords": aliases,
+                "official_website": official_website,
+            },
+            "competitors": [{"name": name} for name in competitor_names if name],
+            "competitive_landscape": None,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "source_task_id": str(snapshot.id),
+        }
 
     async def _count_active_schedules(self, user_id: UUID | None = None) -> int:
         """Count active schedules, optionally for a specific user."""
@@ -536,6 +681,7 @@ class MonitoringService:
             platform = str(raw_platform).strip().lower()
             if not platform:
                 continue
+            platform = cls.MONITORING_PLATFORM_ALIASES.get(platform, platform)
             if platform not in cls.SUPPORTED_PLATFORM_SET:
                 invalid.append(str(raw_platform))
                 continue
@@ -543,7 +689,7 @@ class MonitoringService:
                 normalized.append(platform)
 
         if invalid:
-            supported = ", ".join(PlatformConstants.SUPPORTED_PLATFORMS)
+            supported = ", ".join(["doubao", "yuanbao", "kimi"])
             raise ValueError(
                 "Unsupported monitoring platforms: "
                 f"{', '.join(invalid)}. Must be one of: {supported}"

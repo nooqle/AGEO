@@ -25,7 +25,7 @@ const STEPS = [
   {
     icon: RiLineChartLine,
     title: '查看结果',
-    desc: '在首页看三块看板，再展开证据报告。',
+    desc: '在首页看最近一轮摘要，再打开完整报告。',
   },
 ];
 
@@ -69,7 +69,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
               用首页判断层快速看清品牌是否被提到、内容是否进入答案，以及整体战况。
             </h1>
             <p className="max-w-2xl text-[14px] leading-8" style={{ color: 'var(--text-secondary)' }}>
-              创建品牌并完成首次分析后，可查看提及率、内容引用率和五维雷达。
+              创建品牌并完成首次分析后，可直接查看最近一轮报告的关键指标、引用来源和关联问题。
             </p>
             <div className="flex flex-wrap items-center gap-3 pt-1">
               <button

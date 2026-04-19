@@ -34,6 +34,7 @@ export interface Output {
   title: string;
   data: Record<string, unknown>;
   category?: string;
+  sequence?: number;
   created_at: string;
 }
 

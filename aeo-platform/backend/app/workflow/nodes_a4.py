@@ -242,8 +242,69 @@ def _build_browser_phase_start_message(
     return "启动浏览器采集。"
 
 
+def _question_id_from_state_question(question: dict[str, Any]) -> str:
+    """Resolve the stable question id from workflow question objects."""
+
+    if not isinstance(question, dict):
+        return ""
+    return str(
+        question.get("id")
+        or question.get("question_id")
+        or question.get("qid")
+        or ""
+    ).strip()
+
+
+def _derive_preserved_fetch_results(
+    *,
+    current_questions: list[dict[str, Any]],
+    existing_fetch_results: list[dict[str, Any]] | None,
+    selected_platforms: set[str],
+) -> list[dict[str, Any]]:
+    """Preserve only unselected platform results for the current question set.
+
+    This is used for true scoped reruns only. If the current question set has
+    changed (for example, panorama -> scenario), old fetch rows must not leak
+    into the new analysis contract.
+    """
+
+    current_question_ids = {
+        _question_id_from_state_question(question)
+        for question in current_questions
+        if _question_id_from_state_question(question)
+    }
+    if not current_question_ids:
+        return []
+
+    preserved: list[dict[str, Any]] = []
+    for existing_entry in existing_fetch_results or []:
+        question_id = str(existing_entry.get("question_id") or "").strip()
+        if not question_id or question_id not in current_question_ids:
+            continue
+        kept_platform_results = [
+            platform_result
+            for platform_result in existing_entry.get("platform_results", []) or []
+            if str(platform_result.get("platform") or "").strip().lower()
+            not in selected_platforms
+        ]
+        if kept_platform_results:
+            preserved.append(
+                {
+                    "question_id": question_id,
+                    "question_text": existing_entry.get("question_text", ""),
+                    "platform_results": kept_platform_results,
+                    "aio_platform_packets": _collect_aio_platform_packets(
+                        kept_platform_results
+                    ),
+                }
+            )
+    return preserved
+
+
 async def _gather_browser_tasks(
     browser_tasks: list[Coroutine[Any, Any, Any]],
+    *,
+    timeout_seconds: float | None = None,
 ) -> list[Any]:
     """Run browser platform pipelines with the configured AIO concurrency cap."""
 
@@ -253,7 +314,10 @@ async def _gather_browser_tasks(
             max(1, settings.AIO_MAX_PARALLEL_BROWSER_SESSIONS),
         )
 
-    return await _AIO_ANSWER_FETCH_TOOL.gather_browser_tasks(browser_tasks)
+    return await _AIO_ANSWER_FETCH_TOOL.gather_browser_tasks(
+        browser_tasks,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _get_aio_auth_scope(state: AgentState) -> str:
@@ -487,10 +551,12 @@ class _ProgressTracker:
         total_questions: int,
         active_platforms: list[str],
         session_id: str,
+        task_id: str | None = None,
     ):
         self.total_questions = total_questions
         self.active_platforms = active_platforms
         self.session_id = session_id
+        self.task_id = task_id
         self.total_tasks = total_questions * len(active_platforms)
         self.completed = 0
         # Per-platform counters
@@ -528,6 +594,44 @@ class _ProgressTracker:
             progress=progress,
             message=message,
         )
+        await _persist_task_progress(
+            self.task_id,
+            stage="A4",
+            progress=progress,
+            message=message,
+            context="api_progress",
+        )
+
+
+async def _persist_task_progress(
+    task_id: str | None,
+    *,
+    stage: str,
+    progress: float,
+    message: str,
+    context: str,
+) -> None:
+    """Mirror live websocket progress into durable task state when available."""
+
+    if not task_id:
+        return
+
+    try:
+        from uuid import UUID as _UUID
+
+        from app.core.database import AsyncSessionLocal
+        from app.services.task_service import TaskService
+
+        async with AsyncSessionLocal() as db:
+            ts = TaskService(db)
+            await ts.update_progress(
+                _UUID(task_id),
+                stage=stage,
+                progress=progress,
+                message=message,
+            )
+    except Exception as exc:
+        logger.warning("[A4] Task progress sync failed (%s): %s", context, exc)
 
 
 async def _tracked_api_fetch(
@@ -650,6 +754,22 @@ _429_ERROR_CODE_MAP = {
 _RETRY_SECONDS_RE = re.compile(r"try again after (\d+) seconds", re.IGNORECASE)
 
 
+def _engine_overload_retry_budget(platform: str) -> tuple[int, float]:
+    """Return a bounded overload retry budget for one API platform.
+
+    Doubao's responses endpoint is the dominant long-tail blocker in real runs.
+    When it repeatedly returns `engine_overloaded`, we prefer partial completion
+    over stalling the entire A4 stage for many minutes.
+    """
+
+    if platform == "doubao":
+        return 1, 2.0
+    return (
+        WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES,
+        WorkflowConstants.ENGINE_OVERLOADED_BASE_WAIT,
+    )
+
+
 def _parse_429_error(response: httpx.Response) -> tuple[str, float | None]:
     """Parse 429 response body to extract error type and retry hint.
 
@@ -712,6 +832,7 @@ async def _retry_fetch(
 
     attempt = 0
     overload_retries = 0
+    overload_retry_limit, overload_base_wait = _engine_overload_retry_budget(platform)
 
     while attempt <= MAX_RETRIES:
         try:
@@ -745,18 +866,15 @@ async def _retry_fetch(
 
                 if error_type == "engine_overloaded":
                     overload_retries += 1
-                    if (
-                        overload_retries
-                        > WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES
-                    ):
+                    if overload_retries > overload_retry_limit:
                         logger.warning(
                             "[A4] %s 429 (engine_overloaded) — exhausted %d overload retries",
                             platform,
-                            WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES,
+                            overload_retry_limit,
                         )
                         break
                     wait = (
-                        WorkflowConstants.ENGINE_OVERLOADED_BASE_WAIT
+                        overload_base_wait
                         + overload_retries * 5.0
                         + random.uniform(0, 3)
                     )
@@ -765,7 +883,7 @@ async def _retry_fetch(
                         platform,
                         wait,
                         overload_retries,
-                        WorkflowConstants.ENGINE_OVERLOADED_MAX_RETRIES,
+                        overload_retry_limit,
                     )
                     await asyncio.sleep(wait)
                     # Don't consume the main attempt budget
@@ -1014,22 +1132,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
     )
 
     task_id = state.get("task_id")
-    if task_id:
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.services.task_service import TaskService
-            from uuid import UUID as _UUID
-
-            async with AsyncSessionLocal() as db:
-                ts = TaskService(db)
-                await ts.update_progress(
-                    _UUID(task_id),
-                    stage="A4",
-                    progress=0.55,
-                    message=f"开始抓取 {len(questions)} 个问题的答案（{mode_label}）",
-                )
-        except Exception as te:
-            logger.warning("[A4] TaskService start milestone failed: %s", te)
+    await _persist_task_progress(
+        task_id,
+        stage="A4",
+        progress=0.55,
+        message=f"开始抓取 {len(questions)} 个问题的答案（{mode_label}）",
+        context="start_milestone",
+    )
 
     fetch_results: list[dict[str, Any]] = []
 
@@ -1243,6 +1352,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     total_questions=total,
                     active_platforms=active_api_platforms,
                     session_id=session_id,
+                    task_id=task_id,
                 )
 
                 # Wrap each task to report progress on completion
@@ -1302,6 +1412,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         api_task_count=len(api_tasks),
                     ),
                 )
+                await _persist_task_progress(
+                    task_id,
+                    stage="A4",
+                    progress=0.72,
+                    message=_build_browser_phase_start_message(
+                        fetch_mode,
+                        platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
+                        api_success_total=api_success_total,
+                        api_task_count=len(api_tasks),
+                    ),
+                    context="browser_phase_start_after_api",
+                )
             else:
                 # full mode: skip API entirely
                 logger.info("[A4] Full mode — skipping Phase 1 (API)")
@@ -1314,6 +1436,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         fetch_mode,
                         platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
                     ),
+                )
+                await _persist_task_progress(
+                    task_id,
+                    stage="A4",
+                    progress=0.57,
+                    message=_build_browser_phase_start_message(
+                        fetch_mode,
+                        platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
+                    ),
+                    context="browser_phase_start_full_mode",
                 )
 
             # =============================================================
@@ -1511,6 +1643,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             progress=combined_progress,
                             message=f"{platform_name} 已停止本轮采集，继续其他平台",
                         )
+                        await _persist_task_progress(
+                            task_id,
+                            stage="A4",
+                            progress=combined_progress,
+                            message=f"{platform_name} 已停止本轮采集，继续其他平台",
+                            context=f"browser_stop_{platform}",
+                        )
                         break
 
                     # Delay between browser questions to avoid rate limiting
@@ -1536,6 +1675,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         step_name="AI答案抓取",
                         progress=combined_progress,
                         message=f"{platform_name} {idx + 1}/{total} 完成",
+                    )
+                    await _persist_task_progress(
+                        task_id,
+                        stage="A4",
+                        progress=combined_progress,
+                        message=f"{platform_name} {idx + 1}/{total} 完成",
+                        context=f"browser_progress_{platform}",
                     )
                 return results
 
@@ -1678,11 +1824,22 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             if browser_tasks:
                 active_browser_pipeline_count = max(len(browser_task_platforms), 1)
-                logger.info(
-                    "[A4] Phase 2: Starting %d browser pipeline(s)...",
-                    len(browser_tasks),
+                browser_batch_timeout = (
+                    max(
+                        _get_browser_pipeline_timeout(platform, total)
+                        for platform in browser_task_platforms
+                    )
+                    + 30.0
                 )
-                browser_all_results = await _gather_browser_tasks(browser_tasks)
+                logger.info(
+                    "[A4] Phase 2: Starting %d browser pipeline(s) with hard batch timeout %.0fs...",
+                    len(browser_tasks),
+                    browser_batch_timeout,
+                )
+                browser_all_results = await _gather_browser_tasks(
+                    browser_tasks,
+                    timeout_seconds=browser_batch_timeout,
+                )
 
                 for i, br in enumerate(browser_all_results):
                     if isinstance(br, BaseException):
@@ -1776,31 +1933,20 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 except BaseException as e:
                     logger.debug("[A4] Browser client close failed: %s", e)
 
-        # When platform_filter is active, merge new platform results with preserved baseline results.
+        # When platform_filter is active, only preserve old platform results for
+        # the same question set. A fresh scenario run can also use a filtered
+        # platform list, but it must not inherit panorama fetch rows.
         final_fetch_results = fetch_results
         baseline = state.get("preserved_fetch_results")
         if platform_filter and baseline is None and state.get("fetch_results"):
-            baseline = []
-            selected_platforms = {str(platform).lower() for platform in platform_filter}
-            for existing_entry in state.get("fetch_results") or []:
-                kept_platform_results = [
-                    platform_result
-                    for platform_result in existing_entry.get("platform_results", []) or []
-                    if str(platform_result.get("platform") or "").lower()
-                    not in selected_platforms
-                ]
-                if kept_platform_results:
-                    baseline.append(
-                        {
-                            "question_id": existing_entry.get("question_id", ""),
-                            "question_text": existing_entry.get("question_text", ""),
-                            "platform_results": kept_platform_results,
-                            "aio_platform_packets": _collect_aio_platform_packets(
-                                kept_platform_results
-                            ),
-                        }
-                    )
-        if platform_filter and baseline:
+            selected_platforms = {str(platform).strip().lower() for platform in platform_filter}
+            baseline = _derive_preserved_fetch_results(
+                current_questions=questions,
+                existing_fetch_results=state.get("fetch_results") or [],
+                selected_platforms=selected_platforms,
+            )
+        scoped_merge_active = bool(platform_filter and baseline)
+        if scoped_merge_active:
             baseline_map: dict[str, dict[str, Any]] = {}
             for baseline_entry in baseline:
                 question_id = baseline_entry.get("question_id", "")
@@ -2165,6 +2311,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         if platform_filter:
             update_dict["platform_filter"] = None
             update_dict["preserved_fetch_results"] = None
+        if scoped_merge_active:
             update_dict["next_required_action"] = build_next_required_action(
                 tool_name="analysis_report_skill",
                 tool_args={"report_type": state.get("analysis_mode") or "persona"},

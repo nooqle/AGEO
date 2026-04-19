@@ -60,7 +60,7 @@ BUILTIN_SKILL_SPECS: tuple[BuiltinSkillSpec, ...] = (
         intent_signals=["完整报告", "整体分析", "总结", "战况报告", "正式报告"],
         prerequisites=["fetch_results_required"],
         artifact_types=["report", "dashboard"],
-        default_params={"report_type": "persona"},
+        default_params={"report_type": "scenario"},
         prompt_overlay=None,
         cost_class=SkillCostClass.HIGH,
         latency_class=SkillLatencyClass.HIGH,
@@ -351,8 +351,8 @@ def _build_analysis_report_tool(
         },
         "report_type": {
             "type": "string",
-            "enum": ["baseline", "persona"],
-            "description": "报告类型：baseline=品牌全景分析报告, persona=场景分析报告（默认）",
+            "enum": ["panorama", "scenario"],
+            "description": "报告类型：panorama=品牌全景分析报告, scenario=场景分析报告（默认）",
         },
     }
     return {

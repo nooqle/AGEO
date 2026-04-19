@@ -60,11 +60,27 @@ function normalizePreviewMetricValue(label: string, value: unknown, unit?: unkno
 }
 
 function readPreviewMetricsFromStructuredSummary(raw: Record<string, unknown>): Record<string, CanvasPreviewMetricValue> | null {
-  const summary = isRecord(raw.report_v2)
-    ? (isRecord(raw.report_v2.summary) ? raw.report_v2.summary : null)
-    : isRecord(raw.report_summary)
-    ? raw.report_summary
+  const summarySection = Array.isArray(raw.sections)
+    ? raw.sections.find(
+        (section) =>
+          isRecord(section) &&
+          section.section_name === 'summary' &&
+          isRecord(section.data) &&
+          Array.isArray(section.data.metrics)
+      )
     : null;
+  const canonicalMetrics =
+    isRecord(summarySection) && isRecord(summarySection.data) && Array.isArray(summarySection.data.metrics)
+      ? summarySection.data.metrics
+      : null;
+  const summary =
+    canonicalMetrics
+      ? { metrics: canonicalMetrics }
+      : isRecord(raw.report_v2)
+      ? (isRecord(raw.report_v2.summary) ? raw.report_v2.summary : null)
+      : isRecord(raw.report_summary)
+      ? raw.report_summary
+      : null;
 
   const metricArray = Array.isArray(summary?.metrics) ? summary.metrics : null;
   if (!metricArray || metricArray.length === 0) {
@@ -167,6 +183,7 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
       ...preview,
       report_kind: typeof data.report_kind === 'string' ? data.report_kind : undefined,
       artifact_kind: typeof data.artifact_kind === 'string' ? data.artifact_kind : undefined,
+      title: typeof data.title === 'string' ? data.title : undefined,
       headline: typeof data.headline === 'string' ? data.headline : undefined,
       subtitle: typeof data.subtitle === 'string' ? data.subtitle : undefined,
       overallScore: typeof data.overallScore === 'number'
@@ -187,6 +204,11 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
       content: typeof data.content === 'string' ? data.content : undefined,
       executive_summary: typeof data.executive_summary === 'string' ? data.executive_summary : undefined,
       report_markdown: typeof data.report_markdown === 'string' ? data.report_markdown : undefined,
+      full_markdown: typeof data.full_markdown === 'string' ? data.full_markdown : undefined,
+      sections: Array.isArray(data.sections) ? data.sections : undefined,
+      metric_bundle: isRecord(data.metric_bundle) ? data.metric_bundle : undefined,
+      comparison_bundle: isRecord(data.comparison_bundle) ? data.comparison_bundle : undefined,
+      dashboard_projection: isRecord(data.dashboard_projection) ? data.dashboard_projection : undefined,
       bwvs_breakdown,
       brand_name: typeof data.brand_name === 'string' ? data.brand_name : undefined,
       analysis_period: typeof data.analysis_period === 'string' ? data.analysis_period : undefined,

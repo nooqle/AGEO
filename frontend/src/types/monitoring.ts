@@ -29,6 +29,17 @@ export interface BaselineSummary {
   source_task_id: string | null;
 }
 
+export interface PanoramaAnalysisStatus {
+  has_report: boolean;
+  mention_rate: number | null;
+  brand_rank: number | null;
+  brand_rank_total: number | null;
+  brand_rank_label: string | null;
+  created_at: string | null;
+  triggered_by: string | null;
+  session_id: string | null;
+}
+
 export interface BaselineData {
   questions: Array<{ id: string; text: string; category?: string }>;
   simulated_questions: Record<string, unknown> | null;
@@ -68,6 +79,7 @@ export interface MonitoringSchedule {
 export interface CreateScheduleInput {
   entity_id: string;
   frequency?: ScheduleFrequency;
+  status?: ScheduleStatus;
   preferred_hour?: number;
   timezone?: string;
   platforms?: string[];
@@ -79,6 +91,7 @@ export interface CreateScheduleInput {
 
 export interface UpdateScheduleInput {
   frequency?: ScheduleFrequency;
+  status?: ScheduleStatus;
   preferred_hour?: number;
   timezone?: string;
   platforms?: string[];

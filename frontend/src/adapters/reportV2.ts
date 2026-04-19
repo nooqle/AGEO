@@ -11,6 +11,7 @@
   ReportMentionScenarioGroup,
   ReportMentionSectionData,
   ReportSummaryData,
+  ReportV2Data,
   ReportV2Metric,
   RiskSectionData,
   ScenarioCoverageData,
@@ -758,6 +759,111 @@ const EMPTY_ACTION_QUEUE: ActionQueueData = {
   items: [],
 };
 
+function buildCanonicalReportV2(data: ReportCanvasContent['data']): ReportV2Data | null {
+  const sections = isRecord(data.sections) ? data.sections : undefined;
+  if (!sections) {
+    return null;
+  }
+
+  const summarySection = isRecord(sections.summary) ? sections.summary : {};
+  const visibilityBoard = isRecord(sections.visibility_board) ? sections.visibility_board : {};
+  const diagnosticsBoard = isRecord(sections.question_diagnostics_board)
+    ? sections.question_diagnostics_board
+    : {};
+  const citationBoard = isRecord(sections.citation_visibility_board)
+    ? sections.citation_visibility_board
+    : {};
+  const sentimentBoard = isRecord(sections.sentiment_risk_board) ? sections.sentiment_risk_board : {};
+  const recommendationsBoard = isRecord(sections.recommendations_board)
+    ? sections.recommendations_board
+    : {};
+  const sourceSummary = isRecord(readField(citationBoard, 'summary'))
+    ? (readField(citationBoard, 'summary') as UnknownRecord)
+    : {};
+  const sentimentSummary = isRecord(readField(sentimentBoard, 'summary'))
+    ? (readField(sentimentBoard, 'summary') as UnknownRecord)
+    : {};
+
+  return {
+    summary: {
+      title: readString(summarySection, 'title'),
+      summary: readString(summarySection, 'summary'),
+      status_summary: readString(summarySection, 'status_summary', 'statusSummary'),
+      highlights: readStringList(summarySection, 'highlights'),
+      metrics: toRecordArray(readField(summarySection, 'metrics')).map((metric, index) => {
+        const rawId = readString(metric, 'id') || `metric-${index + 1}`;
+        const normalizedId =
+          rawId === 'mention_rate'
+            ? 'brand_mention_rate'
+            : rawId === 'scenario_hit_count'
+              ? 'scenario_coverage_count'
+              : rawId;
+        return {
+          id: normalizedId,
+          label: readString(metric, 'label') || '指标',
+          value: readNumber(metric, 'value'),
+          unit: readString(metric, 'unit'),
+          description: readString(metric, 'description'),
+          status: (readString(metric, 'status') as ReportV2Metric['status'] | undefined) || 'neutral',
+          assessment: readString(metric, 'assessment'),
+        };
+      }),
+    },
+    scenarioCoverage: {
+      title: readString(visibilityBoard, 'title') || '场景覆盖',
+      items: toRecordArray(readField(visibilityBoard, 'items'))
+        .map((item, index) => normalizeScenarioItem(item, `场景 ${index + 1}`))
+        .filter((item): item is ScenarioCoverageItem => Boolean(item)),
+      missing_items: toRecordArray(readField(diagnosticsBoard, 'items'))
+        .map((item, index) => normalizeScenarioItem(item, `待进入场景 ${index + 1}`, false))
+        .filter((item): item is ScenarioCoverageItem => Boolean(item)),
+      risk_items: toRecordArray(readField(sections, 'risk_map'))
+        .map((item, index) => normalizeScenarioItem(item, `高风险场景 ${index + 1}`))
+        .filter((item): item is ScenarioCoverageItem => Boolean(item)),
+    },
+    sources: {
+      title: readString(citationBoard, 'title') || '引用来源分析',
+      official_citation_rate: normalizePercent(
+        readNumber(sourceSummary, 'official_citation_rate', 'officialCitationRate')
+      ),
+      citation_analysis: buildCitationAnalysisFromSourceOverview(sourceSummary),
+    },
+    mentions: {
+      title: readString(sentimentBoard, 'title') || '提及率分析',
+      sentiment_summary: {
+        positive: readNumber(sentimentSummary, 'positive') ?? 0,
+        neutral: readNumber(sentimentSummary, 'neutral') ?? 0,
+        negative: readNumber(sentimentSummary, 'negative') ?? 0,
+      },
+      brand_mentions: toRecordArray(readField(sentimentBoard, 'items')).map((item, index) =>
+        normalizeMentionItem(item, index)
+      ),
+    },
+    risks: {
+      title: '待进入场景与高风险场景',
+      items: toRecordArray(readField(sections, 'risk_map')).map((item) => ({
+        risk_id: readString(item, 'scenario_id', 'scenarioId'),
+        scenario_label: readString(item, 'scenario_label', 'scenarioLabel'),
+        severity: readString(item, 'risk_level', 'riskLevel') || 'medium',
+        reason: readString(item, 'risk_reason_summary', 'riskReasonSummary', 'evidence'),
+        evidence: readString(item, 'evidence'),
+        recommended_action_ref: readString(item, 'action_hint', 'actionHint'),
+      })),
+    },
+    actionQueue: {
+      title: readString(recommendationsBoard, 'title') || '下一步优化',
+      items: toRecordArray(readField(recommendationsBoard, 'items')).map((item, index) => ({
+        action_id: `action-${index + 1}`,
+        priority: readNumber(item, 'priority') ?? index + 1,
+        title: readString(item, 'title'),
+        action: readString(item, 'title'),
+        expected_metric: readString(item, 'rationale'),
+        status: 'not_started',
+      })),
+    },
+  };
+}
+
 export interface ReportViewModel {
   headline: string;
   subtitle?: string;
@@ -775,7 +881,16 @@ export interface ReportViewModel {
 }
 
 export function buildReportViewModel(content: ReportCanvasContent): ReportViewModel {
-  const data = content.data;
+  const canonicalReportV2 = buildCanonicalReportV2(content.data);
+  const data = canonicalReportV2
+    ? {
+        ...content.data,
+        report_v2: {
+          ...(content.data.report_v2 ?? {}),
+          ...canonicalReportV2,
+        },
+      }
+    : content.data;
   const mentions = normalizeMentions(data);
   const scenarios = normalizeScenarioCoverage(data);
   const sources = normalizeSourcesForReport(data, mentions);
@@ -784,7 +899,9 @@ export function buildReportViewModel(content: ReportCanvasContent): ReportViewMo
   const headline = sanitizeNarrativeText(data.headline) || '品牌战况报告';
   const updatedAt = formatUpdatedAt(data.updated_at);
   const degradationNote = toStringValue(data._degradation_note);
-  const isBaseline = content.category === 'baseline';
+  const isBaseline = content.category === 'panorama' || content.category === 'baseline';
+  const risks = data.report_v2?.risks ?? data.risk_section ?? EMPTY_RISKS;
+  const actionQueue = data.report_v2?.actionQueue ?? data.action_queue_section ?? EMPTY_ACTION_QUEUE;
 
   return {
     headline,
@@ -795,11 +912,11 @@ export function buildReportViewModel(content: ReportCanvasContent): ReportViewMo
     summary,
     scenarioCoverage: scenarios,
     competitorBattle: EMPTY_COMPETITOR_BATTLE,
-    risks: EMPTY_RISKS,
+    risks,
     mentions,
     sources,
     insights: EMPTY_INSIGHTS,
-    actionQueue: EMPTY_ACTION_QUEUE,
+    actionQueue,
   };
 }
 

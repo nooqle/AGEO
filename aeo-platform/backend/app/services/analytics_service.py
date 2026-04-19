@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 
 from app.models.message import Message, MessageType, MessageRole
+from app.models.snapshot import AnalysisSnapshot
 from app.models.session import Session
 from app.models.user import User
 from app.core.utils import extract_domain
@@ -30,6 +31,20 @@ AEO_THRESHOLDS = {
     "mention_rate": {"benchmark": 0.30, "good": 0.30, "warning": 0.15},
     "total_questions": {"benchmark": 50, "good": 50, "warning": 20},
     "total_mentions": {"benchmark": 15, "good": 15, "warning": 5},
+}
+
+SOURCE_TYPE_LABELS = {
+    "official": "官网 / 官方文档",
+    "authority_media": "官媒 / 权威机构",
+    "vertical_media": "行业媒体",
+    "community": "社区 / 论坛 / 问答",
+    "video_or_content": "视频 / 内容平台",
+    "other": "其他",
+}
+
+REPORT_KIND_LABELS = {
+    "panorama": "品牌全景分析报告",
+    "scenario": "用户场景分析报告",
 }
 
 
@@ -157,6 +172,14 @@ class AnalyticsService:
                         if isinstance(metadata, dict)
                         else None
                     )
+                    data["_triggered_by"] = (
+                        data.get("triggered_by")
+                        or (
+                            metadata.get("triggered_by")
+                            if isinstance(metadata, dict)
+                            else None
+                        )
+                    )
                     outputs.append(data)
                 except (json.JSONDecodeError, TypeError):
                     continue
@@ -181,7 +204,7 @@ class AnalyticsService:
             "confidence_analysis",
         }:
             return False
-        if output_type == "report_baseline":
+        if artifact_kind == "geo_report" and report_kind in {"panorama", "scenario"}:
             return True
         if output_type != "report":
             return False
@@ -211,6 +234,8 @@ class AnalyticsService:
 
     def _extract_metrics(self, data: dict[str, Any]) -> dict[str, Any] | None:
         """Extract metrics from output data (supports nested structures)."""
+        if "metric_bundle" in data and isinstance(data["metric_bundle"], dict):
+            return data["metric_bundle"]
         if "metrics" in data:
             return data["metrics"]
         if "metrics_raw" in data and isinstance(data["metrics_raw"], dict):
@@ -221,6 +246,8 @@ class AnalyticsService:
 
     def _extract_report(self, data: dict[str, Any]) -> dict[str, Any] | None:
         """Extract report from output data."""
+        if data.get("artifact_kind") == "geo_report":
+            return data
         if "report" in data:
             return data["report"]
         if "executive_summary" in data:
@@ -257,7 +284,7 @@ class AnalyticsService:
             .where(
                 Message.role == MessageRole.ASSISTANT,
                 Message.type == MessageType.OUTPUT,
-                Message.output_type.in_(("report", "report_baseline")),
+                Message.output_type == "report",
             )
             .order_by(desc(Message.created_at))
             .limit(20)
@@ -296,6 +323,14 @@ class AnalyticsService:
                         metadata = None
                 data["_output_type"] = msg.output_type
                 data["_created_at"] = msg.created_at.isoformat() if msg.created_at else None
+                data["_message_id"] = str(msg.id)
+                data["_session_id"] = str(msg.session_id)
+                data["_artifact_id"] = (
+                    metadata.get("output_id")
+                    if isinstance(metadata, dict)
+                    and isinstance(metadata.get("output_id"), str)
+                    else None
+                )
                 data["_artifact_kind"] = (
                     metadata.get("artifact_kind")
                     if isinstance(metadata, dict)
@@ -306,14 +341,99 @@ class AnalyticsService:
                     if isinstance(metadata, dict)
                     else None
                 )
+                data["_triggered_by"] = (
+                    data.get("triggered_by")
+                    or (
+                        metadata.get("triggered_by")
+                        if isinstance(metadata, dict)
+                        else None
+                    )
+                )
                 if self._is_dashboard_report_output(data):
                     outputs.append(data)
             except (json.JSONDecodeError, TypeError):
                 continue
         return outputs
 
+    async def _get_latest_snapshot_report_source(
+        self, brand_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Get latest snapshot-backed report payload for dashboard home."""
+        if not brand_id:
+            return None
+        try:
+            brand_uuid = UUID(brand_id)
+        except (ValueError, AttributeError):
+            return None
+
+        query = (
+            select(AnalysisSnapshot)
+            .where(
+                AnalysisSnapshot.entity_id == brand_uuid,
+                AnalysisSnapshot.triggered_by == "scheduled",
+            )
+            .order_by(desc(AnalysisSnapshot.created_at))
+            .limit(1)
+        )
+        result = await self.db.execute(query)
+        snapshot = result.scalar_one_or_none()
+        if snapshot is None:
+            return None
+
+        raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
+        report_data = raw_data.get("report_data", {})
+        report_data = report_data if isinstance(report_data, dict) else {}
+        if not report_data:
+            return None
+
+        payload = {
+            **report_data,
+            "metric_bundle": raw_data.get("metric_bundle")
+            if isinstance(raw_data.get("metric_bundle"), dict)
+            else report_data.get("metric_bundle"),
+            "comparison_bundle": raw_data.get("comparison_bundle")
+            if isinstance(raw_data.get("comparison_bundle"), dict)
+            else report_data.get("comparison_bundle"),
+            "dashboard_projection": raw_data.get("dashboard_projection")
+            if isinstance(raw_data.get("dashboard_projection"), dict)
+            else report_data.get("dashboard_projection"),
+            "_output_type": "report",
+            "_created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "_session_id": "",
+            "_artifact_id": "",
+            "_artifact_kind": "geo_report",
+            "_report_kind": str(raw_data.get("report_kind") or snapshot.snapshot_type or ""),
+            "_triggered_by": str(snapshot.triggered_by or ""),
+        }
+        return payload
+
+    def _select_latest_home_source(
+        self,
+        latest_output: dict[str, Any] | None,
+        latest_snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if latest_output is None:
+            return latest_snapshot
+        if latest_snapshot is None:
+            return latest_output
+        output_created = str(latest_output.get("_created_at") or "")
+        snapshot_created = str(latest_snapshot.get("_created_at") or "")
+        return latest_snapshot if snapshot_created > output_created else latest_output
+
     def _extract_v2_payload(self, data: dict[str, Any]) -> dict[str, Any]:
         """Extract V2 contract fields from artifact, report_data, or metrics_raw."""
+        dashboard_projection = data.get("dashboard_projection")
+        if isinstance(dashboard_projection, dict):
+            return {
+                "summary_metrics": data.get("metric_bundle", {}),
+                "scenario_matrix": data.get("scenario_matrix", []),
+                "competitor_battles": data.get("competitor_battles", []),
+                "risk_map": data.get("sections", {}).get("risk_map", []),
+                "action_queue": data.get("sections", {}).get("recommendations_board", {}).get("items", []),
+                "source_overview": data.get("source_overview", {}),
+                "mention_sentiment_analysis": data.get("mention_sentiment_analysis", {}),
+                "citation_analysis": data.get("source_overview", {}),
+            }
         nested_report = data.get("report_data")
         nested_report = nested_report if isinstance(nested_report, dict) else {}
         metrics_raw = data.get("metrics_raw")
@@ -345,6 +465,162 @@ class AnalyticsService:
     def _extract_report_data(self, data: dict[str, Any]) -> dict[str, Any]:
         report_data = data.get("report_data")
         return report_data if isinstance(report_data, dict) else {}
+
+    def _source_type_label(self, source_type: str | None) -> str:
+        normalized = str(source_type or "").strip().lower()
+        return SOURCE_TYPE_LABELS.get(normalized, SOURCE_TYPE_LABELS["other"])
+
+    def _report_kind_label(self, report_kind: str | None) -> str:
+        normalized = str(report_kind or "").strip().lower()
+        return REPORT_KIND_LABELS.get(normalized, "分析报告")
+
+    def _build_dashboard_home_from_projection(
+        self,
+        data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        dashboard_projection = data.get("dashboard_projection")
+        metric_bundle = data.get("metric_bundle")
+        input_bundle = data.get("input_bundle")
+        if (
+            not isinstance(dashboard_projection, dict)
+            or not isinstance(metric_bundle, dict)
+            or not isinstance(input_bundle, dict)
+        ):
+            return None
+
+        source_summary = metric_bundle.get("source_summary", {})
+        source_summary = source_summary if isinstance(source_summary, dict) else {}
+        questions = input_bundle.get("questions", [])
+        questions = [question for question in questions if isinstance(question, dict)]
+
+        report_kind = str(
+            data.get("_report_kind")
+            or data.get("report_kind")
+            or data.get("meta", {}).get("report_kind")
+            or dashboard_projection.get("report_kind")
+            or "panorama"
+        ).strip().lower()
+        triggered_by = str(
+            data.get("_triggered_by")
+            or data.get("triggered_by")
+            or ""
+        ).strip().lower()
+        summary_headline = str(
+            data.get("subtitle")
+            or data.get("executive_summary")
+            or "最近一轮报告已经生成，可直接查看核心指标和引用分布。"
+        )
+        session_id = str(data.get("_session_id") or "")
+
+        raw_source_types = source_summary.get("source_type_breakdown", {})
+        source_types = []
+        if isinstance(raw_source_types, dict):
+            source_types = [
+                {
+                    "key": key,
+                    "label": self._source_type_label(key),
+                    "share": value if isinstance(value, (int, float)) else None,
+                }
+                for key, value in raw_source_types.items()
+                if isinstance(value, (int, float)) and value > 0
+            ]
+            source_types.sort(key=lambda item: (-(item["share"] or 0), item["label"]))
+
+        top_domains = [
+            {
+                "domain": str(item.get("domain", "") or ""),
+                "displayName": str(
+                    item.get("display_name")
+                    or item.get("site_name")
+                    or item.get("domain")
+                    or ""
+                ),
+                "count": int(item.get("count", 0) or 0),
+                "share": item.get("share") if isinstance(item.get("share"), (int, float)) else None,
+                "isOfficial": bool(item.get("is_official", False)),
+                "sourceType": str(item.get("source_type", "") or "other"),
+                "sourceTypeLabel": self._source_type_label(str(item.get("source_type", "") or "other")),
+            }
+            for item in source_summary.get("top_domains", []) or []
+            if isinstance(item, dict) and item.get("domain")
+        ][:8]
+
+        question_items = [
+            {
+                "questionId": str(question.get("question_id", "") or ""),
+                "questionText": str(question.get("question_text", "") or ""),
+                "scene": str(question.get("scene", "") or ""),
+            }
+            for question in questions
+            if question.get("question_text")
+        ]
+
+        mention_rate = metric_bundle.get("brand_visibility")
+        if not isinstance(mention_rate, (int, float)):
+            mention_rate = metric_bundle.get("mention_rate")
+
+        official_friendly = metric_bundle.get("official_conversion_rate")
+        if not isinstance(official_friendly, (int, float)):
+            official_friendly = source_summary.get("official_conversion_rate")
+
+        official_funnel = source_summary.get("official_funnel", {})
+        official_funnel = official_funnel if isinstance(official_funnel, dict) else {}
+        brand_link_answer_count = int(official_funnel.get("brand_related_link_answer_count", 0) or 0)
+
+        return {
+            "summary": {"headline": summary_headline},
+            "latestReport": {
+                "title": str(data.get("title") or "分析报告"),
+                "subtitle": summary_headline,
+                "reportKind": report_kind,
+                "reportKindLabel": self._report_kind_label(report_kind),
+                "badgeLabel": "自动监测" if triggered_by == "scheduled" else None,
+                "triggeredBy": triggered_by or None,
+                "sessionId": session_id,
+                "artifactId": str(data.get("_artifact_id") or data.get("_message_id") or ""),
+                "outputId": str(data.get("_message_id") or ""),
+                "createdAt": str(data.get("_created_at") or ""),
+                "actionLabel": "打开最新报告",
+            },
+            "metrics": [
+                {
+                    "id": "mention_rate",
+                    "label": "提及率",
+                    "value": mention_rate if isinstance(mention_rate, (int, float)) else None,
+                    "format": "percent",
+                    "subtitle": "最近一轮答案里，品牌被写进答案的比例。",
+                },
+                {
+                    "id": "brand_rank",
+                    "label": "排名",
+                    "value": metric_bundle.get("brand_rank")
+                    if isinstance(metric_bundle.get("brand_rank"), int)
+                    else None,
+                    "format": "rank",
+                    "subtitle": "在被提及的品牌里，当前排第几。",
+                },
+                {
+                    "id": "official_ai_friendliness",
+                    "label": "官网 AI 友好度",
+                    "value": official_friendly if isinstance(official_friendly, (int, float)) else None,
+                    "format": "percent",
+                    "subtitle": "提到品牌以后，有多少答案把流量接回官网。",
+                },
+            ],
+            "citationDistribution": {
+                "summary": (
+                    f"这轮一共有 {brand_link_answer_count} 条答案带了品牌相关链接，主要引用来源集中在{source_types[0]['label']}。"
+                    if source_types
+                    else "这轮还没有形成稳定的品牌相关链接分布。"
+                ),
+                "sourceTypes": source_types,
+                "topDomains": top_domains,
+            },
+            "relatedQuestions": {
+                "summary": f"这轮报告基于 {len(question_items)} 个问题的答案抓取结果。",
+                "items": question_items,
+            },
+        }
 
     def _extract_platform_analysis(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         report_data = self._extract_report_data(data)
@@ -1539,50 +1815,62 @@ class AnalyticsService:
             "actionQueue": [self._to_action_camel(row) for row in actions],
         }
     async def get_dashboard_home_v2(self, brand_id: str | None) -> dict[str, Any]:
-        """Get Dashboard homepage three-board aggregate data."""
+        """Get Dashboard homepage latest-report summary data."""
         report_outputs = await self._get_report_like_outputs(brand_id=brand_id)
-        current = report_outputs[0] if report_outputs else None
+        latest_output = report_outputs[0] if report_outputs else None
+        latest_snapshot = await self._get_latest_snapshot_report_source(brand_id=brand_id)
+        current = self._select_latest_home_source(latest_output, latest_snapshot)
         if not current:
             return {
-                "summary": {"headline": "尚未生成分析结果，完成首次分析后即可查看首页三看板。"},
-                "mentionBoard": {
-                    "mentionRate": None,
-                    "headline": "暂无提及数据。",
-                    "sentimentSummary": {"positive": 0, "neutral": 0, "negative": 0},
-                    "leadingCompetitors": [],
-                    "report": {
-                        "brandMentions": [],
-                        "competitorMentions": [],
-                        "strongScenarios": [],
-                        "weakScenarios": [],
+                "summary": {"headline": "尚未生成最近一轮报告，完成首次分析后即可查看首页摘要。"},
+                "latestReport": {
+                    "title": "暂无最新报告",
+                    "subtitle": "完成首次分析后，这里会直接展示最近一轮报告。",
+                    "reportKind": None,
+                    "reportKindLabel": None,
+                    "sessionId": "",
+                    "artifactId": "",
+                    "outputId": "",
+                    "createdAt": "",
+                    "actionLabel": "打开最新报告",
+                },
+                "metrics": [
+                    {
+                        "id": "mention_rate",
+                        "label": "提及率",
+                        "value": None,
+                        "format": "percent",
+                        "subtitle": "最近一轮答案里，品牌被写进答案的比例。",
                     },
-                },
-                "sourceBoard": {
-                    "contentCitationRate": None,
-                    "citedAnswerCount": 0,
-                    "citedContentCount": 0,
-                    "headline": "暂无内容引用数据。",
-                    "report": {
-                        "officialCases": [],
-                        "nonOfficialCases": [],
-                        "officialContents": [],
-                        "nonOfficialContents": [],
-                        "topDomains": [],
-                        "platformStats": [],
+                    {
+                        "id": "brand_rank",
+                        "label": "排名",
+                        "value": None,
+                        "format": "rank",
+                        "subtitle": "在被提及的品牌里，当前排第几。",
                     },
+                    {
+                        "id": "official_ai_friendliness",
+                        "label": "官网 AI 友好度",
+                        "value": None,
+                        "format": "percent",
+                        "subtitle": "提到品牌以后，有多少答案把流量接回官网。",
+                    },
+                ],
+                "citationDistribution": {
+                    "summary": "暂无品牌相关链接分布。",
+                    "sourceTypes": [],
+                    "topDomains": [],
                 },
-                "radarBoard": {
-                    "headline": "暂无雷达数据。",
-                    "strongestDimension": "",
-                    "weakestDimension": "",
-                    "dimensions": [],
-                },
-                "monitoringEntry": {
-                    "title": "持续监测",
-                    "description": "追踪提及率、官网引用率和风险变化。",
-                    "ctaLabel": "进入监测",
+                "relatedQuestions": {
+                    "summary": "暂无问题样本。",
+                    "items": [],
                 },
             }
+
+        projection_home = self._build_dashboard_home_from_projection(current)
+        if projection_home is not None:
+            return projection_home
 
         payload = self._extract_v2_payload(current)
         summary = payload.get("summary_metrics") or self._fallback_summary_metrics(current)

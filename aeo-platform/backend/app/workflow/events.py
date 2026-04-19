@@ -281,6 +281,7 @@ async def send_output_ready(
     output_id: str | None = None,
     related_message_id: str | None = None,
     linked_message_id: str | None = None,
+    sequence: int | None = None,
     category: str | None = None,
     scenario_label: str | None = None,
 ) -> None:
@@ -298,6 +299,8 @@ async def send_output_ready(
     }
     if linked_message_id:
         payload["linked_message_id"] = linked_message_id
+    if sequence is not None:
+        payload["sequence"] = sequence
     if category:
         payload["category"] = category
     if scenario_label:
@@ -354,12 +357,14 @@ async def save_and_send_artifact(
                     "output_id": resolved_artifact_id,
                     "artifact_kind": data.get("artifact_kind"),
                     "report_kind": data.get("report_kind"),
+                    "triggered_by": data.get("triggered_by"),
                 },
                 message_type="OUTPUT",
                 output_type=output_type,
                 output_data=json.dumps(data, ensure_ascii=False),
             )
             db_message_id = msg["id"]
+            db_sequence = msg.get("sequence")
 
         artifact_id = resolved_artifact_id
 
@@ -371,6 +376,7 @@ async def save_and_send_artifact(
             output_id=artifact_id,
             related_message_id=related_message_id,
             linked_message_id=db_message_id,
+            sequence=db_sequence if isinstance(db_sequence, int) else None,
             category=category,
             scenario_label=scenario_label,
         )

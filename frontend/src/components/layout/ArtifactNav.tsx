@@ -51,7 +51,7 @@ function getReportMeta(content: CanvasContent) {
   if (isConfidenceCanvasReport(content)) {
     return { icon: RiShieldCheckLine, label: '置信' };
   }
-  if (content.category === 'baseline') {
+  if (content.category === 'baseline' || content.category === 'panorama') {
     return { icon: RiFileChartLine, label: '全景' };
   }
   return { icon: RiPieChartLine, label: '分析' };

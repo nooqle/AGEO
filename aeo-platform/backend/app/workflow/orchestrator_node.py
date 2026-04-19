@@ -133,6 +133,25 @@ _RECENT_EVIDENCE_PROMPT_PRIORITY: dict[str, int] = {
 }
 
 
+def _normalize_public_report_kind(value: Any) -> str:
+    """Normalize external report kind names to canonical panorama/scenario."""
+    raw = str(value or "").strip().lower()
+    if raw in {"baseline", "panorama"}:
+        return "panorama"
+    if raw in {"persona", "scenario"}:
+        return "scenario"
+    return "scenario"
+
+
+def _normalize_internal_analysis_mode(value: Any) -> str:
+    """Keep workflow state compatible while public APIs move to canonical terms."""
+    return (
+        "baseline"
+        if _normalize_public_report_kind(value) == "panorama"
+        else "persona"
+    )
+
+
 # =============================================================================
 # Agent Tool Registry
 # =============================================================================
@@ -255,8 +274,8 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 },
                 "report_type": {
                     "type": "string",
-                    "enum": ["baseline", "persona"],
-                    "description": "报告类型：baseline=品牌全景分析报告, persona=场景分析报告（默认）",
+                    "enum": ["panorama", "scenario"],
+                    "description": "报告类型：panorama=品牌全景分析报告, scenario=场景分析报告（默认）",
                 },
             },
         },
@@ -1711,15 +1730,15 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 """
                 A1 完成后的流程（最高优先级）：
                 - A1 完成后，必须先汇报结果并 ask_user，绝不直接调用 persona_generation 或 question_simulation。
-                - 尚无品牌全景分析时，必须按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline") 执行。
+                - 尚无品牌全景分析时，必须按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="panorama") 执行。
                 - 已有品牌全景分析时，用户可进入引用置信度评估、场景细化、重跑品牌全景分析或直接提问。
 
                 场景细化流程：
-                - 用户选择场景细化时：persona_generation -> 用户选择画像 -> question_simulation(mode="persona_focused") -> answer_fetch -> analysis_report_skill(report_type="persona")。
+                - 用户选择场景细化时：persona_generation -> 用户选择画像 -> question_simulation(mode="persona_focused") -> answer_fetch -> analysis_report_skill(report_type="scenario")。
                 - 如果用户明确要求“以某个身份 / 职业 / 角色生成问题”，仍调用 question_simulation，并通过 identity 传入该身份；若用户未明确要求，默认消费者视角，不要擅自加身份。
 
                 其他固定路径：
-                - 用户说“重跑品牌全景分析”时：question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="baseline")。
+                - 用户说“重跑品牌全景分析”时：question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="panorama")。
                 - 用户明确要检查引用可信度时：confidence_analysis_skill。
                 - 用户基于已有结果要求深入分析、历次对比、解释原因、提炼风险时：post_analysis_skill。
                 - 用户要求重新抓取、重跑部分平台、全量重跑、或从 API 改为浏览器模式时：统一走 answer_fetch，不要再发明 refetch 类能力名。
@@ -2003,12 +2022,12 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         fr = state.get("fetch_results")
         if fr:
             report_type = (
-                "baseline"
+                "panorama"
                 if (state.get("analysis_mode") or "persona") == "baseline"
-                else "persona"
+                else "scenario"
             )
             report_label = (
-                "品牌全景分析报告" if report_type == "baseline" else "场景分析报告"
+                "品牌全景分析报告" if report_type == "panorama" else "场景分析报告"
             )
             return (
                 f"AI答案抓取完成。共抓取 {len(fr)} 组问题结果。"
@@ -4225,8 +4244,13 @@ async def _handle_tool_call(
             resolved_skill is not None
             and resolved_skill.executor_ref == "a5_data_analytics"
         ):
-            report_type = tool_args.get("report_type", "persona")
-            extra_updates["analysis_mode"] = report_type
+            report_type = _normalize_public_report_kind(
+                tool_args.get("report_type", "scenario")
+            )
+            tool_args["report_type"] = report_type
+            extra_updates["analysis_mode"] = _normalize_internal_analysis_mode(
+                report_type
+            )
 
         return Command(
             goto=node_name,
