@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from langgraph.graph import END
 from langgraph.types import Command
 
 from app.core.utils import extract_domain
@@ -25,15 +24,14 @@ from app.workflow.a5.canonical import (
 )
 from app.workflow.events import (
     send_error_event,
-    send_execution_complete,
     send_progress_event,
-    send_reply_event,
     send_stage_result,
 )
 from app.workflow.harness_validation import (
     build_harness_decision,
     evaluate_skill_postconditions,
     evaluate_skill_preconditions,
+    validate_a4_canonical_result,
     validate_artifact_writeback,
 )
 from app.workflow.nodes_a4 import PLATFORMS
@@ -96,7 +94,8 @@ def _pick_latest_panorama_baseline_report(
             continue
         latest_payload = {
             **output_data,
-            "artifact_id": metadata.get("artifact_id") or output_data.get("artifact_id"),
+            "artifact_id": metadata.get("artifact_id")
+            or output_data.get("artifact_id"),
             "report_id": message.get("id") or output_data.get("report_id"),
         }
         latest_id = (
@@ -118,10 +117,12 @@ async def _resolve_scenario_baseline_context(
     existing_report: dict[str, Any] | None = None,
     existing_report_id: str | None = None,
 ) -> tuple[dict[str, Any], str | None]:
-    resolved_existing_report, resolved_existing_id = _pick_latest_panorama_baseline_report(
-        [],
-        existing_report=existing_report,
-        existing_report_id=existing_report_id,
+    resolved_existing_report, resolved_existing_id = (
+        _pick_latest_panorama_baseline_report(
+            [],
+            existing_report=existing_report,
+            existing_report_id=existing_report_id,
+        )
     )
     if isinstance(resolved_existing_report.get("metric_bundle"), dict):
         return resolved_existing_report, resolved_existing_id
@@ -156,6 +157,43 @@ async def a5_analytics_node(state: AgentState) -> Command:
     """
     session_id = state["session_id"]
     entity_id = state.get("entity_id")
+    canonical_fetch_validation = validate_a4_canonical_result(state)
+    if not canonical_fetch_validation.passed:
+        message = f"A5 前置条件未满足：{canonical_fetch_validation.reason}"
+        await send_error_event(session_id, "A5", message, recoverable=True)
+        validation_update = build_validation_result_update(
+            state, canonical_fetch_validation
+        )
+        decision_update = build_harness_decision_update(
+            {**state, **validation_update},
+            build_harness_decision(
+                decision_type="fail_step",
+                reason=message,
+                recoverable=True,
+                metadata={
+                    "step": "A5",
+                    "gate": canonical_fetch_validation.gate_name,
+                    "blocker_code": canonical_fetch_validation.metadata.get(
+                        "blocker_code"
+                    )
+                    or "fetch_results_missing",
+                },
+            ),
+        )
+        return Command(
+            update={
+                "error_info": {
+                    "step": "A5",
+                    "error": message,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                "current_step": "A5",
+                "execution_status": "error",
+                **validation_update,
+                **decision_update,
+            }
+        )
+
     facts = build_skill_fact_snapshot(state)
     brand_profile = facts.brand_profile
     fetch_results = facts.fetch_results
@@ -214,12 +252,16 @@ async def a5_analytics_node(state: AgentState) -> Command:
         baseline_report = state.get("baseline_report")
         baseline_report_id = state.get("baseline_report_id")
         if report_kind == "scenario":
-            baseline_report, baseline_report_id = await _resolve_scenario_baseline_context(
-                session_id=session_id,
-                existing_report=baseline_report if isinstance(baseline_report, dict) else None,
-                existing_report_id=(
-                    str(baseline_report_id).strip() if baseline_report_id else None
-                ),
+            baseline_report, baseline_report_id = (
+                await _resolve_scenario_baseline_context(
+                    session_id=session_id,
+                    existing_report=(
+                        baseline_report if isinstance(baseline_report, dict) else None
+                    ),
+                    existing_report_id=(
+                        str(baseline_report_id).strip() if baseline_report_id else None
+                    ),
+                )
             )
 
         canonical_report = build_canonical_report_artifact(
@@ -231,8 +273,12 @@ async def a5_analytics_node(state: AgentState) -> Command:
             fetch_results=fetch_results,
             simulated_questions=state.get("simulated_questions"),
             base_metrics=metrics,
-            baseline_report=baseline_report if isinstance(baseline_report, dict) else None,
-            baseline_report_id=baseline_report_id if isinstance(baseline_report_id, str) else None,
+            baseline_report=(
+                baseline_report if isinstance(baseline_report, dict) else None
+            ),
+            baseline_report_id=(
+                baseline_report_id if isinstance(baseline_report_id, str) else None
+            ),
         )
         summary_metrics = canonical_report.get("metric_bundle", {})
         skill_outputs = canonical_report.get("skill_outputs", {})
@@ -324,34 +370,6 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 logger.warning("[A5] Failed to persist stage_result: %s", e)
 
         # Query previous snapshot for delta (before LLM call, to include in prompt)
-        previous_snapshot_data = None
-        if entity_id:
-            try:
-                from app.core.database import AsyncSessionLocal
-                from app.services.snapshot_service import SnapshotService
-
-                async with AsyncSessionLocal() as db:
-                    snap_service = SnapshotService(db)
-                    prev_snap = await snap_service.get_previous_snapshot(
-                        entity_id=entity_id,
-                        snapshot_type="panorama" if is_baseline else "scenario",
-                    )
-                    if prev_snap and prev_snap.bwvs_index is not None:
-                        previous_snapshot_data = {
-                            "date": (
-                                prev_snap.created_at.strftime("%Y-%m-%d")
-                                if prev_snap.created_at
-                                else "N/A"
-                            ),
-                            "bwvs_index": prev_snap.bwvs_index,
-                            "mention_rate": prev_snap.mention_rate,
-                            "sentiment_score": prev_snap.sentiment_score,
-                            "coverage_score": prev_snap.coverage_score,
-                            "citation_score": prev_snap.citation_score,
-                        }
-            except Exception as snap_err:
-                logger.warning("[A5] Failed to query previous snapshot: %s", snap_err)
-
         report_data = canonical_report
 
         await send_progress_event(
@@ -640,27 +658,14 @@ async def a5_analytics_node(state: AgentState) -> Command:
             message="分析完成",
             status="completed",
         )
-        final_message = (
-            f"{summary} 如需继续深入看某个平台、具体问题、竞品表现或引用来源，"
-            "直接在对话里继续问我即可。"
-        )
-        await send_reply_event(
-            session_id,
-            final_message,
-            is_delta=False,
-            is_new_round=True,
-        )
-        await send_reply_event(session_id, "", is_complete=True)
-        await send_execution_complete(session_id, "分析报告已生成")
 
         return Command(
-            goto=END,
             update={
                 **update_dict,
                 "execution_status": "completed",
                 "awaiting_user": False,
                 "pending_confirmation": None,
-                "orchestrator_reply": final_message,
+                "orchestrator_reply": summary,
             },
         )
 

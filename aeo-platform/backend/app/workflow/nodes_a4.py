@@ -54,11 +54,17 @@ from app.workflow.events import (
 from app.workflow.harness_validation import (
     build_harness_decision,
     decide_a4_completion_policy,
+    validate_artifact_writeback,
     validate_scoped_fetch_merge,
 )
-from app.workflow.runtime_policy_executor import build_next_required_action
+from app.workflow.fetch_recovery import (
+    build_fetch_recovery_plan,
+    extract_latest_fetch_recovery_plan_from_state,
+    normalize_question_targets,
+)
 from app.workflow.skill_state import (
     build_harness_decision_update,
+    build_skill_result_update,
     build_validation_result_update,
 )
 
@@ -214,6 +220,158 @@ def _build_filtered_fetch_summary(
     }
 
 
+def _build_a4_followup_options(*, retry_failed_only: bool) -> list[dict[str, str]]:
+    supplemental_label = (
+        "继续补采剩余失败项（浏览器）" if retry_failed_only else "补采失败项（浏览器）"
+    )
+    supplemental_description = (
+        "只重跑本轮补采后仍失败的平台和问题，并和已成功结果继续合并"
+        if retry_failed_only
+        else "只重跑上一轮失败的平台和问题，并和已成功结果合并"
+    )
+    return [
+        {
+            "id": "run_supplemental_fetch",
+            "label": supplemental_label,
+            "description": supplemental_description,
+        },
+        {
+            "id": "run_analysis_report",
+            "label": "先用当前结果继续分析",
+            "description": "跳过继续补采，直接基于当前成功样本生成新报告",
+        },
+    ]
+
+
+def _build_a4_completion_observation(
+    *,
+    projected_fetch_results: list[dict[str, Any]],
+    completion_decision: Any,
+    artifact_validation: Any,
+    retry_failed_only: bool,
+    scoped_merge_active: bool,
+    question_targets: list[dict[str, Any]],
+    successful_fetches: int,
+    total_fetches: int,
+    fail_count: int,
+    platform_statuses: dict[str, Any],
+) -> dict[str, Any]:
+    recovery_plan = build_fetch_recovery_plan(projected_fetch_results)
+    requires_user_decision = bool(
+        artifact_validation.passed
+        and completion_decision.decision_type == "degraded_continue"
+        and recovery_plan
+        and int(recovery_plan.get("failure_count") or 0) > 0
+    )
+    return {
+        "summary": (
+            "答案抓取已完成，当前仍有失败项，需要由 Orchestrator 先请求用户确认下一步。"
+            if requires_user_decision
+            else "答案抓取已完成，结果已写回到当前官方样本。"
+        ),
+        "requires_user_decision": requires_user_decision,
+        "followup_options": (
+            _build_a4_followup_options(retry_failed_only=retry_failed_only)
+            if requires_user_decision
+            else []
+        ),
+        "failed_question_count": int(
+            (recovery_plan or {}).get("failed_question_count") or 0
+        ),
+        "failed_platform_count": int(
+            (recovery_plan or {}).get("failed_platform_count") or fail_count
+        ),
+        "failure_count": int((recovery_plan or {}).get("failure_count") or 0),
+        "success_count": int(
+            (recovery_plan or {}).get("success_count") or successful_fetches
+        ),
+        "total_count": int((recovery_plan or {}).get("total_count") or total_fetches),
+        "successful_fetches": successful_fetches,
+        "total_fetches": total_fetches,
+        "artifact_write_validated": bool(artifact_validation.passed),
+        "completion_decision": completion_decision.to_state_payload(),
+        "retry_failed_only": bool(retry_failed_only),
+        "scoped_merge_active": bool(scoped_merge_active),
+        "question_target_count": len(question_targets),
+        "platform_statuses": dict(platform_statuses or {}),
+        "recovery_plan": recovery_plan,
+    }
+
+
+def _build_a4_completion_response(
+    *,
+    total_fetches: int,
+    successful_fetches: int,
+    platform_summary: list[str],
+    observation: dict[str, Any],
+) -> str:
+    success_rate = (
+        (successful_fetches / total_fetches * 100) if total_fetches > 0 else 0
+    )
+    if not bool(observation.get("artifact_write_validated", True)):
+        next_step_message = (
+            "抓取结果已经生成，但官方结果写回失败。"
+            "我会先处理这次写回异常，当前不会直接继续生成分析报告。"
+        )
+    elif observation.get("requires_user_decision"):
+        next_step_message = (
+            "抓取已完成，但当前仍有失败项。"
+            "我会先请您确认是继续补采剩余失败项，还是直接基于当前成功结果生成分析报告。"
+        )
+    else:
+        next_step_message = "抓取已完成。我会基于当前抓取结果继续生成分析报告。"
+
+    return f"""✅ **答案抓取完成**
+
+本轮问题已经完成抓取，抓取结果和平台成功/失败统计都已汇总完成。
+
+**📊 抓取概览**
+- 总抓取次数：{total_fetches} 次
+- 成功抓取：{successful_fetches} 次
+- 成功率：{success_rate:.0f}%
+
+**🌐 平台分布**
+{chr(10).join(platform_summary) if platform_summary else "- 暂无平台数据"}
+
+**📋 输出内容**
+- 完整抓取结果
+- 平台答案对照与引用列表
+
+**⏭️ 下一步**
+{next_step_message}"""
+
+
+def _build_a4_canonical_result(
+    *,
+    projected_fetch_results: list[dict[str, Any]],
+    authoritative_projection: dict[str, Any] | None,
+    artifact_message_id: str,
+    artifact_key: str,
+    artifact_validation: Any,
+    completion_decision: Any,
+    observation: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "version": "a4_fetch_result_v1",
+        "fetch_results": projected_fetch_results,
+        "platform_status": (
+            (authoritative_projection or {}).get("platform_status") or {}
+        ),
+        "timing_summary": (
+            (authoritative_projection or {}).get("timing_summary") or {}
+        ),
+        "artifact": {
+            "message_id": artifact_message_id,
+            "artifact_key": artifact_key,
+            "output_type": "fetchResults",
+        },
+        "validation": artifact_validation.to_state_payload(),
+        "completion_decision": completion_decision.to_state_payload(),
+        "recovery_plan": dict(observation.get("recovery_plan") or {}),
+        "observation": observation,
+    }
+
+
 def _build_browser_phase_start_message(
     fetch_mode: str,
     platforms: list[str],
@@ -254,10 +412,7 @@ def _question_id_from_state_question(question: dict[str, Any]) -> str:
     if not isinstance(question, dict):
         return ""
     return str(
-        question.get("id")
-        or question.get("question_id")
-        or question.get("qid")
-        or ""
+        question.get("id") or question.get("question_id") or question.get("qid") or ""
     ).strip()
 
 
@@ -265,7 +420,8 @@ def _derive_preserved_fetch_results(
     *,
     current_questions: list[dict[str, Any]],
     existing_fetch_results: list[dict[str, Any]] | None,
-    selected_platforms: set[str],
+    selected_platforms: set[str] | None = None,
+    question_platform_targets: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Preserve only unselected platform results for the current question set.
 
@@ -287,11 +443,17 @@ def _derive_preserved_fetch_results(
         question_id = str(existing_entry.get("question_id") or "").strip()
         if not question_id or question_id not in current_question_ids:
             continue
+        targeted_platforms = (
+            question_platform_targets.get(question_id)
+            if question_platform_targets and question_id in question_platform_targets
+            else selected_platforms
+        )
         kept_platform_results = [
             platform_result
             for platform_result in existing_entry.get("platform_results", []) or []
-            if str(platform_result.get("platform") or "").strip().lower()
-            not in selected_platforms
+            if not targeted_platforms
+            or _canonicalize_platform_id(platform_result.get("platform"))
+            not in targeted_platforms
         ]
         if kept_platform_results:
             preserved.append(
@@ -305,6 +467,24 @@ def _derive_preserved_fetch_results(
                 }
             )
     return preserved
+
+
+def _question_platform_targets_from_questions(
+    questions: list[dict[str, Any]],
+) -> dict[str, set[str]]:
+    targets: dict[str, set[str]] = {}
+    for question in questions:
+        question_id = _question_id_from_state_question(question)
+        if not question_id:
+            continue
+        platforms: set[str] = set()
+        for raw_platform in question.get("platforms") or []:
+            platform = _canonicalize_platform_id(raw_platform)
+            if platform:
+                platforms.add(platform)
+        if platforms:
+            targets[question_id] = platforms
+    return targets
 
 
 async def _gather_browser_tasks(
@@ -413,7 +593,9 @@ def _status_priority(status: str) -> int:
 def _fetch_result_has_success(fetch_result: dict[str, Any]) -> bool:
     packets = _packets_for_fetch_result(fetch_result)
     if packets:
-        return any(_packet_status_is_success(_packet_status(packet)) for packet in packets)
+        return any(
+            _packet_status_is_success(_packet_status(packet)) for packet in packets
+        )
     return bool(fetch_result.get("success"))
 
 
@@ -948,9 +1130,9 @@ async def _browser_fetch_with_timeout(
     Browser platforms (Kimi/DeepSeek) are optional — failures are non-blocking.
     """
     # Extract platform info from args for error reporting
-# _fetch_from_browser signature: handler, question, platform, platform_name, browser_state
-    platform = args[3] if len(args) > 3 else "unknown"
-    platform_name = args[4] if len(args) > 4 else platform
+    # _fetch_from_browser signature: handler, question, platform, platform_name, browser_state
+    platform = args[2] if len(args) > 2 else "unknown"
+    platform_name = args[3] if len(args) > 3 else platform
     handler = args[0] if args else None
     question_id = kwargs.get("question_id")
     question_text = args[1] if len(args) > 1 else None
@@ -1090,7 +1272,9 @@ def _build_browser_failure_result(
             evidence_ref=evidence_ref,
         ),
     }
-    result.update({key: value for key, value in extra_fields.items() if value is not None})
+    result.update(
+        {key: value for key, value in extra_fields.items() if value is not None}
+    )
     return result
 
 
@@ -1142,15 +1326,44 @@ async def a4_fetch_node(state: AgentState) -> Command:
     - full: All 4 platforms via Browser only, no API       (~8-15 min)
     """
     session_id = state["session_id"]
-    questions = state.get("questions", [])
+    questions = list(state.get("questions", []) or [])
     brand_profile = state.get("brand_profile") or {}
     fetch_mode = state.get("fetch_mode") or "fast"
     tool_args = state.get("tool_call_args") or {}
+    retry_failed_only = bool(tool_args.get("retry_failed_only"))
+    question_targets = normalize_question_targets(tool_args.get("question_targets"))
+    if retry_failed_only and not question_targets:
+        recovery_plan = extract_latest_fetch_recovery_plan_from_state(state)
+        question_targets = normalize_question_targets(
+            (recovery_plan or {}).get("question_targets")
+        )
+    if question_targets:
+        questions = [
+            {
+                "id": item["question_id"],
+                "text": item["question_text"],
+                "category": "失败补采",
+                "platforms": list(item["platforms"]),
+            }
+            for item in question_targets
+        ]
     requested_platforms = tool_args.get("platforms") or []
     normalized_requested_platforms = _normalize_platform_filter(requested_platforms)
+    targeted_platforms = _normalize_platform_filter(
+        [
+            platform
+            for item in question_targets
+            for platform in item.get("platforms") or []
+        ]
+    )
     # 显式 tool_args.platforms 优先于历史 state.platform_filter，避免旧范围覆盖当前用户意图。
-    raw_platform_filter = normalized_requested_platforms or state.get("platform_filter")
+    raw_platform_filter = (
+        normalized_requested_platforms
+        or targeted_platforms
+        or state.get("platform_filter")
+    )
     platform_filter = _normalize_platform_filter(raw_platform_filter)
+    question_platform_targets = _question_platform_targets_from_questions(questions)
     aio_fetch_request = _AIO_ANSWER_FETCH_TOOL.build_request(
         state=state,
         questions=questions,
@@ -1175,7 +1388,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
     try:
         cleaned = BrowserFailureEvidenceService().cleanup_expired()
         if cleaned:
-            logger.info("[A4] Cleaned %d expired failure-evidence day folder(s)", cleaned)
+            logger.info(
+                "[A4] Cleaned %d expired failure-evidence day folder(s)", cleaned
+            )
     except Exception as cleanup_err:
         logger.warning("[A4] Failure-evidence cleanup failed: %s", cleanup_err)
 
@@ -1383,8 +1598,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 api_tasks = []
                 api_task_map: list[tuple[int, str]] = []  # (question_idx, platform)
                 for idx, question in enumerate(questions):
+                    question_id = _question_id_from_state_question(question)
+                    allowed_platforms = question_platform_targets.get(question_id)
                     q_text = question.get("text", "")
-                    if doubao_client is not None:
+                    if doubao_client is not None and (
+                        not allowed_platforms or "doubao" in allowed_platforms
+                    ):
                         api_tasks.append(
                             _throttled_retry_fetch(
                                 _fetch_from_doubao,
@@ -1395,7 +1614,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             )
                         )
                         api_task_map.append((idx, "doubao"))
-                    if hunyuan_client is not None:
+                    if hunyuan_client is not None and (
+                        not allowed_platforms or "hunyuan" in allowed_platforms
+                    ):
                         api_tasks.append(
                             _throttled_retry_fetch(
                                 _fetch_from_hunyuan,
@@ -1406,7 +1627,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             )
                         )
                         api_task_map.append((idx, "hunyuan"))
-                    if kimi_client is not None:
+                    if kimi_client is not None and (
+                        not allowed_platforms or "kimi" in allowed_platforms
+                    ):
                         api_tasks.append(
                             _throttled_retry_fetch(
                                 _fetch_from_kimi,
@@ -1569,7 +1792,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     results  # share reference for timeout recovery
                 )
                 for idx, question in enumerate(questions):
+                    qid = _question_id_from_state_question(question)
+                    allowed_platforms = question_platform_targets.get(qid)
                     q_text = question.get("text", "")
+                    if allowed_platforms and platform not in allowed_platforms:
+                        _browser_shared_done[platform] = idx + 1
+                        continue
 
                     # Circuit breaker check
                     if not breaker.allow_request():
@@ -1960,6 +2188,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         "[A4] Browser %s pipeline failed: %s", platform, browser_batch
                     )
                     for idx in range(total):
+                        question_id = _question_id_from_state_question(questions[idx])
+                        allowed_platforms = question_platform_targets.get(question_id)
+                        if allowed_platforms and platform not in allowed_platforms:
+                            continue
                         question_results[idx].append(
                             _attach_aio_platform_packet(
                                 {
@@ -1993,7 +2225,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 question_text = question.get("text", "")
                 platform_results = question_results[idx]
                 q_success = sum(
-                    1 for result in platform_results if _fetch_result_has_success(result)
+                    1
+                    for result in platform_results
+                    if _fetch_result_has_success(result)
                 )
                 logger.info(
                     "[A4] Q%d/%d: %d platforms succeeded", idx + 1, total, q_success
@@ -2021,14 +2255,26 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # platform list, but it must not inherit panorama fetch rows.
         final_fetch_results = fetch_results
         baseline = state.get("preserved_fetch_results")
-        if platform_filter and baseline is None and state.get("fetch_results"):
-            selected_platforms = {str(platform).strip().lower() for platform in platform_filter}
+        pair_targeted_merge = bool(question_platform_targets)
+        if (
+            (platform_filter or pair_targeted_merge)
+            and baseline is None
+            and state.get("fetch_results")
+        ):
+            selected_platforms = (
+                {str(platform).strip().lower() for platform in platform_filter}
+                if platform_filter
+                else None
+            )
             baseline = _derive_preserved_fetch_results(
                 current_questions=questions,
                 existing_fetch_results=state.get("fetch_results") or [],
                 selected_platforms=selected_platforms,
+                question_platform_targets=question_platform_targets or None,
             )
-        scoped_merge_active = bool(platform_filter and baseline)
+        scoped_merge_active = bool(
+            (platform_filter or pair_targeted_merge) and baseline
+        )
         if scoped_merge_active:
             baseline_map: dict[str, dict[str, Any]] = {}
             for baseline_entry in baseline:
@@ -2149,6 +2395,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
             if platform_filter
             else MIN_PLATFORMS_REQUIRED
         )
+        completion_decision = decide_a4_completion_policy(
+            success_count=len(successful_platforms),
+            fail_count=fail_count,
+            effective_min=effective_min,
+            platform_filter=platform_filter,
+        )
 
         if len(successful_platforms) < effective_min:
             logger.warning(
@@ -2206,38 +2458,15 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 f"- **{display_name}**: {stats['completed']}/{stats['total']} 成功 ({success_rate:.0f}%)"
             )
 
-        detailed_response = f"""✅ **答案抓取完成**
-
-本轮问题已经完成抓取，抓取结果会统一收敛到 **AI答案抓取结果** artifact；平台成功/失败统计也只以这份结果为准。
-
-**📊 抓取概览**
-- 总抓取次数：{total_fetches} 次
-- 成功抓取：{successful_fetches} 次
-- 成功率：{(successful_fetches/total_fetches*100) if total_fetches > 0 else 0:.0f}%
-
-**🌐 平台分布**
-{chr(10).join(platform_summary) if platform_summary else "- 暂无平台数据"}
-
-**📋 输出内容**
-- 完整抓取结果（左侧 Canvas）
-- 平台答案对照与引用列表
-
-**⏭️ 下一步**
-抓取已完成。我会基于当前抓取结果继续生成分析报告。"""
-
-        from app.workflow.events import send_tpaor_event
-
-        await send_tpaor_event(
-            session_id, "response", detailed_response, is_complete=True
-        )
-
         # Save and send artifact to Canvas
         from app.workflow.events import save_and_send_artifact
 
-        await save_and_send_artifact(
+        artifact_key = f"{session_id}_fetchResults_a4"
+        artifact_message_id = await save_and_send_artifact(
             session_id=session_id,
             output_type="fetchResults",
             title="AI答案抓取结果",
+            artifact_key=artifact_key,
             data={
                 "fetchResults": projected_fetch_results,
                 "platformStatus": (
@@ -2252,6 +2481,43 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 ),
             },
         )
+        artifact_validation = validate_artifact_writeback(
+            gate_name="artifact_writeback_gate",
+            artifact_message_id=artifact_message_id,
+            artifact_key=artifact_key,
+            artifact_kind="fetch_results",
+            metadata={
+                "step": "A4",
+                "success_count": len(successful_platforms),
+                "fail_count": fail_count,
+                "retry_failed_only": retry_failed_only,
+                "scoped_merge_active": scoped_merge_active,
+            },
+        )
+        observation = _build_a4_completion_observation(
+            projected_fetch_results=projected_fetch_results,
+            completion_decision=completion_decision,
+            artifact_validation=artifact_validation,
+            retry_failed_only=retry_failed_only,
+            scoped_merge_active=scoped_merge_active,
+            question_targets=question_targets,
+            successful_fetches=successful_fetches,
+            total_fetches=total_fetches,
+            fail_count=fail_count,
+            platform_statuses=platform_statuses,
+        )
+        detailed_response = _build_a4_completion_response(
+            total_fetches=total_fetches,
+            successful_fetches=successful_fetches,
+            platform_summary=platform_summary,
+            observation=observation,
+        )
+
+        from app.workflow.events import send_tpaor_event
+
+        await send_tpaor_event(
+            session_id, "response", detailed_response, is_complete=True
+        )
         if task_id and task_run_id:
             try:
                 from uuid import UUID as _UUID
@@ -2265,7 +2531,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     state_service = FetchRunPlatformStateService(db)
                     await state_service.mark_artifact_write_status(
                         task_run_id=_UUID(str(task_run_id)),
-                        status="written",
+                        status="written" if artifact_validation.passed else "failed",
                     )
                     await db.commit()
             except Exception as artifact_status_err:
@@ -2273,11 +2539,63 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     "[A4] Failed to mark fetch artifact write status: %s",
                     artifact_status_err,
                 )
-        completion_decision = decide_a4_completion_policy(
-            success_count=len(successful_platforms),
-            fail_count=fail_count,
-            effective_min=effective_min,
-            platform_filter=platform_filter,
+
+        merge_validation_update = build_validation_result_update(
+            state, merge_validation
+        )
+        artifact_validation_state = {**state, **merge_validation_update}
+        artifact_validation_update = build_validation_result_update(
+            artifact_validation_state,
+            artifact_validation,
+        )
+
+        if not artifact_validation.passed:
+            artifact_failure_message = (
+                "答案抓取结果已生成，但官方结果写回失败，当前不能继续生成分析报告。"
+            )
+            await send_error_event(
+                session_id,
+                "A4",
+                artifact_failure_message,
+                recoverable=True,
+            )
+            decision_update = build_harness_decision_update(
+                {**artifact_validation_state, **artifact_validation_update},
+                build_harness_decision(
+                    decision_type="retry_step",
+                    reason=artifact_validation.reason,
+                    recoverable=True,
+                    metadata={
+                        "step": "A4",
+                        "blocker_code": "artifact_writeback_failed",
+                        "artifact_key": artifact_key,
+                    },
+                ),
+            )
+            return Command(
+                update={
+                    "a4_completion_observation": observation,
+                    "current_step": "A4",
+                    "execution_status": "error",
+                    "error_info": {
+                        "step": "A4",
+                        "error": artifact_failure_message,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                    **merge_validation_update,
+                    **artifact_validation_update,
+                    **decision_update,
+                }
+            )
+
+        canonical_result = _build_a4_canonical_result(
+            projected_fetch_results=projected_fetch_results,
+            authoritative_projection=authoritative_projection,
+            artifact_message_id=artifact_message_id,
+            artifact_key=artifact_key,
+            artifact_validation=artifact_validation,
+            completion_decision=completion_decision,
+            observation=observation,
         )
 
         # Write A4 materials into Knowledge Workspace for future retrieval.
@@ -2295,7 +2613,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     task_id=task_id,
                     run_id=state.get("run_id"),
                     brand_profile=brand_profile,
-                    fetch_results=final_fetch_results,
+                    fetch_results=canonical_result["fetch_results"],
                 )
         except Exception as knowledge_err:
             logger.warning("[A4] Knowledge write-back failed: %s", knowledge_err)
@@ -2339,27 +2657,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 logger.warning("[A4] TaskService milestone failed: %s", te)
 
         update_dict: dict[str, Any] = {
-            "fetch_results": projected_fetch_results,
+            "a4_canonical_result": canonical_result,
+            "a4_completion_observation": observation,
+            "fetch_recovery_plan": dict(observation.get("recovery_plan") or {}),
+            "fetch_results": canonical_result["fetch_results"],
             "current_step": "A4",
             "progress": 0.6,
         }
         # Clear platform_filter after use; scoped reruns should deterministically
-        # continue into A5 instead of relying on a dead boolean flag.
-        if platform_filter:
+        # reuse the official canonical result instead of stale transient filters.
+        if platform_filter or pair_targeted_merge:
             update_dict["platform_filter"] = None
             update_dict["preserved_fetch_results"] = None
-        if scoped_merge_active:
-            update_dict["next_required_action"] = build_next_required_action(
-                tool_name="analysis_report_skill",
-                tool_args={"report_type": state.get("analysis_mode") or "persona"},
-                reason="答案抓取定向重跑完成后需要刷新分析报告。",
-                reply_text="定向重跑已完成，继续刷新分析报告。",
-                source_step="A4",
-                metadata={
-                    "trigger": "scoped_rerun_completed",
-                    "platform_filter": list(platform_filter or []),
-                },
-            )
 
         if len(successful_platforms) == 0:
             update_dict["error_info"] = {
@@ -2368,10 +2677,40 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
-        update_dict.update(build_validation_result_update(state, merge_validation))
+        skill_update = build_skill_result_update(
+            state,
+            skill_key=state.get("current_skill"),
+            tool_name="answer_fetch",
+            status=(
+                "degraded"
+                if completion_decision.decision_type == "degraded_continue"
+                else "completed"
+            ),
+            summary=str(observation.get("summary") or "答案抓取已完成。"),
+            executor_ref="a4_answer_fetch",
+            metadata={
+                "artifact_message_id": artifact_message_id,
+                "artifact_key": artifact_key,
+                "success_count": len(successful_platforms),
+                "fail_count": fail_count,
+                "requires_user_decision": bool(
+                    observation.get("requires_user_decision")
+                ),
+                "followup_options": list(observation.get("followup_options") or []),
+                "retry_failed_only": retry_failed_only,
+                "scoped_merge_active": scoped_merge_active,
+            },
+        )
+        update_dict.update(skill_update)
+        update_dict.update(merge_validation_update)
+        update_dict.update(artifact_validation_update)
         update_dict.update(
             build_harness_decision_update(
-                {**state, **update_dict},
+                {
+                    **artifact_validation_state,
+                    **artifact_validation_update,
+                    **update_dict,
+                },
                 completion_decision,
             )
         )
@@ -2414,7 +2753,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         return Command(
             update={
-                "fetch_results": fetch_results,
+                "a4_completion_observation": None,
                 "error_info": {
                     "step": "A4",
                     "error": str(e),
@@ -2673,8 +3012,9 @@ async def _fetch_from_browser(
     evidence_ref = None
     max_verify_recoveries = 3
     pending_action: PendingBrowserAction | None = None
-    resolved_action_wait_timeout = action_wait_timeout or _get_browser_action_wait_timeout(
-        platform, question_count
+    resolved_action_wait_timeout = (
+        action_wait_timeout
+        or _get_browser_action_wait_timeout(platform, question_count)
     )
 
     try:

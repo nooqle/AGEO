@@ -8,9 +8,11 @@ by A4 browser execution.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from app.core.fetchers.browser.failure_observability import build_failure_contract
 from app.schemas.fetch import BrowserEvent, BrowserState, FetchResult, SearchReference
 from app.workflow.browser_action_contract import wait_for_browser_action_resume
 
@@ -27,6 +29,21 @@ AsyncCaptureEvidence = Callable[..., Awaitable[dict[str, Any] | None]]
 BoolPredicate = Callable[[Any], bool]
 AsyncRetryFetch = Callable[..., Awaitable[dict[str, Any]]]
 
+logger = logging.getLogger(__name__)
+
+_DEFAULT_STABLE_ROUNDS = 2
+_DEFAULT_BLOCKER_CHECK_AFTER_SECONDS = 9
+
+
+def _coerce_positive_int(value: Any, *, default: int, minimum: int = 1) -> int:
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError):
+        return default
+    if resolved < minimum:
+        return default
+    return resolved
+
 
 @dataclass(slots=True)
 class BrowserAnswerExecutionPlan:
@@ -40,8 +57,8 @@ class BrowserAnswerExecutionPlan:
     max_wait: int = 60
     poll_interval: int = 3
     min_content_len: int = 0
-    stable_rounds: int | None = None
-    blocker_check_after_seconds: int | None = None
+    stable_rounds: int = _DEFAULT_STABLE_ROUNDS
+    blocker_check_after_seconds: int = _DEFAULT_BLOCKER_CHECK_AFTER_SECONDS
     dump_keywords: list[str] | None = None
     parser_message_overrides: dict[str, str] | None = None
     before_dom_extract: AsyncHook | None = None
@@ -77,52 +94,86 @@ async def execute_post_submit_capture_flow(
     answer_text = ""
     search_refs: list[SearchReference] = []
     source = "dom"
+    stable_rounds = _coerce_positive_int(
+        plan.stable_rounds,
+        default=_DEFAULT_STABLE_ROUNDS,
+        minimum=1,
+    )
+    blocker_check_after_seconds = _coerce_positive_int(
+        plan.blocker_check_after_seconds,
+        default=_DEFAULT_BLOCKER_CHECK_AFTER_SECONDS,
+        minimum=1,
+    )
 
-    if plan.intercept_task:
-        parsed = await plan.intercept_task
-        if parsed and parsed.parse_ok and len(parsed.answer_text.strip()) >= 10:
-            answer_text = parsed.answer_text
-            search_refs = parsed.references
-            source = "network"
-        elif parsed and parsed.error_type:
-            parser_events, handled = await handler._handle_browser_agent_parser_error(
-                parsed_error=parsed.error,
-                error_type=parsed.error_type,
-                progress=plan.parser_error_progress,
-                fallback_url=plan.fallback_url,
-                message_overrides=plan.parser_message_overrides,
+    try:
+        if plan.intercept_task:
+            parsed = await plan.intercept_task
+            if parsed and parsed.parse_ok and len(parsed.answer_text.strip()) >= 10:
+                answer_text = parsed.answer_text
+                search_refs = parsed.references
+                source = "network"
+            elif parsed and parsed.error_type:
+                parser_events, handled = await handler._handle_browser_agent_parser_error(
+                    parsed_error=parsed.error,
+                    error_type=parsed.error_type,
+                    progress=plan.parser_error_progress,
+                    fallback_url=plan.fallback_url,
+                    message_overrides=plan.parser_message_overrides,
+                )
+                events.extend(parser_events)
+                if handled:
+                    return None, events
+                return None, events
+
+        if not answer_text:
+            prev_len, waited, blocker_decision = await handler._wait_for_content_with_browser_agent(
+                max_wait=plan.max_wait,
+                poll_interval=plan.poll_interval,
+                min_content_len=plan.min_content_len,
+                stable_rounds=stable_rounds,
+                target_url=plan.fallback_url,
+                blocker_check_after_seconds=blocker_check_after_seconds,
             )
-            events.extend(parser_events)
+            blocker_events, handled = await handler._handle_browser_agent_wait_blocker(
+                blocker_decision,
+                progress=plan.blocker_progress,
+                fallback_url=plan.fallback_url,
+            )
+            events.extend(blocker_events)
             if handled:
                 return None, events
-            return None, events
 
-    if not answer_text:
-        prev_len, waited, blocker_decision = await handler._wait_for_content_with_browser_agent(
-            max_wait=plan.max_wait,
-            poll_interval=plan.poll_interval,
-            min_content_len=plan.min_content_len,
-            stable_rounds=plan.stable_rounds,
-            target_url=plan.fallback_url,
-            blocker_check_after_seconds=plan.blocker_check_after_seconds,
-        )
-        blocker_events, handled = await handler._handle_browser_agent_wait_blocker(
-            blocker_decision,
-            progress=plan.blocker_progress,
+            if prev_len == 0:
+                await handler._dump_page_debug(
+                    waited,
+                    extra_keywords=plan.dump_keywords or [],
+                )
+
+            if plan.before_dom_extract:
+                await plan.before_dom_extract()
+
+            events.append(
+                handler._create_event(
+                    BrowserState.EXTRACTING,
+                    "提取回答内容...",
+                    progress=plan.extract_progress,
+                )
+            )
+            answer_extractor = plan.extract_answer or handler._extract_answer_dom
+            reference_extractor = (
+                plan.extract_references or handler._extract_references_dom
+            )
+            answer_text = await answer_extractor()
+            search_refs = await reference_extractor()
+
+        empty_events, handled = await handler._handle_browser_agent_empty_answer(
+            answer_text,
+            progress=plan.empty_answer_progress,
             fallback_url=plan.fallback_url,
         )
-        events.extend(blocker_events)
+        events.extend(empty_events)
         if handled:
             return None, events
-
-        if prev_len == 0:
-            await handler._dump_page_debug(
-                waited,
-                extra_keywords=plan.dump_keywords or [],
-            )
-
-        if plan.before_dom_extract:
-            await plan.before_dom_extract()
 
         events.append(
             handler._create_event(
@@ -131,36 +182,59 @@ async def execute_post_submit_capture_flow(
                 progress=plan.extract_progress,
             )
         )
-        answer_extractor = plan.extract_answer or handler._extract_answer_dom
-        reference_extractor = (
-            plan.extract_references or handler._extract_references_dom
+        fetch_result = await handler._build_success_result(
+            question=plan.question,
+            answer_text=answer_text,
+            search_references=search_refs,
+            source=source,
         )
-        answer_text = await answer_extractor()
-        search_refs = await reference_extractor()
-
-    empty_events, handled = await handler._handle_browser_agent_empty_answer(
-        answer_text,
-        progress=plan.empty_answer_progress,
-        fallback_url=plan.fallback_url,
-    )
-    events.extend(empty_events)
-    if handled:
+        return fetch_result, events
+    except Exception as exc:
+        tag = getattr(handler, "PLATFORM_KEY", "browser")
+        logger.exception(
+            "[%s] Shared post-submit capture flow failed: %s",
+            str(tag).capitalize(),
+            exc,
+        )
+        evidence_ref = None
+        capture_evidence = getattr(handler, "_capture_failure_evidence", None)
+        if callable(capture_evidence):
+            try:
+                evidence_ref = await capture_evidence(
+                    failure_reason="parser_error",
+                    execution_stage="fetch_loop",
+                    extra_metadata={
+                        "exception_type": exc.__class__.__name__,
+                        "exception_message": str(exc),
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "[%s] Failed to capture executor evidence for fetch-loop error",
+                    str(tag).capitalize(),
+                )
+        display_name = (
+            handler._platform_display_name()
+            if callable(getattr(handler, "_platform_display_name", None))
+            else "当前平台"
+        )
+        events.append(
+            handler._create_event(
+                BrowserState.ERROR,
+                f"{display_name}抓取流程异常中断，请稍后重试。",
+                progress=0,
+                error_type="fetch_loop_error",
+                **build_failure_contract(
+                    failure_reason="parser_error",
+                    execution_stage="fetch_loop",
+                    retryable=False,
+                    needs_handoff=False,
+                    failure_layer="executor",
+                    evidence_ref=evidence_ref,
+                ),
+            )
+        )
         return None, events
-
-    events.append(
-        handler._create_event(
-            BrowserState.EXTRACTING,
-            "提取回答内容...",
-            progress=plan.extract_progress,
-        )
-    )
-    fetch_result = await handler._build_success_result(
-        question=plan.question,
-        answer_text=answer_text,
-        search_references=search_refs,
-        source=source,
-    )
-    return fetch_result, events
 
 
 def infer_browser_action_requirement(

@@ -174,6 +174,30 @@ class AgentState(TypedDict):
     #   }
     # ]
 
+    a4_canonical_result: dict | None
+    # {
+    #   "version": str,
+    #   "fetch_results": list,
+    #   "platform_status": dict,
+    #   "timing_summary": dict,
+    #   "artifact": {"message_id": str, "artifact_key": str, "output_type": str},
+    #   "validation": {"gate_name": str, "passed": bool, "reason": str, ...},
+    #   "completion_decision": {"decision_type": str, "reason": str, ...},
+    #   "recovery_plan": {...}
+    # }
+
+    a4_completion_observation: dict | None
+    # {
+    #   "requires_user_decision": bool,
+    #   "followup_options": list[dict],
+    #   "failed_question_count": int,
+    #   "failed_platform_count": int,
+    #   "artifact_write_validated": bool,
+    #   "summary": str,
+    # }
+
+    fetch_recovery_plan: dict | None
+
     # =========================================================================
     # A5 Output: Analytics & Report
     # =========================================================================
@@ -265,7 +289,9 @@ class AgentState(TypedDict):
         str | None
     )  # Optional prompt overlay resolved from selected profile
     current_skill_contract: dict | None  # Structured public skill contract payload
-    current_skill_prompt_sections: list | None  # Structured model-visible skill sections
+    current_skill_prompt_sections: (
+        list | None
+    )  # Structured model-visible skill sections
     current_tool_capability: dict | None  # Structured tool capability payload
     last_skill_result: dict | None  # Latest skill execution result summary
     skill_history: list  # [{skill_key, tool_name, status, summary, ...}]

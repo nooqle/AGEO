@@ -55,7 +55,9 @@ def evaluate_skill_preconditions(
             reason="No skill contract attached to current state.",
         )
 
-    preconditions = [str(item) for item in (contract_payload.get("preconditions") or [])]
+    preconditions = [
+        str(item) for item in (contract_payload.get("preconditions") or [])
+    ]
     missing: list[str] = []
     for rule in preconditions:
         if rule == "fetch_results_required" and not state.get("fetch_results"):
@@ -117,6 +119,89 @@ def validate_artifact_writeback(
     )
 
 
+def validate_a4_canonical_result(
+    state: Mapping[str, Any],
+) -> ValidationGateResult:
+    """Validate that A5 consumes an official, persisted A4 result."""
+
+    canonical = state.get("a4_canonical_result")
+    if not isinstance(canonical, Mapping):
+        legacy_fetch_results = state.get("fetch_results")
+        legacy_observation = state.get("a4_completion_observation")
+        if (
+            isinstance(legacy_fetch_results, list)
+            and legacy_fetch_results
+            and not isinstance(legacy_observation, Mapping)
+        ):
+            return ValidationGateResult(
+                gate_name="a4_canonical_result_gate",
+                passed=True,
+                reason=(
+                    "Legacy fetch_results state reused because no A4 canonical result "
+                    "was recorded before this rollout."
+                ),
+                metadata={
+                    "artifact_message_id": "",
+                    "blocker_code": "legacy_fetch_results_fallback",
+                    "question_count": len(legacy_fetch_results),
+                },
+            )
+        return ValidationGateResult(
+            gate_name="a4_canonical_result_gate",
+            passed=False,
+            reason=(
+                "A4 canonical fetch result is missing. "
+                "Please complete a persisted answer-fetch run before generating A5."
+            ),
+            metadata={"blocker_code": "fetch_results_missing"},
+        )
+
+    validation = canonical.get("validation")
+    if not isinstance(validation, Mapping) or not bool(validation.get("passed")):
+        return ValidationGateResult(
+            gate_name="a4_canonical_result_gate",
+            passed=False,
+            reason=(
+                "A4 canonical fetch result is not validated for downstream analytics. "
+                "Please finish the official fetch artifact writeback first."
+            ),
+            metadata={
+                "blocker_code": "artifact_writeback_failed",
+                "artifact_message_id": str(
+                    ((validation or {}).get("metadata") or {}).get(
+                        "artifact_message_id"
+                    )
+                    or ""
+                ),
+            },
+        )
+
+    fetch_results = canonical.get("fetch_results")
+    if not isinstance(fetch_results, list) or not fetch_results:
+        return ValidationGateResult(
+            gate_name="a4_canonical_result_gate",
+            passed=False,
+            reason=("A4 canonical fetch result does not contain usable fetch_results."),
+            metadata={"blocker_code": "fetch_results_missing"},
+        )
+
+    artifact = canonical.get("artifact")
+    artifact_message_id = ""
+    if isinstance(artifact, Mapping):
+        artifact_message_id = str(artifact.get("message_id") or "").strip()
+
+    return ValidationGateResult(
+        gate_name="a4_canonical_result_gate",
+        passed=True,
+        reason="A4 canonical fetch result is validated for A5 consumption.",
+        metadata={
+            "artifact_message_id": artifact_message_id,
+            "blocker_code": "none",
+            "question_count": len(fetch_results),
+        },
+    )
+
+
 def evaluate_skill_postconditions(
     *,
     state: Mapping[str, Any],
@@ -134,7 +219,9 @@ def evaluate_skill_postconditions(
         )
 
     pending = dict(pending_update or {})
-    postconditions = [str(item) for item in (contract_payload.get("postconditions") or [])]
+    postconditions = [
+        str(item) for item in (contract_payload.get("postconditions") or [])
+    ]
     missing: list[str] = []
     for rule in postconditions:
         if rule in {"report_artifact_persisted", "confidence_artifact_persisted"}:
@@ -198,7 +285,9 @@ def validate_scoped_fetch_merge(
     preserved = list(preserved_results or [])
     merged = list(merged_results or [])
     merged_by_question = {
-        str(item.get("question_id") or ""): item for item in merged if item.get("question_id")
+        str(item.get("question_id") or ""): item
+        for item in merged
+        if item.get("question_id")
     }
     missing_questions: list[str] = []
     missing_platform_pairs: list[str] = []

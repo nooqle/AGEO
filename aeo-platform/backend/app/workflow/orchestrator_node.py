@@ -67,7 +67,11 @@ from app.workflow.runtime_policy_executor import (
     resolve_answer_fetch_mode_policy,
     summarize_alternative_actions,
 )
+from app.workflow.fetch_recovery import (
+    normalize_question_targets,
+)
 from app.workflow.nodes_streaming import async_wrap_sync_gen
+
 logger = logging.getLogger(__name__)
 
 SKILLIZED_TOOL_NAMES = {
@@ -86,6 +90,7 @@ _VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
     "confidence_analysis_skill": "引用置信度评估",
     "confidence_signal_skill": "引用置信度评估",
     "citation_confidence_analysis": "引用置信度评估",
+    "site_confidence_assessment_skill": "官网 AI 友好度",
     "post_analysis_skill": "后续分析",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
@@ -146,9 +151,7 @@ def _normalize_public_report_kind(value: Any) -> str:
 def _normalize_internal_analysis_mode(value: Any) -> str:
     """Keep workflow state compatible while public APIs move to canonical terms."""
     return (
-        "baseline"
-        if _normalize_public_report_kind(value) == "panorama"
-        else "persona"
+        "baseline" if _normalize_public_report_kind(value) == "panorama" else "persona"
     )
 
 
@@ -255,6 +258,22 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "用户自定义问题文本列表（可选）。当用户直接提供问题时使用，将覆盖 A3 生成的问题。",
+                },
+                "question_targets": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question_id": {"type": "string"},
+                            "question_text": {"type": "string"},
+                            "platforms": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["question_id", "question_text", "platforms"],
+                    },
+                    "description": "定向补采时使用。每个问题只重跑指定失败平台，并保留已成功结果。",
                 },
             },
         },
@@ -439,7 +458,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
     {
         "name": "knowledge_export",
         "description": (
-            "把过往资料整理成可交付的数据表 artifact。"
+            "把过往资料整理成可交付的数据表。"
             "适用于用户明确要求导出、下载、生成文件、拉清单或交付过往资料。"
             "执行后会生成一个可在前端继续导出为 md/pdf 的数据表。"
         ),
@@ -743,9 +762,23 @@ def _format_knowledge_group(group: dict[str, Any]) -> str:
         ]
     samples = "；".join(_compact_text(item, 32) for item in sample_titles[:2])
     sample_suffix = f"；样例={samples}" if samples else ""
+    fetch_suffix = ""
+    success_count = group.get("success_count")
+    failure_count = group.get("failure_count")
+    fetch_metrics: list[str] = []
+    if isinstance(success_count, int) and isinstance(failure_count, int):
+        fetch_metrics.extend([f"成功={success_count}", f"失败={failure_count}"])
+    question_count = group.get("question_count")
+    if isinstance(question_count, int):
+        fetch_metrics.append(f"问题数={question_count}")
+    platform_count = group.get("platform_count")
+    if isinstance(platform_count, int):
+        fetch_metrics.append(f"平台数={platform_count}")
+    if fetch_metrics:
+        fetch_suffix = "；" + "；".join(fetch_metrics)
     return (
         f"- {group.get('group_key', 'unknown')}：{group.get('count', 0)} 条"
-        f"；来源={','.join(group.get('source_types') or [])}{sample_suffix}"
+        f"{fetch_suffix}；来源={','.join(group.get('source_types') or [])}{sample_suffix}"
     )
 
 
@@ -798,7 +831,7 @@ def _build_recent_knowledge_context(state: AgentState) -> str:
             "\n最近一次资料表结果:\n"
             f"- 标题={export_result.get('title', '过往资料表')}；"
             f"记录数={export_result.get('item_count', 0)}；"
-            f"artifact={export_result.get('artifact_id', 'unknown')}"
+            "相关结果已生成"
         )
 
     compare_result = state.get("knowledge_compare_result") or {}
@@ -932,9 +965,8 @@ def _is_current_report_follow_up(state: AgentState) -> bool:
     mentions_current_fetch = any(
         marker in latest_user_message for marker in current_fetch_reference_markers
     )
-    return (
-        (mentions_current_report or mentions_current_fetch)
-        and not any(marker in latest_user_message for marker in strong_history_markers)
+    return (mentions_current_report or mentions_current_fetch) and not any(
+        marker in latest_user_message for marker in strong_history_markers
     )
 
 
@@ -973,6 +1005,13 @@ def _build_knowledge_planning_hint(state: AgentState) -> str:
     has_materials = any(bool(value) for value in available_sources.values())
     if not has_materials:
         return ""
+
+    if _infer_authoritative_history_refresh_tool(state) is not None:
+        return (
+            "\n当前用户明确在问上一轮/最近一轮抓取的失败统计或补采对象。"
+            "这里不能直接复述历史对话中的旧数字，必须先刷新权威历史结果；"
+            "优先考虑 knowledge_aggregate，必要时再结合 knowledge_lookup。"
+        )
 
     text = latest_user_message.lower()
     compare_keywords = [
@@ -1084,9 +1123,8 @@ def _infer_current_session_followup_tool(
         "4月",
         "5月",
     ]
-    if (
-        not _is_current_report_follow_up(state)
-        and any(keyword in latest_user_message for keyword in history_keywords)
+    if not _is_current_report_follow_up(state) and any(
+        keyword in latest_user_message for keyword in history_keywords
     ):
         return None
 
@@ -1117,6 +1155,92 @@ def _infer_current_session_followup_tool(
             )
 
     return None
+
+
+def _infer_authoritative_history_refresh_tool(
+    state: AgentState,
+) -> tuple[str, dict[str, Any]] | None:
+    """Require a fresh history read for latest-run fetch stats before answering."""
+
+    latest_user_message = _get_latest_user_message(state)
+    if not latest_user_message:
+        return None
+    if _session_was_recalled(state) or _is_current_report_follow_up(state):
+        return None
+
+    if not _is_latest_run_history_stats_query(latest_user_message):
+        return None
+
+    manifest = state.get("knowledge_manifest") or {}
+    available_sources = manifest.get("available_sources") or {}
+    if not any(bool(value) for value in available_sources.values()):
+        return None
+
+    if _has_authoritative_history_refresh_result(state):
+        return None
+
+    lowered = latest_user_message.lower()
+    group_by = "source_type"
+    if any(
+        marker in latest_user_message
+        for marker in ("问题", "题目", "没有采集到答案", "没成功")
+    ):
+        group_by = "question"
+    elif any(
+        marker in lowered
+        for marker in ("平台", "deepseek", "kimi", "doubao", "元宝", "hunyuan")
+    ):
+        group_by = "platform"
+
+    return (
+        "knowledge_aggregate",
+        {
+            "query": latest_user_message,
+            "group_by": group_by,
+            "limit": 12,
+            "source_types": ["fetch_answer"],
+        },
+    )
+
+
+def _is_latest_run_history_stats_query(message: str | None) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+
+    latest_window_markers = [
+        "上一轮",
+        "上轮",
+        "最近一轮",
+        "最近这轮",
+        "上次",
+        "上一批",
+        "最新一轮",
+    ]
+    fetch_status_markers = [
+        "采集",
+        "抓取",
+        "成功",
+        "失败",
+        "成功率",
+        "失败率",
+        "失败平台",
+        "失败的问题",
+        "失败题目",
+        "没有采集到答案",
+        "没成功",
+        "补采",
+    ]
+    return any(marker in text for marker in latest_window_markers) and any(
+        marker in text for marker in fetch_status_markers
+    )
+
+
+def _has_authoritative_history_refresh_result(state: AgentState) -> bool:
+    aggregate_result = state.get("knowledge_aggregate_result") or {}
+    return (
+        isinstance(aggregate_result, dict) and aggregate_result.get("status") == "hit"
+    )
 
 
 def _get_contextual_hidden_tool_names(state: AgentState | None) -> set[str]:
@@ -1281,7 +1405,14 @@ def _infer_knowledge_fallback_tool(
             source_types = ["competitor_profile", "fetch_answer"]
         elif any(
             keyword in latest_user_message
-            for keyword in ["品牌档案", "品牌信息", "品牌定位", "品牌介绍", "核心产品", "目标受众"]
+            for keyword in [
+                "品牌档案",
+                "品牌信息",
+                "品牌定位",
+                "品牌介绍",
+                "核心产品",
+                "目标受众",
+            ]
         ):
             source_types = ["brand_profile", "competitor_profile"]
         elif "答案" in latest_user_message:
@@ -1365,7 +1496,10 @@ def _build_context_summary(state: AgentState) -> str:
             available_tools.append(
                 "post_analysis_skill (可对已有结果做深挖、对比、解释或风险提取)"
             )
-        if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
+        if (
+            preferred_followup_tool
+            and preferred_followup_tool[0] == "drill_down_analysis"
+        ):
             parts.append("- 当前问题命中本次结果深挖场景，优先使用 drill_down_analysis")
             if "post_analysis_skill" in hidden_tool_names:
                 parts.append(
@@ -1417,7 +1551,9 @@ def _build_context_summary(state: AgentState) -> str:
                 if int(history_info.get("analysis_window_count") or 0) >= 2:
                     available_tools.append("knowledge_compare (可对比最近变化)")
                 else:
-                    unavailable_tools.append("knowledge_compare (过往轮次不足，暂不可对比)")
+                    unavailable_tools.append(
+                        "knowledge_compare (过往轮次不足，暂不可对比)"
+                    )
         else:
             if "knowledge_lookup" not in hidden_tool_names:
                 unavailable_tools.append("knowledge_lookup (当前尚无过往资料可复用)")
@@ -1456,74 +1592,39 @@ def _build_context_summary(state: AgentState) -> str:
 # =============================================================================
 
 DIRECTIVE_A1_HAS_BASELINE = (
-    "【强制操作】你必须先用 3-5 句话向用户汇报品牌分析结果（包含至少1个具体洞察），"
-    "然后在消息末尾用自然语言列出选项：\n"
-    "1. 做一次引用内容置信度评估（可选）— 检查当前引用来源的可信度、结构化质量与可核查性\n"
-    "2. 生成用户画像，进入场景细化分析（推荐）— 基于不同用户群体深入分析品牌在各场景下的AI曝光表现\n"
-    "3. 重新运行品牌全景分析 — 使用最新数据重新评估品牌在各AI平台上的整体表现\n"
-    "4. 直接提问 — 针对已有数据自由提问\n"
-    "您可以回复序号，或者直接说您的想法。\n"
-    "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
-    "不要跳过 ask_user，不要自行决定下一步。"
+    "建议先用 3-5 句话向用户汇报品牌分析结果，并带出至少 1 个具体洞察。"
+    "如果用户还没有明确下一步，可继续引导其在引用内容置信度评估、用户画像与场景细化、"
+    "重新运行品牌全景分析或直接追问之间做选择；只有在确实需要明确选择时，再调用 ask_user。"
 )
 
 DIRECTIVE_A1_NO_BASELINE = (
-    "【强制操作】当前仅完成了品牌分析，还没有建立品牌全景分析结果。\\n"
-    "你必须先向用户说明：“品牌全景分析会用行业通用问题建立品牌在各个AI平台的整体认知参考，后续画像和场景分析都会基于它进行对比。”\\n"
-    "1) 品牌全景分析会采集行业通用问题的AI回答，建立品牌整体认知\\n"
-    "2) 品牌全景分析完成后，再生成用户画像可以做场景对比\\n"
-    "3) 完整采集模式下需要约10-20分钟\\n"
-    "请向用户给出两个选择：\\n"
-    "1. 先运行品牌全景分析\\n"
-    "2. 暂不\\n"
-    "然后调用 ask_user(message='是否先运行品牌全景分析？')，不要传 options 参数。不要跳过这一确认步骤。"
+    "当前仅完成了品牌分析，还没有建立品牌全景分析结果。"
+    "建议先向用户说明品牌全景分析会用行业通用问题建立各 AI 平台上的整体认知参考，"
+    "后续画像和场景分析都会基于它做对比；如果用户尚未明确是否继续，可再调用 ask_user 请求确认。"
 )
 
 DIRECTIVE_A2_ASK_PATH = (
-    "【强制操作】画像已生成并展示在右侧画布（Canvas）的管道图中。"
-    "你必须在消息中引导用户：\n"
-    "'用户画像已生成，请在右侧画布的管道图中勾选您希望重点分析的画像（可多选），然后点击确认选择按钮。'\n"
-    "然后在消息末尾列出选项：\n"
-    "1. 我已在画布中选好画像 — 请先在右侧画布中勾选画像，再回复此选项\n"
-    "2. 跳过，品牌全景分析 — 覆盖所有用户群体，不针对特定画像\n"
-    "您可以回复序号，或者直接说您的想法。\n"
-    "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
-    "不要调用 question_simulation，必须等用户操作后再继续。"
+    "画像已生成并展示在界面结果区中。"
+    "建议先提醒用户勾选希望重点分析的画像；"
+    "如果用户还没有明确是否继续或是否跳过，可调用 ask_user 请求确认。"
 )
 
 DIRECTIVE_A3_NEXT_FETCH = (
-    "【强制操作】用 2-3 句话友好地向用户说明问题已生成（可提及问题数量、覆盖的主题方向），"
-    "在消息中说明问题列表已在右侧画布中展示。然后在消息末尾用自然语言列出以下选项，每个选项必须包含说明文字：\n"
-    "1. 快速采集（推荐）— 通过 API 调用豆包、元宝和 Kimi，并通过浏览器采集 DeepSeek，约 3-5 分钟。"
-    "能快速建立品牌在 AI 平台中的初步观感，但 API 返回的内容与真实用户在网页端看到的可能存在差异\n"
-    "2. 完整采集 — 4 个平台全部通过浏览器模拟真实用户访问，约 10-20 分钟。"
-    "完全还原用户在网页端的真实体验，采集到的回答、引用来源和品牌提及最为准确，是深度 AEO 分析的最佳选择\n"
-    "3. 重新生成问题 — 如果对当前问题不满意\n"
-    "您可以回复序号，或者直接说您的想法。\n"
-    "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
-    "不要逐条列出问题内容（UI 已经展示了）。"
-    "用户选择 1 后调用 answer_fetch(fetch_mode='fast')，选择 2 后调用 answer_fetch(fetch_mode='full')。"
+    "建议先用 2-3 句话说明问题已生成，且问题列表已在界面结果区中展示。"
+    "通常下一步是让用户在快速采集、完整采集或重新调整问题之间做选择；"
+    "如果用户尚未明确采集模式，可调用 ask_user 请求确认。不要逐条复述 UI 中已经展示的问题内容。"
 )
 
 DIRECTIVE_A5_BASELINE_NEXT = (
-    "【强制操作】你必须先用 3-5 句话向用户汇报品牌全景分析结果，至少包含 1 个具体指标或风险发现。"
-    "然后在消息末尾用自然语言列出以下编号选项，每个选项都要说明作用：\n"
-    "1. 做一次引用内容置信度评估（可选）— 检查当前报告中引用来源的可信度、结构化质量和可核查性\n"
-    "2. 生成用户画像，进入场景细化分析（推荐）— 在品牌全景分析之上继续看不同人群场景中的品牌表现\n"
-    "3. 重新运行品牌全景分析 — 用新的问题或新的采集结果重建当前整体分析\n"
-    "4. 直接提问 — 基于当前报告继续追问任何具体问题\n"
-    "您可以回复序号，或者直接说您的想法。\n"
-    "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
+    "建议先用 3-5 句话向用户汇报品牌全景分析结果，并至少包含 1 个具体指标或风险发现。"
+    "如果用户还没有明确下一步，可继续引导其选择引用内容置信度评估、用户画像与场景细化、"
+    "重新运行品牌全景分析或直接追问；需要明确确认时再调用 ask_user。"
 )
 
 DIRECTIVE_A5_PERSONA_NEXT = (
-    "【强制操作】你必须先用 3-5 句话向用户汇报场景分析报告结果，至少包含 1 个具体指标或风险发现。"
-    "然后在消息末尾用自然语言列出以下编号选项，每个选项都要说明作用：\n"
-    "1. 做一次引用内容置信度评估（可选）— 检查当前报告中引用来源的可信度、结构化质量和可核查性\n"
-    "2. 深入分析当前报告 — 继续围绕某个平台、问题场景或竞品展开分析\n"
-    "3. 直接提问 — 针对当前报告继续追问任何具体问题\n"
-    "您可以回复序号，或者直接说您的想法。\n"
-    "然后调用 ask_user(message='请回复序号或输入您的想法')，不要传 options 参数。"
+    "建议先用 3-5 句话向用户汇报场景分析报告结果，并至少包含 1 个具体指标或风险发现。"
+    "如果用户还没有明确下一步，可继续引导其选择引用内容置信度评估、深入分析当前报告或直接追问；"
+    "需要明确确认时再调用 ask_user。"
 )
 
 
@@ -1541,9 +1642,13 @@ def _build_public_skill_index(state: AgentState) -> str:
     lines: list[str] = []
     note_lines: list[str] = []
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
-        note_lines.append("- 当前问题属于本次结果追问，过往资料工具已从本轮公共技能面隐藏。")
+        note_lines.append(
+            "- 当前问题属于本次结果追问，过往资料工具已从本轮公共技能面隐藏。"
+        )
     if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
-        note_lines.append("- 当前回合已收敛到 drill_down_analysis，不再暴露泛化的后续分析入口。")
+        note_lines.append(
+            "- 当前回合已收敛到 drill_down_analysis，不再暴露泛化的后续分析入口。"
+        )
     if note_lines:
         note_lines.append("- 以下仅列出当前回合真实可调用的公共技能。")
     for definition in build_builtin_skill_tool_definitions():
@@ -1629,7 +1734,10 @@ def _should_render_instruction_defense(
     recent_evidence_packet: RecentEvidencePacket,
 ) -> bool:
     defense_context = build_instruction_defense_context(state, recent_evidence_packet)
-    if defense_context.prompt_disclosure_request or defense_context.suspicious_evidence_count:
+    if (
+        defense_context.prompt_disclosure_request
+        or defense_context.suspicious_evidence_count
+    ):
         return True
     latest_user_message = _get_latest_user_message(state)
     return detect_instruction_injection(latest_user_message)
@@ -1648,10 +1756,10 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
         else ""
     )
     active_skill_context = render_active_skill_packet(context_packets.active_skill)
-    pending_decision = render_pending_decision_packet(
-        context_packets.pending_decision
+    pending_decision = render_pending_decision_packet(context_packets.pending_decision)
+    recent_evidence = _render_recent_evidence_for_prompt(
+        context_packets.recent_evidence
     )
-    recent_evidence = _render_recent_evidence_for_prompt(context_packets.recent_evidence)
     context_summary = _compact_text(_build_context_summary(state), 500)
     knowledge_hint = _build_knowledge_planning_hint(state)
     contextual_tool_surface_note = _build_contextual_tool_surface_note(state)
@@ -1729,8 +1837,8 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
             body=dedent(
                 """
                 A1 完成后的流程（最高优先级）：
-                - A1 完成后，必须先汇报结果并 ask_user，绝不直接调用 persona_generation 或 question_simulation。
-                - 尚无品牌全景分析时，必须按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="panorama") 执行。
+                - A1 完成后，优先先汇报结果；如果用户还没有明确下一步，再用 ask_user 帮助其做选择，而不是默认直接调用 persona_generation 或 question_simulation。
+                - 尚无品牌全景分析时，默认优先按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="panorama") 推进，但仍要尊重用户当前意图。
                 - 已有品牌全景分析时，用户可进入引用置信度评估、场景细化、重跑品牌全景分析或直接提问。
 
                 场景细化流程：
@@ -1743,8 +1851,9 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 用户基于已有结果要求深入分析、历次对比、解释原因、提炼风险时：post_analysis_skill。
                 - 用户要求重新抓取、重跑部分平台、全量重跑、或从 API 改为浏览器模式时：统一走 answer_fetch，不要再发明 refetch 类能力名。
                 - 用户选择“直接提问”时，禁止再次 ask_user 给子选项；直接自然语言引导用户在输入框中继续追问。
-                - 只有用户明确在问过往资料、历史月份、导出记录、最近两次变化时，才优先使用 knowledge_*。
-                - 围绕过往品牌/竞品/回答/引用时，优先 knowledge_lookup；围绕过往汇总时，优先 knowledge_aggregate；明确导出时，优先 knowledge_export；比较最近两轮变化时，优先 knowledge_compare。
+                - 只有用户明确在问过往资料、历史月份、导出记录、最近两次变化时，才优先考虑 knowledge_*。
+                - 围绕过往品牌/竞品/回答/引用时，优先考虑 knowledge_lookup；围绕过往汇总时，优先考虑 knowledge_aggregate；明确导出时，优先考虑 knowledge_export；比较最近两轮变化时，优先考虑 knowledge_compare。
+                - 当用户在问“上一轮 / 最近一轮 / 上次抓取”的成功率、失败数、失败平台、失败问题或补采对象时，不能直接复述历史对话里的旧数字；必须先调用 knowledge_aggregate 或 knowledge_lookup 刷新权威结果，再回复。
                 """
             ).strip(),
         ),
@@ -1760,7 +1869,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 所有对用户可见的回复、计划、提示、说明和思考流都必须使用中文；不要输出英文草稿或英文推理片段。
                 - 在回复中说明打算做什么，然后调用对应工具。
                 - 不要一次调用多个工具，每轮只执行一个步骤。
-                - 画像生成完成后必须 ask_user 引导用户选画像；问题生成完成后必须 ask_user 让用户选择采集模式；答案抓取完成后不要 ask_user，必须立即调用 analysis_report_skill；分析报告完成后必须 ask_user 让用户决定是否做引用置信度评估或继续后续分析。
+                - 画像生成完成后，若用户尚未明确后续范围，优先 ask_user 引导其选画像；问题生成完成后，若用户尚未明确采集模式，优先 ask_user 请求确认；答案抓取完成后通常继续进入 analysis_report_skill，但如果最新 A4 observation 明确要求用户先做选择（例如补采后仍有失败项），必须先 ask_user，再决定是否进入 analysis_report_skill；分析报告完成后，若用户尚未明确下一步，再 ask_user 帮助其决定是否做引用置信度评估或继续后续分析。
                 - 如果用户请求不明确，用自然语言追问，不要调用 ask_user。
                 - 步骤完成后的回复应包含 1 个具体数据点或风险发现，不要只报“完成了”。
                 - 如果用户直接提供问题文本并要求抓取答案，可通过 answer_fetch 的 custom_questions 传入，无需先调用 question_simulation，但仍需明确 fetch_mode。
@@ -1768,9 +1877,9 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 当条件不足、步骤失败或路由受限时，不要只说“无法完成/不能执行”；必须同时说明原因，并给出至少一个可执行的下一步方案。
 
                 ask_user 使用限制：
-                - 只允许在表格导入确认、品牌/竞品识别后确认基线、基线或分析报告完成后选下一步、画像生成后选画像、问题生成后选采集模式、步骤失败恢复这几类场景使用。
+                - 只允许在表格导入确认、品牌/竞品识别后确认基线、基线或分析报告完成后选下一步、画像生成后选画像、问题生成后选采集模式、答案抓取后需确认是否补采剩余失败项、步骤失败恢复这几类场景使用。
                 - 除这些场景外，所有其他情况都直接自然语言回复，绝不调用 ask_user。
-                - 调用 ask_user 时不传 options 参数，只传 message='请回复序号或输入您的想法'。
+                - 调用 ask_user 时必须显式传入 message 和 options。对于答案抓取后的补采确认，必须提供“补采失败项（浏览器）/继续补采剩余失败项（浏览器）”与“先用当前结果继续分析”这类明确选项。
                 """
             ).strip(),
         ),
@@ -1976,27 +2085,25 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         if table_kind == "question_list":
             return (
                 f"{summary}"
-                "【强制操作】请先用自然语言告诉用户你识别到这是一份问题列表，并说明将挂接到 A3。"
-                "然后调用 ask_user，请用户确认是否作为 A3 问题列表导入。"
-                "推荐选项：1. 作为 A3 问题列表导入 2. 暂不导入。"
+                " 建议先向用户说明这是一份问题列表，适合挂接到 A3；"
+                "如果用户尚未确认是否导入，再调用 ask_user 请求确认。"
             )
         if table_kind == "brand_competitor_info":
             return (
                 f"{summary}"
-                "【强制操作】请先说明这份表格更适合作为 A1 的品牌/竞品信息输入，"
-                "然后调用 ask_user，请用户确认是否更新当前品牌/竞品上下文。"
+                " 建议先说明这份表格更适合作为 A1 的品牌/竞品信息输入；"
+                "如果用户尚未确认是否更新上下文，再调用 ask_user。"
             )
         if table_kind == "link_list":
             return (
                 f"{summary}"
-                "【强制操作】请先说明这是一份链接清单，适合作为来源/链接清单继续分析，"
-                "然后调用 ask_user，请用户确认是否继续。"
+                " 建议先说明这是一份链接清单，适合作为来源/链接清单继续分析；"
+                "如果用户尚未确认是否继续，再调用 ask_user。"
             )
         return (
             f"{summary}"
-            "【强制操作】请告诉用户我暂时还不能稳定判断这份表格的用途，"
+            " 建议直接告诉用户当前还不能稳定判断这份表格的用途，"
             "并补充可执行方案：重新上传单个 CSV/XLSX、说明希望挂接到哪个步骤、或拆分文件后再试。"
-            "随后调用 ask_user 请求用户选择下一步。"
         )
 
     if tool_name == "question_simulation":
@@ -2013,13 +2120,48 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             return summary
         return (
             "问题模拟暂未生成有效问题。"
-            "【强制操作】直接告知用户当前问题集不足以继续抓取，"
+            "请直接告知用户当前问题集不足以继续抓取，"
             "并提供两个选项：1) 重新生成问题；2) 换一种方式描述需求或改用上传问题列表。"
             "不要继续调用 answer_fetch，等待用户指示。"
         )
 
     if tool_name == "answer_fetch":
         fr = state.get("fetch_results")
+        a4_observation = state.get("a4_completion_observation") or {}
+        requires_user_decision = bool(a4_observation.get("requires_user_decision"))
+        if requires_user_decision:
+            failed_question_count = int(
+                a4_observation.get("failed_question_count") or 0
+            )
+            failed_platform_count = int(
+                a4_observation.get("failed_platform_count") or 0
+            )
+            option_lines = []
+            for option in a4_observation.get("followup_options") or []:
+                option_id = str(option.get("id") or "").strip()
+                option_label = str(option.get("label") or "").strip()
+                option_description = str(option.get("description") or "").strip()
+                if not option_id or not option_label:
+                    continue
+                option_lines.append(
+                    f"- {option_label}（id={option_id}）：{option_description}"
+                )
+            options_text = "\n".join(option_lines)
+            return (
+                f"AI答案抓取已完成，当前有 {failed_question_count} 个失败问题、"
+                f"{failed_platform_count} 个失败平台仍未补齐。"
+                "不要直接调用 analysis_report_skill。"
+                "请先调用 ask_user，请用户在继续补采剩余失败项和直接基于当前成功样本生成报告之间做选择。"
+                f"{chr(10)}可用选项如下：{chr(10)}{options_text}"
+            )
+        if a4_observation and not bool(
+            a4_observation.get("artifact_write_validated", True)
+        ):
+            return (
+                "AI答案抓取已经跑出结果，但官方抓取结果写回失败。"
+                "不要继续调用 analysis_report_skill。"
+                "请先向用户说明需要重新完成答案抓取结果写回，并提供可执行的重试方案。"
+            )
         if fr:
             report_type = (
                 "panorama"
@@ -2029,19 +2171,23 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             report_label = (
                 "品牌全景分析报告" if report_type == "panorama" else "场景分析报告"
             )
+            if bool(a4_observation.get("scoped_merge_active")):
+                return (
+                    f"AI答案抓取完成。定向补采结果已经并入最新完整样本，共 {len(fr)} 组问题结果。"
+                    f"现在可以继续刷新{report_label}。"
+                )
             return (
                 f"AI答案抓取完成。共抓取 {len(fr)} 组问题结果。"
-                f"【强制操作】不要调用 ask_user，不要等待用户确认。"
-                f"你必须立即调用 analysis_report_skill(report_type='{report_type}') 生成{report_label}。"
+                f"通常下一步是生成{report_label}；"
+                "如果用户当前明确要求补采、换模式、缩小范围或继续确认，优先响应用户当前意图。"
             )
         return (
             "AI答案抓取完成，但未获取到有效数据。"
-            "【强制操作】你必须使用 ask_user 向用户说明抓取失败，并提供以下选项："
+            "请向用户说明抓取失败，并优先给出这些可执行方案："
             "1) 重新尝试抓取（可换模式，如 fast→full）；"
             "2) 仅抓取指定平台（继续走 answer_fetch，并通过 platforms 指定平台）；"
             "3) 手动提供问题重新抓取。"
-            "【绝对禁止】不要调用 question_simulation 重新生成问题。"
-            "问题已经在之前的步骤中生成，无需重新生成。"
+            "除非用户明确要求改题，否则不要默认重新调用 question_simulation。"
         )
 
     if tool_name in {"data_analytics", "analysis_report_skill"}:
@@ -2090,6 +2236,12 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         )
 
     if tool_name == "knowledge_lookup":
+        latest_history_query = _is_latest_run_history_stats_query(
+            _get_latest_user_message(state)
+        )
+        if latest_history_query and _has_authoritative_history_refresh_result(state):
+            return _build_agent_result_summary(state, "knowledge_aggregate")
+
         result = state.get("knowledge_lookup_result") or {}
         matches = result.get("matches", [])
         if matches:
@@ -2119,8 +2271,19 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             group_lines = "\n".join(
                 _format_knowledge_group(group) for group in groups[:5]
             )
+            fetch_status = result.get("fetch_status_summary") or {}
+            fetch_prefix = ""
+            if int(fetch_status.get("total_count") or 0) > 0:
+                fetch_prefix = (
+                    f"最近一轮采集共 {int(fetch_status.get('total_count') or 0)} 条，"
+                    f"成功 {int(fetch_status.get('success_count') or 0)} 条，"
+                    f"失败 {int(fetch_status.get('failure_count') or 0)} 条。"
+                )
+            scope_label = str(result.get("analysis_scope_label") or "当前范围")
+            filter_label = str(result.get("status_filter_label") or "全部记录")
             return (
-                f"过往资料整理完成，共统计 {result.get('total_records', 0)} 条记录，"
+                f"{fetch_prefix}"
+                f"本次按{scope_label}{filter_label}整理，共统计 {result.get('total_records', 0)} 条记录，"
                 f"得到 {len(groups)} 个分组。"
                 f"当前最大分组是 {top.get('group_key', 'unknown')}，数量 {top.get('count', 0)}。"
                 "\n关键分组如下：\n"
@@ -2139,7 +2302,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             return (
                 f"过往资料表已生成，共整理 {result.get('item_count', 0)} 条记录。"
                 f"交付物标题：{result.get('title', '过往资料表')}。"
-                "数据表 artifact 已经生成，请向用户说明已可查看并继续导出为 md/pdf，"
+                "数据表已经生成，请向用户说明现在可以查看，并可继续导出为 md/pdf，"
                 "同时用 1-2 句话概括本次导出的范围。"
             )
         return (
@@ -2182,10 +2345,25 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         "compare_snapshots",
     }:
         last_skill_result = state.get("last_skill_result") or {}
+        reply = str(state.get("orchestrator_reply") or "").strip()
+        if reply:
+            return reply
         if last_skill_result.get("summary"):
             return str(last_skill_result["summary"])
-        reply = state.get("orchestrator_reply", "")
-        return f"后续分析已完成。{reply[:200]}"
+        return "后续分析已完成。"
+
+    if tool_name == "site_confidence_assessment_skill":
+        reply = str(
+            state.get("site_confidence_report_message")
+            or state.get("orchestrator_reply")
+            or ""
+        ).strip()
+        if reply:
+            return reply
+        last_skill_result = state.get("last_skill_result") or {}
+        if last_skill_result.get("summary"):
+            return str(last_skill_result["summary"])
+        return "官网 AI 友好度评估已完成。"
 
     current_skill = state.get("current_skill")
     last_skill_result = state.get("last_skill_result") or {}
@@ -2240,6 +2418,7 @@ def _get_tool_name_from_node(node_name: str) -> str | None:
         "a5_analytics": "analysis_report_skill",
         "confidence_analysis_executor": "confidence_analysis_skill",
         "a7_confidence_signal": "confidence_analysis_skill",
+        "site_confidence_assessment_executor": "site_confidence_assessment_skill",
         "post_analysis_executor": "post_analysis_skill",
     }
     if node_name in preferred:
@@ -2693,6 +2872,7 @@ TOOL_TO_NODE: dict[str, str] = {
     "knowledge_compare": "knowledge_compare",
     "knowledge_export": "knowledge_export",
     "confidence_analysis_skill": "confidence_analysis_executor",
+    "site_confidence_assessment_skill": "site_confidence_assessment_executor",
     "post_analysis_skill": "post_analysis_executor",
     "drill_down_analysis": "drill_down",
     "compare_snapshots": "compare_snapshots",
@@ -2715,6 +2895,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "confidence_signal_skill": "引用置信度评估",
     "citation_confidence_analysis": "引用内容置信度评估",
     "confidence_analysis_skill": "引用置信度评估",
+    "site_confidence_assessment_skill": "官网 AI 友好度",
     "post_analysis_skill": "后续分析",
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
@@ -2858,13 +3039,20 @@ async def _execute_runtime_policy_action(
     state: AgentState,
     session_id: str,
 ) -> Command | None:
-    action = parse_next_required_action(state.get("next_required_action"))
+    raw_action = state.get("next_required_action")
+    action = parse_next_required_action(raw_action)
     if action is None:
+        if raw_action:
+            logger.warning(
+                "[Orchestrator] Ignoring next_required_action without recognized authority: %s",
+                raw_action,
+            )
         return None
 
     logger.info(
-        "[Orchestrator] Consuming next_required_action: tool=%s source=%s reason=%s",
+        "[Orchestrator] Consuming next_required_action: tool=%s authority=%s source=%s reason=%s",
         action.tool_name,
+        action.authority,
         action.source_step or "unknown",
         action.reason,
     )
@@ -2915,10 +3103,9 @@ async def _route_brand_seed_without_llm(
     if manifest is not None:
         seeded_state = {**seeded_state, "knowledge_manifest": manifest}
 
-    available_sources = ((manifest or {}).get("available_sources") or {})
-    has_history_materials = (
-        not _session_was_recalled(seeded_state)
-        and any(bool(value) for value in available_sources.values())
+    available_sources = (manifest or {}).get("available_sources") or {}
+    has_history_materials = not _session_was_recalled(seeded_state) and any(
+        bool(value) for value in available_sources.values()
     )
 
     if has_history_materials:
@@ -3228,6 +3415,26 @@ async def orchestrator_node(state: AgentState) -> Command:
         working_state = {**state, "knowledge_manifest": manifest}
     llm_state = _sanitize_runtime_policy_state(working_state)
 
+    authoritative_history_refresh = _infer_authoritative_history_refresh_tool(llm_state)
+    if authoritative_history_refresh is not None:
+        refresh_tool_name, refresh_tool_args = authoritative_history_refresh
+        logger.warning(
+            "[Orchestrator] Pre-LLM authoritative refresh for latest-run history query via %s args=%s",
+            refresh_tool_name,
+            refresh_tool_args,
+        )
+        return await _handle_tool_call(
+            llm_state,
+            session_id,
+            SimpleNamespace(
+                name=refresh_tool_name,
+                arguments=refresh_tool_args,
+                id=f"call_authoritative_preflight_{refresh_tool_name}",
+            ),
+            "",
+            build_orchestrator_messages(llm_state),
+        )
+
     # Build orchestrator call
     system_prompt = build_orchestrator_system_prompt(llm_state)
     messages = build_orchestrator_messages(llm_state)
@@ -3245,6 +3452,16 @@ async def orchestrator_node(state: AgentState) -> Command:
     stream_started_at = perf_counter()
     stream_thoughts = _should_stream_thoughts(llm_state)
     thinking_placeholder_sent = False
+    first_chunk_logged = False
+
+    logger.info(
+        "[Orchestrator] Stream started for session %s: messages=%d tools=%d current_skill=%s next_action=%s",
+        session_id,
+        len(messages) + 1,
+        len(tools),
+        state.get("current_skill"),
+        state.get("next_action"),
+    )
 
     try:
         async for chunk in async_wrap_sync_gen(
@@ -3258,6 +3475,16 @@ async def orchestrator_node(state: AgentState) -> Command:
                 tool_choice="auto",
             )
         ):
+            if not first_chunk_logged:
+                logger.info(
+                    "[Orchestrator] First stream chunk received for session %s: has_content=%s has_thinking=%s has_tool_calls=%s finish=%s",
+                    session_id,
+                    bool(chunk.content),
+                    bool(chunk.thinking_blocks),
+                    bool(chunk.tool_calls),
+                    chunk.finish_reason,
+                )
+                first_chunk_logged = True
             # Tool calls arrive at end of stream.
             # IMPORTANT: The final chunk with tool_calls also contains the
             # full accumulated content_buffer and reasoning_buffer (not deltas),
@@ -3389,6 +3616,11 @@ async def orchestrator_node(state: AgentState) -> Command:
         new_history.append(assistant_msg)
 
         if tool_call_result:
+            logger.info(
+                "[Orchestrator] Routing captured tool call for session %s: %s",
+                session_id,
+                tool_call_result.name,
+            )
             return await _handle_tool_call(
                 llm_state, session_id, tool_call_result, reply_text, new_history
             )
@@ -3396,18 +3628,29 @@ async def orchestrator_node(state: AgentState) -> Command:
         knowledge_fallback = _infer_knowledge_fallback_tool(llm_state)
         if knowledge_fallback is not None:
             fallback_tool_name, fallback_tool_args = knowledge_fallback
-            logger.warning(
-                "[Orchestrator] No tool call for clear history task; forcing %s with args=%s",
+            logger.info(
+                "[Orchestrator] No tool call after stream; heuristic candidate=%s args=%s (not auto-forced)",
                 fallback_tool_name,
                 fallback_tool_args,
+            )
+
+        authoritative_history_refresh = _infer_authoritative_history_refresh_tool(
+            llm_state
+        )
+        if authoritative_history_refresh is not None:
+            refresh_tool_name, refresh_tool_args = authoritative_history_refresh
+            logger.warning(
+                "[Orchestrator] No tool call for latest-run history query; forcing authoritative refresh via %s args=%s",
+                refresh_tool_name,
+                refresh_tool_args,
             )
             return await _handle_tool_call(
                 llm_state,
                 session_id,
                 SimpleNamespace(
-                    name=fallback_tool_name,
-                    arguments=fallback_tool_args,
-                    id=f"fallback_{fallback_tool_name}_{int(datetime.now().timestamp() * 1000)}",
+                    name=refresh_tool_name,
+                    arguments=refresh_tool_args,
+                    id=f"call_authoritative_{refresh_tool_name}",
                 ),
                 reply_text,
                 new_history,
@@ -3522,6 +3765,24 @@ async def orchestrator_node(state: AgentState) -> Command:
             },
         )
 
+    except TimeoutError as e:
+        logger.error(
+            "[Orchestrator] Stream timed out for session %s: %s", session_id, e
+        )
+        from app.workflow.events import send_error_event
+
+        await send_error_event(session_id, "orchestrator", str(e), recoverable=True)
+        return Command(
+            goto=END,
+            update={
+                "execution_status": "error",
+                "error_info": {
+                    "step": "orchestrator",
+                    "error": str(e),
+                    "timestamp": datetime.now().isoformat(),
+                },
+            },
+        )
     except Exception as e:
         logger.error(f"[Orchestrator] Error: {e}", exc_info=True)
         from app.workflow.events import send_error_event
@@ -3794,9 +4055,7 @@ async def _handle_tool_call(
         selected_skill_package_context = resolved_skill.package_body
         selected_skill_prompt_overlay = resolved_skill.prompt_overlay
         selected_skill_contract = resolved_skill.skill_contract.to_state_payload()
-        selected_skill_prompt_sections = selected_skill_contract.get(
-            "prompt_sections"
-        )
+        selected_skill_prompt_sections = selected_skill_contract.get("prompt_sections")
         node_name = resolved_skill.node_name
         tool_args = dict(resolved_skill.merged_tool_args)
     else:
@@ -3882,6 +4141,12 @@ async def _handle_tool_call(
         # Check retry count — block if same tool called >= 2 times
         retry_counts = dict(state.get("agent_retry_counts", {}) or {})
         retry_key = skill_key or effective_tool_name
+        if effective_tool_name == "answer_fetch":
+            targeted_question_targets = normalize_question_targets(
+                tool_args.get("question_targets")
+            )
+            if tool_args.get("retry_failed_only") or targeted_question_targets:
+                retry_key = "answer_fetch_retry_failed_only"
         current_count = retry_counts.get(retry_key, 0)
         if current_count >= 2:
             logger.warning(
@@ -4136,8 +4401,22 @@ async def _handle_tool_call(
 
         # Pass fetch_mode for A4 + custom_questions + ask_user guard
         if effective_tool_name == "answer_fetch":
+            question_targets = normalize_question_targets(
+                tool_args.get("question_targets")
+            )
+            if question_targets:
+                extra_updates["questions"] = [
+                    {
+                        "id": item["question_id"],
+                        "text": item["question_text"],
+                        "category": "失败补采",
+                        "platforms": list(item["platforms"]),
+                    }
+                    for item in question_targets
+                ]
+                tool_args = {**tool_args, "question_targets": question_targets}
             custom_qs = tool_args.get("custom_questions")
-            if custom_qs and isinstance(custom_qs, list):
+            if not question_targets and custom_qs and isinstance(custom_qs, list):
                 formatted = [
                     {"id": f"custom_{i+1}", "text": q, "category": "用户自定义"}
                     for i, q in enumerate(custom_qs)

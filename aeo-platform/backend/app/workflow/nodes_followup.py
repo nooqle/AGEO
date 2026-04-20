@@ -17,7 +17,6 @@ from app.services.tool_capability_matrix import validate_tool_capability_access
 from app.workflow.harness_validation import build_harness_decision
 from app.workflow.a5.metrics import analyze_sentiment
 from app.workflow.state import AgentState
-from app.workflow.events import send_reply_event
 from app.workflow.skill_fact_snapshot import build_skill_fact_snapshot
 from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.skill_state import (
@@ -25,7 +24,6 @@ from app.workflow.skill_state import (
     build_harness_decision_update,
     build_skill_result_update,
 )
-from app.workflow.runtime_policy_executor import build_next_required_action
 from app.core.llm import get_llm_model
 
 logger = logging.getLogger(__name__)
@@ -72,7 +70,7 @@ async def drill_down_node(state: AgentState) -> Command:
     Reads: fetch_results, metrics, report, brand_profile, simulated_questions.
     Does NOT invoke any Agent pipeline.
     Uses LLM to generate targeted analysis based on focus_dimension/focus_value.
-    Sends result via reply_delta (chat response, not a full report).
+    Returns the generated analysis to the orchestrator as an observation.
     """
     session_id = state["session_id"]
     tool_args = state.get("tool_call_args") or {}
@@ -91,11 +89,22 @@ async def drill_down_node(state: AgentState) -> Command:
         error_msg = (
             "当前会话中没有分析数据，请先完成一次完整的品牌分析后再进行深入分析。"
         )
-        await send_reply_event(session_id, error_msg, is_delta=False, is_complete=True)
         return Command(
             update={
                 "orchestrator_reply": error_msg,
                 "execution_status": "completed",
+                **build_skill_result_update(
+                    state,
+                    skill_key=state.get("current_skill"),
+                    tool_name="post_analysis_skill",
+                    status="completed",
+                    summary=error_msg,
+                    executor_ref="post_analysis_executor",
+                    metadata={
+                        "analysis_mode": "drill_down",
+                        "blocked_by": "analysis_context_missing",
+                    },
+                ),
             }
         )
 
@@ -119,9 +128,6 @@ async def drill_down_node(state: AgentState) -> Command:
         focus_value,
         skill_key=state.get("current_skill"),
     )
-
-    # Send as chat reply (not Canvas artifact)
-    await send_reply_event(session_id, analysis, is_delta=False, is_complete=True)
 
     return Command(
         update={
@@ -475,8 +481,24 @@ async def compare_snapshots_node(state: AgentState) -> Command:
 
     if not entity_id:
         msg = "当前会话中没有关联的品牌实体，请先完成一次完整的品牌分析。"
-        await send_reply_event(session_id, msg, is_delta=False, is_complete=True)
-        return Command(update={"execution_status": "completed"})
+        return Command(
+            update={
+                "orchestrator_reply": msg,
+                "execution_status": "completed",
+                **build_skill_result_update(
+                    state,
+                    skill_key=state.get("current_skill"),
+                    tool_name="post_analysis_skill",
+                    status="completed",
+                    summary=msg,
+                    executor_ref="post_analysis_executor",
+                    metadata={
+                        "analysis_mode": "compare_snapshots",
+                        "blocked_by": "analysis_context_missing",
+                    },
+                ),
+            }
+        )
 
     from app.core.database import AsyncSessionLocal
     from app.services.snapshot_service import SnapshotService
@@ -489,8 +511,24 @@ async def compare_snapshots_node(state: AgentState) -> Command:
         snapshots = snapshot_list.get("snapshots", [])
         if len(snapshots) < 2:
             msg = "目前只有一次分析记录，至少需要两次分析才能进行对比。请再次运行分析后重试。"
-            await send_reply_event(session_id, msg, is_delta=False, is_complete=True)
-            return Command(update={"execution_status": "completed"})
+            return Command(
+                update={
+                    "orchestrator_reply": msg,
+                    "execution_status": "completed",
+                    **build_skill_result_update(
+                        state,
+                        skill_key=state.get("current_skill"),
+                        tool_name="post_analysis_skill",
+                        status="completed",
+                        summary=msg,
+                        executor_ref="post_analysis_executor",
+                        metadata={
+                            "analysis_mode": "compare_snapshots",
+                            "blocked_by": "snapshot_unavailable",
+                        },
+                    ),
+                }
+            )
 
         # Load full snapshot data (Review T6: use get_snapshot for raw_data)
         snapshot_new = await service.get_snapshot(snapshots[0]["id"])
@@ -498,8 +536,24 @@ async def compare_snapshots_node(state: AgentState) -> Command:
 
     if not snapshot_new or not snapshot_old:
         msg = "无法加载快照数据，请稍后重试。"
-        await send_reply_event(session_id, msg, is_delta=False, is_complete=True)
-        return Command(update={"execution_status": "completed"})
+        return Command(
+            update={
+                "orchestrator_reply": msg,
+                "execution_status": "completed",
+                **build_skill_result_update(
+                    state,
+                    skill_key=state.get("current_skill"),
+                    tool_name="post_analysis_skill",
+                    status="completed",
+                    summary=msg,
+                    executor_ref="post_analysis_executor",
+                    metadata={
+                        "analysis_mode": "compare_snapshots",
+                        "blocked_by": "snapshot_unavailable",
+                    },
+                ),
+            }
+        )
 
     # Generate comparison via LLM
     comparison = await _generate_comparison(
@@ -512,8 +566,6 @@ async def compare_snapshots_node(state: AgentState) -> Command:
         new_meta=snapshots[0],
         skill_key=state.get("current_skill"),
     )
-
-    await send_reply_event(session_id, comparison, is_delta=False, is_complete=True)
 
     return Command(
         update={
@@ -625,7 +677,6 @@ async def _generate_comparison(
 async def post_analysis_executor_node(state: AgentState) -> Command:
     """Route coarse-grained post-analysis skill to existing follow-up nodes."""
 
-    session_id = str(state.get("session_id") or "")
     tool_args = state.get("tool_call_args") or {}
     current_capability = state.get("current_tool_capability") or {}
     capability_tool_name = str(current_capability.get("tool_name") or "").strip()
@@ -635,17 +686,11 @@ async def post_analysis_executor_node(state: AgentState) -> Command:
     )
     if capability_error:
         logger.warning("[post_analysis_skill] Capability access blocked: %s", capability_error)
-        if session_id:
-            await send_reply_event(
-                session_id,
-                "后续分析能力路由被运行时策略阻止，请稍后重试。",
-                is_delta=False,
-                is_complete=True,
-            )
         return Command(
             update={
                 "execution_status": "error",
                 "current_step": state.get("current_step") or "post_analysis_executor",
+                "orchestrator_reply": "后续分析能力路由被运行时策略阻止，请稍后重试。",
                 "error_info": {
                     "step": "post_analysis_executor",
                     "error": capability_error,
@@ -672,10 +717,14 @@ async def post_analysis_executor_node(state: AgentState) -> Command:
     }
     if not requested_mode and capability_tool_name in capability_mode_map:
         requested_mode = capability_mode_map[capability_tool_name]
-    if tool_args.get("platforms") or tool_args.get("fetch_mode"):
+    if (
+        tool_args.get("platforms")
+        or tool_args.get("fetch_mode")
+        or tool_args.get("custom_questions")
+    ):
         guidance = (
-            "已识别为重新抓取诉求。后续分析只读取已有结果，"
-            "接下来我会改用答案抓取继续执行。"
+            "当前请求更像重新抓取新数据。后续分析只读取已有结果，"
+            "建议由编排器结合您的当前意图，判断是否改走答案抓取。"
         )
         redirected_fetch_args = {
             key: value
@@ -683,13 +732,6 @@ async def post_analysis_executor_node(state: AgentState) -> Command:
             if key in {"platforms", "fetch_mode", "custom_questions"}
             and value not in (None, "", [])
         }
-        if session_id:
-            await send_reply_event(
-                session_id,
-                guidance,
-                is_delta=False,
-                is_complete=True,
-            )
         return Command(
             update={
                 "orchestrator_reply": guidance,
@@ -699,20 +741,14 @@ async def post_analysis_executor_node(state: AgentState) -> Command:
                     skill_key=state.get("current_skill"),
                     tool_name="post_analysis_skill",
                     status="completed",
-                    summary="后续分析检测到重抓诉求，已自动重定向到答案抓取。",
+                    summary="后续分析判断当前诉求需要新抓取数据，建议改走答案抓取。",
                     executor_ref="post_analysis_executor",
                     metadata={
-                        "analysis_mode": "route_to_answer_fetch",
-                        "redirect_tool": "answer_fetch",
+                        "analysis_mode": "needs_fresh_fetch",
+                        "fresh_data_needed": True,
+                        "suggested_tool": "answer_fetch",
+                        "suggested_tool_args": redirected_fetch_args,
                     },
-                ),
-                "next_required_action": build_next_required_action(
-                    tool_name="answer_fetch",
-                    tool_args=redirected_fetch_args,
-                    reason="后续分析识别到用户真正需求是重新抓取数据。",
-                    reply_text=guidance,
-                    source_step="post_analysis_executor",
-                    metadata={"redirected_from": "post_analysis_skill"},
                 ),
             }
         )

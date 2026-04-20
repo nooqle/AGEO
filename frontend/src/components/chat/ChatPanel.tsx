@@ -305,8 +305,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const shouldAutoSendDraft = !initialArtifactId && searchParams.get('autosend') === '1';
   const autoSentRef = useRef(false);
   const [isAutoStartingPrompt, setIsAutoStartingPrompt] = useState(Boolean(autoStartBrand || autoStartDraft));
-  const safeToLeaveShownRef = useRef(false);
-  const [showSafeToLeave, setShowSafeToLeave] = useState(false);
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
   const replayAnimatingRef = useRef(false);
 
@@ -779,19 +777,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     checkActiveTask();
     return () => { cancelled = true; };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Cycle 3: Safe-to-leave signal (only on fresh execution, once per session)
-  useEffect(() => {
-    if (isAgentExecuting && executionProgress && !safeToLeaveShownRef.current && !replayAnimatingRef.current) {
-      safeToLeaveShownRef.current = true;
-      const timer = setTimeout(() => {
-        setShowSafeToLeave(true);
-        // Auto-hide after 10s (animation handles visual fade)
-        setTimeout(() => setShowSafeToLeave(false), 10000);
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [isAgentExecuting, executionProgress]);
 
   const actionableBrowserStates = useMemo(
     () => browserStates.filter((state) => state.requiresAction),
@@ -1718,25 +1703,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
                   </div>
                 );
               })}
-            </div>
-          )}
-
-          {/* Cycle 3: Safe-to-leave signal */}
-          {showSafeToLeave && isAgentExecuting && (
-            <div
-              role="status"
-              aria-live="polite"
-              className="flex items-center gap-2 mt-3 px-3 py-2 rounded-lg animate-safe-leave"
-              style={{
-                background: 'rgba(99,102,241,0.06)',
-                border: '1px solid rgba(99,102,241,0.15)',
-              }}
-            >
-              <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-                您可以
-                <span className="font-medium" style={{ color: 'var(--text-primary)' }}>安全关闭此页面</span>
-                ，分析完成后我们会通知您。
-              </span>
             </div>
           )}
 

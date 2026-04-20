@@ -7,16 +7,31 @@ Legacy events (send_output_ready, send_execution_complete, send_error_event) are
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+from app.core.json_safety import to_json_compatible
 from app.services.session_event_publisher import session_event_publisher
 
 logger = logging.getLogger(__name__)
 
 _USER_VISIBLE_TEXT_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("AI答案抓取结果 artifact", "AI答案抓取结果"),
+    ("数据表 artifact 已经生成", "数据表已经生成"),
+    ("完整抓取结果（左侧 Canvas）", "完整抓取结果"),
+    ("完整抓取结果（左侧Canvas）", "完整抓取结果"),
+    ("关联产物", "相关结果"),
+    ("右侧画布（Canvas）的管道图中", "界面中的画像结果区"),
+    ("右侧画布（Canvas）", "界面结果区"),
+    ("右侧画布中", "界面结果区中"),
+    ("左侧 Canvas", "结果区"),
+    ("左侧Canvas", "结果区"),
+    ("runtime policy", "系统续跑规则"),
+    ("RuntimePolicy", "系统续跑规则"),
+    ("runtime_policy", "系统续跑规则"),
     ("site_confidence_assessment_skill", "官网 AI 友好度"),
     ("site_confidence_assessment_executor", "官网 AI 友好度"),
     ("官网置信度评估", "官网 AI 友好度"),
@@ -41,6 +56,18 @@ def _sanitize_user_visible_text(value: str | None) -> str:
     text = str(value or "")
     for raw, display in _USER_VISIBLE_TEXT_REPLACEMENTS:
         text = text.replace(raw, display)
+    text = re.sub(
+        r"\bartifact(?:_id)?\s*[=:]\s*[\w-]+\b",
+        "结果已生成",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\bartifact\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bcanvas\b", "结果区", text, flags=re.IGNORECASE)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"([一-龥]) ([一-龥])", r"\1\2", text)
+    text = re.sub(r"[；;,:：]\s*(结果已生成)", r"；\1", text)
+    text = re.sub(r"^[；;,:：]\s*", "", text)
     return text
 
 
@@ -323,6 +350,7 @@ async def send_output_ready(
     if _is_headless(session_id):
         return
     title = _sanitize_user_visible_text(title or "分析结果")
+    data = to_json_compatible(data)
     payload: dict[str, Any] = {
         "output_id": output_id,
         "type": output_type,
@@ -380,6 +408,7 @@ async def save_and_send_artifact(
                 **status,
                 "message": _sanitize_user_visible_text(status.get("message")),
             }
+    data = to_json_compatible(data)
 
     # Headless mode: skip Message save, rely on Snapshot only
     if session_id.startswith("headless-"):

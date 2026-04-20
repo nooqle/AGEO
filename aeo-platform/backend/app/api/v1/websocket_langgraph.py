@@ -42,9 +42,11 @@ from app.workflow.browser_action_contract import (
 )
 from app.workflow.runtime_policy_executor import (
     build_next_required_action,
+    clear_runtime_policy_fields,
     get_user_visible_runtime_label,
 )
 from app.workflow.confirmation import resolve_confirmation_selection
+from app.workflow.fetch_recovery import extract_latest_fetch_recovery_plan_from_state
 from app.workflow.brand_state import seed_effective_brand_profile
 
 from sqlalchemy import select
@@ -665,6 +667,28 @@ def _reset_follow_up_runtime_state(state_values: dict[str, Any]) -> None:
     state_values["pending_confirmation"] = None
     state_values["error_info"] = None
     state_values["execution_status"] = "running"
+    state_values["next_action"] = None
+    state_values["orchestrator_reply"] = None
+    state_values["site_confidence_report_message"] = None
+    state_values["tool_call_args"] = None
+    state_values["tool_call_id"] = None
+    state_values["current_skill"] = None
+    state_values["current_skill_family"] = None
+    state_values["current_skill_package_key"] = None
+    state_values["current_skill_package_name"] = None
+    state_values["current_skill_package_path"] = None
+    state_values["current_skill_package_context"] = None
+    state_values["current_skill_prompt_overlay"] = None
+    state_values["current_skill_contract"] = None
+    state_values["current_skill_prompt_sections"] = None
+    state_values["current_tool_capability"] = None
+    state_values["last_skill_result"] = None
+    state_values["knowledge_lookup_result"] = None
+    state_values["knowledge_aggregate_result"] = None
+    state_values["knowledge_compare_result"] = None
+    state_values["knowledge_export_result"] = None
+    state_values["agent_retry_counts"] = {}
+    state_values.update(clear_runtime_policy_fields())
 
 
 def _should_seed_follow_up_brand_profile(state_values: dict[str, Any]) -> bool:
@@ -2031,6 +2055,10 @@ async def _save_final_message(session_id: str, workflow, config: dict):
             else:
                 content = "分析完成"
 
+            from app.workflow.events import _sanitize_user_visible_text
+
+            content = _sanitize_user_visible_text(content)
+
             logger.info(
                 f"[LangGraph] Saving agent message ({len(content)} chars) for session {session_id}"
             )
@@ -2175,15 +2203,36 @@ async def handle_confirmation_langgraph(
             user_content = "用户选择先执行答案抓取"
             state_values["next_required_action"] = build_next_required_action(
                 tool_name="answer_fetch",
+                authority="user_confirmation",
                 reason="用户在恢复面板中选择先执行答案抓取。",
                 reply_text="已按您的选择，先执行答案抓取。",
                 source_step="error_recovery",
             )
             logger.info("[LangGraph] Inline confirmation: run_answer_fetch")
+        elif selected_option_id == "run_supplemental_fetch":
+            plan = extract_latest_fetch_recovery_plan_from_state(state_values)
+            if plan and plan.get("question_targets"):
+                user_content = "用户选择补采上一轮失败项"
+                state_values["next_required_action"] = build_next_required_action(
+                    tool_name="answer_fetch",
+                    authority="user_confirmation",
+                    tool_args={
+                        "fetch_mode": "full",
+                        "retry_failed_only": True,
+                        "question_targets": list(plan.get("question_targets") or []),
+                        "platforms": list(plan.get("platforms") or []),
+                        "failed_task_id": plan.get("task_id"),
+                    },
+                    reason="用户在恢复面板中选择补采上一轮失败的平台与问题。",
+                    reply_text="已按您的选择，仅补采上一轮失败项并保留已有成功结果。",
+                    source_step="error_recovery",
+                )
+                logger.info("[LangGraph] Inline confirmation: run_supplemental_fetch")
         elif selected_option_id == "run_analysis_report":
             user_content = "用户选择重新生成分析报告"
             state_values["next_required_action"] = build_next_required_action(
                 tool_name="analysis_report_skill",
+                authority="user_confirmation",
                 reason="用户在恢复面板中选择重新生成分析报告。",
                 reply_text="已按您的选择，重新生成分析报告。",
                 source_step="error_recovery",

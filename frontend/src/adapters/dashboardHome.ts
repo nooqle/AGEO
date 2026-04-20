@@ -9,12 +9,21 @@ import type {
 
 type UnknownRecord = Record<string, unknown>;
 
+const NULLISH_DISPLAY_VALUES = new Set(['null', 'none', 'undefined', 'nan']);
+
 function toNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function toStringValue(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value : undefined;
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return NULLISH_DISPLAY_VALUES.has(trimmed.toLowerCase()) ? undefined : trimmed;
 }
 
 function emptyHome(): DashboardHomeData {
@@ -81,7 +90,7 @@ function normalizeLatestReport(value: unknown): DashboardLatestReport | undefine
   const row = value && typeof value === 'object' ? (value as UnknownRecord) : null;
   if (!row) return undefined;
   return {
-    title: String(row.title ?? '分析报告'),
+    title: toStringValue(row.title) ?? '分析报告',
     subtitle: toStringValue(row.subtitle),
     report_kind: toStringValue(row.reportKind),
     report_kind_label: toStringValue(row.reportKindLabel),
@@ -105,7 +114,7 @@ function normalizeMetrics(value: unknown): DashboardHomeMetric[] {
     if (!id) continue;
     metrics.push({
       id,
-      label: String(row.label ?? ''),
+      label: toStringValue(row.label) ?? '',
       value: toNumber(row.value),
       format:
         row.format === 'rank' || row.format === 'count' || row.format === 'percent'
@@ -123,9 +132,11 @@ function normalizeSourceTypes(value: unknown): DashboardCitationSourceType[] {
     .map((item) => {
       const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
       if (!row) return null;
+      const key = toStringValue(row.key) ?? '';
+      if (!key) return null;
       return {
-        key: String(row.key ?? ''),
-        label: String(row.label ?? ''),
+        key,
+        label: toStringValue(row.label) ?? '',
         share: toNumber(row.share),
       } satisfies DashboardCitationSourceType;
     })
@@ -138,11 +149,11 @@ function normalizeTopDomains(value: unknown): DashboardCitationDomain[] {
   for (const item of value) {
     const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
     if (!row) continue;
-    const domain = String(row.domain ?? '');
+    const domain = toStringValue(row.domain) ?? '';
     if (!domain) continue;
     domains.push({
       domain,
-      display_name: String(row.displayName ?? row.domain ?? ''),
+      display_name: toStringValue(row.displayName) ?? toStringValue(row.domain) ?? domain,
       count: Number(row.count ?? 0),
       share: toNumber(row.share),
       is_official: Boolean(row.isOfficial),
@@ -159,7 +170,7 @@ function normalizeRelatedQuestions(value: unknown): DashboardRelatedQuestion[] {
   for (const item of value) {
     const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
     if (!row) continue;
-    const questionText = String(row.questionText ?? '');
+    const questionText = toStringValue(row.questionText) ?? '';
     if (!questionText) continue;
     questions.push({
       question_id: String(row.questionId ?? ''),
@@ -189,17 +200,17 @@ export function buildDashboardHomeData(value: unknown): DashboardHomeData | unde
   return {
     ...base,
     summary: {
-      headline: String(summary.headline ?? ''),
+      headline: toStringValue(summary.headline) ?? '',
     },
     latest_report: normalizeLatestReport(row.latestReport),
     metrics: normalizeMetrics(row.metrics),
     citation_distribution: {
-      summary: String(citationDistribution.summary ?? ''),
+      summary: toStringValue(citationDistribution.summary) ?? '',
       source_types: normalizeSourceTypes(citationDistribution.sourceTypes),
       top_domains: normalizeTopDomains(citationDistribution.topDomains),
     },
     related_questions: {
-      summary: String(relatedQuestions.summary ?? ''),
+      summary: toStringValue(relatedQuestions.summary) ?? '',
       items: normalizeRelatedQuestions(relatedQuestions.items),
     },
   };

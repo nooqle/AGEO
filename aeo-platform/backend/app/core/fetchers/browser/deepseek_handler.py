@@ -20,6 +20,7 @@ from app.core.fetchers.browser.parsers.sse import DeepSeekSSEParser
 from app.schemas.fetch import (
     BrowserState,
     Platform,
+    SearchReference,
 )
 
 logger = logging.getLogger(__name__)
@@ -218,6 +219,8 @@ class DeepSeekHandler(BaseBrowserHandler):
                     max_wait=50,
                     poll_interval=3,
                     min_content_len=0,
+                    stable_rounds=2,
+                    blocker_check_after_seconds=9,
                     dump_keywords=["ds-"],
                     extract_references=self._extract_references,
                 ),

@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.json_safety import to_json_compatible
 from app.models.fetch_run_platform_state import FetchRunPlatformState
 from app.tools.a4_fetch_agent import normalize_public_platform_id
 
@@ -747,12 +748,20 @@ class FetchRunPlatformStateService:
         persisted: list[FetchRunPlatformState] = []
         now = datetime.now(timezone.utc)
         for row in rows:
+            latest_packet = to_json_compatible(row.get("latest_packet"))
+            timing_json = to_json_compatible(row.get("timing_json"))
             existing = await self._get_existing_row(
                 task_run_id=row["task_run_id"],
                 platform=row["platform"],
             )
             if existing is None:
-                existing = FetchRunPlatformState(**row)
+                existing = FetchRunPlatformState(
+                    **{
+                        **row,
+                        "latest_packet": latest_packet,
+                        "timing_json": timing_json,
+                    }
+                )
                 self.db.add(existing)
             else:
                 merged_status = self._merge_status(existing.status, row.get("status"))
@@ -771,8 +780,8 @@ class FetchRunPlatformStateService:
                     int(row.get("attempt_no") or 1),
                 )
                 existing.auth_state = merged_auth_state
-                if row.get("latest_packet") is not None:
-                    existing.latest_packet = row.get("latest_packet")
+                if latest_packet is not None:
+                    existing.latest_packet = latest_packet
                 existing.latest_takeover_request_id = (
                     row.get("latest_takeover_request_id")
                     or existing.latest_takeover_request_id
@@ -798,7 +807,7 @@ class FetchRunPlatformStateService:
                 )
                 existing.timing_json = self._merge_timing_maps(
                     existing.timing_json,
-                    row.get("timing_json"),
+                    timing_json,
                 )
                 existing.started_at = self._merge_started_at(
                     existing.started_at,

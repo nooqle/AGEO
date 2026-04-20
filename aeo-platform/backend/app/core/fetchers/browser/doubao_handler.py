@@ -162,6 +162,8 @@ class DoubaoHandler(BaseBrowserHandler):
                     max_wait=60,
                     poll_interval=3,
                     min_content_len=80,
+                    stable_rounds=2,
+                    blocker_check_after_seconds=9,
                     parser_message_overrides={
                         "rate_limit": "豆包触发平台限流，请稍后重试，或降低并发后再采集。",
                         "verify": "豆包触发安全验证，请在浏览器窗口完成验证后重新采集。",

@@ -35,6 +35,13 @@ def build_skill_fact_snapshot(state: AgentState) -> SkillFactSnapshot:
         or state.get("brand_name")
         or state.get("official_website")
     )
+    canonical_fetch = state.get("a4_canonical_result") or {}
+    canonical_fetch_results = (
+        canonical_fetch.get("fetch_results")
+        if isinstance(canonical_fetch, dict)
+        else None
+    )
+    fetch_results = list(canonical_fetch_results or state.get("fetch_results") or [])
     return SkillFactSnapshot(
         session_id=str(state.get("session_id") or ""),
         entity_id=state.get("entity_id"),
@@ -42,9 +49,9 @@ def build_skill_fact_snapshot(state: AgentState) -> SkillFactSnapshot:
         analysis_mode=state.get("analysis_mode"),
         brand_profile=brand_profile,
         competitors=list(state.get("competitors") or []),
-        fetch_results=list(state.get("fetch_results") or []),
+        fetch_results=fetch_results,
         confidence_fetch_results=list(
-            state.get("fetch_results") or state.get("baseline_fetch_results") or []
+            fetch_results or state.get("baseline_fetch_results") or []
         ),
         metrics=dict(state.get("metrics") or {}),
         report=dict(state.get("report") or {}),

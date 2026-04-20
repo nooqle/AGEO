@@ -255,6 +255,8 @@ class YuanbaoHandler(BaseBrowserHandler):
                     max_wait=60,
                     poll_interval=3,
                     min_content_len=100,
+                    stable_rounds=2,
+                    blocker_check_after_seconds=9,
                     dump_keywords=["agent-dialogue"],
                     before_dom_extract=self._expand_collapsed_answer_sections,
                 ),

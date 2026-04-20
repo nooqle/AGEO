@@ -16,6 +16,19 @@ from app.workflow.state import AgentState
 logger = logging.getLogger(__name__)
 
 
+def _resolve_knowledge_query(state: AgentState, tool_args: dict[str, object]) -> str:
+    explicit_query = str(tool_args.get("query") or "").strip()
+    if explicit_query:
+        return explicit_query
+
+    for item in reversed(list(state.get("orchestrator_history") or [])):
+        if item.get("role") == "user":
+            fallback_query = str(item.get("content") or "").strip()
+            if fallback_query:
+                return fallback_query
+    return ""
+
+
 def _build_export_artifact_key(
     state: AgentState,
     result: dict[str, object],
@@ -44,7 +57,7 @@ async def knowledge_lookup_node(state: AgentState) -> Command:
     """Look up historical evidence from Knowledge Workspace."""
 
     tool_args = state.get("tool_call_args") or {}
-    query = str(tool_args.get("query") or "").strip()
+    query = _resolve_knowledge_query(state, tool_args)
     source_types = tool_args.get("source_types") or None
     platform = str(tool_args.get("platform") or "").strip() or None
     competitor_name = str(tool_args.get("competitor_name") or "").strip() or None
@@ -104,6 +117,7 @@ async def knowledge_aggregate_node(state: AgentState) -> Command:
     """Aggregate historical evidence for analysis/export style tasks."""
 
     tool_args = state.get("tool_call_args") or {}
+    query = _resolve_knowledge_query(state, tool_args)
     brand_name = (
         (state.get("brand_profile") or {}).get("brand_name")
         or state.get("brand_name")
@@ -114,7 +128,7 @@ async def knowledge_aggregate_node(state: AgentState) -> Command:
         async with AsyncSessionLocal() as db:
             service = KnowledgeWorkspaceService(db)
             result = await service.aggregate(
-                query=str(tool_args.get("query") or "").strip(),
+                query=query,
                 entity_id=state.get("entity_id"),
                 brand_name=brand_name,
                 source_types=tool_args.get("source_types") or None,
@@ -185,6 +199,7 @@ async def knowledge_export_node(state: AgentState) -> Command:
     """Export historical evidence into a data-table artifact."""
 
     tool_args = state.get("tool_call_args") or {}
+    query = _resolve_knowledge_query(state, tool_args)
     brand_name = (
         (state.get("brand_profile") or {}).get("brand_name")
         or state.get("brand_name")
@@ -195,7 +210,7 @@ async def knowledge_export_node(state: AgentState) -> Command:
         async with AsyncSessionLocal() as db:
             service = KnowledgeWorkspaceService(db)
             result = await service.export_table(
-                query=str(tool_args.get("query") or "").strip(),
+                query=query,
                 entity_id=state.get("entity_id"),
                 brand_name=brand_name,
                 source_types=tool_args.get("source_types") or None,
@@ -218,7 +233,11 @@ async def knowledge_export_node(state: AgentState) -> Command:
         }
 
     if result.get("status") == "hit":
-        artifact_id = _build_export_artifact_key(state, result, tool_args)
+        artifact_id = _build_export_artifact_key(
+            state,
+            result,
+            {**tool_args, "query": query},
+        )
         artifact_data = {
             "artifact_kind": "knowledge_export",
             "brand_name": result.get("brand_name"),

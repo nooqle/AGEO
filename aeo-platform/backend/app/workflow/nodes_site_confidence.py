@@ -15,7 +15,6 @@ from app.models.task import AnalysisTask, TaskStatus
 from app.services.task_service import TaskService
 from app.workflow.events import (
     send_error_event,
-    send_execution_complete,
     send_progress_event,
 )
 from app.workflow.harness_validation import (
@@ -355,7 +354,6 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
             message="官网 AI 友好度已完成",
             status="completed",
         )
-        await send_execution_complete(session_id, site_confidence_reply)
         await _complete_task_if_live(task_id)
 
         skill_update = build_skill_result_update(
@@ -412,6 +410,7 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
                 "error_info": None,
                 "current_step": "A7",
                 "progress": 1.0,
+                "execution_status": "completed",
                 "orchestrator_reply": site_confidence_reply,
                 "site_confidence_report_message": site_confidence_reply,
                 "site_confidence_report_summary": {

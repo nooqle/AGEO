@@ -214,6 +214,106 @@ def _source_type_label(source_type: str) -> str:
     }.get(source_type, source_type)
 
 
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            return True
+        if lowered in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def _is_fetch_answer_scope(source_types: list[str] | None) -> bool:
+    normalized = {
+        _text(item).lower()
+        for item in (source_types or [])
+        if _text(item)
+    }
+    return normalized == {"fetch_answer"}
+
+
+def _is_fetch_status_query(query: str) -> bool:
+    text = _text(query).lower()
+    if not text:
+        return False
+    keywords = (
+        "当前",
+        "最近",
+        "最新",
+        "上一轮",
+        "上轮",
+        "采集状态",
+        "问题采集情况",
+        "成功",
+        "失败",
+        "成功率",
+        "补采",
+        "补充采集",
+    )
+    return any(keyword in text for keyword in keywords)
+
+
+def _infer_fetch_status_filter(query: str) -> str:
+    text = _text(query).lower()
+    if not text:
+        return "all"
+
+    strong_failure_keywords = (
+        "失败的平台",
+        "失败问题",
+        "失败的问题",
+        "没成功",
+        "未成功",
+        "没采集到",
+        "没有采集到",
+        "未采集到",
+        "没拿到答案",
+        "没有答案",
+        "没答案",
+        "补采",
+        "补充采集",
+        "跳过成功",
+        "只采集没成功",
+    )
+    if any(keyword in text for keyword in strong_failure_keywords):
+        return "failure"
+
+    strong_success_keywords = (
+        "成功的平台",
+        "成功问题",
+        "成功的问题",
+        "全部成功",
+    )
+    if any(keyword in text for keyword in strong_success_keywords):
+        return "success"
+
+    has_failure = any(keyword in text for keyword in ("失败", "失败率"))
+    has_success = any(keyword in text for keyword in ("成功", "成功率"))
+    if has_failure and not has_success:
+        return "failure"
+    if has_success and not has_failure:
+        return "success"
+    return "all"
+
+
+def _fetch_status_filter_label(status_filter: str) -> str:
+    return {
+        "failure": "失败记录",
+        "success": "成功记录",
+        "all": "全部记录",
+    }.get(str(status_filter or "").lower(), "全部记录")
+
+
+def _analysis_scope_label(scope: str) -> str:
+    return {
+        "latest_window": "最近一轮",
+        "all_history": "全部历史",
+    }.get(str(scope or "").lower(), "当前范围")
+
+
 class KnowledgeWorkspaceService:
     """Persist and retrieve retrieval-friendly evidence objects."""
 
@@ -432,6 +532,175 @@ class KnowledgeWorkspaceService:
 
         await self.db.commit()
 
+    def _record_fetch_success(self, record: KnowledgeRecord) -> bool:
+        metadata = record.extra_metadata if isinstance(record.extra_metadata, dict) else {}
+        payload = record.payload if isinstance(record.payload, dict) else {}
+
+        success = _coerce_bool(metadata.get("success"))
+        if success is not None:
+            return success
+
+        success = _coerce_bool(payload.get("success"))
+        if success is not None:
+            return success
+
+        answer = payload.get("answer")
+        if isinstance(answer, dict) and _text(answer.get("content")):
+            return True
+        return False
+
+    def _analysis_label_with_parts(
+        self,
+        record: KnowledgeRecord,
+    ) -> tuple[str, str | None, str | None, str | None]:
+        task_id = _text(record.task_id) or None
+        run_id = _text(record.run_id) or None
+        session_id = _text(record.session_id) or None
+        if task_id:
+            return (f"task:{task_id}", task_id, run_id, session_id)
+        if run_id:
+            return (f"run:{run_id}", None, run_id, session_id)
+        if session_id:
+            return (f"session:{session_id}", None, None, session_id)
+        occurred_at = getattr(record, "occurred_at", None)
+        if occurred_at:
+            return (
+                f"date:{occurred_at.strftime('%Y-%m-%d')}",
+                None,
+                None,
+                session_id,
+            )
+        return ("unknown", None, None, session_id)
+
+    def _latest_analysis_records(
+        self,
+        records: list[KnowledgeRecord],
+    ) -> tuple[list[KnowledgeRecord], dict[str, Any]]:
+        if not records:
+            return ([], {})
+
+        ordered = sorted(
+            records,
+            key=lambda record: record.occurred_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        label, task_id, run_id, session_id = self._analysis_label_with_parts(ordered[0])
+        latest_records = [
+            record
+            for record in ordered
+            if self._analysis_label_with_parts(record)[0] == label
+        ]
+        return (
+            latest_records,
+            {
+                "analysis_label": label,
+                "task_id": task_id,
+                "run_id": run_id,
+                "session_id": session_id,
+                "occurred_at": (
+                    latest_records[0].occurred_at.isoformat()
+                    if latest_records and latest_records[0].occurred_at
+                    else None
+                ),
+            },
+        )
+
+    def _build_fetch_status_summary(
+        self,
+        records: list[KnowledgeRecord],
+    ) -> dict[str, Any]:
+        latest_records, latest_identity = self._latest_analysis_records(records)
+        if not latest_records:
+            return {}
+
+        success_count = 0
+        failure_count = 0
+        platform_rollup: dict[str, dict[str, Any]] = {}
+        failed_targets: dict[str, dict[str, Any]] = {}
+
+        for record in latest_records:
+            platform = _text(record.platform).lower()
+            question_id = _text(record.question_id)
+            question_text = _text(record.question_text)
+            is_success = self._record_fetch_success(record)
+
+            if platform:
+                row = platform_rollup.setdefault(
+                    platform,
+                    {
+                        "platform": platform,
+                        "success_count": 0,
+                        "failure_count": 0,
+                        "total_count": 0,
+                    },
+                )
+                row["total_count"] += 1
+                if is_success:
+                    row["success_count"] += 1
+                else:
+                    row["failure_count"] += 1
+
+            if is_success:
+                success_count += 1
+                continue
+
+            failure_count += 1
+            if question_id and question_text and platform:
+                target = failed_targets.setdefault(
+                    question_id,
+                    {
+                        "question_id": question_id,
+                        "question_text": question_text,
+                        "platforms": [],
+                    },
+                )
+                if platform not in target["platforms"]:
+                    target["platforms"].append(platform)
+
+        total_count = success_count + failure_count
+        failed_question_targets = sorted(
+            failed_targets.values(),
+            key=lambda item: item["question_id"],
+        )
+        failed_platforms = sorted(
+            {
+                platform
+                for item in failed_question_targets
+                for platform in item["platforms"]
+            }
+        )
+        return {
+            **latest_identity,
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "total_count": total_count,
+            "success_rate": (success_count / total_count) if total_count else 0.0,
+            "failed_question_count": len(failed_question_targets),
+            "failed_platform_count": len(failed_platforms),
+            "platform_breakdown": sorted(
+                platform_rollup.values(),
+                key=lambda item: (-int(item["failure_count"]), item["platform"]),
+            ),
+            "failed_question_targets": failed_question_targets,
+        }
+
+    def _filter_fetch_status_records(
+        self,
+        records: list[KnowledgeRecord],
+        *,
+        status_filter: str,
+    ) -> list[KnowledgeRecord]:
+        normalized = str(status_filter or "all").lower()
+        if normalized not in {"success", "failure"}:
+            return list(records)
+
+        want_success = normalized == "success"
+        return [
+            record
+            for record in records
+            if self._record_fetch_success(record) is want_success
+        ]
+
     async def get_manifest(
         self,
         *,
@@ -522,6 +791,20 @@ class KnowledgeWorkspaceService:
             if len(recent_months) >= 6:
                 break
 
+        latest_fetch_summary: dict[str, Any] = {}
+        if counts.get("fetch_answer", 0) > 0:
+            fetch_stmt = (
+                select(KnowledgeRecord)
+                .where(
+                    *self._scope_conditions(entity_id=entity_id, brand_name=brand_name),
+                    KnowledgeRecord.source_type == "fetch_answer",
+                )
+                .order_by(desc(KnowledgeRecord.occurred_at))
+                .limit(2000)
+            )
+            fetch_records = list((await self.db.execute(fetch_stmt)).scalars())
+            latest_fetch_summary = self._build_fetch_status_summary(fetch_records)
+
         return {
             "available_sources": {
                 "brand_profile": counts.get("brand_profile", 0) > 0,
@@ -534,6 +817,7 @@ class KnowledgeWorkspaceService:
                 "latest_analysis_at": latest.isoformat() if latest else None,
                 "analysis_window_count": len(analysis_labels),
                 "recent_months": recent_months,
+                "latest_fetch": latest_fetch_summary,
             },
             "coverage": {
                 "platform_count": platform_count,
@@ -649,12 +933,16 @@ class KnowledgeWorkspaceService:
         inferred_start, inferred_end = _infer_month_range(query)
         start_date = start_date or inferred_start
         end_date = end_date or inferred_end
+        fetch_status_query = _is_fetch_status_query(query)
+        effective_source_types = list(source_types or [])
+        if fetch_status_query and not effective_source_types:
+            effective_source_types = ["fetch_answer"]
 
         records = await self._fetch_records(
             query=query,
             entity_id=entity_id,
             brand_name=brand_name,
-            source_types=source_types,
+            source_types=effective_source_types or None,
             platform=platform,
             competitor_name=competitor_name,
             domain=domain,
@@ -662,9 +950,25 @@ class KnowledgeWorkspaceService:
             end_date=end_date,
             max_records=max(limit * 20, 200),
         )
+        fetch_scope = _is_fetch_answer_scope(effective_source_types or None)
+        analysis_scope = "all_history"
+        if fetch_scope and fetch_status_query:
+            latest_records, _ = self._latest_analysis_records(records)
+            if latest_records:
+                records = latest_records
+                analysis_scope = "latest_window"
+        fetch_status_summary = (
+            self._build_fetch_status_summary(records) if fetch_scope and records else {}
+        )
+        status_filter = _infer_fetch_status_filter(query) if fetch_scope else "all"
+        records_for_groups = (
+            self._filter_fetch_status_records(records, status_filter=status_filter)
+            if fetch_scope
+            else list(records)
+        )
 
         grouped: dict[str, list[KnowledgeRecord]] = defaultdict(list)
-        for record in records:
+        for record in records_for_groups:
             key = self._aggregate_key(record, group_by)
             if key is None:
                 continue
@@ -672,10 +976,45 @@ class KnowledgeWorkspaceService:
 
         groups: list[dict[str, Any]] = []
         for key, items in grouped.items():
+            success_count = 0
+            failure_count = 0
+            question_keys: set[str] = set()
+            platform_keys: set[str] = set()
+            failure_question_keys: set[str] = set()
+            success_question_keys: set[str] = set()
+            if fetch_scope:
+                for item in items:
+                    question_key = _text(item.question_id) or _text(item.question_text)
+                    if question_key:
+                        question_keys.add(question_key)
+                    platform_key = _text(item.platform)
+                    if platform_key:
+                        platform_keys.add(platform_key)
+                    if self._record_fetch_success(item):
+                        success_count += 1
+                        if question_key:
+                            success_question_keys.add(question_key)
+                    else:
+                        failure_count += 1
+                        if question_key:
+                            failure_question_keys.add(question_key)
             groups.append(
                 {
                     "group_key": key,
                     "count": len(items),
+                    "success_count": success_count if fetch_scope else None,
+                    "failure_count": failure_count if fetch_scope else None,
+                    "question_count": len(question_keys) if fetch_scope else None,
+                    "platform_count": len(platform_keys) if fetch_scope else None,
+                    "success_question_count": (
+                        len(success_question_keys) if fetch_scope else None
+                    ),
+                    "failure_question_count": (
+                        len(failure_question_keys) if fetch_scope else None
+                    ),
+                    "success_rate": (
+                        success_count / len(items) if fetch_scope and items else None
+                    ),
                     "source_types": sorted(
                         {item.source_type for item in items if item.source_type}
                     ),
@@ -701,7 +1040,13 @@ class KnowledgeWorkspaceService:
             "status": "hit" if groups else "miss",
             "group_by": group_by,
             "query": query,
-            "total_records": len(records),
+            "analysis_scope": analysis_scope,
+            "analysis_scope_label": _analysis_scope_label(analysis_scope),
+            "status_filter": status_filter,
+            "status_filter_label": _fetch_status_filter_label(status_filter),
+            "total_records": len(records_for_groups),
+            "unfiltered_total_records": len(records),
+            "fetch_status_summary": fetch_status_summary,
             "groups": groups[:limit],
         }
 

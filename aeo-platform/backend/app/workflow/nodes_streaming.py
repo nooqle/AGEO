@@ -4,6 +4,7 @@ This module provides streaming LLM calls with real-time TPAOR event emission.
 """
 
 import asyncio
+import logging
 from time import perf_counter
 from typing import Any, AsyncGenerator, Callable, Generator
 
@@ -11,6 +12,23 @@ from app.workflow.events import send_tpaor_event, send_progress_event, send_thou
 from app.core.llm import BaseLLMModel, LLMResponse
 
 _SENTINEL = object()
+_STREAM_IDLE_TIMEOUT_SECONDS = 120
+logger = logging.getLogger(__name__)
+
+
+def _queue_put_threadsafe(
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[Any],
+    item: Any,
+) -> bool:
+    """Schedule queue delivery from a worker thread without blocking on backpressure."""
+
+    try:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+        return True
+    except RuntimeError:
+        logger.warning("[nodes_streaming] Event loop closed before stream item delivery")
+        return False
 
 
 async def async_wrap_sync_gen(
@@ -20,33 +38,42 @@ async def async_wrap_sync_gen(
 
     Uses asyncio.Queue to shuttle chunks from a background thread to the async consumer.
     """
-    queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+    queue: asyncio.Queue[Any] = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
     def _producer():
+        produced = 0
         try:
             for item in gen_factory():
-                asyncio.run_coroutine_threadsafe(queue.put(item), loop).result(timeout=30)
+                produced += 1
+                if not _queue_put_threadsafe(loop, queue, item):
+                    return
         except Exception as exc:
-            try:
-                asyncio.run_coroutine_threadsafe(queue.put(exc), loop).result(timeout=5)
-            except Exception:
-                pass
+            logger.warning("[nodes_streaming] Producer raised: %s", exc, exc_info=True)
+            _queue_put_threadsafe(loop, queue, exc)
         finally:
-            try:
-                asyncio.run_coroutine_threadsafe(queue.put(_SENTINEL), loop).result(timeout=5)
-            except Exception:
-                pass
+            logger.info(
+                "[nodes_streaming] Producer finished: produced=%d", produced
+            )
+            _queue_put_threadsafe(loop, queue, _SENTINEL)
 
     thread_future = loop.run_in_executor(None, _producer)
 
     try:
         while True:
             try:
-                item = await asyncio.wait_for(queue.get(), timeout=120)
+                item = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=_STREAM_IDLE_TIMEOUT_SECONDS,
+                )
             except asyncio.TimeoutError:
+                logger.error(
+                    "[nodes_streaming] Stream idle timeout: no data received for %d seconds",
+                    _STREAM_IDLE_TIMEOUT_SECONDS,
+                )
                 raise TimeoutError(
-                    "LLM streaming timed out: no data received for 120 seconds"
+                    "LLM streaming timed out: no data received for "
+                    f"{_STREAM_IDLE_TIMEOUT_SECONDS} seconds"
                 )
             if item is _SENTINEL:
                 break

@@ -855,6 +855,16 @@ class BaseBrowserHandler(ABC):
         """Poll DOM content while allowing Browser Agent blocker checks."""
 
         tag = self.PLATFORM_KEY.capitalize()
+        try:
+            stable_rounds = max(int(stable_rounds), 1)
+        except (TypeError, ValueError):
+            stable_rounds = 2
+        try:
+            blocker_check_after_seconds = float(blocker_check_after_seconds)
+            if blocker_check_after_seconds <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            blocker_check_after_seconds = 9
         sync_method = getattr(self.client, "sync_to_existing_target_page", None)
         await asyncio.sleep(poll_interval)
         waited = poll_interval

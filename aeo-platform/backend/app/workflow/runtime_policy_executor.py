@@ -23,12 +23,20 @@ _USER_VISIBLE_RUNTIME_LABELS: dict[str, str] = {
     "post_analysis_skill": "后续分析",
 }
 
+_ALLOWED_RUNTIME_AUTHORITIES = frozenset(
+    {
+        "user_confirmation",
+        "authoritative_resume",
+    }
+)
+
 
 @dataclass(frozen=True)
 class RuntimePolicyAction:
     """Structured runtime action consumed before the orchestrator asks the model."""
 
     action_type: str
+    authority: str
     reason: str
     tool_name: str | None = None
     tool_args: dict[str, Any] = field(default_factory=dict)
@@ -39,6 +47,7 @@ class RuntimePolicyAction:
     def to_state_payload(self) -> dict[str, Any]:
         return {
             "action_type": self.action_type,
+            "authority": self.authority,
             "reason": self.reason,
             "tool_name": self.tool_name,
             "tool_args": dict(self.tool_args or {}),
@@ -51,14 +60,19 @@ class RuntimePolicyAction:
 def build_next_required_action(
     *,
     tool_name: str,
+    authority: str,
     reason: str,
     tool_args: Mapping[str, Any] | None = None,
     reply_text: str = "",
     source_step: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    normalized_authority = str(authority or "").strip()
+    if normalized_authority not in _ALLOWED_RUNTIME_AUTHORITIES:
+        raise ValueError(f"Unsupported runtime authority: {authority}")
     return RuntimePolicyAction(
         action_type="run_tool",
+        authority=normalized_authority,
         reason=reason,
         tool_name=tool_name,
         tool_args=dict(tool_args or {}),
@@ -74,12 +88,19 @@ def parse_next_required_action(
     if not payload:
         return None
     action_type = str(payload.get("action_type") or "").strip()
+    authority = str(payload.get("authority") or "").strip()
     reason = str(payload.get("reason") or "").strip()
     tool_name = str(payload.get("tool_name") or "").strip() or None
-    if action_type != "run_tool" or not reason or not tool_name:
+    if (
+        action_type != "run_tool"
+        or authority not in _ALLOWED_RUNTIME_AUTHORITIES
+        or not reason
+        or not tool_name
+    ):
         return None
     return RuntimePolicyAction(
         action_type=action_type,
+        authority=authority,
         reason=reason,
         tool_name=tool_name,
         tool_args=dict(payload.get("tool_args") or {}),
