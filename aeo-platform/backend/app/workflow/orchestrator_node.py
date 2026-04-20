@@ -68,7 +68,10 @@ from app.workflow.runtime_policy_executor import (
     summarize_alternative_actions,
 )
 from app.workflow.fetch_recovery import (
+    extract_latest_fetch_recovery_plan_from_state,
+    is_supplemental_fetch_request,
     normalize_question_targets,
+    prefers_browser_fetch_mode,
 )
 from app.workflow.nodes_streaming import async_wrap_sync_gen
 
@@ -1192,12 +1195,14 @@ def _infer_authoritative_history_refresh_tool(
     ):
         group_by = "platform"
 
+    limit = 50 if group_by == "question" else 20
+
     return (
         "knowledge_aggregate",
         {
             "query": latest_user_message,
             "group_by": group_by,
-            "limit": 12,
+            "limit": limit,
             "source_types": ["fetch_answer"],
         },
     )
@@ -2279,10 +2284,18 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                     f"成功 {int(fetch_status.get('success_count') or 0)} 条，"
                     f"失败 {int(fetch_status.get('failure_count') or 0)} 条。"
                 )
+            fetch_question_hint = ""
+            if int(fetch_status.get("failed_question_count") or 0) > 0:
+                preview_count = min(len(groups), 5)
+                fetch_question_hint = (
+                    f"失败问题数以权威统计为准，共 {int(fetch_status.get('failed_question_count') or 0)} 个。"
+                    f"如果下面只展示 {preview_count} 个分组，那只是预览，不代表总数。"
+                )
             scope_label = str(result.get("analysis_scope_label") or "当前范围")
             filter_label = str(result.get("status_filter_label") or "全部记录")
             return (
                 f"{fetch_prefix}"
+                f"{fetch_question_hint}"
                 f"本次按{scope_label}{filter_label}整理，共统计 {result.get('total_records', 0)} 条记录，"
                 f"得到 {len(groups)} 个分组。"
                 f"当前最大分组是 {top.get('group_key', 'unknown')}，数量 {top.get('count', 0)}。"
@@ -2493,6 +2506,112 @@ def _build_ask_user_fallback_reply(
         )
 
     return message or "请继续告诉我您的选择。"
+
+
+def _should_force_fetch_recovery_confirmation(state: AgentState) -> bool:
+    if not _is_latest_run_history_stats_query(_get_latest_user_message(state)):
+        return False
+    if state.get("awaiting_user") or state.get("pending_confirmation"):
+        return False
+    if not (state.get("a4_canonical_result") or state.get("fetch_results")):
+        return False
+
+    aggregate_result = state.get("knowledge_aggregate_result") or {}
+    if not isinstance(aggregate_result, dict) or aggregate_result.get("status") != "hit":
+        return False
+
+    fetch_status = aggregate_result.get("fetch_status_summary") or {}
+    if not isinstance(fetch_status, dict):
+        return False
+
+    failure_count = int(fetch_status.get("failure_count") or 0)
+    question_targets = normalize_question_targets(
+        fetch_status.get("failed_question_targets")
+    )
+    return failure_count > 0 and bool(question_targets)
+
+
+async def _force_fetch_recovery_confirmation(
+    *,
+    state: AgentState,
+    session_id: str,
+    reply_text: str,
+    new_history: list[dict[str, Any]],
+    request_id: str,
+    current_retry_counts: dict[str, int],
+) -> Command:
+    defense_options = [
+        {
+            "id": "run_supplemental_fetch",
+            "label": "补采失败项（浏览器）",
+            "description": "仅补采上一轮失败的问题和平台，并保留已有成功结果",
+        },
+        {
+            "id": "run_analysis_report",
+            "label": "先用当前结果继续分析",
+            "description": "接受当前缺口，直接继续生成分析报告",
+        },
+    ]
+    defense_msg = (
+        "上一轮采集仍有失败项。"
+        "您可以先补采失败的平台与问题，或者直接基于当前成功样本继续生成分析报告。"
+        "请选择下一步："
+    )
+    visible_reply = reply_text.strip() or defense_msg
+    if visible_reply and not reply_text.strip():
+        await send_reply_event(
+            session_id,
+            visible_reply,
+            is_delta=True,
+            is_new_round=True,
+        )
+        await send_reply_event(session_id, "", is_complete=True)
+
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "inline_confirmation",
+        {
+            "message": defense_msg,
+            "options": defense_options,
+            "type": "simple",
+        },
+    )
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "confirmation_request",
+        {
+            "request_id": request_id,
+            "type": "step_confirmation",
+            "message": defense_msg,
+            "options": defense_options,
+            "allow_text_input": True,
+            "step_id": "orchestrator",
+            "step_name": "选择补采策略",
+        },
+    )
+
+    new_history.append(
+        {
+            "role": "tool",
+            "content": "等待用户确认是否补采失败项...",
+            "tool_call_id": request_id,
+        }
+    )
+    return Command(
+        goto="wait_for_user",
+        update={
+            "awaiting_user": True,
+            "orchestrator_reply": visible_reply,
+            "orchestrator_history": new_history,
+            "pending_confirmation": {
+                "step_id": "orchestrator",
+                "step_name": "选择补采策略",
+                "message": defense_msg,
+                "options": defense_options,
+            },
+            "agent_retry_counts": current_retry_counts,
+        },
+    )
 
 
 async def _force_fetch_mode_confirmation(
@@ -3695,6 +3814,21 @@ async def orchestrator_node(state: AgentState) -> Command:
                 current_retry_counts=current_retry_counts,
             )
 
+        if last_tool == "knowledge_aggregate" and _should_force_fetch_recovery_confirmation(
+            llm_state
+        ):
+            logger.warning(
+                "[Orchestrator] No tool call after latest-run failure summary; forcing supplemental fetch confirmation."
+            )
+            return await _force_fetch_recovery_confirmation(
+                state=llm_state,
+                session_id=session_id,
+                reply_text=reply_text,
+                new_history=new_history,
+                request_id=f"defense_fetch_recovery_{int(datetime.now().timestamp() * 1000)}",
+                current_retry_counts=current_retry_counts,
+            )
+
         # No tool call — check if we're in an error state before ending
         error_info = state.get("error_info")
         exec_status = state.get("execution_status")
@@ -4401,6 +4535,24 @@ async def _handle_tool_call(
 
         # Pass fetch_mode for A4 + custom_questions + ask_user guard
         if effective_tool_name == "answer_fetch":
+            latest_user_message = _get_latest_user_message(state)
+            recovery_plan = extract_latest_fetch_recovery_plan_from_state(state)
+            if (
+                is_supplemental_fetch_request(latest_user_message)
+                and recovery_plan
+                and recovery_plan.get("question_targets")
+            ):
+                tool_args = {
+                    **tool_args,
+                    "retry_failed_only": True,
+                    "question_targets": list(
+                        recovery_plan.get("question_targets") or []
+                    ),
+                    "platforms": list(recovery_plan.get("platforms") or []),
+                    "failed_task_id": recovery_plan.get("task_id"),
+                }
+                if prefers_browser_fetch_mode(latest_user_message):
+                    tool_args["fetch_mode"] = "full"
             question_targets = normalize_question_targets(
                 tool_args.get("question_targets")
             )

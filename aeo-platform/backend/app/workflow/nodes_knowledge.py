@@ -11,9 +11,51 @@ from langgraph.types import Command
 from app.core.database import AsyncSessionLocal
 from app.services.knowledge_workspace_service import KnowledgeWorkspaceService
 from app.workflow.events import save_and_send_artifact
+from app.workflow.fetch_recovery import normalize_question_targets
 from app.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
+
+
+def _build_fetch_recovery_plan_from_aggregate_result(
+    result: dict[str, object] | None,
+) -> dict[str, object] | None:
+    fetch_status = (result or {}).get("fetch_status_summary") or {}
+    if not isinstance(fetch_status, dict):
+        return None
+
+    failure_count = int(fetch_status.get("failure_count") or 0)
+    question_targets = normalize_question_targets(
+        fetch_status.get("failed_question_targets")
+    )
+    if failure_count <= 0 or not question_targets:
+        return None
+
+    platforms = sorted(
+        {
+            platform
+            for target in question_targets
+            for platform in target.get("platforms") or []
+        }
+    )
+    return {
+        "question_targets": question_targets,
+        "platforms": platforms,
+        "success_count": int(fetch_status.get("success_count") or 0),
+        "failure_count": failure_count,
+        "total_count": int(fetch_status.get("total_count") or 0),
+        "success_rate": float(fetch_status.get("success_rate") or 0.0),
+        "failed_question_count": int(
+            fetch_status.get("failed_question_count") or len(question_targets)
+        ),
+        "failed_platform_count": int(
+            fetch_status.get("failed_platform_count") or len(platforms)
+        ),
+        "platform_breakdown": list(fetch_status.get("platform_breakdown") or []),
+        "task_id": str(fetch_status.get("task_id") or "").strip() or None,
+        "analysis_label": str(fetch_status.get("analysis_label") or "").strip() or None,
+        "source": "knowledge_aggregate",
+    }
 
 
 def _resolve_knowledge_query(state: AgentState, tool_args: dict[str, object]) -> str:
@@ -150,9 +192,12 @@ async def knowledge_aggregate_node(state: AgentState) -> Command:
             "error": str(exc),
         }
 
+    recovery_plan = _build_fetch_recovery_plan_from_aggregate_result(result)
+
     return Command(
         update={
             "knowledge_aggregate_result": result,
+            "fetch_recovery_plan": recovery_plan,
             "current_step": "KNOWLEDGE",
         }
     )
