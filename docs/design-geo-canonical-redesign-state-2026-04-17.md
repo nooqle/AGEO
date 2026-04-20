@@ -218,6 +218,129 @@ Validation completed:
 
 - backend canonical projection tests passed
 - frontend `tsc`, `lint`, and `build` passed
+
+### 8. A4 minimum-evolution status (2026-04-20)
+
+This round started implementing the minimum evolution plan from
+`docs/design-a4-fetch-layering-context-and-failure-2026-04-19.md` without
+rewriting the full A4 pipeline.
+
+Implemented:
+
+- browser failure taxonomy and failure contract were added to the shared fetch
+  schema and browser error path:
+  - `failure_layer`
+  - `failure_reason`
+  - `execution_stage`
+  - `retryable`
+  - `needs_handoff`
+  - `evidence_ref`
+- browser terminal failures now capture a short-lived local evidence bundle
+  through `app/core/fetchers/browser/failure_observability.py`
+- A4 now cleans up expired failure evidence at run start
+- a shared browser post-submit executor was added in
+  `app/core/fetchers/browser/browser_executor.py`
+- `deepseek / doubao / kimi / yuanbao` handlers were refactored to reuse that
+  shared post-submit capture flow instead of each carrying a full local copy
+- browser handoff/resume semantics also started moving into the shared executor:
+  `PendingBrowserAction`, action inference, and the shared resume helper now
+  live in `browser_executor.py` instead of remaining as implicit local
+  protocols inside `nodes_a4.py`
+- browser-path A4 result shaping stopped writing `has_brand_mention` directly;
+  the immediate browser packet now focuses on raw answer/citation capture
+- API-path A4 result shaping also stopped writing `has_brand_mention`
+  directly in:
+  - `_fetch_from_doubao`
+  - `_fetch_from_hunyuan`
+  - `_fetch_from_kimi`
+- `AioAnswerFetchRequest` no longer carries `brand_profile`; A4 tool-facing
+  execution now uses a question-only fetch contract
+- browser executor now also owns shared recovery helpers for:
+  - `rate_limit`
+  - `verify`
+  - `modal_blocked`
+  and `nodes_a4.py` now delegates browser failure recovery through the shared
+  executor entrypoint instead of keeping those branches inline
+- fetch artifact remains the only user-facing A4 truth source; the duplicate
+  chat-side platform status card remains disabled
+- authoritative projection now preserves failure taxonomy fields while
+  sanitizing `evidence_ref` before it reaches user-facing artifact projections,
+  so local filesystem paths are not exposed in fetch artifacts
+
+Validation completed:
+
+- backend compile passed for:
+  - `browser_executor.py`
+  - `failure_observability.py`
+  - `a4_fetch_agent.py`
+  - `fetch_run_platform_state_service.py`
+  - `nodes_a4.py`
+- shared-env pytest passed at `29 passed` across:
+- shared-env pytest passed at `31 passed` across:
+- shared-env pytest passed at `32 passed` across:
+  - `test_nodes_a4_timeouts.py`
+  - `test_fetch_run_platform_state_service.py`
+  - `test_browser_failure_evidence_service.py`
+  - `test_browser_executor.py`
+  - `test_a5_generic_report_copy.py`
+
+Code review conclusion for this round:
+
+- no new blocking security issue remains after sanitizing `evidence_ref` in
+  projection output
+- the main remaining design paradoxes are boundary-related rather than runtime
+  blockers:
+  - A4 still keeps some downstream brand-aware writeback behavior, even though
+    fetch execution itself no longer writes `has_brand_mention`
+  - executor responsibilities are much clearer, but not fully centralized yet:
+    `nodes_a4.py` still owns part of the pending-action lifecycle and terminal
+    failure shaping, even after `PendingBrowserAction`, shared action
+    inference, shared resume flow, and shared failure recovery moved into
+    `browser_executor.py`
+
+Current judgment:
+
+- Phase 1 and Phase 2 are effectively landed
+- Phase 3 is substantially landed: shared post-submit execution and shared
+  browser failure recovery now exist, but pending-action lifecycle ownership is
+  not yet fully centralized
+- Phase 4 is materially narrowed: browser/API fetch helpers no longer carry
+  direct brand semantics, but downstream brand-aware writeback still remains
+
+### 8. A4 fetch layering / failure-boundary discussion frozen (2026-04-19)
+
+This round did not yet rewrite A4, but it froze the target responsibility model
+ and failure semantics.
+
+See:
+
+- `docs/design-a4-fetch-layering-context-and-failure-2026-04-19.md`
+
+Frozen conclusions:
+
+- A4 should remain a fetch/orchestration stage, not a brand-analysis stage
+- A4 should be treated as four layers:
+  - `A4 orchestrator`
+  - `browser executor`
+  - `platform adapter (handler)`
+  - `browser client`
+- `browser executor` is the right place to unify execution context,
+  automatic recovery, and failure classification
+- A4 should be as brand-light as possible; brand mention / official-domain /
+  competitor semantics should move toward A5 rather than be expanded in A4
+- fetch artifact should remain the only user-visible truth source for platform
+  results; duplicate chat-side platform-status notices should be removed
+- terminal browser failures should capture failure evidence
+  (`screenshot + URL + failure metadata + text snapshot`) with short retention
+- A5 skill copy must remain generic and must not reintroduce cross-domain
+  hardcoded language
+
+Related implementation observations now recorded in state:
+
+- the previously observed A5 automotive phrases were confirmed to be
+  report-builder hardcoding, not upstream question data
+- current platform instability appears more aligned with fetch/extraction and
+  orchestration-budget issues than with AIO connectivity itself
 - direct API validation against `GET /analytics/v2/dashboard-home` on `8007`
   confirmed the new latest-report summary shape for `理想汽车`
 - direct frontend-code validation via `api.getAnalyticsAll(...)` confirmed
@@ -316,6 +439,84 @@ Completion estimate:
   place
 - remaining work is concentrated in destructive cleanup rehearsal, residual
   legacy compatibility cleanup, and user-level acceptance validation
+
+### 10. A4 minimum-evolution implementation status (2026-04-19)
+
+The A4 layering / context / failure-responsibility plan is no longer only a
+discussion artifact. A first minimum implementation pass is now in code.
+
+Implemented:
+
+- `aeo-platform/backend/app/schemas/fetch.py`
+  - browser/fetch result contracts now expose:
+    - `failure_layer`
+    - `failure_reason`
+    - `execution_stage`
+    - `retryable`
+    - `needs_handoff`
+    - `evidence_ref`
+- `aeo-platform/backend/app/core/fetchers/browser/failure_observability.py`
+  - added shared failure taxonomy helpers
+  - added `BrowserFailureEvidenceService`
+  - terminal browser failures can now persist:
+    - screenshot
+    - current URL
+    - timestamp
+    - question/platform metadata
+    - brief text snapshot
+  - retention cleanup is implemented as a dated-directory sweep
+- `aeo-platform/backend/app/core/fetchers/browser/base_handler.py`
+  - parser / empty-answer terminal failures now attach the structured failure
+    fields
+  - parser / empty-answer failures now capture evidence bundles instead of
+    returning only coarse error strings
+- `aeo-platform/backend/app/workflow/nodes_a4.py`
+  - browser timeout and executor-failure paths now emit the new failure
+    contract fields
+  - browser evidence cleanup is invoked opportunistically at A4 start
+  - browser failure evidence capture now propagates `question_id`
+  - the duplicate chat-side platform-summary notice remains disabled, keeping
+    the fetch artifact as the only user-facing truth source
+- `aeo-platform/backend/app/tools/a4_fetch_agent.py`
+  - legacy packet projection now preserves structured failure metadata and
+    `evidence_ref`
+- `aeo-platform/backend/app/services/fetch_run_platform_state_service.py`
+  - authoritative platform-state projection now preserves the new failure
+    fields instead of dropping them during summary build
+- regression coverage added/updated:
+  - `tests/test_nodes_a4_timeouts.py`
+  - `tests/test_fetch_run_platform_state_service.py`
+  - `tests/test_browser_failure_evidence_service.py`
+  - `tests/test_a5_generic_report_copy.py`
+
+Validation completed:
+
+- targeted backend compile passed for:
+  - `base_handler.py`
+  - `failure_observability.py`
+  - `nodes_a4.py`
+  - `a4_fetch_agent.py`
+  - `fetch_run_platform_state_service.py`
+  - `fetch.py`
+- shared-env pytest passed:
+  - `tests/test_nodes_a4_timeouts.py`
+  - `tests/test_fetch_run_platform_state_service.py`
+  - `tests/test_browser_failure_evidence_service.py`
+  - `tests/test_a5_generic_report_copy.py`
+  - result: `22 passed`
+
+Scope note:
+
+- this is a **minimum** implementation of the A4 plan:
+  - Phase 1 truth-source cleanup is in place
+  - Phase 2 failure taxonomy/evidence is in place
+  - Phase 5 user-visible duplicate platform-status output is already fenced
+- the browser executor / handler responsibility split is **not yet** fully
+  restructured in code
+- A4 still carries some compatibility-era post-fetch brand semantics in legacy
+  result shaping; the broader “A4 default brand-light, A5 owns brand
+  interpretation” direction is frozen but not fully executed yet
+- failure evidence remains internal-only and is not yet surfaced in product UI
 
 ## Frozen Decisions
 
@@ -1402,17 +1603,24 @@ This round also confirmed one more execution discipline writeback:
 
 ## Next Actions
 
-1. Execute the controlled rollout against the documented main-path gate in
+1. Continue Phase 3 of the A4 minimum-evolution plan:
+   move browser retry / fallback / timeout / failure-classification ownership
+   further into a common executor flow and thin platform handlers back toward
+   pure platform-difference adapters.
+2. Continue Phase 4 of the A4 minimum-evolution plan:
+   keep shrinking compatibility-era brand semantics from A4 result shaping and
+   move brand interpretation back toward A5-only analysis.
+3. Execute the controlled rollout against the documented main-path gate in
    `docs/launch-geo-canonical-rollout-checklist-2026-04-19.md`.
-2. Execute cleanup and first-run brand recreation in the documented order from
+4. Execute cleanup and first-run brand recreation in the documented order from
    `docs/launch-geo-canonical-cleanup-checklist-2026-04-19.md`.
-3. Keep the non-homepage analytics V2 surfaces fenced as retained legacy during
+5. Keep the non-homepage analytics V2 surfaces fenced as retained legacy during
    rollout; only remove them in a dedicated cleanup pass after monitoring and
    secondary historical views are explicitly reviewed.
-4. Re-evaluate whether official-domain aliasing should stay as a targeted
+6. Re-evaluate whether official-domain aliasing should stay as a targeted
    curated table or be generalized into a wider brand-domain normalization
    strategy.
-5. Keep this state document as the implementation anchor and update it after
+7. Keep this state document as the implementation anchor and update it after
    each rollout validation gate.
 
 ## Last Reviewed
@@ -1500,3 +1708,5 @@ This round also confirmed one more execution discipline writeback:
 - 2026-04-19: monitoring/settings were tightened around one explicit meaning: scheduled panorama reruns using the latest panorama baseline; brand-card `设置监测` now routes directly into settings, settings-page monitoring copy was stripped of threshold/change-alert/operations noise, and `全景分析状态` now shows latest panorama `提及率 / 品牌排名`
 - 2026-04-19: service-level monitoring validation on backend `8008` confirmed DeepSeek is rejected on schedule creation, active schedules can be created from the latest panorama baseline with populated `question_count / source_task_id / next_run_at`, and validation cleanup removed the temporary schedule immediately afterward
 - 2026-04-19: dashboard latest-report summaries now surface `自动监测` from scheduled A5 output artifacts via `triggered_by`, and browser validation on frontend `3001` confirmed direct settings navigation plus the simplified monitoring page content (`全景自动监测`, `全景分析状态`, no threshold/change-alert/ops block, DeepSeek disabled copy, Doubao API subtitle)
+- 2026-04-20: A4 minimum-evolution Phase 3 advanced further without rewriting the full pipeline: API-path helper packets stopped writing `has_brand_mention`, `AioAnswerFetchRequest.brand_profile` became compatibility-only optional, and shared browser recovery helpers for `rate_limit / verify / modal_blocked` moved into `browser_executor.py`; targeted shared-env validation rose to `29 passed`
+- 2026-04-20: A4 failure-evidence projection was hardened so user-visible fetch artifacts no longer expose local `screenshot_path / metadata_path`; the remaining non-blocking design debt is now mainly the residual resume/pending-action orchestration still living in `nodes_a4.py` and the still-present optional `brand_profile` compatibility seam in the fetch tool contract

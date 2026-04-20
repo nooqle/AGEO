@@ -104,7 +104,6 @@ class AioAnswerFetchRequest:
     task_id: str
     run_id: str | None
     questions: list[dict[str, Any]]
-    brand_profile: dict[str, Any]
     mode: AioFetchMode
     platforms: tuple[AioPublicPlatform, ...]
     auth_context: AioAuthContext
@@ -238,7 +237,6 @@ class AioAnswerFetchTool:
         *,
         state: dict[str, Any],
         questions: list[dict[str, Any]],
-        brand_profile: dict[str, Any],
         mode: str,
         platform_filter: Any = None,
     ) -> AioAnswerFetchRequest:
@@ -262,7 +260,6 @@ class AioAnswerFetchTool:
             task_id=run_context.task_id,
             run_id=run_context.run_id,
             questions=questions,
-            brand_profile=brand_profile,
             mode=normalized_mode,
             platforms=platforms,
             auth_context=auth_context,
@@ -501,6 +498,11 @@ class AioAnswerFetchTool:
         citations = (
             result.get("citations") if isinstance(result.get("citations"), list) else []
         )
+        evidence_ref = (
+            result.get("evidence_ref")
+            if isinstance(result.get("evidence_ref"), dict)
+            else None
+        )
         error = str(result.get("error") or "").strip()
         error_type = str(result.get("error_type") or "").strip()
         errors: list[dict[str, Any]] = []
@@ -518,6 +520,12 @@ class AioAnswerFetchTool:
                     "stop_platform": bool(result.get("stop_platform")),
                     "skipped_by_user": bool(result.get("skipped_by_user")),
                     "skipped_by_breaker": bool(result.get("skipped_by_breaker")),
+                    "failure_layer": result.get("failure_layer"),
+                    "failure_reason": result.get("failure_reason"),
+                    "execution_stage": result.get("execution_stage"),
+                    "retryable": result.get("retryable"),
+                    "needs_handoff": result.get("needs_handoff"),
+                    "evidence_ref": evidence_ref,
                 }
             )
         takeover: AioTakeoverRequiredPacket | None = None
@@ -557,7 +565,7 @@ class AioAnswerFetchTool:
             questions=[question] if question else [],
             answers=answers,
             citations=citations,
-            evidence=citations,
+            evidence=[evidence_ref] if evidence_ref else [],
             auth_state_updated=bool(result.get("auth_state_updated")),
             provenance={
                 "source": "aio_answer_fetch",
@@ -572,6 +580,12 @@ class AioAnswerFetchTool:
                 "target_url": result.get("target_url"),
                 "final_url": result.get("final_url"),
                 "probe_result": result.get("probe_result"),
+                "failure_layer": result.get("failure_layer"),
+                "failure_reason": result.get("failure_reason"),
+                "execution_stage": result.get("execution_stage"),
+                "retryable": result.get("retryable"),
+                "needs_handoff": result.get("needs_handoff"),
+                "evidence_ref": evidence_ref,
             },
             errors=errors,
             takeover=takeover,
@@ -618,7 +632,6 @@ def resolve_platform_display_names(platforms: list[str]) -> str:
 
 async def fetch_answers(
     questions: list,
-    brand_profile: dict,
     platforms: list[str] | None = None,
 ) -> list[dict]:
     """Backward-compatible async wrapper for legacy callers.
@@ -631,7 +644,6 @@ async def fetch_answers(
     request = tool.build_request(
         state={"session_id": "legacy_direct_tool_call"},
         questions=[dict(q) for q in questions],
-        brand_profile=brand_profile,
         mode="fast",
         platform_filter=platforms,
     )

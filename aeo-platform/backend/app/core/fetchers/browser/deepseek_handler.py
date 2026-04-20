@@ -11,12 +11,15 @@ import logging
 from typing import Any, AsyncGenerator
 
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
+from app.core.fetchers.browser.browser_executor import (
+    BrowserAnswerExecutionPlan,
+    execute_post_submit_capture_flow,
+)
 from app.core.fetchers.browser.parsers.base import BaseResponseParser
 from app.core.fetchers.browser.parsers.sse import DeepSeekSSEParser
 from app.schemas.fetch import (
     BrowserState,
     Platform,
-    SearchReference,
 )
 
 logger = logging.getLogger(__name__)
@@ -205,77 +208,26 @@ class DeepSeekHandler(BaseBrowserHandler):
                 )
                 return
 
-            # Step 6: Wait for response (try network interception first, fallback to DOM)
             yield self._create_event(BrowserState.WAITING_RESPONSE, "等待 AI 回复...", progress=0.7)
-            answer_text = ""
-            search_refs: list[SearchReference] = []
-            source = "dom"
-
-            if intercept_task:
-                parsed = await intercept_task
-                if parsed and parsed.parse_ok and len(parsed.answer_text.strip()) >= 10:
-                    answer_text = parsed.answer_text
-                    search_refs = parsed.references
-                    source = "network"
-                    logger.info("[DeepSeek] Using network-intercepted data (%d chars, %d refs)",
-                                len(answer_text), len(search_refs))
-                elif parsed and parsed.error_type:
-                    logger.warning("[DeepSeek] SSE error: %s (type=%s)", parsed.error, parsed.error_type)
-                    events, handled = await self._handle_browser_agent_parser_error(
-                        parsed_error=parsed.error,
-                        error_type=parsed.error_type,
-                        progress=0.68,
-                        fallback_url=self.URL,
-                    )
-                    for event in events:
-                        yield event
-                    if handled:
-                        return
-                    return
-
-            # DOM fallback
-            if not answer_text:
-                logger.info("[DeepSeek] Falling back to DOM extraction")
-                prev_len, waited, blocker_decision = await self._wait_for_content_with_browser_agent(
-                    max_wait=50, poll_interval=3, min_content_len=0,
-                    target_url=self.URL,
-                )
-                events, handled = await self._handle_browser_agent_wait_blocker(
-                    blocker_decision,
-                    progress=0.72,
+            fetch_result, events = await execute_post_submit_capture_flow(
+                self,
+                BrowserAnswerExecutionPlan(
+                    question=question,
+                    intercept_task=intercept_task,
                     fallback_url=self.URL,
-                )
-                for event in events:
-                    yield event
-                if handled:
-                    return
-                if prev_len == 0:
-                    await self._dump_page_debug(waited, extra_keywords=['ds-'])
-
-                yield self._create_event(BrowserState.EXTRACTING, "提取回答内容...", progress=0.9)
-                answer_text = await self._extract_answer_dom()
-                search_refs = await self._extract_references()
-
-            events, handled = await self._handle_browser_agent_empty_answer(
-                answer_text,
-                progress=0.92,
-                fallback_url=self.URL,
+                    max_wait=50,
+                    poll_interval=3,
+                    min_content_len=0,
+                    dump_keywords=["ds-"],
+                    extract_references=self._extract_references,
+                ),
             )
             for event in events:
                 yield event
-            if handled:
+            if fetch_result is None:
                 return
 
-            # Step 7: Build result
-            yield self._create_event(BrowserState.EXTRACTING, "提取回答内容...", progress=0.9)
-            result = await self._build_success_result(
-                question=question,
-                answer_text=answer_text,
-                search_references=search_refs,
-                source=source,
-            )
-
-            yield self._create_event(BrowserState.COMPLETED, "抓取完成", progress=1.0, data=result)
+            yield self._create_event(BrowserState.COMPLETED, "抓取完成", progress=1.0, data=fetch_result)
 
         except Exception as e:
             yield self._create_event(BrowserState.ERROR, f"抓取失败: {str(e)}", progress=0)

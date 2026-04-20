@@ -474,10 +474,18 @@ class FetchRunPlatformStateService:
             "fetch_method",
             "error",
             "duration",
+            "failure_layer",
+            "failure_reason",
+            "execution_stage",
+            "retryable",
+            "needs_handoff",
         ):
             value = packet.get(key)
             if value is not None:
                 normalized[key] = value
+        evidence_ref = cls._sanitize_evidence_ref(packet.get("evidence_ref"))
+        if evidence_ref is not None:
+            normalized["evidence_ref"] = evidence_ref
         answer = packet.get("answer")
         if isinstance(answer, dict):
             normalized["answer"] = answer
@@ -512,10 +520,22 @@ class FetchRunPlatformStateService:
             "status": normalized_status,
             "success": normalized_status == "success",
         }
-        for key in ("fetch_method", "error", "duration"):
+        for key in (
+            "fetch_method",
+            "error",
+            "duration",
+            "failure_layer",
+            "failure_reason",
+            "execution_stage",
+            "retryable",
+            "needs_handoff",
+        ):
             value = legacy_result.get(key)
             if value is not None:
                 normalized[key] = value
+        evidence_ref = cls._sanitize_evidence_ref(legacy_result.get("evidence_ref"))
+        if evidence_ref is not None:
+            normalized["evidence_ref"] = evidence_ref
         answer = legacy_result.get("answer")
         if isinstance(answer, dict):
             normalized["answer"] = answer
@@ -572,7 +592,47 @@ class FetchRunPlatformStateService:
             if (packet or {}).get("duration") is not None
             else (legacy_result or {}).get("duration")
         )
+        for key in (
+            "failure_layer",
+            "failure_reason",
+            "execution_stage",
+            "retryable",
+            "needs_handoff",
+        ):
+            value = (
+                (packet or {}).get(key)
+                if (packet or {}).get(key) is not None
+                else (legacy_result or {}).get(key)
+            )
+            if value is not None:
+                merged[key] = value
+        evidence_ref = cls._sanitize_evidence_ref(
+            (packet or {}).get("evidence_ref")
+            if (packet or {}).get("evidence_ref") is not None
+            else (legacy_result or {}).get("evidence_ref")
+        )
+        if evidence_ref is not None:
+            merged["evidence_ref"] = evidence_ref
         return merged
+
+    @staticmethod
+    def _sanitize_evidence_ref(evidence_ref: Any) -> dict[str, Any] | None:
+        if not isinstance(evidence_ref, dict):
+            return None
+        sanitized: dict[str, Any] = {}
+        for key in ("evidence_id", "storage_kind", "captured_at"):
+            value = evidence_ref.get(key)
+            if isinstance(value, str) and value.strip():
+                sanitized[key] = value
+        if isinstance(evidence_ref.get("has_screenshot"), bool):
+            sanitized["has_screenshot"] = evidence_ref["has_screenshot"]
+        elif evidence_ref.get("screenshot_path"):
+            sanitized["has_screenshot"] = True
+        if isinstance(evidence_ref.get("has_text_snapshot"), bool):
+            sanitized["has_text_snapshot"] = evidence_ref["has_text_snapshot"]
+        elif evidence_ref.get("text_snapshot_path"):
+            sanitized["has_text_snapshot"] = True
+        return sanitized or None
 
     @classmethod
     def _build_rows_from_fetch_results(

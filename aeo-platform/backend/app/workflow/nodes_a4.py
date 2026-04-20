@@ -24,6 +24,15 @@ from langgraph.types import Command
 
 from app.core.config import settings
 from app.core.constants import PlatformConstants, WorkflowConstants
+from app.core.fetchers.browser.failure_observability import (
+    BrowserFailureEvidenceService,
+    build_failure_contract,
+)
+from app.core.fetchers.browser.browser_executor import (
+    PendingBrowserAction,
+    handle_browser_failure,
+    resume_browser_action,
+)
 from app.tools.a4_fetch_agent import (
     AioAnswerFetchTool,
     build_legacy_platform_configs,
@@ -31,18 +40,15 @@ from app.tools.a4_fetch_agent import (
     resolve_platform_display_names,
     to_executor_platform_id,
 )
-from app.workflow.brand_mentions import content_mentions_brand
 from app.workflow.browser_action_contract import (
     emit_browser_action_handoff,
     wait_for_browser_action_outcome,
-    wait_for_browser_action_resume,
 )
 from app.workflow.state import AgentState
 from app.workflow.events import (
     send_progress_event,
     send_reply_event,
     send_error_event,
-    send_stage_result,
     send_browser_state_event,
 )
 from app.workflow.harness_validation import (
@@ -392,31 +398,6 @@ def _packet_platform(packet: dict[str, Any]) -> str:
     return str(packet.get("platform") or "unknown").strip().lower() or "unknown"
 
 
-def _packet_answer_content(packet: dict[str, Any]) -> str:
-    answers = packet.get("answers")
-    if not isinstance(answers, list) or not answers:
-        return ""
-    answer = answers[0]
-    if isinstance(answer, dict):
-        return str(answer.get("content") or "")
-    return str(answer or "")
-
-
-def _packet_has_brand_mention(
-    packet: dict[str, Any],
-    brand_profile: dict[str, Any],
-) -> bool:
-    answers = packet.get("answers")
-    if isinstance(answers, list) and answers:
-        answer = answers[0]
-        if isinstance(answer, dict) and isinstance(
-            answer.get("has_brand_mention"), bool
-        ):
-            return bool(answer["has_brand_mention"])
-    content = _packet_answer_content(packet)
-    return bool(content and content_mentions_brand(content, brand_profile))
-
-
 def _status_priority(status: str) -> int:
     if status == "success":
         return 4
@@ -438,15 +419,12 @@ def _fetch_result_has_success(fetch_result: dict[str, Any]) -> bool:
 
 def _build_aio_packet_fetch_summary(
     fetch_results: list[dict[str, Any]],
-    *,
-    brand_profile: dict[str, Any],
 ) -> dict[str, Any]:
     """Build A4 downstream status from AIO packets, not legacy booleans."""
 
     total_fetches = 0
     successful_fetches = 0
     total_answers = 0
-    brand_mentions = 0
     successful_platforms: set[str] = set()
     platform_statuses: dict[str, str] = {}
     platform_fetch_stats: dict[str, dict[str, int]] = {}
@@ -475,9 +453,6 @@ def _build_aio_packet_fetch_summary(
                 successful_platforms.add(platform)
                 platform_fetch_stats[platform]["completed"] += 1
                 next_platform_status = "success"
-                if _packet_has_brand_mention(packet, brand_profile):
-                    brand_mentions += 1
-                    platform_fetch_stats[platform]["mentions"] += 1
             elif status == "skipped":
                 platform_fetch_stats[platform]["skipped"] += 1
                 next_platform_status = "skipped"
@@ -500,7 +475,6 @@ def _build_aio_packet_fetch_summary(
         "platform_fetch_stats": platform_fetch_stats,
         "platform_statuses": platform_statuses,
         "total_answers": total_answers,
-        "brand_mentions": brand_mentions,
     }
 
 
@@ -974,10 +948,12 @@ async def _browser_fetch_with_timeout(
     Browser platforms (Kimi/DeepSeek) are optional — failures are non-blocking.
     """
     # Extract platform info from args for error reporting
-    # _fetch_from_browser signature: handler, question, brand_profile, platform, platform_name, browser_state
+# _fetch_from_browser signature: handler, question, platform, platform_name, browser_state
     platform = args[3] if len(args) > 3 else "unknown"
     platform_name = args[4] if len(args) > 4 else platform
     handler = args[0] if args else None
+    question_id = kwargs.get("question_id")
+    question_text = args[1] if len(args) > 1 else None
 
     async def _cleanup_browser_client() -> None:
         client = getattr(handler, "client", None)
@@ -1004,27 +980,118 @@ async def _browser_fetch_with_timeout(
     except asyncio.TimeoutError:
         logger.warning("[A4] Browser %s timed out after %.0fs", platform, timeout)
         await _cleanup_browser_client()
+        evidence_ref = await _capture_browser_failure_evidence(
+            handler=handler,
+            failure_reason="question_timeout",
+            execution_stage="wait_response",
+            question_id=question_id,
+            question_text=question_text,
+            extra_metadata={"timeout_seconds": timeout},
+        )
 
-        return {
-            "platform": platform,
-            "platform_name": platform_name,
-            "fetch_method": "browser",
-            "success": False,
-            "error": f"超时（{timeout:.0f}s）",
-            "error_type": "question_timeout",
-            "duration": timeout,
-        }
+        return _build_browser_failure_result(
+            platform=platform,
+            platform_name=platform_name,
+            error=f"超时（{timeout:.0f}s）",
+            error_type="question_timeout",
+            duration=timeout,
+            failure_reason="question_timeout",
+            execution_stage="wait_response",
+            retryable=False,
+            needs_handoff=False,
+            failure_layer="executor",
+            evidence_ref=evidence_ref,
+        )
     except Exception as e:
         logger.warning("[A4] Browser %s failed: %s", platform, e)
         await _cleanup_browser_client()
+        evidence_ref = await _capture_browser_failure_evidence(
+            handler=handler,
+            failure_reason="parser_error",
+            execution_stage="executor_failure",
+            question_id=question_id,
+            question_text=question_text,
+            extra_metadata={"exception": str(e)},
+        )
 
-        return {
-            "platform": platform,
-            "platform_name": platform_name,
-            "fetch_method": "browser",
-            "success": False,
-            "error": str(e),
-        }
+        return _build_browser_failure_result(
+            platform=platform,
+            platform_name=platform_name,
+            error=str(e),
+            error_type="parser_error",
+            duration=0.0,
+            failure_reason="parser_error",
+            execution_stage="executor_failure",
+            retryable=False,
+            needs_handoff=False,
+            failure_layer="executor",
+            evidence_ref=evidence_ref,
+        )
+
+
+async def _capture_browser_failure_evidence(
+    *,
+    handler: Any,
+    failure_reason: str,
+    execution_stage: str,
+    question_id: str | None = None,
+    question_text: str | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if handler is None:
+        return None
+    if question_id is not None:
+        setattr(handler, "_current_question_id", question_id)
+    if question_text is not None:
+        setattr(handler, "_current_question_text", question_text)
+    capture = getattr(handler, "_capture_failure_evidence", None)
+    if not callable(capture):
+        return None
+    return await capture(
+        failure_reason=failure_reason,
+        execution_stage=execution_stage,
+        extra_metadata=extra_metadata,
+    )
+
+
+def _build_browser_failure_result(
+    *,
+    platform: str,
+    platform_name: str,
+    error: str,
+    error_type: str,
+    duration: float,
+    failure_reason: str,
+    execution_stage: str,
+    retryable: bool,
+    needs_handoff: bool,
+    failure_layer: str,
+    evidence_ref: dict[str, Any] | None = None,
+    stop_platform: bool = False,
+    skipped_by_user: bool = False,
+    **extra_fields: Any,
+) -> dict[str, Any]:
+    result = {
+        "platform": platform,
+        "platform_name": platform_name,
+        "fetch_method": "browser",
+        "success": False,
+        "error": error,
+        "error_type": error_type,
+        "duration": duration,
+        "stop_platform": stop_platform,
+        "skipped_by_user": skipped_by_user,
+        **build_failure_contract(
+            failure_reason=failure_reason,
+            execution_stage=execution_stage,
+            retryable=retryable,
+            needs_handoff=needs_handoff,
+            failure_layer=failure_layer,
+            evidence_ref=evidence_ref,
+        ),
+    }
+    result.update({key: value for key, value in extra_fields.items() if value is not None})
+    return result
 
 
 def _build_duration_msg(fetch_mode: str, question_count: int) -> str:
@@ -1087,7 +1154,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
     aio_fetch_request = _AIO_ANSWER_FETCH_TOOL.build_request(
         state=state,
         questions=questions,
-        brand_profile=brand_profile,
         mode=fetch_mode,
         platform_filter=raw_platform_filter,
     )
@@ -1106,6 +1172,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
         aio_fetch_request.auth_context.context_key,
         aio_fetch_request.run_context.context_key,
     )
+    try:
+        cleaned = BrowserFailureEvidenceService().cleanup_expired()
+        if cleaned:
+            logger.info("[A4] Cleaned %d expired failure-evidence day folder(s)", cleaned)
+    except Exception as cleanup_err:
+        logger.warning("[A4] Failure-evidence cleanup failed: %s", cleanup_err)
 
     if not questions:
         return Command(
@@ -1318,7 +1390,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                                 _fetch_from_doubao,
                                 doubao_client,
                                 q_text,
-                                brand_profile,
                                 platform="doubao",
                                 method="api",
                             )
@@ -1330,7 +1401,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                                 _fetch_from_hunyuan,
                                 hunyuan_client,
                                 q_text,
-                                brand_profile,
                                 platform="hunyuan",
                                 method="api",
                             )
@@ -1342,7 +1412,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                                 _fetch_from_kimi,
                                 kimi_client,
                                 q_text,
-                                brand_profile,
                                 platform="kimi",
                                 method="api",
                             )
@@ -1534,10 +1603,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         _fetch_from_browser,
                         handler,
                         q_text,
-                        brand_profile,
                         platform,
                         platform_name,
                         BrowserState,
+                        question_id=qid,
                         timeout=question_timeout,
                         session_id=session_id,
                         user_id=(
@@ -2052,15 +2121,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # platform_results shape remains in artifacts for compatibility only.
         packet_summary = _build_aio_packet_fetch_summary(
             projected_fetch_results,
-            brand_profile=brand_profile,
         )
         total_fetches = int(packet_summary["total_fetches"])
         successful_fetches = int(packet_summary["successful_fetches"])
         successful_platforms = set(packet_summary["successful_platforms"])
         platform_fetch_stats = packet_summary["platform_fetch_stats"]
         platform_statuses = dict(packet_summary["platform_statuses"])
-        total_answers = int(packet_summary["total_answers"])
-        brand_mentions = int(packet_summary["brand_mentions"])
         if authoritative_projection:
             projected_statuses = (
                 authoritative_projection.get("platform_status", {}).get(
@@ -2070,38 +2136,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
             )
             if projected_statuses:
                 platform_statuses = dict(projected_statuses)
-
-        for pname, pstats in platform_fetch_stats.items():
-            p_status = platform_statuses.get(pname, "failed")
-            display_name = PlatformConstants.PLATFORM_DISPLAY_NAMES.get(pname, pname)
-            error_message = None
-            if p_status == "skipped":
-                error_message = f"{display_name} 已跳过"
-            elif p_status == "takeover_required":
-                error_message = f"{display_name} 等待人工接管"
-            elif p_status != "success":
-                error_message = f"{display_name} 部分抓取失败"
-            await send_stage_result(
-                session_id,
-                "A4",
-                "数据抓取",
-                result_type="platform_status",
-                data={
-                    "platforms": [
-                        {
-                            "platform": pname,
-                            "status": p_status,
-                            "questions_completed": pstats["completed"],
-                            "questions_total": pstats["total"],
-                            "mention_count": pstats["mentions"],
-                            "error": error_message,
-                        }
-                    ],
-                },
-            )
-
-        # Layer 2 degradation: send notice based on platform success count
-        from app.workflow.resilience import DegradationRegistry
 
         # When platform_filter is set, total is the filtered set, not all platforms
         total_platforms = len(aio_fetch_request.platforms)
@@ -2123,18 +2157,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 ", ".join(successful_platforms) if successful_platforms else "none",
                 effective_min,
             )
-            if len(successful_platforms) > 0:
-                # Some data available -- send degradation notice, not error
-                await DegradationRegistry.send_degradation_notice(
-                    session_id,
-                    "A4",
-                    context={
-                        "success_count": len(successful_platforms),
-                        "fail_count": fail_count,
-                        "platform_statuses": platform_statuses,
-                    },
-                )
-            else:
+            if len(successful_platforms) == 0:
                 # Zero platforms -- hard error
                 await send_error_event(
                     session_id,
@@ -2142,16 +2165,23 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     "所有平台数据获取均失败，请检查网络连接后重试",
                     recoverable=True,
                 )
+            else:
+                logger.info(
+                    "[A4] %d platform(s) succeeded but below threshold %d; "
+                    "skipping chat degradation notice and relying on fetch artifact",
+                    len(successful_platforms),
+                    effective_min,
+                )
         elif fail_count > 0:
-            # Met minimum threshold but some platforms failed -- notify user
-            await DegradationRegistry.send_degradation_notice(
-                session_id,
-                "A4",
-                context={
-                    "success_count": len(successful_platforms),
-                    "fail_count": fail_count,
-                    "platform_statuses": platform_statuses,
-                },
+            # Partial platform failures are already reflected in the authoritative
+            # fetch artifact. Avoid emitting a second coarse-grained chat notice
+            # that can conflict with the per-platform success counters users see
+            # in the artifact itself.
+            logger.info(
+                "[A4] Partial platform failures detected (%d success / %d fail); "
+                "skipping duplicate chat degradation notice and relying on fetch artifact",
+                len(successful_platforms),
+                fail_count,
             )
 
         await send_progress_event(
@@ -2162,9 +2192,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
             message=f"抓取完成: {successful_fetches}/{total_fetches} 成功（{len(successful_platforms)} 个平台有数据）",
             status="completed",
         )
-
-        # Send detailed response to user
-        brand_name = brand_profile.get("brand_name", "该品牌")
 
         platform_summary = []
         for platform, stats in platform_fetch_stats.items():
@@ -2181,7 +2208,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         detailed_response = f"""✅ **答案抓取完成**
 
-我已针对模拟问题在主流 AI 平台进行了答案抓取，获取「{brand_name}」在 AI 平台中的曝光情况：
+本轮问题已经完成抓取，抓取结果会统一收敛到 **AI答案抓取结果** artifact；平台成功/失败统计也只以这份结果为准。
 
 **📊 抓取概览**
 - 总抓取次数：{total_fetches} 次
@@ -2191,16 +2218,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
 **🌐 平台分布**
 {chr(10).join(platform_summary) if platform_summary else "- 暂无平台数据"}
 
-**📈 品牌曝光**
-- 品牌提及次数：{brand_mentions} 次
-- 品牌提及率：{(brand_mentions/total_answers*100) if total_answers > 0 else 0:.0f}%
-
 **📋 输出内容**
 - 完整抓取结果（左侧 Canvas）
-- 平台答案对比分析
+- 平台答案对照与引用列表
 
 **⏭️ 下一步**
-答案抓取已完成。我会基于当前抓取结果立即继续生成分析报告。报告生成后，您可以再决定是否继续做引用内容置信度评估或进入后续画像分析。"""
+抓取已完成。我会基于当前抓取结果继续生成分析报告。"""
 
         from app.workflow.events import send_tpaor_event
 
@@ -2412,9 +2435,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         )
 
 
-async def _fetch_from_doubao(
-    client, question: str, brand_profile: dict
-) -> dict[str, Any]:
+async def _fetch_from_doubao(client, question: str) -> dict[str, Any]:
     """Fetch answer from Doubao."""
     start_time = datetime.now(timezone.utc)
 
@@ -2444,7 +2465,6 @@ async def _fetch_from_doubao(
             "answer": {
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
-                "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
@@ -2485,9 +2505,7 @@ async def _fetch_from_doubao(
         }
 
 
-async def _fetch_from_hunyuan(
-    client, question: str, brand_profile: dict
-) -> dict[str, Any]:
+async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
     """Fetch answer from Yuanbao."""
     start_time = datetime.now(timezone.utc)
 
@@ -2517,7 +2535,6 @@ async def _fetch_from_hunyuan(
             "answer": {
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
-                "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
@@ -2546,9 +2563,7 @@ async def _fetch_from_hunyuan(
         }
 
 
-async def _fetch_from_kimi(
-    client, question: str, brand_profile: dict
-) -> dict[str, Any]:
+async def _fetch_from_kimi(client, question: str) -> dict[str, Any]:
     """Fetch answer from Kimi (Moonshot API)."""
     start_time = datetime.now(timezone.utc)
 
@@ -2578,7 +2593,6 @@ async def _fetch_from_kimi(
             "answer": {
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
-                "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
@@ -2619,127 +2633,6 @@ async def _fetch_from_kimi(
         }
 
 
-def _infer_browser_action_requirement(
-    *,
-    platform_name: str,
-    error_message: str | None,
-    error_type: str | None,
-) -> dict[str, str] | None:
-    """Infer one browser-action requirement from normalized fetch failures."""
-
-    message = (error_message or "").strip()
-    lower_message = message.lower()
-    normalized_error_type = (error_type or "").strip().lower()
-
-    verify_markers = [
-        "verify",
-        "captcha",
-        "人机验证",
-        "安全验证",
-        "完成验证",
-        "图片验证",
-    ]
-    if normalized_error_type == "verify" or any(
-        marker in lower_message or marker in message for marker in verify_markers
-    ):
-        return {
-            "state": "waiting_for_login",
-            "action_type": "verify",
-            "message": f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
-            "action_hint": f"请在弹出的浏览器窗口中完成 {platform_name} 验证，完成后点击“我已完成”",
-            "reply_markdown": (
-                f"**{platform_name}** 触发了安全验证\n\n"
-                "请在浏览器窗口中完成验证。完成后回到聊天卡片点击“我已完成”，我会继续接管当前问题。"
-            ),
-        }
-
-    login_markers = [
-        "permission_denied",
-        "requirelogin",
-        "require login",
-        "need login",
-        "please login",
-        "please log in",
-        "sign in",
-        "log in",
-        "请登录",
-        "登录后",
-        "未登录",
-        "需要登录",
-    ]
-    login_error_types = {
-        "permission_denied",
-        "login_required",
-        "unauthorized",
-        "requirelogin",
-        "require_login",
-    }
-    if normalized_error_type in login_error_types or any(
-        marker in lower_message or marker in message for marker in login_markers
-    ):
-        return {
-            "state": "waiting_for_login",
-            "action_type": "login",
-            "message": f"检测到 {platform_name} 需要登录，请在浏览器窗口中完成登录",
-            "action_hint": f"请在弹出的浏览器窗口中完成 {platform_name} 登录，完成后点击“我已完成”",
-            "reply_markdown": (
-                f"**{platform_name}** 需要登录\n\n"
-                "请在浏览器窗口中完成登录。完成后回到聊天卡片点击“我已完成”，我会继续接管抓取。"
-            ),
-        }
-
-    modal_markers = ["弹窗", "协议", "terms", "privacy", "modal", "dialog"]
-    if normalized_error_type == "modal" or any(
-        marker in lower_message or marker in message for marker in modal_markers
-    ):
-        return {
-            "state": "waiting_for_modal",
-            "action_type": "modal",
-            "message": f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
-            "action_hint": "请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”",
-            "reply_markdown": (
-                f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
-                "请在浏览器中关闭弹窗或同意协议。完成后回到聊天卡片点击“我已完成”，我会继续接管抓取。"
-            ),
-        }
-
-    return None
-
-
-async def _resume_after_browser_action(
-    *,
-    handler: Any,
-    request_id: str,
-    action_type: str,
-    timeout: int = int(_BROWSER_ACTION_WAIT_TIMEOUT_SECONDS),
-) -> tuple[bool, str | None]:
-    """Resume one browser action using the unified contract."""
-
-    completion_callback = None
-    ready_timeout = 45
-    skip_readiness_probe = False
-
-    if action_type == "verify" and hasattr(handler, "recover_after_verify"):
-
-        async def _recover_verify() -> bool:
-            return bool(await handler.recover_after_verify(prepare_window=False))
-
-        completion_callback = _recover_verify
-        ready_timeout = 300
-    elif action_type == "modal":
-        ready_timeout = 30
-
-    return await wait_for_browser_action_resume(
-        request_id=request_id,
-        handler=handler,
-        action_type=action_type,
-        timeout=timeout,
-        ready_timeout=ready_timeout,
-        on_completed=completion_callback,
-        skip_readiness_probe=skip_readiness_probe,
-    )
-
-
 def _get_handler_page_url(handler: Any) -> str | None:
     client = getattr(handler, "client", None)
     page = getattr(client, "page", None)
@@ -2755,10 +2648,10 @@ def _get_handler_page_url(handler: Any) -> str | None:
 async def _fetch_from_browser(
     handler,
     question: str,
-    brand_profile: dict,
     platform: str,
     platform_name: str,
     browser_state,
+    question_id: str | None = None,
     session_id: str = "",
     user_id: str | None = None,
     run_id: str | None = None,
@@ -2772,13 +2665,21 @@ async def _fetch_from_browser(
     result_data = None
     error_message = None
     error_type = ""
+    failure_layer = None
+    failure_reason = None
+    execution_stage = None
+    retryable = False
+    needs_handoff = False
+    evidence_ref = None
     max_verify_recoveries = 3
-    pending_action: dict[str, Any] | None = None
+    pending_action: PendingBrowserAction | None = None
     resolved_action_wait_timeout = action_wait_timeout or _get_browser_action_wait_timeout(
         platform, question_count
     )
 
     try:
+        setattr(handler, "_current_question_id", question_id)
+        setattr(handler, "_current_question_text", question)
         async for event in handler.fetch(question):
             if event.state == browser_state.WAITING_FOR_LOGIN and session_id:
                 request_id = await emit_browser_action_handoff(
@@ -2798,14 +2699,13 @@ async def _fetch_from_browser(
                     user_id=user_id,
                     target_url=getattr(handler, "URL", None),
                 )
-                pending_action = {
-                    "request_id": request_id,
-                    "action_type": event.action_type or "login",
-                    "success_message": f"{platform_name} 登录已完成，正在继续抓取当前问题",
-                    "timeout_message": f"{platform_name} 登录未完成或等待超时，本轮将跳过该平台",
-                    "timeout_error_type": "user_action_timeout",
-                    "resume_error_type": "resume_gate_failed",
-                }
+                pending_action = PendingBrowserAction(
+                    request_id=request_id,
+                    action_type=event.action_type or "login",
+                    success_message=f"{platform_name} 登录已完成，正在继续抓取当前问题",
+                    timeout_message=f"{platform_name} 登录未完成或等待超时，本轮将跳过该平台",
+                    timeout_error_type="user_action_timeout",
+                )
                 break
 
             if event.state == browser_state.WAITING_FOR_MODAL and session_id:
@@ -2826,20 +2726,31 @@ async def _fetch_from_browser(
                     user_id=user_id,
                     target_url=getattr(handler, "URL", None),
                 )
-                pending_action = {
-                    "request_id": request_id,
-                    "action_type": event.action_type or "modal",
-                    "success_message": f"{platform_name} 弹窗已处理，正在继续抓取当前问题",
-                    "timeout_message": f"{platform_name} 弹窗未处理完成，本轮将跳过该平台",
-                    "timeout_error_type": "modal_timeout",
-                    "resume_error_type": "resume_gate_failed",
-                }
+                pending_action = PendingBrowserAction(
+                    request_id=request_id,
+                    action_type=event.action_type or "modal",
+                    success_message=f"{platform_name} 弹窗已处理，正在继续抓取当前问题",
+                    timeout_message=f"{platform_name} 弹窗未处理完成，本轮将跳过该平台",
+                    timeout_error_type="modal_timeout",
+                )
                 break
 
             if event.state == browser_state.ERROR:
                 error_message = event.message or event.error or "抓取失败"
                 if event.error_type:
                     error_type = event.error_type
+                if event.failure_layer:
+                    failure_layer = event.failure_layer
+                if event.failure_reason:
+                    failure_reason = event.failure_reason
+                if event.execution_stage:
+                    execution_stage = event.execution_stage
+                if event.retryable is not None:
+                    retryable = bool(event.retryable)
+                if event.needs_handoff is not None:
+                    needs_handoff = bool(event.needs_handoff)
+                if isinstance(event.evidence_ref, dict):
+                    evidence_ref = event.evidence_ref
 
             if event.state == browser_state.COMPLETED and event.data:
                 result_data = event.data
@@ -2863,424 +2774,66 @@ async def _fetch_from_browser(
             "answer": {
                 "content": answer_text,
                 "word_count": len(answer_text.split()),
-                "has_brand_mention": _check_brand_mention(answer_text, brand_profile),
             },
             "citations": [ref.model_dump() for ref in result_data.search_references],
             "auth_state_updated": _auth_state_updated,
             "duration": duration,
         }
 
-    inferred_action = None
-    if pending_action is None:
-        inferred_action = _infer_browser_action_requirement(
-            platform_name=platform_name,
-            error_message=error_message,
-            error_type=error_type,
-        )
-        if inferred_action and session_id:
-            if (
-                inferred_action["action_type"] == "verify"
-                and _verify_recovery_count >= max_verify_recoveries
-            ):
-                inferred_action = None
-            else:
-                request_id = await emit_browser_action_handoff(
-                    session_id=session_id,
-                    platform=platform,
-                    state=inferred_action["state"],
-                    action_type=inferred_action["action_type"],
-                    message=inferred_action["message"],
-                    action_hint=inferred_action["action_hint"],
-                    progress=0.35,
-                    reply_markdown=inferred_action["reply_markdown"],
-                    run_id=run_id,
-                    handler=handler,
-                    user_id=user_id,
-                    target_url=getattr(handler, "URL", None),
-                )
-                timeout_error_type = (
-                    "modal_timeout"
-                    if inferred_action["action_type"] == "modal"
-                    else "user_action_timeout"
-                )
-                pending_action = {
-                    "request_id": request_id,
-                    "action_type": inferred_action["action_type"],
-                    "success_message": (
-                        f"{platform_name} {'验证' if inferred_action['action_type'] == 'verify' else '登录' if inferred_action['action_type'] == 'login' else '弹窗处理'}已完成，正在继续抓取当前问题"
-                    ),
-                    "timeout_message": (
-                        f"{platform_name} {'验证' if inferred_action['action_type'] == 'verify' else '登录' if inferred_action['action_type'] == 'login' else '弹窗处理'}未完成或等待超时，本轮将跳过该平台"
-                    ),
-                    "timeout_error_type": timeout_error_type,
-                    "resume_error_type": "resume_gate_failed",
-                }
-
-    if pending_action is not None:
-        if (
-            pending_action["action_type"] == "verify"
-            and _verify_recovery_count >= max_verify_recoveries
-        ):
-            logger.warning(
-                "[A4] %s verify challenge exceeded max recoveries (%d), giving up on current question",
-                platform_name,
-                max_verify_recoveries,
-            )
-            if session_id:
-                await send_browser_state_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state="error",
-                    message=f"{platform_name} 连续触发安全验证，本轮已跳过该平台并继续其他平台",
-                    progress=0.7,
-                    requires_action=False,
-                )
-                await send_reply_event(
-                    session_id,
-                    (
-                        f"**{platform_name}** 连续多次触发安全验证，"
-                        "本轮无法继续自动抓取该平台。我会继续完成其他平台采集，"
-                        "并在后续报告中基于已成功的平台生成结果。"
-                    ),
-                    is_delta=True,
-                    is_new_round=True,
-                )
-                await send_reply_event(session_id, "", is_complete=True)
-            return {
-                "platform": platform,
-                "platform_name": platform_name,
-                "fetch_method": "browser",
-                "success": False,
-                "error": error_message or "安全验证未通过",
-                "error_type": "verify",
-                "stop_platform": True,
-                "duration": duration,
-            }
-
-        resumed, resolution = await _resume_after_browser_action(
-            handler=handler,
-            request_id=pending_action["request_id"],
-            action_type=pending_action["action_type"],
-            timeout=resolved_action_wait_timeout,
-        )
-        if resumed:
-            if session_id:
-                await send_browser_state_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state="waiting_response",
-                    message=pending_action["success_message"],
-                    progress=0.45,
-                    requires_action=False,
-                )
-            return await _fetch_from_browser(
-                handler,
-                question,
-                brand_profile,
-                platform,
-                platform_name,
-                browser_state,
-                session_id=session_id,
-                user_id=user_id,
-                run_id=run_id,
-                question_count=question_count,
-                action_wait_timeout=resolved_action_wait_timeout,
-                _is_retry=True,
-                _verify_recovery_count=(
-                    _verify_recovery_count + 1
-                    if pending_action["action_type"] == "verify"
-                    else _verify_recovery_count
-                ),
-                _auth_state_updated=(
-                    _auth_state_updated or pending_action["action_type"] == "login"
-                ),
-            )
-        if session_id:
-            await send_browser_state_event(
-                session_id=session_id,
-                platform=platform,
-                state="error",
-                message=pending_action["timeout_message"],
-                progress=0.35,
-                requires_action=False,
-            )
-        failure_error_type = (
-            "user_skipped"
-            if resolution == "skip"
-            else (
-                pending_action["resume_error_type"]
-                if resolution == "completed"
-                else pending_action["timeout_error_type"]
-            )
-        )
-        return {
-            "platform": platform,
-            "platform_name": platform_name,
-            "fetch_method": "browser",
-            "success": False,
-            "error": pending_action["timeout_message"],
-            "error_type": failure_error_type,
-            "reason_code": pending_action["action_type"],
-            "target_url": getattr(handler, "URL", None),
-            "final_url": _get_handler_page_url(handler),
-            "probe_result": failure_error_type,
-            "request_id": pending_action["request_id"],
-            "stop_platform": failure_error_type
-            in {
-                "user_skipped",
-                "user_action_timeout",
-                "resume_gate_failed",
-                "modal_timeout",
-            },
-            "skipped_by_user": failure_error_type == "user_skipped",
-            "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
-        }
-
-    # -- Failure path: try platform-specific recovery first --
-    if (
-        error_type == "rate_limit"
-        and not _is_retry
-        and platform == "doubao"
-        and hasattr(handler, "recover_after_rate_limit")
-    ):
-        logger.info(
-            "[A4] %s rate limited, attempting one automatic recovery", platform_name
-        )
-        if session_id:
-            await send_browser_state_event(
-                session_id=session_id,
-                platform=platform,
-                state="waiting_response",
-                message=f"{platform_name} 触发限流，正在冷却后自动重试",
-                progress=0.7,
-                requires_action=False,
-            )
-        recovered = await handler.recover_after_rate_limit()
-        if recovered:
-            return await _fetch_from_browser(
-                handler,
-                question,
-                brand_profile,
-                platform,
-                platform_name,
-                browser_state,
-                session_id=session_id,
-                user_id=user_id,
-                run_id=run_id,
-                question_count=question_count,
-                action_wait_timeout=resolved_action_wait_timeout,
-                _is_retry=True,
-                _auth_state_updated=_auth_state_updated,
-            )
-
-    if (
-        error_type == "verify"
-        and platform == "doubao"
-        and hasattr(handler, "recover_after_verify")
-    ):
-        if _verify_recovery_count >= max_verify_recoveries:
-            logger.warning(
-                "[A4] %s verify challenge exceeded max recoveries (%d), giving up on current question",
-                platform_name,
-                max_verify_recoveries,
-            )
-            if session_id:
-                await send_browser_state_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state="error",
-                    message=f"{platform_name} 连续触发安全验证，本轮已跳过该平台并继续其他平台",
-                    progress=0.7,
-                    requires_action=False,
-                )
-                await send_reply_event(
-                    session_id,
-                    (
-                        f"**{platform_name}** 连续多次触发安全验证，"
-                        "本轮无法继续自动抓取该平台。我会继续完成其他平台采集，"
-                        "并在后续报告中基于已成功的平台生成结果。"
-                    ),
-                    is_delta=True,
-                    is_new_round=True,
-                )
-                await send_reply_event(session_id, "", is_complete=True)
-            return {
-                "platform": platform,
-                "platform_name": platform_name,
-                "fetch_method": "browser",
-                "success": False,
-                "error": error_message or "安全验证未通过",
-                "error_type": error_type,
-                "stop_platform": True,
-                "duration": duration,
-            }
-
-        logger.info(
-            "[A4] %s verify challenge detected, waiting for user to clear it (attempt %d/%d)",
+    async def _retry_browser_fetch(
+        *,
+        verify_recovery_increment: bool = False,
+        auth_state_updated: bool = False,
+    ) -> dict[str, Any]:
+        return await _fetch_from_browser(
+            handler,
+            question,
+            platform,
             platform_name,
-            _verify_recovery_count + 1,
-            max_verify_recoveries,
+            browser_state,
+            question_id=question_id,
+            session_id=session_id,
+            user_id=user_id,
+            run_id=run_id,
+            question_count=question_count,
+            action_wait_timeout=resolved_action_wait_timeout,
+            _is_retry=True,
+            _verify_recovery_count=_verify_recovery_count
+            + (1 if verify_recovery_increment else 0),
+            _auth_state_updated=_auth_state_updated or auth_state_updated,
         )
-        if session_id:
-            recovered = False
-            should_open_surface = not _should_defer_aio_takeover_open(handler)
-            if not should_open_surface or await handler._open_headed_for_user_action(
-                handler.URL
-            ):
-                request_id = await emit_browser_action_handoff(
-                    session_id=session_id,
-                    platform=platform,
-                    state="waiting_for_login",
-                    action_type="verify",
-                    message=f"{platform_name} 触发安全验证，请在浏览器窗口完成验证后继续",
-                    action_hint=f"请在弹出的浏览器窗口中完成 {platform_name} 验证，完成后点击“我已完成”",
-                    progress=0.35,
-                    reply_markdown=(
-                        f"**{platform_name}** 触发了安全验证\n\n"
-                        f"请在浏览器窗口中完成验证。完成后回到聊天卡片点击“我已完成”，我会继续接管当前问题。"
-                    ),
-                    run_id=run_id,
-                    handler=handler,
-                    user_id=user_id,
-                    target_url=getattr(handler, "URL", None),
-                )
-                resolution = await wait_for_browser_action_outcome(
-                    request_id, timeout=resolved_action_wait_timeout
-                )
-                if resolution == "completed":
-                    recovered = await handler.recover_after_verify(prepare_window=False)
-                elif resolution == "skip":
-                    recovered = False
-            else:
-                recovered = False
-        else:
-            recovered = await handler.recover_after_verify()
-        if recovered:
-            if session_id:
-                await send_browser_state_event(
-                    session_id=session_id,
-                    platform=platform,
-                    state="waiting_response",
-                    message=f"{platform_name} 验证已完成，正在继续抓取当前问题",
-                    progress=0.45,
-                    requires_action=False,
-                )
-            return await _fetch_from_browser(
-                handler,
-                question,
-                brand_profile,
-                platform,
-                platform_name,
-                browser_state,
-                session_id=session_id,
-                user_id=user_id,
-                run_id=run_id,
-                question_count=question_count,
-                action_wait_timeout=resolved_action_wait_timeout,
-                _is_retry=True,
-                _verify_recovery_count=_verify_recovery_count + 1,
-                _auth_state_updated=_auth_state_updated,
-            )
-        if session_id:
-            await send_browser_state_event(
-                session_id=session_id,
-                platform=platform,
-                state="error",
-                message=f"{platform_name} 验证未完成或等待超时，本轮将跳过该平台",
-                progress=0.35,
-                requires_action=False,
-            )
 
-    # -- Failure path: diagnose if a blocking modal caused the failure --
-    if not _is_retry:
-        try:
-            detected = await handler._detect_blocking_modal()
-        except Exception:
-            detected = ""
-
-        if detected:
-            logger.info(
-                "[A4] %s fetch failed, modal detected: %s — alerting user",
-                platform_name,
-                detected,
-            )
-            if _should_defer_aio_takeover_open(handler):
-                opened = True
-            else:
-                opened = await handler._open_headed_for_user_action(handler.URL)
-            if not opened:
-                return {
-                    "platform": platform,
-                    "platform_name": platform_name,
-                    "fetch_method": "browser",
-                    "success": False,
-                    "error": "打开浏览器窗口失败，请稍后重试",
-                    "error_type": "modal_reopen_failed",
-                    "duration": (
-                        datetime.now(timezone.utc) - start_time
-                    ).total_seconds(),
-                }
-
-            modal_cleared = False
-            if session_id:
-                request_id = await emit_browser_action_handoff(
-                    session_id=session_id,
-                    platform=platform,
-                    state="waiting_for_modal",
-                    action_type="modal",
-                    message=f"检测到 {platform_name} 页面弹窗阻碍了抓取，请在浏览器窗口中操作",
-                    action_hint="请在弹出的浏览器窗口中关闭弹窗或同意协议，完成后点击“我已完成”",
-                    progress=0.35,
-                    reply_markdown=(
-                        f"**{platform_name}** 页面弹窗阻碍了抓取\n\n"
-                        f"请在浏览器中关闭弹窗或同意协议。完成后回到聊天卡片点击“我已完成”，我会继续接管抓取。"
-                    ),
-                    run_id=run_id,
-                    handler=handler,
-                    user_id=user_id,
-                    target_url=getattr(handler, "URL", None),
-                )
-                resolution = await wait_for_browser_action_outcome(
-                    request_id, timeout=resolved_action_wait_timeout
-                )
-                modal_cleared = (
-                    resolution == "completed"
-                    and await handler._wait_for_modal_clear(timeout=45)
-                )
-            else:
-                modal_cleared = await handler._wait_for_modal_clear(timeout=480)
-            if modal_cleared:
-                logger.info(
-                    "[A4] %s modal cleared by user, retrying fetch", platform_name
-                )
-                return await _fetch_from_browser(
-                    handler,
-                    question,
-                    brand_profile,
-                    platform,
-                    platform_name,
-                    browser_state,
-                    session_id=session_id,
-                    user_id=user_id,
-                    run_id=run_id,
-                    question_count=question_count,
-                    action_wait_timeout=resolved_action_wait_timeout,
-                    _is_retry=True,
-                    _auth_state_updated=_auth_state_updated,
-                )
-            else:
-                return {
-                    "platform": platform,
-                    "platform_name": platform_name,
-                    "fetch_method": "browser",
-                    "success": False,
-                    "error": "弹窗处理超时",
-                    "error_type": "modal_timeout",
-                    "stop_platform": True,
-                    "duration": (
-                        datetime.now(timezone.utc) - start_time
-                    ).total_seconds(),
-                }
+    recovery_result = await handle_browser_failure(
+        handler=handler,
+        platform=platform,
+        platform_name=platform_name,
+        question=question,
+        question_id=question_id,
+        session_id=session_id,
+        user_id=user_id,
+        run_id=run_id,
+        pending_action=pending_action,
+        error_message=error_message,
+        error_type=error_type,
+        duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
+        question_count=question_count,
+        timeout=resolved_action_wait_timeout,
+        is_retry=_is_retry,
+        verify_recovery_count=_verify_recovery_count,
+        max_verify_recoveries=max_verify_recoveries,
+        auth_state_updated=_auth_state_updated,
+        should_defer_surface_open=_should_defer_aio_takeover_open,
+        emit_handoff=emit_browser_action_handoff,
+        wait_for_outcome=wait_for_browser_action_outcome,
+        resume_action=resume_browser_action,
+        send_browser_state=send_browser_state_event,
+        send_reply=send_reply_event,
+        capture_evidence=_capture_browser_failure_evidence,
+        build_failure_result=_build_browser_failure_result,
+        retry_fetch=_retry_browser_fetch,
+    )
+    if recovery_result is not None:
+        return recovery_result
 
     stop_platform = error_type in {
         "user_skipped",
@@ -3288,19 +2841,18 @@ async def _fetch_from_browser(
         "resume_gate_failed",
         "modal_timeout",
     }
-    return {
-        "platform": platform,
-        "platform_name": platform_name,
-        "fetch_method": "browser",
-        "success": False,
-        "error": error_message or "抓取失败",
-        "error_type": error_type,
-        "stop_platform": stop_platform,
-        "skipped_by_user": error_type == "user_skipped",
-        "duration": duration,
-    }
-
-
-def _check_brand_mention(content: str, brand_profile: dict[str, Any]) -> bool:
-    """Check if brand is mentioned in content."""
-    return content_mentions_brand(content, brand_profile)
+    return _build_browser_failure_result(
+        platform=platform,
+        platform_name=platform_name,
+        error=error_message or "抓取失败",
+        error_type=error_type or "parser_error",
+        duration=duration,
+        failure_reason=failure_reason or error_type or "parser_error",
+        execution_stage=execution_stage or "fetch_loop",
+        retryable=retryable,
+        needs_handoff=needs_handoff,
+        failure_layer=failure_layer or "executor",
+        evidence_ref=evidence_ref,
+        stop_platform=stop_platform,
+        skipped_by_user=error_type == "user_skipped",
+    )

@@ -64,6 +64,12 @@ class FetchResult(BaseModel):
 
     # Failure info
     error_message: Optional[str] = Field(None, description="错误信息")
+    failure_layer: Optional[str] = Field(None, description="失败发生层级")
+    failure_reason: Optional[str] = Field(None, description="失败原因")
+    execution_stage: Optional[str] = Field(None, description="失败发生阶段")
+    retryable: Optional[bool] = Field(None, description="系统是否可自动重试")
+    needs_handoff: Optional[bool] = Field(None, description="是否需要人工接管")
+    evidence_ref: Optional[dict] = Field(None, description="失败证据引用")
 
     # Metadata
     fetch_duration: Optional[float] = Field(None, description="抓取耗时(秒)")
@@ -186,6 +192,12 @@ class BrowserEvent(BaseModel):
     error: Optional[str] = Field(None, description="错误信息")
     error_type: Optional[str] = Field(None, description="错误类型: rate_limit | verify | server_error")
     recoverable: bool = Field(True, description="是否可恢复")
+    failure_layer: Optional[str] = Field(None, description="失败发生层级")
+    failure_reason: Optional[str] = Field(None, description="失败原因")
+    execution_stage: Optional[str] = Field(None, description="失败发生阶段")
+    retryable: Optional[bool] = Field(None, description="系统是否可自动重试")
+    needs_handoff: Optional[bool] = Field(None, description="是否需要人工接管")
+    evidence_ref: Optional[dict] = Field(None, description="失败证据引用")
 
     # Result
     data: Optional[FetchResult] = Field(None, description="完成时的数据")

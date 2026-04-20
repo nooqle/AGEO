@@ -26,6 +26,10 @@ from app.core.fetchers.browser.browser_agent_contract import (
     PlatformBrowserProfile,
     platform_profile_to_payload,
 )
+from app.core.fetchers.browser.failure_observability import (
+    BrowserFailureEvidenceService,
+    build_failure_contract,
+)
 from app.core.fetchers.browser.browser_agent_loop import collect_browser_agent_step
 from app.core.fetchers.browser.parsers.base import (
     BaseResponseParser,
@@ -150,6 +154,7 @@ class BaseBrowserHandler(ABC):
         self._is_playwright = isinstance(client, PlaywrightBrowserClient)
         self._sel_cache: dict = {}
         self._aio_backend = AioSandboxBackend()
+        self._failure_evidence = BrowserFailureEvidenceService()
 
     # ------------------------------------------------------------------ selectors
 
@@ -500,6 +505,78 @@ class BaseBrowserHandler(ABC):
         except Exception as e:
             logger.debug(
                 "[%s] Browser-agent screenshot capture failed: %s",
+                self.PLATFORM_KEY,
+                e,
+            )
+            return None
+
+    async def _browser_agent_text_snapshot_provider(self) -> str | None:
+        page = getattr(self.client, "page", None)
+        if page is None:
+            return None
+        try:
+            text = await page.evaluate(
+                "() => (document.body?.innerText || '').slice(0, 4000)"
+            )
+        except Exception as e:
+            logger.debug(
+                "[%s] Browser-agent text snapshot failed: %s",
+                self.PLATFORM_KEY,
+                e,
+            )
+            return None
+        return str(text or "").strip() or None
+
+    async def _capture_failure_evidence(
+        self,
+        *,
+        failure_reason: str,
+        execution_stage: str,
+        extra_metadata: dict | None = None,
+    ) -> dict | None:
+        screenshot_payload: dict | bytes | None = None
+        screenshot_payload = await self._browser_agent_screenshot_provider()
+        if screenshot_payload is None:
+            page = getattr(self.client, "page", None)
+            if page is not None:
+                try:
+                    screenshot_payload = await page.screenshot(type="png")
+                except Exception as e:
+                    logger.debug(
+                        "[%s] Playwright screenshot capture failed: %s",
+                        self.PLATFORM_KEY,
+                        e,
+                    )
+        text_snapshot = await self._browser_agent_text_snapshot_provider()
+        page_url = None
+        page = getattr(self.client, "page", None)
+        if page is not None:
+            try:
+                current_url = getattr(page, "url", None)
+                if isinstance(current_url, str) and current_url.strip():
+                    page_url = current_url
+            except Exception:
+                page_url = None
+        question_id = getattr(self, "_current_question_id", None)
+        question_text = getattr(self, "_current_question_text", None)
+        try:
+            return self._failure_evidence.capture(
+                platform=self.PLATFORM.value,
+                question_id=str(question_id or ""),
+                failure_reason=failure_reason,
+                execution_stage=execution_stage,
+                current_url=page_url,
+                screenshot_payload=screenshot_payload,
+                text_snapshot=text_snapshot,
+                metadata={
+                    "platform_display_name": self._platform_display_name(),
+                    "question_text": question_text,
+                    **(extra_metadata or {}),
+                },
+            )
+        except Exception as e:
+            logger.warning(
+                "[%s] Failure evidence capture failed: %s",
                 self.PLATFORM_KEY,
                 e,
             )
@@ -1010,12 +1087,25 @@ class BaseBrowserHandler(ABC):
             normalized_error_type,
             f"{self._platform_display_name()}返回错误: {parsed_error}",
         )
+        evidence_ref = await self._capture_failure_evidence(
+            failure_reason=normalized_error_type or "parser_error",
+            execution_stage="parse_response",
+            extra_metadata={"parsed_error": parsed_error},
+        )
         return [
             self._create_event(
                 BrowserState.ERROR,
                 message,
                 progress=0,
                 error_type=error_type,
+                **build_failure_contract(
+                    failure_reason=normalized_error_type or "parser_error",
+                    execution_stage="parse_response",
+                    retryable=False,
+                    needs_handoff=False,
+                    failure_layer="adapter",
+                    evidence_ref=evidence_ref,
+                ),
             )
         ], True
 
@@ -1041,12 +1131,25 @@ class BaseBrowserHandler(ABC):
             self.PLATFORM_KEY.capitalize(),
             len(answer_text) if answer_text else 0,
         )
+        evidence_ref = await self._capture_failure_evidence(
+            failure_reason="empty_answer",
+            execution_stage="extract_answer",
+            extra_metadata={"answer_length": len(answer_text or "")},
+        )
         return [
             self._create_event(
                 BrowserState.ERROR,
                 "未能提取到有效回答",
                 progress=0,
                 error_type="empty_answer",
+                **build_failure_contract(
+                    failure_reason="empty_answer",
+                    execution_stage="extract_answer",
+                    retryable=False,
+                    needs_handoff=False,
+                    failure_layer="adapter",
+                    evidence_ref=evidence_ref,
+                ),
             )
         ], True
 
@@ -2009,6 +2112,12 @@ class BaseBrowserHandler(ABC):
         request_id: str | None = None,
         data: FetchResult | None = None,
         error_type: str | None = None,
+        failure_layer: str | None = None,
+        failure_reason: str | None = None,
+        execution_stage: str | None = None,
+        retryable: bool | None = None,
+        needs_handoff: bool | None = None,
+        evidence_ref: dict | None = None,
     ) -> BrowserEvent:
         """Create a browser event."""
         return BrowserEvent(
@@ -2021,7 +2130,13 @@ class BaseBrowserHandler(ABC):
             request_id=request_id,
             error=None,
             error_type=error_type,
-            recoverable=True,
+            recoverable=bool(retryable) if retryable is not None else True,
+            failure_layer=failure_layer,
+            failure_reason=failure_reason,
+            execution_stage=execution_stage,
+            retryable=retryable,
+            needs_handoff=needs_handoff,
+            evidence_ref=evidence_ref,
             data=data,
         )
 

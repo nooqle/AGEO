@@ -70,14 +70,14 @@ INTENT_ALIASES = {
 
 INTENT_DISPLAY = {
     "what_is_it": "产品了解",
-    "which_is_better": "车型对比",
+    "which_is_better": "选项对比",
     "how_to_choose": "怎么选",
     "how_to_use": "如何使用",
     "risk_or_problem": "风险和顾虑",
-    "price_or_cost": "价格和养车成本",
+    "price_or_cost": "价格与成本",
     "alternative_or_replace": "替代分析",
     "case_or_example": "案例示例",
-    "vendor_recommendation": "直接推荐车型",
+    "vendor_recommendation": "直接问推荐",
     "other": "其他",
 }
 
@@ -177,19 +177,19 @@ POSITIVE_REASON_DISPLAY = {
 
 REPORT_LABEL_ALIASES = {
     "品牌直接问题": "直接问品牌的问题",
-    "画像痛点场景": "带娃出行和家庭使用",
-    "品类选购对比": "同价位车型对比",
+    "画像痛点场景": "具体使用场景问题",
+    "品类选购对比": "选项对比问题",
     "行业趋势认知": "趋势判断问题",
     "品类需求咨询": "直接问怎么选的问题",
     "品类对比排名": "横向比较类问题",
-    "场景化选购": "家庭场景选车问题",
+    "场景化选购": "具体场景问题",
     "行业趋势探索": "趋势判断类问题",
 }
 
 LOGIC_ARCHETYPE_DISPLAY = {
     "principle_first": "原理先行型",
     "list_recommendation": "榜单罗列型",
-    "comparison_review": "把几款车放在一起比较",
+    "comparison_review": "把几个选项放在一起比较",
     "risk_warning": "风险提醒型",
     "scenario_solution": "场景求解型",
     "ecosystem_oriented": "生态导向型",
@@ -661,14 +661,14 @@ def _top_scene_coverage_text(rows: list[dict[str, Any]], limit: int = 3) -> str:
 
 def _derive_negative_issue_label(question_text: str, conclusion_text: str) -> str:
     combined = f"{question_text} {conclusion_text}".lower()
-    if any(token in combined for token in ("pro", "max", "高阶智驾", "豪华配置", "划算", "值不值")):
-        return "高配版本值不值"
-    if any(token in combined for token in ("充电", "排队", "补能", "加油", "续航", "省心", "靠谱")):
-        return "长途补能省不省心"
-    if "增程" in combined and "插混" in combined:
-        return "增程和插混怎么选"
-    if any(token in combined for token in ("大屏", "零重力", "娱乐化座舱", "座舱")):
-        return "家庭娱乐配置是不是刚需"
+    if any(token in combined for token in ("预算", "价格", "成本", "贵不贵", "值不值", "划算")):
+        return "价格和成本顾虑"
+    if any(token in combined for token in ("服务", "响应", "排队", "等待", "支持", "不方便")):
+        return "服务与便利性顾虑"
+    if any(token in combined for token in ("兼容", "接入", "适配", "生态", "集成")):
+        return "兼容与适配顾虑"
+    if any(token in combined for token in ("部署", "维护", "上手", "实施", "使用", "复杂")):
+        return "使用和实施顾虑"
     return _clean_report_text(question_text, max_length=22)
 
 
@@ -2193,7 +2193,7 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
     if not metrics.brand_visibility or (metrics.no_brand_rate or 0) >= 0.5:
         suggestions.append(f"先解决平台不给品牌的问题：补品牌定义页、适用场景页和替代对比页，让平台先愿意把{bundle.meta.brand_name}带进答案。")
     if (metrics.official_conversion_rate or 0) < 0.2:
-        suggestions.append("优先补价格、家庭场景、车型差异和替代对比这几类官网内容，把品牌露出接回官网。")
+        suggestions.append("优先补价格、使用场景、核心差异和替代对比这几类官网内容，把品牌露出接回官网。")
     if (metrics.competitor_pressure or 0) >= 0.3:
         suggestions.append("优先治理比较型问题里的竞品压制，强化对比页、案例页和选型说明。")
     if top_negative:
@@ -2203,7 +2203,7 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
     if bundle.meta.report_kind == "scenario" and comparison.comparable:
         no_brand_delta = comparison.visibility_delta.get("no_brand_rate")
         if isinstance(no_brand_delta, (int, float)) and no_brand_delta > 0:
-            suggestions.append("优先补这个场景里最容易不提品牌的问题，先把带娃出行和长途补能这类内容写成能被直接摘用的结论。")
+            suggestions.append("优先补这个场景里最容易不提品牌的问题，先把相关顾虑和使用条件写成能被直接摘用的结论。")
     if not suggestions:
         suggestions.append("优先围绕当前场景补一页式结论页和 FAQ，再看品牌可见度和官网引用转化率会不会继续抬高。")
     subtitle = (
@@ -2349,7 +2349,7 @@ def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, compar
             f"- {_format_metric_emphasis(f'同时提到{bundle.meta.brand_name}和竞品的答案', _format_ratio(metrics.monitor_plus_others_rate))}。这类回答更像比较名单，{bundle.meta.brand_name}和竞品会一起出现。",
             f"- {_format_metric_emphasis('无品牌率', _format_ratio(metrics.no_brand_rate))}。这部分回答更偏知识性建议，没有带出任何品牌。",
             "",
-            "在买车这类问题里，和竞品同台并不一定是坏信号，因为平台本来就偏好给比较名单；更值得继续优化的，是减少无品牌回答，以及让更多比较类回答把品牌写成更明确的推荐。",
+            "在这类需要比较的决策问题里，和竞品同台并不一定是坏信号，因为平台本来就偏好给比较名单；更值得继续优化的，是减少无品牌回答，以及让更多比较类回答把品牌写成更明确的推荐。",
             "",
             competition_line,
             "",
@@ -2466,6 +2466,8 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
     price_summary = _category_question_summary(question_rows, field="intent", value=_intent_label("price_or_cost"))
     scene_summary = _category_question_summary(question_rows, field="scene", value="画像痛点场景")
     comparison_summary = _category_question_summary(question_rows, field="scene", value="品类选购对比")
+    scene_label = _report_label(scene_summary["label"])
+    comparison_label = _report_label(comparison_summary["label"])
     coverage_text = _top_scene_coverage_text(metrics.coverage_by_scene)
     entry_lines = []
     for summary in entry_scene_summaries[:2]:
@@ -2523,24 +2525,24 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
     price_drop_samples = _state_question_samples(price_summary["questions"], states={"competitor_only", "no_brand"}, limit=2)
     price_line = (
         (
-            f"这轮和价格、养车成本有关的问题有 {price_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {price_summary['entered_count']} 个；其中「{'、'.join(price_drop_samples)}」已经出现品牌掉出。"
+            f"这轮和价格、成本有关的问题有 {price_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {price_summary['entered_count']} 个；其中「{'、'.join(price_drop_samples)}」已经出现品牌掉出。"
             if price_drop_samples
-            else f"这轮和价格、养车成本有关的问题有 {price_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {price_summary['entered_count']} 个。"
+            else f"这轮和价格、成本有关的问题有 {price_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {price_summary['entered_count']} 个。"
         )
         if price_summary["question_count"]
-        else "这轮暂时没有形成明显的价格和养车成本问题带。"
+        else "这轮暂时没有形成明显的价格和成本问题带。"
     )
     scene_line = (
         (
-            f"带娃出行和家庭使用这类问题共有 {scene_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {scene_summary['entered_count']} 个，其中最后只提{bundle.meta.brand_name}的有 **{scene_summary['exclusive_count']} 个**；这也是当前最容易直接不给品牌的场景。"
+            f"{scene_label}共有 {scene_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {scene_summary['entered_count']} 个，其中最后只提{bundle.meta.brand_name}的有 **{scene_summary['exclusive_count']} 个**；这也是当前最容易直接不给品牌的一类问题。"
             if (scene_summary["exclusive_count"] or 0) > 0
-            else f"带娃出行和家庭使用这类问题共有 {scene_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {scene_summary['entered_count']} 个；这也是当前最容易直接不给品牌的场景。"
+            else f"{scene_label}共有 {scene_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {scene_summary['entered_count']} 个；这也是当前最容易直接不给品牌的一类问题。"
         )
         if scene_summary["question_count"]
-        else "这轮暂时还没有形成稳定的家庭使用场景问题带。"
+        else "这轮暂时还没有形成稳定的具体使用场景问题带。"
     )
     comparison_line = (
-        f"相对更有利的是同价位车型对比：共 {comparison_summary['question_count']} 个问题，至少有一个平台把{bundle.meta.brand_name}写进答案的有 {comparison_summary['entered_count']} 个。也就是说，只要问题进入比较语境，{bundle.meta.brand_name}更容易被纳入候选名单。"
+        f"相对更有利的是{comparison_label}：共 {comparison_summary['question_count']} 个问题，至少有一个平台把{bundle.meta.brand_name}写进答案的有 {comparison_summary['entered_count']} 个。也就是说，只要问题进入比较语境，{bundle.meta.brand_name}更容易被纳入候选名单。"
         if comparison_summary["question_count"]
         else "当前样本里还没有哪一类问题，能稳定把品牌带进答案。"
     )
@@ -2557,8 +2559,8 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
                 ]
             )
         )
-    conclusion = f"{bundle.meta.brand_name}不是完全进不去答案，而是在不同问题上的表现差得很大：直接问品牌和同价位对比时更容易进去，带娃出行和补能顾虑这类问题更容易不给品牌。"
-    subtitle = "直接问品牌和同价位对比更容易进入；带娃出行与补能顾虑更容易掉出。"
+    conclusion = f"{bundle.meta.brand_name}不是完全进不去答案，而是在不同问题上的表现差得很大：直接问品牌和{comparison_label}时更容易进去，{scene_label}和风险顾虑这类问题更容易不给品牌。"
+    subtitle = f"直接问品牌和{comparison_label}更容易进入；{scene_label}与风险顾虑更容易掉出。"
     markdown = "\n".join(
         [
             "## 3. 问题解析",
@@ -2854,9 +2856,9 @@ def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, co
         sample_text = "、".join(dropped_samples) or "当前最容易没有把品牌写进答案的问题"
         recommendations.append([
             "P1",
-            "先补最接近决策的家庭用车问题",
-            f"这轮和价格、养车成本有关的问题有 **{price_summary['question_count']}** 个，带娃出行和家庭使用问题有 **{scene_summary['question_count']}** 个。当前最常没有把品牌写进答案的问题是 {sample_text}。",
-            "先把第三排体验、长途补能、Pro 和 Max 怎么选这几类内容写成官网结论页，再准备可被平台直接摘用的短答案。",
+            "先补最接近决策的问题",
+            f"这轮和价格、成本有关的问题有 **{price_summary['question_count']}** 个，{_report_label(scene_summary['label'])}有 **{scene_summary['question_count']}** 个。当前最常没有把品牌写进答案的问题是 {sample_text}。",
+            "先把这些决策问题整理成官网结论页，再准备可被平台直接摘用的短答案。",
             "观察这几类问题里的品牌可见度，以及官网引用转化率是否继续抬高。",
         ])
     if (metrics.official_conversion_rate or 0) < 0.2:
@@ -2864,7 +2866,7 @@ def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, co
             "P1",
             "把品牌露出接回官网",
             f"现在有 **{metrics.official_funnel.get('monitor_brand_answer_count', 0)}** 条答案提到品牌，其中 **{metrics.official_funnel.get('official_link_answer_count', 0)}** 条答案引用官网，流量主要被 {top_source_names} 接走。",
-            "先把价格对比、用车顾虑、车型差异和家庭场景四类页面改成结论页，而不是只放产品页。",
+            "先把价格对比、使用顾虑、核心差异和典型场景这几类页面改成结论页，而不是只放产品页。",
             "观察官网引用转化率和品牌相关链接数能不能先抬起来。",
         ])
     if (metrics.competitor_pressure or 0) >= 0.3:
@@ -2872,7 +2874,7 @@ def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, co
             "P1",
             "把比较题做成品牌主场",
             f"竞品挤压率已经到 **{_format_ratio(metrics.competitor_pressure)}**，说明比较问题里还有明显的替代风险。",
-            f"先把核心竞品对比、车型差异和适合谁买写成一页式内容，让平台在横向比较时更容易先给出{bundle.meta.brand_name}的理由。",
+            f"先把核心竞品对比、关键差异和适合谁用写成一页式内容，让平台在横向比较时更容易先给出{bundle.meta.brand_name}的理由。",
             "观察竞品挤压率和比较类问题里的品牌可见度。",
         ])
     display_negative_topics = _strip_false_negative_topics(metrics.top_negative_topics)
@@ -2928,7 +2930,7 @@ def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, co
                   if comparison_line
                   else f"围绕{bundle.meta.scenario_theme or '当前场景'}，这批问题已经形成了稳定样本。"
               ),
-              f"把家庭长途、带娃配置、第三排舒适度和补能顾虑整理成专题页、FAQ 和短结论。",
+              "把这个场景下反复出现的顾虑、比较点和使用条件整理成专题页、FAQ 和短结论。",
               "观察相对全景基线的无品牌率和官网引用转化率，还要看这几个场景问题里品牌会不会更容易被直接写进答案。",
           ])
     subtitle = "优先做最容易改善品牌进入、官网承接和场景内容复用的动作。"
