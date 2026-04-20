@@ -3282,6 +3282,68 @@ async def _route_brand_seed_without_llm(
     return _merge_command_update(command, extra_update)
 
 
+async def _route_explicit_supplemental_fetch_without_llm(
+    *,
+    state: AgentState,
+    session_id: str,
+) -> Command | None:
+    latest_user_message = _get_latest_user_message(state)
+    if not is_supplemental_fetch_request(latest_user_message):
+        return None
+
+    recovery_plan = extract_latest_fetch_recovery_plan_from_state(state)
+    question_targets = list((recovery_plan or {}).get("question_targets") or [])
+    if not question_targets:
+        return None
+
+    reply_text = "已按您的要求，仅补采上一轮失败的问题和平台，并保留已有成功结果。"
+    if prefers_browser_fetch_mode(latest_user_message):
+        reply_text = "已按您的要求，使用浏览器仅补采上一轮失败的问题和平台，并保留已有成功结果。"
+
+    logger.info(
+        "[Orchestrator] Applying explicit supplemental fetch routing: targets=%d task_id=%s",
+        len(question_targets),
+        (recovery_plan or {}).get("task_id"),
+    )
+
+    sanitized_state = _sanitize_runtime_policy_state(state)
+    history = build_orchestrator_messages(sanitized_state)
+    history.append({"role": "assistant", "content": reply_text})
+
+    await send_reply_event(
+        session_id,
+        reply_text,
+        is_delta=False,
+        is_new_round=True,
+    )
+    await send_reply_event(session_id, "", is_complete=True)
+
+    synthetic_tool_call = SimpleNamespace(
+        name="answer_fetch",
+        arguments={
+            "fetch_mode": "full",
+            "retry_failed_only": True,
+            "question_targets": question_targets,
+            "platforms": list((recovery_plan or {}).get("platforms") or []),
+            "failed_task_id": (recovery_plan or {}).get("task_id"),
+        },
+        id="explicit_supplemental_fetch_answer_fetch",
+    )
+    command = await _handle_tool_call(
+        sanitized_state,
+        session_id,
+        synthetic_tool_call,
+        reply_text,
+        history,
+    )
+    return _merge_command_update(
+        command,
+        {
+            "error_info": None,
+        },
+    )
+
+
 async def _route_agent_error_without_llm(
     state: AgentState,
     session_id: str,
@@ -3527,6 +3589,15 @@ async def orchestrator_node(state: AgentState) -> Command:
     )
     if brand_seed_command is not None:
         return brand_seed_command
+
+    explicit_supplemental_fetch_command = (
+        await _route_explicit_supplemental_fetch_without_llm(
+            state=state,
+            session_id=session_id,
+        )
+    )
+    if explicit_supplemental_fetch_command is not None:
+        return explicit_supplemental_fetch_command
 
     working_state = state
     manifest = await _hydrate_knowledge_manifest(state)
