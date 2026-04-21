@@ -395,6 +395,7 @@ export function useWebSocket(sessionId: string | null) {
         }
 
         setInlineConfirmation({
+          requestId: typeof data.request_id === 'string' ? data.request_id : undefined,
           message: confirmMessage,
           options: options.map((opt: Record<string, unknown>) => ({
             id: typeof opt.id === 'string' ? opt.id : String(opt.label || ''),

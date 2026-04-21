@@ -6,7 +6,7 @@ export const isRecord = (value: unknown): value is Record<string, unknown> =>
 const PREVIEW_METRIC_PRIORITY = [
   '提及率',
   '品牌排名',
-  '官网 AI 友好度',
+  '官网转化率',
   '竞品挤压率',
   '品牌提及率',
   '官网引用率',
@@ -34,8 +34,18 @@ function normalizePreviewMetricLabel(key: string): string | null {
   if (['competitor_pressure', 'competitorpressure', 'competitor_squeeze_rate', 'competitorsqueezerate', '竞品压力', '竞品挤压率'].includes(normalized)) {
     return '竞品挤压率';
   }
-  if (['official_ai_friendliness', 'officialaifriendliness', 'official_ai_friendly_rate', 'officialaifriendlyrate', '官网ai友好度', '官网 ai 友好度'].includes(normalized)) {
-    return '官网 AI 友好度';
+  if ([
+    'official_ai_friendliness',
+    'officialaifriendliness',
+    'official_ai_friendly_rate',
+    'officialaifriendlyrate',
+    'official_conversion_rate',
+    'officialconversionrate',
+    '官网ai友好度',
+    '官网 ai 友好度',
+    '官网转化率',
+  ].includes(normalized)) {
+    return '官网转化率';
   }
   if (['content_citation_rate', 'contentcitationrate', '内容引用率'].includes(normalized)) {
     return '内容引用率';
@@ -67,7 +77,7 @@ function normalizePreviewMetricValue(label: string, value: unknown, unit?: unkno
 
   const isRatio =
     unit === 'ratio'
-    || ['品牌提及率', '提及率', '官网引用率', '官网 AI 友好度', '竞品挤压率', '内容引用率'].includes(label);
+    || ['品牌提及率', '提及率', '官网引用率', '官网转化率', '竞品挤压率', '内容引用率'].includes(label);
   const isRank = ['品牌排名', '排名'].includes(label);
 
   if (Number.isFinite(numeric)) {

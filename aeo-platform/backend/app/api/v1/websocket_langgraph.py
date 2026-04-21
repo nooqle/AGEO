@@ -131,6 +131,17 @@ def _sanitize_user_visible_runtime_text(text: str | None) -> str:
     return sanitized
 
 
+def _looks_like_corrupted_question_marks(text: str | None) -> bool:
+    normalized = str(text or "").strip()
+    if len(normalized) < 4:
+        return False
+    meaningful_chars = [char for char in normalized if not char.isspace()]
+    if not meaningful_chars:
+        return False
+    question_mark_count = sum(1 for char in meaningful_chars if char == "?")
+    return question_mark_count / len(meaningful_chars) >= 0.6
+
+
 def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
     """Build a concise task progress message for waiting-input states."""
 
@@ -2191,8 +2202,28 @@ async def handle_confirmation_langgraph(
             user_decisions=user_decisions,
             state_values=state_values,
         )
-        user_content = resolution.user_content
-        user_decisions = resolution.user_decisions
+        active_resolution = resolution
+        user_content = active_resolution.user_content
+        user_decisions = active_resolution.user_decisions
+        if _looks_like_corrupted_question_marks(user_content):
+            fallback_option_id = ""
+            if isinstance(selection, dict):
+                fallback_option_id = str(selection.get("optionId") or option_id or "")
+            elif isinstance(option_id, str):
+                fallback_option_id = option_id
+            if fallback_option_id:
+                repaired = resolve_confirmation_selection(
+                    selection={"optionId": fallback_option_id},
+                    option_id=fallback_option_id,
+                    user_content=fallback_option_id,
+                    user_decisions=user_decisions,
+                    state_values=state_values,
+                )
+                active_resolution = repaired
+                user_content = active_resolution.user_content
+                user_decisions = active_resolution.user_decisions
+            else:
+                user_content = "用户确认继续"
         selected_option_id = ""
         if isinstance(selection, dict):
             selected_option_id = str(selection.get("optionId") or option_id or "")
@@ -2284,7 +2315,7 @@ async def handle_confirmation_langgraph(
         }
         if state_values.get("fetch_mode"):
             update_state["fetch_mode"] = state_values["fetch_mode"]
-        update_state.update(resolution.state_updates)
+        update_state.update(active_resolution.state_updates)
 
         async for event in workflow.astream(update_state, config=config):
             await _process_langgraph_event(session_id, event)

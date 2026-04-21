@@ -650,11 +650,37 @@ def _build_uploaded_input_items(state: dict[str, Any]) -> tuple[RecentEvidenceIt
     ):
         questions = list(simulated_questions.get("simulated_questions") or [])
         generation_context = simulated_questions.get("generation_context") or {}
+        source_file = (
+            generation_context.get("source_file")
+            if isinstance(generation_context, dict)
+            else {}
+        )
         import_mode = _first_non_empty(
             generation_context.get("import_mode") if isinstance(generation_context, dict) else "",
             "replace",
         )
-        summary = f"上传问题列表已形成 A3 交付物，共 {len(questions)} 条问题；导入方式={import_mode}"
+        preview_questions = []
+        for item in questions[:3]:
+            if not isinstance(item, dict):
+                continue
+            question_text = _first_non_empty(
+                item.get("core_question"),
+                item.get("question_text"),
+                item.get("text"),
+            )
+            if question_text:
+                preview_questions.append(_compact_text(question_text, 30))
+        preview_suffix = (
+            f"；样例：{'、'.join(preview_questions)}" if preview_questions else ""
+        )
+        file_name = (
+            _first_non_empty(source_file.get("name")) if isinstance(source_file, dict) else ""
+        )
+        file_suffix = f"；文件={file_name}" if file_name else ""
+        summary = (
+            f"上传问题列表已形成 A3 交付物，共 {len(questions)} 条问题；导入方式={import_mode}"
+            f"{file_suffix}{preview_suffix}"
+        )
         items.append(
             RecentEvidenceItem(
                 source="uploaded_input",

@@ -13,6 +13,7 @@ from uuid import UUID
 from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import PlatformConstants
 from app.core.utils import extract_domain
 from app.models.knowledge import KnowledgeRecord, KnowledgeSegment
 
@@ -212,6 +213,109 @@ def _source_type_label(source_type: str) -> str:
         "fetch_answer": "过往回答",
         "fetch_citation": "过往引用",
     }.get(source_type, source_type)
+
+
+def _public_platform_id(platform: Any) -> str:
+    normalized = _text(platform).lower()
+    if normalized == "hunyuan":
+        return "yuanbao"
+    return normalized
+
+
+def _platform_display_name(platform: Any) -> str:
+    normalized = _public_platform_id(platform)
+    if not normalized:
+        return ""
+    return PlatformConstants.PLATFORM_DISPLAY_NAMES.get(normalized, _text(platform))
+
+
+def _answer_payload_content(payload: dict[str, Any]) -> str:
+    answer = payload.get("answer") if isinstance(payload.get("answer"), dict) else {}
+    parts = [
+        answer.get("content"),
+        answer.get("summary"),
+        payload.get("answer_text"),
+        payload.get("content"),
+    ]
+    return _join_non_empty(parts, sep="\n")
+
+
+def _record_export_snippet(record: KnowledgeRecord) -> str:
+    payload = record.payload if isinstance(record.payload, dict) else {}
+    citation = (
+        payload.get("citation") if isinstance(payload.get("citation"), dict) else {}
+    )
+    fallback_text = _join_non_empty(
+        [
+            getattr(record, "search_text", ""),
+            getattr(record, "question_text", ""),
+            getattr(record, "title", ""),
+        ]
+    )
+
+    if record.source_type == "fetch_answer":
+        return _compact_for_export(
+            _answer_payload_content(payload) or fallback_text,
+            220,
+        )
+
+    if record.source_type == "fetch_citation":
+        return _compact_for_export(
+            _join_non_empty(
+                [
+                    payload.get("question_text"),
+                    citation.get("title"),
+                    citation.get("summary"),
+                    citation.get("snippet"),
+                ]
+            )
+            or fallback_text,
+            220,
+        )
+
+    return _compact_for_export(fallback_text, 220)
+
+
+def _compact_title_suffix(value: str, limit: int = 18) -> str:
+    compacted = " ".join(_text(value).split())
+    if not compacted:
+        return ""
+    return compacted if len(compacted) <= limit else f"{compacted[: limit - 1]}…"
+
+
+def _export_scope_label(source_types: list[str] | None) -> str:
+    normalized = {
+        _text(item).lower()
+        for item in (source_types or [])
+        if _text(item)
+    }
+    if normalized == {"fetch_answer"}:
+        return "过往回答数据表"
+    if normalized == {"fetch_citation"}:
+        return "过往引用资料表"
+    if normalized == {"brand_profile"}:
+        return "品牌档案资料表"
+    if normalized == {"competitor_profile"}:
+        return "竞品资料表"
+    return "过往资料表"
+
+
+def _build_export_title(
+    *,
+    brand_name: str,
+    source_types: list[str] | None,
+    query: str,
+    analysis_period: str,
+) -> str:
+    base_title = f"{brand_name}{_export_scope_label(source_types)}"
+    scope_suffix = _compact_title_suffix(query) or (
+        _compact_title_suffix(analysis_period)
+        if analysis_period and analysis_period != "历次分析汇总"
+        else ""
+    )
+    if not scope_suffix:
+        return base_title
+    return f"{base_title}（{scope_suffix}）"
 
 
 def _coerce_bool(value: Any) -> bool | None:
@@ -871,11 +975,6 @@ class KnowledgeWorkspaceService:
         )
 
         rows = (await self.db.execute(stmt)).all()
-        if not rows and terms:
-            fallback_stmt = base_stmt.order_by(desc(KnowledgeRecord.occurred_at)).limit(
-                max(limit * 8, 40)
-            )
-            rows = (await self.db.execute(fallback_stmt)).all()
         ranked: list[dict[str, Any]] = []
         for segment, record in rows:
             score = self._score_match(
@@ -888,13 +987,14 @@ class KnowledgeWorkspaceService:
                     "source_type": record.source_type,
                     "title": record.title,
                     "brand_name": record.brand_name,
-                    "platform": record.platform,
+                    "platform": _platform_display_name(record.platform),
                     "question_id": record.question_id,
                     "question_text": record.question_text,
                     "competitor_name": record.competitor_name,
                     "domain": record.domain,
                     "occurred_at": record.occurred_at.isoformat(),
-                    "snippet": segment.content[:320],
+                    "snippet": _record_export_snippet(record)[:320]
+                    or segment.content[:320],
                     "payload": record.payload,
                     "metadata": record.extra_metadata,
                 }
@@ -949,6 +1049,7 @@ class KnowledgeWorkspaceService:
             start_date=start_date,
             end_date=end_date,
             max_records=max(limit * 20, 200),
+            allow_query_fallback=fetch_status_query and _is_fetch_answer_scope(effective_source_types or None),
         )
         fetch_scope = _is_fetch_answer_scope(effective_source_types or None)
         analysis_scope = "all_history"
@@ -1214,9 +1315,9 @@ class KnowledgeWorkspaceService:
         )
         platforms = sorted(
             {
-                _text(record.platform)
+                _platform_display_name(record.platform)
                 for record in visible_records
-                if _text(record.platform)
+                if _platform_display_name(record.platform)
             }
         )
         description_parts = []
@@ -1236,9 +1337,20 @@ class KnowledgeWorkspaceService:
                 f"当前结果较多，已仅展示前 {effective_limit} 条，请缩小筛选范围以导出完整结果"
             )
 
+        analysis_period = (
+            " 至 ".join(part for part in [start_date, end_date] if part)
+            if start_date or end_date
+            else "历次分析汇总"
+        )
+
         return {
             "status": "hit",
-            "title": f"{effective_brand} 过往资料表",
+            "title": _build_export_title(
+                brand_name=effective_brand,
+                source_types=source_set,
+                query=query,
+                analysis_period=analysis_period,
+            ),
             "brand_name": effective_brand,
             "description": "；".join(description_parts)
             or "基于过往品牌资料整理的数据表",
@@ -1250,11 +1362,7 @@ class KnowledgeWorkspaceService:
             "export_limit": effective_limit,
             "source_types": source_set,
             "platforms": platforms,
-            "analysis_period": (
-                " 至 ".join(part for part in [start_date, end_date] if part)
-                if start_date or end_date
-                else "历次分析汇总"
-            ),
+            "analysis_period": analysis_period,
             "summary_metrics": {
                 "导出条数": len(rows),
                 "来源类型": len(source_set),
@@ -1290,6 +1398,7 @@ class KnowledgeWorkspaceService:
         start_date: str | None,
         end_date: str | None,
         max_records: int,
+        allow_query_fallback: bool = False,
     ) -> list[KnowledgeRecord]:
         base_stmt = select(KnowledgeRecord).where(
             *self._scope_conditions(entity_id=entity_id, brand_name=brand_name)
@@ -1322,7 +1431,7 @@ class KnowledgeWorkspaceService:
 
         stmt = stmt.order_by(desc(KnowledgeRecord.occurred_at)).limit(max_records)
         records = list((await self.db.execute(stmt)).scalars())
-        if records or not terms:
+        if records or not terms or not allow_query_fallback:
             return records
 
         fallback_stmt = base_stmt.order_by(desc(KnowledgeRecord.occurred_at)).limit(
@@ -1332,7 +1441,7 @@ class KnowledgeWorkspaceService:
 
     def _aggregate_key(self, record: KnowledgeRecord, group_by: str) -> str | None:
         if group_by == "platform":
-            return _text(record.platform) or None
+            return _platform_display_name(record.platform) or None
         if group_by == "competitor":
             return _text(record.competitor_name) or None
         if group_by == "domain":
@@ -1741,14 +1850,12 @@ class KnowledgeWorkspaceService:
         ]
 
     def _serialize_record_summary(self, record: KnowledgeRecord) -> dict[str, Any]:
-        snippet = ""
-        if record.segments:
-            snippet = _text(record.segments[0].content)[:180]
+        snippet = _record_export_snippet(record)[:180]
         return {
             "record_id": str(record.id),
             "source_type": record.source_type,
             "title": record.title,
-            "platform": record.platform,
+            "platform": _platform_display_name(record.platform),
             "question_text": record.question_text,
             "competitor_name": record.competitor_name,
             "domain": record.domain,
@@ -1765,32 +1872,12 @@ class KnowledgeWorkspaceService:
             payload.get("citation") if isinstance(payload.get("citation"), dict) else {}
         )
 
-        snippet = _compact_for_export(record.search_text, 220)
-        if record.source_type == "fetch_answer":
-            answer = (
-                payload.get("answer") if isinstance(payload.get("answer"), dict) else {}
-            )
-            snippet = _compact_for_export(
-                answer.get("content") or record.search_text, 220
-            )
-        elif record.source_type == "fetch_citation":
-            snippet = _compact_for_export(
-                _join_non_empty(
-                    [
-                        payload.get("question_text"),
-                        citation.get("title"),
-                        citation.get("summary"),
-                        citation.get("snippet"),
-                    ]
-                )
-                or record.search_text,
-                220,
-            )
+        snippet = _record_export_snippet(record)
 
         return {
             "occurred_at": record.occurred_at.strftime("%Y-%m-%d %H:%M"),
             "source_type": _source_type_label(record.source_type),
-            "platform": _text(record.platform),
+            "platform": _platform_display_name(record.platform),
             "competitor_name": _text(record.competitor_name),
             "question_text": _text(record.question_text),
             "title": _text(record.title),

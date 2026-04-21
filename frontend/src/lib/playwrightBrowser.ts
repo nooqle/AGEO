@@ -55,7 +55,9 @@ function findChromiumExecutable(): string | null {
         'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
       ]
     : [
+        '/usr/bin/google-chrome-stable',
         '/usr/bin/google-chrome',
+        '/usr/bin/microsoft-edge',
         '/usr/bin/chromium',
         '/usr/bin/chromium-browser',
       ];
@@ -83,9 +85,22 @@ function findChromiumExecutable(): string | null {
 
 export async function launchPdfBrowser() {
   const executablePath = findChromiumExecutable();
-  return chromium.launch({
-    headless: true,
-    ...(executablePath ? { executablePath } : {}),
-    args: ['--font-render-hinting=medium'],
-  });
+  try {
+    return await chromium.launch({
+      headless: true,
+      ...(executablePath ? { executablePath } : {}),
+      args: ['--font-render-hinting=medium'],
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      process.platform === 'linux'
+      && /libatk-1\.0\.so\.0|error while loading shared libraries/i.test(message)
+    ) {
+      throw new Error(
+        'PDF 导出环境缺少 Chromium 运行库（例如 libatk-1.0.so.0），请先安装 Playwright Linux 依赖后再重试。'
+      );
+    }
+    throw error;
+  }
 }

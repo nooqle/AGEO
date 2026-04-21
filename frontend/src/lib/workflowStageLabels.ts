@@ -28,6 +28,7 @@ const STAGE_LABELS: Record<string, string> = {
   post_analysis_skill: '追问分析',
   drill_down_analysis: '追问分析',
   compare_analysis: '结果对比',
+  table_intake_skill: '表格导入理解',
   table_intake: '表格导入分析',
   apply_import_action: '导入结果处理',
 };
@@ -65,5 +66,6 @@ export function sanitizeUserFacingWorkflowText(text?: string | null): string | u
     .replace(/site_confidence_assessment_executor/g, '官网 AI 友好度')
     .replace(/官网置信度报告/g, '官网 AI 友好度报告')
     .replace(/官网置信度评估/g, '官网 AI 友好度')
-    .replace(/引用置信度评估/g, '来源引用分析');
+    .replace(/引用置信度评估/g, '来源引用分析')
+    .replace(/table_intake_skill/g, '表格导入理解');
 }

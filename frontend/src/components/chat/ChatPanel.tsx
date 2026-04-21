@@ -21,7 +21,7 @@ import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { DEFAULT_FOLLOWUPS } from '@/types/task';
 import type { CanvasContent, CanvasContentDataMap, CanvasContentType } from '@/types/canvas';
-import type { Output } from '@/types/api';
+import type { Message as ApiMessage, Output } from '@/types/api';
 import type { ContextTag } from '@/stores/contextStore';
 import type { StageResult } from '@/types/snapshot';
 import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
@@ -46,6 +46,7 @@ interface ChatPanelProps {
 }
 
 const INITIAL_HISTORY_MESSAGE_LIMIT = 30;
+const HISTORY_BACKFILL_BATCH_SIZE = 50;
 const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
 type ArtifactCategory = 'baseline' | 'panorama' | 'scenario';
 
@@ -292,6 +293,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const recalledContentRef = useRef<string | null>(null);
   const autoScrollEnabledRef = useRef(true);
   const lastBrowserActionScrollKeyRef = useRef<string | null>(null);
+  const oldestLoadedMessageIdRef = useRef<string | null>(null);
+  const loadedAllHistoryRef = useRef(false);
+  const historyBackfillPromiseRef = useRef<Promise<boolean> | null>(null);
   const artifactsHydratedRef = useRef(false);
   const artifactsHydratingPromiseRef = useRef<Promise<CanvasContent[]> | null>(null);
   const [inputValue, setInputValue] = useState('');
@@ -332,6 +336,133 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     settleBrowserActionStates,
     wsBrowserActionResolution,
   } = useConversationStore();
+
+  const hydratePersistedMessages = useCallback((msgs: ApiMessage[], prepend: boolean) => {
+    if (!msgs || msgs.length === 0) {
+      return;
+    }
+
+    const suppressedMessageIds = getSupersededHistoryMessageIds(msgs);
+    const hydratedMessages: ChatMessage[] = [];
+
+    for (let index = 0; index < msgs.length; index += 1) {
+      const msg = msgs[index];
+      const role = msg.role === 'agent' || msg.role === 'assistant' ? 'agent' : 'user';
+      const outputCards = buildOutputCardsFromApiMessage(msg, sessionId);
+      const reconstructed = rebuildPersistedLayers(msg.metadata as Record<string, unknown> | null);
+      const layers = reconstructed.layers;
+      const messageId = msg.id || `history_${index}_${msg.created_at || 'unknown'}`;
+      const messageTimestamp = msg.created_at ? new Date(msg.created_at) : new Date(0);
+      const relatedOutputIds = outputCards?.map((card) => card.id) ?? [];
+      const rawMetadata =
+        typeof msg.metadata === 'object' && msg.metadata !== null
+          ? (msg.metadata as Record<string, unknown>)
+          : null;
+      const messageMetadata =
+        rawMetadata
+          ? {
+              canEdit: typeof rawMetadata.canEdit === 'boolean' ? rawMetadata.canEdit : false,
+              canRollback:
+                typeof rawMetadata.canRollback === 'boolean'
+                  ? rawMetadata.canRollback
+                  : role === 'agent',
+              relatedOutputIds: Array.isArray(rawMetadata.relatedOutputIds)
+                ? rawMetadata.relatedOutputIds.filter(
+                    (value): value is string => typeof value === 'string' && value.length > 0,
+                  )
+                : relatedOutputIds,
+              executionTime:
+                typeof rawMetadata.executionTime === 'number'
+                  ? rawMetadata.executionTime
+                  : undefined,
+            }
+          : {
+              canEdit: false,
+              canRollback: role === 'agent',
+              relatedOutputIds,
+            };
+
+      for (const sr of reconstructed.stageResults) {
+        addStageResult(sr);
+      }
+
+      if (suppressedMessageIds.has(messageId)) {
+        continue;
+      }
+
+      hydratedMessages.push({
+        id: messageId,
+        type: role,
+        content: msg.content || '',
+        timestamp: messageTimestamp,
+        metadata: messageMetadata,
+        ...(
+          Array.isArray((msg.metadata as Record<string, unknown> | null)?.attachments)
+            ? {
+                attachments: ((msg.metadata as Record<string, unknown>).attachments as Attachment[]),
+              }
+            : {}
+        ),
+        ...(outputCards ? { outputCards } : {}),
+        ...(layers ? { layers } : {}),
+      });
+    }
+
+    if (hydratedMessages.length === 0) {
+      return;
+    }
+
+    useConversationStore.setState((state) => {
+      const existingIds = new Set(state.messages.map((message) => message.id));
+      const freshMessages = hydratedMessages.filter((message) => !existingIds.has(message.id));
+      if (freshMessages.length === 0) {
+        return {};
+      }
+      return {
+        messages: prepend
+          ? [...freshMessages, ...state.messages]
+          : [...state.messages, ...freshMessages],
+      };
+    });
+  }, [addStageResult, sessionId]);
+
+  const loadOlderHistoryUntil = useCallback(async (targetMessageId: string) => {
+    if (!targetMessageId || loadedAllHistoryRef.current) {
+      return false;
+    }
+    if (historyBackfillPromiseRef.current) {
+      return historyBackfillPromiseRef.current;
+    }
+
+    const task = (async () => {
+      while (!loadedAllHistoryRef.current && oldestLoadedMessageIdRef.current) {
+        const batch = await api.getMessages(sessionId, {
+          limit: HISTORY_BACKFILL_BATCH_SIZE,
+          before: oldestLoadedMessageIdRef.current,
+        });
+        if (!batch || batch.length === 0) {
+          loadedAllHistoryRef.current = true;
+          return false;
+        }
+
+        hydratePersistedMessages(batch, true);
+        oldestLoadedMessageIdRef.current = batch[0]?.id || oldestLoadedMessageIdRef.current;
+        if (batch.length < HISTORY_BACKFILL_BATCH_SIZE) {
+          loadedAllHistoryRef.current = true;
+        }
+        if (batch.some((message) => message.id === targetMessageId)) {
+          return true;
+        }
+      }
+      return false;
+    })()
+      .finally(() => {
+        historyBackfillPromiseRef.current = null;
+      });
+
+    historyBackfillPromiseRef.current = task;
+    return task;
+  }, [hydratePersistedMessages, sessionId]);
 
   const setOptimisticExecutionProgress = useCallback((optionId: string) => {
     const optimisticProgressMap: Record<string, {
@@ -428,16 +559,24 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const handler = (e: Event) => {
       const { messageId } = (e as CustomEvent).detail;
       if (!messageId || !scrollRef.current) return;
-      const el = scrollRef.current.querySelector(`[data-message-id="${messageId}"]`);
-      if (el) {
+
+      void (async () => {
+        let el = scrollRef.current?.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+        if (!el) {
+          await loadOlderHistoryUntil(messageId);
+          el = scrollRef.current?.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+        }
+        if (!el) {
+          return;
+        }
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.add('message-highlight');
         setTimeout(() => el.classList.remove('message-highlight'), 3000);
-      }
+      })();
     };
     window.addEventListener('scroll-to-message', handler);
     return () => window.removeEventListener('scroll-to-message', handler);
-  }, []);
+  }, [loadOlderHistoryUntil]);
 
   // Listen for recall-fill-input events from useWebSocket recall_complete handler
   useEffect(() => {
@@ -458,40 +597,14 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const loadHistory = async () => {
       try {
         const msgs = await api.getMessages(sessionId, { limit: INITIAL_HISTORY_MESSAGE_LIMIT });
-        if (cancelled || !msgs || msgs.length === 0) return;
-        const suppressedMessageIds = getSupersededHistoryMessageIds(msgs);
-        // Convert API messages to store format, reconstructing outputCards and layers from metadata
-        for (const msg of msgs) {
-          const role = msg.role === 'agent' || msg.role === 'assistant' ? 'agent' : 'user';
-          const outputCards = buildOutputCardsFromApiMessage(msg, sessionId);
-
-          // Reconstruct layers and stage results from persisted metadata
-          const reconstructed = rebuildPersistedLayers(msg.metadata as Record<string, unknown> | null);
-          const layers = reconstructed.layers;
-          for (const sr of reconstructed.stageResults) {
-            addStageResult(sr);
-          }
-
-          if (suppressedMessageIds.has(msg.id)) {
-            continue;
-          }
-
-          addMessage({
-            id: msg.id || undefined,
-            type: role,
-            content: msg.content || '',
-            timestamp: msg.created_at ? new Date(msg.created_at) : undefined,
-            ...(
-              Array.isArray((msg.metadata as Record<string, unknown> | null)?.attachments)
-                ? {
-                    attachments: ((msg.metadata as Record<string, unknown>).attachments as Attachment[]),
-                  }
-                : {}
-            ),
-            ...(outputCards ? { outputCards } : {}),
-            ...(layers ? { layers } : {}),
-          });
+        if (cancelled) return;
+        if (!msgs || msgs.length === 0) {
+          loadedAllHistoryRef.current = true;
+          return;
         }
+        oldestLoadedMessageIdRef.current = msgs[0]?.id || null;
+        loadedAllHistoryRef.current = msgs.length < INITIAL_HISTORY_MESSAGE_LIMIT;
+        hydratePersistedMessages(msgs, false);
       } catch {
         toast.error('消息加载失败');
       } finally {
@@ -1334,6 +1447,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     if (inlineConf) {
       const option = inlineConf.options.find((o: { id: string }) => o.id === optionId);
       const label = option?.label || optionId;
+      const requestId = inlineConf.requestId || '';
 
       // Mark the button as selected (disables re-clicking)
       if (lastAgentMsg) {
@@ -1347,8 +1461,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       startExecution();
       setOptimisticExecutionProgress(optionId);
 
-      // Send confirmation to backend — selection must be a plain string
-      sendConfirmation('', label);
+      sendConfirmation(requestId, { optionId });
     }
   }, [
     pendingConfirmation,

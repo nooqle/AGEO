@@ -6,6 +6,7 @@ import { useConversationStore } from '@/stores/conversationStore';
 import { CanvasHeader } from './CanvasHeader';
 import { CanvasTabs } from './CanvasTabs';
 import { ReportContent } from './contents/ReportContent';
+import { SiteConfidenceReportContent } from './contents/SiteConfidenceReportContent';
 import { ChartContent } from './contents/ChartContent';
 import { DataTableContent } from './contents/DataTableContent';
 import { PipelineContent } from './contents/PipelineContent';
@@ -15,6 +16,7 @@ import { FetchResultsContent } from './contents/FetchResultsContent';
 import { BrowserTakeoverContent } from './contents/BrowserTakeoverContent';
 import { cn } from '@/lib/cn';
 import { RiLayoutRightLine, RiFileTextLine, RiLoader4Line } from '@remixicon/react';
+import { isSiteConfidenceCanvasReport } from '@/adapters/exportArtifacts';
 
 export function CanvasPanel() {
   const {
@@ -88,7 +90,9 @@ export function CanvasPanel() {
 
     switch (activeContent.type) {
       case 'report':
-        return <ReportContent content={activeContent} />;
+        return isSiteConfidenceCanvasReport(activeContent)
+          ? <SiteConfidenceReportContent content={activeContent} />
+          : <ReportContent content={activeContent} />;
       case 'chart':
         return <ChartContent content={activeContent} />;
       case 'dataTable':

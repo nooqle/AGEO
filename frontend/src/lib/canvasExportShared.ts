@@ -8,6 +8,7 @@ import {
   buildConfidenceExportViewModel,
   buildFetchExportViewModel,
   isConfidenceCanvasReport,
+  isSiteConfidenceCanvasReport,
 } from '@/adapters/exportArtifacts';
 
 export type SupportedExportFormat = 'pdf' | 'md' | 'csv';
@@ -17,6 +18,7 @@ export type SupportedDeliverable =
   | '品牌全景分析'
   | '用户场景细分分析'
   | '置信度报告'
+  | '官网AI友好度分析报告'
   | '过往资料表';
 
 export type ExportDescriptor = {
@@ -156,6 +158,10 @@ export function getDeliverableName(content: CanvasContent): SupportedDeliverable
 
   if (isConfidenceCanvasReport(content)) {
     return '置信度报告';
+  }
+
+  if (isSiteConfidenceCanvasReport(content)) {
+    return '官网AI友好度分析报告';
   }
 
   if (content.category === 'panorama' || content.category === 'baseline') {

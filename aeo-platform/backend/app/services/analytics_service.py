@@ -559,9 +559,9 @@ class AnalyticsService:
         if not isinstance(mention_rate, (int, float)):
             mention_rate = metric_bundle.get("mention_rate")
 
-        official_friendly = metric_bundle.get("official_conversion_rate")
-        if not isinstance(official_friendly, (int, float)):
-            official_friendly = source_summary.get("official_conversion_rate")
+        official_conversion_rate = metric_bundle.get("official_conversion_rate")
+        if not isinstance(official_conversion_rate, (int, float)):
+            official_conversion_rate = source_summary.get("official_conversion_rate")
 
         official_funnel = source_summary.get("official_funnel", {})
         official_funnel = official_funnel if isinstance(official_funnel, dict) else {}
@@ -600,11 +600,13 @@ class AnalyticsService:
                     "subtitle": "在被提及的品牌里，当前排第几。",
                 },
                 {
-                    "id": "official_ai_friendliness",
-                    "label": "官网 AI 友好度",
-                    "value": official_friendly if isinstance(official_friendly, (int, float)) else None,
+                    "id": "official_conversion_rate",
+                    "label": "官网转化率",
+                    "value": official_conversion_rate
+                    if isinstance(official_conversion_rate, (int, float))
+                    else None,
                     "format": "percent",
-                    "subtitle": "提到品牌以后，有多少答案把流量接回官网。",
+                    "subtitle": "提到品牌以后，有多少答案把流量引导回官网。",
                 },
             ],
             "citationDistribution": {
@@ -1850,11 +1852,11 @@ class AnalyticsService:
                         "subtitle": "在被提及的品牌里，当前排第几。",
                     },
                     {
-                        "id": "official_ai_friendliness",
-                        "label": "官网 AI 友好度",
+                        "id": "official_conversion_rate",
+                        "label": "官网转化率",
                         "value": None,
                         "format": "percent",
-                        "subtitle": "提到品牌以后，有多少答案把流量接回官网。",
+                        "subtitle": "提到品牌以后，有多少答案把流量引导回官网。",
                     },
                 ],
                 "citationDistribution": {

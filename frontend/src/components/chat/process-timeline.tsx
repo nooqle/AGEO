@@ -77,6 +77,7 @@ function formatToolName(tool?: string): string {
     simulate_user_questions: "问题模拟",
     fetch_ai_platform_answers: "数据抓取",
     analyze_data_and_generate_report: "报告生成",
+    table_intake_skill: "表格导入理解",
   };
   return toolNames[tool] || tool;
 }

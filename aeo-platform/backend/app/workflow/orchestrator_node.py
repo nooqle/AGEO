@@ -1283,6 +1283,21 @@ def _infer_knowledge_fallback_tool(
         return None
 
     text = latest_user_message.lower()
+    current_uploaded_table_query = (
+        any(keyword in latest_user_message for keyword in ("上传", "导入", "附件"))
+        and any(keyword in latest_user_message for keyword in ("表格", "问题列表", "问题内容", "识别"))
+        and (
+            bool(state.get("table_intake_result"))
+            or (
+                isinstance(state.get("simulated_questions"), dict)
+                and (state.get("simulated_questions") or {}).get("generation_mode")
+                == "uploaded_list"
+            )
+        )
+    )
+    if current_uploaded_table_query:
+        return None
+
     compare_keywords = ["对比", "比较", "变化", "趋势", "最近两次", "上次", "这次"]
     export_keywords = [
         "导出",
@@ -2727,77 +2742,9 @@ async def _force_table_import_confirmation(
     """Deterministically ask for confirmation after table intake."""
 
     result = state.get("table_intake_result") or {}
-    table_kind = result.get("table_kind")
-    if table_kind == "question_list":
-        import_intent = (result.get("import_intent") or {}).get("mode")
-        if import_intent == "unspecified":
-            defense_msg = "我识别到这是一份问题列表，且当前会话里已有上传问题。请先确认本次是整合到上一版，还是替换上一版。"
-            defense_options = [
-                {
-                    "id": "table_import_question_list_merge",
-                    "label": "整合导入",
-                    "description": "保留上一版上传问题，并追加本次新问题",
-                },
-                {
-                    "id": "table_import_question_list_replace",
-                    "label": "替换导入",
-                    "description": "放弃上一版上传问题，只保留本次新问题",
-                },
-                {
-                    "id": "table_import_cancel",
-                    "label": "暂不导入",
-                    "description": "保留当前结果，不执行本次导入",
-                },
-            ]
-        else:
-            defense_msg = (
-                "我识别到这是一份问题列表，准备作为 A3 问题列表导入。是否继续？"
-            )
-            defense_options = [
-                {
-                    "id": "table_import_question_list",
-                    "label": "作为 A3 问题列表导入",
-                    "description": "先更新 A3 交付物，再继续后续抓取流程",
-                },
-                {
-                    "id": "table_import_cancel",
-                    "label": "暂不导入",
-                    "description": "保留当前结果，不执行本次导入",
-                },
-            ]
-        step_name = "确认问题列表导入"
-    elif table_kind == "brand_competitor_info":
-        defense_msg = (
-            "我识别到这是一份品牌/竞品信息表，准备更新当前 A1 相关上下文。是否继续？"
-        )
-        defense_options = [
-            {
-                "id": "table_import_brand_info",
-                "label": "更新品牌/竞品信息",
-                "description": "先更新 A1 交付物，再回到后续流程",
-            },
-            {
-                "id": "table_import_cancel",
-                "label": "暂不更新",
-                "description": "保留当前上下文，不执行本次导入",
-            },
-        ]
-        step_name = "确认品牌信息导入"
-    else:
-        defense_msg = "我识别到这是一份链接清单，准备整理为后续来源分析输入。是否继续？"
-        defense_options = [
-            {
-                "id": "table_import_link_list",
-                "label": "作为链接清单继续",
-                "description": "先生成链接清单交付物，再继续后续分析",
-            },
-            {
-                "id": "table_import_cancel",
-                "label": "暂不继续",
-                "description": "保留当前流程，不执行本次导入",
-            },
-        ]
-        step_name = "确认链接清单导入"
+    defense_msg, defense_options, step_name = _build_table_import_confirmation_payload(
+        result
+    )
 
     visible_reply = reply_text.strip() or _build_ask_user_fallback_reply(
         state,
@@ -2817,6 +2764,7 @@ async def _force_table_import_confirmation(
         session_id,
         "inline_confirmation",
         {
+            "request_id": request_id,
             "message": defense_msg,
             "options": defense_options,
             "type": "simple",
@@ -2850,6 +2798,7 @@ async def _force_table_import_confirmation(
             "orchestrator_reply": visible_reply,
             "orchestrator_history": new_history,
             "pending_confirmation": {
+                "request_id": request_id,
                 "step_id": "orchestrator",
                 "step_name": step_name,
                 "message": defense_msg,
@@ -2857,6 +2806,110 @@ async def _force_table_import_confirmation(
             },
             "agent_retry_counts": current_retry_counts,
         },
+    )
+
+
+def _build_table_import_preview(result: dict[str, Any], *, limit: int = 3) -> str:
+    source_file = result.get("source_file") or {}
+    source_name = str(source_file.get("name") or "当前表格").strip() or "当前表格"
+    payload = result.get("normalized_payload") or {}
+    questions = [
+        str(item.get("text") or "").strip()
+        for item in (payload.get("questions") or [])
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    ]
+    if not questions:
+        return source_name
+
+    preview_lines = [
+        f"{index}. {text}" for index, text in enumerate(questions[:limit], start=1)
+    ]
+    remaining = len(questions) - len(preview_lines)
+    if remaining > 0:
+        preview_lines.append(f"...另外还有 {remaining} 条问题")
+
+    return f"{source_name}，共识别到 {len(questions)} 条有效问题：\n" + "\n".join(
+        preview_lines
+    )
+
+
+def _build_table_import_confirmation_payload(
+    result: dict[str, Any],
+) -> tuple[str, list[dict[str, str]], str]:
+    table_kind = result.get("table_kind")
+    if table_kind == "question_list":
+        import_intent = (result.get("import_intent") or {}).get("mode")
+        preview = _build_table_import_preview(result)
+        if import_intent == "unspecified":
+            return (
+                f"{preview}\n\n当前会话里已经有一版上传问题。请确认这次是整合到上一版，还是替换上一版。",
+                [
+                    {
+                        "id": "table_import_question_list_merge",
+                        "label": "整合导入",
+                        "description": "保留上一版上传问题，并追加本次新问题",
+                    },
+                    {
+                        "id": "table_import_question_list_replace",
+                        "label": "替换导入",
+                        "description": "放弃上一版上传问题，只保留本次新问题",
+                    },
+                    {
+                        "id": "table_import_cancel",
+                        "label": "暂不导入",
+                        "description": "保留当前结果，不执行本次导入",
+                    },
+                ],
+                "确认问题列表导入",
+            )
+        return (
+            f"{preview}\n\n是否将这些问题作为 A3 问题列表导入？确认后我会先更新问题列表，再继续后续流程。",
+            [
+                {
+                    "id": "table_import_question_list",
+                    "label": "确认导入问题列表",
+                    "description": "先更新 A3 交付物，再继续后续抓取流程",
+                },
+                {
+                    "id": "table_import_cancel",
+                    "label": "暂不导入",
+                    "description": "保留当前结果，不执行本次导入",
+                },
+            ],
+            "确认问题列表导入",
+        )
+    if table_kind == "brand_competitor_info":
+        return (
+            "我已识别到这是一份品牌/竞品信息表。确认后会先更新当前 A1 上下文，再继续后续流程。",
+            [
+                {
+                    "id": "table_import_brand_info",
+                    "label": "更新品牌/竞品信息",
+                    "description": "先更新 A1 交付物，再回到后续流程",
+                },
+                {
+                    "id": "table_import_cancel",
+                    "label": "暂不更新",
+                    "description": "保留当前上下文，不执行本次导入",
+                },
+            ],
+            "确认品牌信息导入",
+        )
+    return (
+        "我已识别到这是一份链接清单。确认后会先整理为链接交付物，再继续后续来源分析。",
+        [
+            {
+                "id": "table_import_link_list",
+                "label": "作为链接清单继续",
+                "description": "先生成链接清单交付物，再继续后续分析",
+            },
+            {
+                "id": "table_import_cancel",
+                "label": "暂不继续",
+                "description": "保留当前流程，不执行本次导入",
+            },
+        ],
+        "确认链接清单导入",
     )
 
 
@@ -4077,72 +4130,9 @@ async def _handle_tool_call(
         checklist = tool_args.get("checklist", [])
         request_id = tool_call.id or f"ask_user_{id(tool_call)}"
 
-        if (
-            not options
-            and state.get("table_intake_result")
-            and last_tool_name == "table_intake_skill"
-        ):
+        if state.get("table_intake_result") and last_tool_name == "table_intake_skill":
             result = state.get("table_intake_result") or {}
-            table_kind = result.get("table_kind")
-            if table_kind == "question_list":
-                import_intent = (result.get("import_intent") or {}).get("mode")
-                if import_intent == "unspecified":
-                    options = [
-                        {
-                            "id": "table_import_question_list_merge",
-                            "label": "整合导入",
-                            "description": "保留上一版上传问题，并追加本次新问题",
-                        },
-                        {
-                            "id": "table_import_question_list_replace",
-                            "label": "替换导入",
-                            "description": "放弃上一版上传问题，只保留本次新问题",
-                        },
-                        {
-                            "id": "table_import_cancel",
-                            "label": "暂不导入",
-                            "description": "保留当前结果，不执行本次导入",
-                        },
-                    ]
-                else:
-                    options = [
-                        {
-                            "id": "table_import_question_list",
-                            "label": "作为 A3 问题列表导入",
-                            "description": "先更新 A3 交付物，再继续后续抓取流程",
-                        },
-                        {
-                            "id": "table_import_cancel",
-                            "label": "暂不导入",
-                            "description": "保留当前结果，不执行本次导入",
-                        },
-                    ]
-            elif table_kind == "brand_competitor_info":
-                options = [
-                    {
-                        "id": "table_import_brand_info",
-                        "label": "更新品牌/竞品信息",
-                        "description": "将表格作为 A1 的结构化补充输入",
-                    },
-                    {
-                        "id": "table_import_cancel",
-                        "label": "暂不更新",
-                        "description": "保留当前上下文，不执行本次导入",
-                    },
-                ]
-            elif table_kind == "link_list":
-                options = [
-                    {
-                        "id": "table_import_link_list",
-                        "label": "作为链接清单继续",
-                        "description": "将表格作为来源/链接清单继续分析",
-                    },
-                    {
-                        "id": "table_import_cancel",
-                        "label": "暂不继续",
-                        "description": "保留当前流程，不执行本次导入",
-                    },
-                ]
+            msg, options, step_name = _build_table_import_confirmation_payload(result)
 
         if (
             not options
@@ -4175,6 +4165,7 @@ async def _handle_tool_call(
 
         # Enhanced inline confirmation with type, tips, and checklist
         payload: dict[str, Any] = {
+            "request_id": request_id,
             "message": msg,
             "options": options,
             "type": confirm_type,
@@ -4222,6 +4213,7 @@ async def _handle_tool_call(
                 "orchestrator_reply": reply_text,
                 "orchestrator_history": new_history,
                 "pending_confirmation": {
+                    "request_id": request_id,
                     "step_id": "orchestrator",
                     "step_name": "等待用户确认",
                     "message": msg,

@@ -314,6 +314,7 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
         artifact_result = await generate_site_confidence_artifact(
             session_id=session_id,
             root_url=root_url,
+            brand_name=brand_name,
             scan_mode=scan_mode,
             max_pages=max_pages,
         )

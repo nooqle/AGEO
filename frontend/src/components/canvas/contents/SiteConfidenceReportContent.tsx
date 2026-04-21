@@ -36,12 +36,8 @@ function formatUpdatedAt(value?: string) {
   if (!value) return '刚刚更新';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const pad = (num: number) => String(num).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export function SiteConfidenceReportContent({
@@ -54,10 +50,11 @@ export function SiteConfidenceReportContent({
   return (
     <ReportPage className="max-w-none space-y-5">
       <ReportHero
-        title="官网 AI 友好度"
+        eyebrow="官网评估报告"
+        title="官网 AI 友好度分析报告"
         meta={
           <>
-            <span>{data.root_domain || data.brand_name || '未识别域名'}</span>
+            <span>{data.brand_name || data.root_domain || '未识别站点'}</span>
             <span>最近更新 {formatUpdatedAt(data.updated_at)}</span>
             {data.site_root_url ? <span>{data.site_root_url}</span> : null}
           </>

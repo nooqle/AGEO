@@ -492,11 +492,39 @@ class TableIntakeService:
         return warnings
 
     def _match_header(self, headers: list[str], keywords: tuple[str, ...]) -> str | None:
+        best_header: str | None = None
+        best_score = 0
         for header in headers:
-            lowered = header.lower()
-            if any(keyword in lowered for keyword in keywords):
-                return header
-        return None
+            score = self._header_match_score(header, keywords)
+            if score > best_score:
+                best_header = header
+                best_score = score
+        return best_header
+
+    def _header_match_score(self, header: str, keywords: tuple[str, ...]) -> int:
+        lowered = header.lower().strip()
+        compact = lowered.replace(" ", "").replace("_", "")
+        score = 0
+
+        for keyword in keywords:
+            keyword_lower = keyword.lower().strip()
+            keyword_compact = keyword_lower.replace(" ", "").replace("_", "")
+            if compact == keyword_compact:
+                score = max(score, 100)
+            elif compact.startswith(keyword_compact):
+                score = max(score, 80)
+            elif keyword_compact in compact:
+                score = max(score, 60)
+
+        if score == 0:
+            return 0
+
+        if any(marker in compact for marker in ("id", "编号", "序号", "序列", "编码")):
+            score -= 35
+        if any(marker in compact for marker in ("内容", "文本", "text", "detail", "详情", "提问")):
+            score += 12
+
+        return max(score, 0)
 
     def _contains_any(self, value: str, keywords: tuple[str, ...]) -> bool:
         lowered = value.lower()

@@ -2293,6 +2293,7 @@ async def generate_site_confidence_artifact(
     *,
     session_id: str,
     root_url: str,
+    brand_name: str | None = None,
     scan_mode: str = DEFAULT_SCAN_MODE,
     max_pages: int = DEFAULT_MAX_PAGES,
 ) -> dict[str, Any]:
@@ -2303,6 +2304,8 @@ async def generate_site_confidence_artifact(
         scan_mode=scan_mode,
         max_pages=max_pages,
     )
+    if brand_name:
+        report_data["brand_name"] = brand_name
     domain_key = _artifact_domain_key(str(report_data.get("root_domain") or "site"))
     artifact_key = f"{session_id}_report_site_confidence_{domain_key}"
     artifact_message_id = await save_and_send_artifact(

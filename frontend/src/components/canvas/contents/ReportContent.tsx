@@ -1,11 +1,15 @@
 'use client';
 
-import { isConfidenceCanvasReport } from '@/adapters/exportArtifacts';
+import {
+  isConfidenceCanvasReport,
+  isSiteConfidenceCanvasReport,
+} from '@/adapters/exportArtifacts';
 import type { ReportCanvasContent } from '@/types/canvas';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ConfidenceSignalContent } from './ConfidenceSignalContent';
 import { ReportPage } from './ReportScaffold';
+import { SiteConfidenceReportContent } from './SiteConfidenceReportContent';
 
 type CanonicalSection = {
   section_name?: string;
@@ -18,6 +22,28 @@ type SummaryMetricRow = [string, string, string];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function looksLikeSiteConfidenceFallback(content: ReportCanvasContent): boolean {
+  const data = content.data;
+  const title = [data.title, data.headline, content.title]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+
+  if (title.includes('官网 ai 友好度') || title.includes('官网ai友好度')) {
+    return true;
+  }
+
+  return Boolean(data.root_domain || data.site_root_url);
+}
+
+function formatUpdatedAt(value?: string) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const pad = (num: number) => String(num).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function getCanonicalSections(content: ReportCanvasContent): CanonicalSection[] {
@@ -181,6 +207,10 @@ export function ReportContent({ content, printMode = false }: { content: ReportC
     return <ConfidenceSignalContent content={content} printMode={printMode} />;
   }
 
+  if (isSiteConfidenceCanvasReport(content) || looksLikeSiteConfidenceFallback(content)) {
+    return <SiteConfidenceReportContent content={content} printMode={printMode} />;
+  }
+
   const sections = getCanonicalSections(content);
   const markdown = getFullMarkdown(content, sections);
   const metrics = getSummaryMetrics(sections);
@@ -189,7 +219,7 @@ export function ReportContent({ content, printMode = false }: { content: ReportC
     content.data.subtitle ||
     content.data.executive_summary ||
     '本页只渲染后端输出的 canonical GEO 报告，不再拼接旧版 report_v2。';
-  const updatedAt = content.data.updated_at;
+  const updatedAt = formatUpdatedAt(content.data.updated_at);
 
   return (
     <ReportPage className="w-full max-w-[1320px] space-y-6">
