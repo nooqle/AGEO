@@ -5,7 +5,7 @@ import { cn } from '@/lib/cn';
 import { RiCloseLine } from '@remixicon/react';
 
 export function CanvasTabs() {
-  const { contents, activeContentIndex, setActiveContent, removeContent, setActiveSurface } =
+  const { contents, activeContentIndex, setActiveContentById, removeContent, setActiveSurface } =
     useCanvasStore();
 
   return (
@@ -21,7 +21,7 @@ export function CanvasTabs() {
           )}
           onClick={() => {
             setActiveSurface('artifact');
-            setActiveContent(index);
+            setActiveContentById(content.id);
           }}
         >
           <span className="truncate max-w-[120px]">{content.title}</span>
@@ -37,6 +37,7 @@ export function CanvasTabs() {
             </span>
           )}
           <button
+            type="button"
             className="p-0.5 hover:bg-[var(--bg-tertiary)] rounded transition-colors"
             onClick={(e) => {
               e.stopPropagation();

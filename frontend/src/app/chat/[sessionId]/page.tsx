@@ -21,6 +21,7 @@ function ChatPageContent() {
   const queryEntityId = searchParams.get('entity_id') || undefined;
   const queryBrand = searchParams.get('brand') || undefined;
   const queryArtifactId = searchParams.get('artifact_id') || undefined;
+  const queryOutputId = searchParams.get('output_id') || undefined;
   const queryDraft = searchParams.get('draft') || undefined;
   const queryAutoSend = searchParams.get('autosend') || undefined;
   const [resolvedEntityId, setResolvedEntityId] = useState<string | undefined>(
@@ -74,6 +75,9 @@ function ChatPageContent() {
         if (queryArtifactId) {
           nextQuery.set('artifact_id', queryArtifactId);
         }
+        if (queryOutputId) {
+          nextQuery.set('output_id', queryOutputId);
+        }
         if (queryDraft) {
           nextQuery.set('draft', queryDraft);
         }
@@ -122,7 +126,7 @@ function ChatPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [queryArtifactId, queryAutoSend, queryBrand, queryDraft, queryEntityId, router, sessionId]);
+  }, [queryArtifactId, queryAutoSend, queryBrand, queryDraft, queryEntityId, queryOutputId, router, sessionId]);
 
   // Handle /chat/new - create a new session and redirect
   useEffect(() => {

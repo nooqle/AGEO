@@ -2225,8 +2225,12 @@ async def handle_confirmation_langgraph(
             else:
                 user_content = "用户确认继续"
         selected_option_id = ""
+        selected_option_label = ""
         if isinstance(selection, dict):
             selected_option_id = str(selection.get("optionId") or option_id or "")
+            raw_option_label = selection.get("label")
+            if isinstance(raw_option_label, str):
+                selected_option_label = raw_option_label.strip()
         elif isinstance(option_id, str):
             selected_option_id = option_id
 
@@ -2275,6 +2279,9 @@ async def handle_confirmation_langgraph(
             try:
                 confirmation_metadata = {
                     "tool_mode": state_values.get("selected_tool_mode"),
+                    "confirmation_label": user_content,
+                    "selected_option_id": selected_option_id or None,
+                    "selected_option_label": selected_option_label or None,
                 }
                 saved = await message_service.save_message(
                     session_id=UUID(session_id),

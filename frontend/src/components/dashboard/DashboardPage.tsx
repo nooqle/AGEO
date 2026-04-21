@@ -127,6 +127,9 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     if (artifactTarget) {
       params.set('artifact_id', artifactTarget);
     }
+    if (home.latest_report.output_id) {
+      params.set('output_id', home.latest_report.output_id);
+    }
     const query = params.toString();
     router.push(`/chat/${home.latest_report.session_id}${query ? `?${query}` : ''}`);
   };

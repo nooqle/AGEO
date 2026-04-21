@@ -15,6 +15,29 @@ type PdfExportRequestBody = {
   descriptor?: ExportDescriptor;
 };
 
+function resolveInternalPrintOrigin(request: NextRequest): string {
+  const hostHeader = request.headers.get('host')?.trim();
+  const forwardedHost = request.headers.get('x-forwarded-host')?.trim();
+  const candidateHost = hostHeader || forwardedHost || request.nextUrl.host || '';
+  const candidatePort =
+    request.nextUrl.port
+    || candidateHost.split(':')[1]
+    || process.env.PORT
+    || '3000';
+
+  const normalizedHost = candidateHost.toLowerCase();
+  if (
+    !normalizedHost
+    || normalizedHost.startsWith('0.0.0.0')
+    || normalizedHost.startsWith('localhost')
+    || normalizedHost.startsWith('127.0.0.1')
+  ) {
+    return `http://127.0.0.1:${candidatePort}`;
+  }
+
+  return `http://127.0.0.1:${candidatePort}`;
+}
+
 export async function POST(request: NextRequest) {
   let exportId: string | null = null;
 
@@ -36,7 +59,10 @@ export async function POST(request: NextRequest) {
         deviceScaleFactor: 2,
       });
 
-      const printUrl = new URL(`/exports/print/${exportId}`, request.nextUrl.origin).toString();
+      const printUrl = new URL(
+        `/exports/print/${exportId}`,
+        resolveInternalPrintOrigin(request),
+      ).toString();
       await page.goto(printUrl, { waitUntil: 'networkidle' });
       await page.waitForFunction(() => document.documentElement.dataset.pdfReady === 'true');
       await page.emulateMedia({ media: 'print' });

@@ -110,8 +110,55 @@ function normalizeArtifactCategory(value: unknown): ArtifactCategory | undefined
   return undefined;
 }
 
-function buildHydratedCanvasContents(outputs: Output[]): CanvasContent[] {
-  const sortedOutputs = [...(outputs || [])].sort((left, right) => {
+function looksLikeCorruptedQuestionMarks(value: unknown): boolean {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (normalized.length < 8) {
+    return false;
+  }
+  const meaningfulChars = Array.from(normalized).filter((char) => !/\s/.test(char));
+  if (meaningfulChars.length < 8) {
+    return false;
+  }
+  const questionLikeCount = meaningfulChars.filter((char) => char === '?' || char === '？').length;
+  return questionLikeCount / meaningfulChars.length >= 0.6;
+}
+
+function sanitizePersistedMessageContent(
+  role: 'user' | 'agent',
+  content: unknown,
+  metadata: Record<string, unknown> | null,
+): string {
+  const normalized = typeof content === 'string' ? content : '';
+  if (!looksLikeCorruptedQuestionMarks(normalized)) {
+    return normalized;
+  }
+
+  const confirmationLabel = metadata && typeof metadata.confirmation_label === 'string'
+    ? metadata.confirmation_label.trim()
+    : '';
+  if (confirmationLabel) {
+    return confirmationLabel;
+  }
+
+  const selectedOptionLabel = metadata && typeof metadata.selected_option_label === 'string'
+    ? metadata.selected_option_label.trim()
+    : '';
+  if (selectedOptionLabel) {
+    return selectedOptionLabel;
+  }
+
+  const resolvedLabel = metadata && typeof metadata.resolved_label === 'string'
+    ? metadata.resolved_label.trim()
+    : '';
+  if (resolvedLabel) {
+    return resolvedLabel;
+  }
+
+  return role === 'user' ? '用户已确认继续' : '历史消息已恢复，请查看关联交付物。';
+}
+
+function sortOutputs(outputs: Output[]): Output[] {
+  return [...(outputs || [])].sort((left, right) => {
     const leftSequence =
       typeof left.sequence === 'number' && Number.isFinite(left.sequence)
         ? left.sequence
@@ -125,39 +172,48 @@ function buildHydratedCanvasContents(outputs: Output[]): CanvasContent[] {
     }
     return new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
   });
+}
+
+function buildHydratedCanvasContent(output: Output): CanvasContent {
+  const artifactId = output.artifact_id || output.id;
+  const rawType = typeof output.type === 'string' ? output.type : 'report';
+  const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
+  const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(
+    canvasTypeStr as CanvasContentType,
+  )
+    ? (canvasTypeStr as CanvasContentType)
+    : 'report';
+  const createdAt = new Date(output.created_at);
+  const normalizedData = normalizeCanvasData(
+    outputType,
+    output.data || {},
+  ) as CanvasContentDataMap['report'];
+  const category = normalizeArtifactCategory(output.category);
+  return {
+    id: artifactId,
+    type: outputType,
+    title: output.title || output.type || '分析结果',
+    data: normalizedData,
+    createdAt,
+    relatedMessageId: '',
+    linkedMessageId: output.message_id,
+    versions: [],
+    currentVersionIndex: -1,
+    outputSequence:
+      typeof output.sequence === 'number' && Number.isFinite(output.sequence)
+        ? output.sequence
+        : undefined,
+    category,
+  } as CanvasContent;
+}
+
+function buildHydratedCanvasContents(outputs: Output[]): CanvasContent[] {
+  const sortedOutputs = sortOutputs(outputs);
   const grouped = new Map<string, CanvasContent>();
 
   for (const output of sortedOutputs) {
-    const artifactId = output.artifact_id || output.id;
-    const rawType = typeof output.type === 'string' ? output.type : 'report';
-    const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
-    const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(
-      canvasTypeStr as CanvasContentType,
-    )
-      ? (canvasTypeStr as CanvasContentType)
-      : 'report';
-    const createdAt = new Date(output.created_at);
-    const normalizedData = normalizeCanvasData(
-      outputType,
-      output.data || {},
-    ) as CanvasContentDataMap['report'];
-    const category = normalizeArtifactCategory(output.category);
-    const nextContent = {
-      id: artifactId,
-      type: outputType,
-      title: output.title || output.type || '分析结果',
-      data: normalizedData,
-      createdAt,
-      relatedMessageId: '',
-      linkedMessageId: output.message_id,
-      versions: [],
-      currentVersionIndex: -1,
-      outputSequence:
-        typeof output.sequence === 'number' && Number.isFinite(output.sequence)
-          ? output.sequence
-          : undefined,
-      category,
-    } as CanvasContent;
+    const nextContent = buildHydratedCanvasContent(output);
+    const artifactId = nextContent.id;
 
     const existing = grouped.get(artifactId);
     if (!existing) {
@@ -304,6 +360,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialArtifactId = searchParams.get('artifact_id');
+  const initialOutputId = searchParams.get('output_id');
   const autoStartBrand = initialArtifactId ? null : searchParams.get('brand');
   const autoStartDraft = initialArtifactId ? null : searchParams.get('draft');
   const shouldAutoSendDraft = !initialArtifactId && searchParams.get('autosend') === '1';
@@ -393,7 +450,11 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       hydratedMessages.push({
         id: messageId,
         type: role,
-        content: msg.content || '',
+        content: sanitizePersistedMessageContent(
+          role,
+          msg.content,
+          rawMetadata,
+        ),
         timestamp: messageTimestamp,
         metadata: messageMetadata,
         ...(
@@ -620,8 +681,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const {
     browserWorkspace,
     clearBrowserWorkspace,
-    contents: canvasContents,
-    activeContentIndex: activeCanvasContentIndex,
     activeSurface,
     isOpen: isCanvasOpen,
     openBrowserWorkspace,
@@ -714,6 +773,41 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return await promise;
   }, [sessionId]);
 
+  const hydrateTargetArtifact = useCallback(async (): Promise<CanvasContent | null> => {
+    if (!initialArtifactId || !initialOutputId) {
+      return null;
+    }
+
+    const existing = useCanvasStore.getState().contents.find((content) => content.id === initialArtifactId);
+    if (existing) {
+      return existing;
+    }
+
+    try {
+      const output = await api.getOutput(sessionId, initialOutputId);
+      const content = buildHydratedCanvasContent(output);
+      useCanvasStore.setState((state) => {
+        const existingIndex = state.contents.findIndex((item) => item.id === content.id);
+        const mergedContents =
+          existingIndex >= 0
+            ? state.contents.map((item, index) => (index === existingIndex ? content : item))
+            : [...state.contents, content];
+        const targetIndex = mergedContents.findIndex((item) => item.id === content.id);
+        return {
+          contents: mergedContents,
+          activeContentIndex: Math.max(targetIndex, 0),
+          activeSurface: 'artifact',
+          isOpen: true,
+          mode: state.mode === 'hidden' ? 'split' : state.mode,
+        };
+      });
+      return content;
+    } catch (error) {
+      console.warn('[ChatPanel] Failed to hydrate target artifact eagerly:', error);
+      return null;
+    }
+  }, [initialArtifactId, initialOutputId, sessionId]);
+
   useEffect(() => {
     if (!initialArtifactId) {
       return;
@@ -726,8 +820,14 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }));
 
     const focusArtifact = async () => {
-      const hydratedContents = await hydrateArtifacts();
-      const targetIndex = hydratedContents.findIndex((content) => content.id === initialArtifactId);
+      await hydrateTargetArtifact();
+      let targetIndex = useCanvasStore
+        .getState()
+        .contents.findIndex((content) => content.id === initialArtifactId);
+      if (targetIndex === -1) {
+        const hydratedContents = await hydrateArtifacts();
+        targetIndex = hydratedContents.findIndex((content) => content.id === initialArtifactId);
+      }
       if (targetIndex === -1) {
         return;
       }
@@ -740,7 +840,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     };
 
     void focusArtifact();
-  }, [hydrateArtifacts, initialArtifactId]);
+  }, [hydrateArtifacts, hydrateTargetArtifact, initialArtifactId]);
 
   useEffect(() => {
     artifactsHydratedRef.current = false;
@@ -748,33 +848,36 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   }, [sessionId]);
 
   useEffect(() => {
-    if (!initialArtifactId) {
+    if (!initialArtifactId || !initialOutputId) {
       return;
     }
 
-    const targetIndex = canvasContents.findIndex((content) => content.id === initialArtifactId);
-    if (targetIndex === -1) {
-      return;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let idleCallbackId: number | null = null;
+    const scheduleHydration = () => {
+      if (cancelled) {
+        return;
+      }
+      void hydrateArtifacts();
+    };
+
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      idleCallbackId = window.requestIdleCallback(scheduleHydration, { timeout: 2000 });
+    } else {
+      timeoutId = setTimeout(scheduleHydration, 1200);
     }
 
-    const activeId = canvasContents[activeCanvasContentIndex]?.id;
-    if (isCanvasOpen && activeSurface === 'artifact' && activeId === initialArtifactId) {
-      return;
-    }
-
-    useCanvasStore.setState((state) => ({
-      activeContentIndex: targetIndex,
-      activeSurface: 'artifact',
-      isOpen: true,
-      mode: state.mode === 'hidden' ? 'split' : state.mode,
-    }));
-  }, [
-    activeCanvasContentIndex,
-    activeSurface,
-    canvasContents,
-    initialArtifactId,
-    isCanvasOpen,
-  ]);
+    return () => {
+      cancelled = true;
+      if (idleCallbackId !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+        window.cancelIdleCallback(idleCallbackId);
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [hydrateArtifacts, initialArtifactId, initialOutputId]);
 
   useEffect(() => {
     if (!isCanvasOpen || activeSurface !== 'artifact' || artifactsHydratedRef.current) {
@@ -807,6 +910,10 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   useEffect(() => {
     let cancelled = false;
     const checkActiveTask = async () => {
+      if (initialArtifactId) {
+        setReconnectionTask(null);
+        return;
+      }
       try {
         const task = await api.getActiveTask(sessionId);
         if (cancelled) return;
@@ -889,7 +996,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     checkActiveTask();
     return () => { cancelled = true; };
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialArtifactId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const actionableBrowserStates = useMemo(
     () => browserStates.filter((state) => state.requiresAction),
@@ -1461,7 +1568,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       startExecution();
       setOptimisticExecutionProgress(optionId);
 
-      sendConfirmation(requestId, { optionId });
+      sendConfirmation(requestId, { optionId, label });
     }
   }, [
     pendingConfirmation,
