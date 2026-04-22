@@ -66,6 +66,7 @@ export interface ExecutionStep {
 
 export interface OutputCard {
   id: string;
+  outputId?: string;
   type: CanvasContentType;
   title: string;
   preview: {

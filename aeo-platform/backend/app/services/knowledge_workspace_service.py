@@ -30,6 +30,15 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalize_user_visible_text(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    text = re.sub(r"\[\]\(@mark_[^)]+\)", "", text)
+    text = re.sub(r"\bhunyuan\b", "元宝", text, flags=re.IGNORECASE)
+    return " ".join(text.split())
+
+
 def _join_non_empty(parts: Iterable[Any], sep: str = "\n") -> str:
     return sep.join(part for part in (_text(p) for p in parts) if part)
 
@@ -206,6 +215,49 @@ def _infer_month_range(query: str) -> tuple[str | None, str | None]:
     return (start, end)
 
 
+def _infer_exact_datetime_range(query: str) -> tuple[str | None, str | None]:
+    text = _text(query)
+    if not text:
+        return (None, None)
+
+    match = re.search(
+        r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})(?:日)?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?",
+        text,
+    )
+    if not match:
+        return (None, None)
+
+    year, month, day, hour, minute = (
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+        int(match.group(4)),
+        int(match.group(5)),
+    )
+    second = int(match.group(6) or 0)
+    start = f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+    end_second = 59 if match.group(6) is None else second
+    end = f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{end_second:02d}"
+    return (start, end)
+
+
+def _infer_platform_from_query(query: str) -> str | None:
+    text = _text(query).lower()
+    if not text:
+        return None
+
+    platform_keywords = (
+        ("deepseek", ("deepseek",)),
+        ("kimi", ("kimi",)),
+        ("doubao", ("doubao", "豆包")),
+        ("yuanbao", ("yuanbao", "元宝", "腾讯元宝", "hunyuan", "混元")),
+    )
+    for platform, keywords in platform_keywords:
+        if any(keyword.lower() in text for keyword in keywords):
+            return platform
+    return None
+
+
 def _source_type_label(source_type: str) -> str:
     return {
         "brand_profile": "品牌档案",
@@ -219,6 +271,13 @@ def _public_platform_id(platform: Any) -> str:
     normalized = _text(platform).lower()
     if normalized == "hunyuan":
         return "yuanbao"
+    return normalized
+
+
+def _storage_platform_id(platform: Any) -> str:
+    normalized = _text(platform).lower()
+    if normalized == "yuanbao":
+        return "hunyuan"
     return normalized
 
 
@@ -949,6 +1008,13 @@ class KnowledgeWorkspaceService:
                 "reason": "missing_scope",
             }
 
+        inferred_start, inferred_end = _infer_exact_datetime_range(query)
+        if not inferred_start or not inferred_end:
+            inferred_start, inferred_end = _infer_month_range(query)
+        start_date = inferred_start
+        end_date = inferred_end
+        platform = platform or _infer_platform_from_query(query)
+        storage_platform = _storage_platform_id(platform)
         terms = _extract_query_terms(query)
         base_stmt = (
             select(KnowledgeSegment, KnowledgeRecord)
@@ -957,12 +1023,20 @@ class KnowledgeWorkspaceService:
         )
         if source_types:
             base_stmt = base_stmt.where(KnowledgeRecord.source_type.in_(source_types))
-        if platform:
-            base_stmt = base_stmt.where(KnowledgeRecord.platform == platform)
+        if storage_platform:
+            base_stmt = base_stmt.where(KnowledgeRecord.platform == storage_platform)
         if competitor_name:
             base_stmt = base_stmt.where(KnowledgeRecord.competitor_name == competitor_name)
         if domain:
             base_stmt = base_stmt.where(KnowledgeRecord.domain == domain)
+        if start_date:
+            parsed_start = self._parse_date(start_date, end_of_day=False)
+            if parsed_start is not None:
+                base_stmt = base_stmt.where(KnowledgeRecord.occurred_at >= parsed_start)
+        if end_date:
+            parsed_end = self._parse_date(end_date, end_of_day=True)
+            if parsed_end is not None:
+                base_stmt = base_stmt.where(KnowledgeRecord.occurred_at <= parsed_end)
 
         stmt = base_stmt
         if terms:
@@ -1030,9 +1104,12 @@ class KnowledgeWorkspaceService:
                 "reason": "missing_scope",
             }
 
-        inferred_start, inferred_end = _infer_month_range(query)
+        inferred_start, inferred_end = _infer_exact_datetime_range(query)
+        if not inferred_start or not inferred_end:
+            inferred_start, inferred_end = _infer_month_range(query)
         start_date = start_date or inferred_start
         end_date = end_date or inferred_end
+        platform = platform or _infer_platform_from_query(query)
         fetch_status_query = _is_fetch_status_query(query)
         effective_source_types = list(source_types or [])
         if fetch_status_query and not effective_source_types:
@@ -1266,9 +1343,12 @@ class KnowledgeWorkspaceService:
                 "rows": [],
             }
 
-        inferred_start, inferred_end = _infer_month_range(query)
+        inferred_start, inferred_end = _infer_exact_datetime_range(query)
+        if not inferred_start or not inferred_end:
+            inferred_start, inferred_end = _infer_month_range(query)
         start_date = start_date or inferred_start
         end_date = end_date or inferred_end
+        platform = platform or _infer_platform_from_query(query)
 
         effective_limit = max(min(limit, 500), 1)
         records = await self._fetch_records(
@@ -1327,7 +1407,7 @@ class KnowledgeWorkspaceService:
             period = " 至 ".join(part for part in [start_date, end_date] if part)
             description_parts.append(f"时间范围：{period}")
         if platform:
-            description_parts.append(f"平台：{platform}")
+            description_parts.append(f"平台：{_platform_display_name(platform)}")
         if competitor_name:
             description_parts.append(f"竞品：{competitor_name}")
         if domain:
@@ -1406,7 +1486,9 @@ class KnowledgeWorkspaceService:
         if source_types:
             base_stmt = base_stmt.where(KnowledgeRecord.source_type.in_(source_types))
         if platform:
-            base_stmt = base_stmt.where(KnowledgeRecord.platform == platform)
+            base_stmt = base_stmt.where(
+                KnowledgeRecord.platform == _storage_platform_id(platform)
+            )
         if competitor_name:
             base_stmt = base_stmt.where(KnowledgeRecord.competitor_name == competitor_name)
         if domain:
@@ -1508,6 +1590,14 @@ class KnowledgeWorkspaceService:
                         second=59,
                         tzinfo=timezone.utc,
                     )
+                return base.replace(tzinfo=timezone.utc)
+            if len(value) == 16:
+                base = datetime.strptime(value, "%Y-%m-%d %H:%M")
+                if end_of_day:
+                    return base.replace(second=59, tzinfo=timezone.utc)
+                return base.replace(tzinfo=timezone.utc)
+            if len(value) == 19:
+                base = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
                 return base.replace(tzinfo=timezone.utc)
             base = datetime.strptime(value, "%Y-%m-%d")
             if end_of_day:
@@ -1854,9 +1944,9 @@ class KnowledgeWorkspaceService:
         return {
             "record_id": str(record.id),
             "source_type": record.source_type,
-            "title": record.title,
+            "title": _normalize_user_visible_text(record.title),
             "platform": _platform_display_name(record.platform),
-            "question_text": record.question_text,
+            "question_text": _normalize_user_visible_text(record.question_text),
             "competitor_name": record.competitor_name,
             "domain": record.domain,
             "occurred_at": record.occurred_at.isoformat(),
@@ -1879,8 +1969,8 @@ class KnowledgeWorkspaceService:
             "source_type": _source_type_label(record.source_type),
             "platform": _platform_display_name(record.platform),
             "competitor_name": _text(record.competitor_name),
-            "question_text": _text(record.question_text),
-            "title": _text(record.title),
+            "question_text": _normalize_user_visible_text(record.question_text),
+            "title": _normalize_user_visible_text(record.title),
             "domain": _text(record.domain),
             "site_name": _text(
                 metadata.get("site_name")
@@ -1898,7 +1988,7 @@ class KnowledgeWorkspaceService:
 
 
 def _compact_for_export(value: Any, limit: int = 220) -> str:
-    text = " ".join(str(value or "").split())
+    text = _normalize_user_visible_text(value)
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"

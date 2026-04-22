@@ -1038,6 +1038,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
+      sourceOutputId?: string;
+      isHydrationStub?: boolean;
       outputSequence?: number;
       category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
@@ -1053,6 +1055,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
+      sourceOutputId?: string;
+      isHydrationStub?: boolean;
       outputSequence?: number;
       category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
@@ -1068,6 +1072,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
+      sourceOutputId?: string;
+      isHydrationStub?: boolean;
       outputSequence?: number;
       category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
@@ -1083,6 +1089,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
+      sourceOutputId?: string;
+      isHydrationStub?: boolean;
       outputSequence?: number;
       category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
@@ -1098,6 +1106,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
+      sourceOutputId?: string;
+      isHydrationStub?: boolean;
       outputSequence?: number;
       category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
@@ -1113,6 +1123,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
+      sourceOutputId?: string;
+      isHydrationStub?: boolean;
       outputSequence?: number;
       category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
@@ -1128,6 +1140,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
+      sourceOutputId?: string;
+      isHydrationStub?: boolean;
       outputSequence?: number;
       category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;
@@ -1143,6 +1157,8 @@ export type CanvasContent =
       versions: ContentVersion[];
       currentVersionIndex: number;
       linkedMessageId?: string;
+      sourceOutputId?: string;
+      isHydrationStub?: boolean;
       outputSequence?: number;
       category?: 'baseline' | 'panorama' | 'scenario';
       scenarioLabel?: string;

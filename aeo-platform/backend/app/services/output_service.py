@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 from typing import Any, List
 from uuid import UUID
 
@@ -11,6 +12,103 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.message import Message, MessageType
 from app.services.fetch_run_platform_state_service import FetchRunPlatformStateService
+
+
+def _normalize_user_visible_output_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        normalized = re.sub(r"\[\]\(@mark_[^)]+\)", "", value)
+        return re.sub(r"\bhunyuan\b", "元宝", normalized, flags=re.IGNORECASE)
+    if isinstance(value, list):
+        return [_normalize_user_visible_output_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _normalize_user_visible_output_payload(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _extract_summary_metrics(payload: dict[str, Any]) -> dict[str, Any] | None:
+    summary_metrics = payload.get("summary_metrics")
+    if isinstance(summary_metrics, dict) and summary_metrics:
+        return summary_metrics
+
+    metrics = payload.get("metrics")
+    if isinstance(metrics, dict) and metrics:
+        return metrics
+
+    sections = payload.get("sections")
+    if not isinstance(sections, list):
+        return None
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        if section.get("section_name") != "summary":
+            continue
+        data = section.get("data")
+        if not isinstance(data, dict):
+            continue
+        rows = data.get("metrics")
+        if not isinstance(rows, list):
+            continue
+        compact_metrics: dict[str, Any] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            label = row.get("label")
+            value = row.get("value")
+            if isinstance(label, str) and label.strip() and value is not None:
+                compact_metrics[label.strip()] = value
+        if compact_metrics:
+            return compact_metrics
+    return None
+
+
+def _extract_preview_item_count(payload: dict[str, Any]) -> int | None:
+    explicit_item_count = payload.get("itemCount")
+    if isinstance(explicit_item_count, int):
+        return explicit_item_count
+
+    for key in ("items", "rows", "questions", "fetchResults", "fetch_results"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return len(value)
+    return None
+
+
+def _compact_output_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in (
+        "output_id",
+        "artifact_id",
+        "title",
+        "headline",
+        "report_kind",
+        "artifact_kind",
+        "preview_description",
+        "description",
+        "executive_summary",
+        "updated_at",
+        "brand_name",
+        "root_domain",
+        "site_root_url",
+        "analysis_period",
+    ):
+        value = payload.get(key)
+        if isinstance(value, (str, int, float, bool)) and value != "":
+            compact[key] = value
+
+    summary_metrics = _extract_summary_metrics(payload)
+    if summary_metrics:
+        compact["summary_metrics"] = summary_metrics
+
+    item_count = _extract_preview_item_count(payload)
+    if item_count is not None:
+        compact["itemCount"] = item_count
+
+    compact["hydration_stub"] = True
+    return compact
 
 
 class OutputService:
@@ -27,6 +125,8 @@ class OutputService:
     async def get_outputs(
         self,
         session_id: UUID,
+        *,
+        compact: bool = False,
     ) -> List[dict[str, Any]]:
         """Get all outputs.
 
@@ -46,10 +146,11 @@ class OutputService:
         )
         result = await self.db.execute(query)
         messages = result.scalars().all()
-        outputs = [self._output_to_dict(msg) for msg in messages]
+        outputs = [self._output_to_dict(msg, compact=compact) for msg in messages]
         return await self._merge_authoritative_fetch_results_output(
             session_id=session_id,
             outputs=outputs,
+            compact=compact,
         )
 
     async def get_output(
@@ -124,7 +225,7 @@ class OutputService:
 
         return str(file_path)
 
-    def _output_to_dict(self, message: Message) -> dict[str, Any]:
+    def _output_to_dict(self, message: Message, *, compact: bool = False) -> dict[str, Any]:
         data = None
         metadata = None
         if message.output_data:
@@ -132,6 +233,7 @@ class OutputService:
                 data = json.loads(message.output_data)
             except Exception:
                 data = message.output_data
+        data = _normalize_user_visible_output_payload(data)
         if message.extra_metadata:
             try:
                 metadata = json.loads(message.extra_metadata)
@@ -166,13 +268,17 @@ class OutputService:
                 category = report_kind
             else:
                 category = "scenario"
+        if compact and isinstance(data, dict):
+            data = _compact_output_payload(data)
         return {
             "id": str(message.id),
             "artifact_id": artifact_id,
             "message_id": str(message.id),
             "session_id": str(message.session_id),
             "type": message.output_type,
-            "title": message.content or "分析结果",
+            "title": _normalize_user_visible_output_payload(
+                message.content or "分析结果"
+            ),
             "data": data,
             "metadata": metadata,
             "category": category,
@@ -184,6 +290,7 @@ class OutputService:
         self,
         *,
         session_id: UUID,
+        compact: bool = False,
     ) -> dict[str, Any] | None:
         state_service = FetchRunPlatformStateService(self.db)
         rows = await state_service.list_latest_for_session(session_id)
@@ -215,6 +322,15 @@ class OutputService:
         fetch_anchor_result = await self.db.execute(fetch_anchor_query)
         fetch_anchor_message = fetch_anchor_result.scalar_one_or_none()
 
+        data = {
+            "fetchResults": fetch_results,
+            "platformStatus": projection.get("platform_status") or {},
+            "timingSummary": projection.get("timing_summary") or {},
+        }
+        data = _normalize_user_visible_output_payload(data)
+        if compact:
+            data = _compact_output_payload(data)
+
         return {
             "id": str(latest_row.task_run_id),
             "artifact_id": f"{session_id}_fetchResults",
@@ -222,19 +338,16 @@ class OutputService:
             "session_id": str(session_id),
             "type": "fetchResults",
             "title": (
-                fetch_anchor_message.content
+                _normalize_user_visible_output_payload(fetch_anchor_message.content)
                 if fetch_anchor_message and fetch_anchor_message.content
                 else "AI答案抓取结果"
             ),
-            "data": {
-                "fetchResults": fetch_results,
-                "platformStatus": projection.get("platform_status") or {},
-                "timingSummary": projection.get("timing_summary") or {},
-            },
+            "data": data,
             "metadata": {
                 "synthetic": True,
                 "source": "fetch_run_platform_states",
                 "task_run_id": str(latest_row.task_run_id),
+                "hydration_stub": compact,
             },
             "category": None,
             "sequence": fetch_anchor_message.sequence if fetch_anchor_message else None,
@@ -250,9 +363,11 @@ class OutputService:
         *,
         session_id: UUID,
         outputs: list[dict[str, Any]],
+        compact: bool = False,
     ) -> list[dict[str, Any]]:
         authoritative_fetch_results = await self._get_authoritative_fetch_results_output(
             session_id=session_id,
+            compact=compact,
         )
         if not authoritative_fetch_results:
             return outputs

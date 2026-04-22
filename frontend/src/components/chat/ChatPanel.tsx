@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useConversationStore } from '@/stores/conversationStore';
 import { useCanvasStore } from '@/stores/canvasStore';
@@ -123,14 +123,49 @@ function looksLikeCorruptedQuestionMarks(value: unknown): boolean {
   return questionLikeCount / meaningfulChars.length >= 0.6;
 }
 
+const KNOWN_CONFIRMATION_LABELS: Record<string, string> = {
+  view_questions: '先查看问题内容',
+  still_empty: '问题列表仍未显示',
+  table_import_question_list: '确认导入问题列表',
+  table_import_question_list_merge: '整合导入',
+  table_import_question_list_replace: '替换导入',
+  table_import_brand_info: '更新品牌/竞品信息',
+  table_import_link_list: '作为链接清单继续',
+  table_import_cancel: '暂不导入',
+  run_answer_fetch: '先执行答案抓取',
+  run_supplemental_fetch: '补采上一轮失败项',
+  run_analysis_report: '重新生成分析报告',
+};
+
+function resolveKnownConfirmationLabel(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  return KNOWN_CONFIRMATION_LABELS[normalized] || null;
+}
+
 function sanitizePersistedMessageContent(
   role: 'user' | 'agent',
   content: unknown,
   metadata: Record<string, unknown> | null,
 ): string {
-  const normalized = typeof content === 'string' ? content : '';
+  const normalized = typeof content === 'string' ? content.trim() : '';
+  const directKnownLabel = resolveKnownConfirmationLabel(normalized);
+  if (directKnownLabel) {
+    return directKnownLabel;
+  }
   if (!looksLikeCorruptedQuestionMarks(normalized)) {
     return normalized;
+  }
+
+  const selectedOptionId = metadata?.selected_option_id;
+  const resolvedFromOptionId = resolveKnownConfirmationLabel(selectedOptionId);
+  if (resolvedFromOptionId) {
+    return resolvedFromOptionId;
   }
 
   const confirmationLabel = metadata && typeof metadata.confirmation_label === 'string'
@@ -188,6 +223,10 @@ function buildHydratedCanvasContent(output: Output): CanvasContent {
     outputType,
     output.data || {},
   ) as CanvasContentDataMap['report'];
+  const isHydrationStub = Boolean(
+    output.metadata?.hydration_stub
+    || (output.data && typeof output.data === 'object' && 'hydration_stub' in output.data),
+  );
   const category = normalizeArtifactCategory(output.category);
   return {
     id: artifactId,
@@ -197,6 +236,8 @@ function buildHydratedCanvasContent(output: Output): CanvasContent {
     createdAt,
     relatedMessageId: '',
     linkedMessageId: output.message_id,
+    sourceOutputId: output.id,
+    isHydrationStub,
     versions: [],
     currentVersionIndex: -1,
     outputSequence:
@@ -240,6 +281,74 @@ function buildHydratedCanvasContents(outputs: Output[]): CanvasContent[] {
   }
 
   return Array.from(grouped.values());
+}
+
+function buildRoutePlaceholderContent(
+  artifactId: string,
+  outputId?: string | null,
+): CanvasContent | null {
+  if (!artifactId.includes('report')) {
+    return null;
+  }
+
+  const title = artifactId.includes('site_confidence')
+    ? '官网 AI 友好度分析报告'
+    : artifactId.includes('scenario')
+      ? '用户场景分析报告'
+      : '品牌全景分析报告';
+
+  return {
+    id: artifactId,
+    type: 'report',
+    title,
+    data: {
+      title,
+      subtitle: '报告加载中，请稍候...',
+    },
+    createdAt: new Date(),
+    relatedMessageId: '',
+    linkedMessageId: '',
+    sourceOutputId: outputId ?? undefined,
+    isHydrationStub: true,
+    versions: [],
+    currentVersionIndex: -1,
+  } as CanvasContent;
+}
+
+function reportNeedsCanonicalHydration(content: CanvasContent | null | undefined): boolean {
+  if (!content || content.type !== 'report') {
+    return false;
+  }
+
+  const data = content.data;
+  const hasSections = Array.isArray(data.sections) && data.sections.length > 0;
+  const hasFullMarkdown =
+    typeof data.full_markdown === 'string' && data.full_markdown.trim().length > 0;
+  const hasReportMarkdown =
+    typeof data.report_markdown === 'string' && data.report_markdown.trim().length > 0;
+  const hasLegacyContent =
+    typeof data.content === 'string' && data.content.trim().length > 0;
+
+  return !(hasSections || hasFullMarkdown || hasReportMarkdown || hasLegacyContent);
+}
+
+function contentNeedsDetailHydration(
+  content: CanvasContent | null | undefined,
+  outputId?: string | null,
+): boolean {
+  if (!content) {
+    return true;
+  }
+
+  if (content.isHydrationStub) {
+    return true;
+  }
+
+  if (outputId && content.sourceOutputId && content.sourceOutputId !== outputId) {
+    return true;
+  }
+
+  return reportNeedsCanonicalHydration(content);
 }
 
 function buildBrowserCanvasContent(state: BrowserState): CanvasContent | null {
@@ -354,6 +463,13 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const historyBackfillPromiseRef = useRef<Promise<boolean> | null>(null);
   const artifactsHydratedRef = useRef(false);
   const artifactsHydratingPromiseRef = useRef<Promise<CanvasContent[]> | null>(null);
+  const artifactUrlSyncReadyRef = useRef(false);
+  const stubHydrationOutputIdsRef = useRef<Set<string>>(new Set());
+  const initialRouteCompactHydrationRequestedRef = useRef(false);
+  const canonicalRouteArtifactKeysRef = useRef<Set<string>>(new Set());
+  const artifactDetailHydrationPromisesRef = useRef<Map<string, Promise<CanvasContent | null>>>(
+    new Map(),
+  );
   const [inputValue, setInputValue] = useState('');
   const [selectedToolMode, setSelectedToolMode] = useState<ToolMode | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -361,6 +477,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const searchParams = useSearchParams();
   const initialArtifactId = searchParams.get('artifact_id');
   const initialOutputId = searchParams.get('output_id');
+  const prefersCompactArtifactList = Boolean(initialArtifactId && initialOutputId);
   const autoStartBrand = initialArtifactId ? null : searchParams.get('brand');
   const autoStartDraft = initialArtifactId ? null : searchParams.get('draft');
   const shouldAutoSendDraft = !initialArtifactId && searchParams.get('autosend') === '1';
@@ -657,14 +774,15 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     let cancelled = false;
     const loadHistory = async () => {
       try {
-        const msgs = await api.getMessages(sessionId, { limit: INITIAL_HISTORY_MESSAGE_LIMIT });
+        const initialHistoryLimit = initialArtifactId ? 12 : INITIAL_HISTORY_MESSAGE_LIMIT;
+        const msgs = await api.getMessages(sessionId, { limit: initialHistoryLimit });
         if (cancelled) return;
         if (!msgs || msgs.length === 0) {
           loadedAllHistoryRef.current = true;
           return;
         }
         oldestLoadedMessageIdRef.current = msgs[0]?.id || null;
-        loadedAllHistoryRef.current = msgs.length < INITIAL_HISTORY_MESSAGE_LIMIT;
+        loadedAllHistoryRef.current = msgs.length < initialHistoryLimit;
         hydratePersistedMessages(msgs, false);
       } catch {
         toast.error('消息加载失败');
@@ -676,12 +794,14 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     // and key={sessionId} guarantees a fresh mount on every session change.
     loadHistory();
     return () => { cancelled = true; };
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialArtifactId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const {
     browserWorkspace,
     clearBrowserWorkspace,
     activeSurface,
+    activeContentIndex,
+    contents,
     isOpen: isCanvasOpen,
     openBrowserWorkspace,
     setActiveSurface,
@@ -700,7 +820,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const clearTakeover = useAioTakeoverStore((state) => state.clearTakeover);
   const hydrateArtifacts = useCallback(async (
     force = false,
-    options?: { keepClosed?: boolean },
+    options?: { keepClosed?: boolean; compact?: boolean },
   ): Promise<CanvasContent[]> => {
     if (artifactsHydratedRef.current && !force) {
       return useCanvasStore.getState().contents;
@@ -713,15 +833,50 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     const promise = (async (): Promise<CanvasContent[]> => {
       try {
-        const outputs = await api.getOutputs(sessionId);
+        const outputs = await api.getOutputs(sessionId, {
+          compact: options?.compact ?? prefersCompactArtifactList,
+        });
         const hydratedContents = buildHydratedCanvasContents(outputs || []);
         let nextContents: CanvasContent[] = hydratedContents;
         useCanvasStore.setState((state) => {
           const existingById = new Map(state.contents.map((content) => [content.id, content]));
-          const mergedContents = hydratedContents.map((content) => {
+          const canonicalRouteArtifactKey =
+            initialArtifactId && initialOutputId
+              ? `${initialArtifactId}::${initialOutputId}`
+              : null;
+          const hasCanonicalRouteTarget = Boolean(
+            canonicalRouteArtifactKey
+            && state.contents.some(
+              (content) =>
+                (content.id === initialArtifactId
+                  || content.sourceOutputId === initialOutputId)
+                && !contentNeedsDetailHydration(content, initialOutputId),
+            ),
+          );
+          const safeHydratedContents = hasCanonicalRouteTarget
+            ? hydratedContents.filter((content) => content.id !== initialArtifactId)
+            : canonicalRouteArtifactKey
+              ? hydratedContents.filter(
+                  (content) =>
+                    !(
+                      content.id === initialArtifactId
+                      && content.sourceOutputId === initialOutputId
+                      && content.isHydrationStub
+                      && canonicalRouteArtifactKeysRef.current.has(canonicalRouteArtifactKey)
+                    ),
+                )
+            : hydratedContents;
+          const hydratedIds = new Set(safeHydratedContents.map((content) => content.id));
+          const mergedContents = safeHydratedContents.map((content) => {
             const existing = existingById.get(content.id);
             if (!existing) {
               return content;
+            }
+            if (content.isHydrationStub && !contentNeedsDetailHydration(existing, content.sourceOutputId)) {
+              return {
+                ...existing,
+                outputSequence: content.outputSequence ?? existing.outputSequence,
+              } as CanvasContent;
             }
             const nextVersionIndex =
               existing.currentVersionIndex >= 0
@@ -734,23 +889,30 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
               hasNewVersion: existing.hasNewVersion ?? content.hasNewVersion,
             } as CanvasContent;
           });
-          nextContents = mergedContents;
+          // Preserve any in-flight artifacts that arrived over WebSocket but are
+          // not part of this snapshot yet. Otherwise a slower hydrate response
+          // can overwrite a freshly added preview artifact and snap the canvas
+          // back to an older target.
+          const preservedExisting = state.contents.filter(
+            (content) => !hydratedIds.has(content.id),
+          );
+          nextContents = [...mergedContents, ...preservedExisting];
           const activeId = state.contents[state.activeContentIndex]?.id;
           const nextActiveIndex = activeId
-            ? mergedContents.findIndex((content) => content.id === activeId)
+            ? nextContents.findIndex((content) => content.id === activeId)
             : -1;
           const resolvedActiveIndex =
             nextActiveIndex >= 0
               ? nextActiveIndex
               : Math.min(
                   state.activeContentIndex,
-                  Math.max(0, mergedContents.length - 1),
+                  Math.max(0, nextContents.length - 1),
                 );
           return {
-            contents: mergedContents,
+            contents: nextContents,
             activeContentIndex: resolvedActiveIndex,
             activeSurface:
-              mergedContents.length === 0 && state.browserWorkspace
+              nextContents.length === 0 && state.browserWorkspace
                 ? 'browser'
                 : state.activeSurface,
           };
@@ -771,7 +933,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     artifactsHydratingPromiseRef.current = promise;
     return await promise;
-  }, [sessionId]);
+  }, [prefersCompactArtifactList, sessionId]);
 
   const hydrateTargetArtifact = useCallback(async (): Promise<CanvasContent | null> => {
     if (!initialArtifactId || !initialOutputId) {
@@ -779,33 +941,86 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
 
     const existing = useCanvasStore.getState().contents.find((content) => content.id === initialArtifactId);
-    if (existing) {
+    if (existing && !contentNeedsDetailHydration(existing, initialOutputId)) {
       return existing;
     }
 
-    try {
-      const output = await api.getOutput(sessionId, initialOutputId);
-      const content = buildHydratedCanvasContent(output);
-      useCanvasStore.setState((state) => {
-        const existingIndex = state.contents.findIndex((item) => item.id === content.id);
-        const mergedContents =
-          existingIndex >= 0
-            ? state.contents.map((item, index) => (index === existingIndex ? content : item))
-            : [...state.contents, content];
-        const targetIndex = mergedContents.findIndex((item) => item.id === content.id);
-        return {
-          contents: mergedContents,
-          activeContentIndex: Math.max(targetIndex, 0),
-          activeSurface: 'artifact',
-          isOpen: true,
-          mode: state.mode === 'hidden' ? 'split' : state.mode,
-        };
-      });
-      return content;
-    } catch (error) {
-      console.warn('[ChatPanel] Failed to hydrate target artifact eagerly:', error);
-      return null;
-    }
+    const inFlightHydration =
+      artifactDetailHydrationPromisesRef.current.get(initialOutputId)
+      ?? (async (): Promise<CanvasContent | null> => {
+        try {
+          console.log('[ChatPanel] route hydrate fetch start', {
+            artifactId: initialArtifactId,
+            outputId: initialOutputId,
+            sessionId,
+          });
+          const output = await api.getOutput(sessionId, initialOutputId);
+          const content = buildHydratedCanvasContent(output);
+          if (content.type === 'report') {
+            console.warn('[ChatPanel] hydrated route artifact detail', {
+              artifactId: content.id,
+              outputId: initialOutputId,
+              isHydrationStub: content.isHydrationStub,
+              hasFullMarkdown: Boolean(content.data.full_markdown),
+              hasReportMarkdown: Boolean(content.data.report_markdown),
+              sectionsLen: Array.isArray(content.data.sections) ? content.data.sections.length : null,
+              currentVersionIndex: content.currentVersionIndex,
+            });
+          }
+          useCanvasStore.setState((state) => {
+            const targetIndex = state.contents.findIndex(
+              (item) =>
+                item.id === initialArtifactId
+                || item.id === content.id
+                || item.sourceOutputId === initialOutputId,
+            );
+            const nextContents =
+              targetIndex >= 0
+                ? state.contents.map((item, index) => (
+                  index === targetIndex
+                    ? {
+                        ...content,
+                        hasNewVersion: item.hasNewVersion ?? content.hasNewVersion,
+                      }
+                    : item
+                ))
+                : [...state.contents, content];
+            const resolvedIndex = nextContents.findIndex(
+              (item) =>
+                item.id === initialArtifactId
+                || item.id === content.id
+                || item.sourceOutputId === initialOutputId,
+            );
+            return {
+              contents: nextContents,
+              activeContentIndex:
+                resolvedIndex >= 0 ? resolvedIndex : state.activeContentIndex,
+              activeSurface: 'artifact',
+              isOpen: true,
+              mode: state.mode === 'hidden' ? 'split' : state.mode,
+            };
+          });
+          console.log('[ChatPanel] route hydrate applied', {
+            artifactId: content.id,
+            outputId: initialOutputId,
+            contentsCount: useCanvasStore.getState().contents.length,
+            activeContentIndex: useCanvasStore.getState().activeContentIndex,
+            isOpen: useCanvasStore.getState().isOpen,
+          });
+          if (initialArtifactId && initialOutputId) {
+            canonicalRouteArtifactKeysRef.current.add(`${initialArtifactId}::${initialOutputId}`);
+          }
+          return content;
+        } catch (error) {
+          console.warn('[ChatPanel] Failed to hydrate target artifact eagerly:', error);
+          return null;
+        } finally {
+          artifactDetailHydrationPromisesRef.current.delete(initialOutputId);
+        }
+      })();
+
+    artifactDetailHydrationPromisesRef.current.set(initialOutputId, inFlightHydration);
+    return await inFlightHydration;
   }, [initialArtifactId, initialOutputId, sessionId]);
 
   useEffect(() => {
@@ -814,19 +1029,78 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
 
     useCanvasStore.setState((state) => ({
+      ...(state.contents.some(
+        (content) =>
+          content.id === initialArtifactId
+          || (initialOutputId ? content.sourceOutputId === initialOutputId : false),
+      )
+        ? null
+        : (() => {
+            const placeholder = buildRoutePlaceholderContent(initialArtifactId, initialOutputId);
+            if (!placeholder) {
+              return null;
+            }
+            return {
+              contents: [...state.contents, placeholder],
+              activeContentIndex: state.contents.length,
+            };
+          })()),
       activeSurface: 'artifact',
       isOpen: true,
       mode: state.mode === 'hidden' ? 'split' : state.mode,
     }));
 
     const focusArtifact = async () => {
-      await hydrateTargetArtifact();
       let targetIndex = useCanvasStore
         .getState()
         .contents.findIndex((content) => content.id === initialArtifactId);
+
+      const currentTarget =
+        targetIndex >= 0 ? useCanvasStore.getState().contents[targetIndex] : null;
+
+      if (contentNeedsDetailHydration(currentTarget, initialOutputId)) {
+        const hydratedTarget = await hydrateTargetArtifact();
+        if (hydratedTarget) {
+          targetIndex = useCanvasStore
+            .getState()
+            .contents.findIndex((content) => content.id === hydratedTarget.id);
+        }
+      }
+
       if (targetIndex === -1) {
-        const hydratedContents = await hydrateArtifacts();
-        targetIndex = hydratedContents.findIndex((content) => content.id === initialArtifactId);
+        initialRouteCompactHydrationRequestedRef.current = true;
+        const hydratedContents = await hydrateArtifacts(false, { compact: true });
+        targetIndex = hydratedContents.findIndex(
+          (content) => content.id === initialArtifactId
+        );
+      }
+      const resolvedTarget =
+        targetIndex >= 0 ? useCanvasStore.getState().contents[targetIndex] : null;
+      if (targetIndex >= 0) {
+        useCanvasStore.setState((state) => ({
+          activeContentIndex: targetIndex,
+          activeSurface: 'artifact',
+          isOpen: true,
+          mode: state.mode === 'hidden' ? 'split' : state.mode,
+        }));
+
+        // If the route targets a compact hydration stub, render it immediately
+        // and let the later background hydration effect replace it with the
+        // full payload. This avoids blocking initial navigation on a large
+        // report/detail fetch.
+        if (contentNeedsDetailHydration(resolvedTarget, initialOutputId)) {
+          void hydrateTargetArtifact();
+        }
+        return;
+      }
+
+      if (targetIndex === -1) {
+        const hydratedTarget = await hydrateTargetArtifact();
+        if (hydratedTarget) {
+          targetIndex = useCanvasStore
+            .getState()
+            .contents.findIndex((content) => content.id === hydratedTarget.id);
+        }
       }
       if (targetIndex === -1) {
         return;
@@ -840,15 +1114,24 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     };
 
     void focusArtifact();
-  }, [hydrateArtifacts, hydrateTargetArtifact, initialArtifactId]);
+  }, [hydrateArtifacts, hydrateTargetArtifact, initialArtifactId, initialOutputId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     artifactsHydratedRef.current = false;
     artifactsHydratingPromiseRef.current = null;
-  }, [sessionId]);
+    artifactUrlSyncReadyRef.current = !(initialArtifactId || initialOutputId);
+    stubHydrationOutputIdsRef.current.clear();
+    initialRouteCompactHydrationRequestedRef.current = false;
+    canonicalRouteArtifactKeysRef.current.clear();
+    artifactDetailHydrationPromisesRef.current.clear();
+  }, [initialArtifactId, initialOutputId, sessionId]);
 
   useEffect(() => {
     if (!initialArtifactId || !initialOutputId) {
+      return;
+    }
+
+    if (initialRouteCompactHydrationRequestedRef.current) {
       return;
     }
 
@@ -859,7 +1142,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       if (cancelled) {
         return;
       }
-      void hydrateArtifacts();
+      void hydrateArtifacts(false, { compact: true });
     };
 
     if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
@@ -880,11 +1163,262 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   }, [hydrateArtifacts, initialArtifactId, initialOutputId]);
 
   useEffect(() => {
-    if (!isCanvasOpen || activeSurface !== 'artifact' || artifactsHydratedRef.current) {
+    if (
+      !isCanvasOpen
+      || activeSurface !== 'artifact'
+      || artifactsHydratedRef.current
+      || Boolean(initialArtifactId && initialOutputId)
+    ) {
       return;
     }
     void hydrateArtifacts();
-  }, [activeSurface, hydrateArtifacts, isCanvasOpen]);
+  }, [activeSurface, hydrateArtifacts, initialArtifactId, initialOutputId, isCanvasOpen]);
+
+  useEffect(() => {
+    if (!initialArtifactId || !isCanvasOpen || activeSurface !== 'artifact') {
+      return;
+    }
+
+    const routeTargetIndex = contents.findIndex(
+      (content) =>
+        content.id === initialArtifactId
+        || (initialOutputId ? content.sourceOutputId === initialOutputId : false),
+    );
+
+    if (routeTargetIndex === -1) {
+      return;
+    }
+
+    const routeTarget = contents[routeTargetIndex];
+    if (!routeTarget) {
+      return;
+    }
+
+    if (activeContentIndex !== routeTargetIndex) {
+      useCanvasStore.setState((state) => ({
+        activeContentIndex: routeTargetIndex,
+        activeSurface: 'artifact',
+        isOpen: true,
+        mode: state.mode === 'hidden' ? 'split' : state.mode,
+      }));
+      return;
+    }
+
+    if (!contentNeedsDetailHydration(routeTarget, initialOutputId)) {
+      artifactUrlSyncReadyRef.current = true;
+    }
+  }, [
+    activeContentIndex,
+    activeSurface,
+    contents,
+    initialArtifactId,
+    initialOutputId,
+    isCanvasOpen,
+  ]);
+
+  useEffect(() => {
+    if (!isCanvasOpen || activeSurface !== 'artifact') {
+      return;
+    }
+
+    const activeContent = contents[activeContentIndex];
+    if (!activeContent?.sourceOutputId || !contentNeedsDetailHydration(activeContent, activeContent.sourceOutputId)) {
+      return;
+    }
+
+    const outputId = activeContent.sourceOutputId;
+    if (stubHydrationOutputIdsRef.current.has(outputId)) {
+      return;
+    }
+
+    stubHydrationOutputIdsRef.current.add(outputId);
+    let cancelled = false;
+
+    const hydrateStubArtifact = async () => {
+      try {
+        const inFlightHydration =
+          artifactDetailHydrationPromisesRef.current.get(outputId)
+          ?? (async (): Promise<CanvasContent | null> => {
+            try {
+              const output = await api.getOutput(sessionId, outputId);
+              if (cancelled) {
+                return null;
+              }
+              const hydratedContent = buildHydratedCanvasContent(output);
+              if (hydratedContent.type === 'report') {
+                console.warn('[ChatPanel] hydrated active artifact detail', {
+                  artifactId: hydratedContent.id,
+                  outputId,
+                  isHydrationStub: hydratedContent.isHydrationStub,
+                  hasFullMarkdown: Boolean(hydratedContent.data.full_markdown),
+                  hasReportMarkdown: Boolean(hydratedContent.data.report_markdown),
+                  sectionsLen: Array.isArray(hydratedContent.data.sections)
+                    ? hydratedContent.data.sections.length
+                    : null,
+                  currentVersionIndex: hydratedContent.currentVersionIndex,
+                });
+              }
+              useCanvasStore.setState((state) => {
+                const targetIndex = state.contents.findIndex((item) => item.id === activeContent.id);
+                if (targetIndex === -1) {
+                  return state;
+                }
+                const nextContents = [...state.contents];
+                nextContents[targetIndex] = {
+                  ...hydratedContent,
+                  hasNewVersion:
+                    nextContents[targetIndex].hasNewVersion ?? hydratedContent.hasNewVersion,
+                };
+                return {
+                  contents: nextContents,
+                  activeContentIndex:
+                    state.activeContentIndex === targetIndex ? targetIndex : state.activeContentIndex,
+                };
+              });
+              return hydratedContent;
+            } catch (error) {
+              console.warn('[ChatPanel] Failed to hydrate stub artifact:', error);
+              return null;
+            } finally {
+              artifactDetailHydrationPromisesRef.current.delete(outputId);
+            }
+          })();
+
+        artifactDetailHydrationPromisesRef.current.set(outputId, inFlightHydration);
+        await inFlightHydration;
+      } catch (error) {
+        console.warn('[ChatPanel] Failed to hydrate stub artifact:', error);
+      } finally {
+        stubHydrationOutputIdsRef.current.delete(outputId);
+      }
+    };
+
+    void hydrateStubArtifact();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeContentIndex, activeSurface, contents, isCanvasOpen, sessionId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const debugWindow = window as Window & {
+      __spectaRouteHydrateDebug?: unknown;
+    };
+    const routeTargetIndex = initialArtifactId
+      ? contents.findIndex(
+          (content) =>
+            content.id === initialArtifactId
+            || (initialOutputId ? content.sourceOutputId === initialOutputId : false),
+        )
+      : -1;
+    const routeTarget =
+      routeTargetIndex >= 0 && routeTargetIndex < contents.length
+        ? contents[routeTargetIndex]
+        : null;
+    debugWindow.__spectaRouteHydrateDebug = {
+      initialArtifactId,
+      initialOutputId,
+      isCanvasOpen,
+      activeSurface,
+      activeContentIndex,
+      contentsCount: contents.length,
+      contents: contents.map((content) => ({
+        id: content.id,
+        type: content.type,
+        sourceOutputId: content.sourceOutputId ?? null,
+        isHydrationStub: Boolean(content.isHydrationStub),
+        hasFullMarkdown:
+          content.type === 'report' ? Boolean(content.data.full_markdown) : null,
+        hasReportMarkdown:
+          content.type === 'report' ? Boolean(content.data.report_markdown) : null,
+        sectionsLen:
+          content.type === 'report' && Array.isArray(content.data.sections)
+            ? content.data.sections.length
+            : 0,
+        currentVersionIndex: content.currentVersionIndex,
+      })),
+      routeTargetIndex,
+      routeTarget: routeTarget
+        ? {
+            id: routeTarget.id,
+            sourceOutputId: routeTarget.sourceOutputId ?? null,
+            isHydrationStub: Boolean(routeTarget.isHydrationStub),
+            needsDetailHydration: contentNeedsDetailHydration(routeTarget, initialOutputId),
+            hasFullMarkdown:
+              routeTarget.type === 'report' ? Boolean(routeTarget.data.full_markdown) : null,
+            hasReportMarkdown:
+              routeTarget.type === 'report' ? Boolean(routeTarget.data.report_markdown) : null,
+            sectionsLen:
+              routeTarget.type === 'report' && Array.isArray(routeTarget.data.sections)
+                ? routeTarget.data.sections.length
+                : 0,
+            currentVersionIndex: routeTarget.currentVersionIndex,
+          }
+        : null,
+    };
+  }, [
+    activeContentIndex,
+    activeSurface,
+    contents,
+    initialArtifactId,
+    initialOutputId,
+    isCanvasOpen,
+  ]);
+
+  useEffect(() => {
+    if (!isCanvasOpen || activeSurface !== 'artifact') {
+      return;
+    }
+
+    const activeContent = contents[activeContentIndex];
+    if (!activeContent?.id) {
+      return;
+    }
+
+    const currentArtifactParam = searchParams.get('artifact_id');
+    const currentOutputParam = searchParams.get('output_id');
+
+    const nextArtifactId = activeContent.id;
+    const nextOutputId = activeContent.sourceOutputId ?? null;
+    const routeTargetsActiveArtifact = currentArtifactParam === nextArtifactId;
+    const routeMatchesActiveArtifact =
+      routeTargetsActiveArtifact
+      && (currentOutputParam ?? null) === nextOutputId
+    ;
+
+    if (!artifactUrlSyncReadyRef.current) {
+      if (routeTargetsActiveArtifact || (!currentArtifactParam && !currentOutputParam)) {
+        artifactUrlSyncReadyRef.current = true;
+      } else {
+        return;
+      }
+    }
+
+    if (routeMatchesActiveArtifact) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.set('artifact_id', nextArtifactId);
+    if (nextOutputId) {
+      nextParams.set('output_id', nextOutputId);
+    } else {
+      nextParams.delete('output_id');
+    }
+
+    router.replace(`/chat/${sessionId}?${nextParams.toString()}`, { scroll: false });
+  }, [
+    activeContentIndex,
+    activeSurface,
+    contents,
+    initialArtifactId,
+    isCanvasOpen,
+    router,
+    searchParams,
+    sessionId,
+  ]);
 
   // Listen for recall-reload-artifacts: reload surviving artifacts from DB after recall
   useEffect(() => {
@@ -1542,7 +2076,10 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       if (option) {
         addMessage({ type: 'user', content: option.label });
       }
-      sendConfirmation(pendingConfirmation.requestId, { optionId });
+      sendConfirmation(pendingConfirmation.requestId, {
+        optionId,
+        label: option?.label || resolveKnownConfirmationLabel(optionId) || optionId,
+      });
       setPendingConfirmation(null);
       startExecution();
       return;

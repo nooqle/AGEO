@@ -133,13 +133,18 @@ export function buildOutputCardsFromApiMessage(msg: ApiMessage, sessionId: strin
     (typeof metadata?.output_id === 'string' ? metadata.output_id : undefined) ||
     (typeof (parsed as UnknownRecord).output_id === 'string' ? (parsed as UnknownRecord).output_id as string : undefined) ||
     `${sessionId}_${msg.output_type}`;
+  const artifactId =
+    (typeof metadata?.artifact_id === 'string' ? metadata.artifact_id : undefined) ||
+    (typeof (parsed as UnknownRecord).artifact_id === 'string' ? (parsed as UnknownRecord).artifact_id as string : undefined) ||
+    outputId;
 
   const isSiteConfidenceReport =
     typeof (parsed as UnknownRecord).report_kind === 'string'
     && (parsed as UnknownRecord).report_kind === 'site_confidence_report';
 
   return [{
-    id: outputId,
+    id: artifactId,
+    outputId,
     type: outputType,
     title: isSiteConfidenceReport
       ? '官网 AI 友好度'
@@ -148,9 +153,16 @@ export function buildOutputCardsFromApiMessage(msg: ApiMessage, sessionId: strin
   } satisfies OutputCard];
 }
 
-export function buildRealtimeOutputCard(outputId: string, outputType: CanvasContentType, outputTitle: string, preview: { description?: string; itemCount?: number; metrics?: Record<string, CanvasPreviewMetricValue> }): OutputCard {
+export function buildRealtimeOutputCard(
+  artifactId: string,
+  outputId: string,
+  outputType: CanvasContentType,
+  outputTitle: string,
+  preview: { description?: string; itemCount?: number; metrics?: Record<string, CanvasPreviewMetricValue> },
+): OutputCard {
   return {
-    id: outputId,
+    id: artifactId,
+    outputId,
     type: outputType,
     title: outputTitle,
     preview: {

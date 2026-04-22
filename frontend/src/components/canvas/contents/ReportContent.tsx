@@ -55,11 +55,14 @@ function getCanonicalSections(content: ReportCanvasContent): CanonicalSection[] 
 function getFullMarkdown(content: ReportCanvasContent, sections: CanonicalSection[]): string {
   const bodySections = sections.filter((section) => section.section_name !== 'header');
   if (bodySections.length > 0) {
-    return bodySections
+    const sectionMarkdown = bodySections
       .map((section) => (typeof section.markdown === 'string' ? section.markdown.trim() : ''))
       .filter(Boolean)
       .join('\n\n')
       .trim();
+    if (sectionMarkdown) {
+      return sectionMarkdown;
+    }
   }
   if (typeof content.data.full_markdown === 'string' && content.data.full_markdown.trim()) {
     return content.data.full_markdown.trim();
@@ -188,15 +191,45 @@ function MarkdownDocument({ markdown }: { markdown: string }) {
   );
 }
 
-function MissingCanonicalReport() {
+function MissingCanonicalReport({
+  debug,
+  isHydrationStub = false,
+}: {
+  debug?: Record<string, string>;
+  isHydrationStub?: boolean;
+}) {
+  if (isHydrationStub) {
+    return (
+      <section
+        className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-8 md:px-8 md:py-10"
+        style={{ borderColor: 'var(--border-subtle)' }}
+        {...debug}
+      >
+        <div className="space-y-4 text-[15px] leading-8 text-[var(--text-primary)]">
+          <div
+            className="h-2 w-28 animate-pulse rounded-full"
+            style={{ backgroundColor: 'var(--bg-secondary)' }}
+          />
+          <div className="space-y-2">
+            <p>报告加载中，请稍候...</p>
+            <p className="text-[var(--text-secondary)]">
+              正在补全最新报告内容并打开右侧画布。
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section
       className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-6 md:px-8 md:py-8"
       style={{ borderColor: 'var(--border-subtle)' }}
+      {...debug}
     >
       <div className="space-y-3 text-[15px] leading-8 text-[var(--text-primary)]">
-        <p>当前报告产物缺失 canonical `full_markdown / sections`，已阻止旧报告 fallback 渲染。</p>
-        <p>需要回到后端 A5 canonical pipeline 重新生成报告。</p>
+        <p>当前报告内容不完整，暂时无法正常展示。</p>
+        <p>请重新生成一次分析报告后再查看。</p>
       </div>
     </section>
   );
@@ -214,12 +247,41 @@ export function ReportContent({ content, printMode = false }: { content: ReportC
   const sections = getCanonicalSections(content);
   const markdown = getFullMarkdown(content, sections);
   const metrics = getSummaryMetrics(sections);
-  const headline = content.data.title || content.data.headline || 'GEO 评估报告';
+  const headline = content.data.title || content.data.headline || '分析报告';
+  const eyebrow =
+    content.category === 'scenario' ? '用户场景分析报告' : '品牌全景分析报告';
   const subtitle =
     content.data.subtitle ||
     content.data.executive_summary ||
-    '本页只渲染后端输出的 canonical GEO 报告，不再拼接旧版 report_v2。';
+    '这里展示的是本次分析生成的最新报告内容。';
   const updatedAt = formatUpdatedAt(content.data.updated_at);
+  const isMissingCanonicalMarkdown = !markdown;
+  const fallbackDebugAttributes = isMissingCanonicalMarkdown
+    ? {
+        'data-debug-fallback': '1',
+        'data-debug-artifact-id': content.id,
+        'data-debug-source-output-id': content.sourceOutputId || '',
+        'data-debug-is-hydration-stub': content.isHydrationStub ? '1' : '0',
+        'data-debug-has-full-markdown': content.data.full_markdown ? '1' : '0',
+        'data-debug-has-report-markdown': content.data.report_markdown ? '1' : '0',
+        'data-debug-sections-len': Array.isArray(content.data.sections)
+          ? String(content.data.sections.length)
+          : '0',
+      }
+    : undefined;
+
+  if (isMissingCanonicalMarkdown) {
+    console.warn('[ReportContent] missing canonical markdown', {
+      title: headline,
+      artifactId: content.id,
+      sourceOutputId: content.sourceOutputId,
+      isHydrationStub: content.isHydrationStub,
+      hasFullMarkdown: Boolean(content.data.full_markdown),
+      hasReportMarkdown: Boolean(content.data.report_markdown),
+      sectionsLen: Array.isArray(content.data.sections) ? content.data.sections.length : null,
+      contentKeys: Object.keys(content.data || {}).slice(0, 40),
+    });
+  }
 
   return (
     <ReportPage className="w-full max-w-[1320px] space-y-6">
@@ -228,7 +290,7 @@ export function ReportContent({ content, printMode = false }: { content: ReportC
         style={{ borderColor: 'var(--border-subtle)' }}
       >
         <div className="text-[12px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
-          {content.category === 'scenario' ? 'GEO 场景分析报告' : 'GEO 全景分析报告'}
+          {eyebrow}
         </div>
         <h1 className="mt-3 text-[38px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
           {headline}
@@ -243,7 +305,14 @@ export function ReportContent({ content, printMode = false }: { content: ReportC
 
       <SummaryMetricStrip rows={metrics} />
 
-      {markdown ? <MarkdownDocument markdown={markdown} /> : <MissingCanonicalReport />}
+      {markdown ? (
+        <MarkdownDocument markdown={markdown} />
+      ) : (
+        <MissingCanonicalReport
+          debug={fallbackDebugAttributes}
+          isHydrationStub={content.isHydrationStub}
+        />
+      )}
     </ReportPage>
   );
 }

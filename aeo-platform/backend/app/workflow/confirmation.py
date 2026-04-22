@@ -13,6 +13,20 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
+    "view_questions": "先查看问题内容",
+    "still_empty": "问题列表仍未显示",
+    "table_import_question_list": "确认导入问题列表",
+    "table_import_question_list_merge": "整合导入",
+    "table_import_question_list_replace": "替换导入",
+    "table_import_brand_info": "更新品牌/竞品信息",
+    "table_import_link_list": "作为链接清单继续",
+    "table_import_cancel": "暂不导入",
+    "run_answer_fetch": "先执行答案抓取",
+    "run_supplemental_fetch": "补采上一轮失败项",
+    "run_analysis_report": "重新生成分析报告",
+}
+
 
 @dataclass
 class ConfirmationResolution:
@@ -21,6 +35,167 @@ class ConfirmationResolution:
     user_content: str
     user_decisions: dict[str, Any]
     state_updates: dict[str, Any]
+
+
+def resolve_known_confirmation_label(option_id: str | None) -> str | None:
+    normalized = str(option_id or "").strip()
+    if not normalized:
+        return None
+    return _KNOWN_CONFIRMATION_LABELS.get(normalized)
+
+
+def _build_uploaded_question_items(result: dict[str, Any]) -> list[dict[str, str]]:
+    payload = result.get("normalized_payload") or {}
+    questions = payload.get("questions") or []
+    items: list[dict[str, str]] = []
+    for index, item in enumerate(questions, start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        items.append(
+            {
+                "id": str(item.get("id") or index),
+                "text": text,
+                "category": str(item.get("category") or "上传问题").strip() or "上传问题",
+                "intent": str(item.get("intent") or "").strip(),
+                "stage": str(item.get("stage") or "").strip(),
+            }
+        )
+    return items
+
+
+def build_table_import_preview(result: dict[str, Any], *, limit: int = 3) -> str:
+    source_file = result.get("source_file") or {}
+    source_name = str(source_file.get("name") or "当前表格").strip() or "当前表格"
+    questions = _build_uploaded_question_items(result)
+    if not questions:
+        return source_name
+
+    preview_lines = [
+        f"{index}. {item['text']}" for index, item in enumerate(questions[:limit], start=1)
+    ]
+    remaining = len(questions) - len(preview_lines)
+    if remaining > 0:
+        preview_lines.append(f"...另外还有 {remaining} 条问题")
+
+    return f"{source_name}，共识别到 {len(questions)} 条有效问题：\n" + "\n".join(
+        preview_lines
+    )
+
+
+def build_table_import_question_list_artifact(
+    result: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    questions = _build_uploaded_question_items(result)
+    source_file = result.get("source_file") or {}
+    item_count = len(questions)
+    return (
+        "问题列表",
+        {
+            "questions": questions,
+            "generationMode": "上传问题预览",
+            "sourceFile": source_file or None,
+            "preview_description": f"本次上传共识别到 {item_count} 条问题，请先确认问题内容是否正确。",
+            "itemCount": item_count,
+        },
+    )
+
+
+def build_table_import_confirmation_payload(
+    result: dict[str, Any],
+    *,
+    include_view_option: bool = True,
+) -> tuple[str, list[dict[str, str]], str]:
+    table_kind = result.get("table_kind")
+    if table_kind == "question_list":
+        import_intent = (result.get("import_intent") or {}).get("mode")
+        preview = build_table_import_preview(result)
+        view_option = (
+            [
+                {
+                    "id": "view_questions",
+                    "label": "先查看问题内容",
+                    "description": "先打开右侧问题列表，确认识别出的上传问题",
+                }
+            ]
+            if include_view_option
+            else []
+        )
+        if import_intent == "unspecified":
+            return (
+                f"{preview}\n\n当前会话里已经有一版上传问题。请确认这次是整合到上一版，还是替换上一版。",
+                [
+                    *view_option,
+                    {
+                        "id": "table_import_question_list_merge",
+                        "label": "整合导入",
+                        "description": "保留上一版上传问题，并追加本次新问题",
+                    },
+                    {
+                        "id": "table_import_question_list_replace",
+                        "label": "替换导入",
+                        "description": "放弃上一版上传问题，只保留本次新问题",
+                    },
+                    {
+                        "id": "table_import_cancel",
+                        "label": "暂不导入",
+                        "description": "保留当前结果，不执行本次导入",
+                    },
+                ],
+                "确认问题列表导入",
+            )
+        return (
+            f"{preview}\n\n是否将这些问题作为 A3 问题列表导入？确认后我会先更新问题列表，再继续后续流程。",
+            [
+                *view_option,
+                {
+                    "id": "table_import_question_list",
+                    "label": "确认导入问题列表",
+                    "description": "先更新 A3 交付物，再继续后续抓取流程",
+                },
+                {
+                    "id": "table_import_cancel",
+                    "label": "暂不导入",
+                    "description": "保留当前结果，不执行本次导入",
+                },
+            ],
+            "确认问题列表导入",
+        )
+    if table_kind == "brand_competitor_info":
+        return (
+            "我已识别到这是一份品牌/竞品信息表。确认后会先更新当前 A1 上下文，再继续后续流程。",
+            [
+                {
+                    "id": "table_import_brand_info",
+                    "label": "更新品牌/竞品信息",
+                    "description": "先更新 A1 交付物，再回到后续流程",
+                },
+                {
+                    "id": "table_import_cancel",
+                    "label": "暂不更新",
+                    "description": "保留当前上下文，不执行本次导入",
+                },
+            ],
+            "确认品牌信息导入",
+        )
+    return (
+        "我已识别到这是一份链接清单。确认后会先整理为链接交付物，再继续后续来源分析。",
+        [
+            {
+                "id": "table_import_link_list",
+                "label": "作为链接清单继续",
+                "description": "先生成链接清单交付物，再继续后续分析",
+            },
+            {
+                "id": "table_import_cancel",
+                "label": "暂不继续",
+                "description": "保留当前流程，不执行本次导入",
+            },
+        ],
+        "确认链接清单导入",
+    )
 
 
 def resolve_confirmation_selection(
@@ -151,7 +326,11 @@ def resolve_confirmation_selection(
             resolved_user_content = "用户选择暂不导入本次表格"
             logger.info("[LangGraph] Inline confirmation: table_import_cancel")
         else:
-            resolved_user_content = str(selection.get("label", opt_id))
+            resolved_user_content = str(
+                selection.get("label")
+                or resolve_known_confirmation_label(opt_id)
+                or opt_id
+            )
             logger.info("[LangGraph] Inline confirmation: optionId=%s", opt_id)
     elif isinstance(selection, str) and selection in ("聚焦画像分析", "开始场景细化分析"):
         clear_question_import_state()

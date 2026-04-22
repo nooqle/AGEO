@@ -116,6 +116,20 @@ function sortArtifactContents(contents: CanvasContent[]): CanvasContent[] {
   });
 }
 
+function hasCanonicalReportData(content: CanvasContent): boolean {
+  if (content.type !== 'report') {
+    return false;
+  }
+
+  const data = content.data;
+  return (
+    (typeof data.full_markdown === 'string' && data.full_markdown.trim().length > 0)
+    || (typeof data.report_markdown === 'string' && data.report_markdown.trim().length > 0)
+    || (Array.isArray(data.sections) && data.sections.length > 0)
+    || (typeof data.content === 'string' && data.content.trim().length > 0)
+  );
+}
+
 function shouldPreserveArtifactFocus(
   state: Pick<CanvasState, 'isOpen' | 'contents' | 'activeContentIndex' | 'activeSurface'>,
 ): boolean {
@@ -245,6 +259,38 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     if (existingIndex !== -1) {
       // Same ID exists — merge as new version
       const existing = state.contents[existingIndex];
+      const incomingIsStub = Boolean(content.isHydrationStub);
+      const shouldPreserveCanonicalExisting =
+        incomingIsStub
+        && existing.type === 'report'
+        && content.type === 'report'
+        && existing.sourceOutputId
+        && content.sourceOutputId
+        && existing.sourceOutputId === content.sourceOutputId
+        && hasCanonicalReportData(existing);
+
+      if (shouldPreserveCanonicalExisting) {
+        const newContents = [...state.contents];
+        newContents[existingIndex] = {
+          ...existing,
+          linkedMessageId: content.linkedMessageId ?? existing.linkedMessageId,
+          relatedMessageId: content.relatedMessageId || existing.relatedMessageId,
+          outputSequence: content.outputSequence ?? existing.outputSequence,
+          hasNewVersion: existing.hasNewVersion,
+        } as CanvasContent;
+        return {
+          contents: newContents,
+          activeContentIndex: shouldPreserveArtifactFocus(state)
+            ? state.activeContentIndex
+            : existingIndex,
+          isOpen: true,
+          mode: state.mode === 'hidden' ? 'split' : state.mode,
+          activeSurface: shouldPreserveArtifactFocus(state)
+            ? state.activeSurface
+            : 'artifact',
+        };
+      }
+
       const oldVersion: ContentVersion = {
         versionNumber: (existing.versions?.length ?? 0) + 1,
         timestamp: existing.createdAt?.toISOString?.() || new Date().toISOString(),

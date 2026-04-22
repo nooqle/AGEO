@@ -1,6 +1,7 @@
 """Message service for managing conversation messages."""
 
 import json
+import re
 from typing import Any, List
 from uuid import UUID
 
@@ -8,6 +9,50 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.message import Message, MessageRole, MessageType
+
+_KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
+    "view_questions": "先查看问题内容",
+    "still_empty": "问题列表仍未显示",
+    "table_import_question_list": "确认导入问题列表",
+    "table_import_question_list_merge": "整合导入",
+    "table_import_question_list_replace": "替换导入",
+    "table_import_brand_info": "更新品牌/竞品信息",
+    "table_import_link_list": "作为链接清单继续",
+    "table_import_cancel": "暂不导入",
+    "run_answer_fetch": "先执行答案抓取",
+    "run_supplemental_fetch": "补采上一轮失败项",
+    "run_analysis_report": "重新生成分析报告",
+}
+
+
+def _resolve_known_confirmation_label(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    return _KNOWN_CONFIRMATION_LABELS.get(normalized)
+
+
+def _normalize_user_visible_history_text(text: str | None) -> str:
+    normalized = str(text or "")
+    if not normalized:
+        return ""
+    normalized = re.sub(r"\[\]\(@mark_[^)]+\)", "", normalized)
+    normalized = re.sub(r"\bhunyuan\b", "元宝", normalized, flags=re.IGNORECASE)
+    known_label = _resolve_known_confirmation_label(normalized)
+    return known_label or normalized
+
+
+def _normalize_user_visible_output_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return _normalize_user_visible_history_text(value)
+    if isinstance(value, list):
+        return [_normalize_user_visible_output_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _normalize_user_visible_output_payload(item)
+            for key, item in value.items()
+        }
+    return value
 
 
 def _looks_like_corrupted_question_marks(text: str | None) -> bool:
@@ -70,6 +115,47 @@ def _extract_preview_item_count(payload: dict[str, Any]) -> int | None:
     return None
 
 
+def _compact_summary_metrics_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+
+    compact: dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, (int, float, bool)):
+            compact[key] = value
+            continue
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed and len(trimmed) <= 160:
+                compact[key] = trimmed
+            continue
+        if isinstance(value, list):
+            primitive_items = [
+                item
+                for item in value
+                if isinstance(item, (str, int, float, bool))
+                and len(str(item)) <= 120
+            ]
+            if primitive_items:
+                compact[key] = primitive_items[:6]
+            continue
+        if isinstance(value, dict):
+            nested = {
+                nested_key: nested_value
+                for nested_key, nested_value in value.items()
+                if isinstance(nested_value, (int, float, bool))
+                or (
+                    isinstance(nested_value, str)
+                    and nested_value.strip()
+                    and len(nested_value.strip()) <= 120
+                )
+            }
+            if nested:
+                compact[key] = nested
+
+    return compact or None
+
+
 def _compact_output_payload(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
@@ -94,7 +180,7 @@ def _compact_output_payload(
         if isinstance(value, (str, int, float, bool)) and value != "":
             compact[key] = value
 
-    summary_metrics = _extract_summary_metrics(payload)
+    summary_metrics = _compact_summary_metrics_payload(_extract_summary_metrics(payload))
     if summary_metrics:
         compact["summary_metrics"] = summary_metrics
 
@@ -105,21 +191,69 @@ def _compact_output_payload(
     return compact
 
 
+def _compact_history_metadata(
+    metadata: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict):
+        return metadata
+
+    compact: dict[str, Any] = {}
+    for key in (
+        "attachments",
+        "canEdit",
+        "canRollback",
+        "relatedOutputIds",
+        "executionTime",
+        "confirmation_label",
+        "selected_option_label",
+        "resolved_label",
+        "output_id",
+        "artifact_kind",
+        "report_kind",
+    ):
+        value = metadata.get(key)
+        if value is not None:
+            compact[key] = value
+
+    layers = metadata.get("layers")
+    if isinstance(layers, dict) and layers:
+        compact["layers"] = layers
+
+    report_summary = metadata.get("report_summary")
+    if isinstance(report_summary, dict) and report_summary:
+        compact["report_summary"] = report_summary
+
+    metrics = metadata.get("metrics")
+    if isinstance(metrics, dict):
+        summary_metrics = _compact_summary_metrics_payload(
+            _extract_summary_metrics({"metrics": metrics})
+        )
+        if summary_metrics:
+            compact["summary_metrics"] = summary_metrics
+
+    return compact
+
+
 def _sanitize_history_message_content(
     *,
     role: str,
     content: str | None,
     metadata: dict[str, Any] | None,
 ) -> str:
-    normalized = str(content or "")
+    normalized = _normalize_user_visible_history_text(content)
     if not _looks_like_corrupted_question_marks(normalized):
         return normalized
 
     if metadata:
+        selected_option_id = metadata.get("selected_option_id")
+        if isinstance(selected_option_id, str):
+            resolved_label = _resolve_known_confirmation_label(selected_option_id)
+            if resolved_label:
+                return resolved_label
         for key in ("confirmation_label", "selected_option_label", "resolved_label"):
             value = metadata.get(key)
             if isinstance(value, str) and value.strip():
-                return value.strip()
+                return _normalize_user_visible_history_text(value.strip())
 
     if role == "user":
         return "用户已确认继续"
@@ -250,6 +384,11 @@ class MessageService:
         """
         metadata = json.loads(message.extra_metadata) if message.extra_metadata else None
         role = "agent" if message.role == MessageRole.ASSISTANT else message.role.value
+        history_metadata = (
+            _compact_history_metadata(metadata)
+            if compact_output and isinstance(metadata, dict)
+            else metadata
+        )
 
         result = {
             "id": str(message.id),
@@ -259,15 +398,18 @@ class MessageService:
             "content": _sanitize_history_message_content(
                 role=role,
                 content=message.content,
-                metadata=metadata if isinstance(metadata, dict) else None,
+                metadata=history_metadata if isinstance(history_metadata, dict) else None,
             ),
             "sequence": message.sequence,
-            "metadata": metadata,
+            "metadata": history_metadata,
             "created_at": message.created_at.isoformat(),
         }
         if message.type == MessageType.OUTPUT:
             result["output_type"] = message.output_type
-            parsed_output = json.loads(message.output_data) if message.output_data else None
+            parsed_output = (
+                json.loads(message.output_data) if message.output_data else None
+            )
+            parsed_output = _normalize_user_visible_output_payload(parsed_output)
             if compact_output and isinstance(parsed_output, dict):
                 result["output_data"] = _compact_output_payload(parsed_output)
             else:

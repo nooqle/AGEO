@@ -91,6 +91,34 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function looksLikeDomainLikeBrand(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+    return true;
+  }
+  if (/\s/.test(normalized)) {
+    return false;
+  }
+  if (!normalized.includes('.')) {
+    return false;
+  }
+  return /^([a-z0-9-]+\.)+[a-z]{2,}(\/.*)?$/i.test(normalized);
+}
+
+function resolveSemanticBrandName(value: unknown): string | null {
+  if (!isNonEmptyString(value)) {
+    return null;
+  }
+  const normalized = value.trim();
+  if (looksLikeDomainLikeBrand(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -143,6 +171,40 @@ function inferBrandFromHeadline(headline?: string): string | null {
   return null;
 }
 
+function inferBrandFromContentTitle(title?: string): string | null {
+  if (!isNonEmptyString(title)) {
+    return null;
+  }
+
+  const normalized = title.trim();
+  const separators = [
+    '官网 AI 友好度分析报告',
+    '官网AI友好度分析报告',
+    '品牌全景分析报告',
+    '品牌全景分析',
+    '用户场景细分分析报告',
+    '用户场景细分分析',
+    '过往资料表',
+    '品牌档案',
+    'AI答案抓取结果',
+    '问题列表',
+  ];
+
+  for (const separator of separators) {
+    const index = normalized.indexOf(separator);
+    if (index <= 0) {
+      continue;
+    }
+    const candidate = normalized.slice(0, index).replace(/[|｜\-—–\s]+$/g, '').trim();
+    const resolved = resolveSemanticBrandName(candidate);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return null;
+}
+
 export function getDeliverableName(content: CanvasContent): SupportedDeliverable | null {
   if (content.type === 'fetchResults') {
     return 'AI答案抓取';
@@ -174,12 +236,18 @@ export function getDeliverableName(content: CanvasContent): SupportedDeliverable
 export function inferBrandName(content: CanvasContent, allContents: CanvasContent[]): string {
   const active = resolveActiveContent(content);
 
-  if (active.type === 'dataTable' && isNonEmptyString(active.data.brand_name)) {
-    return active.data.brand_name.trim();
+  if (active.type === 'dataTable') {
+    const brandName = resolveSemanticBrandName(active.data.brand_name);
+    if (brandName) {
+      return brandName;
+    }
   }
 
-  if (active.type === 'report' && isNonEmptyString(active.data.brand_name)) {
-    return active.data.brand_name.trim();
+  if (active.type === 'report') {
+    const brandName = resolveSemanticBrandName(active.data.brand_name);
+    if (brandName) {
+      return brandName;
+    }
   }
 
   if (active.type === 'report') {
@@ -188,17 +256,28 @@ export function inferBrandName(content: CanvasContent, allContents: CanvasConten
       return fromHeadline;
     }
   }
+  const fromActiveTitle = inferBrandFromContentTitle(active.title);
+  if (fromActiveTitle) {
+    return fromActiveTitle;
+  }
 
   for (const candidate of allContents) {
     const resolved = resolveActiveContent(candidate);
-    if (resolved.type === 'report' && isNonEmptyString(resolved.data.brand_name)) {
-      return resolved.data.brand_name.trim();
+    if (resolved.type === 'report') {
+      const brandName = resolveSemanticBrandName(resolved.data.brand_name);
+      if (brandName) {
+        return brandName;
+      }
     }
     if (resolved.type === 'report') {
       const fromHeadline = inferBrandFromHeadline(resolved.data.headline);
       if (fromHeadline) {
         return fromHeadline;
       }
+    }
+    const fromTitle = inferBrandFromContentTitle(resolved.title);
+    if (fromTitle) {
+      return fromTitle;
     }
   }
 
@@ -320,9 +399,9 @@ export function buildExportDescriptor(content: CanvasContent, allContents: Canva
 }
 
 export function buildExportFileName(descriptor: ExportDescriptor, format: SupportedExportFormat): string {
+  const brandAndDeliverable = `${sanitizeFilenamePart(descriptor.brandName)}${sanitizeFilenamePart(descriptor.deliverableName)}`;
   return [
-    sanitizeFilenamePart(descriptor.brandName),
-    sanitizeFilenamePart(descriptor.deliverableName),
+    brandAndDeliverable,
     descriptor.timestamp,
     `v${descriptor.version}`,
   ].join('_') + `.${format}`;

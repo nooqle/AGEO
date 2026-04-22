@@ -6,6 +6,7 @@ import { useCanvasStore } from '@/stores/canvasStore';
 import { CanvasContentType } from '@/types/canvas';
 import { isConfidenceCanvasReport, isSiteConfidenceCanvasReport } from '@/adapters/exportArtifacts';
 import { cn } from '@/lib/cn';
+import { getPlatformDisplayName, normalizePublicPlatformId } from '@/config/platformLabel';
 import {
   RiFileChartLine,
   RiBarChartBoxLine,
@@ -61,6 +62,95 @@ function getReportMeta(content: CanvasContent) {
   return { icon: RiPieChartLine, label: '分析' };
 }
 
+function formatCompactDuplicateSuffix(createdAt: Date | string | undefined): string {
+  if (!createdAt) {
+    return '';
+  }
+  const parsed = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+  const hours = `${parsed.getHours()}`.padStart(2, '0');
+  const minutes = `${parsed.getMinutes()}`.padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function normalizeArtifactTitle(title: string): string {
+  return title
+    .replace(/\s+/g, ' ')
+    .replace(/^[^|｜]+[|｜]\s*/, '')
+    .replace(/（[^）]*最新[^）]*）/g, '')
+    .trim();
+}
+
+function extractPlatformToken(title: string): string | null {
+  const normalizedTitle = normalizeArtifactTitle(title);
+  const match = normalizedTitle.match(/deepseek|kimi|doubao|yuanbao|hunyuan|豆包|元宝|深度求索|腾讯元宝/i);
+  if (!match) {
+    return null;
+  }
+  const token = match[0];
+  if (/豆包/.test(token)) {
+    return '豆包';
+  }
+  if (/元宝|腾讯元宝/.test(token)) {
+    return '元宝';
+  }
+  if (/deepseek|深度求索/i.test(token)) {
+    return 'DeepSeek';
+  }
+  if (/kimi/i.test(token)) {
+    return 'Kimi';
+  }
+  const normalized = normalizePublicPlatformId(token);
+  return getPlatformDisplayName(normalized || token);
+}
+
+function getCompactArtifactCopy(content: CanvasContent): { primary: string; secondary: string } {
+  const meta = getReportMeta(content);
+  const normalizedTitle = normalizeArtifactTitle(content.title || '');
+  const platformToken = extractPlatformToken(normalizedTitle);
+
+  if (content.type === 'report' && isSiteConfidenceCanvasReport(content)) {
+    return { primary: '官网', secondary: '报告' };
+  }
+
+  if (platformToken) {
+    return {
+      primary: platformToken,
+      secondary:
+        content.type === 'dataTable'
+          ? '数据'
+          : content.type === 'fetchResults'
+            ? '抓取'
+            : meta.label,
+    };
+  }
+
+  if (normalizedTitle.includes('问题')) {
+    return { primary: '问题', secondary: '列表' };
+  }
+  if (normalizedTitle.includes('资料')) {
+    return { primary: '资料', secondary: '表' };
+  }
+  if (normalizedTitle.includes('抓取')) {
+    return { primary: '抓取', secondary: '结果' };
+  }
+  if (content.type === 'dataTable') {
+    return { primary: '数据', secondary: '表格' };
+  }
+  if (content.type === 'questionList') {
+    return { primary: '问题', secondary: '列表' };
+  }
+  if (content.type === 'fetchResults') {
+    return { primary: '抓取', secondary: '结果' };
+  }
+  if (content.type === 'workflow') {
+    return { primary: '品牌', secondary: '档案' };
+  }
+  return { primary: meta.label, secondary: '' };
+}
+
 interface ArtifactNavProps {
   compact?: boolean;
 }
@@ -69,6 +159,11 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
   const { contents, activeContentIndex, setActiveContentById, openCanvas } = useCanvasStore();
   const prevCountRef = useRef(contents.length);
   const [glowIds, setGlowIds] = useState<Set<string>>(new Set());
+  const titleCounts = contents.reduce((acc, content) => {
+    const next = acc.get(content.title) ?? 0;
+    acc.set(content.title, next + 1);
+    return acc;
+  }, new Map<string, number>());
 
   useEffect(() => {
     if (contents.length > prevCountRef.current) {
@@ -106,13 +201,19 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
           const Icon = meta.icon;
           const isActive = index === activeContentIndex;
           const hasGlow = glowIds.has(content.id);
+          const compactCopy = getCompactArtifactCopy(content);
+          const hasDuplicateTitle = (titleCounts.get(content.title) ?? 0) > 1;
+          const duplicateSuffix = hasDuplicateTitle
+            ? formatCompactDuplicateSuffix(content.createdAt)
+            : '';
+          const secondaryText = duplicateSuffix || compactCopy.secondary;
 
           return (
             <button
               key={content.id}
               onClick={() => handleClick(content.id)}
               className={cn(
-                'relative w-10 h-10 flex flex-col items-center justify-center rounded-lg cursor-pointer transition-colors',
+                'relative w-12 h-12 px-1 flex flex-col items-center justify-center rounded-lg cursor-pointer transition-colors',
                 hasGlow && 'glow-border'
               )}
               style={{
@@ -126,11 +227,19 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
                 style={{ color: isActive ? 'var(--color-primary)' : 'var(--text-secondary)' }}
               />
               <span
-                className="text-[12px] mt-0.5 leading-none"
+                className="mt-0.5 text-[10px] leading-none font-medium"
                 style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)' }}
               >
-                {meta.label}
+                {compactCopy.primary}
               </span>
+              {secondaryText && (
+                <span
+                  className="mt-0.5 text-[9px] leading-none"
+                  style={{ color: 'var(--text-tertiary)' }}
+                >
+                  {secondaryText}
+                </span>
+              )}
               {content.hasNewVersion && !isActive && (
                 <span
                   className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full"

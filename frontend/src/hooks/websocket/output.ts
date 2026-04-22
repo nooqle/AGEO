@@ -27,6 +27,10 @@ export function buildOutputReadyPayload(data: WebSocketEventData, currentAgentMe
     : (typeof data.title === 'string' ? data.title : '\u5206\u6790\u7ed3\u679c');
   const fallbackId = `output_${outputType}_${outputTitle}_${relatedMessageId || 'global'}`;
   const outputId = typeof data.output_id === 'string' ? data.output_id : fallbackId;
+  const artifactId =
+    typeof data.artifact_id === 'string' && data.artifact_id
+      ? data.artifact_id
+      : outputId;
   const outputData = normalizeCanvasData(outputType, data.data) as CanvasContentDataMap['report'];
   const preview = normalizePreviewData(isRecord(data.data) ? data.data : {});
   const createdAt =
@@ -37,12 +41,18 @@ export function buildOutputReadyPayload(data: WebSocketEventData, currentAgentMe
     typeof data.sequence === 'number' && Number.isFinite(data.sequence)
       ? data.sequence
       : undefined;
+  const isHydrationStub = Boolean(
+    isRecord(data.data) && (
+      data.data.hydration_stub === true
+      || data.data.hydration_stub === 'true'
+    ),
+  );
 
   return {
     outputId,
     targetMessageId: relatedMessageId || currentAgentMessageId,
     content: {
-      id: outputId,
+      id: artifactId,
       type: outputType,
       title: outputTitle,
       data: outputData,
@@ -50,11 +60,13 @@ export function buildOutputReadyPayload(data: WebSocketEventData, currentAgentMe
       relatedMessageId,
       versions: [],
       currentVersionIndex: -1,
+      isHydrationStub,
+      sourceOutputId: outputId,
       outputSequence,
       linkedMessageId: currentAgentMessageId || linkedMessageId,
       category,
       scenarioLabel,
     } as CanvasContent,
-    card: buildRealtimeOutputCard(outputId, outputType, outputTitle, preview),
+    card: buildRealtimeOutputCard(artifactId, outputId, outputType, outputTitle, preview),
   };
 }

@@ -539,7 +539,9 @@ export function useWebSocket(sessionId: string | null) {
           const state = useConversationStore.getState();
           const msg = state.messages.find((m) => m.id === targetMessageId);
           const existingCards = msg?.outputCards || [];
-          const alreadyExists = existingCards.some((card) => card.id === payload.outputId);
+          const alreadyExists = existingCards.some(
+            (card) => card.id === payload.content.id || card.outputId === payload.outputId,
+          );
           const nextContent = payload.content.type === 'report' && isSupersededA5FailureText(msg?.content)
             ? `${payload.card.title}已生成，右侧画布已更新。`
             : msg?.content;

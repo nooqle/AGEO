@@ -15,6 +15,7 @@ router = APIRouter(prefix="/sessions/{session_id}/outputs", tags=["outputs"])
 @router.get("")
 async def get_outputs(
     session_id: UUID,
+    compact: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -24,7 +25,7 @@ async def get_outputs(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = OutputService(db)
-    outputs = await service.get_outputs(session_id)
+    outputs = await service.get_outputs(session_id, compact=compact)
     return outputs
 
 

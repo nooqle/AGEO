@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useConversationStore } from '@/stores/conversationStore';
@@ -29,6 +30,71 @@ export function CanvasPanel() {
   const isAgentExecuting = useConversationStore((s) => s.isAgentExecuting);
   const hasArtifacts = contents.length > 0;
   const hasBrowserWorkspace = Boolean(browserWorkspace);
+
+  const rawContent =
+    activeSurface === 'browser' && browserWorkspace
+      ? browserWorkspace
+      : contents[activeContentIndex] ?? browserWorkspace ?? null;
+
+  // When viewing a historical version, overlay the version's data
+  const activeContent = (() => {
+    if (!rawContent) return rawContent;
+    const vIdx = rawContent.currentVersionIndex;
+    const versions = rawContent.versions || [];
+    if (vIdx >= 0 && vIdx < versions.length) {
+      return { ...rawContent, data: versions[vIdx].data } as typeof rawContent;
+    }
+    return rawContent;
+  })();
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const reportLike =
+      activeContent && activeContent.type === 'report'
+        ? {
+            id: activeContent.id,
+            sourceOutputId: activeContent.sourceOutputId ?? null,
+            isHydrationStub: Boolean(activeContent.isHydrationStub),
+            currentVersionIndex: activeContent.currentVersionIndex,
+            hasFullMarkdown: Boolean(activeContent.data.full_markdown),
+            hasReportMarkdown: Boolean(activeContent.data.report_markdown),
+            sectionsLen: Array.isArray(activeContent.data.sections)
+              ? activeContent.data.sections.length
+              : 0,
+            title: activeContent.title,
+          }
+        : null;
+    (window as Window & { __spectaCanvasDebug?: unknown }).__spectaCanvasDebug = {
+      activeSurface,
+      activeContentIndex,
+      rawContentId: rawContent?.id ?? null,
+      rawContentType: rawContent?.type ?? null,
+      rawContentSourceOutputId:
+        rawContent && 'sourceOutputId' in rawContent ? rawContent.sourceOutputId ?? null : null,
+      rawCurrentVersionIndex: rawContent?.currentVersionIndex ?? null,
+      activeContentId: activeContent?.id ?? null,
+      activeContentType: activeContent?.type ?? null,
+      contents: contents.map((content) => ({
+        id: content.id,
+        type: content.type,
+        sourceOutputId: content.sourceOutputId ?? null,
+        isHydrationStub: Boolean(content.isHydrationStub),
+        currentVersionIndex: content.currentVersionIndex,
+        hasFullMarkdown:
+          content.type === 'report' ? Boolean(content.data.full_markdown) : null,
+        hasReportMarkdown:
+          content.type === 'report' ? Boolean(content.data.report_markdown) : null,
+        sectionsLen:
+          content.type === 'report' && Array.isArray(content.data.sections)
+            ? content.data.sections.length
+            : 0,
+        title: content.title,
+      })),
+      activeReport: reportLike,
+    };
+  }, [activeContent, activeContentIndex, activeSurface, contents, rawContent]);
 
   if (!isOpen) {
     return null;
@@ -68,22 +134,6 @@ export function CanvasPanel() {
       </div>
     );
   }
-
-  const rawContent =
-    activeSurface === 'browser' && browserWorkspace
-      ? browserWorkspace
-      : contents[activeContentIndex] ?? browserWorkspace ?? null;
-
-  // When viewing a historical version, overlay the version's data
-  const activeContent = (() => {
-    if (!rawContent) return rawContent;
-    const vIdx = rawContent.currentVersionIndex;
-    const versions = rawContent.versions || [];
-    if (vIdx >= 0 && vIdx < versions.length) {
-      return { ...rawContent, data: versions[vIdx].data } as typeof rawContent;
-    }
-    return rawContent;
-  })();
 
   const renderContent = () => {
     if (!activeContent) return null;

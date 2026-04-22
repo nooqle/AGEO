@@ -45,7 +45,12 @@ from app.workflow.runtime_policy_executor import (
     clear_runtime_policy_fields,
     get_user_visible_runtime_label,
 )
-from app.workflow.confirmation import resolve_confirmation_selection
+from app.workflow.confirmation import (
+    build_table_import_confirmation_payload,
+    build_table_import_question_list_artifact,
+    resolve_confirmation_selection,
+    resolve_known_confirmation_label,
+)
 from app.workflow.fetch_recovery import extract_latest_fetch_recovery_plan_from_state
 from app.workflow.brand_state import seed_effective_brand_profile
 
@@ -140,6 +145,29 @@ def _looks_like_corrupted_question_marks(text: str | None) -> bool:
         return False
     question_mark_count = sum(1 for char in meaningful_chars if char == "?")
     return question_mark_count / len(meaningful_chars) >= 0.6
+
+
+def _extract_selected_option_id(
+    *,
+    selection: str | dict[str, Any] | None,
+    option_id: str | None,
+) -> str:
+    if isinstance(selection, dict):
+        return str(selection.get("optionId") or option_id or "")
+    if isinstance(option_id, str):
+        return option_id
+    return ""
+
+
+def _extract_selected_option_label(
+    *,
+    selection: str | dict[str, Any] | None,
+) -> str:
+    if isinstance(selection, dict):
+        raw_label = selection.get("label")
+        if isinstance(raw_label, str):
+            return raw_label.strip()
+    return ""
 
 
 def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
@@ -2180,6 +2208,147 @@ async def handle_confirmation_langgraph(
                 session_id,
             )
 
+        selected_option_id = _extract_selected_option_id(
+            selection=selection if isinstance(selection, (str, dict)) else None,
+            option_id=option_id if isinstance(option_id, str) else "",
+        )
+        selected_option_label = _extract_selected_option_label(
+            selection=selection if isinstance(selection, (str, dict)) else None,
+        )
+
+        if selected_option_id in {"view_questions", "still_empty"}:
+            table_intake_result = state_values.get("table_intake_result") or {}
+            if table_intake_result.get("table_kind") != "question_list":
+                await _emit_session_error(
+                    session_id,
+                    {
+                        "message": "当前没有可预览的上传问题，请重新上传表格后再试。",
+                        "recoverable": True,
+                    },
+                )
+                return
+
+            user_content = (
+                selected_option_label
+                or resolve_known_confirmation_label(selected_option_id)
+                or user_content
+            )
+            history = list(state_values.get("orchestrator_history", []))
+            history.append({"role": "user", "content": user_content})
+
+            preview_message = "这是本次上传识别到的问题列表，请先查看右侧问题内容。确认无误后，再选择是否导入。"
+            confirm_message, confirm_options, step_name = build_table_import_confirmation_payload(
+                table_intake_result,
+                include_view_option=False,
+            )
+            preview_request_id = (
+                f"table_import_preview_{int(datetime.now().timestamp() * 1000)}"
+            )
+            pending_confirmation = {
+                "request_id": preview_request_id,
+                "step_id": "orchestrator",
+                "step_name": step_name,
+                "message": confirm_message,
+                "options": confirm_options,
+            }
+
+            async with AsyncSessionLocal() as db:
+                message_service = MessageService(db)
+                saved_user_message = await message_service.save_message(
+                    session_id=UUID(session_id),
+                    role="user",
+                    content=user_content,
+                    metadata={
+                        "tool_mode": state_values.get("selected_tool_mode"),
+                        "confirmation_label": user_content,
+                        "selected_option_id": selected_option_id,
+                        "selected_option_label": user_content,
+                    },
+                )
+                await message_service.save_message(
+                    session_id=UUID(session_id),
+                    role="agent",
+                    content=preview_message,
+                    metadata={
+                        "confirmation_request": {
+                            "request_id": preview_request_id,
+                            "type": "step_confirmation",
+                            "message": confirm_message,
+                            "options": confirm_options,
+                            "step_id": "orchestrator",
+                            "step_name": step_name,
+                        },
+                    },
+                )
+                await db.commit()
+
+            await session_event_publisher.emit_to_session(
+                session_id,
+                "user_message_ack",
+                {
+                    "message_id": str(saved_user_message["id"]),
+                    "content": user_content,
+                },
+            )
+            from app.workflow.events import save_and_send_artifact, send_reply_event
+
+            await send_reply_event(
+                session_id,
+                preview_message,
+                is_delta=False,
+                is_new_round=True,
+            )
+            await send_reply_event(session_id, "", is_complete=True)
+
+            artifact_title, artifact_data = build_table_import_question_list_artifact(
+                table_intake_result
+            )
+            await save_and_send_artifact(
+                session_id=session_id,
+                output_type="questionList",
+                title=artifact_title,
+                data=artifact_data,
+                artifact_key=f"{session_id}_tableImportQuestionPreview",
+            )
+
+            await session_event_publisher.emit_to_session(
+                session_id,
+                "inline_confirmation",
+                {
+                    "request_id": preview_request_id,
+                    "message": confirm_message,
+                    "options": confirm_options,
+                    "type": "simple",
+                },
+            )
+            await session_event_publisher.emit_to_session(
+                session_id,
+                "confirmation_request",
+                {
+                    "request_id": preview_request_id,
+                    "type": "step_confirmation",
+                    "message": confirm_message,
+                    "options": confirm_options,
+                    "allow_text_input": True,
+                    "step_id": "orchestrator",
+                    "step_name": step_name,
+                },
+            )
+
+            await workflow.aupdate_state(
+                config,
+                {
+                    "orchestrator_history": history,
+                    "awaiting_user": True,
+                    "execution_status": "awaiting_user",
+                    "pending_confirmation": pending_confirmation,
+                    "latest_user_input": user_content,
+                    "orchestrator_reply": preview_message,
+                },
+                as_node="wait_for_user",
+            )
+            return
+
         resumed_run_id = await _submit_resume_run(state_values.get("task_id"))
         if state_values.get("task_id") and resumed_run_id is None:
             raise RuntimeError(
@@ -2224,16 +2393,6 @@ async def handle_confirmation_langgraph(
                 user_decisions = active_resolution.user_decisions
             else:
                 user_content = "用户确认继续"
-        selected_option_id = ""
-        selected_option_label = ""
-        if isinstance(selection, dict):
-            selected_option_id = str(selection.get("optionId") or option_id or "")
-            raw_option_label = selection.get("label")
-            if isinstance(raw_option_label, str):
-                selected_option_label = raw_option_label.strip()
-        elif isinstance(option_id, str):
-            selected_option_id = option_id
-
         if selected_option_id == "run_answer_fetch":
             user_content = "用户选择先执行答案抓取"
             state_values["next_required_action"] = build_next_required_action(

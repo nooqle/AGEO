@@ -147,6 +147,8 @@ export function OutputCard({ card }: OutputCardProps) {
       data: previewData,
       createdAt: new Date(),
       relatedMessageId: '',
+      sourceOutputId: card.outputId,
+      isHydrationStub: true,
       versions: [],
       currentVersionIndex: -1,
     };

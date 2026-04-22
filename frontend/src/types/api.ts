@@ -33,6 +33,7 @@ export interface Output {
   type: string;
   title: string;
   data: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
   category?: string;
   sequence?: number;
   created_at: string;

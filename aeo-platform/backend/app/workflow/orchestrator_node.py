@@ -6,6 +6,7 @@ to dynamically decide which Agent to invoke, replacing the hardcoded pipeline.
 
 import json
 import logging
+import re
 from datetime import datetime
 from textwrap import dedent
 from time import perf_counter
@@ -72,6 +73,9 @@ from app.workflow.fetch_recovery import (
     is_supplemental_fetch_request,
     normalize_question_targets,
     prefers_browser_fetch_mode,
+)
+from app.workflow.confirmation import (
+    build_table_import_confirmation_payload,
 )
 from app.workflow.nodes_streaming import async_wrap_sync_gen
 
@@ -743,16 +747,64 @@ def _build_panorama_step_intro(
 def _format_knowledge_lookup_match(match: dict[str, Any]) -> str:
     parts = [f"类型={match.get('source_type', 'unknown')}"]
     if match.get("platform"):
-        parts.append(f"平台={match['platform']}")
+        parts.append(f"平台={_normalize_public_knowledge_text(match['platform'])}")
     if match.get("competitor_name"):
         parts.append(f"竞品={match['competitor_name']}")
     if match.get("domain"):
         parts.append(f"域名={match['domain']}")
     if match.get("question_text"):
-        parts.append(f"问题={_compact_text(match['question_text'], 48)}")
-    snippet = _compact_text(match.get("snippet"), 120)
-    title = _compact_text(match.get("title"), 48)
+        parts.append(
+            f"问题={_compact_text(_normalize_public_knowledge_text(match['question_text']), 48)}"
+        )
+    snippet = _compact_text(_normalize_public_knowledge_text(match.get("snippet")), 120)
+    title = _compact_text(_normalize_public_knowledge_text(match.get("title")), 48)
     return f"- {title}（{'，'.join(parts)}）: {snippet}"
+
+
+def _normalize_public_knowledge_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\[\]\(@mark_[^)]+\)", "", text)
+    text = re.sub(r"\bhunyuan\b", "元宝", text, flags=re.IGNORECASE)
+    return " ".join(text.split())
+
+
+def _extract_exact_datetime_scope_text(text: str) -> str | None:
+    match = re.search(
+        r"(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}(?:日)?\s+\d{1,2}:\d{2}(?::\d{2})?)",
+        str(text or ""),
+    )
+    if not match:
+        return None
+    return match.group(1).replace("年", "-").replace("月", "-").replace("日", "")
+
+
+def _contains_non_negated_keyword(text: str, keywords: list[str]) -> bool:
+    normalized = str(text or "")
+    negative_prefixes = ("不要", "别", "不需要", "无需", "不是")
+    for keyword in keywords:
+        if keyword not in normalized:
+            continue
+        if any(f"{prefix}{keyword}" in normalized for prefix in negative_prefixes):
+            continue
+        return True
+    return False
+
+
+def _is_precise_history_query(text: str) -> bool:
+    normalized = str(text or "")
+    if not _extract_exact_datetime_scope_text(normalized):
+        return False
+    if not any(
+        keyword in normalized
+        for keyword in ("只查", "只查询", "只看", "这一轮", "这轮", "这一批", "这个时间点")
+    ):
+        return False
+    return any(
+        keyword in normalized
+        for keyword in ("过往回答", "回答", "答案", "记录", "资料表", "数据表")
+    )
 
 
 def _format_knowledge_group(group: dict[str, Any]) -> str:
@@ -1347,6 +1399,15 @@ def _infer_knowledge_fallback_tool(
             compare_by = "question"
         return ("knowledge_compare", {"compare_by": compare_by, "limit": 8})
 
+    if _is_precise_history_query(latest_user_message):
+        args: dict[str, Any] = {
+            "query": latest_user_message,
+            "limit": 200,
+        }
+        if any(keyword in latest_user_message for keyword in ("回答", "答案", "过往回答")):
+            args["source_types"] = ["fetch_answer"]
+        return ("knowledge_export", args)
+
     if any(keyword in text for keyword in export_keywords):
         return (
             "knowledge_export",
@@ -1356,7 +1417,7 @@ def _infer_knowledge_fallback_tool(
             },
         )
 
-    if any(keyword in text for keyword in aggregate_keywords):
+    if _contains_non_negated_keyword(latest_user_message, aggregate_keywords):
         group_by = "source_type"
         if "平台" in latest_user_message:
             group_by = "platform"
@@ -2269,8 +2330,22 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
             evidence_lines = "\n".join(
                 _format_knowledge_lookup_match(match) for match in matches[:3]
             )
+            query = str(result.get("query") or _get_latest_user_message(state) or "")
+            exact_scope = _extract_exact_datetime_scope_text(query)
+            platform_label = _normalize_public_knowledge_text(
+                top.get("platform") or result.get("platform") or ""
+            )
+            scope_prefix = ""
+            if exact_scope:
+                scope_prefix = (
+                    f"已按 {exact_scope}"
+                    f"{f' 的{platform_label}平台' if platform_label else ''}"
+                    f" 命中 {len(matches)} 条记录。"
+                    "不要再说无法精确筛选。"
+                )
             return (
-                f"过往资料检索完成，共命中 {len(matches)} 条记录。"
+                f"过往资料检索完成。{scope_prefix}"
+                f"{'' if scope_prefix else f'共命中 {len(matches)} 条记录。'}"
                 f"最高相关来源类型：{top.get('source_type', 'unknown')}。"
                 "\n可直接使用的证据如下：\n"
                 f"{evidence_lines}\n"
@@ -2412,7 +2487,7 @@ def _build_knowledge_export_completion_reply(result: dict[str, Any]) -> str:
 
     item_count = int(result.get("item_count") or 0)
     period = str(result.get("analysis_period") or "").strip()
-    description = str(result.get("description") or "").strip()
+    description = _normalize_public_knowledge_text(result.get("description") or "")
     summary_metrics = result.get("summary_metrics") or {}
     platform_count = summary_metrics.get("覆盖平台数")
     source_type_count = summary_metrics.get("来源类型")
@@ -2742,7 +2817,7 @@ async def _force_table_import_confirmation(
     """Deterministically ask for confirmation after table intake."""
 
     result = state.get("table_intake_result") or {}
-    defense_msg, defense_options, step_name = _build_table_import_confirmation_payload(
+    defense_msg, defense_options, step_name = build_table_import_confirmation_payload(
         result
     )
 
@@ -2806,110 +2881,6 @@ async def _force_table_import_confirmation(
             },
             "agent_retry_counts": current_retry_counts,
         },
-    )
-
-
-def _build_table_import_preview(result: dict[str, Any], *, limit: int = 3) -> str:
-    source_file = result.get("source_file") or {}
-    source_name = str(source_file.get("name") or "当前表格").strip() or "当前表格"
-    payload = result.get("normalized_payload") or {}
-    questions = [
-        str(item.get("text") or "").strip()
-        for item in (payload.get("questions") or [])
-        if isinstance(item, dict) and str(item.get("text") or "").strip()
-    ]
-    if not questions:
-        return source_name
-
-    preview_lines = [
-        f"{index}. {text}" for index, text in enumerate(questions[:limit], start=1)
-    ]
-    remaining = len(questions) - len(preview_lines)
-    if remaining > 0:
-        preview_lines.append(f"...另外还有 {remaining} 条问题")
-
-    return f"{source_name}，共识别到 {len(questions)} 条有效问题：\n" + "\n".join(
-        preview_lines
-    )
-
-
-def _build_table_import_confirmation_payload(
-    result: dict[str, Any],
-) -> tuple[str, list[dict[str, str]], str]:
-    table_kind = result.get("table_kind")
-    if table_kind == "question_list":
-        import_intent = (result.get("import_intent") or {}).get("mode")
-        preview = _build_table_import_preview(result)
-        if import_intent == "unspecified":
-            return (
-                f"{preview}\n\n当前会话里已经有一版上传问题。请确认这次是整合到上一版，还是替换上一版。",
-                [
-                    {
-                        "id": "table_import_question_list_merge",
-                        "label": "整合导入",
-                        "description": "保留上一版上传问题，并追加本次新问题",
-                    },
-                    {
-                        "id": "table_import_question_list_replace",
-                        "label": "替换导入",
-                        "description": "放弃上一版上传问题，只保留本次新问题",
-                    },
-                    {
-                        "id": "table_import_cancel",
-                        "label": "暂不导入",
-                        "description": "保留当前结果，不执行本次导入",
-                    },
-                ],
-                "确认问题列表导入",
-            )
-        return (
-            f"{preview}\n\n是否将这些问题作为 A3 问题列表导入？确认后我会先更新问题列表，再继续后续流程。",
-            [
-                {
-                    "id": "table_import_question_list",
-                    "label": "确认导入问题列表",
-                    "description": "先更新 A3 交付物，再继续后续抓取流程",
-                },
-                {
-                    "id": "table_import_cancel",
-                    "label": "暂不导入",
-                    "description": "保留当前结果，不执行本次导入",
-                },
-            ],
-            "确认问题列表导入",
-        )
-    if table_kind == "brand_competitor_info":
-        return (
-            "我已识别到这是一份品牌/竞品信息表。确认后会先更新当前 A1 上下文，再继续后续流程。",
-            [
-                {
-                    "id": "table_import_brand_info",
-                    "label": "更新品牌/竞品信息",
-                    "description": "先更新 A1 交付物，再回到后续流程",
-                },
-                {
-                    "id": "table_import_cancel",
-                    "label": "暂不更新",
-                    "description": "保留当前上下文，不执行本次导入",
-                },
-            ],
-            "确认品牌信息导入",
-        )
-    return (
-        "我已识别到这是一份链接清单。确认后会先整理为链接交付物，再继续后续来源分析。",
-        [
-            {
-                "id": "table_import_link_list",
-                "label": "作为链接清单继续",
-                "description": "先生成链接清单交付物，再继续后续分析",
-            },
-            {
-                "id": "table_import_cancel",
-                "label": "暂不继续",
-                "description": "保留当前流程，不执行本次导入",
-            },
-        ],
-        "确认链接清单导入",
     )
 
 
@@ -3335,68 +3306,6 @@ async def _route_brand_seed_without_llm(
     return _merge_command_update(command, extra_update)
 
 
-async def _route_explicit_supplemental_fetch_without_llm(
-    *,
-    state: AgentState,
-    session_id: str,
-) -> Command | None:
-    latest_user_message = _get_latest_user_message(state)
-    if not is_supplemental_fetch_request(latest_user_message):
-        return None
-
-    recovery_plan = extract_latest_fetch_recovery_plan_from_state(state)
-    question_targets = list((recovery_plan or {}).get("question_targets") or [])
-    if not question_targets:
-        return None
-
-    reply_text = "已按您的要求，仅补采上一轮失败的问题和平台，并保留已有成功结果。"
-    if prefers_browser_fetch_mode(latest_user_message):
-        reply_text = "已按您的要求，使用浏览器仅补采上一轮失败的问题和平台，并保留已有成功结果。"
-
-    logger.info(
-        "[Orchestrator] Applying explicit supplemental fetch routing: targets=%d task_id=%s",
-        len(question_targets),
-        (recovery_plan or {}).get("task_id"),
-    )
-
-    sanitized_state = _sanitize_runtime_policy_state(state)
-    history = build_orchestrator_messages(sanitized_state)
-    history.append({"role": "assistant", "content": reply_text})
-
-    await send_reply_event(
-        session_id,
-        reply_text,
-        is_delta=False,
-        is_new_round=True,
-    )
-    await send_reply_event(session_id, "", is_complete=True)
-
-    synthetic_tool_call = SimpleNamespace(
-        name="answer_fetch",
-        arguments={
-            "fetch_mode": "full",
-            "retry_failed_only": True,
-            "question_targets": question_targets,
-            "platforms": list((recovery_plan or {}).get("platforms") or []),
-            "failed_task_id": (recovery_plan or {}).get("task_id"),
-        },
-        id="explicit_supplemental_fetch_answer_fetch",
-    )
-    command = await _handle_tool_call(
-        sanitized_state,
-        session_id,
-        synthetic_tool_call,
-        reply_text,
-        history,
-    )
-    return _merge_command_update(
-        command,
-        {
-            "error_info": None,
-        },
-    )
-
-
 async def _route_agent_error_without_llm(
     state: AgentState,
     session_id: str,
@@ -3572,37 +3481,6 @@ async def orchestrator_node(state: AgentState) -> Command:
             current_retry_counts=current_retry_counts,
         )
 
-    if last_tool == "knowledge_export":
-        export_result = state.get("knowledge_export_result") or {}
-        if export_result.get("status") == "hit" and export_result.get("artifact_id"):
-            completion_reply = _build_knowledge_export_completion_reply(export_result)
-            history_with_reply = list(state.get("orchestrator_history", []) or [])
-            history_with_reply.append(
-                {"role": "assistant", "content": completion_reply}
-            )
-
-            from app.workflow.events import send_execution_complete
-
-            await send_reply_event(
-                session_id,
-                completion_reply,
-                is_delta=False,
-                is_new_round=True,
-            )
-            await send_reply_event(session_id, "", is_complete=True)
-            await send_execution_complete(session_id, "过往资料表生成完成")
-
-            return Command(
-                goto=END,
-                update={
-                    "execution_status": "completed",
-                    "awaiting_user": False,
-                    "pending_confirmation": None,
-                    "orchestrator_reply": completion_reply,
-                    "orchestrator_history": history_with_reply,
-                },
-            )
-
     confirmed_import_action = dict(state.get("confirmed_import_action") or {})
     confirmed_table_kind = str(confirmed_import_action.get("table_kind") or "")
     import_confirmed = bool(
@@ -3643,40 +3521,11 @@ async def orchestrator_node(state: AgentState) -> Command:
     if brand_seed_command is not None:
         return brand_seed_command
 
-    explicit_supplemental_fetch_command = (
-        await _route_explicit_supplemental_fetch_without_llm(
-            state=state,
-            session_id=session_id,
-        )
-    )
-    if explicit_supplemental_fetch_command is not None:
-        return explicit_supplemental_fetch_command
-
     working_state = state
     manifest = await _hydrate_knowledge_manifest(state)
     if manifest is not None:
         working_state = {**state, "knowledge_manifest": manifest}
     llm_state = _sanitize_runtime_policy_state(working_state)
-
-    authoritative_history_refresh = _infer_authoritative_history_refresh_tool(llm_state)
-    if authoritative_history_refresh is not None:
-        refresh_tool_name, refresh_tool_args = authoritative_history_refresh
-        logger.warning(
-            "[Orchestrator] Pre-LLM authoritative refresh for latest-run history query via %s args=%s",
-            refresh_tool_name,
-            refresh_tool_args,
-        )
-        return await _handle_tool_call(
-            llm_state,
-            session_id,
-            SimpleNamespace(
-                name=refresh_tool_name,
-                arguments=refresh_tool_args,
-                id=f"call_authoritative_preflight_{refresh_tool_name}",
-            ),
-            "",
-            build_orchestrator_messages(llm_state),
-        )
 
     # Build orchestrator call
     system_prompt = build_orchestrator_system_prompt(llm_state)
@@ -3875,28 +3724,6 @@ async def orchestrator_node(state: AgentState) -> Command:
                 "[Orchestrator] No tool call after stream; heuristic candidate=%s args=%s (not auto-forced)",
                 fallback_tool_name,
                 fallback_tool_args,
-            )
-
-        authoritative_history_refresh = _infer_authoritative_history_refresh_tool(
-            llm_state
-        )
-        if authoritative_history_refresh is not None:
-            refresh_tool_name, refresh_tool_args = authoritative_history_refresh
-            logger.warning(
-                "[Orchestrator] No tool call for latest-run history query; forcing authoritative refresh via %s args=%s",
-                refresh_tool_name,
-                refresh_tool_args,
-            )
-            return await _handle_tool_call(
-                llm_state,
-                session_id,
-                SimpleNamespace(
-                    name=refresh_tool_name,
-                    arguments=refresh_tool_args,
-                    id=f"call_authoritative_{refresh_tool_name}",
-                ),
-                reply_text,
-                new_history,
             )
 
         table_result = state.get("table_intake_result") or {}
@@ -4132,7 +3959,7 @@ async def _handle_tool_call(
 
         if state.get("table_intake_result") and last_tool_name == "table_intake_skill":
             result = state.get("table_intake_result") or {}
-            msg, options, step_name = _build_table_import_confirmation_payload(result)
+            msg, options, step_name = build_table_import_confirmation_payload(result)
 
         if (
             not options

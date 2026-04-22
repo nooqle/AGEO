@@ -423,8 +423,11 @@ class ApiService {
   }
 
   // Output management
-  async getOutputs(sessionId: string) {
-    return this.request<Output[]>(`/sessions/${sessionId}/outputs`);
+  async getOutputs(sessionId: string, options?: { compact?: boolean }) {
+    const params = new URLSearchParams();
+    if (options?.compact) params.set('compact', 'true');
+    const query = params.toString();
+    return this.request<Output[]>(`/sessions/${sessionId}/outputs${query ? `?${query}` : ''}`);
   }
 
   async getOutput(sessionId: string, outputId: string) {
