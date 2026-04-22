@@ -10,6 +10,7 @@ import {
   RiLoader4Line,
   RiErrorWarningLine,
 } from "@remixicon/react";
+import { getUserFacingStageLabel, sanitizeUserFacingWorkflowText } from "@/lib/workflowStageLabels";
 
 export interface ProcessStep {
   id: string;
@@ -71,15 +72,7 @@ const phaseConfig = {
 
 function formatToolName(tool?: string): string {
   if (!tool) return "";
-  const toolNames: Record<string, string> = {
-    analyze_brand_competition: "竞品分析",
-    generate_user_personas: "用户画像",
-    simulate_user_questions: "问题模拟",
-    fetch_ai_platform_answers: "数据抓取",
-    analyze_data_and_generate_report: "报告生成",
-    table_intake_skill: "表格导入理解",
-  };
-  return toolNames[tool] || tool;
+  return sanitizeUserFacingWorkflowText(getUserFacingStageLabel(tool) || tool) || tool;
 }
 
 export function ProcessTimeline({ steps, isExpanded = false, onToggle }: ProcessTimelineProps) {

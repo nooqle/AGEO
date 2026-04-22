@@ -807,6 +807,196 @@ def _is_precise_history_query(text: str) -> bool:
     )
 
 
+def _is_history_answer_content_query(text: str | None) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+
+    history_markers = (
+        "历史",
+        "过往",
+        "之前",
+        "以前",
+        "历次",
+        "上一轮",
+        "上轮",
+        "上次",
+        "最近一轮",
+    )
+    answer_markers = (
+        "回答",
+        "答案",
+        "回答内容",
+        "具体回答",
+        "具体的回答",
+        "回复内容",
+        "内容",
+        "原文",
+    )
+    compare_markers = ("对比", "比较", "变化", "趋势")
+    stats_markers = (
+        "成功率",
+        "失败率",
+        "失败数",
+        "失败平台",
+        "失败问题",
+        "失败题目",
+        "补采",
+    )
+
+    if not any(marker in normalized for marker in history_markers):
+        return False
+    if not any(marker in normalized for marker in answer_markers):
+        return False
+    if any(marker in normalized for marker in compare_markers):
+        return False
+    if any(marker in normalized for marker in stats_markers):
+        return False
+    return True
+
+
+def _is_history_answer_continuation_query(text: str | None) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+
+    continuation_markers = (
+        "完整内容",
+        "完整回答",
+        "完整回答内容",
+        "完整答案",
+        "完整回复",
+        "具体内容",
+        "原文",
+        "全文",
+    )
+    compare_markers = ("对比", "比较", "变化", "趋势")
+    stats_markers = (
+        "成功率",
+        "失败率",
+        "失败数",
+        "失败平台",
+        "失败问题",
+        "失败题目",
+        "补采",
+    )
+    if not any(marker in normalized for marker in continuation_markers):
+        return False
+    if any(marker in normalized for marker in compare_markers):
+        return False
+    if any(marker in normalized for marker in stats_markers):
+        return False
+    return True
+
+
+def _iter_recent_history_messages(
+    state: AgentState,
+    *,
+    role: str | None = None,
+    limit: int = 8,
+) -> list[str]:
+    history = list(state.get("orchestrator_history") or [])
+    items: list[str] = []
+    for item in reversed(history):
+        if role and item.get("role") != role:
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        items.append(content)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _has_recent_history_answer_followup_invite(state: AgentState) -> bool:
+    assistant_messages = _iter_recent_history_messages(state, role="assistant", limit=6)
+    invite_markers = (
+        "完整回答内容",
+        "完整回答",
+        "具体回答",
+        "完整内容",
+    )
+    return any(
+        any(marker in message for marker in invite_markers)
+        for message in assistant_messages
+    )
+
+
+def _get_recent_history_answer_basis_query(state: AgentState) -> str | None:
+    latest_user_message = _get_latest_user_message(state).strip()
+    user_messages = _iter_recent_history_messages(state, role="user", limit=6)
+    skipped_latest = False
+    for message in user_messages:
+        if not skipped_latest and message == latest_user_message:
+            skipped_latest = True
+            continue
+        if _is_history_answer_content_query(message):
+            return message
+    return None
+
+
+def _build_history_answer_export_query(
+    *,
+    latest_user_message: str,
+    basis_query: str,
+) -> str:
+    if _is_history_answer_content_query(latest_user_message):
+        return latest_user_message.strip()
+
+    normalized_basis = str(basis_query or "").strip()
+    if not normalized_basis:
+        return ""
+
+    if _is_history_answer_continuation_query(latest_user_message):
+        continuation_markers = (
+            "完整内容",
+            "完整回答",
+            "完整回答内容",
+            "完整答案",
+            "完整回复",
+            "具体内容",
+            "原文",
+            "全文",
+        )
+        if not any(marker in normalized_basis for marker in continuation_markers):
+            return f"{normalized_basis} 完整内容"
+
+    return normalized_basis
+
+
+def _resolve_bounded_history_answer_query(state: AgentState) -> str | None:
+    latest_user_message = _get_latest_user_message(state).strip()
+    if not latest_user_message or _is_current_report_follow_up(state):
+        return None
+
+    if _is_history_answer_content_query(latest_user_message):
+        return latest_user_message
+
+    if not _is_history_answer_continuation_query(latest_user_message):
+        return None
+
+    basis_query = _get_recent_history_answer_basis_query(state)
+    if basis_query:
+        return _build_history_answer_export_query(
+            latest_user_message=latest_user_message,
+            basis_query=basis_query,
+        )
+
+    if _has_recent_history_answer_followup_invite(state):
+        for result_key in ("knowledge_export_result", "knowledge_lookup_result"):
+            result = state.get(result_key) or {}
+            query = str(result.get("query") or "").strip()
+            source_types = list(result.get("source_types") or [])
+            if query and "fetch_answer" in source_types:
+                return _build_history_answer_export_query(
+                    latest_user_message=latest_user_message,
+                    basis_query=query,
+                )
+
+    return None
+
+
 def _format_knowledge_group(group: dict[str, Any]) -> str:
     sample_titles = list(group.get("sample_titles") or [])
     if not sample_titles:
@@ -1036,6 +1226,10 @@ def _has_terminal_knowledge_result(state: AgentState) -> bool:
         if isinstance(result, dict) and result.get("status") == "miss":
             return True
     return False
+
+
+def _is_bounded_history_answer_query_state(state: AgentState) -> bool:
+    return _resolve_bounded_history_answer_query(state) is not None
 
 
 def _session_was_recalled(state: AgentState | None) -> bool:
@@ -1349,6 +1543,17 @@ def _infer_knowledge_fallback_tool(
     )
     if current_uploaded_table_query:
         return None
+
+    resolved_history_answer_query = _resolve_bounded_history_answer_query(state)
+    if resolved_history_answer_query:
+        return (
+            "knowledge_export",
+            {
+                "query": resolved_history_answer_query,
+                "limit": 200,
+                "source_types": ["fetch_answer"],
+            },
+        )
 
     compare_keywords = ["对比", "比较", "变化", "趋势", "最近两次", "上次", "这次"]
     export_keywords = [
@@ -2402,11 +2607,30 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
     if tool_name == "knowledge_export":
         result = state.get("knowledge_export_result") or {}
         if result.get("status") == "hit":
+            if result.get("source_scope") == "current_import_artifact":
+                return (
+                    f"当前上传问题表已定位，共整理 {result.get('item_count', 0)} 条记录。"
+                    f"交付物标题：{result.get('title', '当前导入问题表')}。"
+                    "请向用户说明这次结果只来自当前导入表格，不包含历史资料，并提示现在可以查看或继续导出。"
+                )
             return (
                 f"过往资料表已生成，共整理 {result.get('item_count', 0)} 条记录。"
                 f"交付物标题：{result.get('title', '过往资料表')}。"
                 "数据表已经生成，请向用户说明现在可以查看，并可继续导出为 md/pdf，"
                 "同时用 1-2 句话概括本次导出的范围。"
+            )
+        if result.get("source_scope") == "current_import_artifact":
+            validation = result.get("validation") or {}
+            failure_messages = "；".join(
+                str(item.get("message") or "").strip()
+                for item in list(validation.get("failures") or [])
+                if isinstance(item, dict) and str(item.get("message") or "").strip()
+            )
+            return (
+                "当前上传问题表未生成有效结果。"
+                "请不要回退到历史资料表。"
+                + (f" 当前阻塞原因：{failure_messages}。" if failure_messages else "")
+                + "请判断是重新绑定本次导入交付物，还是提示用户重新上传/重新确认。"
             )
         return (
             "过往资料表未生成有效结果。"
@@ -2501,7 +2725,16 @@ def _build_knowledge_export_completion_reply(result: dict[str, Any]) -> str:
         detail_parts.append(f"{source_type_count} 类材料")
     detail_text = "，".join(detail_parts)
 
-    reply = f"已完成导出，当前数据表共整理 {item_count} 条记录。"
+    current_import_scope = (
+        str(result.get("source_scope") or "").strip() == "current_import_artifact"
+    )
+    title = str(result.get("title") or "").strip() or (
+        "当前导入问题表" if current_import_scope else "过往资料表"
+    )
+    if current_import_scope:
+        reply = f"已定位当前导入问题表，共整理 {item_count} 条记录。"
+    else:
+        reply = f"已完成导出，当前数据表共整理 {item_count} 条记录。"
     if detail_text:
         reply += f" 本次{detail_text}。"
     if description:
@@ -2511,6 +2744,8 @@ def _build_knowledge_export_completion_reply(result: dict[str, Any]) -> str:
             f" 当前结果较多，仅展示前 {int(result.get('export_limit') or item_count)} 条记录，"
             "如需完整导出请缩小筛选范围后重试。"
         )
+    if current_import_scope:
+        reply += f" 当前结果标题为《{title}》，且只来自本次上传表格，不包含历史资料。"
     reply += " 您可以直接在右侧继续导出为 md 或 pdf。"
     return reply
 
@@ -3306,6 +3541,148 @@ async def _route_brand_seed_without_llm(
     return _merge_command_update(command, extra_update)
 
 
+def _infer_current_import_query(state: AgentState) -> str | None:
+    current_import_artifact = state.get("current_import_artifact") or {}
+    if not str(current_import_artifact.get("artifact_id") or "").strip():
+        return None
+
+    latest_user_message = _get_latest_user_message(state)
+    if not latest_user_message:
+        return None
+
+    upload_keywords = ("上传", "导入", "附件", "表格", "问题列表", "问题内容", "问题")
+    history_keywords = ("历史", "过往", "以前", "之前", "历次")
+    if any(keyword in latest_user_message for keyword in upload_keywords) and not any(
+        keyword in latest_user_message for keyword in history_keywords
+    ):
+        return latest_user_message
+    return None
+
+
+async def _route_current_import_query_without_llm(
+    *,
+    state: AgentState,
+    session_id: str,
+) -> Command | None:
+    query = _infer_current_import_query(state)
+    if not query:
+        return None
+
+    reply_text = "我先只查看本次上传表格里识别出的内容，不混入历史资料。"
+    history = build_orchestrator_messages(_sanitize_runtime_policy_state(state))
+    history.append({"role": "assistant", "content": reply_text})
+
+    await send_reply_event(
+        session_id,
+        reply_text,
+        is_delta=False,
+        is_new_round=True,
+    )
+    await send_reply_event(session_id, "", is_complete=True)
+
+    synthetic_tool_call = SimpleNamespace(
+        name="knowledge_export",
+        arguments={
+            "query": query,
+            "source_scope": "current_import_artifact",
+            "limit": 200,
+        },
+        id="current_import_knowledge_export",
+    )
+    return await _handle_tool_call(
+        state,
+        session_id,
+        synthetic_tool_call,
+        reply_text,
+        history,
+    )
+
+
+async def _route_history_answer_query_without_llm(
+    *,
+    state: AgentState,
+    session_id: str,
+) -> Command | None:
+    resolved_query = _resolve_bounded_history_answer_query(state)
+    if not resolved_query:
+        return None
+
+    latest_user_message = _get_latest_user_message(state)
+    if _is_history_answer_continuation_query(latest_user_message):
+        reply_text = "我直接展开刚才那组历史回答的完整内容，不再重新拆成多轮检索。"
+    else:
+        reply_text = "我先按历史回答内容做一次定向筛选，再整理出你要看的具体回答，不拆成多轮重复检索。"
+    history = build_orchestrator_messages(_sanitize_runtime_policy_state(state))
+    history.append({"role": "assistant", "content": reply_text})
+
+    await send_reply_event(
+        session_id,
+        reply_text,
+        is_delta=False,
+        is_new_round=True,
+    )
+    await send_reply_event(session_id, "", is_complete=True)
+
+    synthetic_tool_call = SimpleNamespace(
+        name="knowledge_export",
+        arguments={
+            "query": resolved_query,
+            "source_types": ["fetch_answer"],
+            "limit": 200,
+        },
+        id="bounded_history_answer_export",
+    )
+    return await _handle_tool_call(
+        state,
+        session_id,
+        synthetic_tool_call,
+        reply_text,
+        history,
+    )
+
+
+async def _route_history_answer_export_completion_without_llm(
+    *,
+    state: AgentState,
+    session_id: str,
+) -> Command | None:
+    resolved_query = _resolve_bounded_history_answer_query(state)
+    if not resolved_query:
+        return None
+
+    result = state.get("knowledge_export_result") or {}
+    if (
+        not isinstance(result, dict)
+        or result.get("status") != "hit"
+        or str(result.get("source_scope") or "").strip() == "current_import_artifact"
+        or str(result.get("query") or "").strip() != resolved_query
+    ):
+        return None
+
+    reply_text = _build_knowledge_export_completion_reply(result)
+    history = build_orchestrator_messages(_sanitize_runtime_policy_state(state))
+    history.append({"role": "assistant", "content": reply_text})
+
+    await send_reply_event(
+        session_id,
+        reply_text,
+        is_delta=False,
+        is_new_round=True,
+    )
+    await send_reply_event(session_id, "", is_complete=True)
+    from app.workflow.events import send_execution_complete
+
+    await send_execution_complete(session_id, "过往资料查询完成")
+    return Command(
+        goto=END,
+        update={
+            "execution_status": "completed",
+            "orchestrator_reply": reply_text,
+            "orchestrator_history": history,
+        },
+    )
+
+
 async def _route_agent_error_without_llm(
     state: AgentState,
     session_id: str,
@@ -3521,6 +3898,29 @@ async def orchestrator_node(state: AgentState) -> Command:
     if brand_seed_command is not None:
         return brand_seed_command
 
+    current_import_command = await _route_current_import_query_without_llm(
+        state=state,
+        session_id=session_id,
+    )
+    if current_import_command is not None:
+        return current_import_command
+
+    history_answer_completion_command = (
+        await _route_history_answer_export_completion_without_llm(
+            state=state,
+            session_id=session_id,
+        )
+    )
+    if history_answer_completion_command is not None:
+        return history_answer_completion_command
+
+    history_answer_command = await _route_history_answer_query_without_llm(
+        state=state,
+        session_id=session_id,
+    )
+    if history_answer_command is not None:
+        return history_answer_command
+
     working_state = state
     manifest = await _hydrate_knowledge_manifest(state)
     if manifest is not None:
@@ -3553,6 +3953,19 @@ async def orchestrator_node(state: AgentState) -> Command:
         len(tools),
         state.get("current_skill"),
         state.get("next_action"),
+    )
+    logger.info(
+        "[Orchestrator] Stream payload summary for session %s: roles=%s",
+        session_id,
+        [
+            {
+                "role": item.get("role"),
+                "has_tool_calls": bool(item.get("tool_calls")),
+                "has_tool_call_id": bool(item.get("tool_call_id")),
+                "content_len": len(str(item.get("content") or "")),
+            }
+            for item in ([{"role": "system", "content": system_prompt}, *messages][-12:])
+        ],
     )
 
     try:
@@ -3869,7 +4282,21 @@ async def orchestrator_node(state: AgentState) -> Command:
             },
         )
     except Exception as e:
-        logger.error(f"[Orchestrator] Error: {e}", exc_info=True)
+        logger.error(
+            "[Orchestrator] Error for session %s: %s payload_roles=%s",
+            session_id,
+            e,
+            [
+                {
+                    "role": item.get("role"),
+                    "has_tool_calls": bool(item.get("tool_calls")),
+                    "has_tool_call_id": bool(item.get("tool_call_id")),
+                    "content_len": len(str(item.get("content") or "")),
+                }
+                for item in ([{"role": "system", "content": system_prompt}, *messages][-12:])
+            ],
+            exc_info=True,
+        )
         from app.workflow.events import send_error_event
 
         await send_error_event(session_id, "orchestrator", str(e), recoverable=False)
@@ -4114,6 +4541,10 @@ async def _handle_tool_call(
         )
 
     if node_name:
+        suppress_history_query_progress = (
+            effective_tool_name in _KNOWLEDGE_TOOL_NAMES
+            or effective_tool_name == "post_analysis_skill"
+        ) and _is_bounded_history_answer_query_state(state)
         requested_question_mode = tool_args.get("mode", "")
         if (
             effective_tool_name == "question_simulation"
@@ -4177,12 +4608,20 @@ async def _handle_tool_call(
                 f"[Orchestrator] Tool {retry_key} already called {current_count} times, blocking retry"
             )
             # Inject a tool_result error into history so LLM knows to offer alternatives
-            error_msg = (
-                f"{display_name}已尝试执行 {current_count} 次但未成功。"
-                f"请使用 ask_user 向用户提供建设性替代选项："
-                f"1) 跳过此步骤继续下一步 2) 手动提供所需数据 3) 用不同参数再次尝试。"
-                f"绝对不要提供'停止分析'或'取消分析'选项。"
-            )
+            if suppress_history_query_progress:
+                error_msg = (
+                    f"{display_name}已达到重复检索上限。"
+                    "不要再继续调用 knowledge_* 或 post_analysis_skill。"
+                    "请直接基于已经拿到的历史结果整理并回答用户；"
+                    "如果仍需更精确，请只要求用户补充平台、时间或问题范围。"
+                )
+            else:
+                error_msg = (
+                    f"{display_name}已尝试执行 {current_count} 次但未成功。"
+                    f"请使用 ask_user 向用户提供建设性替代选项："
+                    f"1) 跳过此步骤继续下一步 2) 手动提供所需数据 3) 用不同参数再次尝试。"
+                    f"绝对不要提供'停止分析'或'取消分析'选项。"
+                )
             new_history.append(
                 {
                     "role": "tool",
@@ -4229,15 +4668,16 @@ async def _handle_tool_call(
                 s["status"] = "in_progress"
         completed_count = sum(1 for s in workflow_steps if s["status"] == "completed")
         total_count = len(workflow_steps)
-        await send_progress_event(
-            session_id,
-            step=effective_tool_name,
-            step_name=display_name,
-            progress=completed_count / total_count,
-            message=f"正在执行：{display_name}",
-            status="running",
-            steps=workflow_steps,
-        )
+        if not suppress_history_query_progress:
+            await send_progress_event(
+                session_id,
+                step=effective_tool_name,
+                step_name=display_name,
+                progress=completed_count / total_count,
+                message=f"正在执行：{display_name}",
+                status="running",
+                steps=workflow_steps,
+            )
 
         panorama_intro = _build_panorama_step_intro(
             effective_tool_name,
@@ -4256,7 +4696,11 @@ async def _handle_tool_call(
 
         # Fallback: if LLM produced no reply text, emit a short status line
         # so the user sees something before the long-running agent starts.
-        if not reply_text.strip() and effective_tool_name != "answer_fetch":
+        if (
+            not suppress_history_query_progress
+            and not reply_text.strip()
+            and effective_tool_name != "answer_fetch"
+        ):
             FALLBACK_TEXTS = {
                 "brand_analysis": "正在收集品牌基本信息和竞品格局，请稍候...",
                 "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
@@ -4283,19 +4727,21 @@ async def _handle_tool_call(
             await send_reply_event(session_id, "", is_complete=True)
 
         # Layer 2: plan event
-        await send_plan_event(
-            session_id,
-            f"正在执行：{display_name}",
-        )
+        if not suppress_history_query_progress:
+            await send_plan_event(
+                session_id,
+                f"正在执行：{display_name}",
+            )
 
         # Layer 3: action log
-        await send_action_log_event(
-            session_id,
-            "agent_call",
-            f"调用 {display_name}...",
-            step=effective_tool_name,
-            is_complete=False,
-        )
+        if not suppress_history_query_progress:
+            await send_action_log_event(
+                session_id,
+                "agent_call",
+                f"调用 {display_name}...",
+                step=effective_tool_name,
+                is_complete=False,
+            )
 
         # Pass brand_name from tool_args if brand_analysis
         extra_updates: dict[str, Any] = {}

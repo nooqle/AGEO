@@ -32,7 +32,6 @@ import { isConfidenceCanvasReport, isSiteConfidenceCanvasReport } from '@/adapte
 import {
   exportCanvasContent,
   getCanvasContentText,
-  getCanvasExportLabel,
   isCanvasContentExportable,
   type SupportedExportFormat,
 } from '@/lib/canvasExport';
@@ -91,7 +90,6 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
       )
     : null;
   const exportable = useMemo(() => !isBrowserTakeover && isCanvasContentExportable(content), [content, isBrowserTakeover]);
-  const exportLabel = useMemo(() => getCanvasExportLabel(content), [content]);
   const canExportCsv = effectiveContent.type === 'dataTable';
 
   // Determine which linkedMessageId to use for "jump to conversation"
@@ -193,8 +191,9 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
     try {
       setExportingFormat(format);
       setExportMenuOpen(false);
-      const fileName = await exportCanvasContent(content, contents, format);
-      toast.success(`已导出 ${fileName}`);
+      await exportCanvasContent(content, contents, format);
+      const formatLabel = format === 'pdf' ? 'PDF' : format === 'md' ? 'MD' : 'CSV';
+      toast.success(`${formatLabel} 已导出`);
     } catch (error) {
       console.error('Export failed:', error);
       toast.error(error instanceof Error ? error.message : '导出失败');
@@ -415,9 +414,6 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                         导出 CSV
                       </button>
                     )}
-                    <div className="px-3 pb-2 pt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                      文件名：品牌名 + {exportLabel} + 时间 + 版本号
-                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>

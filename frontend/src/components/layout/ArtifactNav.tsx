@@ -166,8 +166,14 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
   }, new Map<string, number>());
 
   useEffect(() => {
+    if (prevCountRef.current === 0) {
+      prevCountRef.current = contents.length;
+      return;
+    }
+
     if (contents.length > prevCountRef.current) {
       const newIds = contents.slice(prevCountRef.current).map(c => c.id);
+      prevCountRef.current = contents.length;
       setGlowIds(prev => {
         const next = new Set(prev);
         newIds.forEach(id => next.add(id));
@@ -195,7 +201,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
   // Compact mode: vertical icon-only strip
   if (compact) {
     return (
-      <div className="flex flex-col items-center gap-2 px-1.5">
+      <div className="flex flex-col items-center gap-2 px-1 py-1">
         {contents.map((content, index) => {
           const meta = getReportMeta(content);
           const Icon = meta.icon;
@@ -211,14 +217,18 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
           return (
             <button
               key={content.id}
+              type="button"
               onClick={() => handleClick(content.id)}
               className={cn(
-                'relative w-12 h-12 px-1 flex flex-col items-center justify-center rounded-lg cursor-pointer transition-colors',
-                hasGlow && 'glow-border'
+                'relative w-full min-h-[58px] px-0.5 py-1.5 flex flex-col items-center justify-center rounded-xl cursor-pointer transition-colors'
               )}
               style={{
                 backgroundColor: isActive ? 'var(--bg-tertiary)' : undefined,
-                border: isActive ? '1px solid var(--border-hover)' : '1px solid transparent',
+                border: isActive
+                  ? '1px solid var(--color-primary)'
+                  : hasGlow
+                    ? '1px solid var(--border-hover)'
+                    : '1px solid transparent',
               }}
               title={content.title}
             >
@@ -277,6 +287,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
             return (
               <motion.button
                 key={content.id}
+                type="button"
                 layout
                 exit={{ opacity: 0, x: -10 }}
                 onClick={() => handleClick(content.id)}

@@ -554,6 +554,7 @@ def _build_current_artifact_items(
 
 def _build_uploaded_input_items(state: dict[str, Any]) -> tuple[RecentEvidenceItem, ...]:
     items: list[RecentEvidenceItem] = []
+    current_import_artifact = state.get("current_import_artifact") or {}
 
     pending_table_intake = state.get("pending_table_intake") or {}
     if pending_table_intake and not state.get("table_intake_result"):
@@ -605,12 +606,51 @@ def _build_uploaded_input_items(state: dict[str, Any]) -> tuple[RecentEvidenceIt
                 instruction_authority=False,
                 title=_compact_text(f"表格理解结果｜{file_name}｜{table_kind_label}", 64),
                 summary=summary,
-                artifact_ref=None,
+                artifact_ref=str(
+                    (table_intake_result.get("artifact_ref") or {}).get("artifact_id") or ""
+                ).strip()
+                or None,
                 suspicious_instruction=detect_instruction_injection(summary),
                 relevance_score=0,
                 relevance_reason="",
             )
         )
+
+    if isinstance(current_import_artifact, dict):
+        artifact_id = str(current_import_artifact.get("artifact_id") or "").strip()
+        if artifact_id:
+            title = _first_non_empty(
+                current_import_artifact.get("title"),
+                "当前导入问题列表",
+            )
+            source_file = (
+                ((state.get("table_intake_result") or {}).get("source_file") or {})
+                if isinstance(state.get("table_intake_result"), dict)
+                else {}
+            )
+            file_name = _first_non_empty(
+                source_file.get("name") if isinstance(source_file, dict) else "",
+                "",
+            )
+            item_count = _safe_int(current_import_artifact.get("item_count"))
+            summary = f"当前导入问题列表已形成正式交付物，共 {item_count} 条问题"
+            if file_name:
+                summary += f"；文件={file_name}"
+            items.append(
+                RecentEvidenceItem(
+                    source="uploaded_input",
+                    source_type="current_import_artifact",
+                    freshness="latest",
+                    trust_level="derived_summary",
+                    instruction_authority=False,
+                    title=_compact_text(title, 64),
+                    summary=summary,
+                    artifact_ref=artifact_id,
+                    suspicious_instruction=detect_instruction_injection(summary),
+                    relevance_score=0,
+                    relevance_reason="",
+                )
+            )
 
     import_source_metadata = state.get("import_source_metadata") or {}
     imported_link_count = _safe_int(import_source_metadata.get("imported_link_list_count"))
@@ -681,6 +721,9 @@ def _build_uploaded_input_items(state: dict[str, Any]) -> tuple[RecentEvidenceIt
             f"上传问题列表已形成 A3 交付物，共 {len(questions)} 条问题；导入方式={import_mode}"
             f"{file_suffix}{preview_suffix}"
         )
+        artifact_ref = ""
+        if isinstance(current_import_artifact, dict):
+            artifact_ref = str(current_import_artifact.get("artifact_id") or "").strip()
         items.append(
             RecentEvidenceItem(
                 source="uploaded_input",
@@ -690,7 +733,7 @@ def _build_uploaded_input_items(state: dict[str, Any]) -> tuple[RecentEvidenceIt
                 instruction_authority=False,
                 title="上传问题列表交付物",
                 summary=summary,
-                artifact_ref=None,
+                artifact_ref=artifact_ref or None,
                 suspicious_instruction=detect_instruction_injection(summary),
                 relevance_score=0,
                 relevance_reason="",

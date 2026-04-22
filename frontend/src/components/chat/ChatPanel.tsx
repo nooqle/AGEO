@@ -37,6 +37,7 @@ import {
   VALID_OUTPUT_TYPES,
 } from '@/adapters/chatMessage';
 import { normalizeCanvasData } from '@/hooks/websocket/canvas';
+import { resolveCanonicalArtifactIdFromOutput } from '@/lib/artifactIdentity';
 
 
 interface ChatPanelProps {
@@ -210,7 +211,6 @@ function sortOutputs(outputs: Output[]): Output[] {
 }
 
 function buildHydratedCanvasContent(output: Output): CanvasContent {
-  const artifactId = output.artifact_id || output.id;
   const rawType = typeof output.type === 'string' ? output.type : 'report';
   const canvasTypeStr = rawType.startsWith('report') ? 'report' : rawType;
   const outputType: CanvasContentType = VALID_OUTPUT_TYPES.includes(
@@ -218,6 +218,7 @@ function buildHydratedCanvasContent(output: Output): CanvasContent {
   )
     ? (canvasTypeStr as CanvasContentType)
     : 'report';
+  const artifactId = resolveCanonicalArtifactIdFromOutput(output, outputType);
   const createdAt = new Date(output.created_at);
   const normalizedData = normalizeCanvasData(
     outputType,
@@ -1175,7 +1176,12 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   }, [activeSurface, hydrateArtifacts, initialArtifactId, initialOutputId, isCanvasOpen]);
 
   useEffect(() => {
-    if (!initialArtifactId || !isCanvasOpen || activeSurface !== 'artifact') {
+    if (
+      !initialArtifactId
+      || !isCanvasOpen
+      || activeSurface !== 'artifact'
+      || artifactUrlSyncReadyRef.current
+    ) {
       return;
     }
 
@@ -1408,14 +1414,16 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       nextParams.delete('output_id');
     }
 
-    router.replace(`/chat/${sessionId}?${nextParams.toString()}`, { scroll: false });
+    if (typeof window !== 'undefined') {
+      const nextUrl = `/chat/${sessionId}?${nextParams.toString()}`;
+      window.history.replaceState(window.history.state, '', nextUrl);
+    }
   }, [
     activeContentIndex,
     activeSurface,
     contents,
     initialArtifactId,
     isCanvasOpen,
-    router,
     searchParams,
     sessionId,
   ]);

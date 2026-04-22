@@ -48,6 +48,7 @@ from app.workflow.runtime_policy_executor import (
 from app.workflow.confirmation import (
     build_table_import_confirmation_payload,
     build_table_import_question_list_artifact,
+    resolve_table_import_question_list_artifact_ref,
     resolve_confirmation_selection,
     resolve_known_confirmation_label,
 )
@@ -2300,15 +2301,21 @@ async def handle_confirmation_langgraph(
             )
             await send_reply_event(session_id, "", is_complete=True)
 
+            artifact_ref = resolve_table_import_question_list_artifact_ref(
+                session_id=session_id,
+                result=table_intake_result,
+                state_values=state_values,
+            )
             artifact_title, artifact_data = build_table_import_question_list_artifact(
-                table_intake_result
+                table_intake_result,
+                session_id=session_id,
             )
             await save_and_send_artifact(
                 session_id=session_id,
                 output_type="questionList",
                 title=artifact_title,
                 data=artifact_data,
-                artifact_key=f"{session_id}_tableImportQuestionPreview",
+                artifact_key=artifact_ref["artifact_id"],
             )
 
             await session_event_publisher.emit_to_session(
@@ -2344,6 +2351,7 @@ async def handle_confirmation_langgraph(
                     "pending_confirmation": pending_confirmation,
                     "latest_user_input": user_content,
                     "orchestrator_reply": preview_message,
+                    "current_import_artifact": artifact_ref,
                 },
                 as_node="wait_for_user",
             )

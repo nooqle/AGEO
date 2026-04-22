@@ -27,6 +27,8 @@ _KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
     "run_analysis_report": "重新生成分析报告",
 }
 
+TABLE_IMPORT_QUESTION_LIST_ARTIFACT_KIND = "table_import_question_list"
+
 
 @dataclass
 class ConfirmationResolution:
@@ -66,6 +68,49 @@ def _build_uploaded_question_items(result: dict[str, Any]) -> list[dict[str, str
     return items
 
 
+def build_table_import_question_list_artifact_id(session_id: str) -> str:
+    normalized = str(session_id or "").strip()
+    return f"{normalized}_tableImportQuestionList"
+
+
+def resolve_table_import_question_list_artifact_ref(
+    *,
+    session_id: str,
+    result: dict[str, Any] | None = None,
+    state_values: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    artifact_ref = None
+    if isinstance(result, dict):
+        artifact_ref = result.get("artifact_ref")
+    if not isinstance(artifact_ref, dict) and isinstance(state_values, dict):
+        artifact_ref = (
+            (state_values.get("import_source_metadata") or {}).get("current_import_artifact")
+            or (state_values.get("table_intake_result") or {}).get("artifact_ref")
+        )
+    if isinstance(artifact_ref, dict):
+        artifact_id = str(artifact_ref.get("artifact_id") or "").strip()
+        if artifact_id:
+            return {
+                "artifact_id": artifact_id,
+                "artifact_kind": str(
+                    artifact_ref.get("artifact_kind")
+                    or TABLE_IMPORT_QUESTION_LIST_ARTIFACT_KIND
+                ).strip()
+                or TABLE_IMPORT_QUESTION_LIST_ARTIFACT_KIND,
+                "output_type": str(artifact_ref.get("output_type") or "questionList"),
+                "title": str(artifact_ref.get("title") or "上传问题列表").strip() or "上传问题列表",
+                "item_count": int(artifact_ref.get("item_count") or 0),
+            }
+
+    return {
+        "artifact_id": build_table_import_question_list_artifact_id(session_id),
+        "artifact_kind": TABLE_IMPORT_QUESTION_LIST_ARTIFACT_KIND,
+        "output_type": "questionList",
+        "title": "上传问题列表",
+        "item_count": len(_build_uploaded_question_items(result or {})),
+    }
+
+
 def build_table_import_preview(result: dict[str, Any], *, limit: int = 3) -> str:
     source_file = result.get("source_file") or {}
     source_name = str(source_file.get("name") or "当前表格").strip() or "当前表格"
@@ -87,18 +132,32 @@ def build_table_import_preview(result: dict[str, Any], *, limit: int = 3) -> str
 
 def build_table_import_question_list_artifact(
     result: dict[str, Any],
+    *,
+    session_id: str,
 ) -> tuple[str, dict[str, Any]]:
     questions = _build_uploaded_question_items(result)
     source_file = result.get("source_file") or {}
     item_count = len(questions)
+    artifact_ref = resolve_table_import_question_list_artifact_ref(
+        session_id=session_id,
+        result=result,
+    )
     return (
-        "问题列表",
+        "上传问题列表",
         {
+            "artifact_kind": TABLE_IMPORT_QUESTION_LIST_ARTIFACT_KIND,
+            "artifact_id": artifact_ref["artifact_id"],
             "questions": questions,
             "generationMode": "上传问题预览",
             "sourceFile": source_file or None,
             "preview_description": f"本次上传共识别到 {item_count} 条问题，请先确认问题内容是否正确。",
             "itemCount": item_count,
+            "source_scope": {
+                "scope_type": "uploaded_table_question_list",
+                "source_file_id": str((source_file or {}).get("file_id") or "").strip() or None,
+                "source_file_name": str((source_file or {}).get("name") or "").strip() or None,
+                "item_count": item_count,
+            },
         },
     )
 
@@ -232,6 +291,7 @@ def resolve_confirmation_selection(
         if import_source_metadata.get("source_type") == "uploaded_table" and not (
             import_source_metadata.get("imported_links")
             or import_source_metadata.get("imported_link_list_count")
+            or import_source_metadata.get("current_import_artifact")
         ):
             import_source_metadata.pop("source_type", None)
 
@@ -414,6 +474,11 @@ def resolve_confirmation_selection(
     if decisions.get("table_import_confirmed"):
         table_intake_result = state_values.get("table_intake_result") or {}
         import_intent = table_intake_result.get("import_intent") or {}
+        artifact_ref = resolve_table_import_question_list_artifact_ref(
+            session_id=str(state_values.get("session_id") or ""),
+            result=table_intake_result,
+            state_values=state_values,
+        )
         state_updates["confirmed_import_action"] = {
             "table_kind": decisions.get("confirmed_table_kind"),
             "target_step": {
@@ -437,6 +502,7 @@ def resolve_confirmation_selection(
                 "brand_competitor_info": "brandProfile",
                 "link_list": "linkList",
             }.get(decisions.get("confirmed_table_kind"), "unknown"),
+            "artifact_ref": artifact_ref if decisions.get("confirmed_table_kind") == "question_list" else None,
         }
     elif cleared_question_import_state:
         state_updates["confirmed_import_action"] = None
