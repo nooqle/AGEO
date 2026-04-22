@@ -4,6 +4,7 @@ import type { StageResult } from '@/types/snapshot';
 import type { CanvasContentType, CanvasPreviewMetricValue } from '@/types/canvas';
 import { normalizePreviewData } from '@/hooks/websocket/canvas';
 import { findMatchingPendingActionLog } from '@/hooks/websocket/actionLog';
+import { resolveCanonicalArtifactId } from '@/lib/artifactIdentity';
 
 export const VALID_OUTPUT_TYPES: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
 
@@ -133,10 +134,17 @@ export function buildOutputCardsFromApiMessage(msg: ApiMessage, sessionId: strin
     (typeof metadata?.output_id === 'string' ? metadata.output_id : undefined) ||
     (typeof (parsed as UnknownRecord).output_id === 'string' ? (parsed as UnknownRecord).output_id as string : undefined) ||
     `${sessionId}_${msg.output_type}`;
-  const artifactId =
+  const rawArtifactId =
     (typeof metadata?.artifact_id === 'string' ? metadata.artifact_id : undefined) ||
     (typeof (parsed as UnknownRecord).artifact_id === 'string' ? (parsed as UnknownRecord).artifact_id as string : undefined) ||
     outputId;
+  const artifactId = resolveCanonicalArtifactId({
+    sessionId,
+    outputType,
+    artifactId: rawArtifactId,
+    outputId,
+    payload: parsed,
+  });
 
   const isSiteConfidenceReport =
     typeof (parsed as UnknownRecord).report_kind === 'string'

@@ -363,3 +363,655 @@
   - 证据
   - 下一步
 - 没有经过 demo 回放验证的问题，不得标记为 `已闭环`
+
+## 2026-04-22 19:04 导出弹窗 / PDF 样式子任务
+
+- 范围：
+  - 去掉导出弹窗里的文件名规则展示
+  - 去掉导出成功 toast 里的完整文件名回显
+  - 把 PDF 打印页从深色 canvas 主题收回到浅色文档主题
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`88%`
+- 已完成：
+  - [frontend/src/components/canvas/CanvasHeader.tsx](../frontend/src/components/canvas/CanvasHeader.tsx)
+    - 删除导出下拉中的“文件名：品牌名 + ...”提示
+    - 导出成功提示改为通用格式：`PDF 已导出 / MD 已导出 / CSV 已导出`
+  - [frontend/src/app/exports/print/[id]/page.tsx](../frontend/src/app/exports/print/[id]/page.tsx)
+    - 打印页强制覆盖为浅色文档变量，不再继承深色主题
+- 本地验证：
+  - `npx tsc --noEmit` -> 通过
+  - `npm run lint -- --quiet` -> 通过
+  - `npm run build` -> 通过
+- demo 部署：
+  - 备份目录：`/srv/ageo/.codex-backups/20260422-194200-nav-export-fix`
+  - 已替换：
+    - `frontend/src/components/canvas/CanvasHeader.tsx`
+    - `frontend/src/app/exports/print/[id]/page.tsx`
+  - `frontend` 已重新 `build`
+  - `ageo-frontend.service` / `ageo-backend.service` 已重启，均为 `active`
+  - 健康检查：
+    - `http://127.0.0.1:3000 -> 200`
+    - `https://demo.imspecta.com -> 200`
+- 当前 open：
+  - 还未做本机用户动作级 PDF 预览验证
+  - 还未做导出弹窗实际点击验证
+- 下一步：
+  - 用本机 Playwright 验证导出弹窗不再显示文件名，且 PDF 预览为浅色文档样式
+
+## 2026-04-22 19:20 导航切换重载 / 高亮样式子任务
+
+- 范围：
+  - 导航点击切换时不应触发整页/对话重新加载
+  - compact 导航不应整批错误点亮
+  - 高亮边框应完整、稳定
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`85%`
+- 直接根因：
+  - [frontend/src/components/chat/ChatPanel.tsx](../frontend/src/components/chat/ChatPanel.tsx)
+    - artifact 切换后直接 `router.replace` 更新 `artifact_id/output_id`，导致 App Router 重新跑页面级 searchParams 链路，体感像整页重载
+  - [frontend/src/components/layout/ArtifactNav.tsx](../frontend/src/components/layout/ArtifactNav.tsx)
+    - `prevCountRef` 在新增 artifact 时没有及时更新，导致 `glow-border` 会把整批按钮反复当成“新项”
+    - compact 导航在窄宽度里使用 glow 边框，视觉上容易出现不完整边缘
+- 已完成修正：
+  - artifact URL 同步改为 `window.history.replaceState(...)`，保留 URL 更新但不再触发 router 级导航
+  - `ArtifactNav` 修正 `prevCountRef` 更新时机
+  - compact 导航去掉破碎 glow 边缘，只保留清晰 active border
+  - artifact 导航按钮补 `type=\"button\"`
+- 本地验证：
+  - `npx tsc --noEmit` -> 通过
+  - `npm run lint -- --quiet` -> 通过
+  - `npm run build` -> 通过
+- demo 部署：
+  - 已替换：
+    - `frontend/src/components/layout/ArtifactNav.tsx`
+    - `frontend/src/components/chat/ChatPanel.tsx`
+  - 与上面同批次重建并重启
+- 当前 open：
+  - 还未做 demo live 点击验证
+  - 还未最终确认“只亮当前项”与“切换不触发页面级重载”
+- 下一步：
+  - 本机 Playwright 验证：点击多个导航时不再出现页面级重载，且只有当前项点亮
+
+## 2026-04-22 20:05 P1 Root-Cause Freeze（Issue 8 / 9 / 11 / 12 / 13 / 14，连带复核 2 / 7）
+
+- 范围：
+  - `Issue 8` 导入 6 个问题后，Artifacts 中问题为空/错内容
+  - `Issue 9` 导入成功后 ask_user 不可决策，只说“识别到 6 个问题”
+  - `Issue 11` 查询上传表格内容却扫全历史
+  - `Issue 12` 查询结果/version/title 污染导航
+  - `Issue 13` 结果里出现 `hunyuan` 而不是 `元宝`
+  - `Issue 14` 查询回来的信息维度混乱
+  - 连带复核：`Issue 2` Dashboard 指标文案错位，`Issue 7` skill 名泄露
+- 当前阶段：`解决方案阶段`
+- 当前完成度：`68%`
+- 约束：
+  - 这一阶段不改 repo-tracked 代码，只冻结根因
+  - 每个问题必须落到具体模块，不允许停留在“可能是 orchestrator / skill”
+
+### 问题矩阵
+
+| 问题 | 直接根因 | 所属链路 | 影响范围 | 所属层 |
+| --- | --- | --- | --- | --- |
+| `Issue 8` 导入问题为空/错内容 | [aeo-platform/backend/app/services/table_intake_service.py](../aeo-platform/backend/app/services/table_intake_service.py) 的 `_deterministic_classify`（`186`）和 `_header_match_score`（`504`）仍可能把“编号/问题编号”列误判为问题列；`_merge_results`（`320`）在 LLM 覆盖 `detected_columns` 后又不会重建 `normalized_payload.questions`，导致列选择与最终问题 payload 漂移 | 表格导入解析 -> 预览 artifact/A3 | 导入问题列表、后续 ask_user、A3 问题来源 | `Skill / Artifact` |
+| `Issue 9` ask_user 不可决策 | [aeo-platform/backend/app/workflow/orchestrator_node.py](../aeo-platform/backend/app/workflow/orchestrator_node.py) 的 `table_intake_skill` tool summary（`2162`）仍是“建议 ask_user”的自然语言；`_force_table_import_confirmation`（`2808`）只在无 tool call 的修复分支兜底，而不是正式的 post-table-intake 契约 | Orchestrator -> table_intake -> ask_user | 导入后无法稳定出现“查看问题内容 / 确认导入 / 暂不继续” | `Agent / Skill Contract` |
+| `Issue 11` 查刚上传表格却扫全历史 | [aeo-platform/backend/app/workflow/orchestrator_context_packets.py](../aeo-platform/backend/app/workflow/orchestrator_context_packets.py) 只把上传表格摘要成 `uploaded_input` 证据（`555`、`691`），不是 first-class artifact scope；[aeo-platform/backend/app/workflow/orchestrator_node.py](../aeo-platform/backend/app/workflow/orchestrator_node.py) 的 `current_uploaded_table_query`（`1338`）只是单点 guard；一旦落入 [aeo-platform/backend/app/services/knowledge_workspace_service.py](../aeo-platform/backend/app/services/knowledge_workspace_service.py) 的 `export_table`，查询只按历史 `KnowledgeRecord` 范围导出 | 上传输入 -> 查询路由 -> knowledge_export | “查刚上传内容”变成“查品牌历史全量” | `Context / Artifact / Validation` |
+| `Issue 12` 查询结果/version/title 污染导航 | [aeo-platform/backend/app/services/knowledge_workspace_service.py](../aeo-platform/backend/app/services/knowledge_workspace_service.py) 的 `_export_scope_label`（`345`）默认落到“过往资料表”；`_export_columns`（`1718`）/ `_serialize_export_row`（`1956`）把历史知识导出为通用 `dataTable`；由于上传内容不是 first-class scoped artifact，结果会生成一串泛化历史表 artifact | knowledge_export -> artifact/title/version | 左侧导航被“过往资料表 / 数据”污染 | `Artifact / Version` |
+| `Issue 13` `hunyuan` 外露 | 后端有存储/公开平台名双轨：[knowledge_workspace_service.py](../aeo-platform/backend/app/services/knowledge_workspace_service.py) `_public_platform_id`（`270`）会把 `hunyuan -> yuanbao`，但查询导出仍通过通用 `_serialize_export_row`（`1956`）直序列化历史记录，说明公共显示层没有被所有结果路径一致消费；前端也仍是多处局部归一化而非单一公共契约 | 历史查询导出 -> 数据表/导航显示 | 平台名公开层不一致 | `Display Layer / Artifact Output` |
+| `Issue 14` 结果维度混乱 | [knowledge_workspace_service.py](../aeo-platform/backend/app/services/knowledge_workspace_service.py) 的 `_export_columns`（`1718`）始终固定成单一扁平列 schema，`_serialize_export_row`（`1956`）把异构历史记录压成 `snippet`/`title`/`question_text` 等通用字段；[frontend/src/components/canvas/contents/DataTableContent.tsx](../frontend/src/components/canvas/contents/DataTableContent.tsx) 只是表格直渲染，不做 typed rows 校验，所以“回答内容 / 情感 / 摘要 / 标签”会被混成同一张表 | knowledge_export -> dataTable 渲染 | 查询结果维度不一致，难以解释/复用 | `Validation / Artifact Schema` |
+| `Issue 2` 复核：Dashboard 指标文案错位 | [frontend/src/hooks/websocket/canvas.ts](../frontend/src/hooks/websocket/canvas.ts) 里 `normalizePreviewMetricLabel`（`19`）仍把 `官网 AI 友好度` 归一成 `官网转化率`，`PREVIEW_METRIC_PRIORITY`（`6`）也仍以 `官网转化率` 为预览指标 | 预览指标规范化 | Dashboard / 卡片预览 | `Display Layer` |
+| `Issue 7` 复核：skill 名泄露 | [frontend/src/lib/workflowStageLabels.ts](../frontend/src/lib/workflowStageLabels.ts) 已有公共映射（`22`、`31`），但 [frontend/src/components/chat/process-timeline.tsx](../frontend/src/components/chat/process-timeline.tsx) 仍保留独立 `formatToolName`（`72`），说明公开名称层没有完全收拢到单一 display contract | timeline / tool label 渲染 | 用户可见流程名可能继续泄露内部 skill id | `Display Layer` |
+
+### 根因冻结结论
+
+- `P1-A` 导入问题正式化：
+  - 当前根因已足够冻结，核心不是“前端空白”，而是“导入问题的解析结果与 artifact/version 契约不稳定”
+  - 下一阶段应把上传问题列表提升为 first-class artifact，并让 ask_user 与后续流程都绑定这一 artifact
+- `P1-B` 查询范围收口：
+  - 当前根因已足够冻结，核心不是“某句 prompt 没写好”，而是“上传内容没有 authoritative scope，knowledge_export 只能回落到历史 KnowledgeRecord”
+  - 下一阶段应先补 artifact scope，再做 scoped query 路由和 deterministic scope validator
+- `P1-C` 结果类型与显示规范化：
+  - 当前根因已足够冻结，核心不是某一张表的文案错误，而是“公共 display / typed result schema 还没有收敛成单一契约”
+  - 下一阶段应统一 public display layer 与 typed export schema
+
+### 当前不进入改码的原因
+
+- `Issue 13 / 14` 已拿到直接根因，`Issue 2 / 7` 也已复核到具体模块
+- 但本轮还没有把统一改码方案压成最小 shared-layer 变更面
+- 按本轮协议，必须先完成根因冻结与问题矩阵写回，再进入统一改码
+
+### 下一步
+
+- 进入 `P1` 统一改码方案设计：
+  - `1.` 导入问题升级为 first-class artifact/version
+  - `2.` 重做 table_intake 后的 ask_user 契约
+  - `3.` 为“刚上传/导入内容”建立 authoritative scoped query
+  - `4.` 收拢公共 display layer 与 typed export schema
+  - `5.` 增加最小 deterministic validation：scope / coverage / result typing / artifact binding
+
+## 2026-04-22 20:18 P1 Unified Change Batch / Priority
+
+- 当前阶段：`代码修正阶段（待开始）`
+- 当前完成度：`0%`
+- 设计目标：
+  - 不再用单场景 `if/else` 修补导入与查询
+  - 先补 authoritative artifact/version，再补 query scope，再补 display/validation
+  - 保持 Orchestrator 负责理解与路由，代码负责 deterministic mechanics
+
+### 改码批次与优先级
+
+#### `P1-A` 导入问题升级为 first-class artifact/version（最高优先级）
+
+- 目标：
+  - 上传问题列表不再只是 preview 或 A3 衍生物，而是正式的导入 artifact/version
+  - 后续“查看问题内容 / 确认导入 / 询问刚上传内容”都绑定这份 artifact
+- 最小改动面：
+  - `table_intake_service.py`
+    - 修正问题列识别与 payload 重建，确保 `normalized_payload.questions` 与最终 `detected_columns` 一致
+  - `confirmation.py`
+    - table import preview / confirmation payload 携带稳定 artifact ref
+  - `websocket_langgraph.py`
+    - `view_questions` / `table_import_question_list*` 路径写入 authoritative import artifact ref
+  - `orchestrator_context_packets.py`
+    - 把上传问题列表从“摘要 evidence”升级为带 artifact/version 的 authoritative current input
+
+#### `P1-B` 重做 table_intake 后的 ask_user 契约（高优先级）
+
+- 目标：
+  - 导入成功后，Orchestrator 必须给出可决策 ask_user，而不是“识别到 6 个问题”就结束
+  - ask_user 选项至少稳定包含：
+    - 查看问题内容
+    - 确认按这些问题继续
+    - 暂不继续
+- 最小改动面：
+  - `orchestrator_node.py`
+    - 将 table intake 完成后的确认作为正式 continuation contract，而不是纯自然语言建议
+  - `confirmation.py`
+    - 统一解析 option -> artifact/action 绑定
+  - `nodes_table_intake.py`
+    - 把 import intent / artifact ref / downstream action 准备成结构化 state
+
+#### `P1-C` 建立 authoritative scoped query（高优先级）
+
+- 目标：
+  - “刚上传/导入的表格内容”优先 scoped 到最新导入 artifact
+  - 没有 current import artifact 或用户明确查历史时，才回退知识库
+- 最小改动面：
+  - `orchestrator_node.py`
+    - 明确 current import scope precedence
+  - `orchestrator_context_packets.py`
+    - current import artifact 进入 current context，不再只是 `uploaded_input` 摘要
+  - `nodes_knowledge.py` / `knowledge_workspace_service.py`
+    - 增加 import-artifact scoped export/query path，避免直接落入全历史 `KnowledgeRecord`
+
+#### `P1-D` 收拢 typed export schema + public display layer（中优先级）
+
+- 目标：
+  - 历史/导入查询结果不再混杂回答内容、情感、摘要、标签
+  - `hunyuan -> 元宝`、skill 名、内部术语统一走单一公开显示层
+  - Dashboard 预览指标不再把 `官网 AI 友好度` 归成 `官网转化率`
+- 最小改动面：
+  - `knowledge_workspace_service.py`
+    - 输出 typed rows 和 typed columns，而不是单一扁平 `dataTable`
+  - `frontend/src/components/canvas/contents/DataTableContent.tsx`
+    - 只消费规范化 schema，不再对异构行做隐式容错
+  - `frontend/src/hooks/websocket/canvas.ts`
+    - 修正 preview metric 公共映射
+  - `frontend/src/lib/workflowStageLabels.ts`
+    - 成为唯一 stage/tool 公共映射来源
+  - `frontend/src/components/chat/process-timeline.tsx`
+    - 去掉本地私有 `formatToolName` 映射，统一走公共显示层
+
+#### `P1-E` 最小 deterministic validation（中优先级）
+
+- 目标：
+  - 在交付导入/查询结果前，先做 deterministic 校验，不再只靠模型“理解”
+- 最小改动面：
+  - `table_intake_service.py`
+    - artifact binding / payload consistency check
+  - `orchestrator_node.py`
+    - requirement coverage / scope binding gate
+  - `knowledge_workspace_service.py`
+    - result typing / source_scope 标注
+
+### 执行顺序
+
+- `1.` `P1-A`
+- `2.` `P1-B`
+- `3.` `P1-C`
+- `4.` `P1-D`
+- `5.` `P1-E`
+
+### 本轮改码边界
+
+- 不进入 `P2`，不顺手修 DeepSeek / 多平台成功率
+- 不回头扩 `P0`，除非用户在 demo 最终验证时明确指出残余功能错误
+- 不新增临时 side channel；所有后续动作都必须绑定 artifact/version 或 structured context
+
+## 2026-04-22 20:46 P1 Unified Code Batch / Progress Writeback
+
+- 当前阶段：`代码修正阶段（进行中）`
+- 当前完成度：`72%`
+- 本轮原则：
+  - 先把 authoritative artifact / scope / typed schema / deterministic validation 四条主链补齐
+  - 不中途部署，不把一次 smoke 冒充 closure
+
+### 已完成
+
+- `P1-A` first-class import artifact/version：
+  - `table_intake_node` 现在会在 question_list 导入时直接写正式 `questionList` artifact
+  - `confirmation.py` 统一生成稳定的 `current_import_artifact` 引用
+  - `state.py` 已新增 `current_import_artifact`
+  - `websocket_langgraph.py` 的 `view_questions` / `still_empty` 路径已改成复用 authoritative import artifact，而不是临时 preview key
+  - `nodes_table_intake.py` 已新增 deterministic question-list gate：
+    - 没识别出稳定问题列，或 `normalized_payload.questions` 为空时，不再允许生成空问题列表交付物
+- `P1-B` ask_user 契约重做：
+  - `build_table_import_confirmation_payload()` 现在稳定提供“先查看问题内容 / 确认导入问题列表 / 暂不导入”
+  - `resolve_confirmation_selection()` 会把 option 解析成结构化 import action，而不是只回自然语言
+- `P1-C` scoped query：
+  - `orchestrator_node.py` 已新增 current-import deterministic route
+  - 当用户询问“刚上传/导入的表格/问题内容”时，会优先走 `knowledge_export(source_scope=current_import_artifact)`
+  - `nodes_knowledge.py` 已新增 current import export path，并优先复用 authoritative import artifact，而不是回退到全历史 `KnowledgeRecord`
+- `P1-D` typed result schema + display layer：
+  - `knowledge_workspace_service.py` 导出列已拆成 `source_scope / answer_content / sentiment / summary / tags`
+  - `source_scope` 与 `source_type` 已解耦，历史导出统一标为 `历史资料库`
+  - `frontend/src/hooks/websocket/canvas.ts` 已把 `官网 AI 友好度` 与 `官网转化率` 拆开
+  - `frontend/src/components/chat/process-timeline.tsx` 已改成走公共 `workflowStageLabels`
+- `P1-E` 最小 deterministic validation：
+  - `nodes_knowledge.py` 已新增 `_validate_export_result()`
+  - 当前会在交付前校验：
+    - scope 是否正确
+    - 列 schema 是否完整
+    - row scope 是否正确
+    - current import 结果是否绑定到正式 artifact/version
+    - 历史导出是否仍残留 legacy `snippet` 维度
+  - `orchestrator_node.py` 已补 current import export failure reply，不再错误回退成“过往资料表失败”
+
+### 本轮本地验证
+
+- backend:
+  - `py_compile` 已通过：
+    - `websocket_langgraph.py`
+    - `knowledge_workspace_service.py`
+    - `message_service.py`
+    - `table_intake_service.py`
+    - `confirmation.py`
+    - `nodes_knowledge.py`
+    - `nodes_table_intake.py`
+    - `orchestrator_context_packets.py`
+    - `orchestrator_node.py`
+    - `state.py`
+  - 现有 `pytest aeo-platform/backend/tests/test_nodes_knowledge.py -q` 已通过
+  - 脚本级断言已通过：
+    - current import export validation pass
+    - 历史导出 row scope mismatch 会被 deterministic validator 拦住
+    - current import completion reply 会明确声明“只来自本次上传表格”
+    - table intake deterministic gate 会拦住空问题列表交付物
+- frontend:
+  - `npx tsc --noEmit` 已通过
+  - `npm run lint -- --quiet` 已通过
+
+### 仍然 open
+
+- `P1-A/B` 还没做最终用户动作级闭环，因为本轮按协议还没部署
+- `P1-D` 的 `DataTableContent.tsx` 尚未复核是否需要显式消费新的 typed schema；目前先依赖兼容渲染
+- `Issue 2 / 7` 虽然已经落到公共显示层，但这轮还没做最终 demo 验证
+- `P1` 统一改码批次还没正式进入 `部署验证阶段`
+
+### 下一步
+
+- 继续完成 `P1` 剩余收尾：
+  - 复核 `DataTableContent` 是否需要最小适配
+  - 扫一遍 current import / historical export close-out 文案
+  - 确认没有遗漏的历史 fallback 路径
+- 然后一次性进入：
+  - 本地最终 build
+  - 单次部署到 demo
+  - 交给用户集中验证
+
+## 2026-04-22 20:31 P1 Single Deploy Completed
+
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`88%`
+- 远端备份目录：
+  - `/srv/ageo/.codex-backups/20260422-202633-p1-unified-batch`
+
+### 已部署内容
+
+- backend:
+  - `websocket_langgraph.py`
+  - `knowledge_workspace_service.py`
+  - `message_service.py`
+  - `table_intake_service.py`
+  - `confirmation.py`
+  - `nodes_knowledge.py`
+  - `nodes_table_intake.py`
+  - `orchestrator_context_packets.py`
+  - `orchestrator_node.py`
+  - `state.py`
+- frontend:
+  - `process-timeline.tsx`
+  - `canvas.ts`
+
+### 部署后基础健康检查
+
+- `ageo-backend.service = active`
+- `ageo-frontend.service = active`
+- `http://127.0.0.1:8000/docs -> 200`
+- `http://127.0.0.1:3000 -> 200`
+- `https://demo.imspecta.com -> 200`
+
+### 待用户集中验证的 P1 Checklist
+
+- 导入问题后查看问题内容：
+  - 应只打开当前导入 artifact，不再跳历史资料表
+- 导入后确认继续：
+  - ask_user 不再只是“识别到 6 个问题”，而是可决策的正式确认
+- 询问刚上传/导入的表格内容：
+  - 应优先 scoped 到当前导入 artifact，不扫全历史
+- 查询结果导航/version/title：
+  - 不应再因为当前导入查询生成新的泛化“过往资料表”污染导航
+- 平台名/公共显示：
+  - 不再出现 `hunyuan`、内部 skill 名
+  - `官网 AI 友好度` 不应误映射成 `官网转化率`
+- 查询结果维度：
+  - 结果列应区分 `来源范围 / 来源类型 / 回答内容 / 回答情感 / 摘要 / 标签`
+  - 不再把不同维度混在一列或一段里
+
+### 当前仍未 closed 的原因
+
+- 这轮按协议没有继续做中间 smoke 交互验收
+- 当前等待用户在 demo 上按 checklist 做集中验证，再决定是否还有极小 `P1-fix`
+
+## 2026-04-22 22:05 历史具体回答查询 skill loop 根因冻结 / 首轮修正已部署
+
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`86%`
+- 会话证据：
+  - `session_id = 51a51ea9-4f63-4d72-8292-ec8e22197d05`
+  - `task = ca6c37da-0132-437e-9aeb-dbfc4169f690`
+  - `run = bbd358a1-a456-458c-93ed-03db9663f976`
+
+### 直接根因
+
+- `Root cause A`：
+  - “查询之前带有负面信息的回答”这类请求没有被收成一个有边界的历史回答查询能力
+  - Orchestrator 先后放出了多次 `knowledge_lookup`，然后继续漂到 `post_analysis_skill -> knowledge_aggregate -> knowledge_compare`
+- `Root cause B`：
+  - 第 3 次 `knowledge_lookup` 被 retry gate 拦住后，只是把 tool error 注回 history，然后又回到 orchestrator 继续自由规划
+  - 结果不是停下来整理已有结果，而是继续漂移到别的 knowledge / post-analysis 技能
+- `Root cause C`：
+  - 每次 tool call 都会发完整的 `send_plan_event + send_action_log_event`，所以一次历史查询被拆成了 5~6 条“执行计划”
+- `Root cause D`：
+  - 在上述膨胀后的 history 上，下一次 GLM streaming 请求最终打出 `messages 参数非法`
+  - 目前已补 payload role summary 日志，下一次若还复现，就能直接钉到具体 message shape
+
+### 统一修法
+
+- `orchestrator_node.py`
+  - 新增 bounded route：
+    - “历史/之前/过往 + 回答/答案/内容”这类请求，直接走一次 `knowledge_export(source_types=[fetch_answer])`
+    - 不再让 LLM 自由串 `knowledge_lookup -> aggregate -> compare -> post_analysis`
+  - 新增 bounded close-out：
+    - 当这类请求的 `knowledge_export_result` 已命中后，直接 deterministic 收口，不再继续回到 LLM 漂移
+  - 对这类 bounded 历史查询，抑制 `knowledge_* / post_analysis_skill` 的进度卡、action log 和 fallback 文案，避免一条问题刷出 5~6 条“执行计划”
+  - 对 knowledge retry cap 的错误文案做了专门收口：
+    - 到上限后不再鼓励继续调用更多 `knowledge_* / post_analysis_skill`
+    - 改成要求直接基于已有结果整理回答，或只向用户要求更精确的范围
+  - 在 orchestrator streaming 前和异常路径补了 payload role summary 日志，便于下一次定位 `messages 参数非法`
+
+- `nodes_knowledge.py`
+  - `knowledge_export_result` 现在显式带上 `query`
+  - 供 bounded history route 的 deterministic close-out 校验“本次结果是否属于当前这条用户问题”
+
+### 本地验证
+
+- `py_compile`：
+  - `orchestrator_node.py`
+  - `nodes_knowledge.py`
+  - 均已通过
+- 脚本级断言（使用 `\\u` 逃逸，避免 Windows PowerShell 中文源码污染）：
+  - “查询一下之前带有负面信息的回答” 已命中 bounded history answer query
+  - fallback 现在会直接给出 `knowledge_export + fetch_answer`
+  - “比较最近两次负面回答变化” 不会误判成这条 bounded query
+- `pytest aeo-platform/backend/tests/test_nodes_knowledge.py -q`
+  - 已通过
+
+### 当前 still open
+
+- 这批 backend 修正已部署到 demo：
+  - 备份目录：`/srv/ageo/.codex-backups/20260422-2205-history-query-loop-fix`
+  - `ageo-backend.service = active`
+  - `http://127.0.0.1:8000/docs -> 200`
+- 还没做最终 live 验证：
+  - 是否从“五六条消息”收敛为“一次执行”
+  - 是否不再漂到 `knowledge_compare / post_analysis_skill`
+  - 是否不再打出 `messages 参数非法`
+
+## 2026-04-22 22:31 历史具体回答查询 continuation：recall 后“需要看完整内容”仍退回自由 skill 串链
+
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`93%`
+
+### 会话证据
+
+- `session_id = 51a51ea9-4f63-4d72-8292-ec8e22197d05`
+- `task = 32930a51-282c-468e-a83a-ec74b1dbf468`
+- `run = 24604a2e-8bc1-4aa5-bd78-666f55fbe3c2`
+- 用户输入：`需要看完整内容。`
+
+### 直接根因
+
+- 上一版 bounded history answer route 只覆盖“当前用户输入本身就显式包含历史 + 回答内容”的问法
+- 这次用户是在 `recall` 之后只说了 `需要看完整内容。`
+- 当时 `session_recalled = True`
+- `_is_bounded_history_answer_query_state()` 又把 recalled session 直接排除
+- 结果：
+  - 这条承接型 follow-up 没命中 bounded continuation
+  - 又退回 LLM 自由规划
+  - 日志里重新出现：
+    - `knowledge_lookup`
+    - `knowledge_export`
+    - `knowledge_lookup`
+    - 最后 `ask_user`
+
+### 修法
+
+- 在 `orchestrator_node.py` 增加 history-answer continuation 解析：
+  - 识别 `完整内容 / 完整回答 / 原文 / 全文` 这类 follow-up
+  - 从最近上下文里回溯上一条明确的历史回答查询
+  - 将本轮 follow-up 绑定回同一条 bounded export，而不是重新自由规划
+- `_is_bounded_history_answer_query_state()` 不再单纯因 `session_recalled` 而放弃这类 continuation
+- `_route_history_answer_query_without_llm()` 现在会在 continuation 场景下直接走：
+  - `knowledge_export(source_types=[fetch_answer])`
+  - query 解析成如：`查询一下之前带有负面信息的回答 完整内容`
+- `_infer_knowledge_fallback_tool()` 也同步改成基于 resolved continuation query，而不是只看最新一句字面文本
+
+### 本地验证
+
+- `py_compile orchestrator_node.py` 通过
+- 使用共享 `.env.local` 做脚本级断言：
+  - `session_recalled=True`
+  - 上下文里前一条用户问“查询一下之前带有负面信息的回答”
+  - 当前用户只说“需要看完整内容。”
+  - 解析结果已稳定变成：
+    - `查询一下之前带有负面信息的回答 完整内容`
+- `pytest aeo-platform/backend/tests/test_nodes_knowledge.py -q` 通过
+
+### 部署
+
+- 已部署到 demo：
+  - 备份目录：`/srv/ageo/.codex-backups/20260422-2231-history-answer-continuation`
+  - `ageo-backend.service = active`
+  - `http://127.0.0.1:8000/docs -> 200`
+
+### 当前 still open
+
+- 还没做最终用户侧 live 验证：
+  - follow-up `需要看完整内容。` 是否收敛成 bounded export
+  - 是否不再刷多条“执行计划”
+  - 是否不再退回 `knowledge_lookup -> export -> lookup -> ask_user`
+
+## 2026-04-22 22:18 P0 残余：Dashboard 进入后 Chat 导航 / Tab 点击无响应
+
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`97%`
+
+### 直接根因
+
+- `frontend/src/components/chat/ChatPanel.tsx`
+  - 存在一段 route-target 对齐 effect
+  - 当从 Dashboard 带着 `artifact_id/output_id` 进入 Chat 时，这段 effect 会持续把 `activeContentIndex` 拉回初始 route target
+  - 因为 `initialArtifactId/initialOutputId` 在当前会话里保持不变，所以用户后续点击左侧导航或顶部 Tab，虽然点击事件触发了 `setActiveContentById()`，但选中态立刻又被这段 effect 抢回，体感就是“点哪都没反应”
+
+### 修法
+
+- 这段 route-lock 只保留到“首轮 route artifact 成功落位并完成 URL sync ready”为止
+- 一旦 `artifactUrlSyncReadyRef.current = true`，后续不再持续强制把用户切换拉回初始 report
+
+### 本地验证
+
+- `frontend: npx tsc --noEmit` 通过
+- `frontend: npm run lint -- --quiet` 通过
+
+### 当前 still open
+
+- 修正已完成，本地静态校验已过，且已部署到 demo：
+  - 备份目录：`/srv/ageo/.codex-backups/20260422-2218-p0-nav-click-fix`
+  - `frontend build` 已成功
+  - `ageo-frontend.service = active`
+  - `http://127.0.0.1:3000 -> 200`
+- 还没完成最终 demo live 点击验证：
+  - Dashboard 打开报告后
+  - 左侧导航应可正常切换
+  - 顶部 Tab 应可正常切换
+
+## 2026-04-22 22:32 P0 残余：Chat 返回首页需要多次点击
+
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`91%`
+
+### 直接根因
+
+- `frontend/src/components/layout/HomeBrandLink.tsx`
+  - Chat 侧栏里的“返回首页”入口用了 `requireConfirm`
+  - 确认弹层直接渲染在侧栏组件树内部
+- `frontend/src/components/layout/ChatLayout.tsx`
+  - 侧栏容器是 `motion.div`
+  - Framer Motion 会给祖先建立 transform 上下文
+- 结果：
+  - `HomeBrandLink` 里的 `fixed` 确认层会被 transform 祖先局部化
+  - 第一次点击实际上可能已经打开了确认层，但确认层被限制在侧栏/局部区域内，体感就像“没反应”
+  - 用户继续点多次后，才可能碰到真实可点区域或误打误撞完成跳转
+
+### 修法
+
+- 把 `HomeBrandLink` 的确认层改成 `createPortal(..., document.body)`
+- 让确认层脱离侧栏和 `motion.div` 的 transform 上下文
+- 顺手给入口按钮和关闭按钮补 `type=\"button\"`，避免默认按钮语义带来额外噪音
+
+### 本地验证
+
+- `frontend: npx tsc --noEmit` 通过
+- `frontend: npm run lint -- --quiet` 通过
+
+### 当前 still open
+
+- 这批修正已部署到 demo：
+  - 备份目录：`/srv/ageo/.codex-backups/20260422-221904-homebrandlink-fix`
+  - `frontend build` 已成功
+  - `ageo-frontend.service = active`
+  - `http://127.0.0.1:3000 -> 200`
+- 还没做最终 live 点击验证：
+  - Chat 内点击“返回首页”
+  - 应该一次点击就稳定出现全屏确认层
+  - 点击确认后应直接跳转到 `/dashboard`
+
+## 2026-04-22 22:45 P0 残余：compact 导航边框裁切 / 资料查询每次新增一个导航
+
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`90%`
+
+### 直接根因
+
+- `frontend/src/components/layout/ArtifactNav.tsx`
+  - compact 模式下外层容器宽度只有 48px，但内部按钮用了固定 `w-12` 再叠 `px-1.5`
+  - 实际渲染宽度超过可用竖条宽度，导致选中态边框被裁切，看起来像“外框显示不全”
+- `aeo-platform/backend/app/workflow/nodes_knowledge.py`
+  - `knowledge_export` 为历史资料表生成 artifact key 时把 `query/start_date/end_date/platform/...` 全部纳入 digest
+  - 结果每查一次资料都会生成一个新的 `artifact_id`
+  - 前端自然只能把它们当成多个导航项，而不是同一份资料表的不同版本
+
+### 修法
+
+- `ArtifactNav.tsx`
+  - compact 按钮改成 `w-full` 适配 48px 竖条
+  - 去掉会放大裁切感的 active `boxShadow`
+  - 外层 padding 收紧，保持边框完整可见
+- `nodes_knowledge.py`
+  - 对 `source_scope = knowledge_records` 的历史资料导出，统一收成一个稳定 artifact family：
+    - `session_id + knowledge_export_history`
+  - 这样后续资料查询会走同一个 artifact，通过版本累积，而不是每次长出一个新的“资料”导航
+
+### 本地验证
+
+- `backend: py_compile nodes_knowledge.py` 通过
+- `frontend: npx tsc --noEmit` 通过
+- `frontend: npm run lint -- --quiet` 通过
+
+### 部署
+
+- 已部署到 demo：
+  - 备份目录：`/srv/ageo/.codex-backups/20260422-2245-nav-history-family`
+  - `ageo-backend.service = active`
+  - `ageo-frontend.service = active`
+  - `http://127.0.0.1:8000/docs -> 200`
+  - `http://127.0.0.1:3000 -> 200`
+
+### 当前 still open
+
+- 还没做最终页面级验证：
+  - 资料查询后是否复用同一个导航项，仅通过版本更新
+  - compact 导航选中外框是否已经完整显示
+
+## 2026-04-22 23:05 P0 残余：刷新后旧“资料”导航不自动收拢
+
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`96%`
+
+### 直接根因
+
+- 之前在 `aeo-platform/backend/app/workflow/nodes_knowledge.py` 里做的 stable artifact family，只会影响**后续新生成**的历史资料导出。
+- 但当前旧会话里已经落库的多份历史资料表，本身就是多个不同 `artifact_id`。
+- 刷新页面时，前端 hydrate 只是把这些旧 artifact 重新读出来，并不会自动把数据库里的旧 `artifact_id` 重写合并，所以“刷新以后没反应”是预期内现象。
+- 也就是说：
+  - backend 修的是“以后别再长新的重复资料导航”
+  - 但对“旧会话里已经长出来的一串资料导航”，还缺一个前端 family 归并层。
+
+### 修法
+
+- 新增前端公共 artifact identity 逻辑：
+  - `frontend/src/lib/artifactIdentity.ts`
+- 对 `source_scope = knowledge_records` 的旧历史资料导出，在前端 hydrate / 历史 output card 恢复时统一映射到同一个 canonical artifact family：
+  - `<session_id>_knowledge_export_history`
+- 这样：
+  - 旧会话刷新后也会被折叠成一个“资料”导航
+  - 旧记录会通过 `versions` 机制累积，而不是继续并排显示多个“资料”
+- 实时 websocket 路径不强行伪造 `session_id`，继续沿用后端当前稳定下来的 `artifact_id`，避免在 live 执行时引入新的 identity 漂移。
+
+### 本地验证
+
+- `frontend: npx tsc --noEmit` 通过
+- `frontend: npm run lint -- --quiet` 通过
+
+### 部署
+
+- 已部署到 demo：
+  - 备份目录：`/srv/ageo/.codex-backups/20260422-2318-history-nav-frontend-family`
+  - 远端 `frontend build` 已重新跑过
+  - `ageo-frontend.service = active`
+
+### 当前 still open
+
+- 还没做最终页面级验证：
+  - 旧会话刷新后，多份历史“资料”是否折叠为一个导航项
+  - 同一“资料”导航是否能通过 version 正常切换历史结果

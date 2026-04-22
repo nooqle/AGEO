@@ -185,7 +185,7 @@ class TableIntakeService:
 
     def _deterministic_classify(self, parsed: ParsedTable) -> dict[str, Any]:
         header_map = {header.lower(): header for header in parsed.headers}
-        question_header = self._match_header(parsed.headers, _QUESTION_HEADER_KEYWORDS)
+        question_header = self._resolve_question_header(parsed.headers, parsed.rows)
         category_header = self._match_header(parsed.headers, _CATEGORY_HEADER_KEYWORDS)
         link_header = self._match_header(parsed.headers, _LINK_HEADER_KEYWORDS)
         brand_related_headers = [
@@ -337,6 +337,8 @@ class TableIntakeService:
                         for key, value in detected_columns.items()
                     }
 
+        final = self._finalize_normalized_payload(parsed, final)
+
         final["recommended_step"] = {
             "question_list": "A3",
             "brand_competitor_info": "A1",
@@ -367,6 +369,30 @@ class TableIntakeService:
         else:
             final["summary"] = f"未能稳定识别表格用途，共读取 {parsed.valid_row_count} 行。"
 
+        return final
+
+    def _finalize_normalized_payload(
+        self,
+        parsed: ParsedTable,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        final = dict(result)
+        table_kind = str(final.get("table_kind") or "").strip()
+        detected_columns = dict(final.get("detected_columns") or {})
+
+        if table_kind == "question_list":
+            question_header = str(detected_columns.get("question") or "").strip()
+            category_header = str(detected_columns.get("category") or "").strip() or None
+            if question_header and question_header in parsed.headers:
+                questions, skipped_count = self._normalize_question_rows(
+                    parsed.rows,
+                    question_header,
+                    category_header if category_header in parsed.headers else None,
+                )
+                final["normalized_payload"] = {"questions": questions}
+                final["warnings"] = self._build_warnings(
+                    parsed, skipped_question_count=skipped_count
+                )
         return final
 
     def _normalize_question_rows(
@@ -500,6 +526,75 @@ class TableIntakeService:
                 best_header = header
                 best_score = score
         return best_header
+
+    def _resolve_question_header(
+        self,
+        headers: list[str],
+        rows: list[dict[str, str]],
+    ) -> str | None:
+        ranked: list[tuple[int, int, int, str]] = []
+        for header in headers:
+            keyword_score = self._header_match_score(header, _QUESTION_HEADER_KEYWORDS)
+            if keyword_score <= 0:
+                continue
+            quality_score = self._question_column_quality(rows, header)
+            ranked.append((keyword_score + quality_score, quality_score, keyword_score, header))
+
+        if not ranked:
+            return None
+
+        ranked.sort(reverse=True)
+        best_score, best_quality, _, best_header = ranked[0]
+        if best_score <= 0:
+            return None
+        if best_quality < -10 and len(ranked) > 1:
+            return ranked[1][3]
+        return best_header
+
+    def _question_column_quality(
+        self,
+        rows: list[dict[str, str]],
+        header: str,
+    ) -> int:
+        values = [
+            str(row.get(header, "")).strip()
+            for row in rows[:20]
+            if str(row.get(header, "")).strip()
+        ]
+        if not values:
+            return -40
+
+        score = 0
+        numeric_like = sum(1 for value in values if value.replace(".", "", 1).isdigit())
+        numeric_ratio = numeric_like / len(values)
+        avg_len = sum(len(value) for value in values) / len(values)
+        question_like = sum(
+            1
+            for value in values
+            if any(token in value for token in ("?", "？", "什么", "怎么", "如何", "是否", "为什么", "哪"))
+        )
+        question_ratio = question_like / len(values)
+
+        if numeric_ratio >= 0.6:
+            score -= 60
+        elif numeric_ratio >= 0.3:
+            score -= 25
+
+        if avg_len >= 12:
+            score += 16
+        elif avg_len >= 6:
+            score += 8
+        else:
+            score -= 8
+
+        if question_ratio >= 0.25:
+            score += 18
+
+        unique_count = len({value for value in values})
+        if unique_count <= 1:
+            score -= 10
+
+        return score
 
     def _header_match_score(self, header: str, keywords: tuple[str, ...]) -> int:
         lowered = header.lower().strip()

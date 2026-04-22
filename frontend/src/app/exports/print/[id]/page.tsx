@@ -11,21 +11,50 @@ const PRINT_PAGE_CSS = `
   }
 
   html, body {
-    background: var(--bg-primary);
+    margin: 0;
+    background: #ffffff;
   }
 
   body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+    color: #111827;
   }
 
   .pdf-print-root {
     min-height: 100vh;
+    background: #ffffff;
+    color: #111827;
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #ffffff;
+    --bg-elevated: #f8fafc;
+    --text-primary: #111827;
+    --text-secondary: #475569;
+    --text-tertiary: #64748b;
+    --text-disabled: #94a3b8;
+    --text-muted: #94a3b8;
+    --text-accent: #1d4ed8;
+    --brand-primary: #1d4ed8;
+    --brand-hover: #2563eb;
+    --brand-active: #1e40af;
+    --brand-bg: rgba(29, 78, 216, 0.08);
+    --brand-border: rgba(29, 78, 216, 0.2);
+    --brand-text: #1d4ed8;
+    --success: #15803d;
+    --warning: #b45309;
+    --error: #b91c1c;
+    --info: #1d4ed8;
+    --border-default: rgba(15, 23, 42, 0.12);
+    --border-hover: rgba(15, 23, 42, 0.18);
+    --border-focus: #1d4ed8;
+    --border-subtle: rgba(15, 23, 42, 0.08);
+    --border-strong: rgba(15, 23, 42, 0.18);
   }
 
   .pdf-print-root a {
-    color: inherit;
-    text-decoration: none;
+    color: var(--text-accent);
+    text-decoration: underline;
   }
 
   .pdf-print-root section,
@@ -44,6 +73,10 @@ const PRINT_PAGE_CSS = `
 
   .pdf-print-root [data-print-hidden="true"] {
     display: none !important;
+  }
+
+  .pdf-print-root .report-markdown {
+    color: var(--text-primary);
   }
 `;
 

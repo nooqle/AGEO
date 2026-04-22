@@ -10,6 +10,7 @@ from langgraph.types import Command
 
 from app.core.database import AsyncSessionLocal
 from app.services.knowledge_workspace_service import KnowledgeWorkspaceService
+from app.services.message_service import MessageService
 from app.workflow.events import save_and_send_artifact
 from app.workflow.fetch_recovery import normalize_question_targets
 from app.workflow.state import AgentState
@@ -71,15 +72,264 @@ def _resolve_knowledge_query(state: AgentState, tool_args: dict[str, object]) ->
     return ""
 
 
+def _should_use_current_import_scope(
+    state: AgentState,
+    tool_args: dict[str, object],
+    query: str,
+) -> bool:
+    explicit_scope = str(tool_args.get("source_scope") or "").strip().lower()
+    if explicit_scope:
+        return explicit_scope == "current_import_artifact"
+
+    current_import_artifact = state.get("current_import_artifact") or {}
+    artifact_id = str(current_import_artifact.get("artifact_id") or "").strip()
+    if not artifact_id:
+        return False
+
+    text = str(query or "").strip().lower()
+    if not text:
+        return False
+
+    upload_keywords = ("上传", "导入", "附件", "表格", "问题列表", "问题内容", "问题")
+    history_keywords = ("历史", "过往", "以前", "之前", "历次")
+    return any(keyword in text for keyword in upload_keywords) and not any(
+        keyword in text for keyword in history_keywords
+    )
+
+
+async def _build_current_import_export_result(
+    state: AgentState,
+) -> dict[str, object]:
+    current_import_artifact = state.get("current_import_artifact") or {}
+    artifact_id = str(current_import_artifact.get("artifact_id") or "").strip()
+    if not artifact_id:
+        return {
+            "status": "miss",
+            "reason": "missing_current_import_artifact",
+            "rows": [],
+            "columns": [],
+        }
+
+    async with AsyncSessionLocal() as db:
+        message_service = MessageService(db)
+        output_message = await message_service.get_latest_output_by_artifact_id(
+            session_id=state["session_id"],
+            artifact_id=artifact_id,
+            compact_output=False,
+        )
+
+    output_data = output_message.get("output_data") if isinstance(output_message, dict) else None
+    if not isinstance(output_data, dict):
+        return {
+            "status": "miss",
+            "reason": "current_import_artifact_not_found",
+            "rows": [],
+            "columns": [],
+        }
+
+    questions = [
+        item
+        for item in list(output_data.get("questions") or [])
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    ]
+    source_file = output_data.get("sourceFile") if isinstance(output_data.get("sourceFile"), dict) else {}
+    rows = [
+        {
+            "seq": index,
+            "question_text": str(item.get("text") or "").strip(),
+            "category": str(item.get("category") or "上传问题").strip() or "上传问题",
+            "source_scope": "当前导入表格",
+        }
+        for index, item in enumerate(questions, start=1)
+    ]
+    columns = [
+        {"key": "seq", "label": "序号", "sortable": True},
+        {"key": "question_text", "label": "问题内容", "sortable": False},
+        {"key": "category", "label": "分类", "sortable": True},
+        {"key": "source_scope", "label": "来源范围", "sortable": True},
+    ]
+    file_name = str(source_file.get("name") or "").strip()
+    title = f"当前导入问题表（{file_name}）" if file_name else "当前导入问题表"
+    description = f"当前导入问题列表共 {len(rows)} 条，结果仅来自本次上传表格。"
+    return {
+        "status": "hit",
+        "title": title,
+        "brand_name": (
+            (state.get("brand_profile") or {}).get("brand_name")
+            or state.get("brand_name")
+            or ""
+        ),
+        "description": description,
+        "columns": columns,
+        "rows": rows,
+        "item_count": len(rows),
+        "truncated": False,
+        "has_more_records": False,
+        "export_limit": len(rows),
+        "source_types": ["uploaded_table_question_list"],
+        "platforms": [],
+        "analysis_period": "当前导入表格",
+        "summary_metrics": {
+            "导出条数": len(rows),
+            "来源类型": 1,
+            "覆盖平台数": 0,
+            "结果截断": "否",
+        },
+        "source_scope": "current_import_artifact",
+        "artifact_id": artifact_id,
+        "artifact_message_id": output_message.get("id") if isinstance(output_message, dict) else None,
+    }
+
+
+def _validate_export_result(
+    *,
+    result: dict[str, object],
+    expected_scope: str,
+    expected_row_scope: str,
+    require_artifact_binding: bool,
+) -> dict[str, object]:
+    failures: list[dict[str, str]] = []
+    warnings: list[str] = []
+
+    status = str(result.get("status") or "").strip().lower()
+    if status != "hit":
+        failures.append(
+            {
+                "type": "missing_result",
+                "message": "当前导出结果未命中有效数据，无法通过交付前校验。",
+            }
+        )
+        return {"passed": False, "failures": failures, "warnings": warnings}
+
+    result_scope = str(result.get("source_scope") or "").strip()
+    if result_scope != expected_scope:
+        failures.append(
+            {
+                "type": "scope_mismatch",
+                "message": f"导出结果作用域不正确，期望 {expected_scope}，实际为 {result_scope or 'unknown'}。",
+            }
+        )
+
+    columns = result.get("columns") or []
+    rows = result.get("rows") or []
+    item_count = int(result.get("item_count") or 0)
+    artifact_id = str(result.get("artifact_id") or "").strip()
+
+    if not isinstance(columns, list) or not columns:
+        failures.append(
+            {
+                "type": "missing_columns",
+                "message": "导出结果缺少结构化列定义，无法稳定渲染和导出。",
+            }
+        )
+        columns = []
+
+    if not isinstance(rows, list):
+        failures.append(
+            {
+                "type": "invalid_rows",
+                "message": "导出结果行数据不是列表结构。",
+            }
+        )
+        rows = []
+
+    column_keys = {
+        str(column.get("key") or "").strip()
+        for column in columns
+        if isinstance(column, dict)
+    }
+    required_columns = {"source_scope"}
+    if expected_scope == "current_import_artifact":
+        required_columns.update({"seq", "question_text", "category"})
+    else:
+        required_columns.update(
+            {"question_text", "answer_content", "sentiment", "summary", "tags"}
+        )
+    missing_columns = sorted(key for key in required_columns if key not in column_keys)
+    if missing_columns:
+        failures.append(
+            {
+                "type": "missing_required_columns",
+                "message": f"导出结果缺少必要列：{', '.join(missing_columns)}。",
+            }
+        )
+
+    if item_count != len(rows):
+        failures.append(
+            {
+                "type": "item_count_mismatch",
+                "message": f"导出结果条数不一致，声明 {item_count} 条，实际 {len(rows)} 条。",
+            }
+        )
+
+    if require_artifact_binding and not artifact_id:
+        failures.append(
+            {
+                "type": "missing_artifact_binding",
+                "message": "导出结果未绑定到正式 artifact/version，不能作为正式交付。",
+            }
+        )
+
+    for index, row in enumerate(rows[: min(len(rows), 10)], start=1):
+        if not isinstance(row, dict):
+            failures.append(
+                {
+                    "type": "invalid_row_shape",
+                    "message": f"第 {index} 行不是结构化对象。",
+                }
+            )
+            continue
+        row_scope = str(row.get("source_scope") or "").strip()
+        if row_scope != expected_row_scope:
+            failures.append(
+                {
+                    "type": "row_scope_mismatch",
+                    "message": f"第 {index} 行来源范围错误，期望 {expected_row_scope}，实际为 {row_scope or 'unknown'}。",
+                }
+            )
+        if expected_scope == "current_import_artifact":
+            if not str(row.get("question_text") or "").strip():
+                failures.append(
+                    {
+                        "type": "missing_question_text",
+                        "message": f"第 {index} 行缺少问题内容。",
+                    }
+                )
+        else:
+            legacy_snippet = str(row.get("snippet") or "").strip()
+            if legacy_snippet:
+                failures.append(
+                    {
+                        "type": "legacy_snippet_column",
+                        "message": "导出结果仍携带旧 snippet 维度，说明结果类型还没有完全规范化。",
+                    }
+                )
+            for field in ("answer_content", "sentiment", "summary", "tags"):
+                if field not in row:
+                    failures.append(
+                        {
+                            "type": "missing_typed_field",
+                            "message": f"第 {index} 行缺少字段 {field}。",
+                        }
+                    )
+
+    return {"passed": not failures, "failures": failures, "warnings": warnings}
+
+
 def _build_export_artifact_key(
     state: AgentState,
     result: dict[str, object],
     tool_args: dict[str, object],
 ) -> str:
+    source_scope = str(result.get("source_scope") or "knowledge_records").strip()
+    if source_scope == "knowledge_records":
+        return f"{state['session_id']}_knowledge_export_history"
+
     scope = {
         "brand_name": result.get("brand_name"),
         "query": str(tool_args.get("query") or "").strip(),
         "analysis_period": result.get("analysis_period"),
+        "source_scope": source_scope,
         "source_types": result.get("source_types") or [],
         "platforms": result.get("platforms") or [],
         "platform": str(tool_args.get("platform") or "").strip(),
@@ -251,40 +501,79 @@ async def knowledge_export_node(state: AgentState) -> Command:
         or None
     )
 
-    try:
-        async with AsyncSessionLocal() as db:
-            service = KnowledgeWorkspaceService(db)
-            result = await service.export_table(
-                query=query,
-                entity_id=state.get("entity_id"),
-                brand_name=brand_name,
-                source_types=tool_args.get("source_types") or None,
-                platform=str(tool_args.get("platform") or "").strip() or None,
-                competitor_name=str(tool_args.get("competitor_name") or "").strip()
-                or None,
-                domain=str(tool_args.get("domain") or "").strip() or None,
-                start_date=str(tool_args.get("start_date") or "").strip() or None,
-                end_date=str(tool_args.get("end_date") or "").strip() or None,
-                limit=int(tool_args.get("limit") or 200),
-            )
-    except Exception as exc:
-        logger.warning("[Knowledge] export failed: %s", exc)
-        result = {
-            "status": "miss",
-            "reason": "export_failed",
-            "error": str(exc),
-            "rows": [],
-            "columns": [],
-        }
+    if _should_use_current_import_scope(state, tool_args, query):
+        result = await _build_current_import_export_result(state)
+    else:
+        try:
+            async with AsyncSessionLocal() as db:
+                service = KnowledgeWorkspaceService(db)
+                result = await service.export_table(
+                    query=query,
+                    entity_id=state.get("entity_id"),
+                    brand_name=brand_name,
+                    source_types=tool_args.get("source_types") or None,
+                    platform=str(tool_args.get("platform") or "").strip() or None,
+                    competitor_name=str(tool_args.get("competitor_name") or "").strip()
+                    or None,
+                    domain=str(tool_args.get("domain") or "").strip() or None,
+                    start_date=str(tool_args.get("start_date") or "").strip() or None,
+                    end_date=str(tool_args.get("end_date") or "").strip() or None,
+                    limit=int(tool_args.get("limit") or 200),
+                )
+        except Exception as exc:
+            logger.warning("[Knowledge] export failed: %s", exc)
+            result = {
+                "status": "miss",
+                "reason": "export_failed",
+                "error": str(exc),
+                "rows": [],
+                "columns": [],
+            }
 
     if result.get("status") == "hit":
-        artifact_id = _build_export_artifact_key(
+        result["query"] = query
+        validation = _validate_export_result(
+            result=result,
+            expected_scope=(
+                "current_import_artifact"
+                if result.get("source_scope") == "current_import_artifact"
+                else "knowledge_records"
+            ),
+            expected_row_scope=(
+                "当前导入表格"
+                if result.get("source_scope") == "current_import_artifact"
+                else "历史资料库"
+            ),
+            require_artifact_binding=(
+                result.get("source_scope") == "current_import_artifact"
+            ),
+        )
+        result["validation"] = validation
+        if not validation.get("passed"):
+            result = {
+                **result,
+                "status": "miss",
+                "reason": "export_validation_failed",
+                "validation": validation,
+            }
+            return Command(
+                update={
+                    "knowledge_export_result": result,
+                    "current_step": "KNOWLEDGE",
+                }
+            )
+
+        artifact_id = str(result.get("artifact_id") or "").strip() or _build_export_artifact_key(
             state,
             result,
             {**tool_args, "query": query},
         )
         artifact_data = {
-            "artifact_kind": "knowledge_export",
+            "artifact_kind": (
+                "current_import_export"
+                if result.get("source_scope") == "current_import_artifact"
+                else "knowledge_export"
+            ),
             "brand_name": result.get("brand_name"),
             "analysis_period": result.get("analysis_period"),
             "export_title": result.get("title"),
@@ -296,14 +585,17 @@ async def knowledge_export_node(state: AgentState) -> Command:
             "metrics": result.get("summary_metrics") or {},
             "columns": result.get("columns") or [],
             "rows": result.get("rows") or [],
+            "source_scope": result.get("source_scope") or "knowledge_records",
         }
-        artifact_message_id = await save_and_send_artifact(
-            session_id=state["session_id"],
-            output_type="dataTable",
-            title=str(result.get("title") or "过往资料表"),
-            data=artifact_data,
-            artifact_key=artifact_id,
-        )
+        artifact_message_id = result.get("artifact_message_id")
+        if not artifact_message_id or result.get("source_scope") != "current_import_artifact":
+            artifact_message_id = await save_and_send_artifact(
+                session_id=state["session_id"],
+                output_type="dataTable",
+                title=str(result.get("title") or "过往资料表"),
+                data=artifact_data,
+                artifact_key=artifact_id,
+            )
         result["artifact_id"] = artifact_id
         result["artifact_message_id"] = artifact_message_id
 

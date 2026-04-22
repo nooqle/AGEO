@@ -10,7 +10,15 @@ from langgraph.types import Command
 
 from app.core.database import AsyncSessionLocal
 from app.services.table_intake_service import TableIntakeService
-from app.workflow.events import send_error_event, send_progress_event
+from app.workflow.confirmation import (
+    build_table_import_question_list_artifact,
+    resolve_table_import_question_list_artifact_ref,
+)
+from app.workflow.events import (
+    save_and_send_artifact,
+    send_error_event,
+    send_progress_event,
+)
 from app.workflow.skill_state import build_skill_result_update
 from app.workflow.state import AgentState
 
@@ -152,6 +160,45 @@ def _build_unknown_result(
     }
 
 
+def _validate_question_list_intake_result(result: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(result.get("normalized_payload") or {})
+    questions = list(payload.get("questions") or [])
+    detected_columns = dict(result.get("detected_columns") or {})
+    failures: list[dict[str, str]] = []
+
+    if not str(detected_columns.get("question") or "").strip():
+        failures.append(
+            {
+                "type": "missing_question_column",
+                "message": "未识别出稳定的问题列，无法把这份表格作为正式问题列表交付。",
+            }
+        )
+
+    if not questions:
+        failures.append(
+            {
+                "type": "empty_question_payload",
+                "message": "识别结果中没有有效问题，不能生成空的问题列表交付物。",
+            }
+        )
+
+    for index, item in enumerate(questions, start=1):
+        if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+            failures.append(
+                {
+                    "type": "empty_question_text",
+                    "message": f"第 {index} 条问题内容为空，说明表格解析结果不稳定。",
+                }
+            )
+            break
+
+    return {
+        "passed": not failures,
+        "failures": failures,
+        "warnings": list(result.get("warnings") or []),
+    }
+
+
 async def table_intake_node(state: AgentState) -> Command:
     """Understand a table attachment and return a structured intake result."""
 
@@ -220,6 +267,41 @@ async def table_intake_node(state: AgentState) -> Command:
                     user_message=user_message,
                     result=result,
                 )
+                validation = _validate_question_list_intake_result(result)
+                result["validation"] = validation
+                if not validation.get("passed"):
+                    validation_summary = "；".join(
+                        str(item.get("message") or "").strip()
+                        for item in list(validation.get("failures") or [])
+                        if isinstance(item, dict) and str(item.get("message") or "").strip()
+                    )
+                    result = {
+                        **result,
+                        "table_kind": "unknown",
+                        "recommended_step": "UNKNOWN",
+                        "needs_user_confirmation": True,
+                        "summary": (
+                            validation_summary
+                            or "表格问题列表识别未通过校验，请重新检查表头或重新上传。"
+                        ),
+                    }
+                else:
+                    artifact_ref = resolve_table_import_question_list_artifact_ref(
+                        session_id=session_id,
+                        result=result,
+                    )
+                    artifact_title, artifact_data = build_table_import_question_list_artifact(
+                        result,
+                        session_id=session_id,
+                    )
+                    await save_and_send_artifact(
+                        session_id=session_id,
+                        output_type="questionList",
+                        title=artifact_title,
+                        data=artifact_data,
+                        artifact_key=artifact_ref["artifact_id"],
+                    )
+                    result["artifact_ref"] = artifact_ref
 
         await send_progress_event(
             session_id=session_id,
@@ -235,6 +317,7 @@ async def table_intake_node(state: AgentState) -> Command:
                 "source_type": "uploaded_table",
                 "source_file": result.get("source_file"),
                 "import_intent": result.get("import_intent"),
+                "current_import_artifact": result.get("artifact_ref"),
             }
         )
 
@@ -242,6 +325,7 @@ async def table_intake_node(state: AgentState) -> Command:
             update={
                 "table_intake_result": result,
                 "import_source_metadata": import_source_metadata,
+                "current_import_artifact": result.get("artifact_ref"),
                 "error_info": None,
                 **build_skill_result_update(
                     state,

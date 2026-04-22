@@ -368,6 +368,36 @@ class MessageService:
 
         return self._message_to_dict(message)
 
+    async def get_latest_output_by_artifact_id(
+        self,
+        *,
+        session_id: UUID,
+        artifact_id: str,
+        compact_output: bool = False,
+    ) -> dict[str, Any] | None:
+        normalized_artifact_id = str(artifact_id or "").strip()
+        if not normalized_artifact_id:
+            return None
+
+        query = (
+            select(Message)
+            .where(
+                Message.session_id == session_id,
+                Message.type == MessageType.OUTPUT,
+            )
+            .order_by(Message.sequence.desc())
+        )
+        result = await self.db.execute(query)
+        messages = result.scalars().all()
+        for message in messages:
+            metadata = json.loads(message.extra_metadata) if message.extra_metadata else None
+            if not isinstance(metadata, dict):
+                continue
+            if str(metadata.get("output_id") or "").strip() != normalized_artifact_id:
+                continue
+            return self._message_to_dict(message, compact_output=compact_output)
+        return None
+
     def _message_to_dict(
         self,
         message: Message,

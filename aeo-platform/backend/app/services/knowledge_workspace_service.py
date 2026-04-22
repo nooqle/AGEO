@@ -1718,15 +1718,19 @@ class KnowledgeWorkspaceService:
     def _export_columns(self) -> list[dict[str, Any]]:
         return [
             {"key": "occurred_at", "label": "时间", "sortable": True},
+            {"key": "source_scope", "label": "来源范围", "sortable": True},
             {"key": "source_type", "label": "来源类型", "sortable": True},
             {"key": "platform", "label": "平台", "sortable": True},
             {"key": "competitor_name", "label": "竞品", "sortable": True},
             {"key": "question_text", "label": "问题", "sortable": False},
+            {"key": "answer_content", "label": "回答内容", "sortable": False},
+            {"key": "sentiment", "label": "回答情感", "sortable": True},
+            {"key": "summary", "label": "摘要", "sortable": False},
+            {"key": "tags", "label": "标签", "sortable": False},
             {"key": "title", "label": "标题", "sortable": False},
             {"key": "domain", "label": "域名", "sortable": True},
             {"key": "site_name", "label": "站点", "sortable": True},
             {"key": "is_official", "label": "官网", "sortable": True},
-            {"key": "snippet", "label": "摘要", "sortable": False},
             {"key": "url", "label": "链接", "sortable": False},
         ]
 
@@ -1962,14 +1966,45 @@ class KnowledgeWorkspaceService:
             payload.get("citation") if isinstance(payload.get("citation"), dict) else {}
         )
 
-        snippet = _record_export_snippet(record)
+        answer = payload.get("answer") if isinstance(payload.get("answer"), dict) else {}
+        sentiment = _text(metadata.get("sentiment") or payload.get("sentiment")).lower()
+        has_brand_mention = bool(
+            metadata.get("has_brand_mention") or payload.get("has_brand_mention")
+        )
+        answer_content = _normalize_user_visible_text(
+            _join_non_empty(
+                [
+                    answer.get("content"),
+                    payload.get("answer_text"),
+                    payload.get("content"),
+                ]
+            )
+        )
+        summary = _normalize_user_visible_text(
+            _join_non_empty(
+                [
+                    answer.get("summary"),
+                    citation.get("summary"),
+                    citation.get("snippet"),
+                    _record_export_snippet(record),
+                ]
+            )
+        )
+        tags = ""
+        if sentiment:
+            tags = "、".join(_sentiment_terms(sentiment, has_brand_mention))
 
         return {
             "occurred_at": record.occurred_at.strftime("%Y-%m-%d %H:%M"),
+            "source_scope": "历史资料库",
             "source_type": _source_type_label(record.source_type),
             "platform": _platform_display_name(record.platform),
             "competitor_name": _text(record.competitor_name),
             "question_text": _normalize_user_visible_text(record.question_text),
+            "answer_content": answer_content,
+            "sentiment": _sentiment_label(sentiment) if sentiment else "",
+            "summary": summary,
+            "tags": tags,
             "title": _normalize_user_visible_text(record.title),
             "domain": _text(record.domain),
             "site_name": _text(
@@ -1982,7 +2017,6 @@ class KnowledgeWorkspaceService:
                 if bool(metadata.get("is_official") or payload.get("is_official"))
                 else "否"
             ),
-            "snippet": snippet,
             "url": _text(metadata.get("url") or citation.get("url")),
         }
 
