@@ -586,6 +586,21 @@ async def _handle_pipeline_success(
                     alert_err,
                 )
 
+        if snapshot_id is None:
+            error_message = (
+                "Headless scheduled monitoring finished without snapshot/metrics; "
+                "treating run as failed instead of pseudo-completed."
+            )
+            logger.error("[Scheduler] %s task=%s run=%s", error_message, task_id, run_id)
+            await task_service.fail_task(
+                task_id,
+                error_message=error_message,
+                error_stage="scheduler_snapshot_missing",
+                run_id=run_id,
+            )
+            await monitoring_service.record_run_failed(schedule_id)
+            return
+
         # Save baseline on first successful run (when questions exist)
         if is_first_run and questions:
             # Double-check: baseline may have been saved by a concurrent run
