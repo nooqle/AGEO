@@ -284,6 +284,34 @@
     - `GEO 全景分析报告`
     - `???`
   - 说明先前那次 `networkidle` 超时属于 probe 条件问题，不是 A7 页面功能回退
+- `2026-04-22 18:43` 已将当前修复基线提交为：
+  - `9f734dc fix(workflow): close p0 artifact and report routing`
+  - 并已 `fast-forward merge` 到 `D:\AGEO-main` 的 `main`，随后推送 `origin/main`
+- `2026-04-22 18:43 ~ 18:46` 已部署到 demo：
+  - 远端目录：`/srv/ageo`
+  - 备份目录：`/srv/ageo/.codex-backups/20260422-184307-main-sync`
+  - 处理了一次前端构建权限漂移：先清理 `/srv/ageo/frontend/.next`，再执行 `npm run build`
+  - 两个服务均已重启并恢复 `active`
+  - 健康检查：
+    - `http://127.0.0.1:3000 -> 200`
+    - `https://demo.imspecta.com -> 200`
+- `2026-04-22 18:46` 部署后再次执行本机 Playwright smoke：
+  - `output/playwright/p0-live-probe.json`
+  - `output/playwright/p0-history-probe.json`
+  - 结果：
+    - `dashboard_ready_seconds = 6.786`
+    - `route_seconds = 0.073`
+    - `canvas_seconds = 2.873`
+    - `canonical_seconds = 12.053`
+    - `has_question_marks = false`
+    - `has_bad_fallback = false`
+    - `pdf_downloaded = true`
+    - `md_downloaded = true`
+  - 但同时暴露一个残余 open：
+    - 本轮 probe 最终 `chat_url` 落在 `artifact_id=..._fetchResults`
+    - `report_tab_has_summary = false`
+    - `md_suggested_filename = brand用户场景细分分析_20260422-184505_v1.md`
+  - 说明这版主线和 demo 已完成提交/合并/推送/部署，但 `P0` 仍未正式闭环，当前残余问题已收敛成部署后的一条 artifact focus / export context 错位，不再是服务不可用或大面积回退
     - `25s` 时 canonical panorama report 已完整可见
 - 当前仍保留的 open：
   - 桌面 MCP Playwright browser backend 仍不可用：`browserBackend.callTool: Target page, context or browser has been closed`
