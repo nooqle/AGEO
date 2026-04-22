@@ -965,9 +965,19 @@ def _build_history_answer_export_query(
     return normalized_basis
 
 
+def _get_recent_history_answer_result_query(state: AgentState) -> str | None:
+    for result_key in ("knowledge_export_result", "knowledge_lookup_result"):
+        result = state.get(result_key) or {}
+        query = str(result.get("query") or "").strip()
+        source_types = list(result.get("source_types") or [])
+        if query and "fetch_answer" in source_types:
+            return query
+    return None
+
+
 def _resolve_bounded_history_answer_query(state: AgentState) -> str | None:
     latest_user_message = _get_latest_user_message(state).strip()
-    if not latest_user_message or _is_current_report_follow_up(state):
+    if not latest_user_message:
         return None
 
     if _is_history_answer_content_query(latest_user_message):
@@ -983,16 +993,23 @@ def _resolve_bounded_history_answer_query(state: AgentState) -> str | None:
             basis_query=basis_query,
         )
 
+    result_query = _get_recent_history_answer_result_query(state)
+    if result_query and _session_was_recalled(state):
+        return _build_history_answer_export_query(
+            latest_user_message=latest_user_message,
+            basis_query=result_query,
+        )
+
     if _has_recent_history_answer_followup_invite(state):
-        for result_key in ("knowledge_export_result", "knowledge_lookup_result"):
-            result = state.get(result_key) or {}
-            query = str(result.get("query") or "").strip()
-            source_types = list(result.get("source_types") or [])
-            if query and "fetch_answer" in source_types:
-                return _build_history_answer_export_query(
-                    latest_user_message=latest_user_message,
-                    basis_query=query,
-                )
+        result_query = _get_recent_history_answer_result_query(state)
+        if result_query:
+            return _build_history_answer_export_query(
+                latest_user_message=latest_user_message,
+                basis_query=result_query,
+            )
+
+    if _is_current_report_follow_up(state):
+        return None
 
     return None
 

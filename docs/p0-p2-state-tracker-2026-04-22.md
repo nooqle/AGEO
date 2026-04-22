@@ -1015,3 +1015,56 @@
 - 还没做最终页面级验证：
   - 旧会话刷新后，多份历史“资料”是否折叠为一个导航项
   - 同一“资料”导航是否能通过 version 正常切换历史结果
+
+## 2026-04-22 23:42 P1 残余：历史回答“需要看完整内容”在 recall 后再次退回自由 skill 串链
+
+- 当前阶段：`部署验证阶段`
+- 当前完成度：`90%`
+
+### 直接根因
+
+- 22:13 的线上真实链路表明，这次不是 continuation 词表漏掉，而是 **recall 后 basis 被删掉**：
+  - user: `需要看完整内容。`
+  - `session_recalled=True`
+  - restored state: `step=A5`
+  - 旧链路退回 `knowledge_lookup -> knowledge_export -> knowledge_lookup -> ask_user`
+- 旧逻辑里，`_resolve_bounded_history_answer_query()` 只会从两处恢复 basis：
+  - recent user history 里的上一条历史回答查询
+  - recent assistant 邀请语 + `knowledge_*_result.query`
+- 但 recall 正好会删掉最近一轮 basis query / invite，导致 generic continuation `需要看完整内容。` 在恢复态里找不到承接依据，于是 bounded route 失效。
+
+### 修法
+
+- `aeo-platform/backend/app/workflow/orchestrator_node.py`
+- 新增 `_get_recent_history_answer_result_query(state)`
+- 对 continuation follow-up 增加 `session_recalled` 恢复通道：
+  - 如果 recent history basis 已被 recall 删掉
+  - 但 state 中仍保留最近一次 `fetch_answer` 类型的 `knowledge_lookup/export result query`
+  - 则直接复用它构造 bounded `knowledge_export`
+- 这样 recall 后的 `需要看完整内容。` 不再掉回自由 `lookup/export/lookup/ask_user` 串链。
+
+### 证据
+
+- 线上日志（22:13）：
+  - `Session ... was recalled, bypassing checkpointer`
+  - `user_message: 需要看完整内容。`
+  - 旧链路依次触发：
+    - `knowledge_lookup(query=带有负面信息的回答完整内容)`
+    - `knowledge_export(query=带有负面信息的回答完整内容)`
+    - `knowledge_lookup(query=直销品牌的保健品是否靠谱 负面 风险)`
+    - 第二次 `knowledge_lookup` 被 retry gate 拦截后进入 `ask_user`
+- 本地：
+  - `orchestrator_node.py` `py_compile` 通过
+- demo：
+  - 已部署修复后的 `orchestrator_node.py`
+  - 远端文件 hash 与本地修复版一致：
+    - `751519f94aa833bba7581782ba8fd39fbce00fce725bef7ec17c84711e80dcc1`
+  - `ageo-backend.service = active`
+  - `http://127.0.0.1:8000/docs -> 200`
+
+### 当前 still open
+
+- 还缺用户在 demo 上再次回放：
+  1. 先查带负面信息的回答
+  2. 再发：`需要看完整内容。`
+- 预期应收敛成一次 bounded `knowledge_export(fetch_answer)`，不再刷多条执行计划消息。
