@@ -80,13 +80,14 @@ class JobSubmissionService:
         self,
         *,
         user_id: UUID,
+        session_id: UUID,
         brand_name: str,
         entity_id: UUID,
         monitoring_schedule_id: UUID,
     ) -> SubmittedJob:
         return await self._submit(
             user_id=user_id,
-            session_id=None,
+            session_id=session_id,
             brand_name=brand_name,
             entity_id=entity_id,
             monitoring_schedule_id=monitoring_schedule_id,

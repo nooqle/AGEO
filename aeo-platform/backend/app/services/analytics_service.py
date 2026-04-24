@@ -399,7 +399,7 @@ class AnalyticsService:
             else report_data.get("dashboard_projection"),
             "_output_type": "report",
             "_created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
-            "_session_id": "",
+            "_session_id": str(snapshot.session_id) if snapshot.session_id else "",
             "_artifact_id": "",
             "_artifact_kind": "geo_report",
             "_report_kind": str(raw_data.get("report_kind") or snapshot.snapshot_type or ""),
@@ -412,13 +412,7 @@ class AnalyticsService:
         latest_output: dict[str, Any] | None,
         latest_snapshot: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
-        if latest_output is None:
-            return latest_snapshot
-        if latest_snapshot is None:
-            return latest_output
-        output_created = str(latest_output.get("_created_at") or "")
-        snapshot_created = str(latest_snapshot.get("_created_at") or "")
-        return latest_snapshot if snapshot_created > output_created else latest_output
+        return latest_output or latest_snapshot
 
     def _extract_v2_payload(self, data: dict[str, Any]) -> dict[str, Any]:
         """Extract V2 contract fields from artifact, report_data, or metrics_raw."""

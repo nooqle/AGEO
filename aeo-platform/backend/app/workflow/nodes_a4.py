@@ -2468,7 +2468,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # Save and send artifact to Canvas
         from app.workflow.events import save_and_send_artifact
 
+        task_run_id = str(state.get("run_id") or "").strip()
         artifact_key = f"{session_id}_fetchResults_a4"
+        if task_run_id and (
+            state.get("monitoring_schedule_id") or state.get("headless_mode")
+        ):
+            artifact_key = f"{artifact_key}_{task_run_id}"
         artifact_message_id = await save_and_send_artifact(
             session_id=session_id,
             output_type="fetchResults",
@@ -2713,10 +2718,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
         update_dict.update(merge_validation_update)
         update_dict.update(artifact_validation_update)
         if bool(state.get("headless_mode")) and artifact_validation.passed:
+            report_type = (
+                "panorama"
+                if str(state.get("analysis_mode") or "").strip().lower() == "baseline"
+                else "scenario"
+            )
             update_dict["next_required_action"] = build_next_required_action(
                 tool_name="analysis_report_skill",
                 authority="authoritative_resume",
                 reason="Headless scheduled monitoring continues directly to A5 after A4 completion.",
+                tool_args={"report_type": report_type},
                 source_step="a4_answer_fetch",
                 metadata={
                     "headless_mode": True,

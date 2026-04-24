@@ -332,7 +332,9 @@ async def a5_analytics_node(state: AgentState) -> Command:
         # Stage result: metrics preview before LLM report generation
         metrics_preview_data = {
             "mention_rate": f"{(summary_metrics.get('mention_rate') or 0):.1%}",
-            "content_citation_rate": f"{summary_metrics.get('content_citation_rate', 0):.1%}",
+            "content_citation_rate": (
+                f"{(summary_metrics.get('content_citation_rate') or 0):.1%}"
+            ),
             "scenario_hit_count": summary_metrics.get("scenario_hit_count", 0),
             "scenario_total": summary_metrics.get("scenario_total", 0),
             "accuracy_status": None,
@@ -442,6 +444,12 @@ async def a5_analytics_node(state: AgentState) -> Command:
             "mention_sentiment_analysis": mention_sentiment_analysis,
         }
 
+        triggered_by = (
+            "scheduled"
+            if state.get("headless_mode") or state.get("monitoring_schedule_id")
+            else "manual"
+        )
+
         # --- Snapshot writing + Delta vs previous (single DB session) ---
         is_degraded = report_data.get("_degraded", False)
         snapshot = None
@@ -461,6 +469,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                         competitor_metrics=competitor_metrics,
                         fetch_results_summary=fetch_results_summary,
                         is_degraded=is_degraded,
+                        triggered_by=triggered_by,
                         snapshot_type="panorama" if is_baseline else "scenario",
                     )
                     logger.info(
@@ -514,11 +523,11 @@ async def a5_analytics_node(state: AgentState) -> Command:
         report_title = "品牌全景分析报告" if is_baseline else "用户场景分析报告"
         report_category = report_kind
         artifact_key = f"{session_id}_{report_output_type}_{report_kind}"
-        triggered_by = (
-            "scheduled"
-            if state.get("headless_mode") or state.get("monitoring_schedule_id")
-            else "manual"
-        )
+        task_run_id = str(state.get("run_id") or "").strip()
+        if task_run_id and (
+            state.get("monitoring_schedule_id") or state.get("headless_mode")
+        ):
+            artifact_key = f"{artifact_key}_{task_run_id}"
         report_artifact_data = {
             **report_data,
             "fetch_results_summary": fetch_results_summary,
@@ -589,9 +598,15 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
                     snapshot_uuid = snapshot.id if snapshot else None
+                    task_run_uuid = (
+                        _UUID(str(state.get("run_id")))
+                        if state.get("run_id")
+                        else None
+                    )
                     await task_svc.complete_task(
                         _UUID(task_id),
                         snapshot_id=snapshot_uuid,
+                        run_id=task_run_uuid,
                     )
             except Exception as te:
                 logger.warning("[A5] TaskService complete_task failed: %s", te)
@@ -599,6 +614,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
         update_dict: dict[str, Any] = {
             "metrics": metrics_for_state,
             "report": report_artifact_data,
+            "snapshot_id": str(snapshot.id) if snapshot else None,
             "current_step": "A5",
             "progress": 1.0,
         }
@@ -698,10 +714,16 @@ async def a5_analytics_node(state: AgentState) -> Command:
 
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
+                    task_run_uuid = (
+                        _UUID(str(state.get("run_id")))
+                        if state.get("run_id")
+                        else None
+                    )
                     await task_svc.fail_task(
                         _UUID(task_id),
                         error_message=str(e),
                         error_stage="A5",
+                        run_id=task_run_uuid,
                     )
             except Exception as te:
                 logger.warning("[A5] TaskService fail_task failed: %s", te)

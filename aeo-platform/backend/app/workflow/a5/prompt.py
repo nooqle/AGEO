@@ -3,6 +3,41 @@
 import json
 from typing import Any
 
+
+def _safe_ratio(value: Any, denominator: Any | None = None) -> float:
+    try:
+        numerator = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+    if denominator is not None:
+        try:
+            denominator_value = float(denominator or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        if denominator_value <= 0:
+            return 0.0
+        numeric = numerator / denominator_value
+    else:
+        numeric = numerator
+
+    return max(0.0, min(1.0, numeric))
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _get_a5_report_context_intro(report_type: str) -> str:
     """Get context intro section based on report type."""
     if report_type == "baseline":
@@ -143,10 +178,10 @@ def _build_a5_user_content(
             "|------|---------|---------|-----------|--------|",
         ]
         for platform, stats in platform_breakdown.items():
-            total = stats.get("total", 0)
-            success = stats.get("success", 0)
-            mentions_count = stats.get("mentions", 0)
-            rate = f"{mentions_count / total:.1%}" if total > 0 else "0.0%"
+            total = _safe_int(stats.get("total", 0))
+            success = _safe_int(stats.get("success", 0))
+            mentions_count = _safe_int(stats.get("mentions", 0))
+            rate = f"{_safe_ratio(mentions_count, total):.1%}"
             platform_table_lines.append(
                 f"| {platform} | {total} | {success} | {mentions_count} | {rate} |"
             )
@@ -157,16 +192,16 @@ def _build_a5_user_content(
     sentiment_dist = metrics.get("sentiment_distribution", {})
     sections.append(
         f"## 核心指标\n"
-        f"- 提及率: {metrics.get('mention_rate', 0):.2%}\n"
-        f"- 内容引用率: {(summary_metrics or {}).get('content_citation_rate', 0):.2%}\n"
-        f"- 场景覆盖数: {(summary_metrics or {}).get('scenario_hit_count', 0)}/{(summary_metrics or {}).get('scenario_total', 0)}\n"
-        f"- 总问题数: {metrics.get('total_questions', 0)}\n"
-        f"- 总提及数: {metrics.get('total_mentions', 0)}\n\n"
+        f"- 提及率: {_safe_ratio(metrics.get('mention_rate', 0)):.2%}\n"
+        f"- 内容引用率: {_safe_ratio((summary_metrics or {}).get('content_citation_rate', 0)):.2%}\n"
+        f"- 场景覆盖数: {_safe_int((summary_metrics or {}).get('scenario_hit_count', 0))}/{_safe_int((summary_metrics or {}).get('scenario_total', 0))}\n"
+        f"- 总问题数: {_safe_int(metrics.get('total_questions', 0))}\n"
+        f"- 总提及数: {_safe_int(metrics.get('total_mentions', 0))}\n\n"
         f"### 各平台详细表现\n{platform_table}\n\n"
         f"### 情感分布\n"
-        f"- 正面: {sentiment_dist.get('positive', 0)}, "
-        f"中性: {sentiment_dist.get('neutral', 0)}, "
-        f"负面: {sentiment_dist.get('negative', 0)}"
+        f"- 正面: {_safe_int(sentiment_dist.get('positive', 0))}, "
+        f"中性: {_safe_int(sentiment_dist.get('neutral', 0))}, "
+        f"负面: {_safe_int(sentiment_dist.get('negative', 0))}"
     )
 
     if summary_metrics or scenario_matrix or source_overview:
@@ -289,7 +324,7 @@ def _build_a5_user_content(
         )
 
     # 4. Competitors — structured quantitative table
-    brand_mention_rate = metrics.get("mention_rate", 0)
+    brand_mention_rate = _safe_ratio(metrics.get("mention_rate", 0))
     if competitor_metrics:
         comp_lines = [
             "## 竞品量化数据",
@@ -300,13 +335,14 @@ def _build_a5_user_content(
         ]
         for cm in competitor_metrics:
             name = cm.get("name", "")
-            mr = cm.get("mention_rate", 0)
-            sentiment = cm.get("sentiment", 0)
-            ranking = cm.get("avg_ranking", 0)
+            mr = _safe_ratio(cm.get("mention_rate", 0))
+            sentiment = _safe_float(cm.get("sentiment", 0))
+            ranking = _safe_int(cm.get("avg_ranking", 0))
             vs = "高于" if mr > brand_mention_rate else ("低于" if mr < brand_mention_rate else "持平")
             sent_label = "正面" if sentiment > 0.2 else ("负面" if sentiment < -0.2 else "中性")
+            ranking_label = f"#{ranking}" if ranking > 0 else "-"
             comp_lines.append(
-                f"| {name} | {mr:.1%} | {vs} | {sent_label}({sentiment:+.2f}) | #{ranking} |"
+                f"| {name} | {mr:.1%} | {vs} | {sent_label}({sentiment:+.2f}) | {ranking_label} |"
             )
 
         # Append appeared_in details
@@ -353,14 +389,27 @@ def _build_a5_user_content(
 
     # Inject baseline context for persona mode comparison
     if analysis_mode == "persona" and baseline_metrics:
-        baseline_mention = baseline_metrics.get("mention_rate", 0)
-        baseline_content_citation = (baseline_metrics.get("summary_metrics", {}) or {}).get("content_citation_rate", 0)
-        current_mention = (summary_metrics or {}).get("brand_mention_rate", metrics.get("mention_rate", 0))
-        current_content_citation = (summary_metrics or {}).get("content_citation_rate", 0)
-        current_scenario_hit = (summary_metrics or {}).get("scenario_hit_count", 0)
-        current_scenario_total = (summary_metrics or {}).get("scenario_total", 0)
-        baseline_scenario_hit = (baseline_metrics.get("summary_metrics", {}) or {}).get("scenario_hit_count", 0)
-        baseline_scenario_total = (baseline_metrics.get("summary_metrics", {}) or {}).get("scenario_total", 0)
+        baseline_summary = baseline_metrics.get("summary_metrics", {}) or {}
+        baseline_mention = _safe_ratio(baseline_metrics.get("mention_rate", 0))
+        baseline_content_citation = _safe_ratio(
+            baseline_summary.get("content_citation_rate", 0)
+        )
+        current_mention = _safe_ratio(
+            (summary_metrics or {}).get("brand_mention_rate", metrics.get("mention_rate", 0))
+        )
+        current_content_citation = _safe_ratio(
+            (summary_metrics or {}).get("content_citation_rate", 0)
+        )
+        current_scenario_hit = _safe_int(
+            (summary_metrics or {}).get("scenario_hit_count", 0)
+        )
+        current_scenario_total = _safe_int(
+            (summary_metrics or {}).get("scenario_total", 0)
+        )
+        baseline_scenario_hit = _safe_int(baseline_summary.get("scenario_hit_count", 0))
+        baseline_scenario_total = _safe_int(
+            baseline_summary.get("scenario_total", 0)
+        )
         baseline_findings = ""
         if baseline_report:
             findings = baseline_report.get("key_findings", [])[:3]
