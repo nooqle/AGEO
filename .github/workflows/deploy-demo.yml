@@ -82,7 +82,24 @@ jobs:
           printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
           chmod 600 "$key_path"
           ssh-keygen -y -f "$key_path" >/dev/null
-          ssh-keyscan -p "$DEMO_SSH_PORT" "$DEMO_SSH_HOST" >> ~/.ssh/known_hosts
+          ssh_options=(
+            -i "$key_path"
+            -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+          scp_options=(
+            -i "$key_path"
+            -P "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
 
           retry() {
             local attempt=1
@@ -100,8 +117,7 @@ jobs:
             done
           }
 
-          retry scp -i "$key_path" -P "$DEMO_SSH_PORT" ops/deploy-demo.sh \
+          retry scp "${scp_options[@]}" ops/deploy-demo.sh \
             "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:/tmp/ageo-deploy-demo.sh"
-          retry ssh -i "$key_path" -p "$DEMO_SSH_PORT" \
-            "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+          retry ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
             "chmod +x /tmp/ageo-deploy-demo.sh && /tmp/ageo-deploy-demo.sh --sha $(printf '%q' "$RESOLVED_SHA") --repo $(printf '%q' "$DEMO_REPO_URL") --external-url $(printf '%q' "$DEMO_EXTERNAL_URL")"
