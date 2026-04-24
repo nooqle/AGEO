@@ -82,8 +82,25 @@ jobs:
           printf '%s\n' "$DEMO_SSH_KEY" > "$key_path"
           chmod 600 "$key_path"
           ssh-keyscan -p "$DEMO_SSH_PORT" "$DEMO_SSH_HOST" >> ~/.ssh/known_hosts
-          scp -i "$key_path" -P "$DEMO_SSH_PORT" ops/deploy-demo.sh \
+
+          retry() {
+            local attempt=1
+            local max_attempts=5
+            local delay=10
+            until "$@"; do
+              local exit_code=$?
+              if (( attempt >= max_attempts )); then
+                return "$exit_code"
+              fi
+              echo "SSH command failed with exit ${exit_code}; retrying in ${delay}s (attempt ${attempt}/${max_attempts})" >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+
+          retry scp -i "$key_path" -P "$DEMO_SSH_PORT" ops/deploy-demo.sh \
             "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:/tmp/ageo-deploy-demo.sh"
-          ssh -i "$key_path" -p "$DEMO_SSH_PORT" \
+          retry ssh -i "$key_path" -p "$DEMO_SSH_PORT" \
             "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
             "chmod +x /tmp/ageo-deploy-demo.sh && /tmp/ageo-deploy-demo.sh --sha $(printf '%q' "$RESOLVED_SHA") --repo $(printf '%q' "$DEMO_REPO_URL") --external-url $(printf '%q' "$DEMO_EXTERNAL_URL")"
