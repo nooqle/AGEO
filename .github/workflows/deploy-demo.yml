@@ -79,8 +79,9 @@ jobs:
           install -d -m 700 ~/.ssh
           key_path=~/.ssh/ageo_demo_deploy_key
           trap 'rm -f "$key_path"' EXIT
-          printf '%s\n' "$DEMO_SSH_KEY" > "$key_path"
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
           chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
           ssh-keyscan -p "$DEMO_SSH_PORT" "$DEMO_SSH_HOST" >> ~/.ssh/known_hosts
 
           retry() {
