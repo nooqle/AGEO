@@ -62,6 +62,7 @@ from app.workflow.fetch_recovery import (
     extract_latest_fetch_recovery_plan_from_state,
     normalize_question_targets,
 )
+from app.workflow.runtime_policy_executor import build_next_required_action
 from app.workflow.skill_state import (
     build_harness_decision_update,
     build_skill_result_update,
@@ -248,6 +249,7 @@ def _build_a4_completion_observation(
     projected_fetch_results: list[dict[str, Any]],
     completion_decision: Any,
     artifact_validation: Any,
+    headless_mode: bool,
     retry_failed_only: bool,
     scoped_merge_active: bool,
     question_targets: list[dict[str, Any]],
@@ -262,12 +264,17 @@ def _build_a4_completion_observation(
         and completion_decision.decision_type == "degraded_continue"
         and recovery_plan
         and int(recovery_plan.get("failure_count") or 0) > 0
+        and not headless_mode
     )
     return {
         "summary": (
             "答案抓取已完成，当前仍有失败项，需要由 Orchestrator 先请求用户确认下一步。"
             if requires_user_decision
-            else "答案抓取已完成，结果已写回到当前官方样本。"
+            else (
+                "答案抓取已完成；当前为 headless 定时任务，将直接继续生成分析报告。"
+                if headless_mode and artifact_validation.passed
+                else "答案抓取已完成，结果已写回到当前官方样本。"
+            )
         ),
         "requires_user_decision": requires_user_decision,
         "followup_options": (
@@ -2499,6 +2506,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             projected_fetch_results=projected_fetch_results,
             completion_decision=completion_decision,
             artifact_validation=artifact_validation,
+            headless_mode=bool(state.get("headless_mode")),
             retry_failed_only=retry_failed_only,
             scoped_merge_active=scoped_merge_active,
             question_targets=question_targets,
@@ -2705,6 +2713,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
         update_dict.update(skill_update)
         update_dict.update(merge_validation_update)
         update_dict.update(artifact_validation_update)
+        if bool(state.get("headless_mode")) and artifact_validation.passed:
+            update_dict["next_required_action"] = build_next_required_action(
+                tool_name="analysis_report_skill",
+                authority="authoritative_resume",
+                reason="Headless scheduled monitoring continues directly to A5 after A4 completion.",
+                source_step="a4_answer_fetch",
+                metadata={
+                    "headless_mode": True,
+                    "scheduled_continuation": True,
+                    "artifact_write_validated": True,
+                },
+            )
         update_dict.update(
             build_harness_decision_update(
                 {

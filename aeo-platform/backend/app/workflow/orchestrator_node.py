@@ -61,6 +61,7 @@ from app.workflow.orchestrator_instruction_defense import (
 )
 from app.workflow.prompt_assembly import PromptAssembly, PromptSection
 from app.workflow.runtime_policy_executor import (
+    build_next_required_action,
     build_alternative_action_catalog,
     clear_runtime_policy_fields,
     get_user_visible_runtime_label,
@@ -965,9 +966,19 @@ def _build_history_answer_export_query(
     return normalized_basis
 
 
+def _get_recent_history_answer_result_query(state: AgentState) -> str | None:
+    for result_key in ("knowledge_export_result", "knowledge_lookup_result"):
+        result = state.get(result_key) or {}
+        query = str(result.get("query") or "").strip()
+        source_types = list(result.get("source_types") or [])
+        if query and "fetch_answer" in source_types:
+            return query
+    return None
+
+
 def _resolve_bounded_history_answer_query(state: AgentState) -> str | None:
     latest_user_message = _get_latest_user_message(state).strip()
-    if not latest_user_message or _is_current_report_follow_up(state):
+    if not latest_user_message:
         return None
 
     if _is_history_answer_content_query(latest_user_message):
@@ -983,16 +994,23 @@ def _resolve_bounded_history_answer_query(state: AgentState) -> str | None:
             basis_query=basis_query,
         )
 
+    result_query = _get_recent_history_answer_result_query(state)
+    if result_query and _session_was_recalled(state):
+        return _build_history_answer_export_query(
+            latest_user_message=latest_user_message,
+            basis_query=result_query,
+        )
+
     if _has_recent_history_answer_followup_invite(state):
-        for result_key in ("knowledge_export_result", "knowledge_lookup_result"):
-            result = state.get(result_key) or {}
-            query = str(result.get("query") or "").strip()
-            source_types = list(result.get("source_types") or [])
-            if query and "fetch_answer" in source_types:
-                return _build_history_answer_export_query(
-                    latest_user_message=latest_user_message,
-                    basis_query=query,
-                )
+        result_query = _get_recent_history_answer_result_query(state)
+        if result_query:
+            return _build_history_answer_export_query(
+                latest_user_message=latest_user_message,
+                basis_query=result_query,
+            )
+
+    if _is_current_report_follow_up(state):
+        return None
 
     return None
 
@@ -1499,6 +1517,8 @@ def _get_contextual_hidden_tool_names(state: AgentState | None) -> set[str]:
         return set()
 
     hidden: set[str] = set()
+    if state.get("headless_mode"):
+        hidden.add("ask_user")
     if _session_was_recalled(state):
         hidden.update(_KNOWLEDGE_TOOL_NAMES)
     preferred_followup_tool = _infer_current_session_followup_tool(state)
@@ -1959,6 +1979,9 @@ def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
     hidden_tool_names = _get_contextual_hidden_tool_names(state)
     preferred_followup_tool = _infer_current_session_followup_tool(state)
     lines: list[str] = []
+
+    if state.get("headless_mode"):
+        lines.append("- 当前任务是 headless 定时任务，不能等待用户确认；不要调用 ask_user。")
 
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
         lines.append("- 当前问题属于本次结果追问，过往资料工具已从当前回合工具面隐藏。")
@@ -4344,37 +4367,52 @@ async def _handle_tool_call(
             )
         ]
 
-        # ---- Headless mode: auto-confirm with first option, skip wait ----
+        # ---- Headless scheduled tasks must never wait for or auto-confirm ask_user ----
         if state.get("headless_mode"):
-            auto_choice = options[0] if options else {"id": "confirm", "label": "确认"}
-            auto_reply = f"[自动确认] {auto_choice.get('label', '确认')}"
             logger.info(
-                "[Orchestrator] Headless mode: auto-confirming ask_user "
-                "with option '%s'",
-                auto_choice.get("id"),
+                "[Orchestrator] Headless mode blocked ask_user; resolving deterministically."
             )
-            # Inject tool result with auto-confirm into history
-            new_history.append(
-                {
-                    "role": "tool",
-                    "content": auto_reply,
-                    "tool_call_id": tool_call.id or "call_1",
-                }
-            )
-            # Append user message so orchestrator sees the "reply"
-            new_history.append(
-                {
-                    "role": "user",
-                    "content": auto_reply,
-                }
-            )
+            a4_observation = state.get("a4_completion_observation") or {}
+            if bool(a4_observation.get("artifact_write_validated", False)):
+                new_history.append(
+                    {
+                        "role": "tool",
+                        "content": "[headless_mode] ask_user 已被阻止，改为继续生成分析报告。",
+                        "tool_call_id": tool_call.id or "call_1",
+                    }
+                )
+                return Command(
+                    goto="orchestrator",
+                    update={
+                        "awaiting_user": False,
+                        "orchestrator_reply": reply_text,
+                        "orchestrator_history": new_history,
+                        "pending_confirmation": None,
+                        "agent_retry_counts": current_retry_counts,
+                        "next_required_action": build_next_required_action(
+                            tool_name="analysis_report_skill",
+                            authority="authoritative_resume",
+                            reason="Headless scheduled monitoring cannot wait for ask_user; continue directly to A5 after A4 completion.",
+                            source_step="orchestrator_headless_ask_user_guard",
+                            metadata={
+                                "headless_mode": True,
+                                "fallback_from": "ask_user",
+                            },
+                        ),
+                    },
+                )
             return Command(
-                goto="orchestrator",
+                goto=END,
                 update={
+                    "execution_status": "error",
+                    "error_info": {
+                        "step": "orchestrator",
+                        "error": "Headless scheduled task attempted ask_user without a deterministic continuation.",
+                        "timestamp": datetime.now().isoformat(),
+                    },
                     "awaiting_user": False,
-                    "orchestrator_reply": reply_text,
-                    "orchestrator_history": new_history,
                     "pending_confirmation": None,
+                    "orchestrator_history": new_history,
                     "agent_retry_counts": current_retry_counts,
                 },
             )
