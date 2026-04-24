@@ -23,6 +23,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const searchParams = useSearchParams();
   const isMonitoringMode = searchParams.get('tab') === 'monitoring';
   const [brandArchive, setBrandArchive] = useState<DashboardBrandArchiveData | null>(null);
+  const [isOpeningLatestReport, setIsOpeningLatestReport] = useState(false);
   const {
     selectedBrandId,
     setSelectedBrandId,
@@ -122,6 +123,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
   const handleOpenLatestReport = () => {
     if (!home?.latest_report?.session_id) return;
+    setIsOpeningLatestReport(true);
     const params = new URLSearchParams();
     const artifactTarget = home.latest_report.artifact_id || home.latest_report.output_id;
     if (artifactTarget) {
@@ -165,10 +167,10 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
               }}
             >
               <div className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
-                当前首页未成功加载品牌列表或会话列表
+                首页加载失败
               </div>
               <p className="mt-2 text-[13px] leading-7" style={{ color: 'var(--text-secondary)' }}>
-                先恢复品牌和会话接口，再重新加载首页。
+                请刷新重试。
               </p>
             </div>
           )}
@@ -182,10 +184,10 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
               }}
             >
               <div className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
-                最近一轮分析摘要暂时没有加载成功
+                分析加载失败
               </div>
               <p className="mt-2 text-[13px] leading-7" style={{ color: 'var(--text-secondary)' }}>
-                首页现在只依赖最近一轮报告摘要。请稍后刷新；如果仍失败，再检查 `dashboard-home` 接口。
+                请稍后重试。
               </p>
             </div>
           )}
@@ -229,14 +231,14 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           {hasData && !isMonitoringMode && selectedBrand && !isHomeLoading && hasSelectedBrandAnalysis && home && (
             <div className="space-y-6">
               <DashboardBrandOverview entity={selectedBrand} archive={brandArchive} />
-              <DashboardHomeBoards home={home} onOpenLatestReport={handleOpenLatestReport} />
+              <DashboardHomeBoards home={home} onOpenLatestReport={handleOpenLatestReport} isOpeningLatestReport={isOpeningLatestReport} />
             </div>
           )}
 
           {hasData && !isMonitoringMode && selectedBrand && !isHomeLoading && !hasSelectedBrandAnalysis && !homeError && (
             <EmptyState
-              title={`${selectedBrand.name} 尚未生成最近一轮分析摘要`}
-              description="完成一次分析后，首页会直接显示最新一轮报告的关键指标、引用链接分布和关联问题。"
+              title={`${selectedBrand.name} 暂无最近分析`}
+              description="完成分析后显示最新报告。"
               action={{
                 label: '进入品牌分析',
                 onClick: () => {

@@ -13,15 +13,25 @@ interface BrandCardProps {
   onClick?: () => void;
   onAnalyze?: () => void;
   onMonitor?: () => void;
+  isAnalyzeLoading?: boolean;
+  isMonitorLoading?: boolean;
 }
 
 interface AddBrandCardProps {
   onClick: () => void;
 }
 
-export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }: BrandCardProps) {
+function cleanCardText(value: string | null | undefined, fallback: string): string {
+  const text = (value || '').trim();
+  if (!text || /\?{2,}/.test(text)) return fallback;
+  return text;
+}
+
+export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, isAnalyzeLoading = false, isMonitorLoading = false }: BrandCardProps) {
   const { theme } = useTheme();
   const [renderedAt] = useState(() => Date.now());
+  const displayName = cleanCardText(entity.name, '未命名品牌');
+  const industryLabel = cleanCardText(entity.industry, '未设置行业');
   const lastAnalyzedLabel = useMemo(() => {
     if (!entity.lastAnalyzed) return '尚未分析';
     const diff = renderedAt - new Date(entity.lastAnalyzed).getTime();
@@ -43,9 +53,6 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
 
   return (
     <motion.div
-      role="button"
-      tabIndex={0}
-      aria-pressed={isSelected}
       className="w-full min-w-0 rounded-[22px] border px-3.5 py-3 text-left transition-all duration-200"
       style={{
         background: isDark
@@ -62,47 +69,55 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
           ? (isSelected ? '0 20px 44px rgba(8,12,24,0.34)' : '0 12px 28px rgba(8,12,24,0.22)')
           : (isSelected ? '0 18px 36px rgba(65, 49, 24, 0.08)' : '0 10px 24px rgba(65, 49, 24, 0.03)'),
       }}
-      onClick={onClick}
-      onKeyDown={handleCardKeyDown}
       whileHover={{ y: -2 }}
       transition={{ duration: 0.18 }}
     >
       <div className="flex min-h-[132px] flex-col">
-        <div className="flex items-start justify-between gap-3">
-          <BrandAvatar name={entity.name} domain={entity.domain} size={42} />
-          <span
-            className="rounded-full border px-2.5 py-1 text-[10px]"
-            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-tertiary)' }}
-          >
-            {lastAnalyzedLabel}
-          </span>
-        </div>
-
-        <div className="mt-2.5 min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="truncate text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-              {entity.name}
-            </div>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-pressed={isSelected}
+          aria-label={`${displayName} ${isSelected ? '当前查看' : '切换查看'}`}
+          className="min-w-0 rounded-[16px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+          onClick={onClick}
+          onKeyDown={handleCardKeyDown}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <BrandAvatar name={displayName} domain={entity.domain} size={42} />
             <span
-              className="inline-flex flex-shrink-0 rounded-full border px-2 py-0.5 text-[10px]"
+              className="rounded-full border px-2.5 py-1 text-[10px]"
               style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-tertiary)' }}
             >
-              {entity.visibilityScope === 'organization' ? '组织空间' : '个人空间'}
+              {lastAnalyzedLabel}
             </span>
           </div>
-          {entity.domain && (
-            <div className="mt-0.5 truncate text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-              {entity.domain}
-            </div>
-          )}
-        </div>
 
-        <div className="mt-2.5 flex items-center justify-between gap-3">
-          <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-            {entity.industry || '未设置行业'}
+          <div className="mt-2.5 min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="truncate text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+                {displayName}
+              </div>
+              <span
+                className="inline-flex flex-shrink-0 rounded-full border px-2 py-0.5 text-[10px]"
+                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-tertiary)' }}
+              >
+                {entity.visibilityScope === 'organization' ? '组织空间' : '个人空间'}
+              </span>
+            </div>
+            {entity.domain && (
+              <div className="mt-0.5 truncate text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                {entity.domain}
+              </div>
+            )}
           </div>
-          <div className="text-[11px]" style={{ color: isSelected ? 'var(--color-primary)' : 'var(--text-tertiary)' }}>
-            {isSelected ? '当前查看中' : '点击切换'}
+
+          <div className="mt-2.5 flex items-center justify-between gap-3">
+            <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+              {industryLabel}
+            </div>
+            <div className="text-[11px]" style={{ color: isSelected ? 'var(--color-primary)' : 'var(--text-tertiary)' }}>
+              {isSelected ? '当前查看中' : '点击切换'}
+            </div>
           </div>
         </div>
 
@@ -110,7 +125,9 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              className="flex items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-[11px] font-medium transition-colors"
+              disabled={isAnalyzeLoading || isMonitorLoading}
+              aria-busy={isAnalyzeLoading}
+              className="flex min-h-8 items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-[11px] font-medium transition-colors disabled:cursor-wait disabled:opacity-70"
               style={{
                 background: isDark
                   ? (isSelected
@@ -132,12 +149,14 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
                 onAnalyze?.();
               }}
             >
-              <RiChat1Line className="h-3.5 w-3.5" />
-              进入分析
+              {isAnalyzeLoading ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <RiChat1Line className="h-3.5 w-3.5" />}
+              {isAnalyzeLoading ? '进入中' : '进入分析'}
             </button>
             <button
               type="button"
-              className="flex items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-[11px] font-medium transition-colors"
+              disabled={isAnalyzeLoading || isMonitorLoading}
+              aria-busy={isMonitorLoading}
+              className="flex min-h-8 items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-[11px] font-medium transition-colors disabled:cursor-wait disabled:opacity-70"
               style={{
                 background: isDark
                   ? 'linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025))'
@@ -153,8 +172,8 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor }:
                 onMonitor?.();
               }}
             >
-              <RiCalendar2Line className="h-3.5 w-3.5" />
-              设置监测
+              {isMonitorLoading ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <RiCalendar2Line className="h-3.5 w-3.5" />}
+              {isMonitorLoading ? '跳转中' : '设置监测'}
             </button>
           </div>
         </div>
@@ -194,7 +213,7 @@ export function AddBrandCard({ onClick }: AddBrandCardProps) {
           新建品牌
         </div>
         <div className="mt-1 text-[11px] leading-5" style={{ color: 'var(--text-tertiary)' }}>
-          添加新的品牌对象并进入对话分析。
+          添加品牌并开始分析。
         </div>
       </div>
     </motion.button>

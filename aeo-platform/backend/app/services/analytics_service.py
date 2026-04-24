@@ -47,6 +47,32 @@ REPORT_KIND_LABELS = {
     "scenario": "用户场景分析报告",
 }
 
+PLATFORM_LABELS = {
+    "deepseek": "DeepSeek",
+    "kimi": "Kimi",
+    "doubao": "豆包",
+    "yuanbao": "元宝",
+    "hunyuan": "元宝",
+}
+
+NEGATIVE_TOPIC_LABELS = {
+    "price": "价格与成本",
+    "deployment": "维护与使用复杂度",
+    "service": "服务与便利性",
+    "ecosystem": "兼容与生态",
+    "case": "案例与验证",
+    "usability": "使用门槛",
+    "credibility": "信息可信度",
+    "other": "其他",
+}
+
+ANSWER_STATE_LABELS = {
+    "no_brand": "未提及品牌",
+    "competitor_only": "仅提竞品",
+    "monitor_only": "仅提本品牌",
+    "monitor_plus_others": "品牌同台",
+}
+
 
 def _aeo_status(value: float, metric_key: str) -> str:
     """Evaluate metric status based on configurable thresholds."""
@@ -474,6 +500,18 @@ class AnalyticsService:
         normalized = str(report_kind or "").strip().lower()
         return REPORT_KIND_LABELS.get(normalized, "分析报告")
 
+    def _platform_label(self, platform: str | None) -> str:
+        normalized = str(platform or "").strip()
+        return PLATFORM_LABELS.get(normalized.lower(), normalized)
+
+    def _negative_topic_label(self, topic: str | None) -> str:
+        normalized = str(topic or "").strip().lower()
+        return NEGATIVE_TOPIC_LABELS.get(normalized, str(topic or "").strip())
+
+    def _answer_state_label(self, state: str | None) -> str:
+        normalized = str(state or "").strip().lower()
+        return ANSWER_STATE_LABELS.get(normalized, str(state or "").strip())
+
     def _build_dashboard_home_from_projection(
         self,
         data: dict[str, Any],
@@ -563,15 +601,170 @@ class AnalyticsService:
         if not isinstance(official_conversion_rate, (int, float)):
             official_conversion_rate = source_summary.get("official_conversion_rate")
 
-        official_funnel = source_summary.get("official_funnel", {})
-        official_funnel = official_funnel if isinstance(official_funnel, dict) else {}
-        brand_link_answer_count = int(official_funnel.get("brand_related_link_answer_count", 0) or 0)
+        answer_sample_count = int(metric_bundle.get("successful_answers") or metric_bundle.get("total_answers") or 0)
+        current_brand = str(data.get("brand_name") or data.get("meta", {}).get("brand_name") or "").strip()
+        home_v4 = dashboard_projection.get("home_v4")
+        home_v4 = home_v4 if isinstance(home_v4, dict) else {}
+
+        def numeric(value: Any) -> float | int | None:
+            return value if isinstance(value, (int, float)) else None
+
+        def build_word_cloud() -> dict[str, Any]:
+            positive_rows = []
+            for item in metric_bundle.get("top_positive_reasons", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("display") or item.get("reason") or "").strip()
+                if not text:
+                    continue
+                positive_rows.append({
+                    "text": text,
+                    "weight": numeric(item.get("rate")) or 0,
+                    "sentiment": "positive",
+                })
+
+            negative_rows = []
+            for item in metric_bundle.get("top_negative_topics", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("display") or item.get("topic") or "").strip()
+                if not text:
+                    continue
+                negative_rows.append({
+                    "text": text,
+                    "weight": numeric(item.get("rate")) or 0,
+                    "sentiment": "negative",
+                    "count": int(item.get("count", 0) or 0),
+                })
+
+            return {"positive": positive_rows, "negative": negative_rows}
+
+        def build_platform_diagnosis() -> list[dict[str, Any]]:
+            answers = input_bundle.get("answers", [])
+            answers = [answer for answer in answers if isinstance(answer, dict) and answer.get("status") == "ok"]
+            platform_rows: dict[str, dict[str, Any]] = {}
+            negative_topics_by_platform: dict[str, dict[str, int]] = {}
+
+            for answer in answers:
+                platform = str(answer.get("platform") or "").strip()
+                if not platform:
+                    continue
+                row = platform_rows.setdefault(
+                    platform,
+                    {
+                        "platform": self._platform_label(platform),
+                        "status": "unknown",
+                        "answerCount": 0,
+                        "brandMentionCount": 0,
+                        "positiveCount": 0,
+                        "negativeCount": 0,
+                    },
+                )
+                row["answerCount"] += 1
+                if answer.get("mentioned_monitor_brand"):
+                    row["brandMentionCount"] += 1
+                    sentiment = str(answer.get("sentiment") or "neutral")
+                    if sentiment == "positive":
+                        row["positiveCount"] += 1
+                    elif sentiment == "negative":
+                        row["negativeCount"] += 1
+                    for topic in answer.get("negative_topics", []) or []:
+                        if not topic:
+                            continue
+                        topics = negative_topics_by_platform.setdefault(platform, {})
+                        topic_key = str(topic)
+                        topics[topic_key] = topics.get(topic_key, 0) + 1
+
+            for platform, row in platform_rows.items():
+                if row["negativeCount"] > row["positiveCount"] and row["negativeCount"] > 0:
+                    row["status"] = "risk"
+                elif row["brandMentionCount"] > 0:
+                    row["status"] = "good"
+                elif row["answerCount"] > 0:
+                    row["status"] = "watch"
+                topics = negative_topics_by_platform.get(platform, {})
+                if topics:
+                    row["mainConcern"] = self._negative_topic_label(
+                        sorted(topics.items(), key=lambda item: (-item[1], item[0]))[0][0]
+                    )
+
+            return sorted(
+                platform_rows.values(),
+                key=lambda row: (row["status"] == "risk", row["brandMentionCount"], row["platform"]),
+                reverse=True,
+            )
+
+        question_diagnostics = metric_bundle.get("question_diagnostics", {})
+        question_diagnostics = question_diagnostics if isinstance(question_diagnostics, dict) else {}
+        risk_rows = [row for row in question_diagnostics.get("risk_rows", []) or [] if isinstance(row, dict)]
+        question_rows = [row for row in question_diagnostics.get("question_rows", []) or [] if isinstance(row, dict)]
+
+        def build_risks() -> list[dict[str, Any]]:
+            rows = []
+            for item in sorted(risk_rows, key=lambda row: (str(row.get("risk_level") or ""), str(row.get("question_text") or "")))[:4]:
+                title = str(item.get("question_text") or item.get("scene") or "").strip()
+                if not title:
+                    continue
+                topics = item.get("negative_topics", []) or []
+                rows.append({
+                    "title": title,
+                    "level": "high" if item.get("risk_level") == "high" else "medium",
+                    "platform": "、".join(self._platform_label(str(platform)) for platform in item.get("present_platforms", []) or [] if platform),
+                    "evidence": "、".join(self._negative_topic_label(str(topic)) for topic in topics if topic) or self._answer_state_label(str(item.get("answer_state") or "")),
+                })
+            return rows
+
+        def build_advantages() -> list[dict[str, Any]]:
+            rows = []
+            candidates = [
+                row for row in question_rows
+                if row.get("brand_present") and str(row.get("risk_level") or "") in {"low", "medium"}
+            ]
+            candidates.sort(key=lambda row: (-len(row.get("present_platforms", []) or []), str(row.get("question_text") or "")))
+            for item in candidates[:4]:
+                title = str(item.get("question_text") or item.get("scene") or "").strip()
+                if not title:
+                    continue
+                platforms = item.get("present_platforms", []) or []
+                rows.append({
+                    "title": title,
+                    "platformCount": len(platforms),
+                    "evidence": "、".join(self._platform_label(str(platform)) for platform in platforms if platform),
+                })
+            return rows
+
+        def build_mention_ranking() -> list[dict[str, Any]]:
+            rows = []
+            for item in metric_bundle.get("top_brand_ranking", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                brand = str(item.get("brand") or "").strip()
+                rank = item.get("rank")
+                mention_count = int(item.get("brand_presence_count", 0) or 0)
+                if not brand or not isinstance(rank, int):
+                    continue
+                rows.append({
+                    "rank": rank,
+                    "brand": brand,
+                    "mentionRate": round(mention_count / answer_sample_count, 4) if answer_sample_count else None,
+                    "mentionCount": mention_count,
+                    "isCurrentBrand": bool(current_brand and brand == current_brand),
+                })
+            return rows[:10]
+
+        source_structure = {
+            "officialConversionRate": official_conversion_rate
+            if isinstance(official_conversion_rate, (int, float))
+            else None,
+            "sourceTypes": source_types,
+            "topDomains": top_domains,
+        }
 
         return {
             "summary": {"headline": summary_headline},
             "latestReport": {
                 "title": str(data.get("title") or "分析报告"),
-                "subtitle": summary_headline,
+                "subtitle": "",
                 "reportKind": report_kind,
                 "reportKindLabel": self._report_kind_label(report_kind),
                 "badgeLabel": "自动监测" if triggered_by == "scheduled" else None,
@@ -580,7 +773,7 @@ class AnalyticsService:
                 "artifactId": str(data.get("_artifact_id") or data.get("_message_id") or ""),
                 "outputId": str(data.get("_message_id") or ""),
                 "createdAt": str(data.get("_created_at") or ""),
-                "actionLabel": "打开最新报告",
+                "actionLabel": "打开报告",
             },
             "metrics": [
                 {
@@ -588,7 +781,7 @@ class AnalyticsService:
                     "label": "提及率",
                     "value": mention_rate if isinstance(mention_rate, (int, float)) else None,
                     "format": "percent",
-                    "subtitle": "最近一轮答案里，品牌被写进答案的比例。",
+                    "subtitle": "",
                 },
                 {
                     "id": "brand_rank",
@@ -597,7 +790,7 @@ class AnalyticsService:
                     if isinstance(metric_bundle.get("brand_rank"), int)
                     else None,
                     "format": "rank",
-                    "subtitle": "在被提及的品牌里，当前排第几。",
+                    "subtitle": "",
                 },
                 {
                     "id": "official_conversion_rate",
@@ -606,20 +799,31 @@ class AnalyticsService:
                     if isinstance(official_conversion_rate, (int, float))
                     else None,
                     "format": "percent",
-                    "subtitle": "提到品牌以后，有多少答案把流量引导回官网。",
+                    "subtitle": "",
+                },
+                {
+                    "id": "negative_rate",
+                    "label": "负向率",
+                    "value": metric_bundle.get("negative_rate")
+                    if isinstance(metric_bundle.get("negative_rate"), (int, float))
+                    else None,
+                    "format": "percent",
+                    "subtitle": "",
                 },
             ],
+            "wordCloud": home_v4.get("wordCloud") or home_v4.get("word_cloud") or build_word_cloud(),
+            "platformDiagnosis": home_v4.get("platformDiagnosis") or home_v4.get("platform_diagnosis") or build_platform_diagnosis(),
+            "risks": home_v4.get("risks") or build_risks(),
+            "advantages": home_v4.get("advantages") or build_advantages(),
+            "mentionRanking": home_v4.get("mentionRanking") or home_v4.get("mention_ranking") or build_mention_ranking(),
+            "sourceStructure": home_v4.get("sourceStructure") or home_v4.get("source_structure") or source_structure,
             "citationDistribution": {
-                "summary": (
-                    f"这轮一共有 {brand_link_answer_count} 条答案带了品牌相关链接，主要引用来源集中在{source_types[0]['label']}。"
-                    if source_types
-                    else "这轮还没有形成稳定的品牌相关链接分布。"
-                ),
+                "summary": "",
                 "sourceTypes": source_types,
                 "topDomains": top_domains,
             },
             "relatedQuestions": {
-                "summary": f"这轮报告基于 {len(question_items)} 个问题的答案抓取结果。",
+                "summary": "",
                 "items": question_items,
             },
         }
@@ -903,7 +1107,7 @@ class AnalyticsService:
             case = {
                 "scenarioId": f"legacy-citation-{index + 1}",
                 "scenarioLabel": f"{platform or '平台'} 引用样本 {index + 1}",
-                "platform": platform,
+                "platform": self._platform_label(platform),
                 "matchedAnswer": "",
                 "citationDomains": citation_domains,
                 "citationTitles": citation_titles[:3],
@@ -1824,17 +2028,17 @@ class AnalyticsService:
         current = self._select_latest_home_source(latest_output, latest_snapshot)
         if not current:
             return {
-                "summary": {"headline": "尚未生成最近一轮报告，完成首次分析后即可查看首页摘要。"},
+                "summary": {"headline": "暂无最近分析"},
                 "latestReport": {
                     "title": "暂无最新报告",
-                    "subtitle": "完成首次分析后，这里会直接展示最近一轮报告。",
+                    "subtitle": "",
                     "reportKind": None,
                     "reportKindLabel": None,
                     "sessionId": "",
                     "artifactId": "",
                     "outputId": "",
                     "createdAt": "",
-                    "actionLabel": "打开最新报告",
+                    "actionLabel": "打开报告",
                 },
                 "metrics": [
                     {
@@ -1842,30 +2046,30 @@ class AnalyticsService:
                         "label": "提及率",
                         "value": None,
                         "format": "percent",
-                        "subtitle": "最近一轮答案里，品牌被写进答案的比例。",
+                        "subtitle": "",
                     },
                     {
                         "id": "brand_rank",
                         "label": "排名",
                         "value": None,
                         "format": "rank",
-                        "subtitle": "在被提及的品牌里，当前排第几。",
+                        "subtitle": "",
                     },
                     {
                         "id": "official_conversion_rate",
                         "label": "官网转化率",
                         "value": None,
                         "format": "percent",
-                        "subtitle": "提到品牌以后，有多少答案把流量引导回官网。",
+                        "subtitle": "",
                     },
                 ],
                 "citationDistribution": {
-                    "summary": "暂无品牌相关链接分布。",
+                    "summary": "",
                     "sourceTypes": [],
                     "topDomains": [],
                 },
                 "relatedQuestions": {
-                    "summary": "暂无问题样本。",
+                    "summary": "",
                     "items": [],
                 },
             }
