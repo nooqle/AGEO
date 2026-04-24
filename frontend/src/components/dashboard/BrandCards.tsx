@@ -24,7 +24,8 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
   const [manageOpen, setManageOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [detailEntity, setDetailEntity] = useState<Entity | null>(null);
-  const [navigating, setNavigating] = useState(false);
+  const [analyzingEntityId, setAnalyzingEntityId] = useState<string | null>(null);
+  const [monitoringEntityId, setMonitoringEntityId] = useState<string | null>(null);
 
   const handleAddBrand = async (data: CreateEntityInput) => {
     try {
@@ -37,25 +38,22 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
   };
 
   const handleBrandClick = async (entity: Entity) => {
-    if (navigating) return;
-    setNavigating(true);
+    if (analyzingEntityId || monitoringEntityId) return;
+    setAnalyzingEntityId(entity.id);
     try {
       const session = await api.getOrCreateSessionByEntity(entity.id);
       router.push(`/chat/${session.id}?entity_id=${encodeURIComponent(entity.id)}&brand=${encodeURIComponent(entity.name || '')}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '品牌加载失败');
-    } finally {
-      setNavigating(false);
+      setAnalyzingEntityId(null);
     }
   };
 
   const handleOpenMonitoring = (entity: Entity) => {
+    if (analyzingEntityId || monitoringEntityId) return;
+    setMonitoringEntityId(entity.id);
     setSelectedBrandId(entity.id);
     const target = `/settings?section=monitoring&entity_id=${encodeURIComponent(entity.id)}`;
-    if (typeof window !== 'undefined') {
-      window.location.assign(target);
-      return;
-    }
     router.push(target);
   };
 
@@ -101,7 +99,7 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
               品牌数据加载失败
             </div>
             <div className="mt-1 text-[12px] leading-6" style={{ color: 'var(--text-secondary)' }}>
-              当前不是“没有品牌”，而是后端接口没有成功返回数据。请先重试加载。
+              请重试。
             </div>
           </div>
           <button
@@ -132,6 +130,8 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
               void handleBrandClick(entity);
             }}
             onMonitor={() => handleOpenMonitoring(entity)}
+            isAnalyzeLoading={analyzingEntityId === entity.id}
+            isMonitorLoading={monitoringEntityId === entity.id}
           />
         ))}
         <AddBrandCard onClick={openBrandCreator} />
