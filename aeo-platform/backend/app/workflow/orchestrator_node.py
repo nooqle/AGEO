@@ -4393,6 +4393,14 @@ async def _handle_tool_call(
                             tool_name="analysis_report_skill",
                             authority="authoritative_resume",
                             reason="Headless scheduled monitoring cannot wait for ask_user; continue directly to A5 after A4 completion.",
+                            tool_args={
+                                "report_type": (
+                                    "panorama"
+                                    if str(state.get("analysis_mode") or "").strip().lower()
+                                    == "baseline"
+                                    else "scenario"
+                                )
+                            },
                             source_step="orchestrator_headless_ask_user_guard",
                             metadata={
                                 "headless_mode": True,

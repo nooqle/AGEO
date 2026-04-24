@@ -187,6 +187,16 @@ class SessionService:
 
         return None
 
+    @staticmethod
+    def _is_monitoring_session(session: Session) -> bool:
+        if not session.extra_metadata:
+            return False
+        try:
+            metadata = json.loads(session.extra_metadata)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return isinstance(metadata, dict) and metadata.get("source") == "monitoring"
+
     async def create_session(
         self, viewer: User, entity_id: UUID | None = None
     ) -> dict[str, Any]:
@@ -226,13 +236,16 @@ class SessionService:
                 ),
             )
             .order_by(Session.updated_at.desc())
-            .limit(1)
+            .limit(20)
         )
         result = await self.db.execute(stmt)
-        session = result.scalar_one_or_none()
-        if not session:
+        sessions = list(result.scalars().all())
+        if not sessions:
             return None
-        return self._session_to_dict(session)
+        for session in sessions:
+            if not self._is_monitoring_session(session):
+                return self._session_to_dict(session)
+        return self._session_to_dict(sessions[0])
 
     async def get_session(
         self,

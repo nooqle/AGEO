@@ -13,15 +13,19 @@ Concurrency is controlled via asyncio.Semaphore to avoid overload.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from datetime import datetime, timezone
 from uuid import UUID
+
+from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.models.entity import Entity
+from app.models.session import Session, SessionStatus
 from app.models.task import AnalysisTask
 from app.models.task_run import ExecutorKind, TaskTriggerSource
 from app.services.runtime_coordinator import runtime_coordinator
+from app.workflow.runtime_policy_executor import build_next_required_action
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,77 @@ SCHEDULE_RUN_LEASE_TIMEOUT_SECONDS = 180
 _scheduler_task: asyncio.Task | None = None
 _running_tasks: set[asyncio.Task] = set()
 _concurrency_semaphore: asyncio.Semaphore | None = None
+_DEFAULT_MONITORING_PLATFORMS = ["doubao", "yuanbao", "kimi"]
+
+
+def _parse_session_metadata(raw_metadata: str | None) -> dict:
+    if not raw_metadata:
+        return {}
+    try:
+        parsed = json.loads(raw_metadata)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _build_monitoring_session_title(entity_name: str) -> str:
+    return f"{entity_name} 自动监测"
+
+
+async def _get_or_create_monitoring_session(
+    db,
+    *,
+    schedule_id: UUID,
+    user_id: UUID,
+    entity_id: UUID,
+    entity_name: str,
+) -> Session:
+    stmt = (
+        select(Session)
+        .where(
+            Session.user_id == user_id,
+            Session.entity_id == entity_id,
+        )
+        .order_by(Session.updated_at.desc())
+    )
+    result = await db.execute(stmt)
+    sessions = list(result.scalars().all())
+    for session in sessions:
+        metadata = _parse_session_metadata(session.extra_metadata)
+        if metadata.get("source") != "monitoring":
+            continue
+        if str(metadata.get("monitoring_schedule_id") or "") != str(schedule_id):
+            continue
+        session.title = session.title or _build_monitoring_session_title(entity_name)
+        session.status = SessionStatus.ACTIVE
+        return session
+
+    session = Session(
+        user_id=user_id,
+        title=_build_monitoring_session_title(entity_name),
+        status=SessionStatus.ACTIVE,
+        entity_id=entity_id,
+        extra_metadata=json.dumps(
+            {
+                "brand_name": entity_name,
+                "source": "monitoring",
+                "monitoring_schedule_id": str(schedule_id),
+            },
+            ensure_ascii=False,
+        ),
+    )
+    db.add(session)
+    await db.flush()
+    return session
+
+
+def _resolve_monitoring_platforms(platforms: list[str] | None) -> list[str]:
+    resolved = [
+        str(platform).strip().lower()
+        for platform in (platforms or _DEFAULT_MONITORING_PLATFORMS)
+        if str(platform).strip()
+    ]
+    return resolved or list(_DEFAULT_MONITORING_PLATFORMS)
 
 
 def _get_semaphore() -> asyncio.Semaphore:
@@ -181,9 +256,17 @@ async def _launch_scheduled_analysis(db, schedule, entity) -> None:
     """
     from app.services.job_submission_service import JobSubmissionService
 
+    monitoring_session = await _get_or_create_monitoring_session(
+        db,
+        schedule_id=schedule.id,
+        user_id=schedule.user_id,
+        entity_id=schedule.entity_id,
+        entity_name=entity.name,
+    )
     submission_service = JobSubmissionService(db)
     submitted = await submission_service.submit_scheduled_analysis(
         user_id=schedule.user_id,
+        session_id=monitoring_session.id,
         brand_name=entity.name,
         entity_id=schedule.entity_id,
         monitoring_schedule_id=schedule.id,
@@ -233,7 +316,7 @@ async def _dispatch_queued_runs() -> None:
                 await task_service.fail_task(
                     claimed.task_id,
                     error_message="Scheduled run is missing task context",
-                    error_stage="scheduler_dispatch",
+                    error_stage="sched_disp",
                     run_id=claimed.id,
                 )
                 continue
@@ -249,7 +332,35 @@ async def _dispatch_queued_runs() -> None:
                 await task_service.fail_task(
                     task.id,
                     error_message="Scheduled run is missing schedule or entity",
-                    error_stage="scheduler_dispatch",
+                    error_stage="sched_disp",
+                    run_id=claimed.id,
+                )
+                monitoring_service = MonitoringService(db)
+                await monitoring_service.record_run_failed(task.monitoring_schedule_id)
+                continue
+
+            if task.session_id is None:
+                monitoring_session = await _get_or_create_monitoring_session(
+                    db,
+                    schedule_id=schedule.id,
+                    user_id=schedule.user_id,
+                    entity_id=schedule.entity_id,
+                    entity_name=entity.name,
+                )
+                task.session_id = monitoring_session.id
+                await db.commit()
+
+            baseline = schedule.baseline_data
+            if not baseline or not baseline.get("questions"):
+                logger.error(
+                    "[Scheduler] Schedule %s missing baseline questions; refusing fast monitoring run",
+                    schedule.id,
+                )
+                task_service = TaskService(db)
+                await task_service.fail_task(
+                    task.id,
+                    error_message="Scheduled monitoring requires panorama baseline questions",
+                    error_stage="sched_base",
                     run_id=claimed.id,
                 )
                 monitoring_service = MonitoringService(db)
@@ -259,8 +370,7 @@ async def _dispatch_queued_runs() -> None:
             lease_owner = claimed.lease_owner or "scheduler:dispatcher"
             monitoring_service = MonitoringService(db)
             await monitoring_service.record_run_started(schedule.id, task.id)
-            baseline = schedule.baseline_data
-            platforms = schedule.platforms
+            platforms = _resolve_monitoring_platforms(schedule.platforms)
             entity_id = entity.id
             entity_name = entity.name
             entity_industry = getattr(entity, "industry", None)
@@ -268,12 +378,14 @@ async def _dispatch_queued_runs() -> None:
             user_id = schedule.user_id
             task_id = task.id
             run_id = claimed.id
+            session_id = task.session_id
 
         try:
             pipeline_task = asyncio.create_task(
                 _run_pipeline_headless(
                     task_id=task_id,
                     run_id=run_id,
+                    session_id=session_id,
                     entity_id=entity_id,
                     entity_name=entity_name,
                     entity_industry=entity_industry,
@@ -298,7 +410,7 @@ async def _dispatch_queued_runs() -> None:
                 await task_service.fail_task(
                     task_id,
                     error_message=f"Failed to launch pipeline: {e}",
-                    error_stage="scheduler_dispatch",
+                    error_stage="sched_disp",
                     run_id=run_id,
                 )
             continue
@@ -336,6 +448,7 @@ async def _recover_stale_scheduler_runs(*, lease_timeout_seconds: int) -> int:
 async def _run_pipeline_headless(
     task_id: UUID,
     run_id: UUID,
+    session_id: UUID,
     entity_id: UUID,
     entity_name: str,
     entity_industry: str | None,
@@ -352,24 +465,24 @@ async def _run_pipeline_headless(
     directly to A4 (fetch) + A5 (analytics).  Otherwise a full A1→A5 run
     is executed and the baseline is saved on success.
 
-    Uses a sentinel session_id ("headless-{task_id}") so all existing
-    code paths function normally while WebSocket events gracefully degrade.
+    Uses a real monitoring session for artifact persistence while isolating
+    each workflow run with a dedicated thread_id.
     """
     sem = _get_semaphore()
 
     async with sem:
-        sentinel_session_id = f"headless-{task_id}"
-
         try:
             from app.workflow.graph import get_compiled_workflow
 
             workflow = await get_compiled_workflow()
             effective_lease_owner = lease_owner or f"scheduler:{schedule_id}"
+            resolved_session_id = str(session_id)
+            workflow_thread_id = f"monitoring:{session_id}:{run_id}"
+            effective_platforms = _resolve_monitoring_platforms(platforms)
 
             # --- Build initial state ---
-            # Common fields shared by both first-run and baseline-run
             base_state = {
-                "session_id": sentinel_session_id,
+                "session_id": resolved_session_id,
                 "entity_id": str(entity_id),
                 "brand_name": entity_name,
                 "industry_hint": entity_industry,
@@ -381,7 +494,10 @@ async def _run_pipeline_headless(
                 "tool_call_args": None,
                 "tool_call_id": None,
                 "agent_retry_counts": {},
-                "user_decisions": {},
+                "user_decisions": {
+                    "fetch_mode_confirmed": True,
+                    "fetch_mode_pending": False,
+                },
                 "execution_status": "idle",
                 "current_step": "",
                 "progress": 0.0,
@@ -393,11 +509,25 @@ async def _run_pipeline_headless(
                 "report": None,
                 "task_id": str(task_id),
                 "run_id": str(run_id),
-                "platform_filter": platforms,
+                "monitoring_schedule_id": str(schedule_id),
+                "platform_filter": effective_platforms,
+                "fetch_mode": "fast",
                 "preserved_fetch_results": None,
-                "next_required_action": None,
-                # Baseline Analysis (Issue #4)
-                "analysis_mode": None,
+                "next_required_action": build_next_required_action(
+                    tool_name="answer_fetch",
+                    authority="authoritative_resume",
+                    reason="Scheduled monitoring always runs fast A4 on the panorama baseline.",
+                    tool_args={
+                        "fetch_mode": "fast",
+                        "platforms": effective_platforms,
+                    },
+                    source_step="scheduler_dispatch",
+                    metadata={
+                        "headless_mode": True,
+                        "monitoring_schedule_id": str(schedule_id),
+                    },
+                ),
+                "analysis_mode": "baseline",
                 "baseline_questions": None,
                 "baseline_fetch_results": None,
                 "baseline_metrics": None,
@@ -405,67 +535,30 @@ async def _run_pipeline_headless(
                 "headless_mode": True,
             }
 
-            if baseline and baseline.get("questions"):
-                # Subsequent run: pre-fill A1+A3 data, instruct orchestrator
-                # to skip directly to A4 answer_fetch → A5 data_analytics
-                n_questions = len(baseline["questions"])
-                initial_state = {
-                    **base_state,
-                    "brand_profile": baseline.get("brand_profile"),
-                    "competitors": baseline.get("competitors"),
-                    "competitive_landscape": baseline.get("competitive_landscape"),
-                    "marketing_personas": None,
-                    "simulated_questions": baseline.get("simulated_questions"),
-                    "questions": baseline["questions"],
-                    "orchestrator_history": [
-                        {
-                            "role": "user",
-                            "content": (
-                                f"这是定时监测任务。品牌「{entity_name}」已有"
-                                f"{n_questions}组监测问题基线，"
-                                f"请直接使用 answer_fetch 抓取最新AI答案，"
-                                f"然后使用 data_analytics 生成分析报告。"
-                            ),
-                        }
-                    ],
-                }
-                logger.info(
-                    "[Scheduler] Baseline run for task %s: %d questions preloaded",
-                    task_id,
-                    n_questions,
-                )
-            else:
-                # First run: full A1→A5 pipeline with explicit instruction
-                initial_state = {
-                    **base_state,
-                    "brand_profile": None,
-                    "competitors": None,
-                    "competitive_landscape": None,
-                    "marketing_personas": None,
-                    "simulated_questions": None,
-                    "questions": None,
-                    "orchestrator_history": [
-                        {
-                            "role": "user",
-                            "content": (
-                                f"这是定时监测任务。请对品牌「{entity_name}」执行完整分析流程："
-                                f"品牌分析 → 用户画像 → 问题模拟（品牌全景模式）"
-                                f" → AI答案抓取 → 数据分析报告。无需确认，直接执行。"
-                            ),
-                        }
-                    ],
-                }
-                logger.info(
-                    "[Scheduler] First run for task %s: full pipeline (no baseline)",
-                    task_id,
-                )
+            initial_state = {
+                **base_state,
+                "brand_profile": baseline.get("brand_profile"),
+                "competitors": baseline.get("competitors"),
+                "competitive_landscape": baseline.get("competitive_landscape"),
+                "marketing_personas": None,
+                "simulated_questions": baseline.get("simulated_questions"),
+                "questions": baseline.get("questions"),
+                "orchestrator_history": [],
+            }
+            logger.info(
+                "[Scheduler] Monitoring run for task %s: fast A4+A5 on %d baseline questions",
+                task_id,
+                len(initial_state.get("questions") or []),
+            )
 
-            config = {"configurable": {"thread_id": sentinel_session_id}}
+            config = {"configurable": {"thread_id": workflow_thread_id}}
 
             logger.info(
-                "[Scheduler] Starting pipeline for task %s (entity=%s)",
+                "[Scheduler] Starting pipeline for task %s (entity=%s, session=%s, thread=%s)",
                 task_id,
                 entity_name,
+                resolved_session_id,
+                workflow_thread_id,
             )
 
             # Claim the queued run, then mark task as running
@@ -481,7 +574,7 @@ async def _run_pipeline_headless(
                 current_task = asyncio.current_task()
                 if current_task is not None:
                     await runtime_coordinator.register_local_execution(
-                        session_id=sentinel_session_id,
+                        session_id=resolved_session_id,
                         task_id=task_id,
                         run_id=run_id,
                         lease_owner=effective_lease_owner,
@@ -499,7 +592,6 @@ async def _run_pipeline_headless(
                 schedule_id=schedule_id,
                 user_id=user_id,
                 final_state=final_state,
-                is_first_run=baseline is None or not baseline.get("questions"),
             )
 
         except asyncio.CancelledError:
@@ -527,47 +619,20 @@ async def _handle_pipeline_success(
     schedule_id: UUID,
     user_id: UUID,
     final_state: dict,
-    is_first_run: bool = False,
 ) -> None:
     """Handle successful pipeline completion for a scheduled run.
-
-    On *is_first_run* (no baseline existed), extracts A1+A3 data from
-    final_state and saves it as the schedule's baseline so subsequent
-    runs can skip A1-A3 and only re-run A4+A5 with the same questions.
     """
     from app.services.alert_service import AlertService
     from app.services.monitoring_service import MonitoringService
-    from app.services.snapshot_service import SnapshotService
     from app.services.task_service import TaskService
 
     async with AsyncSessionLocal() as db:
         task_service = TaskService(db)
         monitoring_service = MonitoringService(db)
-        snapshot_service = SnapshotService(db)
+        snapshot_id_raw = final_state.get("snapshot_id")
+        snapshot_id = UUID(snapshot_id_raw) if snapshot_id_raw else None
 
-        # Extract metrics from final state
-        metrics = final_state.get("metrics")
-        report = final_state.get("report")
-        fetch_results = final_state.get("fetch_results")
-        questions = final_state.get("questions")
-
-        snapshot_id = None
-        if metrics:
-            # Create snapshot with triggered_by="scheduled"
-            snapshot = await snapshot_service.create_completed_snapshot(
-                entity_id=entity_id,
-                session_id=None,
-                metrics=metrics,
-                report_data=report or {},
-                fetch_results_summary=(
-                    [{"question_count": len(fetch_results)}] if fetch_results else None
-                ),
-                triggered_by="scheduled",
-                snapshot_type=final_state.get("analysis_mode") or "baseline",
-            )
-            snapshot_id = snapshot.id
-
-            # Generate alerts if schedule has alerting enabled
+        if snapshot_id is not None:
             try:
                 alert_service = AlertService(db)
                 schedule = await monitoring_service.get_schedule(schedule_id)
@@ -585,49 +650,19 @@ async def _handle_pipeline_success(
                     task_id,
                     alert_err,
                 )
-
         if snapshot_id is None:
             error_message = (
-                "Headless scheduled monitoring finished without snapshot/metrics; "
-                "treating run as failed instead of pseudo-completed."
+                "Scheduled monitoring finished without an A5 snapshot."
             )
             logger.error("[Scheduler] %s task=%s run=%s", error_message, task_id, run_id)
             await task_service.fail_task(
                 task_id,
                 error_message=error_message,
-                error_stage="scheduler_snapshot_missing",
+                error_stage="sched_snap",
                 run_id=run_id,
             )
             await monitoring_service.record_run_failed(schedule_id)
             return
-
-        # Save baseline on first successful run (when questions exist)
-        if is_first_run and questions:
-            # Double-check: baseline may have been saved by a concurrent run
-            # or cleared by user during pipeline execution
-            current_baseline = await monitoring_service.get_baseline(schedule_id)
-            if current_baseline is not None:
-                logger.info(
-                    "[Scheduler] Baseline already exists for schedule %s, "
-                    "skipping save (concurrent run or manual update)",
-                    schedule_id,
-                )
-            else:
-                baseline_data = {
-                    "questions": questions,
-                    "simulated_questions": final_state.get("simulated_questions"),
-                    "brand_profile": final_state.get("brand_profile"),
-                    "competitors": final_state.get("competitors"),
-                    "competitive_landscape": final_state.get("competitive_landscape"),
-                    "saved_at": datetime.now(timezone.utc).isoformat(),
-                    "source_task_id": str(task_id),
-                }
-                await monitoring_service.save_baseline(schedule_id, baseline_data)
-                logger.info(
-                    "[Scheduler] Saved baseline for schedule %s (%d questions)",
-                    schedule_id,
-                    len(questions),
-                )
 
         await task_service.complete_task(
             task_id,
@@ -637,10 +672,9 @@ async def _handle_pipeline_success(
         await monitoring_service.record_run_completed(schedule_id)
 
         logger.info(
-            "[Scheduler] Pipeline completed for task %s (snapshot=%s, first_run=%s)",
+            "[Scheduler] Pipeline completed for task %s (snapshot=%s)",
             task_id,
             snapshot_id,
-            is_first_run,
         )
 
 

@@ -1,6 +1,21 @@
 from typing import Any
 
 
+def _safe_ratio(value: Any) -> float:
+    try:
+        numeric = float(value or 0)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    return max(0.0, min(1.0, numeric))
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_report_artifact_data(
     *,
     brand_name: str,
@@ -16,6 +31,16 @@ def build_report_artifact_data(
     source_overview: dict[str, Any],
     mention_sentiment_analysis: dict[str, Any],
 ) -> dict[str, Any]:
+    brand_mention_rate = _safe_ratio(summary_metrics.get("brand_mention_rate", 0))
+    content_citation_rate = _safe_ratio(summary_metrics.get("content_citation_rate", 0))
+    official_citation_rate = _safe_ratio(summary_metrics.get("official_citation_rate", 0))
+    scenario_hit_count = _safe_int(summary_metrics.get("scenario_hit_count", 0))
+    scenario_total = _safe_int(summary_metrics.get("scenario_total", 0))
+    high_risk_scenario_count = _safe_int(
+        summary_metrics.get("high_risk_scenario_count", 0)
+    )
+    total_questions = _safe_int(metrics.get("total_questions", 0))
+    total_mentions = _safe_int(metrics.get("total_mentions", 0))
     report_headline = (
         f"{brand_name or '品牌'} 品牌全景分析报告"
         if is_baseline
@@ -24,20 +49,20 @@ def build_report_artifact_data(
     return {
         'headline': report_headline,
         'subtitle': (
-            f"品牌提及率 {summary_metrics.get('brand_mention_rate', 0):.1%} | "
-            f"内容引用率 {summary_metrics.get('content_citation_rate', 0):.1%} | "
-            f"场景覆盖 {summary_metrics.get('scenario_hit_count', 0)}/{summary_metrics.get('scenario_total', 0)}"
+            f"品牌提及率 {brand_mention_rate:.1%} | "
+            f"内容引用率 {content_citation_rate:.1%} | "
+            f"场景覆盖 {scenario_hit_count}/{scenario_total}"
         ),
         'metrics': {
-            'brand_mention_rate': summary_metrics.get('brand_mention_rate', 0),
-            'content_citation_rate': summary_metrics.get('content_citation_rate', 0),
-            'official_citation_rate': summary_metrics.get('official_citation_rate', 0),
-            'scenario_hit_count': summary_metrics.get('scenario_hit_count', 0),
-            'high_risk_scenario_count': summary_metrics.get('high_risk_scenario_count', 0),
+            'brand_mention_rate': brand_mention_rate,
+            'content_citation_rate': content_citation_rate,
+            'official_citation_rate': official_citation_rate,
+            'scenario_hit_count': scenario_hit_count,
+            'high_risk_scenario_count': high_risk_scenario_count,
             'accuracy_score': summary_metrics.get('accuracy_score'),
             'accuracy_status': summary_metrics.get('accuracy_status'),
-            'total_questions': metrics.get('total_questions', 0),
-            'total_mentions': metrics.get('total_mentions', 0),
+            'total_questions': total_questions,
+            'total_mentions': total_mentions,
         },
         'content': report_data.get('executive_summary', ''),
         'executive_summary': report_data.get('executive_summary', ''),

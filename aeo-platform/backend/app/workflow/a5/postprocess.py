@@ -875,9 +875,6 @@ def build_report_markdown(
             "brand_value", "暂无足够数据"
         )
     )
-    negative_ratio = str(
-        brand_metric_lookup.get("负向情感占比", {}).get("brand_value", "暂无足够数据")
-    )
 
     negative_items = _pick_negative_items(mention_sentiment_analysis)
     negative_labels = _build_negative_labels(negative_items)
@@ -1336,7 +1333,7 @@ def generate_fallback_report(
 ) -> dict[str, Any]:
     """Generate degraded but UI-compatible report data when the LLM fails."""
     brand_name = brand_profile.get("brand_name", "品牌")
-    mention_rate = metrics.get("mention_rate", 0)
+    mention_rate = _safe_ratio(metrics.get("mention_rate", 0))
 
     if mention_rate >= 0.7:
         summary = (
