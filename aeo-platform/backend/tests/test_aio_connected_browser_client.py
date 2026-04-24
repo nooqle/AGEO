@@ -34,3 +34,42 @@ async def test_aio_connected_browser_client_sets_cn_locale_for_new_context():
     assert captured["extra_http_headers"] == {
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
     }
+
+
+@pytest.mark.asyncio
+async def test_aio_connected_browser_client_normalizes_macos_ua_to_linux():
+    captured: dict[str, object] = {}
+
+    async def _new_context(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(pages=[])
+
+    client = AioConnectedBrowserClient(
+        session_name="aio-test",
+        workspace_id="workspace_1",
+        task_id="task_1",
+        platform="deepseek",
+    )
+    client.browser = SimpleNamespace(
+        contexts=[],
+        new_context=AsyncMock(side_effect=_new_context),
+        version="135.0.7049.78",
+    )
+    client.browser_info = {
+        "user_agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        ),
+        "viewport": {"width": 1362, "height": 1042},
+    }
+    client._load_storage_state = AsyncMock(return_value=None)
+
+    await client._get_or_create_remote_context("https://chat.deepseek.com/")
+
+    assert captured["viewport"] == {"width": 1362, "height": 1042}
+    assert captured["user_agent"] == (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/135.0.7049.78 Safari/537.36"
+    )

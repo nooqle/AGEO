@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -15,6 +16,8 @@ from app.services.aio_runtime_contracts import AioPlatformRoots
 from app.services.aio_session_manager import aio_session_manager
 
 logger = logging.getLogger(__name__)
+
+_CHROME_VERSION_RE = re.compile(r"Chrome/([0-9.]+)")
 
 
 class AioConnectedBrowserClient(PlaywrightBrowserClient):
@@ -46,6 +49,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         self.run_scope_id = run_scope_id or workspace_id
         self.browser: Browser | None = None
         self.aio_session_id: str | None = None
+        self.browser_info: dict[str, Any] = {}
         self.platform_roots: AioPlatformRoots | None = None
         self._page_owned_by_client = False
         self._context_owned_by_client = False
@@ -149,7 +153,74 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             auth_scope_id=self.auth_scope_id,
             run_scope_id=self.run_scope_id,
         )
-        return await aio_session_manager.get_browser_connection(session.session_id)
+        self.browser_info = await aio_session_manager.get_browser_connection(
+            session.session_id
+        )
+        return self.browser_info
+
+    @staticmethod
+    def _preferred_languages() -> list[str]:
+        preferred: list[str] = []
+        locale = str(settings.AIO_BROWSER_LOCALE or "").strip()
+        if locale:
+            preferred.append(locale)
+        for part in str(settings.AIO_BROWSER_ACCEPT_LANGUAGE or "").split(","):
+            language = part.split(";", 1)[0].strip()
+            if language and language not in preferred:
+                preferred.append(language)
+        return preferred or ["en-US", "en"]
+
+    @staticmethod
+    def _resolve_viewport(viewport: Any) -> dict[str, int]:
+        if isinstance(viewport, dict):
+            try:
+                width = int(viewport.get("width"))
+                height = int(viewport.get("height"))
+            except (TypeError, ValueError):
+                width = 0
+                height = 0
+            if width > 0 and height > 0:
+                return {"width": width, "height": height}
+        return {"width": 1280, "height": 720}
+
+    @staticmethod
+    def _extract_chrome_version(user_agent: str | None) -> str | None:
+        match = _CHROME_VERSION_RE.search(str(user_agent or ""))
+        if not match:
+            return None
+        version = match.group(1).strip()
+        return version or None
+
+    def _browser_chrome_version(self) -> str | None:
+        raw_version = getattr(self.browser, "version", None)
+        if callable(raw_version):
+            try:
+                raw_version = raw_version()
+            except Exception:
+                raw_version = None
+        version = str(raw_version or "").strip()
+        if not version:
+            return None
+        if version.startswith("Chrome/"):
+            return version.split("/", 1)[1].strip() or None
+        return version if version[0].isdigit() else None
+
+    def _resolve_context_user_agent(self, browser_info: dict[str, Any]) -> str | None:
+        runtime_user_agent = str(browser_info.get("user_agent") or "").strip()
+        if "Linux" in runtime_user_agent or "X11" in runtime_user_agent:
+            return runtime_user_agent
+
+        chrome_version = (
+            self._browser_chrome_version()
+            or self._extract_chrome_version(runtime_user_agent)
+        )
+        if not chrome_version:
+            return None
+        return (
+            "Mozilla/5.0 (X11; Linux x86_64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Chrome/{chrome_version} Safari/537.36"
+        )
 
     async def _load_storage_state(self) -> dict[str, Any] | None:
         if self.platform_roots is None:
@@ -271,25 +342,27 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         return context
 
     async def _apply_language_init_script(self, context: BrowserContext) -> None:
+        locale = json.dumps(str(settings.AIO_BROWSER_LOCALE or "zh-CN"))
+        languages = json.dumps(self._preferred_languages(), ensure_ascii=False)
         try:
             await context.add_init_script(
-                """
-(() => {
-  const language = 'zh-CN';
-  const languages = ['zh-CN', 'zh', 'en'];
-  try {
-    Object.defineProperty(navigator, 'language', {
+                f"""
+(() => {{
+  const language = {locale};
+  const languages = {languages};
+  try {{
+    Object.defineProperty(navigator, 'language', {{
       configurable: true,
       get: () => language,
-    });
-    Object.defineProperty(navigator, 'languages', {
+    }});
+    Object.defineProperty(navigator, 'languages', {{
       configurable: true,
       get: () => languages,
-    });
-  } catch (_) {
+    }});
+  }} catch (_) {{
     // Ignore init-script failures; locale/header settings still apply.
-  }
-})();
+  }}
+}})();
 """
             )
         except Exception as exc:
@@ -353,19 +426,18 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             self.platform,
         )
         self._context_owned_by_client = True
+        browser_info = self.browser_info if isinstance(self.browser_info, dict) else {}
         context_options: dict[str, Any] = {
-            "viewport": {"width": 1280, "height": 720},
+            "viewport": self._resolve_viewport(browser_info.get("viewport")),
             "locale": settings.AIO_BROWSER_LOCALE,
             "timezone_id": settings.AIO_BROWSER_TIMEZONE_ID,
-            "user_agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
             "extra_http_headers": {
                 "Accept-Language": settings.AIO_BROWSER_ACCEPT_LANGUAGE,
             },
         }
+        resolved_user_agent = self._resolve_context_user_agent(browser_info)
+        if resolved_user_agent:
+            context_options["user_agent"] = resolved_user_agent
         storage_state = await self._load_storage_state()
         if storage_state:
             context_options["storage_state"] = storage_state

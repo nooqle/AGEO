@@ -15,9 +15,11 @@ from app.core.fetchers.browser.browser_executor import (
     BrowserAnswerExecutionPlan,
     execute_post_submit_capture_flow,
 )
+from app.core.fetchers.browser.failure_observability import build_failure_contract
 from app.core.fetchers.browser.parsers.base import BaseResponseParser
 from app.core.fetchers.browser.parsers.sse import DeepSeekSSEParser
 from app.schemas.fetch import (
+    BrowserEvent,
     BrowserState,
     Platform,
     SearchReference,
@@ -51,6 +53,12 @@ class DeepSeekHandler(BaseBrowserHandler):
         "verification",
         "人机验证",
         "安全验证",
+    )
+    RISK_CONTROL_MARKERS = (
+        "请检查网络后重试",
+        "浏览器运行环境异常",
+        "当前浏览器运行环境异常",
+        "switch execution environments and try again",
     )
 
     _DEFAULTS: dict = {
@@ -236,6 +244,61 @@ class DeepSeekHandler(BaseBrowserHandler):
             yield self._create_event(BrowserState.ERROR, f"抓取失败: {str(e)}", progress=0)
 
     # ------------------------------------------------------------------ DeepSeek-specific
+
+    async def _detect_risk_control_marker(self) -> tuple[str | None, str | None]:
+        text_snapshot = await self._browser_agent_text_snapshot_provider()
+        normalized_text = " ".join(str(text_snapshot or "").split())
+        if not normalized_text:
+            return None, None
+        lower_text = normalized_text.lower()
+        for marker in self.RISK_CONTROL_MARKERS:
+            if marker.lower() in lower_text:
+                return marker, normalized_text[:600]
+        return None, None
+
+    async def _handle_browser_agent_empty_answer(
+        self,
+        answer_text: str | None,
+        *,
+        progress: float,
+        fallback_url: str | None = None,
+    ) -> tuple[list[BrowserEvent], bool]:
+        if answer_text and len(answer_text.strip()) >= 10:
+            return [], False
+
+        risk_control_marker, page_excerpt = await self._detect_risk_control_marker()
+        if not risk_control_marker:
+            return await super()._handle_browser_agent_empty_answer(
+                answer_text,
+                progress=progress,
+                fallback_url=fallback_url,
+            )
+
+        evidence_ref = await self._capture_failure_evidence(
+            failure_reason="risk_control_page",
+            execution_stage="extract_answer",
+            extra_metadata={
+                "answer_length": len(answer_text or ""),
+                "risk_control_marker": risk_control_marker,
+                "page_excerpt": page_excerpt,
+            },
+        )
+        return [
+            self._create_event(
+                BrowserState.ERROR,
+                "DeepSeek 页面返回运行环境/重试提示，当前运行时未获得有效回答",
+                progress=0,
+                error_type="risk_control_page",
+                **build_failure_contract(
+                    failure_reason="risk_control_page",
+                    execution_stage="extract_answer",
+                    retryable=False,
+                    needs_handoff=False,
+                    failure_layer="adapter",
+                    evidence_ref=evidence_ref,
+                ),
+            )
+        ], True
 
     async def _capture_submission_probe(self) -> dict[str, Any]:
         if self.client.page is None:
