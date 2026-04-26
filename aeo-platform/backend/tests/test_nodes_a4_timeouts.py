@@ -60,3 +60,50 @@ async def test_browser_fetch_timeout_also_applies_to_aio_handlers() -> None:
 
     assert result["success"] is False
     assert result["error_type"] == "question_timeout"
+
+
+def test_supplemental_preserve_keeps_non_target_question_pairs() -> None:
+    preserved = nodes_a4._derive_preserved_fetch_results(
+        current_questions=[
+            {"id": "q1", "text": "Q1"},
+            {"id": "q2", "text": "Q2"},
+        ],
+        existing_fetch_results=[
+            {
+                "question_id": "q1",
+                "question_text": "Q1",
+                "platform_results": [
+                    {"platform": "kimi", "answer": {"content": "old"}},
+                    {"platform": "deepseek", "answer": {"content": "keep"}},
+                ],
+            },
+            {
+                "question_id": "q2",
+                "question_text": "Q2",
+                "platform_results": [
+                    {"platform": "kimi", "answer": {"content": "keep"}},
+                    {"platform": "deepseek", "answer": {"content": "keep"}},
+                ],
+            },
+        ],
+        selected_platforms={"kimi"},
+        question_platform_targets={"q1": {"kimi"}},
+    )
+
+    pair_count = sum(len(item["platform_results"]) for item in preserved)
+    q1_platforms = {
+        result["platform"]
+        for item in preserved
+        if item["question_id"] == "q1"
+        for result in item["platform_results"]
+    }
+    q2_platforms = {
+        result["platform"]
+        for item in preserved
+        if item["question_id"] == "q2"
+        for result in item["platform_results"]
+    }
+
+    assert pair_count == 3
+    assert q1_platforms == {"deepseek"}
+    assert q2_platforms == {"kimi", "deepseek"}

@@ -185,6 +185,48 @@ def validate_a4_canonical_result(
             metadata={"blocker_code": "fetch_results_missing"},
         )
 
+    merge_metadata = canonical.get("merge_metadata")
+    if isinstance(merge_metadata, Mapping) and (
+        merge_metadata.get("source") == "supplemental_fetch_workflow"
+    ):
+        base_pair_count = int(merge_metadata.get("base_pair_count") or 0)
+        merged_pair_count = int(merge_metadata.get("merged_pair_count") or 0)
+        actual_pair_count = sum(
+            len(item.get("platform_results") or [])
+            for item in fetch_results
+            if isinstance(item, Mapping)
+        )
+        if base_pair_count and merged_pair_count < base_pair_count:
+            return ValidationGateResult(
+                gate_name="a4_canonical_result_gate",
+                passed=False,
+                reason=(
+                    "Supplemental fetch result is partial; merged pair count is "
+                    "smaller than the base canonical result."
+                ),
+                metadata={
+                    "blocker_code": "supplemental_fetch_partial_result",
+                    "base_pair_count": base_pair_count,
+                    "merged_pair_count": merged_pair_count,
+                    "actual_pair_count": actual_pair_count,
+                },
+            )
+        if merged_pair_count and actual_pair_count != merged_pair_count:
+            return ValidationGateResult(
+                gate_name="a4_canonical_result_gate",
+                passed=False,
+                reason=(
+                    "Supplemental fetch merge metadata does not match canonical "
+                    "fetch_results."
+                ),
+                metadata={
+                    "blocker_code": "supplemental_fetch_merge_mismatch",
+                    "base_pair_count": base_pair_count,
+                    "merged_pair_count": merged_pair_count,
+                    "actual_pair_count": actual_pair_count,
+                },
+            )
+
     artifact = canonical.get("artifact")
     artifact_message_id = ""
     if isinstance(artifact, Mapping):

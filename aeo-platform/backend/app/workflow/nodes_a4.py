@@ -257,6 +257,7 @@ def _build_a4_completion_observation(
     total_fetches: int,
     fail_count: int,
     platform_statuses: dict[str, Any],
+    merge_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     recovery_plan = build_fetch_recovery_plan(projected_fetch_results)
     requires_user_decision = bool(
@@ -302,6 +303,7 @@ def _build_a4_completion_observation(
         "question_target_count": len(question_targets),
         "platform_statuses": dict(platform_statuses or {}),
         "recovery_plan": recovery_plan,
+        "merge_metadata": dict(merge_metadata or {}),
     }
 
 
@@ -375,8 +377,16 @@ def _build_a4_canonical_result(
         "validation": artifact_validation.to_state_payload(),
         "completion_decision": completion_decision.to_state_payload(),
         "recovery_plan": dict(observation.get("recovery_plan") or {}),
+        "merge_metadata": dict(observation.get("merge_metadata") or {}),
         "observation": observation,
     }
+
+
+def _count_fetch_pairs(fetch_results: list[dict[str, Any]] | None) -> int:
+    count = 0
+    for entry in fetch_results or []:
+        count += len(entry.get("platform_results") or [])
+    return count
 
 
 def _build_browser_phase_start_message(
@@ -450,11 +460,10 @@ def _derive_preserved_fetch_results(
         question_id = str(existing_entry.get("question_id") or "").strip()
         if not question_id or question_id not in current_question_ids:
             continue
-        targeted_platforms = (
-            question_platform_targets.get(question_id)
-            if question_platform_targets and question_id in question_platform_targets
-            else selected_platforms
-        )
+        if question_platform_targets:
+            targeted_platforms = question_platform_targets.get(question_id)
+        else:
+            targeted_platforms = selected_platforms
         kept_platform_results = [
             platform_result
             for platform_result in existing_entry.get("platform_results", []) or []
@@ -775,27 +784,13 @@ async def _persist_task_progress(
     message: str,
     context: str,
 ) -> None:
-    """Mirror live websocket progress into durable task state when available."""
+    """Keep A4 live progress out of durable task state.
 
-    if not task_id:
-        return
+    Official task state is persisted by TaskRuntimeStateWriter after the
+    orchestrator interprets the node result.
+    """
 
-    try:
-        from uuid import UUID as _UUID
-
-        from app.core.database import AsyncSessionLocal
-        from app.services.task_service import TaskService
-
-        async with AsyncSessionLocal() as db:
-            ts = TaskService(db)
-            await ts.update_progress(
-                _UUID(task_id),
-                stage=stage,
-                progress=progress,
-                message=message,
-            )
-    except Exception as exc:
-        logger.warning("[A4] Task progress sync failed (%s): %s", context, exc)
+    return None
 
 
 async def _tracked_api_fetch(
@@ -1333,7 +1328,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
     - full: All 4 platforms via Browser only, no API       (~8-15 min)
     """
     session_id = state["session_id"]
-    questions = list(state.get("questions", []) or [])
+    state_questions = list(state.get("questions", []) or [])
+    questions = list(state_questions)
     brand_profile = state.get("brand_profile") or {}
     fetch_mode = state.get("fetch_mode") or "fast"
     tool_args = state.get("tool_call_args") or {}
@@ -2274,7 +2270,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 else None
             )
             baseline = _derive_preserved_fetch_results(
-                current_questions=questions,
+                current_questions=state_questions if retry_failed_only else questions,
                 existing_fetch_results=state.get("fetch_results") or [],
                 selected_platforms=selected_platforms,
                 question_platform_targets=question_platform_targets or None,
@@ -2323,6 +2319,19 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 len(baseline),
                 len(final_fetch_results),
             )
+
+        merge_metadata: dict[str, Any] = {}
+        if retry_failed_only or scoped_merge_active:
+            merge_metadata = {
+                "source": "supplemental_fetch_workflow",
+                "merge_key": "question_id+platform",
+                "base_pair_count": _count_fetch_pairs(state.get("fetch_results") or []),
+                "preserved_pair_count": _count_fetch_pairs(baseline or []),
+                "overlay_pair_count": _count_fetch_pairs(fetch_results),
+                "merged_pair_count": _count_fetch_pairs(final_fetch_results),
+                "question_target_count": len(question_targets),
+                "platforms": list(platform_filter or []),
+            }
 
         merge_validation = validate_scoped_fetch_merge(
             platform_filter=platform_filter,
@@ -2491,6 +2500,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     if authoritative_projection
                     else {}
                 ),
+                "mergeMetadata": merge_metadata,
             },
         )
         artifact_validation = validate_artifact_writeback(
@@ -2518,6 +2528,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             total_fetches=total_fetches,
             fail_count=fail_count,
             platform_statuses=platform_statuses,
+            merge_metadata=merge_metadata,
         )
         detailed_response = _build_a4_completion_response(
             total_fetches=total_fetches,
@@ -2640,12 +2651,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                 async with AsyncSessionLocal() as db:
                     ts = TaskService(db)
-                    await ts.update_progress(
-                        _UUID(task_id),
-                        stage="A4",
-                        progress=0.60,
-                        message=f"抓取完成: {successful_fetches}/{total_fetches} 成功",
-                    )
                     await ts.append_stage_result(
                         _UUID(task_id),
                         {
@@ -2760,7 +2765,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 from app.services.fetch_run_platform_state_service import (
                     FetchRunPlatformStateService,
                 )
-                from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
 
                 async with AsyncSessionLocal() as db:
@@ -2770,17 +2774,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             task_run_id=_UUID(str(state.get("run_id"))),
                             status="failed",
                         )
-                    task_svc = TaskService(db)
-                    await task_svc.fail_task(
-                        _UUID(task_id),
-                        error_message=str(e),
-                        error_stage="A4",
-                        run_id=(
-                            _UUID(state.get("run_id")) if state.get("run_id") else None
-                        ),
-                    )
             except Exception as te:
-                logger.warning("[A4] TaskService fail_task failed: %s", te)
+                logger.warning("[A4] Failed to mark A4 artifact/run status: %s", te)
 
         return Command(
             update={

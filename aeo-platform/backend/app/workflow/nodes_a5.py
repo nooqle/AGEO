@@ -587,30 +587,6 @@ async def a5_analytics_node(state: AgentState) -> Command:
             except Exception as e:
                 logger.error(f"[A5] Failed to update entity {entity_id}: {e}")
 
-        # Task milestone: A5 completed (Cycle 3, Module 1)
-        task_id = state.get("task_id")
-        if task_id:
-            try:
-                from app.core.database import AsyncSessionLocal
-                from app.services.task_service import TaskService
-                from uuid import UUID as _UUID
-
-                async with AsyncSessionLocal() as db:
-                    task_svc = TaskService(db)
-                    snapshot_uuid = snapshot.id if snapshot else None
-                    task_run_uuid = (
-                        _UUID(str(state.get("run_id")))
-                        if state.get("run_id")
-                        else None
-                    )
-                    await task_svc.complete_task(
-                        _UUID(task_id),
-                        snapshot_id=snapshot_uuid,
-                        run_id=task_run_uuid,
-                    )
-            except Exception as te:
-                logger.warning("[A5] TaskService complete_task failed: %s", te)
-
         update_dict: dict[str, Any] = {
             "metrics": metrics_for_state,
             "report": report_artifact_data,
@@ -703,30 +679,6 @@ async def a5_analytics_node(state: AgentState) -> Command:
             message=f"分析过程出错: {str(e)}",
             status="error",
         )
-
-        # Task milestone: A5 failed (Cycle 3, Module 1)
-        task_id = state.get("task_id")
-        if task_id:
-            try:
-                from app.core.database import AsyncSessionLocal
-                from app.services.task_service import TaskService
-                from uuid import UUID as _UUID
-
-                async with AsyncSessionLocal() as db:
-                    task_svc = TaskService(db)
-                    task_run_uuid = (
-                        _UUID(str(state.get("run_id")))
-                        if state.get("run_id")
-                        else None
-                    )
-                    await task_svc.fail_task(
-                        _UUID(task_id),
-                        error_message=str(e),
-                        error_stage="A5",
-                        run_id=task_run_uuid,
-                    )
-            except Exception as te:
-                logger.warning("[A5] TaskService fail_task failed: %s", te)
 
         return Command(
             update={

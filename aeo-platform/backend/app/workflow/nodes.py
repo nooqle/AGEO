@@ -8,8 +8,6 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 
-logger = logging.getLogger(__name__)
-
 from langgraph.types import Command
 
 from app.workflow.state import AgentState
@@ -29,6 +27,8 @@ from app.core.utils import (
     load_prompt_template,
     render_prompt,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -186,7 +186,7 @@ def _build_a1_retry_prompt(
 
     existing_data = ""
     if existing_profile:
-        existing_data += f"\n已有的品牌信息（请在此基础上补充完善）:\n"
+        existing_data += "\n已有的品牌信息（请在此基础上补充完善）:\n"
         existing_data += f"  品牌名: {existing_profile.get('brand_name', brand_name)}\n"
         existing_data += f"  行业: {existing_profile.get('industry', '未知')}\n"
         existing_data += f"  描述: {existing_profile.get('description', '')[:100]}\n"
@@ -253,21 +253,7 @@ async def a1_brand_node(state: AgentState) -> Command:
         session_id, "thought", f"正在分析品牌 '{brand_name}' 的信息和竞品数据..."
     )
 
-    # Task milestone: A1 started (Cycle 3, Module 1)
     task_id = state.get("task_id")
-    if task_id:
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.services.task_service import TaskService
-            from uuid import UUID as _UUID
-            async with AsyncSessionLocal() as db:
-                ts = TaskService(db)
-                await ts.update_progress(
-                    _UUID(task_id), stage="A1", progress=0.05,
-                    message=f"开始分析品牌: {brand_name}",
-                )
-        except Exception as te:
-            logger.warning("[A1] TaskService update_progress failed: %s", te)
 
     try:
         # Load system prompt
@@ -481,10 +467,6 @@ async def a1_brand_node(state: AgentState) -> Command:
                 from uuid import UUID as _UUID
                 async with AsyncSessionLocal() as db:
                     ts = TaskService(db)
-                    await ts.update_progress(
-                        _UUID(task_id), stage="A1", progress=0.15,
-                        message=f"品牌分析完成: {brand_name}",
-                    )
                     await ts.append_stage_result(_UUID(task_id), {
                         "stage": "A1",
                         "stage_name": "品牌分析",
@@ -549,24 +531,6 @@ async def a1_brand_node(state: AgentState) -> Command:
 
     except Exception as e:
         await send_error_event(session_id, "A1", str(e), recoverable=False)
-
-        # Task milestone: A1 failed
-        task_id = state.get("task_id")
-        if task_id:
-            try:
-                from app.core.database import AsyncSessionLocal
-                from app.services.task_service import TaskService
-                from uuid import UUID as _UUID
-                async with AsyncSessionLocal() as db:
-                    task_svc = TaskService(db)
-                    await task_svc.fail_task(
-                        _UUID(task_id),
-                        error_message=str(e),
-                        error_stage="A1",
-                        run_id=_UUID(state.get("run_id")) if state.get("run_id") else None,
-                    )
-            except Exception as te:
-                logger.warning("[A1] TaskService fail_task failed: %s", te)
 
         return Command(
             update={
@@ -935,24 +899,6 @@ async def a2_persona_node(state: AgentState) -> Command:
 
         # Fallback: if strategy says block (currently unreachable)
         await send_error_event(session_id, "A2", str(e), recoverable=True)
-
-        # Task milestone: A2 failed (blocking path only)
-        task_id = state.get("task_id")
-        if task_id:
-            try:
-                from app.core.database import AsyncSessionLocal
-                from app.services.task_service import TaskService
-                from uuid import UUID as _UUID
-                async with AsyncSessionLocal() as db:
-                    task_svc = TaskService(db)
-                    await task_svc.fail_task(
-                        _UUID(task_id),
-                        error_message=str(e),
-                        error_stage="A2",
-                        run_id=_UUID(state.get("run_id")) if state.get("run_id") else None,
-                    )
-            except Exception as te:
-                logger.warning("[A2] TaskService fail_task failed: %s", te)
 
         return Command(
             update={

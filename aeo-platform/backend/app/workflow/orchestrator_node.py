@@ -3820,11 +3820,27 @@ async def orchestrator_node(state: AgentState) -> Command:
         completed_count = sum(1 for s in workflow_steps if s["status"] == "completed")
         skipped_count = sum(1 for s in workflow_steps if s["status"] == "skipped")
         total_count = len(workflow_steps)
+        is_standalone_skill_complete = (
+            exec_status == "completed"
+            and last_tool
+            in {
+                "site_confidence_assessment_skill",
+                "confidence_analysis_skill",
+                "post_analysis_skill",
+                "drill_down_analysis",
+                "compare_snapshots",
+            }
+        )
         # In baseline mode, Phase 1 completion is not "all done" — Phase 2 may follow
         is_baseline_phase = state.get("analysis_mode") == "baseline"
         all_done = (
             completed_count + skipped_count
         ) == total_count and not is_baseline_phase
+        completion_progress = (
+            1.0
+            if is_standalone_skill_complete
+            else completed_count / total_count
+        )
         from app.workflow.events import send_progress_event
 
         if has_agent_error and _matches_failed_step(
@@ -3851,9 +3867,13 @@ async def orchestrator_node(state: AgentState) -> Command:
                 session_id,
                 step=last_tool,
                 step_name=display_name,
-                progress=completed_count / total_count,
+                progress=completion_progress,
                 message=f"完成：{display_name}",
-                status="completed" if all_done else "running",
+                status=(
+                    "completed"
+                    if all_done or is_standalone_skill_complete
+                    else "running"
+                ),
                 steps=workflow_steps,
             )
             await send_action_log_event(
@@ -4939,15 +4959,9 @@ async def _handle_tool_call(
                 tool_args.get("question_targets")
             )
             if question_targets:
-                extra_updates["questions"] = [
-                    {
-                        "id": item["question_id"],
-                        "text": item["question_text"],
-                        "category": "失败补采",
-                        "platforms": list(item["platforms"]),
-                    }
-                    for item in question_targets
-                ]
+                # Supplemental fetch must keep the previous full question set in
+                # state so A4 can merge the scoped overlay back into the full
+                # canonical matrix. The scoped targets travel only in tool_args.
                 tool_args = {**tool_args, "question_targets": question_targets}
             custom_qs = tool_args.get("custom_questions")
             if not question_targets and custom_qs and isinstance(custom_qs, list):
