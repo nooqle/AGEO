@@ -4998,10 +4998,15 @@ async def _handle_tool_call(
                 )
             if tool_args.get("persona_id"):
                 selected_ids = list(user_decisions.get("selected_persona_ids") or [])
+                selected_names = list(user_decisions.get("selected_persona_names") or [])
                 persona_id = str(tool_args["persona_id"]).strip()
-                if persona_id and persona_id not in selected_ids:
-                    selected_ids.append(persona_id)
-                user_decisions["selected_persona_ids"] = selected_ids
+                if not selected_ids and not selected_names and persona_id:
+                    user_decisions["selected_persona_ids"] = [persona_id]
+                elif persona_id:
+                    logger.info(
+                        "[Orchestrator] Ignoring LLM persona_id=%s because user-selected personas already exist",
+                        persona_id,
+                    )
             extra_updates["user_decisions"] = user_decisions
 
         # Pass fetch_mode for A4 + custom_questions + ask_user guard
