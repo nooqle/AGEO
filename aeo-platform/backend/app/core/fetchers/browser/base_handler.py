@@ -632,6 +632,9 @@ class BaseBrowserHandler(ABC):
                 "has_cdp_url": bool(browser_info.get("cdp_url")),
                 "has_vnc_url": bool(browser_info.get("vnc_url")),
             }
+        context_reuse_strategy = getattr(self.client, "context_reuse_strategy", None)
+        if context_reuse_strategy:
+            metadata["context_reuse_strategy"] = str(context_reuse_strategy)
         if self._recent_intercept_responses:
             metadata["recent_intercept_responses"] = list(
                 self._recent_intercept_responses

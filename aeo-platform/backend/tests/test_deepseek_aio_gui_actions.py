@@ -9,6 +9,15 @@ from app.core.config import settings
 from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
 
 
+def test_deepseek_aio_defaults_to_gui_actions_for_remote_sessions():
+    handler = DeepSeekHandler(
+        client=SimpleNamespace(page=None, aio_session_id="aio-session-1")
+    )
+
+    assert settings.DEEPSEEK_AIO_INTERACTION_MODE == "gui_actions"
+    assert handler._should_use_aio_gui_actions() is True
+
+
 def test_deepseek_gui_actions_requires_aio_session(monkeypatch):
     monkeypatch.setattr(settings, "DEEPSEEK_AIO_INTERACTION_MODE", "gui_actions")
 

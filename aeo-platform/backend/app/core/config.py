@@ -105,7 +105,8 @@ class Settings(BaseSettings):
     AIO_BROWSER_LOCALE: str = "zh-CN"
     AIO_BROWSER_ACCEPT_LANGUAGE: str = "zh-CN,zh;q=0.9,en;q=0.8"
     AIO_BROWSER_TIMEZONE_ID: str = "Asia/Shanghai"
-    DEEPSEEK_AIO_INTERACTION_MODE: str = "cdp_dom"
+    AIO_BROWSER_REUSE_DEFAULT_CONTEXT_PLATFORMS: str = "deepseek"
+    DEEPSEEK_AIO_INTERACTION_MODE: str = "gui_actions"
 
     # A4 fast fetch tuning. These only affect API fetches; browser fetch
     # pacing remains controlled by PlatformConstants.PLATFORM_REQUEST_DELAYS.

@@ -54,6 +54,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         self._page_owned_by_client = False
         self._context_owned_by_client = False
         self._storage_state_loaded_into_context = False
+        self.context_reuse_strategy: str | None = None
 
     @staticmethod
     def _page_matches_target_host(page_url: str | None, target_url: str | None) -> bool:
@@ -222,6 +223,20 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             f"Chrome/{chrome_version} Safari/537.36"
         )
 
+    def _should_reuse_default_context_without_host_match(self) -> bool:
+        configured = str(
+            settings.AIO_BROWSER_REUSE_DEFAULT_CONTEXT_PLATFORMS or ""
+        ).strip()
+        if not configured:
+            return False
+        tokens = {
+            token.strip().lower()
+            for token in configured.replace(";", ",").split(",")
+            if token.strip()
+        }
+        platform = str(self.platform or "").strip().lower()
+        return "*" in tokens or platform in tokens
+
     async def _load_storage_state(self) -> dict[str, Any] | None:
         if self.platform_roots is None:
             return None
@@ -387,6 +402,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             target_host or "<none>",
         )
         reusable_contexts = [candidate for candidate in existing_contexts if candidate]
+        self.context_reuse_strategy = None
         if reusable_contexts and target_host:
             for candidate in reversed(reusable_contexts):
                 existing_pages = [
@@ -403,7 +419,20 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                             target_host,
                             page.url,
                         )
+                        self.context_reuse_strategy = "host_matched_existing_context"
                         return candidate
+
+            if self._should_reuse_default_context_without_host_match():
+                self._context_owned_by_client = False
+                self._storage_state_loaded_into_context = False
+                self.context_reuse_strategy = "platform_default_context_reuse"
+                logger.info(
+                    "[AIO Browser:%s] reusing default remote context for strict platform=%s without target_host match=%s",
+                    self.session_name,
+                    self.platform,
+                    target_host,
+                )
+                return reusable_contexts[-1]
 
             logger.info(
                 "[AIO Browser:%s] no existing context matched target_host=%s; creating isolated platform context",
@@ -417,6 +446,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                 "[AIO Browser:%s] reusing existing remote context because no target host was provided",
                 self.session_name,
             )
+            self.context_reuse_strategy = "first_existing_context_no_target"
             return reusable_contexts[0]
         logger.info(
             "[AIO Browser:%s] creating isolated context for workspace=%s task=%s platform=%s",
@@ -426,6 +456,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             self.platform,
         )
         self._context_owned_by_client = True
+        self.context_reuse_strategy = "isolated_context_created"
         browser_info = self.browser_info if isinstance(self.browser_info, dict) else {}
         context_options: dict[str, Any] = {
             "viewport": self._resolve_viewport(browser_info.get("viewport")),

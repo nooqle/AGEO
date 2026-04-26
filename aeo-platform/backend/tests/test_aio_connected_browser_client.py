@@ -73,3 +73,71 @@ async def test_aio_connected_browser_client_normalizes_macos_ua_to_linux():
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/135.0.7049.78 Safari/537.36"
     )
+
+
+@pytest.mark.asyncio
+async def test_deepseek_reuses_default_aio_context_without_host_match(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.fetchers.browser.aio_connected_client.settings."
+        "AIO_BROWSER_REUSE_DEFAULT_CONTEXT_PLATFORMS",
+        "deepseek",
+    )
+    existing_context = SimpleNamespace(
+        pages=[
+            SimpleNamespace(url="about:blank", is_closed=lambda: False),
+        ]
+    )
+    browser = SimpleNamespace(
+        contexts=[existing_context],
+        new_context=AsyncMock(),
+    )
+    client = AioConnectedBrowserClient(
+        session_name="aio-test",
+        workspace_id="workspace_1",
+        task_id="task_1",
+        platform="deepseek",
+    )
+    client.browser = browser
+
+    context = await client._get_or_create_remote_context(
+        "https://chat.deepseek.com/"
+    )
+
+    assert context is existing_context
+    assert client._context_owned_by_client is False
+    assert client.context_reuse_strategy == "platform_default_context_reuse"
+    browser.new_context.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_non_strict_platform_still_creates_isolated_context(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.fetchers.browser.aio_connected_client.settings."
+        "AIO_BROWSER_REUSE_DEFAULT_CONTEXT_PLATFORMS",
+        "deepseek",
+    )
+    existing_context = SimpleNamespace(
+        pages=[
+            SimpleNamespace(url="about:blank", is_closed=lambda: False),
+        ]
+    )
+    created_context = SimpleNamespace(pages=[])
+    browser = SimpleNamespace(
+        contexts=[existing_context],
+        new_context=AsyncMock(return_value=created_context),
+    )
+    client = AioConnectedBrowserClient(
+        session_name="aio-test",
+        workspace_id="workspace_1",
+        task_id="task_1",
+        platform="kimi",
+    )
+    client.browser = browser
+    client._load_storage_state = AsyncMock(return_value=None)
+
+    context = await client._get_or_create_remote_context("https://kimi.com/")
+
+    assert context is created_context
+    assert client._context_owned_by_client is True
+    assert client.context_reuse_strategy == "isolated_context_created"
+    browser.new_context.assert_awaited_once()
