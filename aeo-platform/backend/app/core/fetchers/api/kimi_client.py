@@ -72,6 +72,14 @@ class KimiClient(BaseAPIClient):
         super().__init__(api_key, endpoint)
         self.model = model
 
+    @staticmethod
+    def _request_timeout() -> float:
+        try:
+            configured = float(settings.A4_KIMI_API_TIMEOUT_SECONDS)
+        except (TypeError, ValueError):
+            configured = PlatformConstants.PLATFORM_API_TIMEOUTS["kimi"]
+        return max(5.0, configured)
+
     async def ask_with_search(self, question: str) -> LLMResponse:
         start_time = time.time()
 
@@ -106,7 +114,7 @@ class KimiClient(BaseAPIClient):
                     self.endpoint,
                     headers=headers,
                     json=payload,
-                    timeout=PlatformConstants.PLATFORM_API_TIMEOUTS["kimi"],
+                    timeout=self._request_timeout(),
                 )
                 response.raise_for_status()
                 data = response.json()
