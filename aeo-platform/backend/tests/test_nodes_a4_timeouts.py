@@ -30,6 +30,28 @@ def test_browser_action_wait_timeout_preserves_single_question_budget() -> None:
     assert timeout == int(nodes_a4._BROWSER_ACTION_WAIT_TIMEOUT_SECONDS)
 
 
+def test_deepseek_runtime_page_failure_stops_platform_without_tripping_breaker() -> None:
+    result = {
+        "success": False,
+        "error_type": "page_runtime_retry_or_risk_control",
+        "failure_reason": "page_runtime_retry_or_risk_control",
+    }
+
+    assert nodes_a4._should_count_browser_failure_for_breaker(result) is False
+    assert nodes_a4._should_stop_browser_platform_after_failure(result) is True
+
+
+def test_legacy_risk_control_page_remains_soft_single_question_failure() -> None:
+    result = {
+        "success": False,
+        "error_type": "risk_control_page",
+        "failure_reason": "risk_control_page",
+    }
+
+    assert nodes_a4._should_count_browser_failure_for_breaker(result) is False
+    assert nodes_a4._should_stop_browser_platform_after_failure(result) is False
+
+
 class _FakeAioClient:
     aio_session_id = "aio-session"
 
