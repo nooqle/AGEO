@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any, Mapping
 
 from app.tools.a4_fetch_agent import normalize_public_platform_id
@@ -24,6 +23,29 @@ _BROWSER_FETCH_KEYWORDS = (
     "完整采集",
     "完整重抓",
 )
+
+
+def normalize_fetch_mode(value: Any) -> str | None:
+    candidate = str(value or "").strip().lower()
+    if candidate in {"fast", "full"}:
+        return candidate
+    return None
+
+
+def resolve_supplemental_fetch_mode(
+    state: Mapping[str, Any],
+    plan: Mapping[str, Any] | None = None,
+) -> str:
+    """Resolve retry mode from the failed A4 run, defaulting to A4's fast mode."""
+
+    for source in (
+        state.get("fetch_mode"),
+        (plan or {}).get("fetch_mode"),
+    ):
+        mode = normalize_fetch_mode(source)
+        if mode:
+            return mode
+    return "fast"
 
 
 def canonicalize_fetch_platform(value: Any) -> str:
@@ -187,6 +209,9 @@ def extract_latest_fetch_recovery_plan_from_state(
             ),
             "platform_breakdown": list(current_plan.get("platform_breakdown") or []),
             "task_id": str(current_plan.get("task_id") or "").strip() or None,
+            "fetch_mode": normalize_fetch_mode(
+                current_plan.get("fetch_mode") or state.get("fetch_mode")
+            ),
         }
 
     current_fetch_results = state.get("fetch_results")
@@ -200,6 +225,7 @@ def extract_latest_fetch_recovery_plan_from_state(
             ).strip()
             if task_id:
                 plan["task_id"] = task_id
+            plan["fetch_mode"] = normalize_fetch_mode(state.get("fetch_mode"))
             return plan
 
     manifest = state.get("knowledge_manifest") or {}
@@ -237,6 +263,9 @@ def extract_latest_fetch_recovery_plan_from_state(
         ),
         "platform_breakdown": list(latest_fetch.get("platform_breakdown") or []),
         "task_id": str(latest_fetch.get("task_id") or "").strip() or None,
+        "fetch_mode": normalize_fetch_mode(
+            latest_fetch.get("fetch_mode") or state.get("fetch_mode")
+        ),
     }
 
 

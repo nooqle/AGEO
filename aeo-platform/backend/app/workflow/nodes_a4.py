@@ -221,14 +221,21 @@ def _build_filtered_fetch_summary(
     }
 
 
-def _build_a4_followup_options(*, retry_failed_only: bool) -> list[dict[str, str]]:
+def _build_a4_followup_options(
+    *,
+    retry_failed_only: bool,
+    fetch_mode: str,
+) -> list[dict[str, str]]:
+    mode_label = "快速/API" if fetch_mode == "fast" else "完整/浏览器"
     supplemental_label = (
-        "继续补采剩余失败项（浏览器）" if retry_failed_only else "补采失败项（浏览器）"
+        f"继续补采剩余失败项（{mode_label}）"
+        if retry_failed_only
+        else f"补采失败项（{mode_label}）"
     )
     supplemental_description = (
-        "只重跑本轮补采后仍失败的平台和问题，并和已成功结果继续合并"
+        "沿用上一轮采集模式，只重跑本轮补采后仍失败的平台和问题，并和已成功结果继续合并"
         if retry_failed_only
-        else "只重跑上一轮失败的平台和问题，并和已成功结果合并"
+        else "沿用上一轮采集模式，只重跑上一轮失败的平台和问题，并和已成功结果合并"
     )
     return [
         {
@@ -257,9 +264,12 @@ def _build_a4_completion_observation(
     total_fetches: int,
     fail_count: int,
     platform_statuses: dict[str, Any],
+    fetch_mode: str,
     merge_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     recovery_plan = build_fetch_recovery_plan(projected_fetch_results)
+    if recovery_plan is not None:
+        recovery_plan = {**recovery_plan, "fetch_mode": fetch_mode}
     requires_user_decision = bool(
         artifact_validation.passed
         and completion_decision.decision_type == "degraded_continue"
@@ -279,7 +289,10 @@ def _build_a4_completion_observation(
         ),
         "requires_user_decision": requires_user_decision,
         "followup_options": (
-            _build_a4_followup_options(retry_failed_only=retry_failed_only)
+            _build_a4_followup_options(
+                retry_failed_only=retry_failed_only,
+                fetch_mode=fetch_mode,
+            )
             if requires_user_decision
             else []
         ),
@@ -2578,6 +2591,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             total_fetches=total_fetches,
             fail_count=fail_count,
             platform_statuses=platform_statuses,
+            fetch_mode=fetch_mode,
             merge_metadata=merge_metadata,
         )
         detailed_response = _build_a4_completion_response(

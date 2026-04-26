@@ -52,7 +52,10 @@ from app.workflow.confirmation import (
     resolve_confirmation_selection,
     resolve_known_confirmation_label,
 )
-from app.workflow.fetch_recovery import extract_latest_fetch_recovery_plan_from_state
+from app.workflow.fetch_recovery import (
+    extract_latest_fetch_recovery_plan_from_state,
+    resolve_supplemental_fetch_mode,
+)
 from app.workflow.brand_state import seed_effective_brand_profile
 
 from sqlalchemy import select
@@ -2420,11 +2423,12 @@ async def handle_confirmation_langgraph(
             plan = extract_latest_fetch_recovery_plan_from_state(state_values)
             if plan and plan.get("question_targets"):
                 user_content = "用户选择补采上一轮失败项"
+                fetch_mode = resolve_supplemental_fetch_mode(state_values, plan)
                 state_values["next_required_action"] = build_next_required_action(
                     tool_name="answer_fetch",
                     authority="user_confirmation",
                     tool_args={
-                        "fetch_mode": "full",
+                        "fetch_mode": fetch_mode,
                         "retry_failed_only": True,
                         "question_targets": list(plan.get("question_targets") or []),
                         "platforms": list(plan.get("platforms") or []),

@@ -74,6 +74,7 @@ from app.workflow.fetch_recovery import (
     is_supplemental_fetch_request,
     normalize_question_targets,
     prefers_browser_fetch_mode,
+    resolve_supplemental_fetch_mode,
 )
 from app.workflow.confirmation import (
     build_table_import_confirmation_payload,
@@ -2888,11 +2889,13 @@ async def _force_fetch_recovery_confirmation(
     request_id: str,
     current_retry_counts: dict[str, int],
 ) -> Command:
+    fetch_mode = resolve_supplemental_fetch_mode(state)
+    mode_label = "快速/API" if fetch_mode == "fast" else "完整/浏览器"
     defense_options = [
         {
             "id": "run_supplemental_fetch",
-            "label": "补采失败项（浏览器）",
-            "description": "仅补采上一轮失败的问题和平台，并保留已有成功结果",
+            "label": f"补采失败项（{mode_label}）",
+            "description": "沿用上一轮采集模式，仅补采上一轮失败的问题和平台，并保留已有成功结果",
         },
         {
             "id": "run_analysis_report",
@@ -4944,8 +4947,13 @@ async def _handle_tool_call(
                 and recovery_plan
                 and recovery_plan.get("question_targets")
             ):
+                supplemental_fetch_mode = resolve_supplemental_fetch_mode(
+                    state,
+                    recovery_plan,
+                )
                 tool_args = {
                     **tool_args,
+                    "fetch_mode": supplemental_fetch_mode,
                     "retry_failed_only": True,
                     "question_targets": list(
                         recovery_plan.get("question_targets") or []
