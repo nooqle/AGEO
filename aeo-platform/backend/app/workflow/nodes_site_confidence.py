@@ -6,13 +6,9 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
 
 from langgraph.types import Command
 
-from app.core.database import AsyncSessionLocal
-from app.models.task import AnalysisTask, TaskStatus
-from app.services.task_service import TaskService
 from app.workflow.events import (
     send_error_event,
     send_progress_event,
@@ -37,7 +33,6 @@ from app.workflow.skill_state import (
 from app.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
-_LIVE_TASK_STATUSES = {TaskStatus.PENDING, TaskStatus.RUNNING}
 
 
 def _extract_root_url(tool_args: dict[str, Any], state: AgentState) -> str:
@@ -79,70 +74,13 @@ def _resolve_monitored_official_website(state: AgentState) -> str:
     )
 
 
-async def _load_live_task(task_id: str | None) -> UUID | None:
-    if not task_id:
-        return None
-    try:
-        task_uuid = UUID(str(task_id))
-    except (TypeError, ValueError):
-        return None
-
-    async with AsyncSessionLocal() as db:
-        task = await db.get(AnalysisTask, task_uuid)
-        if task is None or task.status not in _LIVE_TASK_STATUSES:
-            return None
-    return task_uuid
-
-
 async def _update_task_progress_if_live(
     task_id: str | None,
     *,
     progress: float,
     message: str,
 ) -> None:
-    task_uuid = await _load_live_task(task_id)
-    if task_uuid is None:
-        return
-    try:
-        async with AsyncSessionLocal() as db:
-            task_service = TaskService(db)
-            await task_service.update_progress(
-                task_uuid,
-                stage="A7",
-                progress=progress,
-                message=message,
-                status=TaskStatus.RUNNING,
-            )
-    except Exception as exc:
-        logger.warning("[SiteConfidence] TaskService update_progress failed: %s", exc)
-
-
-async def _complete_task_if_live(task_id: str | None) -> None:
-    task_uuid = await _load_live_task(task_id)
-    if task_uuid is None:
-        return
-    try:
-        async with AsyncSessionLocal() as db:
-            task_service = TaskService(db)
-            await task_service.complete_task(task_uuid)
-    except Exception as exc:
-        logger.warning("[SiteConfidence] TaskService complete_task failed: %s", exc)
-
-
-async def _fail_task_if_live(task_id: str | None, error_message: str) -> None:
-    task_uuid = await _load_live_task(task_id)
-    if task_uuid is None:
-        return
-    try:
-        async with AsyncSessionLocal() as db:
-            task_service = TaskService(db)
-            await task_service.fail_task(
-                task_uuid,
-                error_message=error_message,
-                error_stage="A7",
-            )
-    except Exception as exc:
-        logger.warning("[SiteConfidence] TaskService fail_task failed: %s", exc)
+    return None
 
 
 async def site_confidence_assessment_executor_node(state: AgentState) -> Command:
@@ -355,8 +293,6 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
             message="官网 AI 友好度已完成",
             status="completed",
         )
-        await _complete_task_if_live(task_id)
-
         skill_update = build_skill_result_update(
             state,
             skill_key=state.get("current_skill"),
@@ -429,7 +365,6 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
     except Exception as exc:
         logger.exception("[SiteConfidence] Artifact generation failed: %s", exc)
         await send_error_event(session_id, "A7", str(exc), recoverable=True)
-        await _fail_task_if_live(task_id, str(exc))
         return Command(
             update={
                 "error_info": {

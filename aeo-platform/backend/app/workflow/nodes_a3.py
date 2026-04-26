@@ -437,22 +437,6 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             status="error",
         )
 
-        task_id = state.get("task_id")
-        if task_id:
-            try:
-                from app.core.database import AsyncSessionLocal
-                from app.services.task_service import TaskService
-                from uuid import UUID as _UUID
-                async with AsyncSessionLocal() as db:
-                    task_svc = TaskService(db)
-                    await task_svc.fail_task(
-                        _UUID(task_id),
-                        error_message=str(e),
-                        error_stage="A3",
-                    )
-            except Exception as te:
-                logger.warning("[A3] TaskService fail_task failed: %s", te)
-
         return Command(
             update={
                 "error_info": {

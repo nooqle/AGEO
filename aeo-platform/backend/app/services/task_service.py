@@ -48,6 +48,7 @@ _TERMINAL_TASK_RUN_STATUSES = {
     TaskRunStatus.CANCELLED,
 }
 _USER_VISIBLE_STAGE_LABELS = {
+    "A0": "编排器",
     "A1": "品牌档案分析",
     "A2": "用户画像分析",
     "A3": "问题生成",
@@ -55,6 +56,56 @@ _USER_VISIBLE_STAGE_LABELS = {
     "A5": "报告生成",
     "A7": "官网 AI 友好度",
 }
+_TASK_STAGE_MAX_LENGTH = 10
+_TASK_STAGE_ALIASES = {
+    "orchestrator": "A0",
+    "wait_for_user": "WAIT_USER",
+    "brand_analysis": "A1",
+    "brand_competition": "A1",
+    "marketing_persona": "A2",
+    "persona_analysis": "A2",
+    "question_simulation": "A3",
+    "answer_fetch": "A4",
+    "fetch": "A4",
+    "analysis_report": "A5",
+    "analysis_report_skill": "A5",
+    "data_analytics": "A5",
+    "site_confidence_assessment_skill": "A7",
+    "site_confidence_assessment_executor": "A7",
+}
+
+
+def _coerce_task_stage_code(stage: str | None) -> str:
+    """Return a DB-safe AnalysisTask stage code.
+
+    ``analysis_tasks.current_stage`` and ``error_stage`` are legacy
+    ``String(10)`` columns. Runtime checkpoints may use longer node names, so
+    task-level state must persist a compact code and leave the detailed stage
+    name on ``task_runs.checkpoint_stage``.
+    """
+
+    raw = str(stage or "").strip()
+    if not raw:
+        return "unknown"
+    if raw in _USER_VISIBLE_STAGE_LABELS:
+        return raw
+
+    normalized = raw.lower().replace("-", "_")
+    if normalized in _TASK_STAGE_ALIASES:
+        return _TASK_STAGE_ALIASES[normalized]
+
+    for prefix, alias in (
+        ("a1", "A1"),
+        ("a2", "A2"),
+        ("a3", "A3"),
+        ("a4", "A4"),
+        ("a5", "A5"),
+        ("a7", "A7"),
+    ):
+        if normalized.startswith(prefix):
+            return alias
+
+    return raw[:_TASK_STAGE_MAX_LENGTH]
 
 
 def _sanitize_user_visible_task_text(message: str | None) -> str:
@@ -302,7 +353,7 @@ class TaskService:
         if task is None:
             return
 
-        task.current_stage = stage
+        task.current_stage = _coerce_task_stage_code(stage)
         task.progress = progress
         task.progress_message = message
         task.status = status
@@ -325,6 +376,7 @@ class TaskService:
         *,
         run_id: UUID | None = None,
         checkpoint_stage: str | None = None,
+        progress: float | None = None,
         progress_message: str | None = None,
     ) -> AnalysisTask | None:
         """Mark the current execution attempt as waiting for user input."""
@@ -339,7 +391,9 @@ class TaskService:
         task.status = TaskStatus.RUNNING
         task.completed_at = None
         if checkpoint_stage:
-            task.current_stage = checkpoint_stage
+            task.current_stage = _coerce_task_stage_code(checkpoint_stage)
+        if progress is not None:
+            task.progress = max(0.0, min(1.0, float(progress)))
         if progress_message:
             task.progress_message = progress_message[:255]
         task.updated_at = now
@@ -392,6 +446,8 @@ class TaskService:
         *,
         snapshot_id: UUID | None = None,
         run_id: UUID | None = None,
+        final_stage: str | None = None,
+        progress_message: str | None = None,
     ) -> AnalysisTask | None:
         """Mark task as completed, optionally linking to a snapshot.
 
@@ -423,8 +479,10 @@ class TaskService:
 
         task.status = TaskStatus.COMPLETED
         task.progress = 1.0
-        task.current_stage = _infer_terminal_stage(task, run)
-        task.progress_message = "分析完成"
+        task.current_stage = _coerce_task_stage_code(
+            final_stage or _infer_terminal_stage(task, run)
+        )
+        task.progress_message = (progress_message or "分析完成")[:255]
         task.completed_at = now
         task.updated_at = now
         if snapshot_id is not None:
@@ -475,7 +533,7 @@ class TaskService:
 
         task.status = TaskStatus.FAILED
         task.error_message = error_message
-        task.error_stage = error_stage
+        task.error_stage = _coerce_task_stage_code(error_stage)
         task.completed_at = now
         task.updated_at = now
 
@@ -893,11 +951,11 @@ class TaskService:
                 if (
                     task.status != TaskStatus.COMPLETED
                     or task.progress_message != "分析完成"
-                    or task.current_stage != terminal_stage
+                    or task.current_stage != _coerce_task_stage_code(terminal_stage)
                 ):
                     task.status = TaskStatus.COMPLETED
                     task.progress = 1.0
-                    task.current_stage = terminal_stage
+                    task.current_stage = _coerce_task_stage_code(terminal_stage)
                     task.progress_message = "分析完成"
                     task.completed_at = (
                         task.completed_at
@@ -918,7 +976,7 @@ class TaskService:
                 )
                 if should_update_task or should_fix_message:
                     task.status = TaskStatus.FAILED
-                    task.error_stage = (
+                    task.error_stage = _coerce_task_stage_code(
                         task.error_stage
                         or task.current_stage
                         or getattr(latest_run, "checkpoint_stage", None)
@@ -1172,7 +1230,7 @@ class TaskService:
 
             task.status = TaskStatus.FAILED
             task.error_message = "服务器重启导致任务中断，请重新执行分析。"
-            task.error_stage = task.current_stage or "unknown"
+            task.error_stage = _coerce_task_stage_code(task.current_stage or "unknown")
             task.completed_at = datetime.now(timezone.utc)
             task.updated_at = datetime.now(timezone.utc)
             recovered_count += 1

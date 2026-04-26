@@ -1048,6 +1048,10 @@ async def _sync_runtime_after_stream(workflow, config: dict[str, Any]) -> None:
 
         state_values = dict(current_state.values)
         from app.services.task_service import TaskService
+        from app.workflow.runtime_state_writer import (
+            TaskRuntimeStateWriter,
+            build_transition_from_state,
+        )
 
         task_id = state_values.get("task_id")
         run_id = state_values.get("run_id")
@@ -1056,20 +1060,21 @@ async def _sync_runtime_after_stream(workflow, config: dict[str, Any]) -> None:
 
         async with AsyncSessionLocal() as db:
             task_service = TaskService(db)
-            if _state_is_waiting_for_user(state_values):
-                await task_service.mark_waiting_for_input(
-                    UUID(task_id),
-                    run_id=UUID(run_id),
-                    checkpoint_stage=state_values.get("current_step"),
-                    progress_message=_build_waiting_input_message(state_values),
-                )
-                return
-
-            if state_values.get("execution_status") == "completed":
-                await task_service.complete_task(
-                    UUID(task_id),
-                    run_id=UUID(run_id),
-                )
+            is_waiting_for_user = _state_is_waiting_for_user(state_values)
+            progress_message = state_values.get("progress_message")
+            if is_waiting_for_user and not progress_message:
+                progress_message = _build_waiting_input_message(state_values)
+            transition = build_transition_from_state(
+                {
+                    **state_values,
+                    "awaiting_user": state_values.get("awaiting_user")
+                    or is_waiting_for_user,
+                    "progress_message": progress_message,
+                },
+                reason="langgraph_stream_reconcile",
+            )
+            if transition:
+                await TaskRuntimeStateWriter(task_service).apply_transition(transition)
     except Exception as exc:
         logger.warning("[LangGraph] Failed to sync final runtime state: %s", exc)
 

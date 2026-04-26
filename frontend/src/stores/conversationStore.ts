@@ -604,6 +604,20 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   updateActiveTaskProgress: (stage, progress, message) => {
     set((state) => {
       if (!state.activeTask) return {};
+      if (
+        state.activeTask.status === 'completed' ||
+        state.activeTask.status === 'failed' ||
+        state.activeTask.status === 'cancelled' ||
+        state.activeTask.latest_run?.status === 'waiting_input'
+      ) {
+        return {};
+      }
+      const currentProgress = typeof state.activeTask.progress === 'number'
+        ? state.activeTask.progress
+        : 0;
+      if (progress < currentProgress) {
+        return {};
+      }
       return {
         activeTask: {
           ...state.activeTask,
