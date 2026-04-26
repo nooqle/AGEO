@@ -700,7 +700,7 @@ async def a2_persona_node(state: AgentState) -> Command:
     """
     session_id = state["session_id"]
     brand_profile = state.get("brand_profile")
-    competitors = state.get("competitors")
+    competitors = state.get("competitors") or []
 
     if brand_profile is None:
         logger.warning("[A2] Skipped: brand_profile is None")
@@ -887,7 +887,7 @@ async def a2_persona_node(state: AgentState) -> Command:
         )
 
     except Exception as e:
-        logger.error(f"[A2] Failed: {e}")
+        logger.error("[A2] Failed: %s", e, exc_info=True)
 
         # Layer 2 degradation: A2 failure does not block pipeline
         from app.workflow.resilience import DegradationRegistry
@@ -1185,8 +1185,37 @@ def _build_pipeline_data(personas: list[dict]) -> dict:
     }
 
 
+def _coerce_text_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _coerce_competitor_list(competitors) -> list[dict]:
+    if not isinstance(competitors, list):
+        return []
+
+    normalized: list[dict] = []
+    for comp in competitors:
+        if not isinstance(comp, dict):
+            continue
+        normalized.append(comp)
+    return normalized
+
+
 def _build_a2_user_content(brand_profile: dict, competitors: list) -> str:
     """Build user content for A2."""
+    if not isinstance(brand_profile, dict):
+        brand_profile = {}
+
+    competitors = _coerce_competitor_list(competitors)
+    core_products = _coerce_text_list(brand_profile.get("core_products"))
+    competitor_names = _coerce_text_list(
+        [c.get("name", "") for c in competitors[:5]]
+    )
+
     content = f"""请基于以下品牌档案信息，生成 4 组【用户画像 + 使用场景 + 营销痛点】：
 
 ## 品牌档案
@@ -1194,14 +1223,14 @@ def _build_a2_user_content(brand_profile: dict, competitors: list) -> str:
 - 品牌英文名：{brand_profile.get('brand_name_en', '')}
 - 成立年份：{brand_profile.get('founded_year', '')}
 - 核心领域：{brand_profile.get('industry', '')}
-- 核心产品：{', '.join(brand_profile.get('core_products', []))}
+- 核心产品：{', '.join(core_products)}
 - 品牌理念：{brand_profile.get('brand_positioning', '')}
 - 品牌描述：{brand_profile.get('description', '')}
 - 目标市场：{brand_profile.get('target_audience', '')}
 - 价格定位：{brand_profile.get('price_positioning', '')}
 
 ## 竞争环境参考
-- 主要竞品：{', '.join([c.get('name', '') for c in competitors[:5]])}
+- 主要竞品：{', '.join(competitor_names)}
 - 市场竞争格局：{len(competitors)} 个主要竞品
 """
     return content
