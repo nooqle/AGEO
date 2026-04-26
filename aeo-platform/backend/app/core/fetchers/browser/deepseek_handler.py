@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Any, AsyncGenerator
 
+from app.core.config import settings
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
 from app.core.fetchers.browser.browser_executor import (
     BrowserAnswerExecutionPlan,
@@ -74,6 +75,41 @@ class DeepSeekHandler(BaseBrowserHandler):
         "web_search_texts": ["联网搜索", "联网"],
         "reference_expand_texts": ["引用", "来源", "References", "Sources"],
     }
+
+    def _resolve_interaction_mode(self) -> str:
+        raw_mode = str(settings.DEEPSEEK_AIO_INTERACTION_MODE or "").strip().lower()
+        aliases = {
+            "gui": "gui_actions",
+            "visual": "gui_actions",
+            "vnc": "gui_actions",
+            "cdp": "cdp_dom",
+            "dom": "cdp_dom",
+            "playwright": "cdp_dom",
+        }
+        return aliases.get(raw_mode, raw_mode or "cdp_dom")
+
+    def _should_use_aio_gui_actions(self) -> bool:
+        return (
+            self._resolve_interaction_mode() == "gui_actions"
+            and bool(getattr(self.client, "aio_session_id", None))
+        )
+
+    def _interaction_metadata(self) -> dict[str, Any]:
+        configured_mode = self._resolve_interaction_mode()
+        return {
+            "interaction_mode": (
+                "gui_actions" if self._should_use_aio_gui_actions() else "cdp_dom"
+            ),
+            "configured_interaction_mode": configured_mode,
+            "aio_gui_actions_available": bool(
+                getattr(self.client, "aio_session_id", None)
+            ),
+        }
+
+    def _build_runtime_diagnostics_metadata(self) -> dict[str, Any]:
+        metadata = super()._build_runtime_diagnostics_metadata()
+        metadata.update(self._interaction_metadata())
+        return metadata
 
     def _get_response_parser(self) -> BaseResponseParser | None:
         return DeepSeekSSEParser()
@@ -146,7 +182,10 @@ class DeepSeekHandler(BaseBrowserHandler):
             # Step 3: Ensure web search is ON
             yield self._create_event(BrowserState.ENABLING_SEARCH, "确认联网搜索已开启...", progress=0.5)
             if self.client.page is not None:
-                await self._ensure_web_search_on()
+                if self._should_use_aio_gui_actions():
+                    await self._ensure_web_search_on_via_aio_gui_actions()
+                else:
+                    await self._ensure_web_search_on()
 
             # Step 5: Start network interception (before submit)
             yield self._create_event(BrowserState.SUBMITTING, f"提交问题: {question[:30]}...", progress=0.6)
@@ -161,7 +200,13 @@ class DeepSeekHandler(BaseBrowserHandler):
             # Step 5b: Submit question
             submitted = False
             baseline_probe = await self._capture_submission_probe()
-            if self.client.page is not None:
+            using_gui_actions = self._should_use_aio_gui_actions()
+            if using_gui_actions:
+                submitted = await self._submit_question_via_aio_gui_actions(
+                    question,
+                    baseline_probe,
+                )
+            elif self.client.page is not None:
                 try:
                     editor = self.client.page.locator(self._sel("input")).last
                     if await editor.count() > 0:
@@ -180,7 +225,7 @@ class DeepSeekHandler(BaseBrowserHandler):
                 except Exception as e:
                     logger.debug("[DeepSeek] Direct locator submit failed: %s", e)
 
-            if not submitted:
+            if not submitted and not using_gui_actions:
                 snapshot = await self.client.snapshot(interactive_only=True)
                 textarea_ref = self._find_textarea_ref(snapshot)
                 if textarea_ref:
@@ -196,7 +241,11 @@ class DeepSeekHandler(BaseBrowserHandler):
                         submitted,
                     )
 
-            if not submitted and await self._click_send_button_near_input():
+            if (
+                not submitted
+                and not using_gui_actions
+                and await self._click_send_button_near_input()
+            ):
                 submitted = await self._submission_looks_started(
                     baseline_probe, question
                 )
@@ -209,11 +258,27 @@ class DeepSeekHandler(BaseBrowserHandler):
                 logger.warning(
                     "[DeepSeek] Submission could not be confirmed; skipping DOM wait for this question"
                 )
+                evidence_ref = await self._capture_failure_evidence(
+                    failure_reason="submission_not_confirmed",
+                    execution_stage="submit_question",
+                    extra_metadata={
+                        "answer_length": 0,
+                        **self._interaction_metadata(),
+                    },
+                )
                 yield self._create_event(
                     BrowserState.ERROR,
                     "提交后页面未进入回答状态，本题已跳过",
                     progress=0,
                     error_type="submission_not_confirmed",
+                    **build_failure_contract(
+                        failure_reason="submission_not_confirmed",
+                        execution_stage="submit_question",
+                        retryable=False,
+                        needs_handoff=False,
+                        failure_layer="adapter",
+                        evidence_ref=evidence_ref,
+                    ),
                 )
                 return
 
@@ -281,6 +346,7 @@ class DeepSeekHandler(BaseBrowserHandler):
                 "answer_length": len(answer_text or ""),
                 "risk_control_marker": risk_control_marker,
                 "page_excerpt": page_excerpt,
+                **self._interaction_metadata(),
             },
         )
         return [
@@ -408,6 +474,193 @@ class DeepSeekHandler(BaseBrowserHandler):
             }}"""
         )
         return bool(clicked)
+
+    async def _execute_aio_gui_action(self, action_payload: dict[str, Any]) -> bool:
+        try:
+            result = await self._aio_backend.execute_action(
+                action_payload=action_payload
+            )
+        except Exception as exc:
+            logger.warning("[DeepSeek] AIO GUI action failed: %s", exc)
+            return False
+
+        detail = result.get("detail") if isinstance(result, dict) else None
+        if isinstance(detail, dict) and detail.get("success") is False:
+            logger.warning("[DeepSeek] AIO GUI action rejected: %s", detail)
+            return False
+
+        status = str(
+            (result.get("status") if isinstance(result, dict) else "") or ""
+        ).lower()
+        if status in {"error", "failed", "failure"}:
+            logger.warning("[DeepSeek] AIO GUI action returned status=%s", status)
+            return False
+        return True
+
+    async def _aio_gui_click_rect(self, rect: dict[str, Any]) -> bool:
+        try:
+            x = int(round(float(rect["gui_x"])))
+            y = int(round(float(rect["gui_y"])))
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        moved = await self._execute_aio_gui_action(
+            {"action_type": "MOVE_TO", "x": x, "y": y}
+        )
+        clicked = await self._execute_aio_gui_action(
+            {"action_type": "CLICK", "x": x, "y": y}
+        )
+        return moved and clicked
+
+    async def _deepseek_input_rect_for_gui_actions(self) -> dict[str, Any] | None:
+        if self.client.page is None:
+            return None
+        input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
+        result = await self.client.page.evaluate(
+            f"""() => {{
+                const elements = Array.from(document.querySelectorAll({input_sel}));
+                const el = elements.reverse().find((candidate) => {{
+                    const rect = candidate.getBoundingClientRect();
+                    return rect.width > 20 && rect.height > 10;
+                }});
+                if (!el) return null;
+                const rect = el.getBoundingClientRect();
+                const chromeOffsetX = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+                const chromeOffsetY = Math.max(0, Math.round(window.outerHeight - window.innerHeight));
+                return {{
+                    page_x: rect.left + rect.width / 2,
+                    page_y: rect.top + rect.height / 2,
+                    gui_x: rect.left + rect.width / 2 + chromeOffsetX,
+                    gui_y: rect.top + rect.height / 2 + chromeOffsetY,
+                    width: rect.width,
+                    height: rect.height,
+                    chrome_offset_x: chromeOffsetX,
+                    chrome_offset_y: chromeOffsetY,
+                }};
+            }}"""
+        )
+        return result if isinstance(result, dict) else None
+
+    async def _submit_question_via_aio_gui_actions(
+        self,
+        question: str,
+        baseline_probe: dict[str, Any],
+    ) -> bool:
+        rect = await self._deepseek_input_rect_for_gui_actions()
+        if not rect:
+            logger.warning("[DeepSeek] AIO GUI submit failed: input rect unavailable")
+            return False
+
+        if not await self._aio_gui_click_rect(rect):
+            return False
+        await asyncio.sleep(0.2)
+
+        await self._execute_aio_gui_action(
+            {"action_type": "HOTKEY", "keys": ["ctrl", "a"]}
+        )
+        await asyncio.sleep(0.1)
+        typed = await self._execute_aio_gui_action(
+            {
+                "action_type": "TYPING",
+                "text": question,
+                "use_clipboard": True,
+            }
+        )
+        if not typed:
+            return False
+        await asyncio.sleep(0.2)
+
+        pressed = await self._execute_aio_gui_action(
+            {"action_type": "PRESS", "key": "Enter"}
+        )
+        if not pressed:
+            return False
+
+        submitted = await self._submission_looks_started(baseline_probe, question)
+        logger.info(
+            "[DeepSeek] Question submitted via AIO GUI actions (confirmed=%s)",
+            submitted,
+        )
+        return submitted
+
+    async def _ensure_web_search_on_via_aio_gui_actions(self) -> None:
+        if self.client.page is None:
+            return
+        try:
+            input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
+            info = await self.client.page.evaluate(
+                f"""() => {{
+                    const INTERACTIVE = 'button, [role="button"], [role="switch"], [aria-pressed], [aria-checked]';
+                    const textarea = document.querySelector({input_sel});
+                    const chromeOffsetX = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+                    const chromeOffsetY = Math.max(0, Math.round(window.outerHeight - window.innerHeight));
+                    const descEl = (el) => {{
+                        const rect = el.getBoundingClientRect();
+                        return {{
+                            tag: el.tagName,
+                            pressed: el.getAttribute('aria-pressed') || '',
+                            checked: el.getAttribute('aria-checked') || '',
+                            state: el.getAttribute('data-state') || '',
+                            label: el.getAttribute('aria-label') || '',
+                            title: el.getAttribute('title') || '',
+                            cls: (el.className || '').slice(0, 80),
+                            txt: (el.innerText || el.textContent || '').trim().slice(0, 40),
+                            rect: {{
+                                page_x: rect.left + rect.width / 2,
+                                page_y: rect.top + rect.height / 2,
+                                gui_x: rect.left + rect.width / 2 + chromeOffsetX,
+                                gui_y: rect.top + rect.height / 2 + chromeOffsetY,
+                                width: rect.width,
+                                height: rect.height,
+                                chrome_offset_x: chromeOffsetX,
+                                chrome_offset_y: chromeOffsetY,
+                            }},
+                        }};
+                    }};
+                    let toolbarEls = null;
+                    if (textarea) {{
+                        let c = textarea.parentElement;
+                        while (c && c !== document.body) {{
+                            const els = Array.from(c.querySelectorAll(INTERACTIVE));
+                            if (els.length >= 1 && els.length <= 8) {{
+                                toolbarEls = els;
+                                break;
+                            }}
+                            c = c.parentElement;
+                        }}
+                    }}
+                    return {{
+                        toolbarBtns: toolbarEls ? toolbarEls.map(descEl) : [],
+                    }};
+                }}"""
+            )
+
+            toolbar = info.get("toolbarBtns") if isinstance(info, dict) else []
+            if not isinstance(toolbar, list) or not toolbar:
+                logger.warning("[DeepSeek] AIO GUI search toggle: no toolbar found")
+                return
+
+            search_idx = self._find_web_search_index(toolbar)
+            if search_idx is None or search_idx >= len(toolbar):
+                logger.warning("[DeepSeek] AIO GUI search toggle not identified")
+                return
+
+            button = toolbar[search_idx]
+            pressed = button.get("pressed", "")
+            cls = button.get("cls", "")
+            if pressed == "true" or "--selected" in cls:
+                logger.info("[DeepSeek] Web search already ON via GUI probe")
+                return
+
+            rect = button.get("rect")
+            if isinstance(rect, dict) and await self._aio_gui_click_rect(rect):
+                logger.info("[DeepSeek] Enabled web search via AIO GUI actions")
+                await asyncio.sleep(0.5)
+        except Exception as exc:
+            logger.warning(
+                "[DeepSeek] _ensure_web_search_on_via_aio_gui_actions failed: %s",
+                exc,
+            )
 
     async def _ensure_web_search_on(self) -> None:
         """Ensure the web search toggle is ON in the input toolbar.
