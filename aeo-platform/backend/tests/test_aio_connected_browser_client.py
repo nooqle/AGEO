@@ -5,7 +5,43 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.fetchers.browser import aio_connected_client as aio_client_module
+from app.core.fetchers.browser import playwright_client as playwright_client_module
 from app.core.fetchers.browser.aio_connected_client import AioConnectedBrowserClient
+
+
+@pytest.mark.asyncio
+async def test_aio_connected_browser_client_starts_cdp_driver_without_install(
+    monkeypatch,
+):
+    class FakePatchrightStarter:
+        async def start(self):
+            return "patchright-driver"
+
+    async def _unexpected_install_check():
+        raise AssertionError("AIO CDP attach must not install local Chromium")
+
+    monkeypatch.setattr(
+        aio_client_module,
+        "async_playwright",
+        lambda: FakePatchrightStarter(),
+    )
+    monkeypatch.setattr(
+        playwright_client_module,
+        "ensure_playwright_ready",
+        _unexpected_install_check,
+    )
+
+    client = AioConnectedBrowserClient(
+        session_name="aio-test",
+        workspace_id="workspace_1",
+        task_id="task_1",
+        platform="deepseek",
+    )
+
+    await client._ensure_playwright()
+
+    assert client.playwright == "patchright-driver"
 
 
 @pytest.mark.asyncio
