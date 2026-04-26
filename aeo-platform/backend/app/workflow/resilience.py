@@ -148,7 +148,7 @@ class DegradationRegistry:
                 level="warning",
                 title=f"{agent_step} 降级通知",
                 description=message,
-                impact=message,
+                impact="",
             )
 
         logger.info(

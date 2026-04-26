@@ -783,27 +783,37 @@ async def a2_persona_node(state: AgentState) -> Command:
 
         persona_count = len(personas)
 
-        await send_progress_event(
-            session_id=session_id,
-            step="persona_generation",
-            step_name="用户画像生成",
-            progress=1.0,
-            message=f"成功生成 {persona_count} 个用户画像",
-            status="completed",
-        )
+        try:
+            await send_progress_event(
+                session_id=session_id,
+                step="persona_generation",
+                step_name="用户画像生成",
+                progress=1.0,
+                message=f"成功生成 {persona_count} 个用户画像",
+                status="completed",
+            )
+        except Exception as e:
+            logger.warning("[A2] Failed to send completion progress: %s", e)
 
-        await send_action_log_event(
-            session_id,
-            "agent_complete",
-            f"用户画像生成完成，共 {persona_count} 个画像",
-            step="persona_generation",
-            is_complete=True,
-        )
+        try:
+            await send_action_log_event(
+                session_id,
+                "agent_complete",
+                f"用户画像生成完成，共 {persona_count} 个画像",
+                step="persona_generation",
+                is_complete=True,
+            )
+        except Exception as e:
+            logger.warning("[A2] Failed to send completion action log: %s", e)
 
         request_id = f"a2_persona_selection_{uuid4().hex}"
 
         # Build pipeline data (3-column: profile → scenario → intent)
-        pipeline_data = _build_pipeline_data(personas)
+        try:
+            pipeline_data = _build_pipeline_data(personas)
+        except Exception as e:
+            logger.warning("[A2] Failed to build pipeline data: %s", e)
+            pipeline_data = _build_pipeline_data([])
 
         # Send pipeline artifact with selection capability (A2 deliverable)
         from app.workflow.events import save_and_send_artifact
@@ -828,11 +838,14 @@ async def a2_persona_node(state: AgentState) -> Command:
                 p.get("persona_name", p.get("name", "")) for p in personas[:4]
             ],
         }
-        await send_stage_result(
-            session_id, "A2", "用户画像",
-            result_type="personas",
-            data=stage_result_data,
-        )
+        try:
+            await send_stage_result(
+                session_id, "A2", "用户画像",
+                result_type="personas",
+                data=stage_result_data,
+            )
+        except Exception as e:
+            logger.warning("[A2] Failed to send stage_result: %s", e)
 
         # Persist stage result for reconnection replay
         task_id = state.get("task_id")
@@ -1094,6 +1107,8 @@ def _build_pipeline_data(personas: list[dict]) -> dict:
             pain_points = psycho.get("pain_points", [])
             if isinstance(pain_points, str):
                 pain_points = [pain_points]
+            elif not isinstance(pain_points, list):
+                pain_points = []
 
         values_text = psycho.get("values", "") if isinstance(psycho, dict) else ""
         occupation = ""
@@ -1113,7 +1128,13 @@ def _build_pipeline_data(personas: list[dict]) -> dict:
             "priority": p.get("persona_priority", p.get("priority", "")),
         })
 
-        for si, s in enumerate(p.get("usage_scenarios", [])):
+        usage_scenarios = p.get("usage_scenarios") or []
+        if isinstance(usage_scenarios, dict):
+            usage_scenarios = [usage_scenarios]
+        elif not isinstance(usage_scenarios, list):
+            usage_scenarios = []
+
+        for si, s in enumerate(usage_scenarios):
             if not isinstance(s, dict):
                 continue
             s_name = s.get("scenario_name", f"场景{si+1}")
@@ -1139,6 +1160,8 @@ def _build_pipeline_data(personas: list[dict]) -> dict:
             interaction_intents = s.get("brand_interaction_intents", s.get("likely_search_intents", []))
             if isinstance(interaction_intents, str):
                 interaction_intents = [interaction_intents]
+            elif not isinstance(interaction_intents, list):
+                interaction_intents = []
 
             for intent_text in interaction_intents:
                 if not intent_text:
