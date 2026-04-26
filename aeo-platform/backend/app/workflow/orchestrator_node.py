@@ -1893,6 +1893,34 @@ def _build_context_summary(state: AgentState) -> str:
     return summary
 
 
+def _has_persona_prerequisites(state: AgentState) -> bool:
+    brand_profile = state.get("brand_profile")
+    competitors = state.get("competitors")
+    if not isinstance(brand_profile, dict) or not brand_profile.get("brand_name"):
+        return False
+    if not isinstance(competitors, list):
+        return False
+    return any(
+        isinstance(item, dict) and str(item.get("name") or "").strip()
+        for item in competitors
+    )
+
+
+def _resolve_brand_name_for_dependency_rebuild(state: AgentState, tool_args: dict) -> str:
+    brand_profile = state.get("brand_profile") or {}
+    candidates = (
+        tool_args.get("brand_name"),
+        brand_profile.get("brand_name") if isinstance(brand_profile, dict) else None,
+        brand_profile.get("name") if isinstance(brand_profile, dict) else None,
+        state.get("brand_name"),
+    )
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return ""
+
+
 # =============================================================================
 # Post-Agent Action Directives (共享常量)
 # 这些文本同时被 system prompt 和 _build_agent_result_summary 引用
@@ -4581,6 +4609,39 @@ async def _handle_tool_call(
         tool_args = dict(resolved_skill.merged_tool_args)
     else:
         node_name = TOOL_TO_NODE.get(tool_name)
+
+    if effective_tool_name == "persona_generation" and not _has_persona_prerequisites(state):
+        brand_name = _resolve_brand_name_for_dependency_rebuild(state, tool_args)
+        if brand_name:
+            logger.warning(
+                "[Orchestrator] Rerouting persona_generation to brand_analysis: "
+                "missing complete A1 context (has_brand_profile=%s, competitors_type=%s)",
+                isinstance(state.get("brand_profile"), dict),
+                type(state.get("competitors")).__name__,
+            )
+            effective_tool_name = "brand_analysis"
+            tool_name = "brand_analysis"
+            node_name = TOOL_TO_NODE["brand_analysis"]
+            display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+            tool_args = {"brand_name": brand_name}
+            resolved_skill = None
+        else:
+            new_history.append(
+                {
+                    "role": "tool",
+                    "content": "生成用户画像前需要先完成品牌竞品分析，但当前缺少品牌名称。请先让用户补充品牌名称或官网。",
+                    "tool_call_id": tool_call.id or "call_1",
+                    "name": tool_name,
+                }
+            )
+            return Command(
+                goto="orchestrator",
+                update={
+                    "orchestrator_reply": reply_text,
+                    "orchestrator_history": new_history,
+                    "agent_retry_counts": current_retry_counts,
+                },
+            )
 
     capability = get_tool_capability(tool_name) or get_tool_capability(
         effective_tool_name
