@@ -681,6 +681,7 @@ def _should_count_browser_failure_for_breaker(result: dict[str, Any]) -> bool:
     error_type = str(result.get("error_type") or "").strip().lower()
     if error_type in {
         "empty_answer",
+        "risk_control_page",
         "submission_not_confirmed",
         "rate_limit",
         "user_skipped",

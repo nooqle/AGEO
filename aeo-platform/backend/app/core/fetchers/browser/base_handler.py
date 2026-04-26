@@ -14,7 +14,7 @@ import json
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, Awaitable, Callable, Union
+from typing import Any, AsyncGenerator, Awaitable, Callable, Union
 from urllib.parse import urlparse
 
 from app.core.fetchers.browser.agent_browser import AgentBrowserClient
@@ -155,6 +155,9 @@ class BaseBrowserHandler(ABC):
         self._sel_cache: dict = {}
         self._aio_backend = AioSandboxBackend()
         self._failure_evidence = BrowserFailureEvidenceService()
+        self._recent_console_events: list[dict[str, Any]] = []
+        self._recent_request_failures: list[dict[str, Any]] = []
+        self._recent_intercept_responses: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------ selectors
 
@@ -527,6 +530,118 @@ class BaseBrowserHandler(ABC):
             return None
         return str(text or "").strip() or None
 
+    @staticmethod
+    def _append_recent_diagnostic(
+        bucket: list[dict[str, Any]],
+        payload: dict[str, Any],
+        *,
+        limit: int = 8,
+    ) -> None:
+        bucket.append(payload)
+        if len(bucket) > limit:
+            del bucket[:-limit]
+
+    async def _collect_runtime_fingerprint(self) -> dict[str, Any] | None:
+        page = getattr(self.client, "page", None)
+        if page is None:
+            return None
+        try:
+            payload = await page.evaluate(
+                """() => {
+                    const nav = window.navigator || {};
+                    const screenInfo = window.screen || {};
+                    let webglVendor = null;
+                    let webglRenderer = null;
+                    try {
+                        const canvas = document.createElement('canvas');
+                        const gl =
+                            canvas.getContext('webgl') ||
+                            canvas.getContext('experimental-webgl');
+                        const debugInfo =
+                            gl &&
+                            gl.getExtension &&
+                            gl.getExtension('WEBGL_debug_renderer_info');
+                        if (gl && debugInfo) {
+                            webglVendor = gl.getParameter(
+                                debugInfo.UNMASKED_VENDOR_WEBGL
+                            );
+                            webglRenderer = gl.getParameter(
+                                debugInfo.UNMASKED_RENDERER_WEBGL
+                            );
+                        }
+                    } catch (_) {}
+                    return {
+                        userAgent: nav.userAgent || null,
+                        platform: nav.platform || null,
+                        language: nav.language || null,
+                        languages: Array.isArray(nav.languages)
+                            ? nav.languages.slice(0, 6)
+                            : [],
+                        webdriver:
+                            typeof nav.webdriver === 'boolean'
+                                ? nav.webdriver
+                                : nav.webdriver ?? null,
+                        vendor: nav.vendor || null,
+                        hardwareConcurrency: nav.hardwareConcurrency ?? null,
+                        deviceMemory: nav.deviceMemory ?? null,
+                        maxTouchPoints: nav.maxTouchPoints ?? null,
+                        pluginsLength: nav.plugins ? nav.plugins.length : null,
+                        mimeTypesLength: nav.mimeTypes ? nav.mimeTypes.length : null,
+                        screen: {
+                            width: screenInfo.width ?? null,
+                            height: screenInfo.height ?? null,
+                            availWidth: screenInfo.availWidth ?? null,
+                            availHeight: screenInfo.availHeight ?? null,
+                            colorDepth: screenInfo.colorDepth ?? null,
+                            pixelDepth: screenInfo.pixelDepth ?? null,
+                        },
+                        viewport: {
+                            width: window.innerWidth ?? null,
+                            height: window.innerHeight ?? null,
+                        },
+                        timezone:
+                            Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+                        webglVendor,
+                        webglRenderer,
+                    };
+                }"""
+            )
+        except Exception as e:
+            logger.debug(
+                "[%s] Runtime fingerprint snapshot failed: %s",
+                self.PLATFORM_KEY,
+                e,
+            )
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _build_runtime_diagnostics_metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "client_type": type(self.client).__name__,
+        }
+        aio_session_id = getattr(self.client, "aio_session_id", None)
+        if aio_session_id:
+            metadata["aio_session_id"] = str(aio_session_id)
+        browser_info = getattr(self.client, "browser_info", None)
+        if isinstance(browser_info, dict) and browser_info:
+            metadata["browser_info"] = {
+                "session_id": browser_info.get("session_id"),
+                "user_agent": browser_info.get("user_agent"),
+                "viewport": browser_info.get("viewport"),
+                "preferred_access_mode": browser_info.get("preferred_access_mode"),
+                "has_cdp_url": bool(browser_info.get("cdp_url")),
+                "has_vnc_url": bool(browser_info.get("vnc_url")),
+            }
+        if self._recent_intercept_responses:
+            metadata["recent_intercept_responses"] = list(
+                self._recent_intercept_responses
+            )
+        if self._recent_request_failures:
+            metadata["recent_request_failures"] = list(self._recent_request_failures)
+        if self._recent_console_events:
+            metadata["recent_console_events"] = list(self._recent_console_events)
+        return metadata
+
     async def _capture_failure_evidence(
         self,
         *,
@@ -559,6 +674,10 @@ class BaseBrowserHandler(ABC):
                 page_url = None
         question_id = getattr(self, "_current_question_id", None)
         question_text = getattr(self, "_current_question_text", None)
+        runtime_fingerprint = await self._collect_runtime_fingerprint()
+        runtime_metadata = self._build_runtime_diagnostics_metadata()
+        if runtime_fingerprint is not None:
+            runtime_metadata["runtime_fingerprint"] = runtime_fingerprint
         try:
             return self._failure_evidence.capture(
                 platform=self.PLATFORM.value,
@@ -571,6 +690,7 @@ class BaseBrowserHandler(ABC):
                 metadata={
                     "platform_display_name": self._platform_display_name(),
                     "question_text": question_text,
+                    **runtime_metadata,
                     **(extra_metadata or {}),
                 },
             )
@@ -2006,6 +2126,64 @@ class BaseBrowserHandler(ABC):
             asyncio.get_running_loop().create_future()
         )
         url_re = re.compile(config.url_pattern)
+        self._recent_console_events = []
+        self._recent_request_failures = []
+        self._recent_intercept_responses = []
+
+        def _resolve_event_value(value: Any) -> Any:
+            try:
+                return value() if callable(value) else value
+            except Exception:
+                return None
+
+        def on_request_failed(request: Any) -> None:
+            failure_payload = _resolve_event_value(getattr(request, "failure", None))
+            failure_text = None
+            if isinstance(failure_payload, dict):
+                failure_text = (
+                    failure_payload.get("errorText")
+                    or failure_payload.get("error_text")
+                    or json.dumps(failure_payload, ensure_ascii=False)
+                )
+            elif failure_payload:
+                failure_text = str(failure_payload)
+            self._append_recent_diagnostic(
+                self._recent_request_failures,
+                {
+                    "url": str(_resolve_event_value(getattr(request, "url", None)) or "")[
+                        :300
+                    ],
+                    "method": str(
+                        _resolve_event_value(getattr(request, "method", None)) or ""
+                    ),
+                    "resource_type": str(
+                        _resolve_event_value(getattr(request, "resource_type", None))
+                        or ""
+                    ),
+                    "failure": str(failure_text or "requestfailed")[:240],
+                },
+            )
+
+        def on_console(message: Any) -> None:
+            message_type = str(
+                _resolve_event_value(getattr(message, "type", None)) or ""
+            ).lower()
+            if message_type not in {"error", "warning"}:
+                return
+            location = _resolve_event_value(getattr(message, "location", None))
+            console_entry: dict[str, Any] = {
+                "type": message_type,
+                "text": str(
+                    _resolve_event_value(getattr(message, "text", None)) or ""
+                )[:500],
+            }
+            if isinstance(location, dict):
+                console_entry["location"] = {
+                    "url": str(location.get("url") or "")[:240],
+                    "lineNumber": location.get("lineNumber"),
+                    "columnNumber": location.get("columnNumber"),
+                }
+            self._append_recent_diagnostic(self._recent_console_events, console_entry)
 
         async def on_response(response):
             try:
@@ -2022,6 +2200,16 @@ class BaseBrowserHandler(ABC):
                     and config.content_type_contains not in ct
                 ):
                     return
+
+                self._append_recent_diagnostic(
+                    self._recent_intercept_responses,
+                    {
+                        "url": str(response.url or "")[:300],
+                        "method": str(req.method or ""),
+                        "status": getattr(response, "status", None),
+                        "content_type": ct[:160],
+                    },
+                )
 
                 logger.info(
                     "[%s] Intercepted response: %s (%s)", tag, response.url[:80], ct
@@ -2081,6 +2269,8 @@ class BaseBrowserHandler(ABC):
                     result_future.set_result(None)
 
         page.on("response", on_response)
+        page.on("requestfailed", on_request_failed)
+        page.on("console", on_console)
         try:
             result = await asyncio.wait_for(result_future, timeout=config.timeout)
             if result and result.parse_ok:
@@ -2108,6 +2298,8 @@ class BaseBrowserHandler(ABC):
             return None
         finally:
             page.remove_listener("response", on_response)
+            page.remove_listener("requestfailed", on_request_failed)
+            page.remove_listener("console", on_console)
 
     # ------------------------------------------------------------------ event helper
 

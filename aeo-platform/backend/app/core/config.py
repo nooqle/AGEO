@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     AIO_BROWSER_LOCALE: str = "zh-CN"
     AIO_BROWSER_ACCEPT_LANGUAGE: str = "zh-CN,zh;q=0.9,en;q=0.8"
     AIO_BROWSER_TIMEZONE_ID: str = "Asia/Shanghai"
+    DEEPSEEK_AIO_INTERACTION_MODE: str = "cdp_dom"
 
     # LLM Orchestration Mode (v2)
     USE_LLM_ORCHESTRATION: bool = False
