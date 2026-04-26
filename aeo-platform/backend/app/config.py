@@ -111,11 +111,26 @@ class Settings(BaseSettings):
     # Doubao API
     DOUBAO_API_KEY: str | None = None
     DOUBAO_MODEL: str = "doubao-seed-2-0-lite-260215"
+    DOUBAO_FAST_MODEL: str | None = "doubao-seed-2-0-mini-260215"
+    DOUBAO_USE_APP_API: bool = False
+    DOUBAO_FAST_USE_APP_API: bool = True
+    DOUBAO_APP_FEATURE: str = "ai_search"
+    DOUBAO_APP_ROLE_DESCRIPTION: str = (
+        "You are a professional information assistant. Use search to answer "
+        "accurately and cite sources when available."
+    )
+    DOUBAO_APP_API_FALLBACK_TO_WEB_SEARCH: bool = True
 
     # Hunyuan API
     HUNYUAN_API_KEY: str | None = None
     HUNYUAN_MODEL: str = "hunyuan-2.0-instruct-20251111"
+    HUNYUAN_FAST_MODEL: str | None = None
     HUNYUAN_BASE_URL: str = "https://api.hunyuan.cloud.tencent.com/v1"
+
+    # A4 fast fetch tuning
+    A4_DOUBAO_API_DELAY_SECONDS: float = 3.0
+    A4_HUNYUAN_API_DELAY_SECONDS: float = 1.0
+    A4_KIMI_API_DELAY_SECONDS: float = 1.0
 
     # Bocha API
     BOCHA_API_KEY: str | None = None

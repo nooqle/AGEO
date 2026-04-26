@@ -1,5 +1,6 @@
 """Doubao API client."""
 
+import logging
 import time
 from typing import Any
 
@@ -9,6 +10,8 @@ from app.core.config import settings
 from app.core.constants import PlatformConstants
 from app.core.fetchers.api.base_client import BaseAPIClient
 from app.schemas.fetch import LLMResponse, SearchReference
+
+logger = logging.getLogger(__name__)
 
 
 class DoubaoClient(BaseAPIClient):
@@ -25,6 +28,9 @@ class DoubaoClient(BaseAPIClient):
         api_key: str | None = None,
         endpoint: str | None = None,
         model: str | None = None,
+        use_doubao_app: bool | None = None,
+        doubao_app_feature: str | None = None,
+        doubao_app_role_description: str | None = None,
     ):
         """Initialize Doubao client.
 
@@ -46,6 +52,17 @@ class DoubaoClient(BaseAPIClient):
 
         super().__init__(api_key, endpoint)
         self.model = model
+        self.use_doubao_app = (
+            settings.DOUBAO_USE_APP_API
+            if use_doubao_app is None
+            else bool(use_doubao_app)
+        )
+        self.doubao_app_feature = (
+            doubao_app_feature or settings.DOUBAO_APP_FEATURE or "ai_search"
+        ).strip() or "ai_search"
+        self.doubao_app_role_description = (
+            doubao_app_role_description or settings.DOUBAO_APP_ROLE_DESCRIPTION
+        ).strip()
 
     async def ask_with_search(self, question: str) -> LLMResponse:
         """Send question and get answer with search references.
@@ -56,6 +73,28 @@ class DoubaoClient(BaseAPIClient):
         Returns:
             LLMResponse with answer and references
         """
+        if self.use_doubao_app:
+            try:
+                return await self._ask_with_doubao_app(question)
+            except httpx.HTTPStatusError as exc:
+                if not self._should_fallback_from_doubao_app(exc):
+                    raise
+                logger.warning(
+                    "[DoubaoClient] doubao_app failed with HTTP %s; falling back to web_search",
+                    exc.response.status_code,
+                )
+            except Exception:
+                if not settings.DOUBAO_APP_API_FALLBACK_TO_WEB_SEARCH:
+                    raise
+                logger.warning(
+                    "[DoubaoClient] doubao_app failed; falling back to web_search",
+                    exc_info=True,
+                )
+
+        return await self._ask_with_web_search(question)
+
+    async def _ask_with_web_search(self, question: str) -> LLMResponse:
+        """Send question through the generic Responses web_search tool."""
         start_time = time.time()
 
         # Build request payload
@@ -71,7 +110,7 @@ class DoubaoClient(BaseAPIClient):
                     "sources": ["douyin", "toutiao"],
                     "user_location": {
                         "type": "approximate",
-                        "country": "中国",
+                        "country": "\u4e2d\u56fd",
                     },
                 }
             ],
@@ -126,6 +165,79 @@ class DoubaoClient(BaseAPIClient):
             duration=duration,
         )
 
+    async def _ask_with_doubao_app(self, question: str) -> LLMResponse:
+        """Send question through the Doubao App assistant tool."""
+        start_time = time.time()
+
+        payload = {
+            "model": self.model,
+            "stream": False,
+            "tools": [
+                {
+                    "type": "doubao_app",
+                    "feature": {
+                        self.doubao_app_feature: {
+                            "type": "enabled",
+                            "role_description": self.doubao_app_role_description,
+                        }
+                    },
+                    "user_location": {
+                        "type": "approximate",
+                        "country": "\u4e2d\u56fd",
+                    },
+                }
+            ],
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": question,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "ark-beta-doubao-app": "true",
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self.endpoint,
+                headers=headers,
+                json=payload,
+                timeout=PlatformConstants.PLATFORM_API_TIMEOUTS["doubao"],
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        answer_text = self._extract_doubao_app_answer(data)
+        search_refs = self._extract_doubao_app_references(data)
+        duration = time.time() - start_time
+
+        return LLMResponse(
+            answer_text=answer_text,
+            search_references=search_refs,
+            raw_response=data,
+            duration=duration,
+        )
+
+    @staticmethod
+    def _should_fallback_from_doubao_app(exc: httpx.HTTPStatusError) -> bool:
+        if not settings.DOUBAO_APP_API_FALLBACK_TO_WEB_SEARCH:
+            return False
+        # Keep rate limiting visible to A4 retry handling instead of hiding it
+        # behind the slower generic web_search path.
+        if exc.response.status_code == 429:
+            return False
+        return exc.response.status_code in {400, 403, 404}
+
     def _extract_answer(self, data: dict[str, Any]) -> str:
         """Extract answer text from response.
 
@@ -146,6 +258,59 @@ class DoubaoClient(BaseAPIClient):
             return ""
         except Exception:
             return ""
+
+    def _extract_doubao_app_answer(self, data: dict[str, Any]) -> str:
+        """Extract answer text from doubao_app response blocks."""
+        text_parts: list[str] = []
+        try:
+            for item in data.get("output", []):
+                if item.get("type") == "doubao_app_call":
+                    for block in item.get("blocks", []):
+                        if block.get("type") == "output_text" and block.get("text"):
+                            text_parts.append(str(block.get("text") or ""))
+                if item.get("type") == "message":
+                    for part in item.get("content", []):
+                        if part.get("type") in {"output_text", "text"}:
+                            text_parts.append(str(part.get("text") or ""))
+            return "\n\n".join(part.strip() for part in text_parts if part.strip())
+        except Exception:
+            return ""
+
+    def _extract_doubao_app_references(
+        self,
+        data: dict[str, Any],
+    ) -> list[SearchReference]:
+        """Extract search references from doubao_app search blocks."""
+        references: list[SearchReference] = []
+        seen_urls: set[str] = set()
+        try:
+            for item in data.get("output", []):
+                if item.get("type") != "doubao_app_call":
+                    continue
+                for block in item.get("blocks", []):
+                    if block.get("type") != "search":
+                        continue
+                    for result in block.get("results", []):
+                        card = result.get("text_card") or result.get("card") or result
+                        if not isinstance(card, dict):
+                            continue
+                        url = str(card.get("url") or "").strip()
+                        if not url or url in seen_urls:
+                            continue
+                        seen_urls.add(url)
+                        references.append(
+                            SearchReference(
+                                index=len(references) + 1,
+                                title=str(card.get("title") or url),
+                                url=url,
+                                snippet=card.get("summary") or card.get("snippet"),
+                                site_name=card.get("sitename") or card.get("site_name"),
+                                is_official=bool(card.get("is_official", False)),
+                            )
+                        )
+        except Exception:
+            return references
+        return references
 
     def _extract_search_references(self, data: dict[str, Any]) -> list[SearchReference]:
         """Extract search references from response.
