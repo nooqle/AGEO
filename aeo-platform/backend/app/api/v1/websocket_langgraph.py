@@ -53,6 +53,7 @@ from app.workflow.confirmation import (
     resolve_known_confirmation_label,
 )
 from app.workflow.fetch_recovery import (
+    extract_base_fetch_results_from_state,
     extract_latest_fetch_recovery_plan_from_state,
     resolve_supplemental_fetch_mode,
 )
@@ -2424,6 +2425,7 @@ async def handle_confirmation_langgraph(
             if plan and plan.get("question_targets"):
                 user_content = "用户选择补采上一轮失败项"
                 fetch_mode = resolve_supplemental_fetch_mode(state_values, plan)
+                base_fetch_results = extract_base_fetch_results_from_state(state_values)
                 state_values["next_required_action"] = build_next_required_action(
                     tool_name="answer_fetch",
                     authority="user_confirmation",
@@ -2433,6 +2435,7 @@ async def handle_confirmation_langgraph(
                         "question_targets": list(plan.get("question_targets") or []),
                         "platforms": list(plan.get("platforms") or []),
                         "failed_task_id": plan.get("task_id"),
+                        "base_fetch_results": base_fetch_results,
                     },
                     reason="用户在恢复面板中选择补采上一轮失败的平台与问题。",
                     reply_text="已按您的选择，仅补采上一轮失败项并保留已有成功结果。",

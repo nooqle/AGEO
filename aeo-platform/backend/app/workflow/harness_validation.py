@@ -317,7 +317,7 @@ def validate_scoped_fetch_merge(
 ) -> ValidationGateResult:
     """Validate that a scoped fetch merge preserves unselected platform results."""
 
-    if not platform_filter:
+    if not platform_filter and not preserved_results:
         return ValidationGateResult(
             gate_name="scoped_fetch_merge_gate",
             passed=True,

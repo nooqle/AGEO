@@ -70,6 +70,7 @@ from app.workflow.runtime_policy_executor import (
     summarize_alternative_actions,
 )
 from app.workflow.fetch_recovery import (
+    extract_base_fetch_results_from_state,
     extract_latest_fetch_recovery_plan_from_state,
     is_supplemental_fetch_request,
     normalize_question_targets,
@@ -4951,6 +4952,7 @@ async def _handle_tool_call(
                     state,
                     recovery_plan,
                 )
+                base_fetch_results = extract_base_fetch_results_from_state(state)
                 tool_args = {
                     **tool_args,
                     "fetch_mode": supplemental_fetch_mode,
@@ -4960,6 +4962,7 @@ async def _handle_tool_call(
                     ),
                     "platforms": list(recovery_plan.get("platforms") or []),
                     "failed_task_id": recovery_plan.get("task_id"),
+                    "base_fetch_results": base_fetch_results,
                 }
                 if prefers_browser_fetch_mode(latest_user_message):
                     tool_args["fetch_mode"] = "full"

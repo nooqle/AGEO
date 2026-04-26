@@ -59,6 +59,7 @@ from app.workflow.harness_validation import (
 )
 from app.workflow.fetch_recovery import (
     build_fetch_recovery_plan,
+    extract_base_fetch_results_from_state,
     extract_latest_fetch_recovery_plan_from_state,
     normalize_question_targets,
 )
@@ -400,6 +401,12 @@ def _count_fetch_pairs(fetch_results: list[dict[str, Any]] | None) -> int:
     for entry in fetch_results or []:
         count += len(entry.get("platform_results") or [])
     return count
+
+
+def _fetch_results_arg(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _build_browser_phase_start_message(
@@ -1386,6 +1393,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
     fetch_mode = state.get("fetch_mode") or "fast"
     tool_args = state.get("tool_call_args") or {}
     retry_failed_only = bool(tool_args.get("retry_failed_only"))
+    base_fetch_results = _fetch_results_arg(
+        tool_args.get("base_fetch_results")
+    ) or extract_base_fetch_results_from_state(state)
     question_targets = normalize_question_targets(tool_args.get("question_targets"))
     if retry_failed_only and not question_targets:
         recovery_plan = extract_latest_fetch_recovery_plan_from_state(state)
@@ -2320,12 +2330,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # the same question set. A fresh scenario run can also use a filtered
         # platform list, but it must not inherit panorama fetch rows.
         final_fetch_results = fetch_results
-        baseline = state.get("preserved_fetch_results")
+        baseline = _fetch_results_arg(tool_args.get("preserved_fetch_results"))
+        if not baseline:
+            baseline = state.get("preserved_fetch_results")
         pair_targeted_merge = bool(question_platform_targets)
+        if retry_failed_only and not base_fetch_results and not baseline:
+            raise RuntimeError(
+                "补采缺少上一轮 A4 抓取结果，无法合并生成新的完整抓取 Artifact。"
+            )
         if (
             (platform_filter or pair_targeted_merge)
             and baseline is None
-            and state.get("fetch_results")
+            and base_fetch_results
         ):
             selected_platforms = (
                 {str(platform).strip().lower() for platform in platform_filter}
@@ -2334,7 +2350,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             )
             baseline = _derive_preserved_fetch_results(
                 current_questions=state_questions if retry_failed_only else questions,
-                existing_fetch_results=state.get("fetch_results") or [],
+                existing_fetch_results=base_fetch_results,
                 selected_platforms=selected_platforms,
                 question_platform_targets=question_platform_targets or None,
             )
@@ -2388,7 +2404,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             merge_metadata = {
                 "source": "supplemental_fetch_workflow",
                 "merge_key": "question_id+platform",
-                "base_pair_count": _count_fetch_pairs(state.get("fetch_results") or []),
+                "base_pair_count": _count_fetch_pairs(base_fetch_results),
                 "preserved_pair_count": _count_fetch_pairs(baseline or []),
                 "overlay_pair_count": _count_fetch_pairs(fetch_results),
                 "merged_pair_count": _count_fetch_pairs(final_fetch_results),

@@ -48,6 +48,22 @@ def resolve_supplemental_fetch_mode(
     return "fast"
 
 
+def extract_base_fetch_results_from_state(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return the latest canonical A4 matrix available for supplemental merge."""
+
+    direct_results = state.get("fetch_results")
+    if isinstance(direct_results, list) and direct_results:
+        return [item for item in direct_results if isinstance(item, dict)]
+
+    canonical = state.get("a4_canonical_result")
+    if isinstance(canonical, Mapping):
+        canonical_results = canonical.get("fetch_results")
+        if isinstance(canonical_results, list) and canonical_results:
+            return [item for item in canonical_results if isinstance(item, dict)]
+
+    return []
+
+
 def canonicalize_fetch_platform(value: Any) -> str:
     normalized = normalize_public_platform_id(value)
     if normalized:
