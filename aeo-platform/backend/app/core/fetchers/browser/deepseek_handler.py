@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 from typing import Any, AsyncGenerator
+from urllib.parse import urlparse, urlunparse
 
 from app.core.config import settings
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
@@ -63,6 +64,8 @@ class DeepSeekHandler(BaseBrowserHandler):
         "switch execution environments and try again",
     )
     PAGE_RUNTIME_RISK_FAILURE_REASON = "page_runtime_retry_or_risk_control"
+    REFERENCE_TARGET_COUNT = 15
+    REFERENCE_EXTRACTION_LIMIT = 20
 
     _DEFAULTS: dict = {
         "input": "textarea",
@@ -70,7 +73,11 @@ class DeepSeekHandler(BaseBrowserHandler):
         "answer": "div.ds-markdown",
         "reference_links": [
             "[class*='reference'] a[href^='http']",
+            "[class*='citation'] a[href^='http']",
+            "[class*='source'] a[href^='http']",
             ".search-result a[href^='http']",
+            "[class*='result'] a[href^='http']",
+            "[class*='web'] a[href^='http']",
         ],
         "citation_strip": "[class*='cite'], [class*='citation'], [class*='ref-num'], sup, a.ds-markdown-cite, a[data-index]",
         "new_chat_text": "新对话",
@@ -1007,15 +1014,240 @@ class DeepSeekHandler(BaseBrowserHandler):
             logger.warning("[DeepSeek] Text-based search toggle fallback failed: %s", e)
 
     async def _extract_references(self) -> list[SearchReference]:
-        """Extract search references with DeepSeek-specific citation link extraction."""
-        # Phase 1: DeepSeek-specific citation links
-        refs = await self._extract_citation_links()
+        """Extract search references from all DeepSeek surfaces and merge them."""
+        citation_refs = await self._extract_citation_links()
+        selector_refs = await self._extract_references_dom()
+        page_refs = await self._extract_page_reference_links(
+            limit=self.REFERENCE_EXTRACTION_LIMIT
+        )
+        refs = self._merge_references(
+            citation_refs,
+            selector_refs,
+            page_refs,
+            limit=self.REFERENCE_EXTRACTION_LIMIT,
+        )
         if refs:
-            logger.info("[DeepSeek] Extracted %d references via citation links", len(refs))
-            return refs
+            logger.info(
+                "[DeepSeek] Extracted %d references "
+                "(citation=%d, selector=%d, page=%d, target=%d)",
+                len(refs),
+                len(citation_refs),
+                len(selector_refs),
+                len(page_refs),
+                self.REFERENCE_TARGET_COUNT,
+            )
+        return refs
 
-        # Phase 2+3: Generic extraction from base
-        return await self._extract_references_dom()
+    def _merge_references(
+        self,
+        *groups: list[SearchReference],
+        limit: int | None = None,
+    ) -> list[SearchReference]:
+        """Merge references from multiple extraction strategies."""
+        max_items = limit or self.REFERENCE_EXTRACTION_LIMIT
+        merged: list[SearchReference] = []
+        seen: set[str] = set()
+
+        for refs in groups:
+            for ref in refs:
+                url = (getattr(ref, "url", "") or "").strip()
+                if not self._is_allowed_reference_url(url):
+                    continue
+
+                key = self._normalize_reference_url(url)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+
+                title = (getattr(ref, "title", "") or "").strip()
+                if not title:
+                    title = self._title_from_reference_url(url)
+
+                merged.append(
+                    SearchReference(
+                        index=len(merged) + 1,
+                        title=title,
+                        url=url,
+                        snippet=getattr(ref, "snippet", None),
+                        site_name=getattr(ref, "site_name", None),
+                        is_official=bool(getattr(ref, "is_official", False)),
+                    )
+                )
+                if len(merged) >= max_items:
+                    return merged
+
+        return merged
+
+    @staticmethod
+    def _is_allowed_reference_url(url: str) -> bool:
+        try:
+            parsed = urlparse(url.strip())
+        except Exception:
+            return False
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return False
+        hostname = (parsed.hostname or "").lower()
+        return hostname not in {"chat.deepseek.com", "accounts.deepseek.com"}
+
+    @staticmethod
+    def _normalize_reference_url(url: str) -> str:
+        try:
+            parsed = urlparse(url.strip())
+        except Exception:
+            return ""
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        path = parsed.path.rstrip("/")
+        return urlunparse(
+            (
+                parsed.scheme.lower(),
+                parsed.netloc.lower(),
+                path,
+                "",
+                parsed.query,
+                "",
+            )
+        )
+
+    @staticmethod
+    def _title_from_reference_url(url: str) -> str:
+        try:
+            hostname = urlparse(url).hostname or url[:60]
+            return hostname.removeprefix("www.")
+        except Exception:
+            return url[:60]
+
+    async def _extract_page_reference_links(
+        self,
+        limit: int | None = None,
+    ) -> list[SearchReference]:
+        """Extract source links from the latest answer container and source cards."""
+        try:
+            max_items = limit or self.REFERENCE_EXTRACTION_LIMIT
+            scan_limit = max(max_items * 4, self.REFERENCE_TARGET_COUNT)
+            script = """
+            () => {
+                const scopedSelectors = [
+                    'a[href^="http"]',
+                    '[class*="reference"] a[href^="http"]',
+                    '[class*="citation"] a[href^="http"]',
+                    '[class*="source"] a[href^="http"]',
+                    '[class*="search"] a[href^="http"]',
+                    '[class*="result"] a[href^="http"]',
+                    '[class*="web"] a[href^="http"]'
+                ];
+                const globalSelectors = scopedSelectors.slice(1);
+                const cardSelector = [
+                    '[class*="reference"]',
+                    '[class*="citation"]',
+                    '[class*="source"]',
+                    '[class*="search"]',
+                    '[class*="result"]',
+                    '[class*="web"]',
+                    'article',
+                    'li',
+                    'section',
+                    'div'
+                ].join(',');
+
+                const answers = Array.from(
+                    document.querySelectorAll('div.ds-markdown')
+                );
+                const lastAnswer = answers[answers.length - 1];
+                const scopedRoots = [];
+                let node = lastAnswer;
+                for (let depth = 0; node && depth < 6; depth += 1) {
+                    scopedRoots.push(node);
+                    node = node.parentElement;
+                }
+
+                const anchors = [];
+                const pushAnchors = (root, selectors) => {
+                    if (!root) return;
+                    for (const selector of selectors) {
+                        for (const anchor of root.querySelectorAll(selector)) {
+                            anchors.push(anchor);
+                        }
+                    }
+                };
+
+                for (const root of scopedRoots) {
+                    pushAnchors(root, scopedSelectors);
+                }
+                pushAnchors(document, globalSelectors);
+
+                const seen = new Set();
+                const refs = [];
+                for (const anchor of anchors) {
+                    const url = anchor.href || anchor.getAttribute('href') || '';
+                    if (!url || seen.has(url)) continue;
+                    seen.add(url);
+
+                    const card = anchor.closest(cardSelector);
+                    const cardText = ((card && card.innerText) || '').trim();
+                    let title = (
+                        anchor.getAttribute('title') ||
+                        anchor.getAttribute('aria-label') ||
+                        anchor.getAttribute('data-title') ||
+                        anchor.innerText ||
+                        anchor.textContent ||
+                        ''
+                    ).trim();
+                    if (!title && cardText) {
+                        title = cardText.split('\\n').find(Boolean) || '';
+                    }
+                    if (!title || /^[-\\d\\s.\\[\\]()]+$/.test(title)) {
+                        try {
+                            title = new URL(url).hostname.replace(/^www\\./, '');
+                        } catch {
+                            title = url.slice(0, 80);
+                        }
+                    }
+
+                    let siteName = null;
+                    try {
+                        siteName = new URL(url).hostname.replace(/^www\\./, '');
+                    } catch {
+                        siteName = null;
+                    }
+
+                    refs.push({
+                        index: refs.length + 1,
+                        title: title.slice(0, 200),
+                        url,
+                        snippet: cardText ? cardText.slice(0, 300) : null,
+                        site_name: siteName,
+                        is_official: false
+                    });
+                    if (refs.length >= __SCAN_LIMIT__) break;
+                }
+                return JSON.stringify(refs);
+            }
+            """.replace("__SCAN_LIMIT__", str(scan_limit))
+            result = await self.client.eval(script)
+            data = json.loads(result.get("output", "[]") or "[]")
+            refs: list[SearchReference] = []
+            for item in data:
+                url = item.get("url", "")
+                if not self._is_allowed_reference_url(url):
+                    continue
+                refs.append(
+                    SearchReference(
+                        index=len(refs) + 1,
+                        title=item.get("title")
+                        or self._title_from_reference_url(url),
+                        url=url,
+                        snippet=item.get("snippet"),
+                        site_name=item.get("site_name"),
+                        is_official=bool(item.get("is_official", False)),
+                    )
+                )
+                if len(refs) >= max_items:
+                    break
+            return refs
+        except Exception as e:
+            logger.debug("[DeepSeek] _extract_page_reference_links failed: %s", e)
+            return []
 
     async def _extract_citation_links(self) -> list[SearchReference]:
         """Extract citation links from the last answer with smart title resolution.

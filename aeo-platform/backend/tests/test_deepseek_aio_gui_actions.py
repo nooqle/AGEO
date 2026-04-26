@@ -8,6 +8,7 @@ import pytest
 from app.core.config import settings
 from app.core.fetchers.browser import deepseek_handler as deepseek_module
 from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
+from app.schemas.fetch import SearchReference
 
 
 def test_deepseek_aio_defaults_to_gui_actions_for_remote_sessions():
@@ -223,3 +224,49 @@ async def test_deepseek_runtime_retry_marker_is_terminal_page_failure():
     assert event.retryable is False
     assert event.evidence_ref == {"evidence_id": "deepseek-runtime-risk"}
     handler._capture_failure_evidence.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_deepseek_extract_references_merges_multiple_sources():
+    handler = DeepSeekHandler(
+        client=SimpleNamespace(page=None, aio_session_id="aio-session-1")
+    )
+    handler._extract_citation_links = AsyncMock(
+        return_value=[
+            SearchReference(index=1, title="A", url="https://a.example.com/page"),
+            SearchReference(index=2, title="B", url="https://b.example.com/page"),
+        ]
+    )
+    handler._extract_references_dom = AsyncMock(
+        return_value=[
+            SearchReference(
+                index=1,
+                title="A duplicate",
+                url="https://a.example.com/page/",
+            ),
+            SearchReference(index=2, title="C", url="https://c.example.com/page"),
+        ]
+    )
+    handler._extract_page_reference_links = AsyncMock(
+        return_value=[
+            SearchReference(index=1, title="D", url="https://d.example.com/page"),
+            SearchReference(
+                index=2,
+                title="Internal",
+                url="https://chat.deepseek.com/a/chat/s/1",
+            ),
+        ]
+    )
+
+    refs = await handler._extract_references()
+
+    assert [ref.index for ref in refs] == [1, 2, 3, 4]
+    assert [ref.url for ref in refs] == [
+        "https://a.example.com/page",
+        "https://b.example.com/page",
+        "https://c.example.com/page",
+        "https://d.example.com/page",
+    ]
+    handler._extract_citation_links.assert_awaited_once()
+    handler._extract_references_dom.assert_awaited_once()
+    handler._extract_page_reference_links.assert_awaited_once_with(limit=20)

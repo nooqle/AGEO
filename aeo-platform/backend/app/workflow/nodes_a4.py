@@ -892,7 +892,12 @@ def _get_browser_pipeline_timeout(platform: str, question_count: int) -> float:
     question.
     """
 
-    configured_timeout = float(PlatformConstants.BROWSER_PIPELINE_TIMEOUT)
+    configured_timeout = float(
+        PlatformConstants.BROWSER_PIPELINE_TIMEOUT_OVERRIDES.get(
+            platform,
+            PlatformConstants.BROWSER_PIPELINE_TIMEOUT,
+        )
+    )
     if question_count <= 0:
         return configured_timeout
 

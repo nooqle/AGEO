@@ -104,7 +104,13 @@ class PlatformConstants:
     }
 
     # Global per-pipeline timeout (seconds): caps entire browser platform regardless of question count
-    BROWSER_PIPELINE_TIMEOUT: Final[int] = 600  # 10 minutes max per browser platform (12 questions × ~45s)
+    BROWSER_PIPELINE_TIMEOUT: Final[int] = 600  # 10 minutes max per browser platform
+
+    # Platform-specific browser pipeline caps. DeepSeek GUI runs have been
+    # observed finishing 12/14 questions just after the old 600s cap.
+    BROWSER_PIPELINE_TIMEOUT_OVERRIDES: Final[dict[str, int]] = {
+        "deepseek": 1200,
+    }
 
     # Per-platform inter-request delay (seconds) for rate limiting
     PLATFORM_REQUEST_DELAYS: Final[dict[str, float]] = {

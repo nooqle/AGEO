@@ -4,8 +4,17 @@ from app.core.constants import PlatformConstants
 from app.workflow import nodes_a4
 
 
-def test_browser_pipeline_timeout_caps_multi_question_runs() -> None:
-    timeout = nodes_a4._get_browser_pipeline_timeout("deepseek", 12)
+def test_browser_pipeline_timeout_uses_deepseek_override_for_multi_question_runs() -> None:
+    timeout = nodes_a4._get_browser_pipeline_timeout("deepseek", 14)
+
+    assert timeout == float(
+        PlatformConstants.BROWSER_PIPELINE_TIMEOUT_OVERRIDES["deepseek"]
+    )
+    assert timeout > float(PlatformConstants.BROWSER_PIPELINE_TIMEOUT)
+
+
+def test_browser_pipeline_timeout_keeps_default_cap_for_other_platforms() -> None:
+    timeout = nodes_a4._get_browser_pipeline_timeout("kimi", 14)
 
     assert timeout == float(PlatformConstants.BROWSER_PIPELINE_TIMEOUT)
 
