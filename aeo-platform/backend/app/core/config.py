@@ -56,11 +56,22 @@ class Settings(BaseSettings):
     MINIMAX_MODEL: str = "MiniMax-M2.1"
     DOUBAO_API_KEY: str | None = None
     DOUBAO_MODEL: str = "doubao-seed-2-0-lite-260215"
+    DOUBAO_FAST_MODEL: str | None = "doubao-seed-2-0-mini-260215"
+    DOUBAO_USE_APP_API: bool = False
+    DOUBAO_FAST_USE_APP_API: bool = True
+    DOUBAO_APP_FEATURE: str = "ai_search"
+    DOUBAO_APP_ROLE_DESCRIPTION: str = (
+        "You are a professional information assistant. Use search to answer "
+        "accurately and cite sources when available."
+    )
+    DOUBAO_APP_API_FALLBACK_TO_WEB_SEARCH: bool = True
     HUNYUAN_API_KEY: str | None = None
     HUNYUAN_MODEL: str = "hunyuan-2.0-instruct-20251111"
+    HUNYUAN_FAST_MODEL: str | None = None
     HUNYUAN_BASE_URL: str = "https://api.hunyuan.cloud.tencent.com/v1"
     MOONSHOT_API_KEY: str | None = None
-    MOONSHOT_MODEL: str = "kimi-k2-turbo-preview"
+    MOONSHOT_MODEL: str = "kimi-k2.5"
+    MOONSHOT_FAST_MODEL: str | None = "kimi-k2.5"
     MOONSHOT_BASE_URL: str = "https://api.moonshot.cn/v1/chat/completions"
     BOCHA_API_KEY: str | None = None
 
@@ -95,6 +106,12 @@ class Settings(BaseSettings):
     AIO_BROWSER_ACCEPT_LANGUAGE: str = "zh-CN,zh;q=0.9,en;q=0.8"
     AIO_BROWSER_TIMEZONE_ID: str = "Asia/Shanghai"
     DEEPSEEK_AIO_INTERACTION_MODE: str = "cdp_dom"
+
+    # A4 fast fetch tuning. These only affect API fetches; browser fetch
+    # pacing remains controlled by PlatformConstants.PLATFORM_REQUEST_DELAYS.
+    A4_DOUBAO_API_DELAY_SECONDS: float = 3.0
+    A4_HUNYUAN_API_DELAY_SECONDS: float = 1.0
+    A4_KIMI_API_DELAY_SECONDS: float = 1.0
 
     # LLM Orchestration Mode (v2)
     USE_LLM_ORCHESTRATION: bool = False

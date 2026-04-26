@@ -9,12 +9,11 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.constants import LLMConstants, PlatformConstants
 from app.core.fetchers.api.base_client import BaseAPIClient
 from app.schemas.fetch import LLMResponse, SearchReference
 
 logger = logging.getLogger(__name__)
-
-from app.core.constants import LLMConstants, PlatformConstants
 
 # Maximum tool_calls rounds to prevent infinite loops
 MAX_TOOL_ROUNDS = LLMConstants.MAX_TOOL_ROUNDS
@@ -99,6 +98,7 @@ class KimiClient(BaseAPIClient):
                     "model": self.model,
                     "messages": messages,
                     "tools": tools,
+                    "thinking": {"type": "disabled"},
                     "response_format": {"type": "json_object"},
                 }
 

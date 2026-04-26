@@ -887,6 +887,24 @@ def _get_platform_semaphore(platform: str) -> asyncio.Semaphore:
     return _platform_semaphores.setdefault(platform, asyncio.Semaphore(1))
 
 
+def _get_api_request_delay(platform: str) -> float:
+    """Return configurable fast-mode API pacing for one platform."""
+
+    override_by_platform = {
+        "doubao": settings.A4_DOUBAO_API_DELAY_SECONDS,
+        "hunyuan": settings.A4_HUNYUAN_API_DELAY_SECONDS,
+        "yuanbao": settings.A4_HUNYUAN_API_DELAY_SECONDS,
+        "kimi": settings.A4_KIMI_API_DELAY_SECONDS,
+    }
+    try:
+        delay = float(override_by_platform.get(platform, 0.0))
+    except (TypeError, ValueError):
+        delay = 0.0
+    if delay < 0:
+        return 0.0
+    return delay
+
+
 async def _throttled_retry_fetch(
     fetch_fn: Callable[..., Coroutine[Any, Any, dict[str, Any]]],
     *args: Any,
@@ -902,8 +920,13 @@ async def _throttled_retry_fetch(
         )
         # Delay before releasing semaphore so the next request to the same
         # platform doesn't fire immediately (prevents 429 rate limiting).
-        delay = PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
-        await asyncio.sleep(delay)
+        delay = (
+            _get_api_request_delay(platform)
+            if method == "api"
+            else PlatformConstants.PLATFORM_REQUEST_DELAYS.get(platform, 3.0)
+        )
+        if delay > 0:
+            await asyncio.sleep(delay)
         return result
 
 
@@ -1461,13 +1484,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             try:
                 if _pf is None or "doubao" in _pf:
-                    doubao_client = DoubaoClient()
+                    doubao_client = DoubaoClient(
+                        model=settings.DOUBAO_FAST_MODEL or None,
+                        use_doubao_app=settings.DOUBAO_FAST_USE_APP_API,
+                    )
             except Exception as e:
                 logger.warning("[A4] DoubaoClient init failed: %s", e)
 
             try:
                 if _pf is None or "hunyuan" in _pf:
-                    hunyuan_client = HunyuanClient()
+                    hunyuan_client = HunyuanClient(
+                        model=settings.HUNYUAN_FAST_MODEL or None
+                    )
             except Exception as e:
                 logger.warning("[A4] Yuanbao client init failed: %s", e)
 
@@ -1475,7 +1503,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 if _pf is None or "kimi" in _pf:
                     from app.core.fetchers.api.kimi_client import KimiClient
 
-                    kimi_client = KimiClient()
+                    kimi_client = KimiClient(model=settings.MOONSHOT_FAST_MODEL or None)
             except Exception as e:
                 logger.warning("[A4] KimiClient init failed: %s", e)
 
