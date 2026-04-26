@@ -4997,7 +4997,11 @@ async def _handle_tool_call(
                     },
                 )
             if tool_args.get("persona_id"):
-                user_decisions["selected_persona_ids"] = [tool_args["persona_id"]]
+                selected_ids = list(user_decisions.get("selected_persona_ids") or [])
+                persona_id = str(tool_args["persona_id"]).strip()
+                if persona_id and persona_id not in selected_ids:
+                    selected_ids.append(persona_id)
+                user_decisions["selected_persona_ids"] = selected_ids
             extra_updates["user_decisions"] = user_decisions
 
         # Pass fetch_mode for A4 + custom_questions + ask_user guard

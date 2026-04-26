@@ -103,6 +103,31 @@ async def a3_question_node(state: AgentState) -> Command:
         return await _a3_brand_panorama_mode(state)
 
 
+def _normalize_persona_refs(value) -> set[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = []
+    return {str(item).strip() for item in values if str(item or "").strip()}
+
+
+def _persona_matches_refs(persona: dict, index: int, refs: set[str]) -> bool:
+    if not refs:
+        return False
+
+    candidates = {
+        str(persona.get("id") or "").strip(),
+        str(persona.get("name") or "").strip(),
+        str(persona.get("persona_name") or "").strip(),
+        f"persona_{index + 1}",
+        f"profile_{index}",
+    }
+    candidates.discard("")
+    return bool(candidates & refs)
+
+
 # ============================================================================
 # Brand Panorama Mode (LLM-driven)
 # ============================================================================
@@ -470,6 +495,10 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
         logger.warning(f"[A3] brand_name is empty, falling back to '品牌'. brand_profile keys: {list(brand_profile.keys())}")
     user_decisions = state.get("user_decisions", {})
     selected_ids = user_decisions.get("selected_persona_ids", [])
+    selected_names = user_decisions.get("selected_persona_names", [])
+    selected_refs = _normalize_persona_refs(selected_ids) | _normalize_persona_refs(
+        selected_names
+    )
     marketing_personas = state.get("marketing_personas") or {}
 
     all_personas = marketing_personas.get("user_personas", [])
@@ -480,16 +509,18 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
         for p in all_personas
     ]
     logger.info(
-        f"[A3] Persona matching: selected_ids={selected_ids}, "
+        f"[A3] Persona matching: selected_refs={sorted(selected_refs)}, "
         f"available personas={persona_keys}"
     )
 
     # Match selected personas by name/persona_name
-    if selected_ids:
+    if selected_refs & {"all", "all_personas"}:
+        selected_personas = all_personas
+    elif selected_refs:
         selected_personas = [
-            p for p in all_personas
-            if p.get("name") in selected_ids
-            or p.get("persona_name") in selected_ids
+            p
+            for index, p in enumerate(all_personas)
+            if isinstance(p, dict) and _persona_matches_refs(p, index, selected_refs)
         ]
     else:
         # No selection — use all personas
