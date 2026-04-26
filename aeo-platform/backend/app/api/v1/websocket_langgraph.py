@@ -704,6 +704,16 @@ def _has_reusable_runtime_context(state_values: dict[str, Any]) -> bool:
     )
 
 
+def _count_fetch_result_pairs(fetch_results: Any) -> int:
+    if not isinstance(fetch_results, list):
+        return 0
+    return sum(
+        len(item.get("platform_results") or [])
+        for item in fetch_results
+        if isinstance(item, dict)
+    )
+
+
 def _reset_follow_up_runtime_state(state_values: dict[str, Any]) -> None:
     """Clear stale blockers before resuming orchestration from a prior session."""
 
@@ -1211,6 +1221,8 @@ async def rebuild_state_from_db(
     highest_step = ""
     latest_attachment_turn: dict[str, Any] | None = None
     latest_import_artifact_sequence = 0
+    best_fetch_results: list[dict[str, Any]] = []
+    best_fetch_pair_count = 0
 
     for msg in messages:
         role = msg.get("role", "")
@@ -1329,6 +1341,12 @@ async def rebuild_state_from_db(
                 fr = output_data.get("fetchResults") or output_data.get("fetch_results")
                 if fr:
                     state["fetch_results"] = fr
+                    pair_count = _count_fetch_result_pairs(fr)
+                    if pair_count > best_fetch_pair_count:
+                        best_fetch_pair_count = pair_count
+                        best_fetch_results = [
+                            item for item in fr if isinstance(item, dict)
+                        ]
                 if "A4" > highest_step:
                     highest_step = "A4"
 
@@ -1458,7 +1476,10 @@ async def rebuild_state_from_db(
         f"has_brand={state['brand_profile'] is not None}, "
         f"has_competitors={state['competitors'] is not None}, "
         f"brand_name={state['brand_name']!r}"
-    )
+        )
+
+    if best_fetch_results:
+        state["fetch_results"] = best_fetch_results
 
     return state
 
