@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from typing import Any
 from urllib.parse import urlparse
 
-from patchright.async_api import Browser, BrowserContext
+from patchright.async_api import Browser, BrowserContext, async_playwright
 
 from app.core.config import settings
 from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
@@ -72,15 +73,24 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         return host
 
     async def _ensure_playwright(self):
-        """Ensure Patchright is initialized for CDP attachment."""
+        """Start Patchright for CDP attachment without installing local browsers."""
 
         if self.playwright is None:
             self.playwright = await self._start_playwright()
 
     async def _start_playwright(self):
-        # Reuse the parent helper via open-coded import path because the parent
-        # method also installs browsers if missing.
-        return await super()._ensure_playwright() or self.playwright
+        # AIO connects to a remote Chromium over CDP. It only needs the
+        # Patchright driver process, not a locally installed Chromium binary.
+        try:
+            return await async_playwright().start()
+        except Exception as exc:
+            logger.warning(
+                "[AIO Browser:%s] async_playwright().start() failed: %s; retrying",
+                self.session_name,
+                exc,
+            )
+            await asyncio.sleep(1)
+            return await async_playwright().start()
 
     async def _reset_runtime(self, *, preserve_remote_surface: bool = True) -> None:
         """Detach from the remote browser without killing the AIO runtime."""
