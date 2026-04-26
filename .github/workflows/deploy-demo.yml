@@ -1,0 +1,123 @@
+name: Deploy Demo
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref or commit SHA to deploy. Defaults to the workflow commit."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy demo server
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      DEMO_REPO_URL: ${{ vars.DEMO_REPO_URL || 'git@github.com:nooqle/AGEO.git' }}
+      DEMO_EXTERNAL_URL: ${{ vars.DEMO_EXTERNAL_URL || 'https://demo.imspecta.com' }}
+      DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+      REQUESTED_REF: ${{ github.event.inputs.ref || github.sha }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve deploy commit
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested_ref="${REQUESTED_REF:-${GITHUB_SHA}}"
+          git fetch --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          if resolved_sha="$(git rev-parse --verify "${requested_ref}^{commit}" 2>/dev/null)"; then
+            :
+          elif resolved_sha="$(git rev-parse --verify "origin/${requested_ref}^{commit}" 2>/dev/null)"; then
+            :
+          else
+            echo "Could not resolve deploy ref: ${requested_ref}" >&2
+            exit 1
+          fi
+          echo "sha=${resolved_sha}" >> "$GITHUB_OUTPUT"
+          echo "Deploying commit ${resolved_sha}"
+
+      - name: Validate SSH configuration
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${DEMO_SSH_HOST:?Missing DEMO_SSH_HOST secret}"
+          : "${DEMO_SSH_USER:?Missing DEMO_SSH_USER secret}"
+          : "${DEMO_SSH_KEY:?Missing DEMO_SSH_KEY secret}"
+          : "${DEMO_SSH_PORT:?Missing DEMO_SSH_PORT secret or default}"
+
+      - name: Upload and run deploy script
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          RESOLVED_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_demo_deploy_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(
+            -i "$key_path"
+            -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+          scp_options=(
+            -i "$key_path"
+            -P "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+
+          retry() {
+            local attempt=1
+            local max_attempts=5
+            local delay=10
+            until "$@"; do
+              local exit_code=$?
+              if (( attempt >= max_attempts )); then
+                return "$exit_code"
+              fi
+              echo "SSH command failed with exit ${exit_code}; retrying in ${delay}s (attempt ${attempt}/${max_attempts})" >&2
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+
+          retry scp "${scp_options[@]}" ops/deploy-demo.sh \
+            "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:/tmp/ageo-deploy-demo.sh"
+          retry ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+            "chmod +x /tmp/ageo-deploy-demo.sh && /tmp/ageo-deploy-demo.sh --sha $(printf '%q' "$RESOLVED_SHA") --repo $(printf '%q' "$DEMO_REPO_URL") --external-url $(printf '%q' "$DEMO_EXTERNAL_URL")"

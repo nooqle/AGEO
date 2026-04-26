@@ -1,6 +1,5 @@
 'use client';
 
-import { useState, useMemo } from 'react';
 import { useTheme } from '@/hooks/useTheme';
 
 interface BrandAvatarProps {
@@ -10,58 +9,13 @@ interface BrandAvatarProps {
   className?: string;
 }
 
-export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAvatarProps) {
+export function BrandAvatar({ name, size = 40, className = '' }: BrandAvatarProps) {
   const { theme } = useTheme();
-  const [srcIndex, setSrcIndex] = useState(0);
-  const initial = name.charAt(0).toUpperCase();
-
-  const logoSources = useMemo(() => {
-    if (!domain) return [];
-    const clean = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    return [`https://${clean}/apple-touch-icon.png`, `https://${clean}/favicon.ico`];
-  }, [domain]);
-
-  const currentSrc = logoSources[srcIndex];
+  const initial = (name.trim().charAt(0) || '品').toUpperCase();
   const isLarge = size > 48;
   const borderRadius = isLarge ? '16px' : '18px';
   const fontSize = isLarge ? '1.5rem' : '1.125rem';
   const isDark = theme === 'dark';
-
-  if (currentSrc) {
-    return (
-      <div
-        className={`flex items-center justify-center overflow-hidden ${className}`}
-        style={{
-          width: size,
-          height: size,
-          borderRadius,
-          background: isDark
-            ? 'linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,239,231,0.96))'
-            : 'linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,245,238,0.94))',
-          border: isDark ? '1px solid rgba(255,255,255,0.14)' : '1px solid rgba(17,24,39,0.06)',
-          boxShadow: isDark
-            ? '0 16px 32px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.84)'
-            : '0 10px 18px rgba(15,23,42,0.08), inset 0 1px 0 rgba(255,255,255,0.9)',
-        }}
-      >
-        <img
-          src={currentSrc}
-          alt={name}
-          className="object-contain"
-          style={{
-            width: size - 12,
-            height: size - 12,
-            filter: isDark
-              ? 'drop-shadow(0 4px 10px rgba(15,23,42,0.16))'
-              : 'drop-shadow(0 2px 8px rgba(15,23,42,0.12))',
-          }}
-          onError={() => {
-            setSrcIndex((prev) => (prev < logoSources.length - 1 ? prev + 1 : -1));
-          }}
-        />
-      </div>
-    );
-  }
 
   return (
     <div

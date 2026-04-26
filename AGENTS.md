@@ -192,6 +192,47 @@ Required API keys: MiniMax API key, optionally DashScope for backup LLM.
 - If a previously tried path is already known-bad (for example unsafe PowerShell Chinese writes, stale SSH credential retries, or using old task logs as if they were live), stop and switch paths instead of repeating it.
 - The detailed runbook lives in `docs/design-validation-runtime-and-deploy-protocol-2026-04-15.md`.
 
+## Demo Auto Deploy Protocol (Important)
+
+- Demo deployment is being standardized through GitHub Actions + SSH + server-side release directories.
+- The implementation lives in:
+  - `.github/workflows/deploy-demo.yml`
+  - `ops/deploy-demo.sh`
+- Deployment trigger policy:
+  - push to `main` runs the demo deployment workflow automatically
+  - feature branches do not auto-deploy
+  - feature branch deployments must use `workflow_dispatch` with an explicit ref/SHA
+- GitHub repository configuration already expected for `nooqle/AGEO`:
+  - repo secrets: `DEMO_SSH_HOST`, `DEMO_SSH_PORT`, `DEMO_SSH_USER`, `DEMO_SSH_KEY`
+  - demo server read-only GitHub deploy key for `git@github.com:nooqle/AGEO.git`
+- The new server deployment root is `/srv/ageo-deploy`, not the legacy `/srv/ageo`.
+- `/srv/ageo` is legacy fallback/reference only. Do not manually copy feature files into `/srv/ageo` for normal deploys once this workflow is active.
+- Server layout owned by the deploy script:
+  - `/srv/ageo-deploy/repo.git`: bare git mirror
+  - `/srv/ageo-deploy/releases/<sha>`: immutable release trees
+  - `/srv/ageo-deploy/shared`: persistent env/runtime/uploads/cache
+  - `/srv/ageo-deploy/current`: active release symlink
+  - `/srv/ageo-deploy/previous`: rollback symlink
+  - `/srv/ageo-deploy/deploy.lock`: `flock` deploy lock
+- The deploy script intentionally builds in a fresh release directory, then switches `current`; do not replace it with in-place `git pull && npm build` inside the active runtime directory.
+- The first version does not run database migrations automatically. If `aeo-platform/backend/alembic/versions/` changes between the current and target release, the deploy must stop with `migration_required` and wait for explicit human handling.
+- Runtime persistence must stay outside release trees:
+  - backend `.env.local` comes from `/srv/ageo-deploy/shared/backend/.env.local`
+  - frontend `.env.local`, if present, comes from `/srv/ageo-deploy/shared/frontend/.env.local`
+  - uploads use `/srv/ageo-deploy/shared/uploads`
+  - A4 failure evidence uses `/srv/ageo-deploy/shared/runtime/failure-evidence`
+- Do not print or commit deploy private keys, server passwords, `.env.local`, database URLs, JWT secrets, or AIO tokens.
+- A deployment is not complete until all are true:
+  - target commit/SHA is known
+  - backend service is active
+  - frontend service is active
+  - `http://127.0.0.1:8000/health` responds successfully
+  - `http://127.0.0.1:3000` responds successfully
+  - `https://demo.imspecta.com` responds successfully
+- For rollback, use `ops/deploy-demo.sh --rollback`; do not manually retarget symlinks unless the deploy script itself is broken.
+- If demo SSH shows intermittent `Error reading SSH protocol banner`, retry with backoff before changing credentials. This has been observed as a transient connection issue, not necessarily an auth failure.
+- Keep `.gitattributes` LF rules for deployment shell scripts/workflows; CRLF can break Ubuntu execution.
+
 
 ## Encoding Safety Rule (Important)
 

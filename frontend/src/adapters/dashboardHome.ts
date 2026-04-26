@@ -1,10 +1,18 @@
 import type {
   DashboardCitationDomain,
   DashboardCitationSourceType,
+  DashboardEmotionSentiment,
+  DashboardEmotionWord,
+  DashboardEmotionWordCloud,
+  DashboardHomeAdvantageCard,
   DashboardHomeData,
   DashboardHomeMetric,
+  DashboardHomeRiskCard,
   DashboardLatestReport,
+  DashboardMentionRankingRow,
+  DashboardPlatformDiagnosisRow,
   DashboardRelatedQuestion,
+  DashboardSourceStructure,
 } from '@/types/dashboard';
 
 type UnknownRecord = Record<string, unknown>;
@@ -26,6 +34,22 @@ function toStringValue(value: unknown): string | undefined {
   return NULLISH_DISPLAY_VALUES.has(trimmed.toLowerCase()) ? undefined : trimmed;
 }
 
+function pick(row: UnknownRecord, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      return row[key];
+    }
+  }
+  return undefined;
+}
+
+function toInteger(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.round(value);
+  }
+  return 0;
+}
+
 function emptyHome(): DashboardHomeData {
   return {
     summary: { headline: '' },
@@ -39,6 +63,19 @@ function emptyHome(): DashboardHomeData {
     related_questions: {
       summary: '',
       items: [],
+    },
+    word_cloud: {
+      positive: [],
+      negative: [],
+    },
+    platform_diagnosis: [],
+    risks: [],
+    advantages: [],
+    mention_ranking: [],
+    source_structure: {
+      official_conversion_rate: null,
+      source_types: [],
+      top_domains: [],
     },
     // Compatibility-only legacy boards kept during controlled rollout so the
     // remaining non-homepage analytics surfaces do not break before they are
@@ -181,6 +218,147 @@ function normalizeRelatedQuestions(value: unknown): DashboardRelatedQuestion[] {
   return questions;
 }
 
+function normalizeEmotion(value: unknown, fallback: DashboardEmotionSentiment): DashboardEmotionSentiment {
+  if (value === 'positive' || value === 'negative') {
+    return value;
+  }
+  return fallback;
+}
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value
+    .map((item) => toStringValue(item))
+    .filter((item): item is string => Boolean(item));
+  return items.length ? items : undefined;
+}
+
+function normalizeEmotionWords(value: unknown, sentiment: DashboardEmotionSentiment): DashboardEmotionWord[] {
+  if (!Array.isArray(value)) return [];
+  const words: DashboardEmotionWord[] = [];
+  for (const item of value) {
+    const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
+    if (!row) continue;
+    const text = toStringValue(pick(row, 'text', 'word', 'label')) ?? '';
+    if (!text) continue;
+    words.push({
+      text,
+      weight: toNumber(pick(row, 'weight', 'value', 'rate')) ?? 0,
+      sentiment: normalizeEmotion(pick(row, 'sentiment'), sentiment),
+      count: toInteger(pick(row, 'count', 'mentionCount', 'mention_count')),
+      platforms: normalizeStringArray(pick(row, 'platforms')),
+    });
+  }
+  return words;
+}
+
+function normalizeWordCloud(value: unknown): DashboardEmotionWordCloud {
+  const row = value && typeof value === 'object' ? (value as UnknownRecord) : {};
+  return {
+    positive: normalizeEmotionWords(pick(row, 'positive'), 'positive'),
+    negative: normalizeEmotionWords(pick(row, 'negative'), 'negative'),
+  };
+}
+
+function normalizePlatformStatus(value: unknown): DashboardPlatformDiagnosisRow['status'] {
+  if (value === 'good' || value === 'watch' || value === 'risk') {
+    return value;
+  }
+  return 'unknown';
+}
+
+function normalizePlatformDiagnosis(value: unknown): DashboardPlatformDiagnosisRow[] {
+  if (!Array.isArray(value)) return [];
+  const rows: DashboardPlatformDiagnosisRow[] = [];
+  for (const item of value) {
+    const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
+    if (!row) continue;
+    const platform = toStringValue(row.platform) ?? '';
+    if (!platform) continue;
+    rows.push({
+      platform,
+      status: normalizePlatformStatus(pick(row, 'status')),
+      answer_count: toInteger(pick(row, 'answerCount', 'answer_count')),
+      brand_mention_count: toInteger(pick(row, 'brandMentionCount', 'brand_mention_count')),
+      positive_count: toInteger(pick(row, 'positiveCount', 'positive_count')),
+      negative_count: toInteger(pick(row, 'negativeCount', 'negative_count')),
+      main_concern: toStringValue(pick(row, 'mainConcern', 'main_concern')),
+    });
+  }
+  return rows;
+}
+
+function normalizeRiskLevel(value: unknown): DashboardHomeRiskCard['level'] {
+  if (value === 'high' || value === 'medium' || value === 'low') {
+    return value;
+  }
+  return 'medium';
+}
+
+function normalizeRisks(value: unknown): DashboardHomeRiskCard[] {
+  if (!Array.isArray(value)) return [];
+  const rows: DashboardHomeRiskCard[] = [];
+  for (const item of value) {
+    const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
+    if (!row) continue;
+    const title = toStringValue(pick(row, 'title', 'scenarioLabel', 'scenario_label')) ?? '';
+    if (!title) continue;
+    rows.push({
+      title,
+      level: normalizeRiskLevel(pick(row, 'level', 'severity')),
+      platform: toStringValue(row.platform),
+      evidence: toStringValue(pick(row, 'evidence', 'reason')),
+    });
+  }
+  return rows;
+}
+
+function normalizeAdvantages(value: unknown): DashboardHomeAdvantageCard[] {
+  if (!Array.isArray(value)) return [];
+  const rows: DashboardHomeAdvantageCard[] = [];
+  for (const item of value) {
+    const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
+    if (!row) continue;
+    const title = toStringValue(pick(row, 'title', 'scenarioLabel', 'scenario_label')) ?? '';
+    if (!title) continue;
+    rows.push({
+      title,
+      platform_count: toInteger(pick(row, 'platformCount', 'platform_count')),
+      evidence: toStringValue(pick(row, 'evidence', 'reason')),
+    });
+  }
+  return rows;
+}
+
+function normalizeMentionRanking(value: unknown): DashboardMentionRankingRow[] {
+  if (!Array.isArray(value)) return [];
+  const rows: DashboardMentionRankingRow[] = [];
+  for (const item of value) {
+    const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
+    if (!row) continue;
+    const brand = toStringValue(row.brand) ?? '';
+    const rank = toInteger(row.rank);
+    if (!brand || rank <= 0) continue;
+    rows.push({
+      rank,
+      brand,
+      mention_rate: toNumber(pick(row, 'mentionRate', 'mention_rate')),
+      mention_count: toInteger(pick(row, 'mentionCount', 'mention_count', 'brandPresenceCount', 'brand_presence_count')),
+      is_current_brand: Boolean(pick(row, 'isCurrentBrand', 'is_current_brand')),
+    });
+  }
+  return rows.slice(0, 10);
+}
+
+function normalizeSourceStructure(value: unknown): DashboardSourceStructure {
+  const row = value && typeof value === 'object' ? (value as UnknownRecord) : {};
+  return {
+    official_conversion_rate: toNumber(pick(row, 'officialConversionRate', 'official_conversion_rate')),
+    source_types: normalizeSourceTypes(pick(row, 'sourceTypes', 'source_types')),
+    top_domains: normalizeTopDomains(pick(row, 'topDomains', 'top_domains')),
+  };
+}
+
 export function buildDashboardHomeData(value: unknown): DashboardHomeData | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
@@ -196,6 +374,7 @@ export function buildDashboardHomeData(value: unknown): DashboardHomeData | unde
     row.relatedQuestions && typeof row.relatedQuestions === 'object'
       ? (row.relatedQuestions as UnknownRecord)
       : {};
+  const sourceStructure = normalizeSourceStructure(pick(row, 'sourceStructure', 'source_structure'));
 
   return {
     ...base,
@@ -204,6 +383,12 @@ export function buildDashboardHomeData(value: unknown): DashboardHomeData | unde
     },
     latest_report: normalizeLatestReport(row.latestReport),
     metrics: normalizeMetrics(row.metrics),
+    word_cloud: normalizeWordCloud(pick(row, 'wordCloud', 'word_cloud')),
+    platform_diagnosis: normalizePlatformDiagnosis(pick(row, 'platformDiagnosis', 'platform_diagnosis')),
+    risks: normalizeRisks(pick(row, 'risks')),
+    advantages: normalizeAdvantages(pick(row, 'advantages')),
+    mention_ranking: normalizeMentionRanking(pick(row, 'mentionRanking', 'mention_ranking')),
+    source_structure: sourceStructure,
     citation_distribution: {
       summary: toStringValue(citationDistribution.summary) ?? '',
       source_types: normalizeSourceTypes(citationDistribution.sourceTypes),

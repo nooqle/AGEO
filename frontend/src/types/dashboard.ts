@@ -391,12 +391,74 @@ export interface DashboardRelatedQuestion {
   scene?: string;
 }
 
+export type DashboardEmotionSentiment = 'positive' | 'negative';
+
+export interface DashboardEmotionWord {
+  text: string;
+  weight: number;
+  sentiment: DashboardEmotionSentiment;
+  count?: number;
+  platforms?: string[];
+}
+
+export interface DashboardEmotionWordCloud {
+  positive: DashboardEmotionWord[];
+  negative: DashboardEmotionWord[];
+}
+
+export type DashboardPlatformDiagnosisStatus = 'good' | 'watch' | 'risk' | 'unknown';
+
+export interface DashboardPlatformDiagnosisRow {
+  platform: string;
+  status: DashboardPlatformDiagnosisStatus;
+  answer_count: number;
+  brand_mention_count: number;
+  positive_count: number;
+  negative_count: number;
+  main_concern?: string;
+}
+
+export type DashboardHomeRiskLevel = 'high' | 'medium' | 'low';
+
+export interface DashboardHomeRiskCard {
+  title: string;
+  level: DashboardHomeRiskLevel;
+  platform?: string;
+  evidence?: string;
+}
+
+export interface DashboardHomeAdvantageCard {
+  title: string;
+  platform_count?: number;
+  evidence?: string;
+}
+
+export interface DashboardMentionRankingRow {
+  rank: number;
+  brand: string;
+  mention_rate: number | null;
+  mention_count: number;
+  is_current_brand?: boolean;
+}
+
+export interface DashboardSourceStructure {
+  official_conversion_rate: number | null;
+  source_types: DashboardCitationSourceType[];
+  top_domains: DashboardCitationDomain[];
+}
+
 export interface DashboardHomeData {
   summary: {
     headline: string;
   };
   latest_report?: DashboardLatestReport;
   metrics?: DashboardHomeMetric[];
+  word_cloud?: DashboardEmotionWordCloud;
+  platform_diagnosis?: DashboardPlatformDiagnosisRow[];
+  risks?: DashboardHomeRiskCard[];
+  advantages?: DashboardHomeAdvantageCard[];
+  mention_ranking?: DashboardMentionRankingRow[];
+  source_structure?: DashboardSourceStructure;
   citation_distribution?: {
     summary: string;
     source_types: DashboardCitationSourceType[];

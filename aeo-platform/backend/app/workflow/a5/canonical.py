@@ -498,7 +498,7 @@ def _format_metric_emphasis(label: str, value: str) -> str:
 
 def _brand_rank_sentence(brand_name: str, rank: int | None) -> str:
     if not rank:
-        return f"当前样本里还没有形成稳定的品牌排名。"
+        return "当前样本里还没有形成稳定的品牌排名。"
     if rank == 1:
         return f"在被提及的品牌里，{brand_name}目前排在第一位。"
     return f"在被提及的品牌里，{brand_name}目前排在第 {rank} 位。"
@@ -1493,7 +1493,7 @@ def _build_visibility_analyzer(bundle: InputBundle) -> dict[str, Any]:
     total_presence = sum(brand_counter.values())
     for index, (brand, count) in enumerate(ranked_brands, start=1):
         share = safe_ratio(count, total_presence)
-        if index <= 5:
+        if index <= 10:
             top_brand_ranking.append(
                 {
                     "rank": index,
@@ -2207,9 +2207,9 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
     if not suggestions:
         suggestions.append("优先围绕当前场景补一页式结论页和 FAQ，再看品牌可见度和官网引用转化率会不会继续抬高。")
     subtitle = (
-        f"这个场景下，品牌进入、官网承接，以及相对全景基线的变化，是最值得关注的三件事。"
+        "这个场景下，品牌进入、官网承接，以及相对全景基线的变化，是最值得关注的三件事。"
         if bundle.meta.report_kind == "scenario"
-        else f"品牌进入、排位变化和官网承接，是当前最值得关注的三件事。"
+        else "品牌进入、排位变化和官网承接，是当前最值得关注的三件事。"
     )
     official_bullet = (
         "品牌被提到以后，本轮还没有出现官网引用。"
@@ -2314,7 +2314,11 @@ def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, compar
         ["无品牌率", _format_ratio(metrics.no_brand_rate)],
     ]
     ranking_rows = [
-        [row["rank"], f"**{row['brand']}**" if row["brand"] == bundle.brand_master.monitor_brand else row["brand"], _format_ratio(row["brand_share"])]
+        [
+            row["rank"],
+            f"**{row['brand']}**" if row["brand"] == bundle.brand_master.monitor_brand else row["brand"],
+            _format_ratio(safe_ratio(row["brand_presence_count"], metrics.successful_answers)),
+        ]
         for row in metrics.top_brand_ranking
     ]
     strong_visibility = (metrics.brand_visibility or 0) >= 0.6
@@ -2330,7 +2334,7 @@ def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, compar
         conclusion = f"{bundle.meta.brand_name}已经进入答案，但不同问题上的表现还不完全一致；后续可以继续观察哪些问题更容易出现竞品同台或无品牌回答。"
     subtitle = f"看{bundle.meta.brand_name}能不能进答案、在被提及时排得靠不靠前，以及哪些回答会带上竞品或不给品牌。"
     ranking_lines = [
-        f"- 第 {row['rank']} 位：**{row['brand']}**，提及份额 {_format_ratio(row['brand_share'])}"
+        f"- 第 {row['rank']} 位：**{row['brand']}**，提及率 {_format_ratio(safe_ratio(row['brand_presence_count'], metrics.successful_answers))}"
         for row in metrics.top_brand_ranking[:5]
     ]
     competition_line = (
@@ -2353,7 +2357,7 @@ def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, compar
             "",
             competition_line,
             "",
-            "提及份额排在前面的品牌是：",
+            "提及率排在前面的品牌是：",
             *((ranking_lines[:3] or ["- 当前样本中尚未形成稳定的品牌排名。"])),
             "",
             f"结论：{conclusion}",
@@ -2624,7 +2628,7 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
     else:
         conclusion = f"当前需要优先澄清的负面信息主要集中在 {'、'.join(row['display'] for row in display_negative_topics[:2]) or '少量零散问题'}，既需要补官网澄清内容，也要同步关注模型在回答中的默认归纳逻辑。"
     subtitle = (
-        f"当前更像决策顾虑，而不是大面积口碑差评。"
+        "当前更像决策顾虑，而不是大面积口碑差评。"
         if fallback_negative_issues
         else "负面信息比例不高，但已经有几类顾虑在反复出现。"
     )
@@ -3048,10 +3052,159 @@ def build_full_markdown(*, sections: list[dict[str, Any]]) -> str:
     return "\n\n".join(section["markdown"].strip() for section in sections if section.get("markdown")).strip()
 
 
+def build_home_v4_projection(*, bundle: InputBundle, metric_bundle: MetricBundle) -> dict[str, Any]:
+    def word_rows(rows: list[dict[str, Any]], sentiment: str) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            text = str(row.get("display") or row.get("reason") or row.get("topic") or "").strip()
+            if not text:
+                continue
+            output.append(
+                {
+                    "text": text,
+                    "weight": row.get("rate") if isinstance(row.get("rate"), (int, float)) else 0,
+                    "sentiment": sentiment,
+                    "count": int(row.get("count", 0) or 0),
+                }
+            )
+        return output
+
+    platform_rows: dict[str, dict[str, Any]] = {}
+    platform_negative_topics: dict[str, Counter[str]] = defaultdict(Counter)
+    for answer in bundle.answers:
+        if answer.status != "ok":
+            continue
+        row = platform_rows.setdefault(
+            answer.platform,
+            {
+                "platform": _platform_label(answer.platform),
+                "status": "unknown",
+                "answerCount": 0,
+                "brandMentionCount": 0,
+                "positiveCount": 0,
+                "negativeCount": 0,
+            },
+        )
+        row["answerCount"] += 1
+        if answer.mentioned_monitor_brand:
+            row["brandMentionCount"] += 1
+            if answer.sentiment == "positive":
+                row["positiveCount"] += 1
+            elif answer.sentiment == "negative":
+                row["negativeCount"] += 1
+            for topic in answer.negative_topics:
+                platform_negative_topics[answer.platform][topic] += 1
+
+    for platform, row in platform_rows.items():
+        if row["negativeCount"] > row["positiveCount"] and row["negativeCount"] > 0:
+            row["status"] = "risk"
+        elif row["brandMentionCount"] > 0:
+            row["status"] = "good"
+        elif row["answerCount"] > 0:
+            row["status"] = "watch"
+        if platform_negative_topics.get(platform):
+            topic = platform_negative_topics[platform].most_common(1)[0][0]
+            row["mainConcern"] = _negative_topic_label(topic)
+
+    question_rows = [
+        row for row in metric_bundle.question_diagnostics.get("question_rows", [])
+        if isinstance(row, dict)
+    ]
+    risk_rows = [
+        row for row in metric_bundle.question_diagnostics.get("risk_rows", [])
+        if isinstance(row, dict)
+    ]
+    risks = [
+        {
+            "title": _clean_report_text(str(row.get("question_text") or row.get("scene") or ""), max_length=42),
+            "level": "high" if row.get("risk_level") == "high" else "medium",
+            "platform": "、".join(_platform_label(str(platform)) for platform in row.get("present_platforms", []) or [] if platform),
+            "evidence": "、".join(_negative_topic_label(str(topic)) for topic in row.get("negative_topics", []) or [] if topic) or _state_label(str(row.get("answer_state") or "")),
+        }
+        for row in sorted(risk_rows, key=lambda item: (str(item.get("risk_level") or ""), str(item.get("question_text") or "")))[:4]
+        if row.get("question_text") or row.get("scene")
+    ]
+
+    advantage_candidates = [
+        row for row in question_rows
+        if row.get("brand_present") and str(row.get("risk_level") or "") in {"low", "medium"}
+    ]
+    advantage_candidates.sort(key=lambda row: (-len(row.get("present_platforms", []) or []), str(row.get("question_text") or "")))
+    advantages = [
+        {
+            "title": _clean_report_text(str(row.get("question_text") or row.get("scene") or ""), max_length=42),
+            "platformCount": len(row.get("present_platforms", []) or []),
+            "evidence": "、".join(_platform_label(str(platform)) for platform in row.get("present_platforms", []) or [] if platform),
+        }
+        for row in advantage_candidates[:4]
+        if row.get("question_text") or row.get("scene")
+    ]
+
+    answer_sample_count = metric_bundle.successful_answers or metric_bundle.total_answers
+    mention_ranking = [
+        {
+            "rank": int(row.get("rank", 0) or 0),
+            "brand": str(row.get("brand") or ""),
+            "mentionRate": safe_ratio(int(row.get("brand_presence_count", 0) or 0), answer_sample_count),
+            "mentionCount": int(row.get("brand_presence_count", 0) or 0),
+            "isCurrentBrand": str(row.get("brand") or "") == bundle.brand_master.monitor_brand,
+        }
+        for row in metric_bundle.top_brand_ranking[:10]
+        if isinstance(row, dict) and row.get("brand")
+    ]
+
+    source_type_breakdown = metric_bundle.source_summary.get("source_type_breakdown", {})
+    source_types = [
+        {
+            "key": key,
+            "label": _source_type_label(key),
+            "share": value,
+        }
+        for key, value in source_type_breakdown.items()
+        if isinstance(value, (int, float)) and value > 0
+    ] if isinstance(source_type_breakdown, dict) else []
+    source_types.sort(key=lambda item: (-(item["share"] or 0), item["label"]))
+
+    top_domains = [
+        {
+            "domain": str(row.get("domain") or ""),
+            "displayName": str(row.get("display_name") or row.get("site_name") or row.get("domain") or ""),
+            "count": int(row.get("count", 0) or 0),
+            "share": row.get("share") if isinstance(row.get("share"), (int, float)) else None,
+            "isOfficial": bool(row.get("is_official", False)),
+            "sourceType": str(row.get("source_type") or "other"),
+            "sourceTypeLabel": _source_type_label(str(row.get("source_type") or "other")),
+        }
+        for row in metric_bundle.source_summary.get("top_domains", []) or []
+        if isinstance(row, dict) and row.get("domain")
+    ][:8]
+
+    return {
+        "wordCloud": {
+            "positive": word_rows(metric_bundle.top_positive_reasons, "positive"),
+            "negative": word_rows(metric_bundle.top_negative_topics, "negative"),
+        },
+        "platformDiagnosis": sorted(
+            platform_rows.values(),
+            key=lambda row: (row["status"] == "risk", row["brandMentionCount"], row["platform"]),
+            reverse=True,
+        ),
+        "risks": risks,
+        "advantages": advantages,
+        "mentionRanking": mention_ranking,
+        "sourceStructure": {
+            "officialConversionRate": metric_bundle.official_conversion_rate,
+            "sourceTypes": source_types,
+            "topDomains": top_domains,
+        },
+    }
+
+
 def build_dashboard_projection(*, bundle: InputBundle, metric_bundle: MetricBundle, comparison_bundle: ComparisonBundle, sections: list[dict[str, Any]]) -> dict[str, Any]:
     section_map = {section["section_name"]: section.get("data") for section in sections}
     return {
         "report_kind": bundle.meta.report_kind,
+        "home_v4": build_home_v4_projection(bundle=bundle, metric_bundle=metric_bundle),
         "boards": {
             "visibility": section_map.get("visibility"),
             "citation_visibility": section_map.get("citation_visibility"),

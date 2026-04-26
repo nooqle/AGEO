@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>首页原型</title>
+    <style>
+      :root {
+        --paper: #f6f1e7;
+        --panel: rgba(255, 251, 245, 0.9);
+        --panel-strong: rgba(255, 255, 255, 0.9);
+        --ink: #1e2729;
+        --muted: #64716f;
+        --line: rgba(30, 39, 41, 0.1);
+        --brand: #5f65f3;
+        --brand-soft: rgba(95, 101, 243, 0.1);
+        --positive: #1f8b63;
+        --positive-soft: rgba(31, 139, 99, 0.12);
+        --negative: #b35340;
+        --negative-soft: rgba(179, 83, 64, 0.12);
+        --warning: #c08a34;
+        --warning-soft: rgba(192, 138, 52, 0.12);
+        --shadow: 0 24px 60px rgba(56, 48, 33, 0.08);
+        --radius-xl: 28px;
+        --radius-lg: 20px;
+        --radius-md: 14px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family:
+          "PingFang SC",
+          "Hiragino Sans GB",
+          "Microsoft YaHei UI",
+          "Microsoft YaHei",
+          sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(95, 101, 243, 0.12), transparent 24%),
+          radial-gradient(circle at top right, rgba(225, 177, 93, 0.12), transparent 24%),
+          linear-gradient(180deg, #f7f3ea 0%, #f4ecdf 100%);
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .shell {
+        max-width: 1560px;
+        margin: 0 auto;
+        padding: 20px 24px 60px;
+      }
+
+      .surface {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(12px);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 0 16px;
+      }
+
+      .brandmark {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brandmark .logo {
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #1c1f29, #5f65f3);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+      }
+
+      .brandmark strong {
+        display: block;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .brandmark span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .button {
+        appearance: none;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.85);
+        color: var(--ink);
+        padding: 10px 14px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .button.primary {
+        border-color: transparent;
+        background: linear-gradient(180deg, #6e73ff 0%, #5960ef 100%);
+        color: #fff;
+      }
+
+      .icon-button {
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .overview {
+        border-radius: var(--radius-xl);
+        padding: 24px 26px;
+      }
+
+      .overview-label,
+      .section-label,
+      .report-label {
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.12em;
+      }
+
+      .overview-value {
+        margin-top: 10px;
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+      }
+
+      .chip-row {
+        margin-top: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .section {
+        margin-top: 18px;
+        border-radius: var(--radius-xl);
+        padding: 18px 18px 16px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .section-head h2 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: -0.03em;
+      }
+
+      .brand-grid {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 12px;
+      }
+
+      .brand-card {
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: var(--panel-strong);
+        padding: 14px;
+      }
+
+      .brand-card.selected {
+        background: linear-gradient(180deg, rgba(95, 101, 243, 0.08), rgba(255, 255, 255, 0.9));
+        border-color: rgba(95, 101, 243, 0.18);
+      }
+
+      .brand-card.add {
+        border-style: dashed;
+      }
+
+      .brand-card-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+      }
+
+      .avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(95, 101, 243, 0.16), rgba(95, 101, 243, 0.06));
+        color: #3952a8;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      .status {
+        flex-shrink: 0;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.8);
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .brand-name {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .brand-name strong {
+        font-size: 16px;
+      }
+
+      .brand-name .scope {
+        color: #8a93b5;
+        font-size: 11px;
+      }
+
+      .brand-meta {
+        margin-top: 6px;
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .brand-actions {
+        margin-top: 14px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .brand-action {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .brand-action.primary {
+        background: rgba(95, 101, 243, 0.08);
+        color: #4b52d9;
+        border-color: rgba(95, 101, 243, 0.18);
+      }
+
+      .brand-overview-bar {
+        margin-top: 14px;
+        padding: 14px 16px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.76);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .archive-body {
+        margin-top: 14px;
+        padding: 14px 16px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.76);
+      }
+
+      .archive-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .report-shell {
+        margin-top: 16px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.82);
+        padding: 18px;
+      }
+
+      .report-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 14px;
+      }
+
+      .report-title {
+        margin-top: 10px;
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+      }
+
+      .report-meta {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .kpi-row {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .kpi {
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.88);
+        padding: 18px;
+      }
+
+      .kpi .label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .kpi .value {
+        margin-top: 10px;
+        font-size: 26px;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+      }
+
+      .module {
+        margin-top: 16px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.8);
+        padding: 18px;
+      }
+
+      .module-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .module-head h3 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: -0.03em;
+      }
+
+      .topic-grid {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      .topic-card {
+        position: relative;
+        overflow: hidden;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        padding: 18px 20px 20px;
+        min-height: 310px;
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      .topic-card.positive {
+        background:
+          radial-gradient(circle at 18% 20%, rgba(31, 139, 99, 0.18), transparent 34%),
+          radial-gradient(circle at 84% 78%, rgba(31, 139, 99, 0.12), transparent 28%),
+          linear-gradient(180deg, rgba(241, 251, 246, 0.98), rgba(255, 255, 255, 0.92));
+      }
+
+      .topic-card.negative {
+        background:
+          radial-gradient(circle at 16% 18%, rgba(179, 83, 64, 0.18), transparent 34%),
+          radial-gradient(circle at 82% 80%, rgba(179, 83, 64, 0.12), transparent 28%),
+          linear-gradient(180deg, rgba(252, 244, 242, 0.98), rgba(255, 255, 255, 0.92));
+      }
+
+      .topic-card::before {
+        content: "";
+        position: absolute;
+        inset: 14px;
+        border-radius: 14px;
+        border: 1px dashed rgba(30, 39, 41, 0.08);
+        pointer-events: none;
+      }
+
+      .topic-head {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .topic-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .topic-card strong {
+        font-size: 16px;
+      }
+
+      .topic-cloud {
+        position: relative;
+        z-index: 1;
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        grid-template-rows: repeat(7, minmax(24px, auto));
+        min-height: 230px;
+        align-items: center;
+      }
+
+      .topic-cloud span {
+        display: inline-block;
+        line-height: 0.96;
+        letter-spacing: -0.05em;
+        text-shadow: 0 8px 24px rgba(31, 39, 41, 0.08);
+      }
+
+      .topic-cloud .xl {
+        font-size: 52px;
+        font-weight: 800;
+      }
+
+      .topic-cloud .lg {
+        font-size: 36px;
+        font-weight: 800;
+      }
+
+      .topic-cloud .md {
+        font-size: 27px;
+        font-weight: 700;
+      }
+
+      .topic-cloud .sm {
+        font-size: 19px;
+        font-weight: 600;
+      }
+
+      .positive .topic-cloud span {
+        color: var(--positive);
+      }
+
+      .negative .topic-cloud span {
+        color: var(--negative);
+      }
+
+      .positive .w1 { grid-column: 1 / span 6; grid-row: 2 / span 2; }
+      .positive .w2 { grid-column: 8 / span 4; grid-row: 2 / span 2; }
+      .positive .w3 { grid-column: 2 / span 3; grid-row: 5; }
+      .positive .w4 { grid-column: 7 / span 3; grid-row: 5; }
+      .positive .w5 { grid-column: 10 / span 3; grid-row: 6; }
+      .positive .w6 { grid-column: 1 / span 2; grid-row: 6; }
+      .positive .w7 { grid-column: 5 / span 3; grid-row: 7; }
+
+      .negative .w1 { grid-column: 1 / span 4; grid-row: 2 / span 2; }
+      .negative .w2 { grid-column: 6 / span 4; grid-row: 2 / span 2; }
+      .negative .w3 { grid-column: 10 / span 3; grid-row: 2 / span 2; }
+      .negative .w4 { grid-column: 4 / span 4; grid-row: 5; }
+      .negative .w5 { grid-column: 1 / span 3; grid-row: 6; }
+      .negative .w6 { grid-column: 8 / span 3; grid-row: 6; }
+      .negative .w7 { grid-column: 10 / span 3; grid-row: 7; }
+
+      .table-shell {
+        margin-top: 16px;
+        overflow: hidden;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      thead {
+        background: rgba(30, 39, 41, 0.04);
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(30, 39, 41, 0.08);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+      }
+
+      td {
+        font-size: 13px;
+      }
+
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .pill.positive {
+        color: var(--positive);
+        background: var(--positive-soft);
+      }
+
+      .pill.negative {
+        color: var(--negative);
+        background: var(--negative-soft);
+      }
+
+      .pill.warning {
+        color: var(--warning);
+        background: var(--warning-soft);
+      }
+
+      .pill.neutral {
+        color: var(--muted);
+        background: rgba(100, 113, 111, 0.12);
+      }
+
+      .card-grid {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .data-card {
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.86);
+        padding: 18px;
+      }
+
+      .data-card-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      .data-card strong {
+        font-size: 17px;
+      }
+
+      .source-layout {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 14px;
+      }
+
+      .source-card {
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.86);
+        padding: 18px;
+      }
+
+      .source-card h4 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .bars {
+        margin-top: 14px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .bar-row {
+        display: grid;
+        grid-template-columns: 120px 1fr 48px;
+        gap: 12px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .bar-track {
+        height: 10px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(30, 39, 41, 0.08);
+      }
+
+      .bar-fill {
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #5f65f3, #8ca85a);
+      }
+
+      .domain-list {
+        margin-top: 14px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .domain-list span {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      @media (max-width: 1120px) {
+        .kpi-row,
+        .topic-grid,
+        .card-grid,
+        .source-layout {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .topbar,
+        .section-head,
+        .report-top,
+        .brand-overview-bar {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+
+        .kpi-row {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .shell {
+          padding: 16px 14px 40px;
+        }
+
+        .top-actions {
+          flex-wrap: wrap;
+        }
+
+        .kpi-row,
+        .brand-grid,
+        .card-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .bar-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brandmark">
+          <span class="logo"></span>
+          <div>
+            <strong>Specta AI</strong>
+            <span>品牌AI助手</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button class="button primary">新建品牌</button>
+          <button class="icon-button" title="主题">主题</button>
+          <button class="icon-button" title="通知">通知</button>
+          <button class="icon-button" title="设置">设置</button>
+        </div>
+      </header>
+
+      <section class="overview surface">
+        <div class="overview-label">概览</div>
+        <div class="overview-value">当前已管理 4 个品牌，累计完成 12 次分析</div>
+        <div class="chip-row">
+          <span class="chip">4 个品牌</span>
+          <span class="chip">12 次分析</span>
+          <span class="chip">当前查看 小鹏汽车</span>
+        </div>
+      </section>
+
+      <section class="section surface">
+        <div class="section-head">
+          <h2>品牌</h2>
+          <button class="button">管理全部</button>
+        </div>
+
+        <div class="brand-grid">
+          <article class="brand-card selected">
+            <div class="brand-card-top">
+              <span class="avatar">小</span>
+              <span class="status">今天分析</span>
+            </div>
+            <div class="brand-name">
+              <strong>小鹏汽车</strong>
+              <span class="scope">个人空间</span>
+            </div>
+            <div class="brand-meta">
+              <span>xiaopeng.com</span>
+              <span>新能源车</span>
+              <span>当前查看中</span>
+            </div>
+            <div class="brand-actions">
+              <div class="brand-action primary">进入分析</div>
+              <div class="brand-action">设置监测</div>
+            </div>
+          </article>
+
+          <article class="brand-card">
+            <div class="brand-card-top">
+              <span class="avatar">比</span>
+              <span class="status">昨天分析</span>
+            </div>
+            <div class="brand-name">
+              <strong>比亚迪</strong>
+              <span class="scope">组织空间</span>
+            </div>
+            <div class="brand-meta">
+              <span>byd.com</span>
+              <span>新能源车</span>
+            </div>
+            <div class="brand-actions">
+              <div class="brand-action primary">进入分析</div>
+              <div class="brand-action">设置监测</div>
+            </div>
+          </article>
+
+          <article class="brand-card">
+            <div class="brand-card-top">
+              <span class="avatar">特</span>
+              <span class="status">3 天前分析</span>
+            </div>
+            <div class="brand-name">
+              <strong>特斯拉</strong>
+              <span class="scope">个人空间</span>
+            </div>
+            <div class="brand-meta">
+              <span>tesla.com</span>
+              <span>新能源车</span>
+            </div>
+            <div class="brand-actions">
+              <div class="brand-action primary">进入分析</div>
+              <div class="brand-action">设置监测</div>
+            </div>
+          </article>
+
+          <article class="brand-card add">
+            <div class="brand-card-top">
+              <span class="avatar">+</span>
+              <span class="status">新建</span>
+            </div>
+            <div class="brand-name">
+              <strong>新建品牌</strong>
+            </div>
+            <div class="brand-meta">
+              <span>录入品牌</span>
+              <span>开始分析</span>
+            </div>
+            <div class="brand-actions">
+              <div class="brand-action primary">新建品牌</div>
+              <div class="brand-action">导入品牌</div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section surface">
+        <div class="section-head">
+          <h2>品牌档案与竞品分类</h2>
+          <button class="button">展开品牌信息</button>
+        </div>
+        <div class="archive-body">
+          <div class="archive-tags">
+            <span class="chip">品牌定位</span>
+            <span class="chip">目标受众</span>
+            <span class="chip">官网</span>
+            <span class="chip">核心产品</span>
+            <span class="chip">竞品分类</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section surface">
+        <div class="section-head">
+          <h2>最近一轮分析</h2>
+          <div class="chip-row" style="margin-top: 0;">
+            <span class="chip">最近更新 2026/4/23 03:59:42</span>
+          </div>
+        </div>
+
+        <div class="report-shell">
+          <div class="report-top">
+            <div>
+              <div class="report-label">用户与场景分析报告</div>
+              <div class="report-title">小鹏 | 用户场景分析报告</div>
+              <div class="report-meta">
+                <span class="chip">当前查看品牌</span>
+                <span class="chip">最近 30 天</span>
+              </div>
+            </div>
+            <button class="button">打开最新报告</button>
+          </div>
+
+          <div class="kpi-row">
+            <article class="kpi">
+              <div class="label">提及率</div>
+              <div class="value">48.4%</div>
+            </article>
+            <article class="kpi">
+              <div class="label">提及率排名</div>
+              <div class="value">#2</div>
+            </article>
+            <article class="kpi">
+              <div class="label">正向占比</div>
+              <div class="value" style="color: var(--positive);">39.6%</div>
+            </article>
+            <article class="kpi">
+              <div class="label">负向占比</div>
+              <div class="value" style="color: var(--negative);">12.8%</div>
+            </article>
+          </div>
+
+          <section class="module">
+            <div class="module-head">
+              <h3>正负词云</h3>
+              <span class="chip">小鹏汽车</span>
+            </div>
+
+            <div class="topic-grid">
+              <article class="topic-card positive">
+                <div class="topic-head">
+                  <strong>正向词云</strong>
+                  <span class="topic-badge">7 词</span>
+                </div>
+                <div class="topic-cloud">
+                  <span class="xl w1">智能化</span>
+                  <span class="lg w2">空间</span>
+                  <span class="md w3">家用</span>
+                  <span class="md w4">舒适</span>
+                  <span class="sm w5">辅助驾驶</span>
+                  <span class="sm w6">外观</span>
+                  <span class="sm w7">性价比</span>
+                </div>
+              </article>
+
+              <article class="topic-card negative">
+                <div class="topic-head">
+                  <strong>负向词云</strong>
+                  <span class="topic-badge">7 词</span>
+                </div>
+                <div class="topic-cloud">
+                  <span class="xl w1">售后</span>
+                  <span class="lg w2">续航</span>
+                  <span class="md w3">稳定性</span>
+                  <span class="md w4">价格波动</span>
+                  <span class="sm w5">智驾误判</span>
+                  <span class="sm w6">交付</span>
+                  <span class="sm w7">保值率</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="module">
+            <div class="module-head">
+              <h3>平台诊断</h3>
+              <span class="chip">4 个平台</span>
+            </div>
+
+            <div class="table-shell">
+              <table>
+                <thead>
+                  <tr>
+                    <th>平台</th>
+                    <th>提及次数</th>
+                    <th>情绪分布</th>
+                    <th>主题</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>DeepSeek</td>
+                    <td>6</td>
+                    <td>
+                      <div class="pill-row">
+                        <span class="pill positive">33%</span>
+                        <span class="pill neutral">50%</span>
+                        <span class="pill negative">17%</span>
+                      </div>
+                    </td>
+                    <td>售后 / 稳定性</td>
+                  </tr>
+                  <tr>
+                    <td>豆包</td>
+                    <td>4</td>
+                    <td>
+                      <div class="pill-row">
+                        <span class="pill positive">25%</span>
+                        <span class="pill neutral">50%</span>
+                        <span class="pill negative">25%</span>
+                      </div>
+                    </td>
+                    <td>售后 / 续航</td>
+                  </tr>
+                  <tr>
+                    <td>Kimi</td>
+                    <td>3</td>
+                    <td>
+                      <div class="pill-row">
+                        <span class="pill positive">44%</span>
+                        <span class="pill neutral">44%</span>
+                        <span class="pill negative">12%</span>
+                      </div>
+                    </td>
+                    <td>价格 / 交付</td>
+                  </tr>
+                  <tr>
+                    <td>元宝</td>
+                    <td>2</td>
+                    <td>
+                      <div class="pill-row">
+                        <span class="pill positive">50%</span>
+                        <span class="pill neutral">50%</span>
+                        <span class="pill negative">0%</span>
+                      </div>
+                    </td>
+                    <td>样本不足</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="module">
+            <div class="module-head">
+              <h3>高风险问题</h3>
+              <span class="chip">2 项</span>
+            </div>
+
+            <div class="card-grid">
+              <article class="data-card">
+                <div class="data-card-top">
+                  <strong>20 万级新能源 SUV 选哪家</strong>
+                  <span class="pill negative">高风险</span>
+                </div>
+                <div class="chip-row">
+                  <span class="chip">DeepSeek</span>
+                  <span class="chip">豆包</span>
+                  <span class="chip">售后</span>
+                  <span class="chip">保值率</span>
+                </div>
+              </article>
+
+              <article class="data-card">
+                <div class="data-card-top">
+                  <strong>城市 NOA 值不值得买</strong>
+                  <span class="pill warning">需防守</span>
+                </div>
+                <div class="chip-row">
+                  <span class="chip">DeepSeek</span>
+                  <span class="chip">Kimi</span>
+                  <span class="chip">稳定性</span>
+                  <span class="chip">误判</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="module">
+            <div class="module-head">
+              <h3>当前优势场景</h3>
+              <span class="chip">2 项</span>
+            </div>
+
+            <div class="card-grid">
+              <article class="data-card">
+                <div class="data-card-top">
+                  <strong>家庭通勤 / 大空间</strong>
+                  <span class="pill positive">优势</span>
+                </div>
+                <div class="chip-row">
+                  <span class="chip">3 个平台</span>
+                  <span class="chip">已被引用</span>
+                </div>
+              </article>
+
+              <article class="data-card">
+                <div class="data-card-top">
+                  <strong>智能化体验 / 交互便捷性</strong>
+                  <span class="pill positive">优势</span>
+                </div>
+                <div class="chip-row">
+                  <span class="chip">正向高频</span>
+                  <span class="chip">可继续放大</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="module">
+            <div class="module-head">
+              <h3>提及率排行榜</h3>
+              <span class="chip">前十</span>
+            </div>
+
+            <div class="table-shell">
+              <table>
+                <thead>
+                  <tr>
+                    <th>排名</th>
+                    <th>品牌</th>
+                    <th>提及率</th>
+                    <th>被提及次数</th>
+                    <th>正向占比</th>
+                    <th>负向占比</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>#1</td>
+                    <td>比亚迪</td>
+                    <td>58.1%</td>
+                    <td>18</td>
+                    <td>42.4%</td>
+                    <td>9.8%</td>
+                  </tr>
+                  <tr>
+                    <td><strong>#2</strong></td>
+                    <td><strong>小鹏</strong></td>
+                    <td><strong>48.4%</strong></td>
+                    <td><strong>15</strong></td>
+                    <td><strong>39.6%</strong></td>
+                    <td><strong>12.8%</strong></td>
+                  </tr>
+                  <tr>
+                    <td>#3</td>
+                    <td>特斯拉</td>
+                    <td>41.9%</td>
+                    <td>13</td>
+                    <td>31.7%</td>
+                    <td>14.2%</td>
+                  </tr>
+                  <tr>
+                    <td>#4</td>
+                    <td>问界</td>
+                    <td>35.5%</td>
+                    <td>11</td>
+                    <td>29.3%</td>
+                    <td>11.1%</td>
+                  </tr>
+                  <tr>
+                    <td>#5</td>
+                    <td>理想</td>
+                    <td>31.2%</td>
+                    <td>10</td>
+                    <td>26.8%</td>
+                    <td>10.4%</td>
+                  </tr>
+                  <tr>
+                    <td>#6</td>
+                    <td>蔚来</td>
+                    <td>28.6%</td>
+                    <td>9</td>
+                    <td>24.1%</td>
+                    <td>12.0%</td>
+                  </tr>
+                  <tr>
+                    <td>#7</td>
+                    <td>零跑</td>
+                    <td>24.9%</td>
+                    <td>8</td>
+                    <td>22.5%</td>
+                    <td>13.6%</td>
+                  </tr>
+                  <tr>
+                    <td>#8</td>
+                    <td>极氪</td>
+                    <td>21.7%</td>
+                    <td>7</td>
+                    <td>19.8%</td>
+                    <td>11.9%</td>
+                  </tr>
+                  <tr>
+                    <td>#9</td>
+                    <td>阿维塔</td>
+                    <td>18.4%</td>
+                    <td>6</td>
+                    <td>17.2%</td>
+                    <td>9.7%</td>
+                  </tr>
+                  <tr>
+                    <td>#10</td>
+                    <td>岚图</td>
+                    <td>15.8%</td>
+                    <td>5</td>
+                    <td>14.4%</td>
+                    <td>8.8%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="module">
+            <div class="module-head">
+              <h3>信源结构</h3>
+              <span class="chip">提及品牌的引用链接分布</span>
+            </div>
+
+            <div class="source-layout">
+              <article class="source-card">
+                <h4>来源分布</h4>
+                <div class="bars">
+                  <div class="bar-row">
+                    <div>官网</div>
+                    <div class="bar-track"><div class="bar-fill" style="width: 42%;"></div></div>
+                    <div>42%</div>
+                  </div>
+                  <div class="bar-row">
+                    <div>垂媒</div>
+                    <div class="bar-track"><div class="bar-fill" style="width: 28%;"></div></div>
+                    <div>28%</div>
+                  </div>
+                  <div class="bar-row">
+                    <div>社区</div>
+                    <div class="bar-track"><div class="bar-fill" style="width: 18%;"></div></div>
+                    <div>18%</div>
+                  </div>
+                  <div class="bar-row">
+                    <div>视频</div>
+                    <div class="bar-track"><div class="bar-fill" style="width: 12%;"></div></div>
+                    <div>12%</div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="source-card">
+                <h4>主要站点</h4>
+                <div class="domain-list">
+                  <span>xiaopeng.com</span>
+                  <span>autohome.com.cn</span>
+                  <span>sohu.com</span>
+                  <span>zhihu.com</span>
+                </div>
+              </article>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>
