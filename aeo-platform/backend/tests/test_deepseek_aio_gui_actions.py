@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.core.config import settings
+from app.core.fetchers.browser import deepseek_handler as deepseek_module
 from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
 
 
@@ -70,6 +71,87 @@ async def test_deepseek_submit_uses_aio_gui_actions(monkeypatch):
     assert actions[3]["text"] == "test question"
     assert actions[3]["use_clipboard"] is True
     assert actions[4] == {"action_type": "PRESS", "key": "Enter"}
+
+
+@pytest.mark.asyncio
+async def test_deepseek_submit_uses_gui_send_button_fallback(monkeypatch):
+    monkeypatch.setattr(settings, "DEEPSEEK_AIO_INTERACTION_MODE", "gui_actions")
+    actions: list[dict] = []
+
+    async def _execute_action(*, action_payload):
+        actions.append(action_payload)
+        return {"status": "ok", "detail": {"success": True}}
+
+    handler = DeepSeekHandler(
+        client=SimpleNamespace(
+            page=SimpleNamespace(evaluate=AsyncMock()),
+            aio_session_id="aio-session-1",
+        )
+    )
+    handler._aio_backend = SimpleNamespace(execute_action=_execute_action)
+    handler._deepseek_input_rect_for_gui_actions = AsyncMock(
+        return_value={"gui_x": 640, "gui_y": 880}
+    )
+    handler._deepseek_send_button_rect_for_gui_actions = AsyncMock(
+        return_value={
+            "gui_x": 720,
+            "gui_y": 880,
+            "candidate_score": 8,
+            "candidate_label": "send",
+        }
+    )
+    handler._submission_looks_started = AsyncMock(side_effect=[False, True])
+
+    submitted = await handler._submit_question_via_aio_gui_actions(
+        "test question",
+        {"message_count": 0, "answer_count": 0},
+    )
+
+    assert submitted is True
+    assert [action["action_type"] for action in actions] == [
+        "MOVE_TO",
+        "CLICK",
+        "HOTKEY",
+        "TYPING",
+        "PRESS",
+        "MOVE_TO",
+        "CLICK",
+    ]
+    assert actions[1] == {"action_type": "CLICK", "x": 640, "y": 880}
+    assert actions[-1] == {"action_type": "CLICK", "x": 720, "y": 880}
+    assert handler._submission_looks_started.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_deepseek_submission_confirms_body_prefix_and_cleared_input(
+    monkeypatch,
+):
+    monkeypatch.setattr(deepseek_module.asyncio, "sleep", AsyncMock())
+    page = SimpleNamespace(
+        evaluate=AsyncMock(
+            return_value={
+                "message_count": 0,
+                "answer_count": 0,
+                "input_len": 0,
+                "body_prefix_count": 1,
+                "body_has_prefix": True,
+            }
+        )
+    )
+    handler = DeepSeekHandler(
+        client=SimpleNamespace(page=page, aio_session_id="aio-session-1")
+    )
+
+    submitted = await handler._submission_looks_started(
+        {"message_count": 0, "answer_count": 0, "body_prefix_count": 0},
+        "test question",
+        timeout_seconds=0,
+    )
+
+    assert submitted is True
+    assert handler._last_submission_probe["confirmed_by"] == (
+        "body_prefix_added_and_input_cleared"
+    )
 
 
 @pytest.mark.asyncio

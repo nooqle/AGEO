@@ -201,7 +201,7 @@ class DeepSeekHandler(BaseBrowserHandler):
 
             # Step 5b: Submit question
             submitted = False
-            baseline_probe = await self._capture_submission_probe()
+            baseline_probe = await self._capture_submission_probe(question)
             using_gui_actions = self._should_use_aio_gui_actions()
             if using_gui_actions:
                 submitted = await self._submit_question_via_aio_gui_actions(
@@ -265,6 +265,10 @@ class DeepSeekHandler(BaseBrowserHandler):
                     execution_stage="submit_question",
                     extra_metadata={
                         "answer_length": 0,
+                        "baseline_submission_probe": baseline_probe,
+                        "last_submission_probe": getattr(
+                            self, "_last_submission_probe", None
+                        ),
                         **self._interaction_metadata(),
                     },
                 )
@@ -368,20 +372,28 @@ class DeepSeekHandler(BaseBrowserHandler):
             )
         ], True
 
-    async def _capture_submission_probe(self) -> dict[str, Any]:
+    async def _capture_submission_probe(self, question: str | None = None) -> dict[str, Any]:
         if self.client.page is None:
             return {"message_count": 0, "answer_count": 0, "input_len": 0}
         input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
+        question_prefix = (question or "").strip()[:16]
+        question_prefix_js = json.dumps(question_prefix, ensure_ascii=False)
         probe = await self.client.page.evaluate(
             f"""() => {{
                 const textarea = document.querySelector({input_sel});
                 const readValue = textarea
                     ? String(textarea.value || textarea.textContent || '').trim()
                     : '';
+                const questionPrefix = {question_prefix_js};
+                const bodyText = String(document.body?.innerText || '');
+                const bodyPrefixCount = questionPrefix
+                    ? bodyText.split(questionPrefix).length - 1
+                    : 0;
                 return {{
                     message_count: document.querySelectorAll('.ds-message').length,
                     answer_count: document.querySelectorAll('div.ds-markdown').length,
                     input_len: readValue.length,
+                    body_prefix_count: bodyPrefixCount,
                 }};
             }}"""
         )
@@ -397,7 +409,23 @@ class DeepSeekHandler(BaseBrowserHandler):
         if self.client.page is None:
             return False
         input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
-        question_prefix = json.dumps(question[:16], ensure_ascii=False)
+        question_prefix = question.strip()[:16]
+        question_prefix_js = json.dumps(question_prefix, ensure_ascii=False)
+
+        def _as_int(value: Any) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        baseline_message_count = _as_int(baseline_probe.get("message_count"))
+        baseline_answer_count = _as_int(baseline_probe.get("answer_count"))
+        baseline_prefix_count = _as_int(baseline_probe.get("body_prefix_count"))
+        self._last_submission_probe = {
+            "baseline": baseline_probe,
+            "latest": None,
+            "confirmed_by": None,
+        }
         waited = 0.0
         while waited <= timeout_seconds:
             await asyncio.sleep(0.5)
@@ -408,24 +436,44 @@ class DeepSeekHandler(BaseBrowserHandler):
                     const readValue = textarea
                         ? String(textarea.value || textarea.textContent || '').trim()
                         : '';
+                    const questionPrefix = {question_prefix_js};
                     const bodyText = String(document.body?.innerText || '');
+                    const bodyPrefixCount = questionPrefix
+                        ? bodyText.split(questionPrefix).length - 1
+                        : 0;
                     return {{
                         message_count: document.querySelectorAll('.ds-message').length,
                         answer_count: document.querySelectorAll('div.ds-markdown').length,
                         input_len: readValue.length,
-                        body_has_prefix: bodyText.includes({question_prefix}),
+                        body_prefix_count: bodyPrefixCount,
+                        body_has_prefix: bodyPrefixCount > 0,
                     }};
                 }}"""
             )
             if not isinstance(probe, dict):
                 continue
-            if int(probe.get("message_count") or 0) > int(
-                baseline_probe.get("message_count") or 0
-            ):
+            latest_probe = dict(probe)
+            latest_probe["waited_seconds"] = waited
+            self._last_submission_probe = {
+                "baseline": baseline_probe,
+                "latest": latest_probe,
+                "confirmed_by": None,
+            }
+            if _as_int(probe.get("message_count")) > baseline_message_count:
+                self._last_submission_probe["confirmed_by"] = "message_count"
                 return True
-            if int(probe.get("answer_count") or 0) > int(
-                baseline_probe.get("answer_count") or 0
+            if _as_int(probe.get("answer_count")) > baseline_answer_count:
+                self._last_submission_probe["confirmed_by"] = "answer_count"
+                return True
+            current_prefix_count = _as_int(probe.get("body_prefix_count"))
+            if (
+                current_prefix_count > baseline_prefix_count
+                and bool(probe.get("body_has_prefix"))
+                and _as_int(probe.get("input_len")) == 0
             ):
+                self._last_submission_probe["confirmed_by"] = (
+                    "body_prefix_added_and_input_cleared"
+                )
                 return True
         return False
 
@@ -543,6 +591,106 @@ class DeepSeekHandler(BaseBrowserHandler):
         )
         return result if isinstance(result, dict) else None
 
+    async def _deepseek_send_button_rect_for_gui_actions(
+        self,
+    ) -> dict[str, Any] | None:
+        if self.client.page is None:
+            return None
+        input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
+        result = await self.client.page.evaluate(
+            f"""() => {{
+                const textarea = document.querySelector({input_sel});
+                if (!textarea) return null;
+                const inputRect = textarea.getBoundingClientRect();
+                const chromeOffsetX = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+                const chromeOffsetY = Math.max(0, Math.round(window.outerHeight - window.innerHeight));
+                const interactive = [
+                    "button",
+                    "[role='button']",
+                    "div[class*='icon-button']",
+                    "div[class*='send']",
+                    "[class*='submit']",
+                ].join(", ");
+                const labelOf = (el) => [
+                    el.getAttribute('aria-label') || '',
+                    el.getAttribute('title') || '',
+                    el.getAttribute('data-testid') || '',
+                    el.getAttribute('class') || '',
+                    el.innerText || el.textContent || '',
+                ].join(' ').trim().toLowerCase();
+                const isDisabled = (el) => {{
+                    const cls = String(el.getAttribute('class') || '').toLowerCase();
+                    return el.hasAttribute('disabled')
+                        || el.getAttribute('aria-disabled') === 'true'
+                        || cls.includes('disabled');
+                }};
+                const isToggle = (el, label) => {{
+                    return el.hasAttribute('aria-pressed')
+                        || el.hasAttribute('aria-checked')
+                        || el.getAttribute('role') === 'switch'
+                        || label.includes('deepthink')
+                        || label.includes('联网')
+                        || label.includes('search')
+                        || label.includes('attach')
+                        || label.includes('upload')
+                        || label.includes('file')
+                        || label.includes('附件')
+                        || label.includes('上传');
+                }};
+                const describeRect = (rect) => ({{
+                    page_x: rect.left + rect.width / 2,
+                    page_y: rect.top + rect.height / 2,
+                    gui_x: rect.left + rect.width / 2 + chromeOffsetX,
+                    gui_y: rect.top + rect.height / 2 + chromeOffsetY,
+                    width: rect.width,
+                    height: rect.height,
+                    chrome_offset_x: chromeOffsetX,
+                    chrome_offset_y: chromeOffsetY,
+                }});
+                let container = textarea.parentElement;
+                let depth = 0;
+                let best = null;
+                while (container && container !== document.body && depth < 8) {{
+                    for (const el of Array.from(container.querySelectorAll(interactive))) {{
+                        if (el === textarea || isDisabled(el)) continue;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 12 || rect.height < 12) continue;
+                        const label = labelOf(el);
+                        if (isToggle(el, label)) continue;
+                        const cx = rect.left + rect.width / 2;
+                        const cy = rect.top + rect.height / 2;
+                        const rightSide = cx >= inputRect.left + inputRect.width * 0.55;
+                        const nearInputY = cy >= inputRect.top - 80 && cy <= inputRect.bottom + 90;
+                        let score = 0;
+                        if (/(send|submit|arrow|up|发送)/.test(label)) score += 8;
+                        if (rightSide) score += 3;
+                        if (nearInputY) score += 3;
+                        if (rect.width <= 90 && rect.height <= 90) score += 2;
+                        if (String(el.tagName || '').toLowerCase() === 'button') score += 1;
+                        if (
+                            !best
+                            || score > best.candidate_score
+                            || (
+                                score === best.candidate_score
+                                && cx > best.page_x
+                            )
+                        ) {{
+                            best = {{
+                                ...describeRect(rect),
+                                candidate_score: score,
+                                candidate_label: label.slice(0, 120),
+                                candidate_tag: el.tagName,
+                            }};
+                        }}
+                    }}
+                    container = container.parentElement;
+                    depth += 1;
+                }}
+                return best && best.candidate_score >= 5 ? best : null;
+            }}"""
+        )
+        return result if isinstance(result, dict) else None
+
     async def _submit_question_via_aio_gui_actions(
         self,
         question: str,
@@ -580,8 +728,33 @@ class DeepSeekHandler(BaseBrowserHandler):
 
         submitted = await self._submission_looks_started(baseline_probe, question)
         logger.info(
-            "[DeepSeek] Question submitted via AIO GUI actions (confirmed=%s)",
+            "[DeepSeek] Question submitted via AIO GUI Enter (confirmed=%s)",
             submitted,
+        )
+        if submitted:
+            return True
+
+        send_rect = await self._deepseek_send_button_rect_for_gui_actions()
+        if not send_rect:
+            logger.warning("[DeepSeek] AIO GUI send-button fallback unavailable")
+            return False
+        if not await self._aio_gui_click_rect(send_rect):
+            logger.warning(
+                "[DeepSeek] AIO GUI send-button fallback click failed: %s",
+                send_rect,
+            )
+            return False
+        submitted = await self._submission_looks_started(
+            baseline_probe,
+            question,
+            timeout_seconds=6.0,
+        )
+        logger.info(
+            "[DeepSeek] Question submitted via AIO GUI send button "
+            "(confirmed=%s, score=%s, label=%s)",
+            submitted,
+            send_rect.get("candidate_score"),
+            send_rect.get("candidate_label"),
         )
         return submitted
 
