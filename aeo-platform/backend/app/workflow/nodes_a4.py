@@ -4,8 +4,8 @@ This module contains the A4 node implementation for fetching answers
 from various AI platforms (Doubao, Yuanbao, Kimi, DeepSeek, etc.)
 
 Optimizations:
-- API-first strategy: Doubao/Yuanbao (API) execute first, Kimi/DeepSeek (Browser) second
-- API platforms retry up to 2 times on failure (exponential backoff)
+- API-first strategy: Doubao/Yuanbao/Kimi (API) execute first, DeepSeek (Browser) second
+- API platforms use per-platform pacing, concurrency, and retry budgets
 - Browser platforms have a 90s per-question timeout (from PlatformConstants), no retries
 - Browser failures do not block the overall flow
 - Minimum 2 platforms with data required to proceed (adjusted for scoped platform fetch)
@@ -919,12 +919,70 @@ def _get_browser_pipeline_timeout(platform: str, question_count: int) -> float:
     return min(configured_timeout, derived_timeout)
 
 
-_platform_semaphores: dict[str, asyncio.Semaphore] = {}
+_platform_semaphores: dict[str, tuple[int, asyncio.Semaphore]] = {}
 
 
 def _get_platform_semaphore(platform: str) -> asyncio.Semaphore:
-    """Get or create a per-platform semaphore (concurrency=1 for serial execution)."""
-    return _platform_semaphores.setdefault(platform, asyncio.Semaphore(1))
+    """Get or create a per-platform semaphore with configurable API concurrency."""
+
+    concurrency = _get_api_concurrency(platform)
+    existing = _platform_semaphores.get(platform)
+    if existing is not None and existing[0] == concurrency:
+        return existing[1]
+
+    sem = asyncio.Semaphore(concurrency)
+    _platform_semaphores[platform] = (concurrency, sem)
+    return sem
+
+
+def _coerce_non_negative_float(value: Any, default: float) -> float:
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        coerced = default
+    return max(0.0, coerced)
+
+
+def _coerce_int_range(value: Any, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        coerced = default
+    return max(minimum, min(maximum, coerced))
+
+
+def _get_api_concurrency(platform: str) -> int:
+    """Return bounded fast-mode API concurrency for one platform."""
+
+    override_by_platform = {
+        "doubao": settings.A4_DOUBAO_API_CONCURRENCY,
+        "hunyuan": settings.A4_HUNYUAN_API_CONCURRENCY,
+        "yuanbao": settings.A4_HUNYUAN_API_CONCURRENCY,
+        "kimi": settings.A4_KIMI_API_CONCURRENCY,
+    }
+    return _coerce_int_range(
+        override_by_platform.get(platform, 1),
+        1,
+        minimum=1,
+        maximum=8,
+    )
+
+
+def _get_api_max_retries(platform: str) -> int:
+    """Return bounded fast-mode API retry budget for one platform."""
+
+    override_by_platform = {
+        "doubao": settings.A4_DOUBAO_API_MAX_RETRIES,
+        "hunyuan": settings.A4_HUNYUAN_API_MAX_RETRIES,
+        "yuanbao": settings.A4_HUNYUAN_API_MAX_RETRIES,
+        "kimi": settings.A4_KIMI_API_MAX_RETRIES,
+    }
+    return _coerce_int_range(
+        override_by_platform.get(platform, MAX_RETRIES),
+        MAX_RETRIES,
+        minimum=0,
+        maximum=MAX_RETRIES,
+    )
 
 
 def _get_api_request_delay(platform: str) -> float:
@@ -936,13 +994,7 @@ def _get_api_request_delay(platform: str) -> float:
         "yuanbao": settings.A4_HUNYUAN_API_DELAY_SECONDS,
         "kimi": settings.A4_KIMI_API_DELAY_SECONDS,
     }
-    try:
-        delay = float(override_by_platform.get(platform, 0.0))
-    except (TypeError, ValueError):
-        delay = 0.0
-    if delay < 0:
-        return 0.0
-    return delay
+    return _coerce_non_negative_float(override_by_platform.get(platform, 0.0), 0.0)
 
 
 async def _throttled_retry_fetch(
@@ -1048,7 +1100,7 @@ async def _retry_fetch(
     method: str,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Retry a fetch function up to MAX_RETRIES times with exponential backoff.
+    """Retry a fetch function with the platform's API retry budget.
 
     Handles HTTP 429 with classified retry strategies:
       - quota_exceeded: immediately break, no retry
@@ -1067,8 +1119,9 @@ async def _retry_fetch(
     attempt = 0
     overload_retries = 0
     overload_retry_limit, overload_base_wait = _engine_overload_retry_budget(platform)
+    max_retries = _get_api_max_retries(platform)
 
-    while attempt <= MAX_RETRIES:
+    while attempt <= max_retries:
         try:
             result = await fetch_fn(*args, **kwargs)
             if result.get("success"):
@@ -1125,7 +1178,7 @@ async def _retry_fetch(
 
                 if error_type == "burst":
                     # RequestBurstTooFast: slope too steep, pause briefly then retry
-                    if attempt < MAX_RETRIES:
+                    if attempt < max_retries:
                         wait = (
                             WorkflowConstants.BURST_BACKOFF_BASE
                             + attempt * 3.0
@@ -1136,14 +1189,14 @@ async def _retry_fetch(
                             platform,
                             wait,
                             attempt + 1,
-                            MAX_RETRIES,
+                            max_retries,
                         )
                         await asyncio.sleep(wait)
                         attempt += 1
                         continue
 
                 # rate_limit or unknown
-                if attempt < MAX_RETRIES:
+                if attempt < max_retries:
                     try:
                         header_val = float(e.response.headers.get("Retry-After", 0))
                     except (ValueError, TypeError):
@@ -1163,7 +1216,7 @@ async def _retry_fetch(
                     attempt += 1
                     continue
 
-        if attempt < MAX_RETRIES:
+        if attempt < max_retries:
             wait = RETRY_BACKOFF_BASE**attempt  # 1s, 2s
             logger.info(
                 "[A4] %s attempt %d failed (%s), retrying in %.1fs",
@@ -1179,7 +1232,7 @@ async def _retry_fetch(
     logger.warning(
         "[A4] %s failed after %d attempts: %s",
         platform,
-        MAX_RETRIES + 1,
+        max_retries + 1,
         last_result.get("error"),
     )
     return last_result
