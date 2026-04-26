@@ -12,6 +12,18 @@ from app.services.aio_runtime_contracts import AioBlockerCode
 from app.services.aio_session_manager import SpectaAioTakeover, aio_session_manager
 
 
+_AIO_KEY_ALIASES = {
+    "Enter": "enter",
+    "Return": "return",
+    "Escape": "escape",
+    "Esc": "escape",
+    "Backspace": "backspace",
+    "Delete": "delete",
+    "Tab": "tab",
+    "Space": "space",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class AioVisibleRuntime:
     """Minimal runtime handle exposed to A4 V1."""
@@ -126,6 +138,7 @@ class AioSandboxBackend:
     ) -> dict[str, Any]:
         """Execute one validated AIO browser action against the live display."""
 
+        action_payload = self._normalize_browser_action_payload(action_payload)
         result = await aio_session_manager.get_runtime_client().execute_browser_action(
             action_payload
         )
@@ -134,6 +147,22 @@ class AioSandboxBackend:
             "action_performed": result.action_performed,
             "detail": result.detail,
         }
+
+    @staticmethod
+    def _normalize_browser_action_payload(
+        action_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Normalize Playwright-style key aliases into AIO GUI action keys."""
+
+        normalized = dict(action_payload)
+        action_type = str(normalized.get("action_type") or "").upper()
+        if action_type not in {"PRESS", "KEY_DOWN", "KEY_UP"}:
+            return normalized
+
+        key = normalized.get("key")
+        if isinstance(key, str):
+            normalized["key"] = _AIO_KEY_ALIASES.get(key, key)
+        return normalized
 
     async def wait(self, *, duration_seconds: float) -> dict[str, Any]:
         """Small convenience wrapper over the official WAIT action."""
