@@ -103,3 +103,32 @@ async def test_deepseek_search_toggle_uses_aio_gui_click(monkeypatch):
         {"action_type": "MOVE_TO", "x": 600, "y": 900},
         {"action_type": "CLICK", "x": 600, "y": 900},
     ]
+
+
+@pytest.mark.asyncio
+async def test_deepseek_runtime_retry_marker_is_terminal_page_failure():
+    handler = DeepSeekHandler(
+        client=SimpleNamespace(page=None, aio_session_id="aio-session-1")
+    )
+    handler._browser_agent_text_snapshot_provider = AsyncMock(
+        return_value="DeepSeek 页面提示：当前浏览器运行环境异常，请检查网络后重试"
+    )
+    handler._capture_failure_evidence = AsyncMock(
+        return_value={"evidence_id": "deepseek-runtime-risk"}
+    )
+
+    events, handled = await handler._handle_browser_agent_empty_answer(
+        "",
+        progress=0.92,
+        fallback_url=handler.URL,
+    )
+
+    assert handled is True
+    assert len(events) == 1
+    event = events[0]
+    assert event.error_type == "page_runtime_retry_or_risk_control"
+    assert event.failure_reason == "page_runtime_retry_or_risk_control"
+    assert event.failure_layer == "adapter"
+    assert event.retryable is False
+    assert event.evidence_ref == {"evidence_id": "deepseek-runtime-risk"}
+    handler._capture_failure_evidence.assert_awaited_once()

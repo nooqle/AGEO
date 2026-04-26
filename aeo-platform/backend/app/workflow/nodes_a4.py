@@ -691,6 +691,7 @@ def _should_count_browser_failure_for_breaker(result: dict[str, Any]) -> bool:
     if error_type in {
         "empty_answer",
         "risk_control_page",
+        "page_runtime_retry_or_risk_control",
         "submission_not_confirmed",
         "rate_limit",
         "user_skipped",
@@ -715,6 +716,20 @@ def _should_count_browser_failure_for_breaker(result: dict[str, Any]) -> bool:
         return False
 
     return True
+
+
+def _should_stop_browser_platform_after_failure(result: dict[str, Any]) -> bool:
+    """Stop the current platform run when repeating the next question is pointless."""
+
+    if result.get("success"):
+        return False
+
+    error_type = str(result.get("error_type") or "").strip().lower()
+    failure_reason = str(result.get("failure_reason") or "").strip().lower()
+    stop_reasons = {
+        "page_runtime_retry_or_risk_control",
+    }
+    return error_type in stop_reasons or failure_reason in stop_reasons
 
 
 class _ProgressTracker:
@@ -1962,6 +1977,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
                                         "success": False,
                                         "error": stop_reason,
                                         "error_type": error_type,
+                                        "failure_layer": r.get("failure_layer"),
+                                        "failure_reason": r.get("failure_reason"),
+                                        "execution_stage": r.get("execution_stage"),
+                                        "retryable": r.get("retryable"),
+                                        "needs_handoff": r.get("needs_handoff"),
+                                        "evidence_ref": r.get("evidence_ref"),
                                         "stop_platform": True,
                                         "skipped_by_user": bool(
                                             r.get("skipped_by_user")
@@ -3235,7 +3256,13 @@ async def _fetch_from_browser(
         "user_action_timeout",
         "resume_gate_failed",
         "modal_timeout",
-    }
+    } or _should_stop_browser_platform_after_failure(
+        {
+            "success": False,
+            "error_type": error_type,
+            "failure_reason": failure_reason,
+        }
+    )
     return _build_browser_failure_result(
         platform=platform,
         platform_name=platform_name,

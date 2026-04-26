@@ -59,8 +59,10 @@ class DeepSeekHandler(BaseBrowserHandler):
         "请检查网络后重试",
         "浏览器运行环境异常",
         "当前浏览器运行环境异常",
+        "运行环境",
         "switch execution environments and try again",
     )
+    PAGE_RUNTIME_RISK_FAILURE_REASON = "page_runtime_retry_or_risk_control"
 
     _DEFAULTS: dict = {
         "input": "textarea",
@@ -340,7 +342,7 @@ class DeepSeekHandler(BaseBrowserHandler):
             )
 
         evidence_ref = await self._capture_failure_evidence(
-            failure_reason="risk_control_page",
+            failure_reason=self.PAGE_RUNTIME_RISK_FAILURE_REASON,
             execution_stage="extract_answer",
             extra_metadata={
                 "answer_length": len(answer_text or ""),
@@ -354,9 +356,9 @@ class DeepSeekHandler(BaseBrowserHandler):
                 BrowserState.ERROR,
                 "DeepSeek 页面返回运行环境/重试提示，当前运行时未获得有效回答",
                 progress=0,
-                error_type="risk_control_page",
+                error_type=self.PAGE_RUNTIME_RISK_FAILURE_REASON,
                 **build_failure_contract(
-                    failure_reason="risk_control_page",
+                    failure_reason=self.PAGE_RUNTIME_RISK_FAILURE_REASON,
                     execution_stage="extract_answer",
                     retryable=False,
                     needs_handoff=False,

@@ -17,6 +17,7 @@ FAILURE_REASONS = {
     "dom_extraction_empty",
     "empty_answer",
     "risk_control_page",
+    "page_runtime_retry_or_risk_control",
     "parser_error",
     "question_timeout",
     "verify_required",
@@ -37,6 +38,9 @@ _FAILURE_REASON_ALIASES = {
     "modal_reopen_failed": "modal_blocked",
     "empty_response": "empty_answer",
     "risk_control": "risk_control_page",
+    "runtime_retry": "page_runtime_retry_or_risk_control",
+    "runtime_risk_control": "page_runtime_retry_or_risk_control",
+    "page_runtime_risk_control": "page_runtime_retry_or_risk_control",
 }
 
 _FAILURE_LAYER_BY_REASON = {
@@ -46,6 +50,7 @@ _FAILURE_LAYER_BY_REASON = {
     "dom_extraction_empty": "adapter",
     "empty_answer": "adapter",
     "risk_control_page": "adapter",
+    "page_runtime_retry_or_risk_control": "adapter",
     "parser_error": "adapter",
     "question_timeout": "executor",
     "verify_required": "adapter",
