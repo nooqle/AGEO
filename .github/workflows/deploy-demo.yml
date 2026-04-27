@@ -1,13 +1,10 @@
 name: Deploy Demo
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref or commit SHA to deploy. Defaults to the workflow commit."
+        description: "Diagnostic mode only. Optional minutes to inspect; defaults to 120."
         required: false
         type: string
 
@@ -15,45 +12,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: demo-deploy
+  group: demo-log-diagnostic
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy demo server
+  inspect:
+    name: Inspect demo server logs
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     env:
-      DEMO_REPO_URL: ${{ vars.DEMO_REPO_URL || 'git@github.com:nooqle/AGEO.git' }}
-      DEMO_EXTERNAL_URL: ${{ vars.DEMO_EXTERNAL_URL || 'https://demo.imspecta.com' }}
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
-      REQUESTED_REF: ${{ github.event.inputs.ref || github.sha }}
+      SINCE_MINUTES: ${{ github.event.inputs.ref || '120' }}
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Resolve deploy commit
-        id: resolve
-        shell: bash
-        run: |
-          set -euo pipefail
-          requested_ref="${REQUESTED_REF:-${GITHUB_SHA}}"
-          git fetch --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
-          if resolved_sha="$(git rev-parse --verify "${requested_ref}^{commit}" 2>/dev/null)"; then
-            :
-          elif resolved_sha="$(git rev-parse --verify "origin/${requested_ref}^{commit}" 2>/dev/null)"; then
-            :
-          else
-            echo "Could not resolve deploy ref: ${requested_ref}" >&2
-            exit 1
-          fi
-          echo "sha=${resolved_sha}" >> "$GITHUB_OUTPUT"
-          echo "Deploying commit ${resolved_sha}"
-
       - name: Validate SSH configuration
         shell: bash
         env:
@@ -67,17 +39,16 @@ jobs:
           : "${DEMO_SSH_KEY:?Missing DEMO_SSH_KEY secret}"
           : "${DEMO_SSH_PORT:?Missing DEMO_SSH_PORT secret or default}"
 
-      - name: Upload and run deploy script
+      - name: Read runtime logs
         shell: bash
         env:
           DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
           DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
           DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
-          RESOLVED_SHA: ${{ steps.resolve.outputs.sha }}
         run: |
           set -euo pipefail
           install -d -m 700 ~/.ssh
-          key_path=~/.ssh/ageo_demo_deploy_key
+          key_path=~/.ssh/ageo_demo_log_key
           trap 'rm -f "$key_path"' EXIT
           printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
           chmod 600 "$key_path"
@@ -91,33 +62,49 @@ jobs:
             -o StrictHostKeyChecking=accept-new
             -o UserKnownHostsFile=~/.ssh/known_hosts
           )
-          scp_options=(
-            -i "$key_path"
-            -P "$DEMO_SSH_PORT"
-            -o BatchMode=yes
-            -o ConnectTimeout=20
-            -o ConnectionAttempts=1
-            -o StrictHostKeyChecking=accept-new
-            -o UserKnownHostsFile=~/.ssh/known_hosts
+
+          case "${SINCE_MINUTES}" in
+            ''|*[!0-9]*) SINCE_MINUTES=120 ;;
+          esac
+          if (( SINCE_MINUTES < 10 )); then SINCE_MINUTES=10; fi
+          if (( SINCE_MINUTES > 720 )); then SINCE_MINUTES=720; fi
+
+          remote_script=$(cat <<'SCRIPT'
+          set -euo pipefail
+          minutes="$1"
+          since="${minutes} minutes ago"
+          echo "== host =="
+          hostname
+          date -Is
+          echo
+          echo "== services =="
+          systemctl is-active ageo-backend.service || true
+          systemctl is-active ageo-frontend.service || true
+          systemctl --no-pager --full status ageo-backend.service | sed -n '1,35p' || true
+          echo
+          echo "== backend recent doubao/a4/browser/error lines =="
+          sudo journalctl -u ageo-backend.service --since "$since" --no-pager -o short-iso |
+            grep -Ei 'doubao|豆包|A4|browser|fetch|question|第11|11/|timeout|timed out|error|exception|traceback|modal|takeover|blocked|failed' |
+            tail -n 260 || true
+          echo
+          echo "== backend last 220 lines =="
+          sudo journalctl -u ageo-backend.service --since "$since" --no-pager -o short-iso |
+            tail -n 220 || true
+          echo
+          echo "== frontend last 80 lines =="
+          sudo journalctl -u ageo-frontend.service --since "$since" --no-pager -o short-iso |
+            tail -n 80 || true
+          echo
+          echo "== recent failure evidence files =="
+          if [ -d /srv/ageo-deploy/shared/runtime/failure-evidence ]; then
+            find /srv/ageo-deploy/shared/runtime/failure-evidence -type f -mmin "-$minutes" -printf '%TY-%Tm-%Td %TH:%TM:%TS %p\n' |
+              sort |
+              tail -n 50 || true
+          else
+            echo "failure evidence directory not found"
+          fi
+SCRIPT
           )
 
-          retry() {
-            local attempt=1
-            local max_attempts=5
-            local delay=10
-            until "$@"; do
-              local exit_code=$?
-              if (( attempt >= max_attempts )); then
-                return "$exit_code"
-              fi
-              echo "SSH command failed with exit ${exit_code}; retrying in ${delay}s (attempt ${attempt}/${max_attempts})" >&2
-              sleep "$delay"
-              attempt=$((attempt + 1))
-              delay=$((delay * 2))
-            done
-          }
-
-          retry scp "${scp_options[@]}" ops/deploy-demo.sh \
-            "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:/tmp/ageo-deploy-demo.sh"
-          retry ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
-            "chmod +x /tmp/ageo-deploy-demo.sh && /tmp/ageo-deploy-demo.sh --sha $(printf '%q' "$RESOLVED_SHA") --repo $(printf '%q' "$DEMO_REPO_URL") --external-url $(printf '%q' "$DEMO_EXTERNAL_URL")"
+          ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+            "bash -s -- $(printf '%q' "$SINCE_MINUTES")" <<< "$remote_script"
