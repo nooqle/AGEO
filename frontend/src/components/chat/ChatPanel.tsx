@@ -249,6 +249,83 @@ function buildHydratedCanvasContent(output: Output): CanvasContent {
   } as CanvasContent;
 }
 
+function buildHistoryCanvasStubFromMessage(
+  message: ApiMessage,
+  sessionId: string,
+): CanvasContent | null {
+  const outputCards = buildOutputCardsFromApiMessage(message, sessionId);
+  const card = outputCards?.[0];
+  if (!card) {
+    return null;
+  }
+
+  return {
+    id: card.id,
+    type: card.type,
+    title: card.title,
+    data: {
+      description: card.preview.description,
+      metrics: card.preview.metrics,
+      itemCount: card.preview.itemCount,
+    } as CanvasContentDataMap['report'],
+    createdAt: message.created_at ? new Date(message.created_at) : new Date(),
+    relatedMessageId: message.id,
+    linkedMessageId: message.id,
+    sourceOutputId: card.outputId,
+    isHydrationStub: true,
+    versions: [],
+    currentVersionIndex: -1,
+    outputSequence:
+      typeof message.sequence === 'number' && Number.isFinite(message.sequence)
+        ? message.sequence
+        : undefined,
+  } as CanvasContent;
+}
+
+function mergeHistoryCanvasStubs(stubs: CanvasContent[]) {
+  if (stubs.length === 0) {
+    return;
+  }
+
+  useCanvasStore.setState((state) => {
+    const nextContents = [...state.contents];
+
+    for (const stub of stubs) {
+      const existingIndex = nextContents.findIndex((content) => content.id === stub.id);
+      if (existingIndex === -1) {
+        nextContents.push(stub);
+        continue;
+      }
+
+      const existing = nextContents[existingIndex];
+      if (!contentNeedsDetailHydration(existing, existing.sourceOutputId)) {
+        nextContents[existingIndex] = {
+          ...existing,
+          linkedMessageId: stub.linkedMessageId ?? existing.linkedMessageId,
+          relatedMessageId: stub.relatedMessageId || existing.relatedMessageId,
+          outputSequence: stub.outputSequence ?? existing.outputSequence,
+        } as CanvasContent;
+        continue;
+      }
+
+      nextContents[existingIndex] = {
+        ...stub,
+        hasNewVersion: existing.hasNewVersion,
+      } as CanvasContent;
+    }
+
+    return {
+      contents: nextContents,
+      activeContentIndex: Math.min(
+        state.activeContentIndex,
+        Math.max(0, nextContents.length - 1),
+      ),
+      activeSurface:
+        nextContents.length === 0 && state.browserWorkspace ? 'browser' : state.activeSurface,
+    };
+  });
+}
+
 function buildHydratedCanvasContents(outputs: Output[]): CanvasContent[] {
   const sortedOutputs = sortOutputs(outputs);
   const grouped = new Map<string, CanvasContent>();
@@ -519,11 +596,16 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     const suppressedMessageIds = getSupersededHistoryMessageIds(msgs);
     const hydratedMessages: ChatMessage[] = [];
+    const historyCanvasStubs: CanvasContent[] = [];
 
     for (let index = 0; index < msgs.length; index += 1) {
       const msg = msgs[index];
       const role = msg.role === 'agent' || msg.role === 'assistant' ? 'agent' : 'user';
       const outputCards = buildOutputCardsFromApiMessage(msg, sessionId);
+      const canvasStub = buildHistoryCanvasStubFromMessage(msg, sessionId);
+      if (canvasStub) {
+        historyCanvasStubs.push(canvasStub);
+      }
       const reconstructed = rebuildPersistedLayers(msg.metadata as Record<string, unknown> | null);
       const layers = reconstructed.layers;
       const messageId = msg.id || `history_${index}_${msg.created_at || 'unknown'}`;
@@ -588,6 +670,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
 
     if (hydratedMessages.length === 0) {
+      mergeHistoryCanvasStubs(historyCanvasStubs);
       return;
     }
 
@@ -603,6 +686,8 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           : [...state.messages, ...freshMessages],
       };
     });
+
+    mergeHistoryCanvasStubs(historyCanvasStubs);
   }, [addStageResult, sessionId]);
 
   const loadOlderHistoryUntil = useCallback(async (targetMessageId: string) => {
@@ -834,6 +919,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     const promise = (async (): Promise<CanvasContent[]> => {
       try {
+        const keepClosedAfterHydration = Boolean(
+          options?.keepClosed && !useCanvasStore.getState().isOpen,
+        );
         const outputs = await api.getOutputs(sessionId, {
           compact: options?.compact ?? prefersCompactArtifactList,
         });
@@ -918,7 +1006,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
                 : state.activeSurface,
           };
         });
-        if (options?.keepClosed) {
+        if (keepClosedAfterHydration) {
           useCanvasStore.getState().setOpen(false);
         }
         artifactsHydratedRef.current = true;
@@ -934,7 +1022,15 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     artifactsHydratingPromiseRef.current = promise;
     return await promise;
-  }, [prefersCompactArtifactList, sessionId]);
+  }, [initialArtifactId, initialOutputId, prefersCompactArtifactList, sessionId]);
+
+  useEffect(() => {
+    if (initialArtifactId) {
+      return;
+    }
+
+    void hydrateArtifacts(false, { keepClosed: true, compact: true });
+  }, [hydrateArtifacts, initialArtifactId]);
 
   const hydrateTargetArtifact = useCallback(async (): Promise<CanvasContent | null> => {
     if (!initialArtifactId || !initialOutputId) {

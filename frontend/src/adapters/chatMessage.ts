@@ -130,13 +130,12 @@ export function buildOutputCardsFromApiMessage(msg: ApiMessage, sessionId: strin
 
   const preview = normalizePreviewData(parsed as UnknownRecord);
   const metadata = isRecord(msg.metadata) ? msg.metadata : undefined;
-  const outputId =
-    (typeof metadata?.output_id === 'string' ? metadata.output_id : undefined) ||
-    (typeof (parsed as UnknownRecord).output_id === 'string' ? (parsed as UnknownRecord).output_id as string : undefined) ||
-    `${sessionId}_${msg.output_type}`;
+  const outputId = typeof msg.id === 'string' ? msg.id : `${sessionId}_${msg.output_type}`;
   const rawArtifactId =
     (typeof metadata?.artifact_id === 'string' ? metadata.artifact_id : undefined) ||
     (typeof (parsed as UnknownRecord).artifact_id === 'string' ? (parsed as UnknownRecord).artifact_id as string : undefined) ||
+    (typeof metadata?.output_id === 'string' ? metadata.output_id : undefined) ||
+    (typeof (parsed as UnknownRecord).output_id === 'string' ? (parsed as UnknownRecord).output_id as string : undefined) ||
     outputId;
   const artifactId = resolveCanonicalArtifactId({
     sessionId,
