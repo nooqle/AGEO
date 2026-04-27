@@ -9,7 +9,7 @@ import type { Entity, CreateEntityInput } from '@/types/entity';
 interface EntityFormDialogProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: CreateEntityInput) => void;
+  onSubmit: (data: CreateEntityInput) => Promise<void> | void;
   entity?: Entity | null;
   allowOrganizationScope?: boolean;
   preventClose?: boolean;
@@ -50,7 +50,7 @@ function EntityFormDialogInner({
 }: {
   entity?: Entity | null;
   onClose: () => void;
-  onSubmit: (data: CreateEntityInput) => void;
+  onSubmit: (data: CreateEntityInput) => Promise<void> | void;
   allowOrganizationScope: boolean;
   preventClose: boolean;
   onPreventClose?: () => void;
@@ -64,6 +64,8 @@ function EntityFormDialogInner({
   const [visibilityScope, setVisibilityScope] = useState<CreateEntityInput['visibilityScope']>(
     entity?.visibilityScope ?? 'personal'
   );
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const isEdit = !!entity;
 
@@ -79,9 +81,18 @@ function EntityFormDialogInner({
     onClose();
   }, [onClose, onPreventClose, preventClose]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit({ name, aliases, domain, industry, description, visibilityScope });
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onSubmit({ name, aliases, domain, industry, description, visibilityScope });
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '提交失败，请稍后重试');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -265,6 +276,15 @@ function EntityFormDialogInner({
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
+            {submitError && (
+              <div
+                className="mr-auto flex items-center text-xs"
+                role="alert"
+                style={{ color: 'var(--status-error)' }}
+              >
+                {submitError}
+              </div>
+            )}
             <button
               type="button"
               onClick={handleRequestClose}
@@ -275,10 +295,10 @@ function EntityFormDialogInner({
             </button>
             <button
               type="submit"
-              disabled={!name.trim() || !domain.trim() || !industry.trim()}
+              disabled={isSubmitting || !name.trim() || !domain.trim() || !industry.trim()}
               className="btn-primary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
             >
-              {isEdit ? '更新品牌' : '创建品牌'}
+              {isSubmitting ? (isEdit ? '更新中...' : '创建中...') : isEdit ? '更新品牌' : '创建品牌'}
             </button>
           </div>
         </form>

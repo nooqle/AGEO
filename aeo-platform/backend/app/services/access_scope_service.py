@@ -125,7 +125,11 @@ class AccessScopeService:
             return False
         if allow_internal_admin_bypass and user.role == UserRole.INTERNAL_ADMIN:
             return True
-        return entity.owner_user_id == user.id
+        if entity.owner_user_id == user.id:
+            return True
+        if entity.owner_user_id is None:
+            return any(session.user_id == user.id for session in entity.sessions)
+        return False
 
     @staticmethod
     def can_access_session(
