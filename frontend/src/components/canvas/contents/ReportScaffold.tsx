@@ -28,7 +28,7 @@ export function ReportHero({
 }) {
   return (
     <header
-      className="border-b bg-[var(--bg-report)] px-6 py-6 md:px-8 md:py-7"
+      className="rounded-[16px] border bg-[var(--bg-report)] px-6 py-6 md:px-8 md:py-7"
       style={{ borderColor: 'var(--border-subtle)' }}
     >
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--border-subtle)] pb-4">
@@ -46,7 +46,7 @@ export function ReportHero({
 
       {note ? (
         <div
-          className="mt-4 border-l-2 bg-[var(--bg-report-muted)] px-5 py-4 text-[15px] leading-8 text-[var(--text-secondary)]"
+          className="mt-4 rounded-[12px] border border-l-2 bg-[var(--bg-report-muted)] px-5 py-4 text-[15px] leading-8 text-[var(--text-secondary)]"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
           {note}

@@ -286,7 +286,7 @@ export function ReportContent({ content, printMode = false }: { content: ReportC
   return (
     <ReportPage className="w-full max-w-[1320px] space-y-6">
       <header
-        className="border-b bg-[var(--bg-report)] px-2 py-7 md:px-3 md:py-10"
+        className="rounded-[16px] border bg-[var(--bg-report)] px-6 py-7 md:px-8 md:py-10"
         style={{ borderColor: 'var(--border-subtle)' }}
       >
         <div className="text-[12px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
