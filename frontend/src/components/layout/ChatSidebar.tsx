@@ -11,6 +11,7 @@ import {
   RiTimeLine,
 } from '@remixicon/react';
 import { cn } from '@/lib/cn';
+import { BrandAvatar } from '@/components/dashboard/BrandAvatar';
 import { NotificationBell } from '@/components/notifications/NotificationBell';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { HomeBrandLink } from './HomeBrandLink';
@@ -99,32 +100,6 @@ export function ChatSidebar({
     } else {
       return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
     }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'var(--status-success)';
-      case 'inactive':
-        return 'var(--status-warning)';
-      default:
-        return 'var(--text-muted)';
-    }
-  };
-
-  const getStatusAnimationClass = () => {
-    return '';
-  };
-
-  const getCompactEntityLabel = (name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return '?';
-    if (/[A-Za-z]/.test(trimmed)) {
-      const parts = trimmed.split(/\s+/).filter(Boolean).slice(0, 2);
-      const initial = parts.map((part) => part[0]?.toUpperCase() ?? '').join('');
-      return initial || trimmed.slice(0, 2).toUpperCase();
-    }
-    return trimmed.slice(0, 2);
   };
 
   const renderMenuButton = (entityId: string, compact = false) => (
@@ -252,27 +227,7 @@ export function ChatSidebar({
                 >
                   {collapsed ? (
                     <>
-                      <div className="relative">
-                        <div
-                          className={cn(
-                            'flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold',
-                            getStatusAnimationClass()
-                          )}
-                          style={{
-                            backgroundColor:
-                              activeEntityId === entity.id
-                                ? 'var(--bg-elevated)'
-                                : 'var(--bg-secondary)',
-                            color: 'var(--text-primary)',
-                          }}
-                        >
-                          {getCompactEntityLabel(entity.name)}
-                        </div>
-                        <span
-                          className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full"
-                          style={{ backgroundColor: getStatusColor(entity.status) }}
-                        />
-                      </div>
+                      <BrandAvatar name={entity.name} domain={entity.domain} size={40} />
                       <span
                         className="w-full truncate text-center text-[11px] font-medium"
                         style={{ color: 'var(--text-secondary)' }}
@@ -283,12 +238,11 @@ export function ChatSidebar({
                     </>
                   ) : (
                     <>
-                      <div
-                        className={cn(
-                          'mt-1.5 h-2 w-2 flex-shrink-0 rounded-full',
-                          getStatusAnimationClass()
-                        )}
-                        style={{ backgroundColor: getStatusColor(entity.status) }}
+                      <BrandAvatar
+                        name={entity.name}
+                        domain={entity.domain}
+                        size={40}
+                        className="mt-0.5 shrink-0"
                       />
                       <div className="min-w-0 flex-1">
                         <h3

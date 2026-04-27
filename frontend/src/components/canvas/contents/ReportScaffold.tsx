@@ -73,7 +73,10 @@ export function ReportSection({
 }) {
   return (
     <section
-      className={cn('border-t bg-[var(--bg-report)] px-1 py-6 md:py-7', className)}
+      className={cn(
+        'rounded-[16px] border bg-[var(--bg-report)] px-5 py-6 md:px-7 md:py-7',
+        className
+      )}
       style={{ borderColor: 'var(--border-subtle)' }}
     >
       {eyebrow || title || description ? (

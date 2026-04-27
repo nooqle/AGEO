@@ -8,7 +8,6 @@ import type {
   FetchPlatformResult,
   FetchCitation,
   FetchPlatformStatusProjection,
-  FetchPlatformStatusSummary,
   FetchPlatformStatusValue,
   FetchTimingSummary,
 } from '@/types/canvas';
@@ -533,11 +532,11 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
   }
 
   return (
-    <div className="overflow-hidden rounded-[22px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+    <div className="overflow-hidden rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
       {/* Question header — click to collapse/expand */}
       <button
         onClick={toggleExpand}
-        className="flex w-full items-start gap-3 bg-transparent px-5 py-4 text-left transition-colors duration-150"
+        className="flex w-full items-start gap-3 bg-transparent px-5 py-4 text-left transition-colors duration-150 md:px-6 md:py-5"
         onMouseEnter={(e) => {
           (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--bg-tertiary)';
         }}
@@ -609,7 +608,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
             <div
               role="tablist"
               aria-label="平台选择"
-              className="flex overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-5 pt-3"
+              className="flex overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-5 pt-3 md:px-6"
               onKeyDown={(e) => {
                 const currentIdx = availablePlatforms.indexOf(activeTab);
                 if (e.key === 'ArrowRight') {
@@ -665,7 +664,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
           {/* Single platform — show label inline without tabs */}
           {availablePlatforms.length === 1 && (
             <div
-              className="flex items-center gap-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-5 py-3"
+              className="flex items-center gap-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-5 py-3 md:px-6"
             >
               <span
                 style={{
@@ -693,7 +692,7 @@ function QuestionSection({ item, index, platforms, defaultExpanded = true, print
           <div
             role="tabpanel"
             aria-labelledby={`tab-${item.question_id}-${activeTab}`}
-            className="px-5 py-5"
+            className="px-5 py-5 md:px-6 md:py-6"
           >
             {activePlatformResult ? (
               <PlatformPane platformResult={activePlatformResult} />
