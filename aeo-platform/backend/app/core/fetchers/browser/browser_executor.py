@@ -112,6 +112,14 @@ async def execute_post_submit_capture_flow(
                 answer_text = parsed.answer_text
                 search_refs = parsed.references
                 source = "network"
+                if not search_refs:
+                    fallback_refs = await _try_extract_dom_references_after_network(
+                        handler,
+                        plan,
+                    )
+                    if fallback_refs:
+                        search_refs = fallback_refs
+                        source = "network+dom_refs"
             elif parsed and parsed.error_type:
                 parser_events, handled = await handler._handle_browser_agent_parser_error(
                     parsed_error=parsed.error,
@@ -235,6 +243,44 @@ async def execute_post_submit_capture_flow(
             )
         )
         return None, events
+
+
+async def _try_extract_dom_references_after_network(
+    handler: Any,
+    plan: BrowserAnswerExecutionPlan,
+) -> list[SearchReference]:
+    """Fallback to DOM reference extraction when network answer has no refs.
+
+    Several web UIs stream answer text and source cards through different
+    surfaces. Treating a successful network answer with zero parsed references
+    as final loses citations that may already be visible in the DOM.
+    """
+
+    tag = getattr(handler, "PLATFORM_KEY", "browser")
+    try:
+        if plan.before_dom_extract:
+            await plan.before_dom_extract()
+        reference_extractor = plan.extract_references or handler._extract_references_dom
+        refs = await reference_extractor()
+        if refs:
+            logger.info(
+                "[%s] Network response had 0 refs; recovered %d DOM references",
+                str(tag).capitalize(),
+                len(refs),
+            )
+        else:
+            logger.info(
+                "[%s] Network response had 0 refs; DOM fallback also found none",
+                str(tag).capitalize(),
+            )
+        return refs
+    except Exception as exc:
+        logger.warning(
+            "[%s] DOM reference fallback after network response failed: %s",
+            str(tag).capitalize(),
+            exc,
+        )
+        return []
 
 
 def infer_browser_action_requirement(
