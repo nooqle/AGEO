@@ -55,6 +55,7 @@ export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAv
   const borderRadius = isLarge ? '14px' : '12px';
   const fontSize = isLarge ? '1.5rem' : '1.125rem';
   const isDark = theme === 'dark';
+  const fallbackTextColor = isDark ? 'var(--text-primary)' : 'var(--text-secondary)';
   const sourceIndex = faviconState.key === faviconKey ? faviconState.sourceIndex : 0;
   const faviconUrl = faviconSources[sourceIndex];
   const showFavicon = Boolean(faviconUrl);
@@ -66,11 +67,9 @@ export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAv
         width: size,
         height: size,
         borderRadius,
-        background: isDark
-          ? 'linear-gradient(180deg, color-mix(in srgb, var(--brand-primary) 72%, #24312b 28%), color-mix(in srgb, var(--brand-active) 72%, #1a221d 28%))'
-          : 'linear-gradient(180deg, color-mix(in srgb, var(--brand-primary) 92%, #f1eadf 8%), color-mix(in srgb, var(--brand-active) 86%, #cdbb9f 14%))',
-        border: isDark ? '1px solid rgba(244,241,232,0.14)' : '1px solid rgba(31,122,107,0.18)',
-        boxShadow: isDark ? '0 10px 22px rgba(5, 12, 10, 0.28)' : '0 8px 18px rgba(31, 78, 66, 0.12)',
+        background: 'transparent',
+        border: isDark ? '1px solid rgba(244,241,232,0.12)' : '1px solid var(--border-subtle)',
+        boxShadow: 'none',
       }}
     >
       {showFavicon ? (
@@ -98,7 +97,7 @@ export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAv
           className="font-bold"
           style={{
             fontSize,
-            color: isDark ? 'var(--text-primary)' : 'var(--color-primary)',
+            color: fallbackTextColor,
           }}
         >
           {initial}
