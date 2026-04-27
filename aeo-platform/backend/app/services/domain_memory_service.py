@@ -54,6 +54,96 @@ class DomainMemoryService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def resolve_citation_domain_fast(
+        self,
+        *,
+        url: str | None,
+        raw_domain: str | None,
+        title: str | None,
+        snippet: str | None,
+        site_name: str | None,
+        brand_name: str,
+        entity_id: str | None,
+        official_domains: list[str],
+        platform: str | None,
+    ) -> DomainResolution:
+        """Resolve citation domains without model calls for request-time paths."""
+
+        del title, snippet, platform
+        canonical_domain = normalize_domain(raw_domain or url)
+        if not canonical_domain:
+            return DomainResolution(
+                canonical_domain=None,
+                display_name=site_name or "N/A",
+                owner_name=None,
+                source_type="other",
+                site_category=None,
+                is_official=False,
+                relation_type="unknown",
+                confidence=None,
+                status="missing_domain",
+                resolved_by=None,
+            )
+
+        identity = await self._get_identity_record(canonical_domain)
+        relation = await self._get_relation_record(
+            canonical_domain=canonical_domain,
+            brand_name=brand_name,
+            entity_id=entity_id,
+        )
+        official = domain_matches(canonical_domain, official_domains)
+        relation_type = (
+            "official"
+            if official
+            else (relation.relation_type if relation is not None else "unknown")
+        )
+        is_official = relation_type == "official"
+        source_type = (
+            "official"
+            if is_official
+            else (identity.source_type if identity is not None else "other")
+        )
+        display_name = (
+            (identity.display_name if identity is not None else None)
+            or site_name
+            or canonical_domain
+        )
+        confidence_values = [
+            value
+            for value in (
+                0.99 if official else None,
+                identity.confidence if identity is not None else None,
+                relation.confidence if relation is not None else None,
+            )
+            if isinstance(value, (int, float))
+        ]
+        resolved_by = (
+            "deterministic_official_domain"
+            if official
+            else (
+                relation.resolved_by
+                if relation is not None and relation.resolved_by
+                else (
+                    identity.resolved_by
+                    if identity is not None and identity.resolved_by
+                    else "fast_fallback"
+                )
+            )
+        )
+        has_memory = identity is not None or relation is not None
+        return DomainResolution(
+            canonical_domain=canonical_domain,
+            display_name=display_name,
+            owner_name=identity.owner_name if identity is not None else None,
+            source_type=source_type,
+            site_category=identity.site_category if identity is not None else None,
+            is_official=is_official,
+            relation_type=relation_type,
+            confidence=max(confidence_values) if confidence_values else None,
+            status="resolved" if official or has_memory else "fast_fallback",
+            resolved_by=resolved_by,
+        )
+
     async def resolve_citation_domain(
         self,
         *,
@@ -103,7 +193,9 @@ class DomainMemoryService:
         is_official = relation.relation_type == "official"
         source_type = "official" if is_official else (identity.source_type or "other")
         display_name = identity.display_name or site_name or canonical_domain
-        status = "resolved" if identity.status in {"resolved", "manual"} else "unresolved"
+        status = (
+            "resolved" if identity.status in {"resolved", "manual"} else "unresolved"
+        )
         if relation.status in {"resolved", "manual"}:
             status = "resolved"
         elif relation.status == "unresolved":
@@ -180,18 +272,24 @@ class DomainMemoryService:
         await self.db.flush()
         return record
 
-    async def _get_or_resolve_relation(
+    async def _get_identity_record(
+        self,
+        canonical_domain: str,
+    ) -> DomainIdentityRecord | None:
+        result = await self.db.execute(
+            select(DomainIdentityRecord).where(
+                DomainIdentityRecord.canonical_domain == canonical_domain
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def _get_relation_record(
         self,
         *,
         canonical_domain: str,
         brand_name: str,
         entity_id: str | None,
-        official_domains: list[str],
-        url: str | None,
-        title: str | None,
-        snippet: str | None,
-        platform: str | None,
-    ) -> BrandDomainRelation:
+    ) -> BrandDomainRelation | None:
         conditions = [
             BrandDomainRelation.canonical_domain == canonical_domain,
             BrandDomainRelation.brand_name == brand_name,
@@ -206,7 +304,25 @@ class DomainMemoryService:
         else:
             conditions.append(BrandDomainRelation.entity_id.is_(None))
         result = await self.db.execute(select(BrandDomainRelation).where(*conditions))
-        record = result.scalars().first()
+        return result.scalars().first()
+
+    async def _get_or_resolve_relation(
+        self,
+        *,
+        canonical_domain: str,
+        brand_name: str,
+        entity_id: str | None,
+        official_domains: list[str],
+        url: str | None,
+        title: str | None,
+        snippet: str | None,
+        platform: str | None,
+    ) -> BrandDomainRelation:
+        record = await self._get_relation_record(
+            canonical_domain=canonical_domain,
+            brand_name=brand_name,
+            entity_id=entity_id,
+        )
         if record:
             return record
 
@@ -309,7 +425,9 @@ class DomainMemoryService:
             if source_type not in SOURCE_TYPES:
                 source_type = "other"
             return {
-                "display_name": str(data.get("display_name") or site_name or canonical_domain).strip(),
+                "display_name": str(
+                    data.get("display_name") or site_name or canonical_domain
+                ).strip(),
                 "owner_name": _optional_text(data.get("owner_name")),
                 "source_type": source_type,
                 "site_category": _optional_text(data.get("site_category")),
@@ -319,7 +437,11 @@ class DomainMemoryService:
                 "reason": _optional_text(data.get("reason")),
             }
         except Exception as exc:
-            logger.warning("Domain identity LLM resolution failed for %s: %s", canonical_domain, exc)
+            logger.warning(
+                "Domain identity LLM resolution failed for %s: %s",
+                canonical_domain,
+                exc,
+            )
             fallback["error"] = str(exc)
             return fallback
 

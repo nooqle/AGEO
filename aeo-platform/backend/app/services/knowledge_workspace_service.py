@@ -345,11 +345,7 @@ def _compact_title_suffix(value: str, limit: int = 18) -> str:
 
 
 def _export_scope_label(source_types: list[str] | None) -> str:
-    normalized = {
-        _text(item).lower()
-        for item in (source_types or [])
-        if _text(item)
-    }
+    normalized = {_text(item).lower() for item in (source_types or []) if _text(item)}
     if normalized == {"fetch_answer"}:
         return "过往回答数据表"
     if normalized == {"fetch_citation"}:
@@ -392,11 +388,7 @@ def _coerce_bool(value: Any) -> bool | None:
 
 
 def _is_fetch_answer_scope(source_types: list[str] | None) -> bool:
-    normalized = {
-        _text(item).lower()
-        for item in (source_types or [])
-        if _text(item)
-    }
+    normalized = {_text(item).lower() for item in (source_types or []) if _text(item)}
     return normalized == {"fetch_answer"}
 
 
@@ -646,7 +638,7 @@ class KnowledgeWorkspaceService:
                     site_name = _text(
                         citation.get("site_name") or citation.get("source")
                     )
-                    resolution = await domain_memory.resolve_citation_domain(
+                    resolution = await domain_memory.resolve_citation_domain_fast(
                         url=url,
                         raw_domain=raw_domain,
                         title=title,
@@ -730,7 +722,9 @@ class KnowledgeWorkspaceService:
         await self.db.commit()
 
     def _record_fetch_success(self, record: KnowledgeRecord) -> bool:
-        metadata = record.extra_metadata if isinstance(record.extra_metadata, dict) else {}
+        metadata = (
+            record.extra_metadata if isinstance(record.extra_metadata, dict) else {}
+        )
         payload = record.payload if isinstance(record.payload, dict) else {}
 
         success = _coerce_bool(metadata.get("success"))
@@ -778,7 +772,8 @@ class KnowledgeWorkspaceService:
 
         ordered = sorted(
             records,
-            key=lambda record: record.occurred_at or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda record: record.occurred_at
+            or datetime.min.replace(tzinfo=timezone.utc),
             reverse=True,
         )
         label, task_id, run_id, session_id = self._analysis_label_with_parts(ordered[0])
@@ -1060,7 +1055,9 @@ class KnowledgeWorkspaceService:
         if storage_platform:
             base_stmt = base_stmt.where(KnowledgeRecord.platform == storage_platform)
         if competitor_name:
-            base_stmt = base_stmt.where(KnowledgeRecord.competitor_name == competitor_name)
+            base_stmt = base_stmt.where(
+                KnowledgeRecord.competitor_name == competitor_name
+            )
         if domain:
             base_stmt = base_stmt.where(KnowledgeRecord.domain == domain)
         if start_date:
@@ -1160,7 +1157,8 @@ class KnowledgeWorkspaceService:
             start_date=start_date,
             end_date=end_date,
             max_records=max(limit * 20, 200),
-            allow_query_fallback=fetch_status_query and _is_fetch_answer_scope(effective_source_types or None),
+            allow_query_fallback=fetch_status_query
+            and _is_fetch_answer_scope(effective_source_types or None),
         )
         fetch_scope = _is_fetch_answer_scope(effective_source_types or None)
         analysis_scope = "all_history"
@@ -1524,7 +1522,9 @@ class KnowledgeWorkspaceService:
                 KnowledgeRecord.platform == _storage_platform_id(platform)
             )
         if competitor_name:
-            base_stmt = base_stmt.where(KnowledgeRecord.competitor_name == competitor_name)
+            base_stmt = base_stmt.where(
+                KnowledgeRecord.competitor_name == competitor_name
+            )
         if domain:
             base_stmt = base_stmt.where(KnowledgeRecord.domain == domain)
 
@@ -2000,7 +2000,9 @@ class KnowledgeWorkspaceService:
             payload.get("citation") if isinstance(payload.get("citation"), dict) else {}
         )
 
-        answer = payload.get("answer") if isinstance(payload.get("answer"), dict) else {}
+        answer = (
+            payload.get("answer") if isinstance(payload.get("answer"), dict) else {}
+        )
         sentiment = _text(metadata.get("sentiment") or payload.get("sentiment")).lower()
         has_brand_mention = bool(
             metadata.get("has_brand_mention") or payload.get("has_brand_mention")

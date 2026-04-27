@@ -457,7 +457,7 @@ async def _enrich_fetch_result_citation_domains(
                         or citation.get("site_display_name")
                         or ""
                     ).strip()
-                    resolution = await domain_memory.resolve_citation_domain(
+                    resolution = await domain_memory.resolve_citation_domain_fast(
                         url=url,
                         raw_domain=raw_domain,
                         title=title,
