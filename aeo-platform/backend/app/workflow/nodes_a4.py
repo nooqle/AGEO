@@ -504,8 +504,7 @@ async def _enrich_fetch_result_citation_domains(
                             "domain_resolution_status": resolution.status,
                             "domain_resolved_by": resolution.resolved_by,
                             "is_official": bool(
-                                citation.get("is_official")
-                                or resolution.is_official
+                                citation.get("is_official") or resolution.is_official
                             ),
                         }
                     )
@@ -1812,6 +1811,58 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 i: [] for i in range(total)
             }
 
+            async def _persist_incremental_browser_result(
+                q_idx: int,
+                raw_result: dict[str, Any],
+            ) -> None:
+                """Persist one completed browser answer before the platform finishes."""
+
+                task_run_id = state.get("run_id")
+                entity_id = state.get("entity_id")
+                user_id = state.get("user_id")
+                if not (task_id and task_run_id and user_id):
+                    return
+
+                try:
+                    from uuid import UUID as _UUID
+
+                    from app.core.database import AsyncSessionLocal
+                    from app.services.fetch_run_platform_state_service import (
+                        FetchRunPlatformStateService,
+                    )
+
+                    question = questions[q_idx]
+                    enriched_result = _attach_aio_platform_packet(
+                        raw_result,
+                        question=question,
+                        request=aio_fetch_request,
+                    )
+                    fetch_result = {
+                        "question_id": question.get("id", f"Q{q_idx}"),
+                        "question_text": question.get("text", ""),
+                        "platform_results": [enriched_result],
+                        "aio_platform_packets": _collect_aio_platform_packets(
+                            [enriched_result]
+                        ),
+                    }
+                    async with AsyncSessionLocal() as db:
+                        state_service = FetchRunPlatformStateService(db)
+                        await state_service.sync_fetch_results(
+                            task_run_id=_UUID(str(task_run_id)),
+                            task_id=_UUID(str(task_id)),
+                            session_id=(_UUID(str(session_id)) if session_id else None),
+                            entity_id=(_UUID(str(entity_id)) if entity_id else None),
+                            user_id=_UUID(str(user_id)),
+                            fetch_results=[fetch_result],
+                        )
+                        await db.commit()
+                except Exception as incremental_err:
+                    logger.warning(
+                        "[A4] Incremental browser result persist failed for Q%d: %s",
+                        q_idx + 1,
+                        incremental_err,
+                    )
+
             # =============================================================
             # Phase 1: API calls (fast mode only)
             # Each platform processes questions one at a time with delay;
@@ -2145,6 +2196,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             )
 
                     results.append((idx, r))
+                    await _persist_incremental_browser_result(idx, r)
 
                     if stop_platform:
                         stop_reason = (

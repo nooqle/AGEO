@@ -9,7 +9,10 @@ from app.services.fetch_run_platform_state_service import FetchRunPlatformStateS
 
 def test_normalize_status_treats_result_as_succeeded():
     assert FetchRunPlatformStateService._normalize_status("result") == "succeeded"
-    assert FetchRunPlatformStateService._derive_status_from_packet({"status": "result"}) == "succeeded"
+    assert (
+        FetchRunPlatformStateService._derive_status_from_packet({"status": "result"})
+        == "succeeded"
+    )
 
 
 def test_canonicalize_platform_unifies_hunyuan_to_yuanbao():
@@ -80,7 +83,9 @@ def test_build_summary_projection_projects_platform_and_fetch_results_consistent
     fetch_results = projection["fetch_results"]
     assert len(fetch_results) == 1
     assert fetch_results[0]["question_id"] == "q1"
-    assert {packet["platform"] for packet in fetch_results[0]["aio_platform_packets"]} == {
+    assert {
+        packet["platform"] for packet in fetch_results[0]["aio_platform_packets"]
+    } == {
         "yuanbao",
         "kimi",
     }
@@ -310,6 +315,141 @@ def test_build_rows_from_fetch_results_preserves_platform_success_when_latest_qu
     assert row["latest_packet"]["status"] == "succeeded"
     assert row["latest_packet"]["stats"]["completed"] == 1
     assert row["latest_packet"]["stats"]["total"] == 2
+
+
+def test_merge_latest_packets_preserves_incremental_question_results():
+    current = {
+        "platform": "doubao",
+        "status": "succeeded",
+        "question_results": [
+            {
+                "question_id": "q1",
+                "question_text": "问题1",
+                "packet": {
+                    "platform": "doubao",
+                    "status": "result",
+                    "answer": {"has_brand_mention": True},
+                },
+                "legacy_result": {"platform": "doubao", "success": True},
+            }
+        ],
+        "stats": {"completed": 1, "total": 1, "mentions": 1},
+    }
+    incoming = {
+        "platform": "doubao",
+        "status": "succeeded",
+        "question_results": [
+            {
+                "question_id": "q2",
+                "question_text": "问题2",
+                "packet": {"platform": "doubao", "status": "result"},
+                "legacy_result": {"platform": "doubao", "success": True},
+            }
+        ],
+        "stats": {"completed": 1, "total": 1, "mentions": 0},
+    }
+
+    merged = FetchRunPlatformStateService._merge_latest_packets(current, incoming)
+
+    assert merged is not None
+    assert [item["question_id"] for item in merged["question_results"]] == [
+        "q1",
+        "q2",
+    ]
+    assert merged["stats"] == {"completed": 2, "total": 2, "mentions": 1}
+
+
+def test_merge_latest_packets_overwrites_same_question_without_dropping_others():
+    current = {
+        "platform": "doubao",
+        "status": "succeeded",
+        "question_results": [
+            {
+                "question_id": "q1",
+                "question_text": "old",
+                "packet": {"platform": "doubao", "status": "failed"},
+                "legacy_result": {"platform": "doubao", "success": False},
+            },
+            {
+                "question_id": "q2",
+                "question_text": "问题2",
+                "packet": {"platform": "doubao", "status": "result"},
+                "legacy_result": {"platform": "doubao", "success": True},
+            },
+        ],
+    }
+    incoming = {
+        "platform": "doubao",
+        "status": "succeeded",
+        "question_results": [
+            {
+                "question_id": "q1",
+                "question_text": "new",
+                "packet": {"platform": "doubao", "status": "result"},
+                "legacy_result": {"platform": "doubao", "success": True},
+            }
+        ],
+    }
+
+    merged = FetchRunPlatformStateService._merge_latest_packets(current, incoming)
+
+    assert merged is not None
+    assert [item["question_text"] for item in merged["question_results"]] == [
+        "new",
+        "问题2",
+    ]
+    assert merged["stats"] == {"completed": 2, "total": 2, "mentions": 0}
+
+
+def test_status_from_latest_packet_keeps_platform_succeeded_after_later_failure():
+    latest_packet = {
+        "platform": "doubao",
+        "status": "failed",
+        "question_results": [
+            {
+                "question_id": "q1",
+                "packet": {"platform": "doubao", "status": "result"},
+                "legacy_result": {"platform": "doubao", "success": True},
+            },
+            {
+                "question_id": "q2",
+                "packet": {"platform": "doubao", "status": "failed"},
+                "legacy_result": {"platform": "doubao", "success": False},
+            },
+        ],
+    }
+
+    assert (
+        FetchRunPlatformStateService._status_from_latest_packet(latest_packet)
+        == "succeeded"
+    )
+
+
+def test_merge_latest_packets_keeps_question_results_for_action_updates():
+    current = {
+        "platform": "doubao",
+        "status": "succeeded",
+        "question_results": [
+            {
+                "question_id": "q1",
+                "question_text": "问题1",
+                "packet": {"platform": "doubao", "status": "result"},
+            }
+        ],
+        "stats": {"completed": 1, "total": 1, "mentions": 0},
+    }
+    incoming = {
+        "platform": "doubao",
+        "status": "running",
+        "auth_state": "authenticated",
+    }
+
+    merged = FetchRunPlatformStateService._merge_latest_packets(current, incoming)
+
+    assert merged is not None
+    assert merged["status"] == "running"
+    assert [item["question_id"] for item in merged["question_results"]] == ["q1"]
+    assert merged["stats"] == {"completed": 1, "total": 1, "mentions": 0}
 
 
 def test_build_rows_from_fetch_results_does_not_fabricate_timestamps_without_source_times():

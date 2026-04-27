@@ -216,6 +216,140 @@ class FetchRunPlatformStateService:
                     merged[key] = value
         return merged
 
+    @classmethod
+    def _question_result_merge_key(
+        cls,
+        item: Any,
+        fallback_index: int,
+    ) -> str:
+        if not isinstance(item, dict):
+            return f"index:{fallback_index}"
+        question_id = str(item.get("question_id") or "").strip()
+        if question_id:
+            return f"id:{question_id}"
+        question_text = str(item.get("question_text") or "").strip()
+        if question_text:
+            return f"text:{question_text}"
+        return f"index:{fallback_index}"
+
+    @classmethod
+    def _question_result_status(cls, item: dict[str, Any]) -> str:
+        packet = item.get("packet")
+        if isinstance(packet, dict):
+            return cls._derive_status_from_packet(packet)
+        legacy_result = item.get("legacy_result")
+        if isinstance(legacy_result, dict):
+            status = legacy_result.get("status")
+            if status is None:
+                status = "success" if legacy_result.get("success") else "failed"
+            return cls._normalize_status(status)
+        return "failed"
+
+    @classmethod
+    def _question_result_has_brand_mention(cls, item: dict[str, Any]) -> bool:
+        for source_key in ("packet", "legacy_result"):
+            source = item.get(source_key)
+            if not isinstance(source, dict):
+                continue
+            answer = source.get("answer")
+            if isinstance(answer, dict) and answer.get("has_brand_mention"):
+                return True
+        return False
+
+    @classmethod
+    def _build_question_result_stats(
+        cls,
+        question_results: list[Any],
+    ) -> dict[str, int]:
+        completed = 0
+        total = 0
+        mentions = 0
+        for item in question_results:
+            if not isinstance(item, dict):
+                continue
+            total += 1
+            if cls._question_result_status(item) == "succeeded":
+                completed += 1
+            if cls._question_result_has_brand_mention(item):
+                mentions += 1
+        return {
+            "completed": completed,
+            "total": total,
+            "mentions": mentions,
+        }
+
+    @classmethod
+    def _aggregate_question_result_status(
+        cls,
+        question_results: list[Any],
+    ) -> str | None:
+        statuses = [
+            cls._question_result_status(item)
+            for item in question_results
+            if isinstance(item, dict)
+        ]
+        if not statuses:
+            return None
+        if any(status == "succeeded" for status in statuses):
+            return "succeeded"
+        if any(status == "skipped" for status in statuses):
+            return "skipped"
+        if any(status == "takeover_required" for status in statuses):
+            return "takeover_required"
+        if any(status == "running" for status in statuses):
+            return "running"
+        if any(status == "pending" for status in statuses):
+            return "pending"
+        return "failed"
+
+    @classmethod
+    def _merge_latest_packets(
+        cls,
+        current: dict[str, Any] | None,
+        incoming: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(current, dict):
+            return incoming
+        if not isinstance(incoming, dict):
+            return current
+
+        current_results = current.get("question_results")
+        incoming_results = incoming.get("question_results")
+        merged_packet = {**current, **incoming}
+
+        if not isinstance(current_results, list):
+            return incoming
+        if not isinstance(incoming_results, list):
+            merged_packet["question_results"] = current_results
+            if "stats" in current:
+                merged_packet["stats"] = current.get("stats")
+            return merged_packet
+
+        merged_by_key: dict[str, Any] = {}
+        ordered_keys: list[str] = []
+        for index, item in enumerate([*current_results, *incoming_results]):
+            key = cls._question_result_merge_key(item, index)
+            if key not in merged_by_key:
+                ordered_keys.append(key)
+            merged_by_key[key] = item
+
+        merged_results = [merged_by_key[key] for key in ordered_keys]
+        merged_packet["question_results"] = merged_results
+        merged_packet["stats"] = cls._build_question_result_stats(merged_results)
+        return merged_packet
+
+    @classmethod
+    def _status_from_latest_packet(
+        cls,
+        latest_packet: dict[str, Any] | None,
+    ) -> str | None:
+        if not isinstance(latest_packet, dict):
+            return None
+        question_results = latest_packet.get("question_results")
+        if not isinstance(question_results, list):
+            return None
+        return cls._aggregate_question_result_status(question_results)
+
     @staticmethod
     def _to_int_timing(value: Any) -> int | None:
         try:
@@ -264,10 +398,7 @@ class FetchRunPlatformStateService:
             total_ms = max(
                 0,
                 int(
-                    (
-                        max(finished_points) - min(started_points)
-                    ).total_seconds()
-                    * 1000
+                    (max(finished_points) - min(started_points)).total_seconds() * 1000
                 ),
             )
         if total_ms == 0:
@@ -292,7 +423,10 @@ class FetchRunPlatformStateService:
         incoming_value = cls._normalize_status(incoming)
         if current_value == incoming_value:
             return current_value
-        if current_value in _TERMINAL_STATUSES and incoming_value not in _TERMINAL_STATUSES:
+        if (
+            current_value in _TERMINAL_STATUSES
+            and incoming_value not in _TERMINAL_STATUSES
+        ):
             return current_value
         if incoming_value in _TERMINAL_STATUSES:
             return incoming_value
@@ -574,13 +708,16 @@ class FetchRunPlatformStateService:
             "status": status,
             "success": status == "success",
         }
-        merged["fetch_method"] = (
-            (packet or {}).get("fetch_method") or (legacy_result or {}).get("fetch_method")
+        merged["fetch_method"] = (packet or {}).get("fetch_method") or (
+            legacy_result or {}
+        ).get("fetch_method")
+        merged["answer"] = (packet or {}).get("answer") or (legacy_result or {}).get(
+            "answer"
         )
-        merged["answer"] = (packet or {}).get("answer") or (legacy_result or {}).get("answer")
         merged["citations"] = (
             (packet or {}).get("citations")
-            if isinstance((packet or {}).get("citations"), list) and (packet or {}).get("citations")
+            if isinstance((packet or {}).get("citations"), list)
+            and (packet or {}).get("citations")
             else (legacy_result or {}).get("citations")
         )
         merged["error"] = (
@@ -674,7 +811,8 @@ class FetchRunPlatformStateService:
                         packet
                         for packet in fetch_result.get("aio_platform_packets", []) or []
                         if isinstance(packet, dict)
-                        and cls.canonicalize_platform(packet.get("platform")) == platform
+                        and cls.canonicalize_platform(packet.get("platform"))
+                        == platform
                     ),
                     None,
                 )
@@ -730,7 +868,9 @@ class FetchRunPlatformStateService:
                             fetch_results=fetch_results,
                         ),
                     },
-                    "latest_takeover_request_id": representative_packet.get("request_id"),
+                    "latest_takeover_request_id": representative_packet.get(
+                        "request_id"
+                    ),
                     "latest_blocking_fingerprint": representative_packet.get(
                         "blocking_fingerprint"
                     ),
@@ -744,7 +884,9 @@ class FetchRunPlatformStateService:
             )
         return rows
 
-    async def upsert_many(self, rows: list[dict[str, Any]]) -> list[FetchRunPlatformState]:
+    async def upsert_many(
+        self, rows: list[dict[str, Any]]
+    ) -> list[FetchRunPlatformState]:
         persisted: list[FetchRunPlatformState] = []
         now = datetime.now(timezone.utc)
         for row in rows:
@@ -774,14 +916,21 @@ class FetchRunPlatformStateService:
                 existing.entity_id = row.get("entity_id", existing.entity_id)
                 existing.user_id = row.get("user_id", existing.user_id)
                 existing.platform = row.get("platform", existing.platform)
-                existing.status = merged_status
                 existing.attempt_no = max(
                     int(existing.attempt_no or 1),
                     int(row.get("attempt_no") or 1),
                 )
                 existing.auth_state = merged_auth_state
                 if latest_packet is not None:
-                    existing.latest_packet = latest_packet
+                    existing.latest_packet = self._merge_latest_packets(
+                        existing.latest_packet,
+                        latest_packet,
+                    )
+                    merged_status = (
+                        self._status_from_latest_packet(existing.latest_packet)
+                        or merged_status
+                    )
+                existing.status = merged_status
                 existing.latest_takeover_request_id = (
                     row.get("latest_takeover_request_id")
                     or existing.latest_takeover_request_id
@@ -852,16 +1001,18 @@ class FetchRunPlatformStateService:
             or (
                 "needs_login"
                 if str(reason_code or "").strip().lower() in {"login", "needs_login"}
-                else "needs_verify"
-                if str(reason_code or "").strip().lower()
-                in {
-                    "verify",
-                    "captcha",
-                    "security_confirmation",
-                    "account_selection",
-                    "needs_verify",
-                }
-                else "unknown"
+                else (
+                    "needs_verify"
+                    if str(reason_code or "").strip().lower()
+                    in {
+                        "verify",
+                        "captcha",
+                        "security_confirmation",
+                        "account_selection",
+                        "needs_verify",
+                    }
+                    else "unknown"
+                )
             ),
         )
         packet = self._build_takeover_packet(
@@ -924,7 +1075,11 @@ class FetchRunPlatformStateService:
             if next_status == "skipped"
             else self._merge_auth_state(existing.auth_state, auth_state)
         )
-        packet = dict(existing.latest_packet) if isinstance(existing.latest_packet, dict) else {}
+        packet = (
+            dict(existing.latest_packet)
+            if isinstance(existing.latest_packet, dict)
+            else {}
+        )
         packet.update(
             {
                 "platform": normalized_platform,
@@ -932,7 +1087,11 @@ class FetchRunPlatformStateService:
                 "auth_state": next_auth_state,
                 "request_id": request_id or existing.latest_takeover_request_id,
                 "timing_json": self._merge_timing_maps(
-                    packet.get("timing_json") if isinstance(packet.get("timing_json"), dict) else {},
+                    (
+                        packet.get("timing_json")
+                        if isinstance(packet.get("timing_json"), dict)
+                        else {}
+                    ),
                     timing_json,
                 ),
             }
@@ -954,8 +1113,12 @@ class FetchRunPlatformStateService:
                     or existing.latest_takeover_request_id,
                     "latest_blocking_fingerprint": existing.latest_blocking_fingerprint,
                     "artifact_write_status": existing.artifact_write_status,
-                    "error_kind": None if next_status == "running" else existing.error_kind,
-                    "error_message": None if next_status == "running" else existing.error_message,
+                    "error_kind": (
+                        None if next_status == "running" else existing.error_kind
+                    ),
+                    "error_message": (
+                        None if next_status == "running" else existing.error_message
+                    ),
                     "timing_json": timing_json or {},
                     "started_at": existing.started_at,
                     "finished_at": existing.finished_at,
@@ -1102,12 +1265,16 @@ class FetchRunPlatformStateService:
                         "aio_platform_packets": [],
                     },
                 )
-                packet_payload = self._normalize_packet_projection(
-                    packet_item.get("packet")
-                ) if isinstance(packet_item.get("packet"), dict) else None
-                legacy_result = self._normalize_legacy_projection(
-                    packet_item.get("legacy_result")
-                ) if isinstance(packet_item.get("legacy_result"), dict) else None
+                packet_payload = (
+                    self._normalize_packet_projection(packet_item.get("packet"))
+                    if isinstance(packet_item.get("packet"), dict)
+                    else None
+                )
+                legacy_result = (
+                    self._normalize_legacy_projection(packet_item.get("legacy_result"))
+                    if isinstance(packet_item.get("legacy_result"), dict)
+                    else None
+                )
 
                 if packet_payload is not None:
                     packets_by_platform = question_entry.setdefault(
@@ -1125,7 +1292,9 @@ class FetchRunPlatformStateService:
                         "_results_by_platform",
                         {},
                     )
-                    merged_results_by_platform[merged_result["platform"]] = merged_result
+                    merged_results_by_platform[merged_result["platform"]] = (
+                        merged_result
+                    )
 
         projection: list[dict[str, Any]] = []
         for item in sorted(
@@ -1150,9 +1319,7 @@ class FetchRunPlatformStateService:
             1 for row in rows if self._status_to_legacy(row.status) == "success"
         )
         fail_count = sum(
-            1
-            for row in rows
-            if self._status_to_legacy(row.status) == "failed"
+            1 for row in rows if self._status_to_legacy(row.status) == "failed"
         )
         skipped_count = sum(1 for row in rows if row.status == "skipped")
         return {
