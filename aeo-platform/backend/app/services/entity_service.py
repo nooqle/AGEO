@@ -206,6 +206,8 @@ class EntityService:
             ):
                 raise PermissionError("仅品牌创建者或内部管理员可修改品牌")
             try:
+                if entity.owner_user_id is None and viewer is not None:
+                    entity.owner_user_id = viewer.id
                 if "name" in data and data["name"] is not None:
                     entity.name = data["name"]
                 if "aliases" in data and data["aliases"] is not None:

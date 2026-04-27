@@ -10,6 +10,7 @@ import { BrandAvatar } from './BrandAvatar';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
+import { toast } from '@/components/ui/toast';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 
@@ -88,8 +89,11 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
       const updated = await api.updateEntity(entity.id, data);
       updateEntityInStore(entity.id, updated);
       setEditOpen(false);
-    } catch {
-      // silently handle
+      toast.success('品牌已更新');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '品牌更新失败';
+      toast.error(message);
+      throw error;
     }
   };
 

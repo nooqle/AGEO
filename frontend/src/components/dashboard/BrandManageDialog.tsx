@@ -8,6 +8,7 @@ import { EntityFormDialog } from './EntityFormDialog';
 import { BrandAvatar } from './BrandAvatar';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
+import { toast } from '@/components/ui/toast';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 
@@ -42,14 +43,22 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
       if (editEntity) {
         const updated = await api.updateEntity(editEntity.id, data);
         updateEntity(editEntity.id, updated);
+        toast.success('品牌已更新');
       } else {
         const created = await api.createEntity(data);
         addEntity(created);
+        toast.success('品牌已创建');
       }
       setFormOpen(false);
       setEditEntity(null);
-    } catch {
-      // silent for now
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : editEntity
+          ? '品牌更新失败'
+          : '品牌创建失败';
+      toast.error(message);
+      throw error;
     }
   };
 
