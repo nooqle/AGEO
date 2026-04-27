@@ -31,17 +31,17 @@ export function SummaryPill({
   tone: 'blue' | 'green' | 'amber' | 'slate';
 }) {
   const tones = {
-    blue: { bg: '#eef4ff', fg: '#0052d9' },
-    green: { bg: '#edfdf5', fg: '#047857' },
-    amber: { bg: '#fff7ed', fg: '#b45309' },
-    slate: { bg: '#f3f5f8', fg: '#516074' },
+    blue: { bg: 'var(--brand-bg)', fg: 'var(--brand-text)' },
+    green: { bg: 'var(--status-success-bg)', fg: 'var(--status-success)' },
+    amber: { bg: 'var(--status-warning-bg)', fg: 'var(--status-warning)' },
+    slate: { bg: 'var(--bg-report-muted)', fg: 'var(--text-secondary)' },
   };
   const paletteTone = tones[tone];
   return (
     <div
       className="rounded-2xl border px-4 py-4"
       style={{
-        borderColor: 'rgba(15,23,42,0.08)',
+        borderColor: 'var(--border-subtle)',
         background: paletteTone.bg,
       }}
     >
@@ -51,7 +51,7 @@ export function SummaryPill({
       >
         {label}
       </div>
-      <div className="mt-2 text-xl font-semibold" style={{ color: '#15243a' }}>
+      <div className="mt-2 text-xl font-semibold" style={{ color: palette.text }}>
         {value}
       </div>
     </div>
@@ -85,7 +85,7 @@ export function ReviewQueuePanel({
         actionSlot ?? (
           <div
             className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold"
-            style={{ background: '#fff4e8', color: '#b45309' }}
+            style={{ background: palette.warningSoft, color: palette.warning }}
           >
             <RiMailSendLine className="h-4 w-4" />
             待发放 {applications.length} 个
@@ -108,7 +108,7 @@ export function ReviewQueuePanel({
               className="rounded-2xl border px-4 py-4"
               style={{
                 borderColor: palette.border,
-                background: '#fafcff',
+                background: palette.panelMuted,
               }}
             >
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px_auto] xl:items-center">
@@ -118,8 +118,8 @@ export function ReviewQueuePanel({
                     <span
                       className="rounded-full px-2 py-1 text-[11px] font-semibold"
                       style={{
-                        background: '#eef4ff',
-                        color: palette.accent,
+                        background: palette.accentSoft,
+                        color: palette.accentText,
                       }}
                     >
                       {application.email || application.phone || '--'}

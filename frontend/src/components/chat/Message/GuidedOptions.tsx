@@ -31,18 +31,18 @@ export function GuidedOptions({ message, options, onSelect, selectedId }: Guided
               key={option.id}
               onClick={() => !selectedId && onSelect(option.id)}
               disabled={!!selectedId}
-              className={`flex items-start gap-3 px-4 py-3 rounded-xl border text-left transition-all ${
+              className={`flex items-start gap-3 rounded-[14px] border px-4 py-3 text-left transition-colors ${
                 isSelected
-                  ? 'bg-[#6366F1]/10 border-[#6366F1]/40 text-[var(--text-primary)]'
+                  ? 'bg-[var(--brand-bg)] border-[var(--brand-border)] text-[var(--text-primary)]'
                   : selectedId
                   ? 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-tertiary)] opacity-50'
-                  : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[#6366F1]/30 hover:bg-[#6366F1]/5'
+                  : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[var(--brand-border)] hover:bg-[var(--brand-bg)]'
               }`}
             >
               <span
                 className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
                   isSelected
-                    ? 'bg-[#6366F1] text-white'
+                    ? 'bg-[var(--brand-primary)] text-[var(--brand-contrast)]'
                     : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
                 }`}
               >
@@ -57,7 +57,7 @@ export function GuidedOptions({ message, options, onSelect, selectedId }: Guided
                 )}
               </div>
               {isSelected && (
-                <span className="text-xs text-[#6366F1] font-medium flex-shrink-0 mt-0.5">
+                <span className="text-xs text-[var(--brand-text)] font-medium flex-shrink-0 mt-0.5">
                   已选择
                 </span>
               )}

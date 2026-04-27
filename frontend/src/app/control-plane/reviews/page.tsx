@@ -159,7 +159,7 @@ function ControlPlaneReviewsContent() {
           actionSlot={
             <div
               className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold"
-              style={{ background: '#fff4e8', color: '#b45309' }}
+              style={{ background: palette.warningSoft, color: palette.warning }}
             >
               待发放 {pendingApplications.length} 个
             </div>

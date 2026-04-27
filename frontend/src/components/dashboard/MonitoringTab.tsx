@@ -141,9 +141,9 @@ export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTa
   return (
     <div className="space-y-6">
       <div
-        className="rounded-2xl px-5 py-4"
+        className="rounded-xl px-5 py-4"
         style={{
-          background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(6,182,212,0.08))',
+          background: 'color-mix(in srgb, var(--brand-primary) 8%, var(--bg-elevated) 92%)',
           border: '1px solid var(--border-subtle)',
         }}
       >

@@ -112,7 +112,7 @@ function EntityFormDialogInner({
       onClick={handleRequestClose}
     >
       <div
-        className="rounded-xl w-full max-w-lg shadow-2xl"
+        className="rounded-xl w-full max-w-lg shadow-[0_22px_70px_rgba(15,23,42,0.20)]"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: 'var(--bg-tertiary)',

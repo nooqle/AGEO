@@ -190,7 +190,7 @@ export const BrandCompetitionGraph = React.memo(function BrandCompetitionGraph({
           </div>
           <div className="flex items-center gap-3 text-xs">
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#6366F1]" />
+              <span className="w-2 h-2 rounded-full bg-[var(--brand-primary)]" />
               <span style={{ color: 'var(--text-secondary)' }}>目标品牌</span>
             </div>
             <div className="flex items-center gap-1.5">
@@ -301,9 +301,8 @@ export const BrandCompetitionGraph = React.memo(function BrandCompetitionGraph({
             onMouseLeave={handleNodeLeave}
             onClick={(e) => { e.stopPropagation(); handleNodeClick('brand'); }}
           >
-            {/* Outer glow */}
-            <circle cx={cx} cy={cy} r={brandR + 6} fill="none" stroke="#6366F1" strokeWidth={1.5} opacity={0.3} />
-            <circle cx={cx} cy={cy} r={brandR} fill="#6366F1" />
+            <circle cx={cx} cy={cy} r={brandR + 6} fill="none" stroke="var(--brand-primary)" strokeWidth={1.5} opacity={0.22} />
+            <circle cx={cx} cy={cy} r={brandR} fill="var(--brand-primary)" />
             {selectedNode === 'brand' && (
               <circle cx={cx} cy={cy} r={brandR} fill="none" stroke="#fff" strokeWidth={2.5} />
             )}
@@ -338,7 +337,7 @@ export const BrandCompetitionGraph = React.memo(function BrandCompetitionGraph({
               <div className="flex items-center gap-2 mb-1">
                 <span className={cn(
                   'w-2.5 h-2.5 rounded-full',
-                  tooltip.type === '目标品牌' ? 'bg-[#6366F1]' :
+                  tooltip.type === '目标品牌' ? 'bg-[var(--brand-primary)]' :
                   tooltip.type === '直接竞争' ? 'bg-[#EF4444]' :
                   tooltip.type === '间接竞争' ? 'bg-[#F59E0B]' : 'bg-[#6B7280]'
                 )} />

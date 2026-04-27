@@ -25,21 +25,21 @@ export function PlanCard({ planText, isActive }: PlanCardProps) {
         className="flex items-center gap-2 group cursor-pointer"
       >
         {isActive ? (
-          <RiLoader4Line className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />
+          <RiLoader4Line className="w-3.5 h-3.5 text-[var(--brand-text)] animate-spin flex-shrink-0" />
         ) : (
           <RiCheckboxCircleLine className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
         )}
         <span className={cn(
           'text-xs font-medium transition-colors',
-          isActive ? 'text-indigo-300' : 'text-[var(--text-tertiary)]',
+          isActive ? 'text-[var(--brand-text)]' : 'text-[var(--text-tertiary)]',
           'group-hover:text-[var(--text-secondary)]'
         )}>
           {isActive ? '正在制定计划...' : '执行计划'}
         </span>
         {isActive && (
           <span className="relative flex h-1.5 w-1.5 flex-shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-60" />
-            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-indigo-500" />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--brand-primary)] opacity-40" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[var(--brand-primary)]" />
           </span>
         )}
         <motion.div

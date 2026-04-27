@@ -37,10 +37,10 @@ const showcaseItems: Array<{
 
 function BaselinePanel() {
   const bars = [
-    ['DeepSeek', 72, '#4f6af7'],
-    ['Kimi', 80, '#7c4dff'],
-    ['豆包', 90, '#11c76f'],
-    ['元宝', 98, '#8b5cf6'],
+    ['DeepSeek', 72, '#4F6F88'],
+    ['Kimi', 80, '#1F7A6B'],
+    ['豆包', 90, '#B7792B'],
+    ['元宝', 98, '#7B6A4C'],
   ] as const;
 
   return (

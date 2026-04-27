@@ -60,7 +60,7 @@ function formatSize(bytes?: number): string {
 export function AttachmentCard({ attachment, removable, onRemove }: AttachmentCardProps) {
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg hover:border-[var(--border-hover)] transition-colors group min-w-[180px] max-w-[240px]">
-      <FileIcon type={attachment.type} name={attachment.name} className="w-5 h-5 text-[#6366F1] flex-shrink-0" />
+      <FileIcon type={attachment.type} name={attachment.name} className="w-5 h-5 text-[var(--brand-text)] flex-shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-xs text-[var(--text-primary)] truncate">{attachment.name}</p>
         <p className="text-[10px] text-[var(--text-tertiary)]">{formatSize(attachment.size)}</p>

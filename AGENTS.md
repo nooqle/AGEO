@@ -124,6 +124,34 @@ Required API keys: MiniMax API key, optionally DashScope for backup LLM.
 - Do not make broad unrelated changes in one go.
 - Prefer minimal, focused edits and verify with relevant lint/tests.
 
+## Global Visual Design System (Important)
+
+All frontend UI work must follow the Specta global visual system, not local taste or generic AI SaaS patterns.
+
+Before changing any page, component, dialog, chart, empty state, loading state, or public/auth/control-plane surface, read:
+
+- `.impeccable.md`
+- `docs/design-global-visual-principles-2026-04-26.md`
+- If working in Chat, Canvas, Dashboard, Settings, public landing, auth, or control-plane, also check `docs/design-chat-canvas-dashboard-visual-principles-2026-04-26.md`
+
+Core direction:
+
+- Specta is a light-first, evidence-led, report-oriented brand intelligence workspace.
+- The platform signature color is Specta Evidence Teal: `#1F7A6B`.
+- Use Specta Evidence Teal through `--brand-*` tokens for brand recognition, primary actions, active/selected states, and high-confidence evidence confirmation.
+- Do not introduce a second competing brand color. Do not use teal as decoration everywhere; paper-neutral surfaces should carry most of the UI.
+- Avoid generic AI visual language: purple/blue gradients, indigo/violet/cyan palettes, glow, decorative blur, glassmorphism, sparkle/robot/brain/magic iconography, over-rounded card piles, and gradient text.
+- Prefer tokens from `frontend/src/app/globals.css`, `frontend/src/styles/design-system.css`, and `frontend/src/styles/chart-theme.ts` over one-off hard-coded colors.
+- Buttons, inputs, panels, cards, tabs, dialogs, and charts should use restrained radius, subtle borders, light shadows, and clear evidence/status color roles.
+- ICP / legal footer text must live in normal footer document flow, not as a fixed or sticky viewport watermark.
+
+For any visual change, validation must include:
+
+1. A scan for old AI palette/effect terms such as `indigo`, `violet`, `purple`, `cyan`, `sky`, `#4f46e5`, `#6366F1`, `#8B5CF6`, `#06B6D4`, `Sparkle`, `Brain`, `Robot`, `glow`, `blur-3xl`, `shadow-indigo`.
+2. A scan for newly introduced `???`.
+3. `python scripts/validate_change.py` for non-trivial UI work.
+4. Browser screenshot or Playwright verification for visible layout changes.
+
 ## Agent-First Architecture Principle (Important)
 
 - Treat Specta AI as an `Agent + Skills + Context + Memory + Artifact/Version` system first, not as a collection of one-off hardcoded feature branches.

@@ -69,9 +69,9 @@ function ToastItemView({ item, onDismiss }: { item: ToastItem; onDismiss: (id: s
   };
 
   const colorMap: Record<ToastType, { bg: string; border: string; icon: string }> = {
-    success: { bg: 'rgba(34,197,94,0.12)', border: 'rgba(34,197,94,0.3)', icon: '#22C55E' },
-    error: { bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.3)', icon: '#EF4444' },
-    info: { bg: 'rgba(99,102,241,0.12)', border: 'rgba(99,102,241,0.3)', icon: '#6366F1' },
+    success: { bg: 'var(--status-success-bg)', border: 'color-mix(in srgb, var(--success) 34%, transparent)', icon: 'var(--success)' },
+    error: { bg: 'var(--status-error-bg)', border: 'color-mix(in srgb, var(--error) 34%, transparent)', icon: 'var(--error)' },
+    info: { bg: 'var(--status-info-bg)', border: 'color-mix(in srgb, var(--info) 34%, transparent)', icon: 'var(--info)' },
   };
 
   const colors = colorMap[item.type];
@@ -79,7 +79,7 @@ function ToastItemView({ item, onDismiss }: { item: ToastItem; onDismiss: (id: s
   return (
     <div
       className={cn(
-        'flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg backdrop-blur-sm',
+        'flex items-center gap-3 px-4 py-3 rounded-xl shadow-sm',
         'transition-all duration-200 ease-out cursor-pointer',
         isExiting ? 'opacity-0 translate-x-4' : 'opacity-100 translate-x-0'
       )}

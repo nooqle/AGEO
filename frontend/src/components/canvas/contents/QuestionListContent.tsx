@@ -36,7 +36,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
       <div className="border-b border-[var(--border-subtle)] pb-4">
         <h2 className="text-xl font-semibold text-[var(--text-primary)]">模拟问题列表</h2>
         <p className="text-sm text-[var(--text-secondary)] mt-1">
-          生成模式: <span className="font-medium text-blue-300">{mode}</span>
+          生成模式: <span className="font-medium text-[var(--brand-text)]">{mode}</span>
         </p>
         <p className="text-sm text-[var(--text-secondary)]">
           共 {questions?.length || 0} 个问题
@@ -54,7 +54,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
             >
               <div className="flex items-start justify-between mb-3">
                 <div>
-                  <span className="inline-block px-2 py-1 text-xs font-medium bg-blue-500/10 text-blue-500 rounded mb-2 border border-blue-500/20">
+                  <span className="inline-block px-2 py-1 text-xs font-medium bg-[var(--brand-bg)] text-[var(--brand-text)] rounded mb-2 border border-[var(--brand-border)]">
                     {sq.category}
                   </span>
                   {sq.subcategory && (
@@ -80,7 +80,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
                 <div className="mt-3 pt-3 border-t border-[var(--border-subtle)] space-y-2">
                   {sq.question_variants.variant_a && (
                     <div className="flex items-start gap-2">
-                      <span className="text-xs font-medium text-purple-300 whitespace-nowrap">
+                      <span className="text-xs font-medium text-[var(--evidence-secondary)] whitespace-nowrap">
                         {sq.question_variants.variant_a.type}
                       </span>
                       <p className="text-sm text-[var(--text-secondary)]">
@@ -90,7 +90,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
                   )}
                   {sq.question_variants.variant_b && (
                     <div className="flex items-start gap-2">
-                      <span className="text-xs font-medium text-emerald-300 whitespace-nowrap">
+                      <span className="text-xs font-medium text-[var(--success)] whitespace-nowrap">
                         {sq.question_variants.variant_b.type}
                       </span>
                       <p className="text-sm text-[var(--text-secondary)]">
@@ -100,7 +100,7 @@ export function QuestionListContent({ content }: QuestionListContentProps) {
                   )}
                   {sq.question_variants.variant_c && (
                     <div className="flex items-start gap-2">
-                      <span className="text-xs font-medium text-orange-300 whitespace-nowrap">
+                      <span className="text-xs font-medium text-[var(--warning)] whitespace-nowrap">
                         {sq.question_variants.variant_c.type}
                       </span>
                       <p className="text-sm text-[var(--text-secondary)]">

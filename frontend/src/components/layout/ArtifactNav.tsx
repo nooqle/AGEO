@@ -18,7 +18,7 @@ import {
   RiTableLine,
   RiGitBranchLine,
   RiPieChartLine,
-  RiRobot2Line,
+  RiGlobalLine,
   RiShieldCheckLine,
 } from '@remixicon/react';
 import type { CanvasContent } from '@/types/canvas';
@@ -51,7 +51,7 @@ function getReportMeta(content: CanvasContent) {
     return { icon: TYPE_ICONS[content.type] || RiFileTextLine, label: TYPE_LABELS[content.type] || '' };
   }
   if (isSiteConfidenceCanvasReport(content)) {
-    return { icon: RiRobot2Line, label: '官网' };
+    return { icon: RiGlobalLine, label: '官网' };
   }
   if (isConfidenceCanvasReport(content)) {
     return { icon: RiShieldCheckLine, label: '置信' };
@@ -158,7 +158,7 @@ interface ArtifactNavProps {
 export function ArtifactNav({ compact = false }: ArtifactNavProps) {
   const { contents, activeContentIndex, setActiveContentById, openCanvas } = useCanvasStore();
   const prevCountRef = useRef(contents.length);
-  const [glowIds, setGlowIds] = useState<Set<string>>(new Set());
+  const [emphasisIds, setEmphasisIds] = useState<Set<string>>(new Set());
   const titleCounts = contents.reduce((acc, content) => {
     const next = acc.get(content.title) ?? 0;
     acc.set(content.title, next + 1);
@@ -174,13 +174,13 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
     if (contents.length > prevCountRef.current) {
       const newIds = contents.slice(prevCountRef.current).map(c => c.id);
       prevCountRef.current = contents.length;
-      setGlowIds(prev => {
+      setEmphasisIds(prev => {
         const next = new Set(prev);
         newIds.forEach(id => next.add(id));
         return next;
       });
       const timer = setTimeout(() => {
-        setGlowIds(prev => {
+        setEmphasisIds(prev => {
           const next = new Set(prev);
           newIds.forEach(id => next.delete(id));
           return next;
@@ -206,7 +206,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
           const meta = getReportMeta(content);
           const Icon = meta.icon;
           const isActive = index === activeContentIndex;
-          const hasGlow = glowIds.has(content.id);
+          const hasEmphasis = emphasisIds.has(content.id);
           const compactCopy = getCompactArtifactCopy(content);
           const hasDuplicateTitle = (titleCounts.get(content.title) ?? 0) > 1;
           const duplicateSuffix = hasDuplicateTitle
@@ -220,13 +220,13 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
               type="button"
               onClick={() => handleClick(content.id)}
               className={cn(
-                'relative w-full min-h-[58px] px-0.5 py-1.5 flex flex-col items-center justify-center rounded-xl cursor-pointer transition-colors'
+                'relative w-full min-h-[58px] px-0.5 py-1.5 flex flex-col items-center justify-center rounded-[10px] cursor-pointer transition-colors'
               )}
               style={{
                 backgroundColor: isActive ? 'var(--bg-tertiary)' : undefined,
                 border: isActive
-                  ? '1px solid var(--color-primary)'
-                  : hasGlow
+                  ? '1px solid var(--brand-border)'
+                  : hasEmphasis
                     ? '1px solid var(--border-hover)'
                     : '1px solid transparent',
               }}
@@ -234,7 +234,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
             >
               <Icon
                 className="w-5 h-5"
-                style={{ color: isActive ? 'var(--color-primary)' : 'var(--text-secondary)' }}
+                style={{ color: isActive ? 'var(--brand-text)' : 'var(--text-secondary)' }}
               />
               <span
                 className="mt-0.5 text-[10px] leading-none font-medium"
@@ -280,7 +280,7 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
             const meta = getReportMeta(content);
             const Icon = meta.icon;
             const isActive = index === activeContentIndex;
-            const hasGlow = glowIds.has(content.id);
+            const hasEmphasis = emphasisIds.has(content.id);
             const isSiteConfidenceReport =
               content.type === 'report' && isSiteConfidenceCanvasReport(content);
 
@@ -293,12 +293,12 @@ export function ArtifactNav({ compact = false }: ArtifactNavProps) {
                 onClick={() => handleClick(content.id)}
                 className={cn(
                   'w-full flex items-center gap-2.5 mx-2 px-2 py-2 rounded-lg transition-all text-left',
-                  hasGlow && 'glow-border'
+                  hasEmphasis && 'border border-[var(--border-hover)]'
                 )}
                 style={{
                   width: 'calc(100% - 16px)',
                   backgroundColor: isActive ? 'var(--bg-tertiary)' : undefined,
-                  border: isActive ? '1px solid var(--border-hover)' : hasGlow ? undefined : '1px solid transparent',
+                  border: isActive ? '1px solid var(--border-hover)' : hasEmphasis ? undefined : '1px solid transparent',
                 }}
                 title={content.title}
               >

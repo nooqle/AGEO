@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { RiAddLine, RiLineChartLine, RiRobot2Line } from '@remixicon/react';
+import { RiAddLine, RiFileChartLine, RiLineChartLine } from '@remixicon/react';
 import { motion } from 'framer-motion';
 
 interface HeroSectionProps {
@@ -18,7 +18,7 @@ const STEPS = [
     desc: '录入品牌与竞品信息，形成分析对象。',
   },
   {
-    icon: RiRobot2Line,
+    icon: RiFileChartLine,
     title: '进入分析',
     desc: '通过对话发起采集，生成结构化判断。',
   },
@@ -75,9 +75,9 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
               <button
                 className="rounded-full px-5 py-2.5 text-sm font-medium transition-opacity hover:opacity-90"
                 style={{
-                  background: 'linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 90%, #8fa3ff 10%), color-mix(in srgb, var(--color-primary) 70%, #4259d8 30%))',
-                  color: '#ffffff',
-                  boxShadow: '0 12px 26px rgba(54, 79, 124, 0.2)',
+                  background: 'var(--brand-primary)',
+                  color: 'var(--brand-contrast)',
+                  boxShadow: 'var(--shadow-sm)',
                 }}
                 onClick={onNewAnalysis}
               >
@@ -107,7 +107,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
               >
                 <div className="flex items-start gap-3">
                   <div
-                    className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-2xl"
+                    className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl"
                     style={{ background: 'var(--bg-secondary)' }}
                   >
                     <step.icon className="h-4 w-4" style={{ color: 'var(--color-primary)' }} />
@@ -161,7 +161,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
             <span
               className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
               style={{
-                background: 'color-mix(in srgb, var(--bg-elevated) 92%, #f3eef9 8%)',
+                background: 'color-mix(in srgb, var(--bg-elevated) 92%, #f1eadf 8%)',
                 borderColor: 'color-mix(in srgb, var(--border-subtle) 82%, var(--color-primary) 18%)',
                 color: 'var(--text-secondary)',
               }}
@@ -183,7 +183,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
           </div>
         </div>
         {lastActiveBrand ? (
-          <div className="rounded-full border px-3 py-1 text-[11px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'color-mix(in srgb, var(--bg-elevated) 90%, #f3eef9 10%)' }}>
+          <div className="rounded-full border px-3 py-1 text-[11px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'color-mix(in srgb, var(--bg-elevated) 90%, #f1eadf 10%)' }}>
             当前查看：{lastActiveBrand}
           </div>
         ) : null}

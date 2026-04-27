@@ -114,11 +114,11 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
 
   return (
     <div className="flex flex-col items-center justify-center py-20 px-4">
-      <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[0_20px_50px_rgba(99,102,241,0.12)]">
+      <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-sm)]">
         <ThemedLogo size={42} />
       </div>
 
-      <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2 text-center">
+      <h2 className="text-2xl font-semibold text-[var(--text-primary)] mb-2 text-center">
         欢迎使用 Specta AI 智能分析助手
       </h2>
 
@@ -132,7 +132,7 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
             <button
               key={brand.name}
               onClick={() => handleBrandClick(brand.name)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-sm text-[var(--text-primary)] hover:border-[#6366F1] hover:bg-[var(--bg-tertiary)] transition-all"
+              className="inline-flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-4 py-2.5 text-sm text-[var(--text-primary)] transition-colors hover:border-[var(--brand-border)] hover:bg-[var(--bg-tertiary)]"
             >
               <span>{brand.emoji}</span>
               <span>{brand.name}</span>
@@ -145,7 +145,7 @@ function EmptyState({ exampleBrands, onBrandClick }: EmptyStateProps) {
         {FEATURE_HIGHLIGHTS.map((feature) => (
           <div key={feature.title} className="text-[var(--text-tertiary)]">
             <div className="mb-3 flex justify-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[0_10px_24px_rgba(99,102,241,0.08)]">
+              <div className="flex h-11 w-11 items-center justify-center rounded-[12px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
                 <FeatureIcon feature={feature} />
               </div>
             </div>

@@ -91,7 +91,7 @@ function CodeInputRow({
               handleBackspace(index);
             }
           }}
-          className="h-16 rounded-[18px] border border-[#dde2e8] bg-white text-center text-[26px] font-semibold text-[#111827] outline-none transition-colors focus:border-[#111827]"
+          className="h-14 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-center text-[22px] font-semibold text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--brand-primary)]"
         />
       ))}
     </div>
@@ -228,23 +228,23 @@ function ControlPlaneLoginContent() {
 
   if (checking) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#f5f4ef]">
+      <main className="public-light-surface flex min-h-screen items-center justify-center bg-[var(--bg-primary)]">
         <div className="text-center">
-          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-[#d7dbe3] border-t-[#111827]" />
-          <p className="text-sm text-[#6b7280]">正在进入运营后台...</p>
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--brand-primary)]" />
+          <p className="text-sm text-[var(--text-secondary)]">正在进入运营后台...</p>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-[#f5f4ef]">
+    <main className="public-light-surface min-h-screen bg-[var(--bg-primary)]">
       <div className="mx-auto flex min-h-screen max-w-[760px] flex-col px-6 py-8 lg:px-10 lg:py-12">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <Link
               href="/"
-              className="inline-flex items-center gap-2 text-sm font-medium text-[#475569]"
+              className="inline-flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)]"
             >
               <RiArrowLeftLine className="h-4 w-4" />
               返回首页
@@ -254,33 +254,33 @@ function ControlPlaneLoginContent() {
         </div>
 
         <div className="mt-16">
-          <div className="inline-flex items-center gap-2 rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 text-sm font-medium text-[#6b7280]">
-            <RiShieldKeyholeLine className="h-4 w-4 text-[#4f46e5]" />
+          <div className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-sm font-medium text-[var(--text-secondary)]">
+            <RiShieldKeyholeLine className="h-4 w-4 text-[var(--brand-text)]" />
             运营后台
           </div>
 
-          <h1 className="mt-8 text-[52px] font-semibold leading-[1.02] tracking-[-0.06em] text-[#111827] lg:text-[64px]">
+          <h1 className="mt-8 text-[36px] font-semibold leading-[1.12] text-[var(--text-primary)] lg:text-[46px]">
             管理员邮箱验证码登录
           </h1>
-          <p className="mt-4 max-w-[620px] text-[18px] leading-8 text-[#6b7280]">
+          <p className="mt-4 max-w-[620px] text-[16px] leading-8 text-[var(--text-secondary)]">
             使用内部管理员邮箱获取验证码，验证后直接进入运营后台。
           </p>
         </div>
 
-        <div className="mt-12 rounded-[32px] border border-[#e5e7eb] bg-white px-6 py-7 shadow-[0_24px_80px_rgba(35,31,26,0.08)] lg:px-8 lg:py-8">
+        <div className="mt-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-6 py-7 shadow-sm lg:px-8 lg:py-8">
           <div className="space-y-8">
             <label className="block">
-              <div className="text-[17px] font-semibold text-[#111827]">管理员邮箱</div>
+              <div className="text-[15px] font-semibold text-[var(--text-primary)]">管理员邮箱</div>
               <div className="mt-4">
                 <div className="relative">
-                  <RiMailLine className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-[#94a3b8]" />
+                  <RiMailLine className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[var(--text-tertiary)]" />
                   <input
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                     inputMode="email"
                     autoComplete="email"
                     placeholder="you@company.com"
-                    className="h-[60px] w-full rounded-[18px] border border-[#dde2e8] bg-white pl-12 pr-5 text-[18px] text-[#111827] outline-none transition-colors placeholder:text-[#a0a8b5] focus:border-[#111827]"
+                    className="h-12 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] pl-11 pr-4 text-[15px] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--brand-primary)]"
                   />
                 </div>
               </div>
@@ -290,8 +290,8 @@ function ControlPlaneLoginContent() {
               <div>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-[17px] font-semibold text-[#111827]">验证码</div>
-                    <div className="mt-2 text-sm text-[#6b7280]">
+                    <div className="text-[15px] font-semibold text-[var(--text-primary)]">验证码</div>
+                    <div className="mt-2 text-sm text-[var(--text-secondary)]">
                       验证码已发送至 {maskedEmail}
                     </div>
                   </div>
@@ -299,7 +299,7 @@ function ControlPlaneLoginContent() {
                     type="button"
                     onClick={sendCode}
                     disabled={countdown > 0 || isSendingCode}
-                    className="text-sm font-medium text-[#475569] disabled:cursor-not-allowed disabled:text-[#a0a8b5]"
+                    className="text-sm font-medium text-[var(--text-secondary)] disabled:cursor-not-allowed disabled:text-[var(--text-disabled)]"
                   >
                     {isSendingCode ? '发送中...' : formatCountdown(countdown)}
                   </button>
@@ -308,8 +308,8 @@ function ControlPlaneLoginContent() {
                   <CodeInputRow value={code} onChange={setCode} />
                 </div>
                 {debugCode ? (
-                  <div className="mt-4 rounded-[18px] border border-[rgba(79,70,229,0.16)] bg-[rgba(79,70,229,0.06)] px-4 py-3 text-sm leading-6 text-[#4338ca]">
-                    <div className="font-semibold text-[#312e81]">开发环境验证码</div>
+                  <div className="mt-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--status-info-bg)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
+                    <div className="font-semibold text-[var(--info)]">开发环境验证码</div>
                     <div className="mt-1">
                       当前管理员邮箱验证码是 <span className="font-mono text-base font-semibold">{debugCode}</span>
                     </div>
@@ -319,7 +319,7 @@ function ControlPlaneLoginContent() {
             ) : null}
 
             {currentUser && currentUser.role !== 'internal_admin' ? (
-              <div className="rounded-[18px] border border-[rgba(191,146,91,0.24)] bg-[rgba(191,146,91,0.08)] px-4 py-3 text-sm leading-6 text-[#7c5a27]">
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--status-warning-bg)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
                 当前账号不是运营后台管理员，请使用已授权的管理员邮箱登录。
               </div>
             ) : null}
@@ -330,7 +330,7 @@ function ControlPlaneLoginContent() {
                   type="button"
                   onClick={login}
                   disabled={code.length !== CODE_LENGTH || isSubmitting}
-                  className="inline-flex h-14 min-w-[180px] items-center justify-center rounded-[18px] bg-[#111827] px-6 text-base font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#eef1f5] disabled:text-[#a0a8b5]"
+                  className="inline-flex h-12 min-w-[180px] items-center justify-center rounded-xl bg-[var(--brand-primary)] px-6 text-base font-semibold text-[var(--brand-contrast)] transition-colors hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:bg-[var(--bg-tertiary)] disabled:text-[var(--text-disabled)]"
                 >
                   {isSubmitting ? '登录中...' : '进入后台'}
                 </button>
@@ -339,7 +339,7 @@ function ControlPlaneLoginContent() {
                   type="button"
                   onClick={sendCode}
                   disabled={!normalizeEmail(email) || isSendingCode}
-                  className="inline-flex h-14 min-w-[180px] items-center justify-center rounded-[18px] bg-[#111827] px-6 text-base font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#eef1f5] disabled:text-[#a0a8b5]"
+                  className="inline-flex h-12 min-w-[180px] items-center justify-center rounded-xl bg-[var(--brand-primary)] px-6 text-base font-semibold text-[var(--brand-contrast)] transition-colors hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:bg-[var(--bg-tertiary)] disabled:text-[var(--text-disabled)]"
                 >
                   {isSendingCode ? '发送中...' : '发送验证码'}
                 </button>
@@ -354,7 +354,7 @@ function ControlPlaneLoginContent() {
                     setDebugCode(null);
                     setCountdown(0);
                   }}
-                  className="inline-flex h-14 items-center justify-center rounded-[18px] border border-[#dde2e8] px-5 text-sm font-medium text-[#475569]"
+                  className="inline-flex h-12 items-center justify-center rounded-xl border border-[var(--border-subtle)] px-5 text-sm font-medium text-[var(--text-secondary)]"
                 >
                   更换邮箱
                 </button>

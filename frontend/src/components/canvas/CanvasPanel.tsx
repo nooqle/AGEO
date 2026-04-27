@@ -104,12 +104,12 @@ export function CanvasPanel() {
 
   if (!hasArtifacts && !hasBrowserWorkspace) {
     return (
-      <div className="flex flex-col h-full shadow-[-2px_0_16px_rgba(0,0,0,0.08)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="flex flex-col h-full shadow-[var(--shadow-md)]" style={{ backgroundColor: 'var(--bg-primary)' }}>
         {/* 空状态 / 分析中间态 */}
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
           {isAgentExecuting ? (
             <>
-              <div className="w-16 h-16 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] flex items-center justify-center mb-4">
+              <div className="w-16 h-16 rounded-[16px] bg-[var(--bg-secondary)] border border-[var(--border-subtle)] flex items-center justify-center mb-4">
                 <RiLoader4Line className="w-8 h-8 text-[#F59E0B] animate-spin" />
               </div>
               <h3 className="text-lg font-medium text-[var(--text-secondary)] mb-2">
@@ -121,7 +121,7 @@ export function CanvasPanel() {
             </>
           ) : (
             <>
-              <div className="w-16 h-16 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--border-subtle)] flex items-center justify-center mb-4">
+              <div className="w-16 h-16 rounded-[16px] bg-[var(--bg-secondary)] border border-[var(--border-subtle)] flex items-center justify-center mb-4">
                 <RiFileTextLine className="w-8 h-8 text-[var(--text-disabled)]" />
               </div>
               <h3 className="text-lg font-medium text-[var(--text-secondary)] mb-2">
@@ -168,7 +168,7 @@ export function CanvasPanel() {
     <motion.div
       className={cn(
         'flex flex-col h-full',
-        'shadow-[-2px_0_16px_rgba(0,0,0,0.08)]'
+        'shadow-[var(--shadow-md)]'
       )}
       data-canvas-export-root="true"
       data-canvas-export-id={rawContent?.id || ''}
@@ -257,7 +257,7 @@ export function CanvasToggle({ onClick, hasContent = false }: CanvasToggleProps)
         'w-10 h-10 rounded-full flex items-center justify-center',
         'bg-[var(--bg-secondary)] border border-[var(--border-subtle)] shadow-lg',
         'hover:bg-[var(--bg-tertiary)] hover:border-[var(--border-hover)] transition-all duration-200',
-        hasContent && 'ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--bg-primary)]'
+        hasContent && 'ring-2 ring-[var(--brand-primary)] ring-offset-2 ring-offset-[var(--bg-primary)]'
       )}
       initial={{ x: 20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
@@ -267,7 +267,7 @@ export function CanvasToggle({ onClick, hasContent = false }: CanvasToggleProps)
     >
       <RiLayoutRightLine className="w-5 h-5 text-[var(--text-secondary)]" />
       {hasContent && (
-        <span className="absolute -top-1 -right-1 w-3 h-3 bg-[var(--color-primary)] rounded-full" />
+        <span className="absolute -top-1 -right-1 w-3 h-3 bg-[var(--brand-primary)] rounded-full" />
       )}
     </motion.button>
   );

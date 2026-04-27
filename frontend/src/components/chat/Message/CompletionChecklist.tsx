@@ -16,7 +16,7 @@ interface CompletionChecklistProps {
 const STATUS_ICONS = {
   completed: <RiCheckLine className="w-3.5 h-3.5 text-[#22C55E]" />,
   in_progress: (
-    <div className="w-3.5 h-3.5 rounded-full border-2 border-[#6366F1] border-t-transparent animate-spin" />
+    <div className="w-3.5 h-3.5 rounded-full border-2 border-[var(--brand-primary)] border-t-transparent animate-spin" />
   ),
   pending: <div className="w-3.5 h-3.5 rounded-full border border-[var(--border-subtle)]" />,
   failed: <RiCloseLine className="w-3.5 h-3.5 text-[#EF4444]" />,
@@ -41,7 +41,7 @@ export function CompletionChecklist({ title, items }: CompletionChecklistProps) 
       {/* Progress bar */}
       <div className="h-1 bg-[var(--bg-tertiary)] rounded-full mb-3 overflow-hidden">
         <div
-          className="h-full bg-[#6366F1] rounded-full transition-all duration-500"
+          className="h-full bg-[var(--brand-primary)] rounded-full transition-all duration-500"
           style={{ width: `${(completedCount / items.length) * 100}%` }}
         />
       </div>

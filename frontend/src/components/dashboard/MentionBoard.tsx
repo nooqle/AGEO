@@ -21,10 +21,8 @@ export function MentionBoard({ data, onClick }: MentionBoardProps) {
     <button
       type="button"
       onClick={onClick}
-      className="dashboard-board dashboard-board--violet group relative h-full overflow-hidden rounded-[28px] p-6 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--border-hover)]"
+      className="dashboard-board dashboard-board--analysis group relative h-full overflow-hidden rounded-[18px] p-6 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--border-hover)]"
     >
-      <div className="pointer-events-none absolute right-[-28px] top-[-34px] h-[146px] w-[146px] rounded-full blur-3xl" style={{ background: 'color-mix(in srgb, var(--color-primary) 18%, transparent)' }} />
-
       <div className="relative flex h-full flex-col">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'color-mix(in srgb, var(--color-primary) 15%, var(--bg-elevated) 85%)' }}>

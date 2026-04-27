@@ -46,10 +46,10 @@ const WorkflowNode = ({ data, selected }: { data: WorkflowNodeData; selected?: b
   
   const statusStyles = {
     idle: 'bg-[var(--bg-secondary)] border-[var(--border-subtle)] text-[var(--text-tertiary)]',
-    running: 'bg-[var(--bg-secondary)] border-[#6366F1] text-[#6366F1] shadow-[0_0_20px_rgba(99,102,241,0.3)]',
-    completed: 'bg-[var(--bg-secondary)] border-[#10B981] text-[#10B981]',
-    error: 'bg-[var(--bg-secondary)] border-[#EF4444] text-[#EF4444]',
-    waiting: 'bg-[var(--bg-secondary)] border-[#F59E0B] text-[#F59E0B]',
+    running: 'bg-[var(--bg-secondary)] border-[var(--brand-primary)] text-[var(--brand-text)] shadow-sm',
+    completed: 'bg-[var(--bg-secondary)] border-[var(--success)] text-[var(--success)]',
+    error: 'bg-[var(--bg-secondary)] border-[var(--error)] text-[var(--error)]',
+    waiting: 'bg-[var(--bg-secondary)] border-[var(--warning)] text-[var(--warning)]',
   };
 
   return (
@@ -60,7 +60,7 @@ const WorkflowNode = ({ data, selected }: { data: WorkflowNodeData; selected?: b
         px-4 py-3 rounded-xl border-2 min-w-[160px]
         transition-all duration-300
         ${statusStyles[status as keyof typeof statusStyles] || statusStyles.idle}
-        ${selected ? 'ring-2 ring-[#6366F1] ring-offset-2 ring-offset-[var(--bg-primary)]' : ''}
+        ${selected ? 'ring-2 ring-[var(--brand-border)] ring-offset-2 ring-offset-[var(--bg-primary)]' : ''}
       `}
     >
       <div className="flex items-center gap-2 mb-1">
@@ -133,12 +133,12 @@ export function WorkflowVisualizer({
         type: 'smoothstep',
         animated: isCurrent && executionStatus === 'running',
         style: {
-          stroke: isActive ? '#10B981' : isCurrent ? '#6366F1' : 'var(--border-subtle)',
+          stroke: isActive ? 'var(--success)' : isCurrent ? 'var(--brand-primary)' : 'var(--border-subtle)',
           strokeWidth: 2,
         },
         markerEnd: {
           type: 'arrowclosed',
-          color: isActive ? '#10B981' : isCurrent ? '#6366F1' : 'var(--border-subtle)',
+          color: isActive ? 'var(--success)' : isCurrent ? 'var(--brand-primary)' : 'var(--border-subtle)',
         },
       };
     });
@@ -179,13 +179,13 @@ export function WorkflowVisualizer({
           nodeColor={(node) => {
             switch (node.data?.status) {
               case 'completed':
-                return '#10B981';
+                return 'var(--success)';
               case 'running':
-                return '#6366F1';
+                return 'var(--brand-primary)';
               case 'error':
-                return '#EF4444';
+                return 'var(--error)';
               case 'waiting':
-                return '#F59E0B';
+                return 'var(--warning)';
               default:
                 return 'var(--border-subtle)';
             }

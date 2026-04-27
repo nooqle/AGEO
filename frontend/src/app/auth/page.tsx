@@ -79,7 +79,7 @@ function PageHeader({
       <div className="flex items-center gap-4">
         <Link
           href="/"
-          className="inline-flex items-center gap-2 text-sm font-medium text-[#475569]"
+          className="inline-flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)]"
         >
           <RiArrowLeftLine className="h-4 w-4" />
           返回首页
@@ -87,14 +87,14 @@ function PageHeader({
         <PublicBrand size={34} textSizeClassName="text-[30px]" />
       </div>
 
-      <div className="inline-flex rounded-full border border-[#e5e7eb] bg-white p-1">
+      <div className="inline-flex rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1">
         <button
           type="button"
           onClick={() => onModeChange('apply')}
           className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
             mode === 'apply'
-              ? 'bg-[#111827] text-white'
-              : 'text-[#475569]'
+              ? 'bg-[var(--brand-primary)] text-[var(--brand-contrast)]'
+              : 'text-[var(--text-secondary)]'
           }`}
         >
           申请体验
@@ -104,8 +104,8 @@ function PageHeader({
           onClick={() => onModeChange('login')}
           className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
             mode === 'login'
-              ? 'bg-[#111827] text-white'
-              : 'text-[#475569]'
+              ? 'bg-[var(--brand-primary)] text-[var(--brand-contrast)]'
+              : 'text-[var(--text-secondary)]'
           }`}
         >
           已有账号
@@ -133,8 +133,8 @@ function StepHeader({
       : ['工作邮箱', '登录验证'];
   return (
     <div className="max-w-[720px]">
-      <div className="inline-flex items-center gap-3 rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 text-sm text-[#6b7280]">
-        <span className="font-semibold text-[#111827]">
+      <div className="inline-flex items-center gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 text-sm text-[var(--text-secondary)]">
+        <span className="font-semibold text-[var(--text-primary)]">
           {String(step).padStart(2, '0')}
         </span>
         <span>/</span>
@@ -149,10 +149,10 @@ function StepHeader({
               key={label}
               className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium ${
                 current
-                  ? 'border-[#111827] bg-[#111827] text-white'
+                  ? 'border-[var(--brand-primary)] bg-[var(--brand-primary)] text-[var(--brand-contrast)]'
                   : completed
-                    ? 'border-[#d7dbe3] bg-white text-[#111827]'
-                    : 'border-[#e5e7eb] bg-white text-[#94a3b8]'
+                    ? 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)]'
+                    : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-tertiary)]'
               }`}
             >
               <span className="font-semibold">
@@ -163,10 +163,10 @@ function StepHeader({
           );
         })}
       </div>
-      <h1 className="mt-8 text-[44px] font-semibold leading-[1.02] tracking-[-0.06em] text-[#111827] lg:text-[56px]">
+      <h1 className="mt-8 text-[34px] font-semibold leading-[1.12] text-[var(--text-primary)] lg:text-[44px]">
         {title}
       </h1>
-      <p className="mt-4 max-w-[620px] text-[18px] leading-8 text-[#6b7280]">
+      <p className="mt-4 max-w-[620px] text-[16px] leading-8 text-[var(--text-secondary)]">
         {description}
       </p>
     </div>
@@ -182,7 +182,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <div className="text-[17px] font-semibold text-[#111827]">{label}</div>
+      <div className="text-[15px] font-semibold text-[var(--text-primary)]">{label}</div>
       <div className="mt-4">{children}</div>
     </label>
   );
@@ -192,7 +192,7 @@ function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`h-[60px] w-full rounded-[18px] border border-[#dde2e8] bg-white px-5 text-[18px] text-[#111827] outline-none transition-colors placeholder:text-[#a0a8b5] focus:border-[#111827] ${props.className || ''}`}
+      className={`h-12 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-4 text-[15px] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--brand-primary)] ${props.className || ''}`}
     />
   );
 }
@@ -209,10 +209,10 @@ function OptionButton({
     <button
       {...props}
       type="button"
-      className={`rounded-[18px] border px-5 py-4 text-left text-[18px] font-semibold transition-colors ${
+      className={`rounded-xl border px-4 py-3 text-left text-[15px] font-semibold transition-colors ${
         active
-          ? 'border-[#111827] bg-[#f8fafc] text-[#111827]'
-          : 'border-[#dde2e8] bg-white text-[#111827] hover:border-[#c6ccd5]'
+          ? 'border-[var(--brand-border)] bg-[var(--brand-bg)] text-[var(--text-primary)]'
+          : 'border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] hover:border-[var(--border-hover)]'
       } ${props.className || ''}`}
     >
       {children}
@@ -229,7 +229,7 @@ function PrimaryButton({
   return (
     <button
       {...props}
-      className={`inline-flex h-14 w-full items-center justify-center rounded-[18px] bg-[#111827] px-6 text-base font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:bg-[#eef1f5] disabled:text-[#a0a8b5] ${props.className || ''}`}
+      className={`inline-flex h-12 w-full items-center justify-center rounded-xl bg-[var(--brand-primary)] px-6 text-base font-semibold text-[var(--brand-contrast)] transition-colors hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:bg-[var(--bg-tertiary)] disabled:text-[var(--text-disabled)] ${props.className || ''}`}
     >
       {children}
     </button>
@@ -246,7 +246,7 @@ function SecondaryAction({
     <button
       {...props}
       type="button"
-      className={`inline-flex items-center justify-center text-sm font-medium text-[#475569] disabled:cursor-not-allowed disabled:text-[#a0a8b5] ${props.className || ''}`}
+      className={`inline-flex items-center justify-center text-sm font-medium text-[var(--text-secondary)] disabled:cursor-not-allowed disabled:text-[var(--text-disabled)] ${props.className || ''}`}
     >
       {children}
     </button>
@@ -296,7 +296,7 @@ function CodeInputRow({
           value={value[index] || ''}
           onChange={(event) => handleInput(index, event.target.value)}
           onKeyDown={(event) => handleKeyDown(index, event)}
-          className="h-20 rounded-[18px] border border-[#dde2e8] bg-white text-center text-[30px] font-semibold text-[#111827] outline-none transition-colors focus:border-[#111827]"
+          className="h-16 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-center text-[24px] font-semibold text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--brand-primary)]"
         />
       ))}
     </div>
@@ -313,14 +313,14 @@ function InfoPanel({
   description: string;
 }) {
   return (
-    <div className="rounded-[20px] border border-[#e5e7eb] bg-white px-5 py-5">
+    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-5 py-5">
       <div className="flex items-start gap-4">
-        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#eef2ff] text-[#4f46e5]">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--brand-bg)] text-[var(--brand-text)]">
           {icon}
         </div>
         <div>
-          <div className="text-sm font-semibold text-[#111827]">{title}</div>
-          <div className="mt-2 text-sm leading-7 text-[#6b7280]">{description}</div>
+          <div className="text-sm font-semibold text-[var(--text-primary)]">{title}</div>
+          <div className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">{description}</div>
         </div>
       </div>
     </div>
@@ -644,8 +644,8 @@ function AuthPageContent() {
           </SecondaryAction>
         </div>
         {registrationDebugCode ? (
-          <div className="mt-6 rounded-[20px] border border-[rgba(79,70,229,0.16)] bg-[rgba(79,70,229,0.06)] px-5 py-4 text-sm leading-7 text-[#4338ca]">
-            <div className="font-semibold text-[#312e81]">开发环境验证码</div>
+          <div className="mt-6 rounded-xl border border-[var(--border-subtle)] bg-[var(--status-info-bg)] px-5 py-4 text-sm leading-7 text-[var(--text-secondary)]">
+            <div className="font-semibold text-[var(--info)]">开发环境验证码</div>
             <div className="mt-1">
               当前邮箱的验证码是 <span className="font-mono text-base font-semibold">{registrationDebugCode}</span>
             </div>
@@ -742,8 +742,8 @@ function AuthPageContent() {
           </SecondaryAction>
         </div>
         {loginDebugCode ? (
-          <div className="mt-6 rounded-[20px] border border-[rgba(79,70,229,0.16)] bg-[rgba(79,70,229,0.06)] px-5 py-4 text-sm leading-7 text-[#4338ca]">
-            <div className="font-semibold text-[#312e81]">开发环境验证码</div>
+          <div className="mt-6 rounded-xl border border-[var(--border-subtle)] bg-[var(--status-info-bg)] px-5 py-4 text-sm leading-7 text-[var(--text-secondary)]">
+            <div className="font-semibold text-[var(--info)]">开发环境验证码</div>
             <div className="mt-1">
               当前邮箱的登录验证码是 <span className="font-mono text-base font-semibold">{loginDebugCode}</span>
             </div>
@@ -762,7 +762,7 @@ function AuthPageContent() {
   );
 
   return (
-    <main className="min-h-screen bg-[#fbfbf8] text-[#111827]">
+    <main className="public-light-surface min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
       <div className="mx-auto max-w-[960px] px-6 py-8 lg:px-10 lg:py-10">
         <PageHeader mode={mode} onModeChange={changeMode} />
 

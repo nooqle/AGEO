@@ -7,11 +7,11 @@ export const PLATFORM_NAMES: Record<string, string> = {
 };
 
 export const PLATFORM_COLORS: Record<string, string> = {
-  deepseek: '#4F8EF7',
-  kimi: '#7C3AED',
-  doubao: '#F59E0B',
-  yuanbao: '#A855F7',
-  zhipu: '#10B981',
+  deepseek: '#4F6F88',
+  kimi: '#1F7A6B',
+  doubao: '#B7792B',
+  yuanbao: '#7B6A4C',
+  zhipu: '#3F8F62',
 };
 
 export function normalizePlatformKey(platform: string | null | undefined): string | undefined {

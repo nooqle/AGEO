@@ -17,9 +17,9 @@ export interface MetricCardProps {
 
 const colorConfig = {
   primary: {
-    bg: "bg-indigo-500/10",
-    border: "border-indigo-500/30",
-    text: "text-indigo-400",
+    bg: "bg-[var(--brand-bg)]",
+    border: "border-[var(--brand-border)]",
+    text: "text-[var(--brand-text)]",
   },
   success: {
     bg: "bg-emerald-500/10",
@@ -60,9 +60,6 @@ export function MetricCard({
       animate={{ opacity: 1, y: 0 }}
       className={`relative overflow-hidden rounded-xl border ${colors.border} ${colors.bg} p-6`}
     >
-      {/* Background decoration */}
-      <div className={`absolute -right-4 -top-4 w-24 h-24 rounded-full ${colors.bg} blur-2xl`} />
-
       <div className="relative">
         {/* Header */}
         <div className="flex items-start justify-between mb-4">

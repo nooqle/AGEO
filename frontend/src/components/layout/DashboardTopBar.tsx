@@ -29,9 +29,9 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
           onClick={onNewAnalysis ?? (() => router.push('/dashboard'))}
           className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-medium transition-opacity hover:opacity-90"
           style={{
-            background: 'linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 88%, #8092ff 12%), color-mix(in srgb, var(--color-primary) 74%, #4458d7 26%))',
-            color: '#ffffff',
-            boxShadow: '0 10px 22px rgba(54, 79, 124, 0.16)',
+            background: 'var(--brand-primary)',
+            color: 'var(--brand-contrast)',
+            boxShadow: 'var(--shadow-sm)',
           }}
         >
           <RiAddLine className="h-3.5 w-3.5" />

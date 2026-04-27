@@ -363,16 +363,16 @@ function ControlPlaneTasksContent() {
 
 function statusBadgeStyle(status: string) {
   if (status === 'completed') {
-    return { background: '#edfdf5', color: '#047857' };
+    return { background: 'var(--status-success-bg)', color: 'var(--status-success)' };
   }
   if (status === 'running' || status === 'pending') {
-    return { background: '#eef4ff', color: '#0052d9' };
+    return { background: 'var(--status-info-bg)', color: 'var(--status-info)' };
   }
   if (status === 'failed') {
-    return { background: '#fff1f2', color: '#be123c' };
+    return { background: 'var(--status-error-bg)', color: 'var(--status-error)' };
   }
   if (status === 'cancelled') {
-    return { background: '#f3f5f8', color: '#516074' };
+    return { background: 'var(--bg-report-muted)', color: 'var(--text-secondary)' };
   }
-  return { background: '#fff7ed', color: '#b45309' };
+  return { background: 'var(--status-warning-bg)', color: 'var(--status-warning)' };
 }

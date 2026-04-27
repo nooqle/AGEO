@@ -217,7 +217,7 @@ function ControlPlaneWorkbench() {
                     className="block rounded-2xl border px-4 py-3 text-sm font-medium"
                     style={{
                       borderColor: palette.border,
-                      background: '#fafcff',
+                      background: palette.panelMuted,
                       color: palette.text,
                     }}
                   >

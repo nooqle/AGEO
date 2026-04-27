@@ -65,7 +65,7 @@ export function ProgressIndicator({
         {/* 总进度条 */}
         <div className="mt-2 h-1 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] rounded-full transition-all duration-500 ease-out"
+            className="h-full rounded-full bg-[var(--brand-primary)] transition-all duration-500 ease-out"
             style={{ width: `${progress * 100}%` }}
           />
         </div>

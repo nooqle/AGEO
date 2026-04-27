@@ -138,17 +138,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
   return (
     <div className="dashboard-page-bg relative flex flex-1 flex-col overflow-auto">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] opacity-80">
-        <div
-          className="absolute left-[8%] top-[-80px] h-[280px] w-[280px] rounded-full blur-3xl"
-          style={{ background: 'color-mix(in srgb, var(--color-primary) 12%, transparent)' }}
-        />
-        <div
-          className="absolute right-[12%] top-[20px] h-[240px] w-[240px] rounded-full blur-3xl"
-          style={{ background: 'color-mix(in srgb, #d5a159 14%, transparent)' }}
-        />
-      </div>
-
       <div className="relative mx-auto w-full max-w-[1920px] px-5 py-4 lg:px-7 lg:py-5 2xl:px-10">
         <div className="space-y-4">
           <HeroSection

@@ -16,9 +16,7 @@ import {
   RiChatForwardLine,
   RiHistoryLine,
   RiShieldCheckLine,
-  RiRobot2Line,
   RiLinkM,
-  RiSparklingLine,
   RiLoader4Line,
 } from '@remixicon/react';
 import { CanvasContent } from '@/types/canvas';
@@ -207,7 +205,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
     switch (content.type) {
       case 'report':
         if (isSiteConfidenceCanvasReport(content)) {
-          return <RiRobot2Line className="w-4 h-4" style={{ color: 'var(--color-primary)' }} />;
+          return <RiFileTextLine className="w-4 h-4" style={{ color: 'var(--evidence-source)' }} />;
         }
         if (isConfidenceCanvasReport(content)) {
           return <RiShieldCheckLine className="w-4 h-4" style={{ color: 'var(--warning)' }} />;
@@ -285,12 +283,12 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
                  '选择项'}
               </span>
               {!isBrowserTakeover && (content.category === 'baseline' || content.category === 'panorama') && (
-                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-500/15 text-violet-300 border border-violet-500/30">
+                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded border" style={{ backgroundColor: 'var(--brand-bg)', color: 'var(--brand-text)', borderColor: 'var(--brand-border)' }}>
                   全景
                 </span>
               )}
               {!isBrowserTakeover && content.category === 'scenario' && (
-                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">
+                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded border" style={{ backgroundColor: 'var(--status-info-bg)', color: 'var(--info)', borderColor: 'color-mix(in srgb, var(--info) 30%, transparent)' }}>
                   {content.scenarioLabel || '场景'}
                 </span>
               )}
@@ -311,7 +309,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
               }}
               title="额外评估"
             >
-              <RiSparklingLine className="h-3.5 w-3.5" />
+              <RiLinkM className="h-3.5 w-3.5" />
               额外评估
             </button>
           ) : null}
@@ -588,7 +586,7 @@ export function CanvasHeader({ content }: CanvasHeaderProps) {
       {artifactInputOpen && isConfidenceSignal ? (
         <div className={modalScrimClassName('z-40 flex items-center justify-center px-4 py-6')}>
           <div
-            className="w-full max-w-[640px] rounded-[24px] border bg-[var(--bg-primary)] p-5 shadow-[0_24px_60px_rgba(15,23,42,0.28)]"
+            className="w-full max-w-[640px] rounded-[18px] border bg-[var(--bg-report)] p-5 shadow-[var(--shadow-lg)]"
             style={{ borderColor: 'var(--border-subtle)' }}
           >
             <div className="flex items-start justify-between gap-4">

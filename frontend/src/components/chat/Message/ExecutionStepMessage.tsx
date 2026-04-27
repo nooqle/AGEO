@@ -25,8 +25,8 @@ const statusConfig: Record<ExecutionStepStatus, { icon: React.ReactNode; label: 
   running: {
     icon: <RiLoader4Line className="w-4 h-4 animate-spin" />,
     label: '执行中',
-    color: 'text-indigo-400',
-    bgColor: 'bg-indigo-500/10',
+    color: 'text-[var(--brand-text)]',
+    bgColor: 'bg-[var(--brand-bg)]',
   },
   completed: {
     icon: <RiCheckLine className="w-4 h-4" />,
@@ -89,7 +89,7 @@ export function ExecutionStepMessage({
         <motion.div
           className={cn(
             'rounded-xl border overflow-hidden transition-all',
-            step.status === 'running' && 'border-indigo-500/30 shadow-sm',
+            step.status === 'running' && 'border-[var(--brand-border)] shadow-sm',
             step.status === 'waiting_confirmation' && 'border-amber-500/30 shadow-sm',
             step.status === 'completed' && 'border-green-500/30',
             step.status === 'failed' && 'border-red-500/30',
@@ -209,7 +209,7 @@ export function ExecutionStepMessage({
                     >
                       <motion.button
                         onClick={onContinue}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+                        className="flex items-center gap-1.5 rounded-lg bg-[var(--brand-primary)] px-4 py-2 text-sm font-medium text-[var(--brand-contrast)] transition-colors hover:bg-[var(--brand-hover)]"
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                       >

@@ -7,7 +7,6 @@ import {
   RiCheckLine,
   RiLoader4Line,
   RiSearchLine,
-  RiBrainLine,
   RiGlobalLine,
   RiCodeLine,
 } from '@remixicon/react';
@@ -20,8 +19,8 @@ interface ActionLogProps {
 }
 
 const ACTION_ICONS: Record<string, React.ReactNode> = {
-  agent_call: <RiBrainLine className="w-3 h-3" />,
-  llm_call:   <RiBrainLine className="w-3 h-3" />,
+  agent_call: <RiCodeLine className="w-3 h-3" />,
+  llm_call:   <RiCodeLine className="w-3 h-3" />,
   search:     <RiSearchLine className="w-3 h-3" />,
   browser:    <RiGlobalLine className="w-3 h-3" />,
   parse:      <RiCodeLine className="w-3 h-3" />,
@@ -50,7 +49,7 @@ export function ActionLog({ logs, isExpanded: defaultExpanded = false }: ActionL
         className="flex items-center gap-2 group cursor-pointer"
       >
         {!isAllComplete ? (
-          <RiLoader4Line className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />
+          <RiLoader4Line className="w-3.5 h-3.5 text-[var(--brand-text)] animate-spin flex-shrink-0" />
         ) : (
           <RiCheckLine className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
         )}
@@ -91,7 +90,7 @@ export function ActionLog({ logs, isExpanded: defaultExpanded = false }: ActionL
                 >
                   <div className={cn(
                     'mt-0.5 flex-shrink-0 transition-colors',
-                    log.isComplete ? 'text-emerald-400' : 'text-[var(--text-tertiary)]'
+                    log.isComplete ? 'text-[var(--success)]' : 'text-[var(--text-tertiary)]'
                   )}>
                     {log.isComplete
                       ? <RiCheckLine className="w-3 h-3" />

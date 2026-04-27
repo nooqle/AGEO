@@ -61,7 +61,7 @@ export function UserMessage({ message, onRecall, recallDisabled, messagesAfterCo
         {/* Message bubble */}
         <div className="flex flex-col items-end gap-2">
           {hasContent && (
-            <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-md px-4 py-3 shadow-sm">
+            <div className="rounded-[14px] rounded-tr-sm border bg-[var(--surface-command)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-sm)]" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="whitespace-pre-wrap break-words">
                 {message.content}
               </div>
@@ -71,7 +71,7 @@ export function UserMessage({ message, onRecall, recallDisabled, messagesAfterCo
             <AttachmentList attachments={message.attachments} />
           )}
           {!hasContent && (!message.attachments || message.attachments.length === 0) && (
-            <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-md px-4 py-3 shadow-sm">
+            <div className="rounded-[14px] rounded-tr-sm border bg-[var(--surface-command)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-sm)]" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="whitespace-pre-wrap break-words">
                 {message.content}
               </div>

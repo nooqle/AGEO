@@ -90,7 +90,7 @@ export function TaskStatusBadge({
           className
         )}
         style={{
-          background: 'rgba(99,102,241,0.08)',
+          background: 'var(--brand-bg)',
           color: 'var(--brand-primary)',
         }}
       >

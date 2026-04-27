@@ -14,10 +14,8 @@ export function RadarBoard({ data, onClick }: RadarBoardProps) {
     <button
       type="button"
       onClick={onClick}
-      className="dashboard-board dashboard-board--mint group relative h-full overflow-hidden rounded-[28px] p-6 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--border-hover)]"
+      className="dashboard-board dashboard-board--mint group relative h-full overflow-hidden rounded-[18px] p-6 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--border-hover)]"
     >
-      <div className="pointer-events-none absolute right-[-38px] top-[-48px] h-[150px] w-[150px] rounded-full blur-3xl" style={{ background: 'color-mix(in srgb, #8bb0a2 20%, transparent)' }} />
-
       <div className="relative flex h-full flex-col">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'color-mix(in srgb, #8bb0a2 16%, var(--bg-elevated) 84%)' }}>
@@ -50,7 +48,7 @@ export function RadarBoard({ data, onClick }: RadarBoardProps) {
               <RadarChart data={data.dimensions} outerRadius="68%">
                 <PolarGrid stroke="var(--border-subtle)" />
                 <PolarAngleAxis dataKey="label" tick={{ fill: chart.colors.secondary, fontSize: 11 }} />
-                <Radar dataKey="score" stroke={chart.colors.cyan} fill={chart.colors.cyan} fillOpacity={0.14} />
+                <Radar dataKey="score" stroke={chart.colors.source} fill={chart.colors.source} fillOpacity={0.14} />
               </RadarChart>
             </ResponsiveContainer>
           </div>

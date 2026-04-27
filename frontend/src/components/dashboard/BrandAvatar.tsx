@@ -52,7 +52,7 @@ export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAv
   });
   const initial = (name.trim().charAt(0) || '品').toUpperCase();
   const isLarge = size > 48;
-  const borderRadius = isLarge ? '16px' : '18px';
+  const borderRadius = isLarge ? '14px' : '12px';
   const fontSize = isLarge ? '1.5rem' : '1.125rem';
   const isDark = theme === 'dark';
   const sourceIndex = faviconState.key === faviconKey ? faviconState.sourceIndex : 0;
@@ -66,9 +66,11 @@ export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAv
         width: size,
         height: size,
         borderRadius,
-        background: isDark ? 'var(--bg-secondary)' : 'var(--bg-elevated)',
-        border: isDark ? '1px solid rgba(255,255,255,0.14)' : '1px solid var(--border-subtle)',
-        boxShadow: isDark ? '0 10px 24px rgba(0, 0, 0, 0.28)' : '0 8px 18px rgba(15, 23, 42, 0.08)',
+        background: isDark
+          ? 'linear-gradient(180deg, color-mix(in srgb, var(--brand-primary) 72%, #24312b 28%), color-mix(in srgb, var(--brand-active) 72%, #1a221d 28%))'
+          : 'linear-gradient(180deg, color-mix(in srgb, var(--brand-primary) 92%, #f1eadf 8%), color-mix(in srgb, var(--brand-active) 86%, #cdbb9f 14%))',
+        border: isDark ? '1px solid rgba(244,241,232,0.14)' : '1px solid rgba(31,122,107,0.18)',
+        boxShadow: isDark ? '0 10px 22px rgba(5, 12, 10, 0.28)' : '0 8px 18px rgba(31, 78, 66, 0.12)',
       }}
     >
       {showFavicon ? (

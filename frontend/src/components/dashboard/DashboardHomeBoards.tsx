@@ -56,14 +56,14 @@ function SectionBlock({
 }) {
   return (
     <section className={`rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] ${compact ? 'px-4 py-4' : 'px-5 py-5'}`}>
-      <div className="text-[17px] font-semibold tracking-[-0.02em] text-[var(--text-primary)]">{title}</div>
+      <div className="text-[17px] font-semibold text-[var(--text-primary)]">{title}</div>
       <div className={compact ? 'mt-3' : 'mt-4'}>{children}</div>
     </section>
   );
 }
 
 function EmptyInline({ label = '暂无数据' }: { label?: string }) {
-  return <div className="rounded-[16px] bg-[var(--bg-tertiary)] px-4 py-3 text-[14px] text-[var(--text-tertiary)]">{label}</div>;
+  return <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-report-muted)] px-4 py-3 text-[14px] text-[var(--text-tertiary)]">{label}</div>;
 }
 
 function MetricStrip({ metrics }: { metrics: DashboardHomeMetric[] }) {
@@ -79,7 +79,7 @@ function MetricStrip({ metrics }: { metrics: DashboardHomeMetric[] }) {
           className="rounded-[20px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-4"
         >
           <div className="text-[13px] text-[var(--text-tertiary)]">{metric.label}</div>
-          <div className="mt-2 text-[30px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+          <div className="mt-2 text-[30px] font-semibold text-[var(--text-primary)]">
             {formatMetricValue(metric)}
           </div>
         </div>
@@ -103,21 +103,44 @@ function WordCloudColumn({
   words: DashboardEmotionWord[];
   tone: 'positive' | 'negative';
 }) {
-  const colorClass = tone === 'positive' ? 'text-emerald-700' : 'text-rose-700';
-  const bgClass = tone === 'positive' ? 'bg-emerald-50' : 'bg-rose-50';
+  const toneStyle =
+    tone === 'positive'
+      ? {
+          label: 'var(--success)',
+          chipBg: 'var(--status-success-bg)',
+          word: 'var(--success)',
+          empty: '暂无正向词云数据',
+        }
+      : {
+          label: 'var(--evidence-risk)',
+          chipBg: 'var(--status-error-bg)',
+          word: 'var(--evidence-risk)',
+          empty: '暂无负向词云数据',
+        };
 
   return (
-    <div className={`min-h-[190px] rounded-[22px] ${bgClass} px-5 py-4`}>
-      <div className={`text-[15px] font-semibold ${colorClass}`}>{title}</div>
+    <div className="min-h-[170px] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-report-muted)] px-5 py-4">
+      <div className="flex items-center gap-2">
+        <span
+          className="h-2 w-2 rounded-full"
+          style={{ backgroundColor: toneStyle.label }}
+        />
+        <div className="text-[14px] font-semibold text-[var(--text-primary)]">{title}</div>
+      </div>
       {words.length === 0 ? (
-        <div className="mt-5 text-[14px] text-[var(--text-tertiary)]">暂无数据</div>
+        <div className="mt-5 text-[14px] text-[var(--text-tertiary)]">{toneStyle.empty}</div>
       ) : (
         <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-3">
           {words.slice(0, 18).map((word) => (
             <span
               key={`${tone}-${word.text}`}
-              className={`${colorClass} leading-none`}
-              style={{ fontSize: wordSize(word), fontWeight: word.weight > 50 || word.weight > 0.5 ? 700 : 500 }}
+              className="leading-none"
+              style={{
+                fontSize: wordSize(word),
+                fontWeight: word.weight > 50 || word.weight > 0.5 ? 700 : 500,
+                color: toneStyle.word,
+                opacity: word.weight > 50 || word.weight > 0.5 ? 0.92 : 0.68,
+              }}
               title={word.count ? `${word.count} 次` : undefined}
             >
               {word.text}
@@ -132,7 +155,7 @@ function WordCloudColumn({
 function EmotionWordCloud({ positive, negative }: { positive: DashboardEmotionWord[]; negative: DashboardEmotionWord[] }) {
   return (
     <SectionBlock title="正负词云">
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-3 xl:grid-cols-2">
         <WordCloudColumn title="正向" words={positive} tone="positive" />
         <WordCloudColumn title="负向" words={negative} tone="negative" />
       </div>
@@ -177,8 +200,8 @@ function PlatformDiagnosis({ rows }: { rows: DashboardPlatformDiagnosisRow[] }) 
                   </td>
                   <td className="border-b border-[var(--border-subtle)] px-3 py-4">{row.answer_count}</td>
                   <td className="border-b border-[var(--border-subtle)] px-3 py-4">{row.brand_mention_count}</td>
-                  <td className="border-b border-[var(--border-subtle)] px-3 py-4 text-emerald-700">{row.positive_count}</td>
-                  <td className="border-b border-[var(--border-subtle)] px-3 py-4 text-rose-700">{row.negative_count}</td>
+                  <td className="border-b border-[var(--border-subtle)] px-3 py-4 text-[var(--success)]">{row.positive_count}</td>
+                  <td className="border-b border-[var(--border-subtle)] px-3 py-4 text-[var(--evidence-risk)]">{row.negative_count}</td>
                   <td className="border-b border-[var(--border-subtle)] px-3 py-4 text-[var(--text-secondary)]">
                     {row.main_concern || '--'}
                   </td>
@@ -194,7 +217,7 @@ function PlatformDiagnosis({ rows }: { rows: DashboardPlatformDiagnosisRow[] }) 
 
 function RiskLevelBadge({ level }: { level: DashboardHomeRiskCard['level'] }) {
   const label = level === 'high' ? '高风险' : level === 'low' ? '低风险' : '需防守';
-  return <span className="rounded-full bg-rose-50 px-2.5 py-1 text-[12px] font-medium text-rose-700">{label}</span>;
+  return <span className="rounded-full px-2.5 py-1 text-[12px] font-medium text-[var(--evidence-risk)]" style={{ backgroundColor: 'var(--status-error-bg)' }}>{label}</span>;
 }
 
 function RiskCards({ risks }: { risks: DashboardHomeRiskCard[] }) {
@@ -230,10 +253,10 @@ function AdvantageCards({ advantages }: { advantages: DashboardHomeAdvantageCard
       ) : (
         <div className="grid gap-3 xl:grid-cols-2">
           {advantages.slice(0, 4).map((advantage) => (
-            <div key={advantage.title} className="rounded-[20px] border border-emerald-100 bg-emerald-50 px-4 py-4">
+            <div key={advantage.title} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-report-muted)] px-4 py-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="text-[16px] font-semibold text-[var(--text-primary)]">{advantage.title}</div>
-                <span className="rounded-full bg-white/70 px-2.5 py-1 text-[12px] font-medium text-emerald-700">优势</span>
+                <span className="rounded-full px-2.5 py-1 text-[12px] font-medium text-[var(--success)]" style={{ backgroundColor: 'var(--status-success-bg)' }}>优势</span>
               </div>
               <div className="mt-3 flex flex-wrap gap-2 text-[13px] text-[var(--text-secondary)]">
                 {advantage.platform_count ? <span>{advantage.platform_count} 个平台</span> : null}
@@ -346,7 +369,7 @@ function SourceStructure({ source }: { source: DashboardSourceStructure }) {
       <div className="grid gap-5 xl:grid-cols-[0.75fr_1fr_1fr]">
         <div className="rounded-[18px] bg-[var(--bg-tertiary)] px-4 py-4">
           <div className="text-[13px] text-[var(--text-tertiary)]">官网转化率</div>
-          <div className="mt-3 text-[32px] font-semibold tracking-[-0.04em] text-[var(--text-primary)]">
+          <div className="mt-3 text-[32px] font-semibold text-[var(--text-primary)]">
             {formatPercent(source.official_conversion_rate)}
           </div>
         </div>
@@ -390,7 +413,7 @@ export function DashboardHomeBoards({ home, onOpenLatestReport, isOpeningLatestR
               {latestReport?.report_kind_label || '分析报告'}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              <h2 className="text-[28px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">
+              <h2 className="text-[28px] font-semibold text-[var(--text-primary)]">
                 {latestReport?.title || '暂无最新报告'}
               </h2>
               {latestReport?.badge_label ? (

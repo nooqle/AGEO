@@ -104,7 +104,7 @@ function SummaryMetricStrip({ rows }: { rows: SummaryMetricRow[] }) {
       {rows.map(([label, value, description]) => (
         <article
           key={label}
-          className="rounded-[20px] border bg-[var(--bg-tertiary)] px-6 py-6"
+          className="rounded-[12px] border bg-[var(--bg-report-muted)] px-6 py-6"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
           <div className="text-[13px] font-medium tracking-[0.08em] text-[var(--text-tertiary)]">
@@ -125,7 +125,7 @@ function SummaryMetricStrip({ rows }: { rows: SummaryMetricRow[] }) {
 function MarkdownDocument({ markdown }: { markdown: string }) {
   return (
     <section
-      className="rounded-[24px] border bg-[var(--bg-tertiary)] px-7 py-8 md:px-10 md:py-10"
+      className="rounded-[12px] border bg-[var(--bg-report)] px-7 py-8 md:px-10 md:py-10"
       style={{ borderColor: 'var(--border-subtle)' }}
     >
       <div className="report-markdown text-[17px] leading-9 text-[var(--text-primary)]">
@@ -133,12 +133,12 @@ function MarkdownDocument({ markdown }: { markdown: string }) {
           remarkPlugins={[remarkGfm]}
           components={{
             h1: ({ children }) => (
-              <h1 className="text-[40px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
+              <h1 className="text-[38px] font-semibold tracking-normal text-[var(--text-primary)]">
                 {children}
               </h1>
             ),
             h2: ({ children }) => (
-              <h2 className="mt-14 pt-1 text-[30px] font-semibold tracking-[-0.04em] text-[var(--text-primary)] first:mt-0">
+              <h2 className="mt-14 pt-1 text-[28px] font-semibold tracking-normal text-[var(--text-primary)] first:mt-0">
                 {children}
               </h2>
             ),
@@ -201,7 +201,7 @@ function MissingCanonicalReport({
   if (isHydrationStub) {
     return (
       <section
-        className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-8 md:px-8 md:py-10"
+        className="rounded-[12px] border bg-[var(--bg-report-muted)] px-6 py-8 md:px-8 md:py-10"
         style={{ borderColor: 'var(--border-subtle)' }}
         {...debug}
       >
@@ -223,7 +223,7 @@ function MissingCanonicalReport({
 
   return (
     <section
-      className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-6 md:px-8 md:py-8"
+      className="rounded-[12px] border bg-[var(--bg-report-muted)] px-6 py-6 md:px-8 md:py-8"
       style={{ borderColor: 'var(--border-subtle)' }}
       {...debug}
     >
@@ -286,13 +286,13 @@ export function ReportContent({ content, printMode = false }: { content: ReportC
   return (
     <ReportPage className="w-full max-w-[1320px] space-y-6">
       <header
-        className="rounded-[26px] border bg-[var(--bg-tertiary)] px-7 py-7 md:px-10 md:py-10"
+        className="border-b bg-[var(--bg-report)] px-2 py-7 md:px-3 md:py-10"
         style={{ borderColor: 'var(--border-subtle)' }}
       >
         <div className="text-[12px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
           {eyebrow}
         </div>
-        <h1 className="mt-3 text-[38px] font-semibold tracking-[-0.05em] text-[var(--text-primary)]">
+        <h1 className="mt-3 text-[36px] font-semibold tracking-normal text-[var(--text-primary)]">
           {headline}
         </h1>
         <p className="mt-5 max-w-[980px] text-[17px] leading-9 text-[var(--text-secondary)]">

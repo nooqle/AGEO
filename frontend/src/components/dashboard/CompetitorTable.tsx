@@ -34,7 +34,7 @@ const pressureTone = {
 
 const stateTone = {
   win: { color: chart.colors.green, bg: `${chart.colors.green}1a`, label: '占优' },
-  present: { color: chart.colors.cyan, bg: `${chart.colors.cyan}1a`, label: '已进入' },
+  present: { color: chart.colors.source, bg: `${chart.colors.source}1a`, label: '已进入' },
   absent: { color: chart.colors.red, bg: `${chart.colors.red}1a`, label: '缺席' },
 } as const;
 

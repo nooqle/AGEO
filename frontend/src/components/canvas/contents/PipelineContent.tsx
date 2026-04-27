@@ -108,7 +108,7 @@ export function PipelineContent({ content }: PipelineContentProps) {
               className={cn(
                 'flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors',
                 checkedIds.size >= minSelection
-                  ? 'bg-indigo-600 text-white hover:bg-indigo-500'
+                  ? 'bg-[var(--brand-primary)] text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)]'
                   : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] cursor-not-allowed'
               )}
               onClick={handleConfirm}

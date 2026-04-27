@@ -337,7 +337,7 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
         selectable && !disabled && 'cursor-pointer hover:border-[var(--border-hover)]',
         selectable && disabled && 'opacity-40 cursor-not-allowed',
         selected
-          ? 'border-indigo-500 bg-indigo-500/10'
+          ? 'border-[var(--brand-border)] bg-[var(--brand-bg)]'
           : 'border-[var(--border-subtle)]',
       )}
     >
@@ -347,7 +347,7 @@ function PersonaCard({ persona, selectable, selected, disabled, onToggle }: Pers
           <div className={cn(
             'w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0',
             selected
-              ? 'border-indigo-500 bg-indigo-500'
+              ? 'border-[var(--brand-primary)] bg-[var(--brand-primary)]'
               : 'border-[var(--border-hover)]'
           )}>
             {selected && <RiCheckLine className="w-3 h-3 text-white" />}
@@ -485,7 +485,7 @@ function SelectionBar({ selectedCount, minSelection, maxSelection, isConfirmed, 
           className={cn(
             'flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors',
             selectedCount >= minSelection
-              ? 'bg-indigo-600 text-white hover:bg-indigo-500'
+              ? 'bg-[var(--brand-primary)] text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)]'
               : 'bg-[var(--bg-tertiary)] text-[var(--text-disabled)] cursor-not-allowed'
           )}
           onClick={onConfirm}

@@ -139,7 +139,7 @@ export function OverviewTab({
             icon: RiFocus3Line,
             title: '重点场景机会',
             body: opportunities[0],
-            tone: chart.colors.cyan,
+            tone: chart.colors.source,
           },
           {
             icon: RiAlarmWarningLine,

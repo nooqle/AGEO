@@ -63,7 +63,7 @@ export function ActionQueueSection({ data }: ActionQueueSectionProps) {
               className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-[var(--accent-primary,#6366F1)]/10 px-2 py-1 text-xs font-medium text-[var(--accent-primary,#6366F1)]">
+                <span className="rounded-full bg-[var(--brand-bg)] px-2 py-1 text-xs font-medium text-[var(--brand-text)]">
                   {formatPriority(item.priority)}
                 </span>
                 <h3 className="text-base font-semibold text-[var(--text-primary)]">

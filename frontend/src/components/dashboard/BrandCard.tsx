@@ -57,13 +57,13 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
       style={{
         background: isDark
           ? (isSelected
-              ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 74%, #1d2850 26%), color-mix(in srgb, var(--bg-secondary) 92%, #181510 8%))'
-              : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 82%, #172238 18%), color-mix(in srgb, var(--bg-secondary) 94%, #17130f 6%))')
+              ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 86%, var(--brand-primary) 14%), color-mix(in srgb, var(--bg-secondary) 94%, #181510 6%))'
+              : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 92%, #1c211c 8%), color-mix(in srgb, var(--bg-secondary) 96%, #17130f 4%))')
           : (isSelected
               ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, #f7efdf 10%), color-mix(in srgb, var(--bg-secondary) 94%, #e9dcc7 6%))'
               : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #fbf7ef 6%), color-mix(in srgb, var(--bg-tertiary) 98%, #f4ede1 2%))'),
         borderColor: isDark
-          ? (isSelected ? 'rgba(129,140,248,0.30)' : 'rgba(255,255,255,0.08)')
+          ? (isSelected ? 'color-mix(in srgb, var(--brand-primary) 38%, var(--border-subtle) 62%)' : 'rgba(255,255,255,0.08)')
           : (isSelected ? 'color-mix(in srgb, #8a6f46 36%, var(--border-subtle) 64%)' : 'color-mix(in srgb, var(--border-subtle) 88%, #d7c4a6 12%)'),
         boxShadow: isDark
           ? (isSelected ? '0 20px 44px rgba(8,12,24,0.34)' : '0 12px 28px rgba(8,12,24,0.22)')
@@ -131,18 +131,18 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
               style={{
                 background: isDark
                   ? (isSelected
-                      ? 'linear-gradient(180deg, rgba(99,102,241,0.28), rgba(99,102,241,0.18))'
-                      : 'linear-gradient(180deg, rgba(99,102,241,0.20), rgba(99,102,241,0.12))')
+                      ? 'color-mix(in srgb, var(--brand-primary) 22%, var(--bg-elevated) 78%)'
+                      : 'color-mix(in srgb, var(--brand-primary) 14%, var(--bg-elevated) 86%)')
                   : (isSelected
                       ? 'color-mix(in srgb, var(--color-primary) 10%, var(--bg-elevated) 90%)'
                       : 'color-mix(in srgb, var(--color-primary) 6%, var(--bg-elevated) 94%)'),
                 color: isDark
-                  ? '#e1e5ff'
+                  ? 'var(--brand-text)'
                   : 'color-mix(in srgb, var(--color-primary) 62%, var(--text-primary) 38%)',
                 border: isDark
-                  ? '1px solid rgba(129,140,248,0.34)'
+                  ? '1px solid color-mix(in srgb, var(--brand-primary) 34%, var(--border-subtle) 66%)'
                   : '1px solid color-mix(in srgb, var(--color-primary) 16%, var(--border-subtle) 84%)',
-                boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.05), 0 10px 20px rgba(57,72,153,0.16)' : 'none',
+                boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.04)' : 'none',
               }}
               onClick={(event) => {
                 event.stopPropagation();

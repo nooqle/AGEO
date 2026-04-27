@@ -1,31 +1,29 @@
 /**
  * Recharts SVG props (stroke, fill, tick) don't support CSS var().
- * These constants mirror design-system.css values.
- * Update BOTH files when changing theme.
+ * These constants mirror the restrained Specta evidence palette.
  */
 
 export const chart = {
-  grid: '#484848',
+  grid: '#D8D0C2',
   axis: {
-    tick: '#737373',       // --text-tertiary
+    tick: '#8F897D',       // --text-tertiary
     fontSize: 12,
   },
   tooltip: {
-    bg: '#1A1A1A',         // --bg-tertiary
-    border: '#484848',
+    bg: '#FFFDF7',         // --bg-elevated (light)
+    border: '#DDD2C1',
     radius: '8px',
-    text: '#E5E5E5',
+    text: '#242821',
   },
   colors: {
-    primary: '#6366F1',    // --color-primary
-    purple: '#8B5CF6',
-    green: '#22C55E',
-    yellow: '#F59E0B',     // --status-warning
-    red: '#EF4444',        // --status-error
-    cyan: '#06B6D4',       // --color-accent-cyan
-    pink: '#EC4899',       // --color-accent-pink
-    neutral: '#737373',    // --text-tertiary
-    secondary: '#A3A3A3',  // --text-secondary
+    primary: '#1F7A6B',
+    source: '#4F6F88',
+    evidence: '#7B6A4C',
+    green: '#3F8F62',
+    yellow: '#B7792B',
+    red: '#B44D45',
+    neutral: '#8F897D',
+    secondary: '#6F695E',
   },
 } as const;
 
@@ -46,10 +44,9 @@ export const axisTick = {
 /** Pie/donut chart color palette */
 export const PIE_COLORS = [
   chart.colors.primary,
-  chart.colors.purple,
+  chart.colors.source,
+  chart.colors.evidence,
   chart.colors.green,
   chart.colors.yellow,
   chart.colors.red,
-  chart.colors.cyan,
-  chart.colors.pink,
 ] as const;

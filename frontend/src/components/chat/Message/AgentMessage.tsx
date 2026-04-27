@@ -13,7 +13,7 @@ import { CompletionChecklist } from './CompletionChecklist';
 import { AttachmentList } from './AttachmentList';
 import { formatTime } from '@/lib/utils';
 import { cn } from '@/lib/cn';
-import { RiSparklingLine, RiBrainLine } from '@remixicon/react';
+import { RiLoader4Line } from '@remixicon/react';
 
 interface AgentMessageProps {
   message: Message;
@@ -50,12 +50,13 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
       {/* Agent avatar */}
       <div className="flex-shrink-0">
         <motion.div
-          className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#6366F1] to-[#8B5CF6] flex items-center justify-center shadow-md"
+          className="flex h-7 w-7 items-center justify-center rounded-md border bg-[var(--bg-elevated)] text-[11px] font-semibold tracking-[0.08em] text-[var(--brand-text)] shadow-[var(--shadow-sm)]"
+          style={{ borderColor: 'var(--border-subtle)' }}
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
-          transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
         >
-          <RiSparklingLine className="w-3.5 h-3.5 text-white" />
+          S
         </motion.div>
       </div>
 
@@ -150,9 +151,9 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                         'px-4 py-1.5 rounded-full text-sm font-medium transition-all border',
                         // Only highlight explicitly recommended options
                         option.recommended && !message.inlineConfirmation?.selectedOptionId
-                          ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
+                          ? 'bg-[var(--brand-primary)] border-[var(--brand-primary)] text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] shadow-sm'
                           : 'bg-transparent border-[var(--border-hover)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]',
-                        message.inlineConfirmation?.selectedOptionId === option.id && 'ring-2 ring-indigo-500 ring-offset-1 ring-offset-[var(--bg-primary)]',
+                        message.inlineConfirmation?.selectedOptionId === option.id && 'ring-2 ring-[var(--brand-primary)] ring-offset-1 ring-offset-[var(--bg-primary)]',
                         message.inlineConfirmation?.selectedOptionId && message.inlineConfirmation.selectedOptionId !== option.id && 'opacity-40 cursor-not-allowed'
                       )}
                     >
@@ -162,7 +163,7 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
                 </div>
                 {!message.inlineConfirmation.selectedOptionId && (
                   <p className="text-[11px] text-[var(--text-tertiary)] flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)] animate-pulse inline-block" />
                     Specta AI 将在你回复后继续工作
                   </p>
                 )}
@@ -208,29 +209,18 @@ export function AgentMessage({ message, onConfirmation, isStreaming = false }: A
         {/* Thought state — user-facing UI only shows a minimal thinking marker */}
         {isThinking && (
           <motion.div
-            className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[color-mix(in_srgb,var(--bg-elevated)_78%,transparent)] px-2.5 py-1 text-[11px] text-[var(--text-tertiary)] shadow-[0_0_0_1px_rgba(255,255,255,0.01)]"
+            className="inline-flex w-fit items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] text-[var(--text-tertiary)]"
             animate={prefersReducedMotion ? undefined : { opacity: [0.78, 1, 0.82] }}
             transition={prefersReducedMotion ? undefined : { duration: 1.6, repeat: Infinity, ease: [0.25, 1, 0.5, 1] }}
           >
             <motion.div
-              animate={prefersReducedMotion ? undefined : { rotate: [0, -8, 8, 0], scale: [1, 1.04, 1] }}
-              transition={prefersReducedMotion ? undefined : { duration: 1.8, repeat: Infinity, ease: [0.25, 1, 0.5, 1] }}
+              animate={prefersReducedMotion ? undefined : { rotate: 360 }}
+              transition={prefersReducedMotion ? undefined : { duration: 1.2, repeat: Infinity, ease: 'linear' }}
             >
-              <RiBrainLine className="h-3 w-3 text-[var(--brand-hover)]" />
+              <RiLoader4Line className="h-3 w-3 text-[var(--brand-text)]" />
             </motion.div>
 
-            <span className="text-[var(--text-secondary)]">正在思考</span>
-
-            <div className="flex items-center gap-1">
-              {[0, 1, 2].map((dot) => (
-                <motion.span
-                  key={dot}
-                  className="h-1 w-1 rounded-full bg-[var(--brand-hover)]"
-                  animate={prefersReducedMotion ? { opacity: 0.7 } : { opacity: [0.28, 1, 0.38], y: [0, -1.5, 0], scale: [0.9, 1.25, 0.95] }}
-                  transition={prefersReducedMotion ? undefined : { duration: 1.05, repeat: Infinity, delay: dot * 0.15, ease: [0.25, 1, 0.5, 1] }}
-                />
-              ))}
-            </div>
+            <span className="text-[var(--text-secondary)]">分析中</span>
           </motion.div>
         )}
 

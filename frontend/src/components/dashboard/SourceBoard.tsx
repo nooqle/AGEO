@@ -19,10 +19,8 @@ export function SourceBoard({ data, onClick }: SourceBoardProps) {
     <button
       type="button"
       onClick={onClick}
-      className="dashboard-board dashboard-board--amber group relative h-full overflow-hidden rounded-[28px] p-6 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--border-hover)]"
+      className="dashboard-board dashboard-board--amber group relative h-full overflow-hidden rounded-[18px] p-6 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--border-hover)]"
     >
-      <div className="pointer-events-none absolute right-[-30px] top-[-40px] h-[148px] w-[148px] rounded-full blur-3xl" style={{ background: 'color-mix(in srgb, #d6a05c 18%, transparent)' }} />
-
       <div className="relative flex h-full flex-col">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'color-mix(in srgb, #d6a05c 16%, var(--bg-elevated) 84%)' }}>
@@ -50,7 +48,7 @@ export function SourceBoard({ data, onClick }: SourceBoardProps) {
             <div className="text-[11px] tracking-[0.08em] text-[var(--text-tertiary)]">第三方引用</div>
             <div className="mt-1 text-[20px] font-semibold text-[var(--text-primary)]">{nonOfficialCount}</div>
           </div>
-          <div className="rounded-[18px] border px-3 py-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--bg-tertiary) 82%, #f5eff8 18%)' }}>
+          <div className="rounded-[18px] border px-3 py-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--bg-tertiary) 84%, #eef3f4 16%)' }}>
             <div className="text-[11px] tracking-[0.08em] text-[var(--text-tertiary)]">主要来源</div>
             <div className="mt-1 text-[15px] font-semibold text-[var(--text-primary)]">{topSourceLabel || '--'}</div>
           </div>

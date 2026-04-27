@@ -103,8 +103,8 @@ export const selectionCardVariants: Variants = {
     backgroundColor: '#141414',
   },
   selected: {
-    borderColor: '#6366F1',
-    backgroundColor: 'rgba(99, 102, 241, 0.08)',
+    borderColor: 'var(--brand-primary)',
+    backgroundColor: 'var(--brand-bg)',
     transition: transitions.fast,
   },
 };

@@ -25,7 +25,7 @@ const ICON_MAP: Record<FollowUpSuggestion['type'], typeof RiSearchEyeLine> = {
 
 const ICON_COLORS: Record<FollowUpSuggestion['type'], string> = {
   drill_down: 'var(--info, #3B82F6)',
-  compare: 'var(--phase-plan, #8B5CF6)',
+  compare: 'var(--phase-plan, #4F6F88)',
   refetch: 'var(--warning, #F59E0B)',
   general: 'var(--text-secondary)',
 };

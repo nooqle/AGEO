@@ -21,7 +21,7 @@ interface RadarChartProps {
   colors?: string[];
 }
 
-const defaultColors = ["#6366F1", "#EC4899", "#22C55E", "#F59E0B", "#8B5CF6"];
+const defaultColors = ["#1F7A6B", "#4F6F88", "#7B6A4C", "#3F8F62", "#B7792B"];
 
 export function BrandRadarChart({ data, brands, colors = defaultColors }: RadarChartProps) {
   return (

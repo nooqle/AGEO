@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { RiArrowDownSLine, RiBrainLine, RiListCheck, RiFlashlightLine, RiEyeLine, RiMessage3Line, RiLoader4Line } from '@remixicon/react';
+import { RiArrowDownSLine, RiSearchLine, RiListCheck, RiFlashlightLine, RiEyeLine, RiMessage3Line, RiLoader4Line } from '@remixicon/react';
 import { cn } from '@/lib/cn';
 
 interface TPAORBlockProps {
@@ -15,15 +15,15 @@ interface TPAORBlockProps {
 
 const phaseConfig = {
   thought: {
-    icon: RiBrainLine,
+    icon: RiSearchLine,
     label: '思考',
     activeLabel: '正在思考...',
     colors: {
       bg: 'bg-[var(--bg-elevated)]',
-      border: 'border-[#8B5CF6]/30',
+      border: 'border-[var(--brand-border)]',
       text: 'text-[var(--text-primary)]',
-      icon: 'text-[#8B5CF6]',
-      ring: 'ring-[#8B5CF6]/50',
+      icon: 'text-[var(--brand-text)]',
+      ring: 'ring-[var(--brand-border)]',
     },
   },
   plan: {
@@ -32,10 +32,10 @@ const phaseConfig = {
     activeLabel: '正在规划...',
     colors: {
       bg: 'bg-[var(--bg-elevated)]',
-      border: 'border-[#3B82F6]/30',
+      border: 'border-[var(--border-hover)]',
       text: 'text-[var(--text-primary)]',
-      icon: 'text-[#3B82F6]',
-      ring: 'ring-[#3B82F6]/50',
+      icon: 'text-[var(--info)]',
+      ring: 'ring-[var(--border-hover)]',
     },
   },
   action: {
@@ -44,10 +44,10 @@ const phaseConfig = {
     activeLabel: '正在执行...',
     colors: {
       bg: 'bg-[var(--bg-elevated)]',
-      border: 'border-[#F59E0B]/30',
+      border: 'border-[var(--border-hover)]',
       text: 'text-[var(--text-primary)]',
-      icon: 'text-[#F59E0B]',
-      ring: 'ring-[#F59E0B]/50',
+      icon: 'text-[var(--warning)]',
+      ring: 'ring-[var(--border-hover)]',
     },
   },
   observation: {
@@ -56,10 +56,10 @@ const phaseConfig = {
     activeLabel: '正在观察...',
     colors: {
       bg: 'bg-[var(--bg-elevated)]',
-      border: 'border-[#22C55E]/30',
+      border: 'border-[var(--border-hover)]',
       text: 'text-[var(--text-primary)]',
-      icon: 'text-[#22C55E]',
-      ring: 'ring-[#22C55E]/50',
+      icon: 'text-[var(--success)]',
+      ring: 'ring-[var(--border-hover)]',
     },
   },
   response: {
@@ -68,10 +68,10 @@ const phaseConfig = {
     activeLabel: '正在生成回复...',
     colors: {
       bg: 'bg-[var(--bg-elevated)]',
-      border: 'border-[#6366F1]/30',
+      border: 'border-[var(--brand-border)]',
       text: 'text-[var(--text-primary)]',
-      icon: 'text-[#6366F1]',
-      ring: 'ring-[#6366F1]/50',
+      icon: 'text-[var(--brand-text)]',
+      ring: 'ring-[var(--brand-border)]',
     },
   },
 };

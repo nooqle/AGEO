@@ -106,7 +106,7 @@ export function BrandDetailDialog({ entity, open, onClose }: BrandDetailDialogPr
           <Dialog.Overlay className={modalScrimClassName('z-50')} />
           <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
-              className="w-full max-w-lg flex flex-col rounded-2xl overflow-hidden max-h-[80vh]"
+              className="w-full max-w-lg flex flex-col rounded-xl overflow-hidden max-h-[80vh]"
               style={{
                 background: 'var(--bg-secondary)',
                 border: '1px solid var(--border-subtle)',

@@ -20,7 +20,7 @@ const priorityTone = {
 
 const battleStatusTone = {
   advantage: { color: chart.colors.green, bg: `${chart.colors.green}1a`, label: '优势' },
-  defend: { color: chart.colors.cyan, bg: `${chart.colors.cyan}1a`, label: '防守' },
+  defend: { color: chart.colors.source, bg: `${chart.colors.source}1a`, label: '防守' },
   contested: { color: chart.colors.yellow, bg: `${chart.colors.yellow}1a`, label: '争夺' },
   missing: { color: chart.colors.red, bg: `${chart.colors.red}1a`, label: '缺席' },
 } as const;

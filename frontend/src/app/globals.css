@@ -26,78 +26,89 @@
   --color-border-focus: var(--border-focus);
 }
 
-/* Specta AI 深色主题设计系统 */
+/* Specta brand intelligence design system */
 :root {
   /* 背景层级 */
-  --bg-primary: #0D0D0D;
-  --bg-secondary: #1A1A1A;
-  --bg-tertiary: #262626;
-  --bg-elevated: #2D2D2D;
+  --bg-primary: #101311;
+  --bg-secondary: #171B18;
+  --bg-tertiary: #20261F;
+  --bg-elevated: #252B26;
+  --bg-report: #191D1A;
+  --bg-report-muted: #202620;
 
   /* 文字层级 */
-  --text-primary: #FFFFFF;
-  --text-secondary: #A3A3A3;
-  --text-tertiary: #8A8A8A;
-  --text-disabled: #525252;
-  --text-muted: #6B6B6B;
+  --text-primary: #F4F1E8;
+  --text-secondary: #B8B2A6;
+  --text-tertiary: #8F897D;
+  --text-disabled: #5D584F;
+  --text-muted: #777167;
 
   /* 品牌色 */
-  --brand-primary: #6366F1;
-  --brand-hover: #818CF8;
-  --brand-active: #4F46E5;
+  --brand-primary: #1F7A6B;
+  --brand-hover: #2E8F7E;
+  --brand-active: #155E53;
+  --brand-contrast: #F4F1E8;
 
   /* 语义色 */
-  --success: #22C55E;
-  --warning: #F59E0B;
-  --error: #EF4444;
-  --info: #3B82F6;
+  --success: #3F8F62;
+  --warning: #B7792B;
+  --error: #B44D45;
+  --info: #4F6F88;
 
   /* 边框 — rgba 透明混合，随背景自动融合 */
-  --border-default: rgba(255, 255, 255, 0.05);
-  --border-hover:   rgba(255, 255, 255, 0.10);
-  --border-focus:   #6366F1;
-  --border-subtle:  rgba(255, 255, 255, 0.025);
+  --border-default: rgba(244, 241, 232, 0.08);
+  --border-hover:   rgba(244, 241, 232, 0.16);
+  --border-focus:   #2E8F7E;
+  --border-subtle:  rgba(244, 241, 232, 0.055);
+  --border-strong:  rgba(244, 241, 232, 0.22);
 
   /* TPAOR 阶段色 */
-  --phase-thought: #8B5CF6;
-  --phase-plan: #3B82F6;
-  --phase-action: #F59E0B;
-  --phase-observe: #22C55E;
-  --phase-response: #6366F1;
+  --phase-thought: #7B6A4C;
+  --phase-plan: #4F6F88;
+  --phase-action: #B7792B;
+  --phase-observe: #3F8F62;
+  --phase-response: #1F7A6B;
 
   /* 过渡动画 */
   --transition-fast: 150ms ease-out;
   --transition-normal: 200ms ease-out;
   --transition-slow: 300ms ease-out;
-  --transition-bounce: 300ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --transition-bounce: 240ms cubic-bezier(0.22, 1, 0.36, 1);
 
   /* 以下变量在 design-system.css 中存在但 globals.css 中缺失，统一补入 */
-  --bg-card: rgba(17, 17, 17, 0.8);
-  --color-primary: #6366F1;
-  --color-primary-light: #818CF8;
-  --color-primary-dark: #4F46E5;
-  --color-primary-glow: rgba(99, 102, 241, 0.4);
-  --color-secondary: #10B981;
-  --status-success: #22C55E;
-  --status-warning: #F59E0B;
-  --status-error: #EF4444;
-  --status-info: #3B82F6;
-  --status-success-bg: rgba(34, 197, 94, 0.1);
-  --status-warning-bg: rgba(245, 158, 11, 0.1);
-  --status-error-bg: rgba(239, 68, 68, 0.1);
-  --status-info-bg: rgba(59, 130, 246, 0.1);
+  --bg-card: rgba(25, 29, 26, 0.92);
+  --color-primary: #1F7A6B;
+  --color-primary-light: #56A192;
+  --color-primary-dark: #155E53;
+  --color-primary-glow: rgba(31, 122, 107, 0.14);
+  --color-secondary: #7B6A4C;
+  --status-success: #3F8F62;
+  --status-warning: #B7792B;
+  --status-error: #B44D45;
+  --status-info: #4F6F88;
+  --status-success-bg: rgba(63, 143, 98, 0.12);
+  --status-warning-bg: rgba(183, 121, 43, 0.12);
+  --status-error-bg: rgba(180, 77, 69, 0.12);
+  --status-info-bg: rgba(79, 111, 136, 0.12);
 
   /* 品牌色辅助变量（深色模式） */
-  --brand-bg:       rgba(99, 102, 241, 0.1);
-  --brand-bg-hover: rgba(99, 102, 241, 0.15);
-  --brand-border:   rgba(99, 102, 241, 0.3);
-  --brand-text:     #818CF8;
+  --brand-bg:       rgba(31, 122, 107, 0.14);
+  --brand-bg-hover: rgba(31, 122, 107, 0.20);
+  --brand-border:   rgba(46, 143, 126, 0.36);
+  --brand-text:     #79B7AA;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.3);
-  --glass-bg: rgba(17, 17, 17, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.05);
+  --shadow-md: 0 8px 18px -12px rgba(0, 0, 0, 0.58);
+  --shadow-lg: 0 18px 44px -28px rgba(0, 0, 0, 0.7);
+  --shadow-glow: 0 0 0 1px rgba(46, 143, 126, 0.18);
+  --glass-bg: rgba(25, 29, 26, 0.84);
+  --glass-border: rgba(244, 241, 232, 0.08);
+  --surface-command: #1D231F;
+  --surface-command-hover: #26302A;
+  --evidence-primary: #1F7A6B;
+  --evidence-secondary: #7B6A4C;
+  --evidence-source: #4F6F88;
+  --evidence-risk: #B44D45;
+  --evidence-opportunity: #B7792B;
 }
 
 /* 全局样式 */
@@ -113,9 +124,10 @@ html {
 }
 
 body {
-  background-color: var(--bg-primary);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 96%, #2a241b 4%), var(--bg-primary));
   color: var(--text-primary);
-  font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
   overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -500,7 +512,7 @@ body {
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
   font-size: 0.875rem;
-  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .prose-chat pre {
@@ -611,71 +623,83 @@ textarea::placeholder {
    ============================================ */
 html[data-theme="light"] {
   /* 背景层级 — 由浅到深，间隔明显 (Linear/Notion 风格) */
-  --bg-primary:    #F8F9FA;
-  --bg-secondary:  #FFFFFF;
-  --bg-tertiary:   #F1F3F5;
-  --bg-elevated:   #FFFFFF;
-  --bg-card:       rgba(255, 255, 255, 0.95);
+  --bg-primary:    #F7F4EC;
+  --bg-secondary:  #FCFAF5;
+  --bg-tertiary:   #ECE7DC;
+  --bg-elevated:   #FFFDF7;
+  --bg-card:       rgba(255, 253, 247, 0.96);
+  --bg-report:     #FFFDF7;
+  --bg-report-muted: #F2EDE3;
 
   /* 文字层级 — 基于 Slate 色阶，柔和不刺眼 */
-  --text-primary:   #1A1A2E;
-  --text-secondary: #64748B;
-  --text-tertiary:  #94A3B8;
-  --text-disabled:  #CBD5E1;
-  --text-muted:     #B0BEC5;
+  --text-primary:   #242823;
+  --text-secondary: #656155;
+  --text-tertiary:  #8E8778;
+  --text-disabled:  #C5BDAE;
+  --text-muted:     #A39B8B;
 
   /* 边框 — rgba 透明混合，随背景自动融合 */
-  --border-default: rgba(0, 0, 0, 0.06);
-  --border-hover:   rgba(0, 0, 0, 0.10);
-  --border-focus:   #6366F1;
-  --border-subtle:  rgba(0, 0, 0, 0.03);
+  --border-default: rgba(50, 45, 35, 0.10);
+  --border-hover:   rgba(50, 45, 35, 0.18);
+  --border-focus:   #1F7A6B;
+  --border-subtle:  rgba(50, 45, 35, 0.075);
+  --border-strong:  rgba(50, 45, 35, 0.24);
 
-  /* 品牌色 — Indigo 系列 */
-  --brand-primary:  #6366F1;
-  --brand-hover:    #4F46E5;
-  --brand-active:   #4338CA;
-  --color-primary:  #6366F1;
-  --color-primary-light: #A5B4FC;
-  --color-primary-dark:  #4F46E5;
-  --color-primary-glow:  rgba(99, 102, 241, 0.08);
+  /* 品牌色 */
+  --brand-primary:  #1F7A6B;
+  --brand-hover:    #176B5E;
+  --brand-active:   #11574C;
+  --brand-contrast: #FFFDF7;
+  --color-primary:  #1F7A6B;
+  --color-primary-light: #6DAEA1;
+  --color-primary-dark:  #11574C;
+  --color-primary-glow:  rgba(31, 122, 107, 0.10);
 
   /* 品牌色辅助变量 */
-  --brand-bg:       #EEF2FF;
-  --brand-bg-hover: #E0E7FF;
-  --brand-border:   #C7D2FE;
-  --brand-text:     #4338CA;
+  --brand-bg:       #DCECE7;
+  --brand-bg-hover: #CCE3DD;
+  --brand-border:   #A8D0C7;
+  --brand-text:     #11574C;
 
   /* 语义/状态色 */
-  --success: #16A34A;
-  --warning: #D97706;
-  --error:   #DC2626;
-  --info:    #2563EB;
-  --status-success: #16A34A;
-  --status-warning: #D97706;
-  --status-error:   #DC2626;
-  --status-info:    #2563EB;
-  --status-success-bg: rgba(22, 163, 74, 0.10);
-  --status-warning-bg: rgba(217, 119, 6, 0.10);
-  --status-error-bg:   rgba(220, 38, 38, 0.10);
-  --status-info-bg:    rgba(37, 99, 235, 0.10);
+  --success: #3F8F62;
+  --warning: #B7792B;
+  --error:   #B44D45;
+  --info:    #4F6F88;
+  --status-success: #3F8F62;
+  --status-warning: #B7792B;
+  --status-error:   #B44D45;
+  --status-info:    #4F6F88;
+  --status-success-bg: rgba(63, 143, 98, 0.12);
+  --status-warning-bg: rgba(183, 121, 43, 0.12);
+  --status-error-bg:   rgba(180, 77, 69, 0.12);
+  --status-info-bg:    rgba(79, 111, 136, 0.12);
 
   /* TPAOR 阶段色 */
-  --phase-thought:  #7C3AED;
-  --phase-plan:     #2563EB;
-  --phase-action:   #D97706;
-  --phase-observe:  #16A34A;
-  --phase-response: #4338CA;
+  --phase-thought:  #7B6A4C;
+  --phase-plan:     #4F6F88;
+  --phase-action:   #B7792B;
+  --phase-observe:  #3F8F62;
+  --phase-response: #1F7A6B;
 
   /* 阴影 — 极轻 */
   --shadow-sm:   0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md:   0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
   --shadow-lg:   0 8px 16px -4px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
-  --shadow-glow: 0 0 16px rgba(99, 102, 241, 0.10);
+  --shadow-glow: 0 0 0 1px rgba(31, 122, 107, 0.16);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
 
   /* Glass */
-  --glass-bg:     rgba(255, 255, 255, 0.80);
-  --glass-border: rgba(0, 0, 0, 0.05);
+  --glass-bg:     rgba(255, 253, 247, 0.86);
+  --glass-border: rgba(50, 45, 35, 0.08);
+  --surface-command: #F4EFE5;
+  --surface-command-hover: #ECE4D7;
+  --bg-dashboard-band: #F7F0E5;
+  --evidence-primary: #1F7A6B;
+  --evidence-secondary: #7B6A4C;
+  --evidence-source: #4F6F88;
+  --evidence-risk: #B44D45;
+  --evidence-opportunity: #B7792B;
 }
 
 /* 主题切换过渡动画 */
@@ -696,41 +720,38 @@ html.theme-transitioning *::after {
 
 .dashboard-page-bg {
   background:
-    radial-gradient(circle at 10% -8%, color-mix(in srgb, var(--color-primary) 30%, transparent), transparent 26%),
-    radial-gradient(circle at 88% 2%, color-mix(in srgb, #d8a45d 24%, transparent), transparent 24%),
-    radial-gradient(circle at 54% 102%, color-mix(in srgb, #2c7b6f 18%, transparent), transparent 28%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 82%, #0e1b37 18%), color-mix(in srgb, var(--bg-primary) 92%, #17120f 8%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 94%, #252016 6%), var(--bg-primary));
 }
 
 .dashboard-shell {
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 52%, #c39c67 48%);
+  border: 1px solid var(--border-subtle);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 76%, #1a2743 24%), color-mix(in srgb, var(--bg-secondary) 90%, #1a140f 10%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 88%, #2b251a 12%), color-mix(in srgb, var(--bg-secondary) 94%, #151915 6%));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 28px 72px rgba(4, 10, 24, 0.38);
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 20px 44px rgba(4, 10, 20, 0.22);
 }
 
 .dashboard-inner-panel {
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, rgba(255,255,255,0.08) 28%);
+  border: 1px solid var(--border-subtle);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 78%, #202c44 22%), color-mix(in srgb, var(--bg-tertiary) 92%, #18120f 8%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 92%, #2a241a 8%), var(--bg-tertiary));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 16px 34px rgba(4, 10, 24, 0.18);
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 12px 28px rgba(4, 10, 20, 0.14);
 }
 
 .dashboard-board {
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 64%, rgba(255,255,255,0.1) 36%);
+  border: 1px solid var(--border-subtle);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 22px 48px rgba(7, 11, 22, 0.28);
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 16px 34px rgba(7, 11, 18, 0.18);
 }
 
-.dashboard-board--violet {
+.dashboard-board--analysis {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 66%, #30366d 34%), color-mix(in srgb, var(--bg-secondary) 90%, #191524 10%));
-  border-color: color-mix(in srgb, var(--border-subtle) 46%, #8f8cff 54%);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, var(--evidence-source) 10%), color-mix(in srgb, var(--bg-secondary) 94%, #19160f 6%));
+  border-color: color-mix(in srgb, var(--border-subtle) 70%, var(--evidence-source) 30%);
 }
 
 .dashboard-board--amber {
@@ -768,18 +789,16 @@ html.theme-transitioning *::after {
 
 html[data-theme="light"] .dashboard-page-bg {
   background:
-    radial-gradient(circle at 10% -4%, color-mix(in srgb, var(--color-primary) 10%, transparent), transparent 24%),
-    radial-gradient(circle at 88% 6%, color-mix(in srgb, #d4a75f 12%, transparent), transparent 20%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 96%, #f7f1e5 4%), color-mix(in srgb, var(--bg-primary) 99%, #efe7da 1%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 96%, var(--bg-dashboard-band) 4%), color-mix(in srgb, var(--bg-primary) 99%, #efe7da 1%));
 }
 
 html[data-theme="light"] .dashboard-shell {
-  border-color: color-mix(in srgb, var(--border-subtle) 70%, #b69467 30%);
+  border-color: var(--border-subtle);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 92%, #faf5ed 8%), color-mix(in srgb, var(--bg-secondary) 98%, #f3ebdf 2%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 95%, #f5ead8 5%), color-mix(in srgb, var(--bg-secondary) 99%, #f3ebdf 1%));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.6),
-    0 22px 50px rgba(65, 49, 24, 0.05);
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 16px 34px rgba(65, 49, 24, 0.045);
 }
 
 html[data-theme="light"] .dashboard-inner-panel {
@@ -792,10 +811,10 @@ html[data-theme="light"] .dashboard-board {
   box-shadow: 0 18px 38px rgba(65, 49, 24, 0.05);
 }
 
-html[data-theme="light"] .dashboard-board--violet {
+html[data-theme="light"] .dashboard-board--analysis {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, #f3efff 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f7f2eb 2%));
-  border-color: color-mix(in srgb, var(--border-subtle) 82%, var(--color-primary) 18%);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #edf3f1 6%), color-mix(in srgb, var(--bg-elevated) 99%, #f7f2eb 1%));
+  border-color: color-mix(in srgb, var(--border-subtle) 84%, var(--evidence-source) 16%);
 }
 
 html[data-theme="light"] .dashboard-board--amber {
@@ -843,6 +862,37 @@ html[data-theme="light"] .glass-strong {
 html[data-theme="light"] textarea,
 html[data-theme="light"] input {
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.public-light-surface {
+  --bg-primary: #F7F4EC;
+  --bg-secondary: #FCFAF5;
+  --bg-tertiary: #ECE7DC;
+  --bg-elevated: #FFFDF7;
+  --bg-report-muted: #EFE9DE;
+  --text-primary: #16201D;
+  --text-secondary: #5F6A64;
+  --text-tertiary: #8A948C;
+  --text-disabled: #B5BDB6;
+  --border-subtle: rgba(42, 35, 24, 0.10);
+  --border-default: rgba(42, 35, 24, 0.16);
+  --border-hover: rgba(31, 122, 107, 0.34);
+  --brand-primary: #1F7A6B;
+  --brand-hover: #17685B;
+  --brand-contrast: #FFFDF7;
+  --brand-bg: #DCECE7;
+  --brand-bg-hover: #CCE3DD;
+  --brand-border: rgba(31, 122, 107, 0.24);
+  --brand-text: #17685B;
+  --status-success: #3F8F62;
+  --status-warning: #B7792B;
+  --status-error: #B44D45;
+  --status-info: #4F6F88;
+  --status-success-bg: rgba(63, 143, 98, 0.12);
+  --status-warning-bg: rgba(183, 121, 43, 0.12);
+  --status-error-bg: rgba(180, 77, 69, 0.12);
+  --status-info-bg: rgba(79, 111, 136, 0.12);
+  --shadow-sm: 0 1px 2px rgba(42, 35, 24, 0.08);
 }
 
 /* Message highlight animation — triggered when jumping from Canvas to Chat */

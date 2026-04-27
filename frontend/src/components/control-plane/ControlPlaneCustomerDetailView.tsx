@@ -426,7 +426,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                     <div
                       key={user.id}
                       className="rounded-2xl border px-4 py-4"
-                      style={{ borderColor: palette.border, background: '#fafcff' }}
+                      style={{ borderColor: palette.border, background: palette.panelMuted }}
                     >
                       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_220px_180px_auto]">
                         <input
@@ -564,7 +564,7 @@ function TabButton({
       className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-colors"
       style={{
         background: active ? palette.accent : 'transparent',
-        color: active ? '#ffffff' : palette.muted,
+        color: active ? palette.accentContrast : palette.muted,
       }}
     >
       {icon}
@@ -597,7 +597,7 @@ function EntityList({
         <div
           key={entity.id}
           className="rounded-2xl border px-4 py-4"
-          style={{ borderColor: palette.border, background: '#fafcff' }}
+          style={{ borderColor: palette.border, background: palette.panelMuted }}
         >
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -614,10 +614,12 @@ function EntityList({
               className="rounded-full px-2 py-1 text-[11px] font-semibold"
               style={{
                 background:
-                  entity.visibility_scope === 'organization' ? '#eef4ff' : '#f3f5f8',
+                  entity.visibility_scope === 'organization'
+                    ? palette.accentSoft
+                    : 'var(--bg-report-muted)',
                 color:
                   entity.visibility_scope === 'organization'
-                    ? palette.accent
+                    ? palette.accentText
                     : palette.muted,
               }}
             >

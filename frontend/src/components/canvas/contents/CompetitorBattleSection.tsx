@@ -111,7 +111,7 @@ export function CompetitorBattleSection({ data }: CompetitorBattleSectionProps) 
                           'rounded-full px-2.5 py-1 text-[11px] font-medium',
                           item.battle_status === 'advantage' && 'bg-emerald-500/10 text-emerald-400',
                           item.battle_status === 'defend' && 'bg-amber-500/10 text-amber-400',
-                          item.battle_status === 'contested' && 'bg-blue-500/10 text-blue-400',
+                          item.battle_status === 'contested' && 'bg-[var(--status-info-bg)] text-[var(--status-info)]',
                           item.battle_status === 'missing' && 'bg-red-500/10 text-red-400'
                         )}
                       >

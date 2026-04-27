@@ -14,19 +14,25 @@ import {
 } from '@remixicon/react';
 
 import { cn } from '@/lib/utils';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
 
 const palette = {
-  page: '#f5f7fb',
-  panel: '#ffffff',
-  sidebar: '#fbfcfe',
-  border: 'rgba(15, 23, 42, 0.08)',
-  borderStrong: 'rgba(15, 23, 42, 0.12)',
-  text: '#15243a',
-  muted: '#5f6f86',
-  subtle: '#95a1b2',
-  accent: '#0052d9',
-  accentSoft: '#e9f2ff',
-  successSoft: '#edfdf5',
+  page: 'var(--bg-primary)',
+  panel: 'var(--bg-elevated)',
+  panelMuted: 'var(--bg-report-muted)',
+  sidebar: 'var(--bg-secondary)',
+  border: 'var(--border-subtle)',
+  borderStrong: 'var(--border-default)',
+  text: 'var(--text-primary)',
+  muted: 'var(--text-secondary)',
+  subtle: 'var(--text-tertiary)',
+  accent: 'var(--brand-primary)',
+  accentText: 'var(--brand-text)',
+  accentSoft: 'var(--brand-bg)',
+  accentContrast: 'var(--brand-contrast)',
+  successSoft: 'var(--status-success-bg)',
+  warning: 'var(--status-warning)',
+  warningSoft: 'var(--status-warning-bg)',
 };
 
 type NavItem = {
@@ -93,17 +99,16 @@ export function ControlPlaneShell({
           }}
         >
           <div
-            className="rounded-[22px] border px-4 py-4"
+            className="rounded-xl border px-4 py-4"
             style={{
               borderColor: palette.borderStrong,
-              background:
-                'linear-gradient(180deg, rgba(0,82,217,0.08), rgba(0,82,217,0.02))',
+              background: palette.panel,
             }}
           >
             <div className="flex items-center gap-3">
               <div
-                className="flex h-10 w-10 items-center justify-center rounded-2xl"
-                style={{ background: palette.accent, color: '#fff' }}
+                className="flex h-10 w-10 items-center justify-center rounded-xl"
+                style={{ background: palette.accentSoft, color: palette.accentText }}
               >
                 <RiApps2Line className="h-5 w-5" />
               </div>
@@ -133,11 +138,11 @@ export function ControlPlaneShell({
                     key={item.label}
                     href={item.href}
                     className={cn(
-                      'group flex items-center gap-3 rounded-2xl px-3 py-3 text-sm transition-all'
+                      'group flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition-all'
                     )}
                     style={{
                       background: isActive ? palette.accentSoft : 'transparent',
-                      color: isActive ? palette.accent : palette.muted,
+                      color: isActive ? palette.accentText : palette.muted,
                     }}
                   >
                     <span>{item.icon}</span>
@@ -154,7 +159,7 @@ export function ControlPlaneShell({
           <div className="mt-8 space-y-3">
             <Link
               href="/dashboard"
-              className="flex items-center gap-3 rounded-2xl border px-3 py-3 text-sm"
+              className="flex items-center gap-3 rounded-xl border px-3 py-3 text-sm"
               style={{
                 borderColor: palette.border,
                 background: palette.panel,
@@ -166,7 +171,7 @@ export function ControlPlaneShell({
             </Link>
             {asideMeta ? (
               <div
-                className="rounded-2xl border px-3 py-3 text-xs leading-6"
+                className="rounded-xl border px-3 py-3 text-xs leading-6"
                 style={{
                   borderColor: palette.border,
                   background: palette.successSoft,
@@ -184,8 +189,7 @@ export function ControlPlaneShell({
             className="sticky top-0 z-20 border-b px-5 py-4 lg:px-8"
             style={{
               borderColor: palette.border,
-              background: 'rgba(245, 247, 251, 0.94)',
-              backdropFilter: 'blur(16px)',
+              background: palette.page,
             }}
           >
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -215,7 +219,10 @@ export function ControlPlaneShell({
                   ) : null}
                 </div>
               </div>
-              {actions ? <div className="flex items-center gap-3">{actions}</div> : null}
+              <div className="flex items-center gap-3">
+                <ThemeToggle />
+                {actions}
+              </div>
             </div>
           </header>
 
@@ -242,11 +249,11 @@ export function ControlPlanePanel({
   return (
     <section
       id={id}
-      className="rounded-[24px] border px-5 py-5 lg:px-6 lg:py-6"
+      className="rounded-xl border px-5 py-5 lg:px-6 lg:py-6"
       style={{
         borderColor: palette.border,
         background: palette.panel,
-        boxShadow: '0 14px 30px rgba(15, 23, 42, 0.04)',
+        boxShadow: 'var(--shadow-sm)',
       }}
     >
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -276,11 +283,11 @@ export function ControlPlaneStatCard({
 }) {
   return (
     <div
-      className="rounded-[22px] border px-5 py-5"
+      className="rounded-xl border px-5 py-5"
       style={{
         borderColor: palette.border,
         background: palette.panel,
-        boxShadow: '0 12px 26px rgba(15, 23, 42, 0.03)',
+        boxShadow: 'var(--shadow-sm)',
       }}
     >
       <div className="text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: palette.subtle }}>

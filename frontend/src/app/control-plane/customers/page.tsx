@@ -122,7 +122,7 @@ function ControlPlaneCustomersContent() {
                 className="rounded-xl px-3 py-2 text-xs font-semibold transition-colors"
                 style={{
                   background: days === option ? palette.accent : 'transparent',
-                  color: days === option ? '#ffffff' : palette.muted,
+                  color: days === option ? palette.accentContrast : palette.muted,
                 }}
               >
                 最近 {option} 天

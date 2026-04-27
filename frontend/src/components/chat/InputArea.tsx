@@ -238,8 +238,8 @@ export function InputArea({
                 onClick={() => onConfirmation?.(option.id)}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors hover:opacity-90"
                 style={{
-                  backgroundColor: option.recommended ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                  color: option.recommended ? '#fff' : 'var(--text-secondary)',
+                  backgroundColor: option.recommended ? 'var(--brand-primary)' : 'var(--bg-tertiary)',
+                  color: option.recommended ? 'var(--brand-contrast)' : 'var(--text-secondary)',
                 }}
               >
                 {option.label}
@@ -298,9 +298,9 @@ export function InputArea({
                 intent: '\u610F\u56FE',
               };
               const typeColors: Record<string, string> = {
-                profile: '#a855f7',
-                scenario: '#3b82f6',
-                intent: '#f59e0b',
+                profile: 'var(--evidence-secondary)',
+                scenario: 'var(--evidence-source)',
+                intent: 'var(--evidence-opportunity)',
               };
               return (
                 <span
@@ -364,9 +364,9 @@ export function InputArea({
               disabled={isExecuting || disabled || isUploading}
               rows={1}
               className={cn(
-                'flex-1 resize-none rounded-2xl px-4 py-3 text-sm leading-6',
+                'flex-1 resize-none rounded-[14px] px-4 py-3 text-sm leading-6',
                 'border',
-                'focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20',
+                'focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/15',
                 'min-h-[48px] max-h-[200px]',
                 'self-center',
                 'disabled:cursor-not-allowed disabled:opacity-50',
@@ -387,10 +387,10 @@ export function InputArea({
               <button
                 onClick={handleSubmit}
                 disabled={(!content.trim() && attachments.length === 0) || disabled || isUploading}
-                className="self-center p-2.5 rounded-xl transition-all flex-shrink-0 hover:opacity-90"
+                className="self-center flex-shrink-0 rounded-[12px] p-2.5 transition-colors hover:opacity-90"
                 style={{
-                  backgroundColor: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                  color: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? '#fff' : 'var(--text-muted)',
+                  backgroundColor: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? 'var(--brand-primary)' : 'var(--bg-tertiary)',
+                  color: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? 'var(--brand-contrast)' : 'var(--text-muted)',
                   cursor: (content.trim() || attachments.length > 0) && !disabled && !isUploading ? 'pointer' : 'not-allowed',
                 }}
               >
@@ -447,8 +447,8 @@ export function InputArea({
                     <span
                       className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full"
                       style={{
-                        backgroundColor: 'rgba(37,99,235,0.12)',
-                        color: '#2563eb',
+                        backgroundColor: 'var(--brand-bg)',
+                        color: 'var(--brand-text)',
                       }}
                     >
                       <RiShieldCheckLine className="h-4 w-4" />
@@ -470,9 +470,9 @@ export function InputArea({
               <span
                 className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs"
                 style={{
-                  borderColor: 'rgba(37,99,235,0.22)',
-                  backgroundColor: 'rgba(37,99,235,0.08)',
-                  color: '#1d4ed8',
+                  borderColor: 'var(--brand-border)',
+                  backgroundColor: 'var(--brand-bg)',
+                  color: 'var(--brand-text)',
                 }}
               >
                 <RiShieldCheckLine className="h-3.5 w-3.5" />

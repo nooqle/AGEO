@@ -53,7 +53,7 @@ export function RiskSection({ data }: RiskSectionProps) {
                       'rounded-full px-2.5 py-1 text-[11px] font-medium',
                       item.severity === 'high' && 'bg-red-500/10 text-red-400',
                       item.severity === 'medium' && 'bg-amber-500/10 text-amber-400',
-                      item.severity === 'low' && 'bg-blue-500/10 text-blue-400'
+                      item.severity === 'low' && 'bg-[var(--status-info-bg)] text-[var(--status-info)]'
                     )}
                   >
                     {severityLabel[item.severity] || item.severity}

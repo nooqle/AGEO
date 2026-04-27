@@ -26,7 +26,7 @@ interface ChartContentProps {
   content: ChartCanvasContent;
 }
 
-const COLORS = ['#6366F1', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#3B82F6'];
+const COLORS = ['#1F7A6B', '#4F6F88', '#7B6A4C', '#B7792B', '#3F8F62', '#B44D45'];
 
 export function ChartContent({ content }: ChartContentProps) {
   const data = content.data;

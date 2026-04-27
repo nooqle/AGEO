@@ -3,7 +3,7 @@
 import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  RiBrainLine,
+  RiSearchLine,
   RiToolsLine,
   RiEyeLine,
   RiCheckLine,
@@ -34,11 +34,11 @@ interface ProcessTimelineProps {
 
 const phaseConfig = {
   thinking: {
-    icon: RiBrainLine,
+    icon: RiSearchLine,
     label: "思考",
     color: "var(--phase-thought)",
-    bgColor: "bg-violet-500/10",
-    borderColor: "border-violet-500/30",
+    bgColor: "bg-[var(--brand-bg)]",
+    borderColor: "border-[var(--brand-border)]",
   },
   action: {
     icon: RiToolsLine,

@@ -25,19 +25,19 @@ const COLUMN_ICONS = {
 };
 
 const COLUMN_COLORS: Record<string, { accent: string; bg: string; border: string; text: string }> = {
-  purple: {
-    accent: '#a855f7',
-    bg: 'rgba(168, 85, 247, 0.08)',
-    border: 'rgba(168, 85, 247, 0.3)',
-    text: '#a855f7',
+  profile: {
+    accent: '#7B6A4C',
+    bg: 'rgba(123, 106, 76, 0.08)',
+    border: 'rgba(123, 106, 76, 0.3)',
+    text: '#7B6A4C',
   },
-  blue: {
+  scenario: {
     accent: '#3b82f6',
     bg: 'rgba(59, 130, 246, 0.08)',
     border: 'rgba(59, 130, 246, 0.3)',
     text: '#3b82f6',
   },
-  orange: {
+  intent: {
     accent: '#f59e0b',
     bg: 'rgba(245, 158, 11, 0.08)',
     border: 'rgba(245, 158, 11, 0.3)',
@@ -235,7 +235,7 @@ export function PersonaPipeline({
         }}
       >
         {data.columns.map((col) => {
-          const colors = COLUMN_COLORS[col.color] || COLUMN_COLORS.blue;
+          const colors = COLUMN_COLORS[col.key] || COLUMN_COLORS.scenario;
           const Icon = COLUMN_ICONS[col.key] || RiLightbulbLine;
           const isFirstCol = col.key === 'profile';
 

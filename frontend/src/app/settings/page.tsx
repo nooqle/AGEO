@@ -165,7 +165,7 @@ function SectionCard({
   eyebrow: string;
   title: string;
   description?: string;
-  tone: 'violet' | 'mint';
+  tone: 'analysis' | 'mint';
   actions?: ReactNode;
   children: ReactNode;
 }) {
@@ -174,7 +174,7 @@ function SectionCard({
       id={id}
       className={cn(
         'dashboard-board rounded-[28px] border px-5 py-5 md:px-7 md:py-7',
-        tone === 'violet' && 'dashboard-board--violet',
+        tone === 'analysis' && 'dashboard-board--analysis',
         tone === 'mint' && 'dashboard-board--mint'
       )}
     >
@@ -227,11 +227,11 @@ function NativeSelect({
   children: ReactNode;
 }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl">
+      <div className="relative overflow-hidden rounded-xl">
       <select
         value={value}
         onChange={onChange}
-        className="h-11 w-full appearance-none rounded-2xl border bg-transparent px-3 pr-12 text-sm outline-none"
+        className="h-11 w-full appearance-none rounded-xl border bg-transparent px-3 pr-12 text-sm outline-none"
         style={{
           backgroundColor: 'var(--bg-tertiary)',
           borderColor: 'var(--border-subtle)',
@@ -275,7 +275,7 @@ function PillOption({
       }}
       disabled={disabled}
       className={cn(
-        'rounded-2xl border px-4 py-4 text-left transition-transform',
+        'rounded-xl border px-4 py-4 text-left transition-transform',
         !disabled && 'hover:-translate-y-0.5',
         disabled && 'cursor-not-allowed opacity-70'
       )}
@@ -286,7 +286,7 @@ function PillOption({
         background: disabled
           ? 'var(--bg-tertiary)'
           : active
-            ? 'linear-gradient(180deg, color-mix(in srgb, var(--brand-primary) 16%, var(--bg-elevated) 84%), color-mix(in srgb, var(--brand-primary) 8%, var(--bg-tertiary) 92%))'
+            ? 'color-mix(in srgb, var(--brand-primary) 10%, var(--bg-elevated) 90%)'
             : 'var(--bg-tertiary)',
       }}
     >
@@ -318,7 +318,7 @@ function PanoramaStatusBlock({
 }) {
   if (loading) {
     return (
-      <div className="rounded-2xl border px-4 py-4 text-sm" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
+      <div className="rounded-xl border px-4 py-4 text-sm" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
         正在读取最近一次全景分析。
       </div>
     );
@@ -326,14 +326,14 @@ function PanoramaStatusBlock({
 
   if (!status?.has_report) {
     return (
-      <div className="rounded-2xl border px-4 py-4 text-sm leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
+      <div className="rounded-xl border px-4 py-4 text-sm leading-6" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
         未建立
       </div>
     );
   }
 
   return (
-    <div className="rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)' }}>
+    <div className="rounded-xl border px-4 py-4" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)' }}>
       <div className="space-y-3">
         <div>
           <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>提及率</div>
@@ -609,7 +609,7 @@ function SettingsPageContent() {
             style={{
               borderColor: 'var(--border-subtle)',
               background:
-                'linear-gradient(135deg, color-mix(in srgb, var(--bg-primary) 90%, #f3efe8 10%) 0%, color-mix(in srgb, var(--bg-elevated) 92%, #eef2ff 8%) 100%)',
+                'linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 94%, #f3efe8 6%), color-mix(in srgb, var(--bg-elevated) 97%, #efe4d3 3%))',
             }}
           >
             <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
@@ -632,13 +632,13 @@ function SettingsPageContent() {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <div className="min-w-[180px] rounded-3xl border px-4 py-4" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)' }}>
+                <div className="min-w-[180px] rounded-xl border px-4 py-4" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)' }}>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>默认品牌</div>
                   <div className="mt-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
                     {workspaceEntity?.name || '未选择'}
                   </div>
                 </div>
-                <div className="min-w-[180px] rounded-3xl border px-4 py-4" style={{ borderColor: statusTone.border, backgroundColor: statusTone.bg }}>
+                <div className="min-w-[180px] rounded-xl border px-4 py-4" style={{ borderColor: statusTone.border, backgroundColor: statusTone.bg }}>
                   <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>自动监测</div>
                   <div className="mt-2 text-sm font-medium" style={{ color: statusTone.text }}>
                     {getStatusLabel(schedule?.status || 'inactive')}
@@ -757,13 +757,13 @@ function SettingsPageContent() {
                     </div>
                   </div>
 
-                  <div className="rounded-3xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
+                  <div className="rounded-xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
                     <div className="flex items-center gap-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
                       <RiNotification3Line className="h-4 w-4" />
                       当前状态
                     </div>
 
-                    <div className="mt-4 rounded-2xl border px-4 py-4" style={{ borderColor: statusTone.border, backgroundColor: statusTone.bg }}>
+                    <div className="mt-4 rounded-xl border px-4 py-4" style={{ borderColor: statusTone.border, backgroundColor: statusTone.bg }}>
                       <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>状态</div>
                       <div className="mt-1 text-sm font-medium" style={{ color: statusTone.text }}>
                         {getStatusLabel(schedule?.status || 'inactive')}
@@ -808,7 +808,7 @@ function SettingsPageContent() {
 
               <SectionCard
                 id="account"
-                tone="violet"
+                tone="analysis"
                 eyebrow="账户与工作区"
                 title="默认品牌与账号信息"
                 actions={
@@ -819,7 +819,7 @@ function SettingsPageContent() {
               >
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
                   <div className="space-y-6">
-                    <div className="rounded-3xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
+                    <div className="rounded-xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
                       <div className="flex items-center justify-between gap-4">
                         <div>
                           <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>外观主题</div>
@@ -846,7 +846,7 @@ function SettingsPageContent() {
                     </div>
                   </div>
 
-                  <div className="rounded-3xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
+                  <div className="rounded-xl border px-5 py-5" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-tertiary)' }}>
                     <div className="flex items-center gap-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
                       <RiTeamLine className="h-4 w-4" />
                       当前账号

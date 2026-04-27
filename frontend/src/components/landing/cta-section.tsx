@@ -12,7 +12,7 @@ export function CTASection() {
         </p>
         <Link
           href="/auth"
-          className="inline-block px-8 py-3 bg-[#6366F1] text-white rounded-lg font-medium hover:bg-[#4F46E5] transition-colors"
+          className="inline-block rounded-lg bg-[var(--brand-primary)] px-8 py-3 font-medium text-[var(--brand-contrast)] transition-colors hover:bg-[var(--brand-hover)]"
         >
           免费开始
         </Link>

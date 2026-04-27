@@ -30,9 +30,9 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
           label: '步骤确认',
           color: 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
           iconBg: 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)]',
-          iconColor: 'text-indigo-300',
+          iconColor: 'text-[var(--brand-text)]',
           titleColor: 'text-[var(--text-primary)]',
-          labelColor: 'text-indigo-300',
+          labelColor: 'text-[var(--brand-text)]',
         };
       case 'brand_info':
         return {
@@ -40,9 +40,9 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
           label: '品牌信息确认',
           color: 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
           iconBg: 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)]',
-          iconColor: 'text-amber-300',
+          iconColor: 'text-[var(--warning)]',
           titleColor: 'text-[var(--text-primary)]',
-          labelColor: 'text-amber-300',
+          labelColor: 'text-[var(--warning)]',
         };
       case 'action_choice':
         return {
@@ -50,9 +50,9 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
           label: '操作选择',
           color: 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
           iconBg: 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)]',
-          iconColor: 'text-purple-300',
+          iconColor: 'text-[var(--evidence-secondary)]',
           titleColor: 'text-[var(--text-primary)]',
-          labelColor: 'text-purple-300',
+          labelColor: 'text-[var(--evidence-secondary)]',
         };
       default:
         return {
@@ -60,9 +60,9 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
           label: '等待确认',
           color: 'border-[var(--border-subtle)] bg-[var(--bg-elevated)]',
           iconBg: 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)]',
-          iconColor: 'text-amber-300',
+          iconColor: 'text-[var(--warning)]',
           titleColor: 'text-[var(--text-primary)]',
-          labelColor: 'text-amber-300',
+          labelColor: 'text-[var(--warning)]',
         };
     }
   };
@@ -73,7 +73,7 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className={cn('rounded-xl border p-4 shadow-sm', config.color, className)}
+      className={cn('rounded-[14px] border p-4 shadow-sm', config.color, className)}
     >
       {/* 标题 */}
       <div className="flex items-center gap-2 mb-3">
@@ -107,9 +107,9 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
             className={cn(
               'inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all',
               option.recommended
-                ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
+                ? 'bg-[var(--brand-primary)] text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] shadow-sm'
                 : 'bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] hover:border-[var(--border-hover)]',
-              selectedOption === option.id && 'ring-2 ring-indigo-500 ring-offset-0',
+              selectedOption === option.id && 'ring-2 ring-[var(--brand-primary)] ring-offset-0',
               selectedOption !== null && selectedOption !== option.id && 'opacity-50'
             )}
           >
@@ -128,7 +128,7 @@ export function ConfirmationBlock({ request, onSelect, className }: Confirmation
       {/* 提示 */}
       {request.allowTextInput && (
         <p className="text-xs text-[var(--text-tertiary)] mt-3 flex items-center gap-1">
-          <span>💡</span>
+          <span aria-hidden="true">i</span>
           您也可以在输入框中直接输入回复
         </p>
       )}

@@ -24,10 +24,10 @@ interface FetchResultsContentProps {
 }
 
 const PLATFORM_CONFIG: Record<string, { label: string; color: string; dotColor: string }> = {
-  doubao:    { label: '豆包',     color: 'var(--color-accent-cyan)',   dotColor: '#06B6D4' },
-  yuanbao:   { label: '元宝',     color: 'var(--color-accent-purple)', dotColor: '#A855F7' },
-  kimi:      { label: 'Kimi',    color: 'var(--color-secondary)',     dotColor: '#10B981' },
-  deepseek:  { label: 'DeepSeek',color: 'var(--color-primary)',       dotColor: '#6366F1' },
+  doubao:    { label: '豆包',     color: 'var(--evidence-source)',    dotColor: '#4F6F88' },
+  yuanbao:   { label: '元宝',     color: 'var(--evidence-secondary)', dotColor: '#7B6A4C' },
+  kimi:      { label: 'Kimi',    color: 'var(--success)',            dotColor: '#3F8F62' },
+  deepseek:  { label: 'DeepSeek',color: 'var(--brand-primary)',      dotColor: '#1F7A6B' },
 };
 
 const PLATFORM_ORDER = ['doubao', 'yuanbao', 'kimi', 'deepseek'] as const;
@@ -188,8 +188,8 @@ function CitationList({ citations }: CitationListProps) {
                 width: '1.125rem',
                 height: '1.125rem',
                 borderRadius: '50%',
-                backgroundColor: cite.is_official ? 'rgba(16,185,129,0.15)' : 'rgba(99,102,241,0.15)',
-                color: cite.is_official ? 'var(--status-success)' : 'var(--color-primary-light)',
+                backgroundColor: cite.is_official ? 'var(--status-success-bg)' : 'var(--status-info-bg)',
+                color: cite.is_official ? 'var(--status-success)' : 'var(--status-info)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

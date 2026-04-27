@@ -1,906 +1,1471 @@
+import Image from 'next/image';
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import Script from 'next/script';
+import type { CSSProperties } from 'react';
 import {
   RiArrowRightUpLine,
-  RiChat3Line,
-  RiCompass3Line,
   RiGlobalLine,
-  RiRadarLine,
-  RiSparklingLine,
+  RiSearchEyeLine,
+  RiTimerFlashLine,
 } from '@remixicon/react';
 
-import { PublicBrand } from '@/components/layout/PublicBrand';
-import { MonitoringLogicShowcase } from '@/components/marketing/MonitoringLogicShowcase';
+const screenshotAssets = {
+  dashboard: '/landing/dashboard-real.png',
+  settings: '/landing/settings-real.png',
+  chat: '/landing/chat-canvas-real.png',
+  panoramaQuestions: '/landing/panorama-questions-real.png',
+  scenarioTouchpoints: '/landing/scenario-touchpoints-real.png',
+  agentReport: '/landing/agent-report-real.png',
+} as const;
 
-const trackedPlatforms = ['豆包', '元宝', 'Kimi', 'DeepSeek'];
-
-const analysisTracks = [
+const capabilityCards = [
   {
-    badge: '01',
-    title: '品牌全景分析',
-    subtitle: '全景掌控',
-    description: '先看品牌在 4 个主流 AI 平台里的提及、引用和主题覆盖。',
-    tone: 'amber',
+    title: '主动监测',
+    text: '先建立行业基线，再看具体人群和场景。',
+    icon: <RiSearchEyeLine className="h-5 w-5" />,
+    accent: '#46d7bb',
+    glow: 'rgba(70,215,187,.34)',
+    labels: ['全景分析', '场景分析', '平台覆盖'],
+    variant: 'horizontal',
   },
   {
-    badge: '02',
-    title: '用户画像分析',
-    subtitle: '聚焦场景',
-    description: '再按人群和业务主题收窄，找到更高价值的问法和场景。',
-    tone: 'green',
+    title: '持续监测',
+    text: '把关键问题设成自动追踪，按天、周、月看变化。',
+    icon: <RiTimerFlashLine className="h-5 w-5" />,
+    accent: '#f0c978',
+    glow: 'rgba(240,201,120,.30)',
+    labels: ['自动更新', '变化提醒', '基线对比'],
+    variant: 'vertical',
   },
   {
-    badge: '03',
-    title: '引用源置信度',
-    subtitle: '判断可信来源',
-    description: '最后判断哪些来源更可信，哪些来源真正影响 AI 的推荐。',
-    tone: 'violet',
+    title: '官网评估',
+    text: '检查官网是否容易被 AI 读取、理解和引用。',
+    icon: <RiGlobalLine className="h-5 w-5" />,
+    accent: '#8cc8ff',
+    glow: 'rgba(140,200,255,.28)',
+    labels: ['9 维评分', '内容缺口', '优化建议'],
+    variant: 'diagonal',
   },
 ] as const;
 
-const workflowSteps = [
+const reelSlides = [
   {
-    step: '01',
-    title: '品牌全景分析 · 全景掌控',
-    description: '先建立品牌在主流 AI 平台里的整体位置，掌握提及、引用和主题覆盖。',
+    kicker: '主动监测',
+    title: '主动监测',
+    image: screenshotAssets.panoramaQuestions,
+    tone: 'blue',
   },
   {
-    step: '02',
-    title: '用户画像分析 · 聚焦场景',
-    description: '再按画像与业务主题收窄，定位更高价值、更高意图的问答场景。',
+    kicker: '持续监测',
+    title: '持续追踪',
+    image: screenshotAssets.settings,
+    tone: 'amber',
   },
   {
-    step: '03',
-    title: '引用源置信度 · 判断来源',
-    description: '最后确认哪些来源更可信，哪些来源真正影响 AI 的推荐结果。',
+    kicker: 'Chat + Canvas',
+    title: '对话驱动',
+    image: screenshotAssets.agentReport,
+    tone: 'teal',
   },
-];
+] as const;
 
 const faqs = [
   {
-    question: '品牌全景分析会先告诉我什么？',
-    answer:
-      '它会先告诉你品牌在主流 AI 平台里的整体位置：提及率、引用来源分布，以及已经覆盖和仍然缺失的主题。',
+    question: 'Specta 主要解决什么问题？',
+    answer: '看品牌在 AI 答案中的位置，找到竞品优势、官网短板和下一步优化方向。',
   },
   {
-    question: '用户画像分析解决什么问题？',
-    answer:
-      '它把分析从全景收窄到关键人群和业务场景，帮助你找到更高价值、更高意图的问答入口，而不是平均分散地看所有问题。',
+    question: '会覆盖哪些平台？',
+    answer: '主动监测覆盖豆包、元宝、DeepSeek、Kimi；持续监测优先覆盖豆包、元宝、Kimi。',
   },
   {
-    question: '引用源置信度为什么重要？',
+    question: '监测采集模式有哪些？',
     answer:
-      '因为不是所有引用都同样有价值。你需要知道哪些来源真正影响 AI 的推荐，哪些来源更值得优先补强。',
+      '快速采集可以在短时间内进行答案监测，省时省费用。完整采集会完全模拟用户输入进行答案监测，时间较长，费用较高。推荐平时监测使用快速采集模式，每个月做一次完整采集，把品牌监控放在不同维度里分析。',
   },
   {
-    question: '为什么强调分析会持续推进？',
-    answer:
-      '因为 Specta 不是停在一张静态报告上。系统会在同一条对话里继续抓取、追问、判断，并把结果推进成交付物。',
+    question: '官网评估为什么重要？',
+    answer: '官网是 AI 答案的重要信源。内容越清晰，被引用和正确转述的机会越高。',
   },
-  {
-    question: '如何获得邀请码？',
-    answer:
-      '先提交公司信息并验证邮箱。我们会向登记邮箱不定期发放邀请码，收到后即可进入平台。',
-  },
-];
+] as const;
 
-function SectionTag({ children }: { children: ReactNode }) {
+function ApertureLogo({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#e7e7e1] bg-white px-3 py-1.5 text-sm text-[#59606f]">
-      {children}
+    <div className={`aperture-logo ${compact ? 'aperture-logo--compact' : ''}`}>
+      <span className="aperture-orbit aperture-orbit--a" />
+      <span className="aperture-orbit aperture-orbit--b" />
+      <span className="aperture-scan" />
+      <Image
+        src="/logo-light.png"
+        alt="Specta AI"
+        width={compact ? 34 : 82}
+        height={compact ? 34 : 82}
+        className="relative z-10 invert"
+        priority
+      />
     </div>
   );
 }
 
-function ProductWindow({ title, children }: { title: string; children: ReactNode }) {
+function PromptBar() {
   return (
-    <div className="rounded-[28px] border border-[#e5e5df] bg-white shadow-[0_30px_70px_rgba(17,24,39,0.08)]">
-      <div className="flex items-center justify-between border-b border-[#eff1f4] px-5 py-4">
-        <div className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-[#f87171]" />
-          <span className="h-2.5 w-2.5 rounded-full bg-[#fbbf24]" />
-          <span className="h-2.5 w-2.5 rounded-full bg-[#34d399]" />
-        </div>
-        <div className="text-sm font-medium text-[#697181]">{title}</div>
-      </div>
-      <div className="p-5">{children}</div>
+    <div className="prompt-bar">
+      <span className="prompt-text">问 Specta：本周品牌在 AI 答案里表现如何？</span>
+      <Link href="/auth?mode=apply" className="prompt-button" aria-label="申请体验">
+        <RiArrowRightUpLine className="h-5 w-5" />
+      </Link>
     </div>
   );
 }
 
-function HeroPreview() {
+function HeroSignal() {
   return (
-    <ProductWindow title="对话驱动分析">
-      <div className="grid gap-4 lg:grid-cols-[1.08fr_0.92fr]">
-        <div className="rounded-[24px] border border-[#eceff4] bg-[#fbfbfd] p-5 lg:row-span-2">
-          <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-[#8d95a4]">
-            <span>真实回答</span>
-            <span>对话快照</span>
-          </div>
-          <div className="mt-5 space-y-4">
-            <div className="rounded-[18px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-7 text-[#344054] shadow-[0_12px_28px_rgba(15,23,42,0.04)]">
-              25 万预算的家用纯电 SUV 怎么选？
-            </div>
-            <div className="rounded-[20px] border border-[#e8ebf2] bg-[#eef2ff] px-4 py-4 text-sm leading-7 text-[#354152]">
-              AI 回答优先提到 <span className="font-semibold text-[#111827]">某汽车品牌</span>，
-              在家庭场景里仍然把 <span className="font-semibold text-[#111827]">竞品品牌</span>{' '}
-              放在更靠前的位置，并引用了两家汽车媒体。
-            </div>
-            <div className="rounded-[18px] border border-[#dbe4f3] bg-white px-4 py-4 text-sm leading-7 text-[#475467]">
-              已识别出 <span className="font-semibold text-[#111827]">品牌被提及</span>、<span className="font-semibold text-[#111827]">竞品压制</span> 与 <span className="font-semibold text-[#111827]">媒体引用</span>，正在继续生成用户画像场景分析报告。
-            </div>
-          </div>
-          <div className="mt-5 flex flex-wrap gap-2">
-            {['品牌被提及', '竞品压制', '媒体引用'].map((item) => (
-              <span
-                key={item}
-                className="rounded-full border border-[#e4e7ee] bg-white px-3 py-1.5 text-xs font-medium text-[#5b6472]"
-              >
-                {item}
-              </span>
-            ))}
-          </div>
-        </div>
+    <section className="hero-section">
+      <div className="hero-grid hero-grid--top" />
+      <div className="hero-grid hero-grid--bottom" />
+      <span className="space-ring space-ring--one" />
+      <span className="space-ring space-ring--two" />
+      <span className="space-dot space-dot--one" />
+      <span className="space-dot space-dot--two" />
 
-        <div className="rounded-[22px] bg-[#f7f8fb] px-5 py-5">
-          <div className="flex items-center justify-between">
-            <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">用户画像场景分析报告</div>
-            <div className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[#111827]">
-              已生成
-            </div>
-          </div>
-          <div className="mt-5 grid gap-3">
-            {[
-              ['品牌提及率', '41.7%'],
-              ['内容引用率', '100%'],
-              ['主题覆盖', '10 / 12'],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-[18px] bg-white px-4 py-4">
-                <div className="text-xs text-[#7b8494]">{label}</div>
-                <div className="mt-2 text-[26px] font-semibold tracking-[-0.05em] text-[#111827]">
-                  {value}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+      <div className="hero-mark" data-heat-target aria-hidden="true">
+        <span className="hero-word hero-word--ghost">Specta</span>
+        <span className="hero-word hero-word--main">Specta</span>
+      </div>
 
-        <div className="rounded-[22px] border border-[#eceef2] bg-[#fbfbfd] px-5 py-5">
-          <div className="flex items-center justify-between">
-            <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">来源分布</div>
-            <div className="text-xs text-[#94a3b8]">平台偏好</div>
-          </div>
-          <div className="mt-5 space-y-4">
-            {[
-              ['豆包', [['媒体', '48%', '#111827'], ['社区', '24%', '#4f46e5'], ['视频', '16%', '#94a3b8'], ['参数库', '12%', '#d7dce6']]],
-              ['Kimi', [['媒体', '54%', '#111827'], ['社区', '20%', '#4f46e5'], ['视频', '14%', '#94a3b8'], ['参数库', '12%', '#d7dce6']]],
-            ].map(([platform, segments]) => (
-              <div key={platform as string}>
-                <div className="mb-2 flex items-center justify-between text-sm">
-                  <span className="font-semibold text-[#111827]">{platform as string}</span>
-                  <span className="text-[#7b8494]">引用偏好</span>
-                </div>
-                <div className="flex h-9 overflow-hidden rounded-full bg-white">
-                  {(segments as string[][]).map(([label, width, color]) => (
-                    <div
-                      key={`${platform}-${label}`}
-                      className="flex items-center justify-center text-[10px] font-semibold"
-                      style={{
-                        width,
-                        backgroundColor: color,
-                        color: color === '#d7dce6' ? '#475569' : '#ffffff',
-                      }}
-                    >
-                      {label}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+      <div className="hero-copy">
+        <h1>看清品牌在 AI 答案中的表现</h1>
+        <p>主动监测、持续追踪、官网评估、对话交付。</p>
+        <PromptBar />
+        <div className="hero-actions">
+          <Link href="/auth?mode=apply">申请体验</Link>
+          <a href="#product-reel">查看能力</a>
         </div>
       </div>
-    </ProductWindow>
+    </section>
   );
 }
 
-function WhyNowShowcase() {
+function CapabilitySection() {
   return (
-    <div className="grid gap-8 lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-10">
-      <div>
-        <div className="max-w-[720px] text-[18px] leading-[1.95] text-[#5b6472]">
-          Specta 不把问题讲成抽象风险，而是直接拆开三个判断：
-          整体有没有被看见，关键场景是不是被竞品抢走，以及哪些来源正在左右 AI 的推荐。
-        </div>
-
-        <div className="mt-10 border-t border-[#e5e7eb] pt-8">
-          <div className="text-sm font-semibold text-[#a0a7b4]">核心分析入口</div>
-          <div className="mt-5 space-y-4">
-            {analysisTracks.map((item) => (
-              <div
-                key={item.title}
-                className="rounded-[24px] border border-[#eceff4] bg-white px-5 py-5 shadow-[0_14px_32px_rgba(15,23,42,0.04)]"
-              >
-                <div className="flex items-start gap-4">
-                  <div
-                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full border text-base font-semibold ${
-                      item.tone === 'amber'
-                        ? 'border-[#f0dcc4] bg-[#fbf4ea] text-[#b7791f]'
-                        : item.tone === 'green'
-                          ? 'border-[#dce8d8] bg-[#eff6ed] text-[#64895b]'
-                          : 'border-[#e4dff2] bg-[#f4f0fb] text-[#7c68c2]'
-                    }`}
-                  >
-                    {item.badge}
-                  </div>
-                  <div>
-                    <div className="text-[24px] font-semibold leading-[1.2] tracking-[-0.05em] text-[#111827]">
-                      {item.title}
-                      <span className="ml-3 text-[18px] font-medium tracking-[-0.03em] text-[#7b8494]">
-                        {item.subtitle}
-                      </span>
-                    </div>
-                    <div className="mt-2 text-[16px] leading-8 text-[#5b6472]">
-                      {item.description}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+    <section className="section-shell" id="capabilities">
+      <div className="section-heading">
+        <h2>三类能力看清 AI 可见度</h2>
+        <p>把品牌位置、用户场景、官网信源和持续变化放在一套工作台里。</p>
       </div>
-
-      <div className="rounded-[32px] border border-[#e7e9ef] bg-white shadow-[0_24px_60px_rgba(15,23,42,0.06)]">
-        <div className="grid gap-0 lg:grid-cols-[0.9fr_1.1fr]">
-          <div className="border-b border-[#eceff4] px-6 py-6 lg:border-b-0 lg:border-r">
-            <div className="text-sm font-semibold text-[#a0a7b4]">真实问答场景</div>
-            <div className="mt-5 rounded-[24px] bg-[#fbfbfd] p-5">
-              <div className="max-w-[88%] rounded-[18px] bg-white px-4 py-4 text-[16px] leading-8 text-[#334155] shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
-                25 万预算的家用纯电 SUV 怎么选？
-              </div>
-              <div className="mt-4 rounded-[22px] border border-[#eceff4] bg-white px-5 py-5 shadow-[0_14px_32px_rgba(15,23,42,0.04)]">
-                <div className="text-sm font-semibold text-[#7b8494]">AI 回答</div>
-                <div className="mt-3 text-[16px] leading-8 text-[#374151]">
-                  回答先提到 <span className="font-semibold text-[#111827]">竞品品牌</span>，再补充{' '}
-                  <span className="font-semibold text-[#111827]">某汽车品牌</span>，并引用了两家汽车媒体与一个参数库。
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {['竞品更靠前', '媒体引用', '参数库引用'].map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded-full bg-[#f4f6fb] px-3 py-1.5 text-xs font-semibold text-[#4b5563]"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="mt-4 rounded-[18px] border border-[#f4d9b7] bg-[#fff7ed] px-4 py-4 text-[15px] leading-7 text-[#9a5c1d]">
-                如果不做基线、场景和来源三层判断，这类偏移通常只会在业务结果里被看到。
-              </div>
+      <div className="capability-grid">
+        {capabilityCards.map((card) => (
+          <article
+            key={card.title}
+            className={`capability-card capability-card--${card.variant}`}
+            style={{ '--accent': card.accent, '--glow': card.glow } as CSSProperties}
+          >
+            <div className="capability-visual" aria-hidden="true">
+              <span className="capability-planet" />
+              <span className="capability-line capability-line--a" />
+              <span className="capability-line capability-line--b" />
             </div>
-          </div>
-
-          <div className="px-6 py-6">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-[#a0a7b4]">同一条结果，拆成三层判断</div>
-              <div className="rounded-full bg-[#111827] px-3 py-1 text-xs font-semibold text-white">
-                Specta 输出
-              </div>
+            <div className="capability-meta">
+              <span>{card.icon}</span>
+              <h3>{card.title}</h3>
+              <p>{card.text}</p>
             </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-3">
-              {[
-                ['品牌提及率', '41.7%', '基线'],
-                ['家庭场景缺口', '2 个', '画像'],
-                ['高置信来源', '3 类', '来源'],
-              ].map(([label, value, tag]) => (
-                <div key={label} className="rounded-[20px] bg-[#fbfbfd] px-4 py-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs text-[#7b8494]">{label}</div>
-                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5b6472]">
-                      {tag}
-                    </span>
-                  </div>
-                  <div className="mt-3 text-[28px] font-semibold tracking-[-0.05em] text-[#111827]">
-                    {value}
-                  </div>
-                </div>
+            <div className="capability-labels">
+              {card.labels.map((label) => (
+                <span key={label}>{label}</span>
               ))}
             </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
-              <div className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4">
-                <div className="text-sm font-semibold text-[#111827]">品牌全景分析</div>
-                <div className="mt-2 text-sm leading-7 text-[#5b6472]">先判断品牌在 4 个平台里的整体位置。</div>
-                <div className="mt-4 h-2 rounded-full bg-[#edf1f5]">
-                  <div className="h-2 rounded-full bg-[#111827]" style={{ width: '42%' }} />
-                </div>
-              </div>
-              <div className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4">
-                <div className="text-sm font-semibold text-[#111827]">用户画像分析</div>
-                <div className="mt-2 text-sm leading-7 text-[#5b6472]">再拆出家庭、智驾、对比等关键场景。</div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {['家庭', '智驾', '对比'].map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded-full bg-[#eef2ff] px-2.5 py-1 text-xs font-semibold text-[#4f46e5]"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4">
-                <div className="text-sm font-semibold text-[#111827]">引用源置信度</div>
-                <div className="mt-2 text-sm leading-7 text-[#5b6472]">最后判断哪些来源真正影响推荐顺序。</div>
-                <div className="mt-4 space-y-2">
-                  {[
-                    ['汽车媒体', '72%'],
-                    ['参数库', '64%'],
-                    ['垂直社区', '41%'],
-                  ].map(([label, width]) => (
-                    <div key={label}>
-                      <div className="flex items-center justify-between text-xs text-[#7b8494]">
-                        <span>{label}</span>
-                        <span>{width}</span>
-                      </div>
-                      <div className="mt-1 h-2 rounded-full bg-[#edf1f5]">
-                        <div className="h-2 rounded-full bg-[#111827]" style={{ width }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FramedShot({
+  src,
+  alt,
+  caption,
+  className = '',
+  priority = false,
+}: {
+  src: string;
+  alt: string;
+  caption: string;
+  className?: string;
+  priority?: boolean;
+}) {
+  return (
+    <div className={`framed-shot ${className}`}>
+      <div className="framed-shot-caption">{caption}</div>
+      <div className="framed-shot-image">
+        <Image
+          src={src}
+          alt={alt}
+          width={1440}
+          height={980}
+          priority={priority}
+          className="h-full w-full object-cover"
+        />
       </div>
     </div>
   );
 }
 
-function WorkflowGrid() {
+function SlideVisual({ slide }: { slide: (typeof reelSlides)[number] }) {
+  if (slide.tone === 'teal') {
+    return (
+      <div className="visual-stage visual-stage--single">
+        <FramedShot
+          src={slide.image}
+          alt="Specta Chat 与 Canvas 真实产品界面"
+          caption="通过语言驱动 Agent 监测，都听您的指挥。"
+          className="framed-shot--wide framed-shot--chat"
+          priority
+        />
+      </div>
+    );
+  }
+
+  if (slide.tone === 'blue') {
+    return (
+      <div className="visual-stage visual-stage--analysis">
+        <FramedShot
+          src={slide.image}
+          alt="Specta 全景分析真实产品界面"
+          caption="全景分析 - 观测行业内品牌的基准表现"
+          className="framed-shot--panorama"
+          priority
+        />
+        <FramedShot
+          src={screenshotAssets.scenarioTouchpoints}
+          alt="Specta 场景分析与用户画像触点真实产品界面"
+          caption="场景分析 - 观测具体人群痛点里品牌占据的位置"
+          className="framed-shot--scenario"
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="grid gap-6 lg:grid-cols-3">
-      {workflowSteps.map((step) => (
-        <div
-          key={step.step}
-          className="rounded-[26px] border border-[#e4e7ee] bg-white px-6 py-6 shadow-[0_16px_40px_rgba(15,23,42,0.04)]"
-        >
-          <div className="text-sm font-semibold text-[#98a1af]">{step.step}</div>
-          <div className="mt-5 text-[24px] font-semibold leading-[1.25] tracking-[-0.04em] text-[#111827]">
-            {step.title}
-          </div>
-          <div className="mt-3 text-[16px] leading-8 text-[#5b6472]">{step.description}</div>
-        </div>
-      ))}
+    <div className="visual-stage visual-stage--single">
+      <FramedShot
+        src={slide.image}
+        alt="Specta 持续监测设置真实产品界面"
+        caption="定时自动化追踪 - 品牌优化可以透过时间看到"
+        className="framed-shot--wide framed-shot--settings"
+      />
     </div>
   );
 }
 
-function AgentOrchestrationMock() {
-  const nodes = [
-    ['全景分析', '品牌档案', '已完成', '建立品牌与竞品上下文'],
-    ['问题生成', '问题列表', '已生成', '输出高意图问题清单'],
-    ['答案抓取', '答案抓取', '进行中', '从真实平台采集回答'],
-    ['报告整理', '用户画像场景分析报告', '待更新', '沉淀报告并继续追问'],
-  ] as const;
-
+function ProductReelSection() {
   return (
-    <div className="rounded-[30px] border border-[#e4e7ee] bg-white px-6 py-6 shadow-[0_20px_50px_rgba(15,23,42,0.05)]">
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,0.94fr)_minmax(0,1.06fr)]">
-        <div className="rounded-[24px] border border-[#eceff4] bg-[#fbfbfd] p-5">
-          <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-[#8d95a4]">
-            <span>对话编排</span>
-            <span>分析持续推进中</span>
-          </div>
-          <div className="mt-5 space-y-3">
-            <div className="max-w-[82%] rounded-[18px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-7 text-[#344054]">
-              帮我看一下某汽车品牌在高端纯电 SUV 场景里，哪些问题会先推荐竞品。
-            </div>
-            <div className="ml-auto max-w-[88%] rounded-[18px] border border-[#e8ebf2] bg-[#eef2ff] px-4 py-4 text-sm leading-7 text-[#344054]">
-              已识别出 12 个问题，正在抓取 4 个平台的真实回答。我会继续定位负向提及、竞品压制与主题缺口。
-            </div>
-          </div>
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            {[
-              ['当前任务', '竞品压制定位'],
-              ['运行状态', '答案抓取 -> 报告生成'],
-              ['交付方式', '对话 + 工作台'],
-            ].map(([label, value]) => (
-              <div
-                key={label}
-                className="rounded-[18px] border border-[#eceff4] bg-white px-4 py-4"
-              >
-                <div className="text-xs text-[#7b8494]">{label}</div>
-                <div className="mt-2 text-base font-semibold text-[#111827]">{value}</div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5 flex flex-wrap gap-2">
-            {['继续追问', '负向提及', '竞品压制', '主题缺口'].map((tag) => (
-              <span
-                key={tag}
-                className="rounded-full border border-[#e4e7ee] bg-white px-3 py-1 text-xs text-[#5b6472]"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
+    <section className="product-reel-section" id="product-reel">
+      <div className="section-heading section-heading--center">
+        <h2>把监测变成交付物</h2>
+        <p>用户提问，Specta 执行监测。结果以产品界面、报告和看板持续沉淀。</p>
+      </div>
+      <div className="reel-window">
+        <div className="reel-rail" aria-hidden="true">
+          <span />
+          <span />
+          <span />
         </div>
-
-        <div className="rounded-[24px] border border-[#eceff4] bg-[#fbfbfd] p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">执行面板</div>
-              <div className="mt-2 text-[22px] font-semibold tracking-[-0.04em] text-[#111827]">
-                同一条对话，持续推进整条分析链
+        <div className="reel-track">
+          {reelSlides.map((slide) => (
+            <article key={slide.title} className="reel-slide">
+              <div className="reel-copy">
+                <h3>{slide.title}</h3>
               </div>
-            </div>
-            <div className="rounded-full bg-[#eef2ff] px-3 py-1 text-xs font-semibold text-[#4f46e5]">
-              实时流转
-            </div>
-          </div>
-          <div className="mt-6 space-y-3">
-            {nodes.map(([agentLabel, label, detail, description], index) => (
-              <div
-                key={agentLabel}
-                className="rounded-[20px] border border-[#eceff4] bg-white px-4 py-4"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-3">
-                    <div className="rounded-full bg-[#111827] px-3 py-1 text-xs font-semibold text-white">
-                      {agentLabel}
-                    </div>
-                    <div>
-                      <div className="text-[16px] font-semibold text-[#111827]">{label}</div>
-                      <div className="mt-1 text-sm leading-7 text-[#5b6472]">{description}</div>
-                    </div>
-                  </div>
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      index < 2
-                        ? 'bg-[#dcfce7] text-[#166534]'
-                        : index === 2
-                          ? 'bg-[#eef2ff] text-[#4f46e5]'
-                          : 'bg-[#f4f0fb] text-[#7c68c2]'
-                    }`}
-                  >
-                    {detail}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-[18px] bg-white px-4 py-4">
-              <div className="text-xs text-[#7b8494]">已生成交付物</div>
-              <div className="mt-3 space-y-2">
-                {['品牌档案', '基线问题列表', '答案抓取结果'].map((item) => (
-                  <div key={item} className="rounded-[14px] bg-[#fbfbfd] px-3 py-3 text-sm font-semibold text-[#111827]">
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-[18px] bg-white px-4 py-4">
-              <div className="text-xs text-[#7b8494]">当前推进</div>
-              <div className="mt-3 rounded-[16px] bg-[#fbfbfd] px-4 py-4">
-                <div className="text-sm font-semibold text-[#111827]">正在定位高意图家庭场景</div>
-                <div className="mt-2 text-sm leading-7 text-[#5b6472]">
-                  系统会把竞品压制最明显的问法补进报告，并继续支持追问。
-                </div>
-              </div>
-            </div>
-          </div>
+              <SlideVisual slide={slide} />
+            </article>
+          ))}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
-function AgentCapabilityStories() {
-  const stories = [
-    {
-      index: '01',
-      title: '从对话里发起品牌全景分析',
-      description: '用户直接在对话里提出分析目标，系统识别意图后生成问题并启动全景分析。',
-      visual: (
-        <div className="space-y-3 rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
-          <div className="max-w-[82%] rounded-[16px] border border-[#eceff4] bg-white px-4 py-3 text-sm leading-6 text-[#344054]">
-            先做一轮品牌全景分析，看看某汽车品牌在 4 个 AI 平台里的整体位置。
-          </div>
-          <div className="ml-auto max-w-[88%] rounded-[16px] border border-[#e8ebf2] bg-[#eef2ff] px-4 py-3 text-sm leading-6 text-[#344054]">
-            已生成问题列表，正在进入答案抓取，采集 4 个平台的真实回答。
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {[
-              ['品牌档案', '已完成'],
-              ['问题列表', '已生成'],
-              ['答案抓取', '准备中'],
-            ].map(([label, status]) => (
-              <div key={label} className="rounded-[16px] border border-[#eceff4] bg-white px-4 py-3">
-                <div className="text-xs text-[#7b8494]">{label}</div>
-                <div className="mt-2 text-sm font-semibold text-[#111827]">{status}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ),
-    },
-    {
-      index: '02',
-      title: '真实回答采集，而不是静态估计',
-      description: '对同一组问题持续抓取真实平台回答，直接记录品牌提及、竞品压制和引用来源。',
-      visual: (
-        <div className="rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {[
-              ['豆包', '已采集', 'bg-[#dcfce7] text-[#166534]'],
-              ['Kimi', '已采集', 'bg-[#dcfce7] text-[#166534]'],
-              ['元宝', '采集中', 'bg-[#eef2ff] text-[#4f46e5]'],
-              ['DeepSeek', '采集中', 'bg-[#eef2ff] text-[#4f46e5]'],
-            ].map(([platform, status, cls]) => (
-              <div key={platform} className="rounded-[18px] bg-white px-4 py-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-[#111827]">{platform}</div>
-                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${cls}`}>
-                    {status}
-                  </span>
-                </div>
-                <div className="mt-3 h-2 rounded-full bg-[#eef2f7]">
-                  <div
-                    className="h-2 rounded-full bg-[#111827]"
-                    style={{ width: status === '已采集' ? '100%' : '58%' }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ),
-    },
-    {
-      index: '03',
-      title: '引用源置信度直接在结果里判断',
-      description: '不是只告诉你“引用了谁”，而是拆开来源类型、平台偏好和可信度层级。',
-      visual: (
-        <div className="rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
-          <div className="grid gap-3 sm:grid-cols-[1.05fr_0.95fr]">
-            <div className="rounded-[18px] bg-white px-4 py-4">
-              <div className="text-sm font-semibold text-[#111827]">来源分层</div>
-              <div className="mt-4 space-y-3">
-                {[
-                  ['汽车媒体', '高', '72%'],
-                  ['参数库', '高', '64%'],
-                  ['垂直社区', '中', '41%'],
-                ].map(([label, level, value]) => (
-                  <div key={label}>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-semibold text-[#111827]">{label}</span>
-                      <span className="text-[#7b8494]">{level}</span>
-                    </div>
-                    <div className="mt-2 h-2 rounded-full bg-[#edf1f5]">
-                      <div className="h-2 rounded-full bg-[#111827]" style={{ width: value }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-[18px] bg-white px-4 py-4">
-              <div className="text-sm font-semibold text-[#111827]">平台偏好</div>
-              <div className="mt-4 space-y-3">
-                {[
-                  ['豆包', '媒体 / 视频'],
-                  ['Kimi', '媒体 / 参数库'],
-                  ['元宝', '媒体 / 社区'],
-                ].map(([platform, mix]) => (
-                  <div key={platform} className="rounded-[14px] bg-[#fbfbfd] px-3 py-3">
-                    <div className="text-sm font-semibold text-[#111827]">{platform}</div>
-                    <div className="mt-1 text-sm text-[#5b6472]">{mix}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      ),
-    },
-    {
-      index: '04',
-      title: '交付物会继续更新，不是停在一张报告',
-      description: '基线、画像、来源判断都会沉淀成交付物，并继续回到对话里追问和协作。',
-      visual: (
-        <div className="rounded-[22px] border border-[#e6eaf0] bg-[#fbfbfd] p-4">
-          <div className="grid gap-3 sm:grid-cols-[1.1fr_0.9fr]">
-            <div className="rounded-[18px] border border-[#e8ebf2] bg-white px-4 py-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-[#8d95a4]">交付物工作台</div>
-              <div className="mt-4 space-y-3">
-                {[
-                  ['基线问题列表', '已生成'],
-                  ['AI 答案抓取结果', '已完成'],
-                  ['用户画像场景分析报告', '持续更新'],
-                ].map(([name, status]) => (
-                  <div key={name} className="rounded-[16px] border border-[#eceff4] bg-[#fbfbfd] px-4 py-3">
-                    <div className="text-sm font-semibold text-[#111827]">{name}</div>
-                    <div className="mt-1 text-xs text-[#7b8494]">{status}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-3 rounded-[18px] bg-white px-4 py-4">
-              <div className="text-sm font-semibold text-[#111827]">后续追问</div>
-              <div className="rounded-[14px] bg-[#fbfbfd] px-3 py-3 text-sm leading-6 text-[#344054]">
-                继续帮我拆一下高意图家庭场景里，哪些回答更偏向竞品。
-              </div>
-              <div className="rounded-[14px] border border-[#eceff4] px-3 py-3 text-sm leading-6 text-[#344054]">
-                已定位 2 个竞品压制最明显的问法，并补充到报告里。
-              </div>
-            </div>
-          </div>
-        </div>
-      ),
-    },
-  ] as const;
-
+function BrandPortalSection() {
   return (
-    <div className="rounded-[30px] border border-[#e4e7ee] bg-white shadow-[0_20px_50px_rgba(15,23,42,0.04)]">
-      {stories.map((story, index) => (
-        <div
-          key={story.index}
-          className={`grid gap-6 px-6 py-6 lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-8 ${
-            index !== stories.length - 1 ? 'border-b border-[#eceff4]' : ''
-          }`}
-        >
-          <div>
-            <div className="text-sm font-semibold text-[#98a1af]">{story.index}</div>
-            <div className="mt-4 text-[24px] font-semibold leading-[1.25] tracking-[-0.04em] text-[#111827]">
-              {story.title}
-            </div>
-            <div className="mt-3 text-[16px] leading-8 text-[#5b6472]">{story.description}</div>
-          </div>
-          <div>{story.visual}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function FaqList() {
-  return (
-    <div className="rounded-[30px] border border-[#e4e7ee] bg-white shadow-[0_20px_50px_rgba(15,23,42,0.05)]">
-      {faqs.map((item, index) => (
-        <details
-          key={item.question}
-          className={`group px-6 py-5 ${index !== faqs.length - 1 ? 'border-b border-[#eceff4]' : ''}`}
-        >
-          <summary className="grid cursor-pointer list-none grid-cols-[minmax(0,1fr)_20px] items-center gap-5 text-[18px] font-semibold leading-[1.45] tracking-[-0.03em] text-[#111827] lg:text-[20px]">
-            <span className="min-w-0 break-keep pr-2">{item.question}</span>
-            <span className="text-[#98a1af] transition-transform duration-200 group-open:rotate-45">
-              +
-            </span>
-          </summary>
-          <p className="mt-4 max-w-[1080px] text-[16px] leading-8 text-[#5b6472]">
-            {item.answer}
-          </p>
-        </details>
-      ))}
-    </div>
-  );
-}
-
-export default function HomePage() {
-  return (
-    <main className="min-h-screen bg-[#f8f8f3] text-[#111827]">
-      <div className="mx-auto max-w-[1760px] px-8 py-6 lg:px-14 lg:py-8">
-        <header className="flex flex-wrap items-center justify-between gap-6 border-b border-[#e8e8e1] pb-6">
-          <PublicBrand />
-          <div className="hidden items-center gap-8 text-sm font-semibold text-[#5e6572] lg:flex">
-            <a href="#why-now" className="transition-colors hover:text-[#111827]">
-              为什么现在
-            </a>
-            <a href="#how-it-works" className="transition-colors hover:text-[#111827]">
-              如何使用
-            </a>
-            <a href="#agent" className="transition-colors hover:text-[#111827]">
-              持续推进
-            </a>
-            <a href="#faq" className="transition-colors hover:text-[#111827]">
-              FAQ
-            </a>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/auth?mode=login"
-              className="inline-flex h-11 items-center rounded-full border border-[#d8dce5] bg-white px-5 text-sm font-semibold text-[#111827]"
-            >
-              登录
-            </Link>
-            <Link
-              href="/auth?mode=apply"
-              className="inline-flex h-11 items-center gap-2 rounded-full bg-[#111827] px-5 text-sm font-semibold text-white"
-            >
-              申请体验
-              <RiArrowRightUpLine className="h-4 w-4" />
-            </Link>
-          </div>
-        </header>
-
-        <section className="grid gap-14 py-16 lg:grid-cols-[minmax(0,0.86fr)_minmax(780px,1.14fr)] lg:items-center lg:gap-18 lg:py-24">
-          <div className="max-w-[840px]">
-            <SectionTag>
-              <RiGlobalLine className="h-4 w-4 text-[#4f46e5]" />
-              {trackedPlatforms.join(' / ')}
-            </SectionTag>
-            <h1 className="mt-8 max-w-[920px] text-[clamp(3.15rem,5vw,5.55rem)] font-semibold leading-[1.01] tracking-[-0.085em] text-[#111827]">
-              让品牌进入 AI 的推荐答案
-            </h1>
-            <p className="mt-6 max-w-[760px] text-[19px] leading-[1.92] text-[#5b6472]">
-              品牌全景分析先看整体位置，用户画像分析继续聚焦场景，再判断哪些来源真正影响 AI 的推荐。
-            </p>
-            <div className="mt-10 flex flex-wrap gap-3">
-              <Link
-                href="/auth?mode=apply"
-                className="inline-flex h-12 items-center gap-2 rounded-full bg-[#111827] px-6 text-sm font-semibold text-white"
-              >
-                申请体验
-                <RiArrowRightUpLine className="h-4 w-4" />
-              </Link>
-              <a
-                href="#how-it-works"
-                className="inline-flex h-12 items-center rounded-full border border-[#d8dce5] bg-white px-6 text-sm font-semibold text-[#111827]"
-              >
-                查看如何使用
-              </a>
-            </div>
-          </div>
-          <HeroPreview />
-        </section>
-
-        <section
-          id="why-now"
-          className="border-t border-[#e8e8e1] py-16 lg:py-20"
-        >
-          <div className="max-w-[900px]">
-            <SectionTag>
-              <RiCompass3Line className="h-4 w-4 text-[#4f46e5]" />
-              为什么现在
-            </SectionTag>
-            <h2 className="mt-5 max-w-[900px] text-[38px] font-semibold leading-[1.15] tracking-[-0.06em] text-[#111827] lg:text-[52px]">
-              客户先问 AI，再决定联系谁
-            </h2>
-            <p className="mt-5 max-w-[760px] text-[18px] leading-[1.95] text-[#5b6472]">
-              Specta 把整体位置、关键场景和来源可信度拆开给你看，不让偏移只在业务结果里暴露。
-            </p>
-          </div>
-          <div className="mt-12">
-            <WhyNowShowcase />
-          </div>
-        </section>
-
-        <section
-          id="how-it-works"
-          className="border-t border-[#e8e8e1] py-16 lg:py-20"
-        >
-          <div className="max-w-[900px]">
-            <SectionTag>
-              <RiChat3Line className="h-4 w-4 text-[#4f46e5]" />
-              如何使用
-            </SectionTag>
-            <h2 className="mt-5 max-w-[860px] text-[38px] font-semibold leading-[1.15] tracking-[-0.06em] text-[#111827] lg:text-[52px]">
-              三步完成品牌可见分析
-            </h2>
-            <p className="mt-5 max-w-[720px] text-[18px] leading-[1.95] text-[#5b6472]">
-              先看全景，再看场景，最后判断来源可信度。
-            </p>
-          </div>
-          <div className="mt-12">
-            <WorkflowGrid />
-          </div>
-        </section>
-
-        <section className="border-t border-[#e8e8e1] py-16 lg:py-20">
-          <div className="max-w-[900px]">
-            <SectionTag>
-              <RiRadarLine className="h-4 w-4 text-[#4f46e5]" />
-              监控与分析
-            </SectionTag>
-            <h2 className="mt-5 max-w-[900px] text-[38px] font-semibold leading-[1.15] tracking-[-0.06em] text-[#111827] lg:text-[52px]">
-              基线、场景与来源，在同一套面板里展开
-            </h2>
-            <p className="mt-5 max-w-[760px] text-[18px] leading-[1.95] text-[#5b6472]">
-              一套面板，连续看清整体位置、关键场景和来源判断。
-            </p>
-          </div>
-          <div className="mt-12">
-            <MonitoringLogicShowcase />
-          </div>
-        </section>
-
-        <section
-          id="agent"
-          className="border-t border-[#e8e8e1] py-16 lg:py-20"
-        >
-          <div>
-            <SectionTag>
-              <RiSparklingLine className="h-4 w-4 text-[#4f46e5]" />
-              核心能力
-            </SectionTag>
-          <h2 className="mt-5 max-w-[1180px] text-[40px] font-semibold leading-[1.12] tracking-[-0.06em] text-[#111827] lg:text-[68px]">
-            分析会在一条对话里持续推进
-          </h2>
-          <p className="mt-6 max-w-[920px] text-[19px] leading-[1.95] text-[#5b6472]">
-            不停在一张报告上，而是继续抓取、继续追问、继续更新交付物。
-            </p>
-          </div>
-          <div className="mt-12 space-y-6">
-            <AgentOrchestrationMock />
-            <AgentCapabilityStories />
-          </div>
-        </section>
-
-        <section
-          id="faq"
-          className="border-t border-[#e8e8e1] py-16 lg:py-20"
-        >
-          <div className="max-w-[900px]">
-            <SectionTag>
-              <RiRadarLine className="h-4 w-4 text-[#4f46e5]" />
-              FAQ
-            </SectionTag>
-            <h2 className="mt-5 text-[38px] font-semibold leading-[1.15] tracking-[-0.06em] text-[#111827] lg:text-[52px]">
-              你最可能先问的问题
-            </h2>
-          </div>
-          <div className="mt-12">
-            <FaqList />
-          </div>
-        </section>
-
-        <footer className="border-t border-[#e8e8e1] py-10">
-          <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <PublicBrand textSizeClassName="text-[26px]" />
-              <p className="mt-4 max-w-[420px] text-[15px] leading-7 text-[#5b6472]">
-                追踪品牌在 AI 回答里的提及、引用和主题表现。
-              </p>
-            </div>
-            <div className="grid gap-8 text-sm text-[#5b6472] sm:grid-cols-3">
-              <div className="space-y-3">
-                <div className="font-semibold text-[#111827]">产品</div>
-                <a href="#why-now" className="block transition-colors hover:text-[#111827]">
-                  为什么现在
-                </a>
-                <a href="#how-it-works" className="block transition-colors hover:text-[#111827]">
-                  如何使用
-                </a>
-              </div>
-              <div className="space-y-3">
-                <div className="font-semibold text-[#111827]">体验</div>
-                <Link
-                  href="/auth?mode=apply"
-                  className="block transition-colors hover:text-[#111827]"
-                >
-                  申请体验
-                </Link>
-                <Link
-                  href="/auth?mode=login"
-                  className="block transition-colors hover:text-[#111827]"
-                >
-                  登录
-                </Link>
-              </div>
-              <div className="space-y-3">
-                <div className="font-semibold text-[#111827]">支持</div>
-                <a href="#faq" className="block transition-colors hover:text-[#111827]">
-                  FAQ
-                </a>
-                <span className="block">support@specta.ai</span>
-              </div>
-            </div>
-          </div>
-        </footer>
+    <section className="brand-portal">
+      <div className="portal-grid portal-grid--ceiling" />
+      <div className="portal-grid portal-grid--floor" />
+      <span className="space-ring space-ring--three" />
+      <span className="space-dot space-dot--three" />
+      <div className="portal-logo">
+        <ApertureLogo />
       </div>
+      <h2>Specta AI</h2>
+      <p className="portal-heatline" data-heat-target>
+        AI时代的品牌助手，异于他者，于辽阔之地。
+      </p>
+      <div className="portal-actions">
+        <Link href="/auth?mode=apply">申请体验</Link>
+        <Link href="/auth?mode=login">登录</Link>
+      </div>
+      <div className="portal-prompt">
+        <span>问 Specta</span>
+        <b>我们的官网是否容易被 AI 引用？</b>
+        <RiArrowRightUpLine className="h-5 w-5" />
+      </div>
+    </section>
+  );
+}
+
+function FaqSection() {
+  return (
+    <section className="faq-section" id="faq">
+      <div className="section-heading section-heading--center">
+        <h2>常见问题</h2>
+      </div>
+      <div className="faq-list">
+        {faqs.map((item, index) => (
+          <details key={item.question} className={index !== faqs.length - 1 ? 'with-border' : ''}>
+            <summary>
+              <span>{item.question}</span>
+              <span>+</span>
+            </summary>
+            <p>{item.answer}</p>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function HomePage() {
+  return (
+    <main className="specta-home min-h-screen overflow-hidden bg-[#020403] text-[#f1eee6]">
+      <style>{`
+        @keyframes aperture-sweep {
+          0% { transform: translateX(-50%) rotate(0deg); opacity: .22; }
+          50% { opacity: .7; }
+          100% { transform: translateX(-50%) rotate(360deg); opacity: .22; }
+        }
+        @keyframes aperture-orbit {
+          0% { transform: rotateX(64deg) rotateZ(0deg); }
+          100% { transform: rotateX(64deg) rotateZ(360deg); }
+        }
+        @keyframes raster-flow {
+          0% { background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0; }
+          100% { background-position: 0 30px, 22px 0, -28px 18px, 40px -14px, -44px 12px, 0 0, 260px 0; }
+        }
+        @keyframes dot-drift {
+          0%, 100% { transform: translate3d(0,0,0); opacity: .35; }
+          50% { transform: translate3d(-18px,12px,0); opacity: .9; }
+        }
+        @keyframes reel-shift {
+          0%, 25% { transform: translate3d(0,0,0); }
+          34%, 58% { transform: translate3d(0,-33.333%,0); }
+          67%, 91% { transform: translate3d(0,-66.666%,0); }
+          100% { transform: translate3d(0,0,0); }
+        }
+        @keyframes portal-float {
+          0%, 100% { transform: translate3d(0,0,0); }
+          50% { transform: translate3d(0,-12px,0); }
+        }
+        .specta-home {
+          color-scheme: dark;
+          --paper: #f1eee6;
+          --muted: rgba(216, 210, 197, .48);
+          --line: rgba(241, 238, 230, .13);
+          --panel: rgba(24, 24, 22, .78);
+          --teal: #46d7bb;
+          --ease: cubic-bezier(.22,1,.36,1);
+        }
+        .aperture-logo {
+          position: relative;
+          display: flex;
+          height: 148px;
+          width: 148px;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid rgba(241,238,230,.13);
+          border-radius: 34px;
+          background: rgba(241,238,230,.035);
+          box-shadow: 0 0 80px rgba(70,215,187,.12);
+        }
+        .aperture-logo--compact {
+          height: 48px;
+          width: 48px;
+          border-radius: 18px;
+        }
+        .aperture-orbit {
+          position: absolute;
+          inset: -46%;
+          border: 1px solid rgba(241,238,230,.13);
+          border-radius: 999px;
+          animation: aperture-orbit 16s linear infinite;
+        }
+        .aperture-orbit--b {
+          inset: -22%;
+          opacity: .52;
+          animation-duration: 11s;
+          animation-direction: reverse;
+        }
+        .aperture-scan {
+          position: absolute;
+          left: 50%;
+          top: -42%;
+          height: 184%;
+          width: 1px;
+          background: linear-gradient(to bottom, transparent, rgba(241,238,230,.68), transparent);
+          animation: aperture-sweep 8s linear infinite;
+        }
+        .site-header {
+          position: fixed;
+          left: 0;
+          right: 0;
+          top: 0;
+          z-index: 50;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 28px clamp(24px, 5vw, 92px);
+          background: linear-gradient(to bottom, rgba(2,4,3,.9), rgba(2,4,3,.42), transparent);
+        }
+        .site-brand,
+        .nav-actions,
+        .site-nav {
+          display: flex;
+          align-items: center;
+        }
+        .site-brand {
+          gap: 14px;
+          color: var(--paper);
+          font-size: 28px;
+          font-weight: 700;
+        }
+        .site-nav {
+          gap: 32px;
+          font-size: 14px;
+          font-weight: 650;
+          color: rgba(216,210,197,.44);
+        }
+        .site-nav a,
+        .nav-actions a,
+        .hero-actions a,
+        .portal-actions a,
+        .reel-copy a {
+          transition: color .28s var(--ease), border-color .28s var(--ease), background .28s var(--ease), transform .28s var(--ease);
+        }
+        .site-nav a:hover {
+          color: var(--paper);
+        }
+        .nav-actions {
+          gap: 12px;
+        }
+        .nav-actions a {
+          min-height: 46px;
+          border-radius: 999px;
+          padding: 13px 22px;
+          font-size: 14px;
+          font-weight: 700;
+        }
+        .nav-actions a:first-child {
+          border: 1px solid rgba(241,238,230,.12);
+          color: rgba(216,210,197,.58);
+        }
+        .nav-actions a:last-child {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background: var(--paper);
+          color: #080908;
+        }
+        .hero-section {
+          position: relative;
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 150px 24px 96px;
+          isolation: isolate;
+        }
+        .hero-section::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background:
+            radial-gradient(circle at 50% 22%, rgba(70,215,187,.13), transparent 32%),
+            linear-gradient(to bottom, rgba(2,4,3,.1), #020403 88%);
+          z-index: -3;
+        }
+        .hero-grid,
+        .portal-grid {
+          position: absolute;
+          left: 50%;
+          width: min(76vw, 1120px);
+          height: 300px;
+          transform: translateX(-50%) perspective(760px) rotateX(64deg);
+          border: 1px solid rgba(241,238,230,.13);
+          border-radius: 30px;
+          background:
+            linear-gradient(to bottom, rgba(241,238,230,.15), transparent 1px),
+            linear-gradient(102deg, transparent 0 13%, rgba(241,238,230,.11) 13.2% 13.35%, transparent 13.55% 100%),
+            linear-gradient(78deg, transparent 0 13%, rgba(241,238,230,.11) 13.2% 13.35%, transparent 13.55% 100%);
+          background-size: 100% 82px, 160px 100%, 160px 100%;
+          opacity: .28;
+          z-index: -2;
+        }
+        .hero-grid--top { top: 86px; mask-image: linear-gradient(to bottom, black, transparent); }
+        .hero-grid--bottom { bottom: 16px; transform: translateX(-50%) perspective(760px) rotateX(64deg) rotate(180deg); mask-image: linear-gradient(to top, black, transparent); }
+        .space-ring {
+          position: absolute;
+          border: 2px solid rgba(241,238,230,.36);
+          border-radius: 999px;
+          box-shadow: inset 0 0 24px rgba(241,238,230,.08), 0 0 32px rgba(70,215,187,.12);
+        }
+        .space-ring--one { right: 7%; top: 12%; width: 42px; height: 42px; }
+        .space-ring--two { right: 18%; bottom: 19%; width: 64px; height: 64px; opacity: .45; }
+        .space-ring--three { right: 8%; top: 20%; width: 48px; height: 48px; }
+        .space-dot {
+          position: absolute;
+          width: 6px;
+          height: 6px;
+          border-radius: 999px;
+          background: var(--paper);
+          box-shadow: 0 0 26px rgba(241,238,230,.5);
+          animation: dot-drift 6s ease-in-out infinite;
+        }
+        .space-dot--one { right: 5%; top: 8%; }
+        .space-dot--two { left: 17%; bottom: 16%; animation-delay: -2s; }
+        .space-dot--three { right: 15%; bottom: 23%; animation-delay: -3s; }
+        .hero-mark {
+          position: absolute;
+          left: 50%;
+          top: 22%;
+          width: min(1180px, 95vw);
+          height: 230px;
+          transform: translateX(-50%);
+          z-index: -1;
+          cursor: default;
+          pointer-events: auto;
+          --heat-x: 50%;
+          --heat-y: 50%;
+        }
+        .hero-mark::after {
+          content: '';
+          position: absolute;
+          inset: 8% 6%;
+          border-radius: 999px;
+          background:
+            radial-gradient(
+              520px circle at var(--heat-x) var(--heat-y),
+              rgba(255,255,255,.72) 0%,
+              rgba(255,235,59,.64) 5%,
+              rgba(255,61,0,.58) 15%,
+              rgba(233,30,99,.4) 25%,
+              rgba(33,150,243,.34) 45%,
+              rgba(0,0,128,.2) 65%,
+              transparent 80%
+            );
+          mix-blend-mode: screen;
+          filter: blur(42px);
+          opacity: 0;
+          transform: scale(.92);
+          transition: opacity .45s var(--ease), transform .45s var(--ease);
+          z-index: 0;
+        }
+        .hero-mark:hover::after {
+          opacity: .72;
+          transform: scale(1);
+        }
+        .hero-word {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: clamp(7rem, 18vw, 19rem);
+          font-weight: 760;
+          line-height: 1;
+          z-index: 1;
+        }
+        .hero-word--ghost {
+          color: rgba(241,238,230,.11);
+          filter: blur(4px);
+          transform: scaleX(1.08);
+        }
+        .hero-word--main {
+          color: transparent;
+          background:
+            repeating-linear-gradient(0deg, rgba(241,238,230,.18) 0 2px, rgba(70,215,187,.035) 2px 7px),
+            linear-gradient(90deg, transparent 0%, rgba(241,238,230,.08) 22%, rgba(241,238,230,.32) 52%, rgba(70,215,187,.16) 72%, transparent 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          text-shadow: 10px 0 30px rgba(70,215,187,.04), -8px 0 26px rgba(240,201,120,.04);
+          opacity: .56;
+          animation: raster-flow 7s linear infinite;
+          mask-image: linear-gradient(90deg, transparent 0%, black 14%, black 84%, transparent 100%);
+          transition: opacity .45s var(--ease), filter .45s var(--ease), text-shadow .45s var(--ease);
+        }
+        .hero-mark:hover .hero-word--main {
+          background:
+            repeating-linear-gradient(0deg, rgba(255,255,255,.42) 0 2px, rgba(0,0,0,.08) 2px 7px),
+            radial-gradient(
+              500px circle at var(--heat-x) var(--heat-y),
+              rgba(255,255,255,.95) 0%,
+              rgba(255,235,59,.86) 5%,
+              rgba(255,61,0,.78) 15%,
+              rgba(233,30,99,.56) 25%,
+              rgba(33,150,243,.44) 45%,
+              rgba(0,0,128,.28) 65%,
+              transparent 80%
+            ),
+            linear-gradient(90deg, #06113c 0%, #0b2d87 45%, #091c4e 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          filter: saturate(1.06) brightness(1.04) contrast(1.08);
+          opacity: .94;
+          text-shadow: 0 0 42px rgba(28,206,232,.16), 0 0 82px rgba(255,102,26,.15);
+        }
+        .hero-copy {
+          width: min(940px, 100%);
+          text-align: center;
+          transform: translateY(122px);
+        }
+        .hero-copy h1 {
+          font-size: clamp(2.4rem, 3.9vw, 4.6rem);
+          font-weight: 760;
+          line-height: 1.05;
+          color: var(--paper);
+        }
+        .hero-copy p {
+          margin: 24px auto 34px;
+          max-width: 680px;
+          color: rgba(216,210,197,.5);
+          font-size: 18px;
+          line-height: 1.9;
+        }
+        .prompt-bar {
+          margin: 0 auto;
+          display: flex;
+          width: min(620px, 92vw);
+          align-items: center;
+          gap: 12px;
+          border: 1px solid rgba(241,238,230,.12);
+          border-radius: 30px;
+          background: rgba(25,25,24,.86);
+          padding: 12px;
+          box-shadow: 0 26px 70px rgba(0,0,0,.45), inset 0 1px 0 rgba(241,238,230,.06);
+          backdrop-filter: blur(16px);
+        }
+        .prompt-text {
+          flex: 1;
+          border-radius: 22px;
+          background: rgba(241,238,230,.035);
+          padding: 18px 22px;
+          text-align: left;
+          color: rgba(216,210,197,.45);
+          font-size: 15px;
+          font-weight: 650;
+        }
+        .prompt-button {
+          display: flex;
+          height: 56px;
+          width: 56px;
+          flex: 0 0 auto;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          background: rgba(241,238,230,.16);
+          color: var(--paper);
+        }
+        .hero-actions,
+        .portal-actions {
+          margin-top: 30px;
+          display: flex;
+          justify-content: center;
+          gap: 14px;
+        }
+        .hero-actions a,
+        .portal-actions a,
+        .reel-copy a {
+          display: inline-flex;
+          min-height: 46px;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid rgba(241,238,230,.22);
+          border-radius: 999px;
+          padding: 0 24px;
+          color: rgba(241,238,230,.72);
+          font-size: 14px;
+          font-weight: 700;
+        }
+        .hero-actions a:first-child,
+        .portal-actions a:first-child {
+          background: var(--paper);
+          color: #080908;
+        }
+        .hero-actions a:hover,
+        .portal-actions a:hover,
+        .reel-copy a:hover {
+          transform: translateY(-2px);
+          border-color: rgba(241,238,230,.42);
+          color: var(--paper);
+        }
+        .section-shell,
+        .product-reel-section,
+        .faq-section {
+          scroll-margin-top: 96px;
+          padding: 120px clamp(24px, 7vw, 140px);
+        }
+        .section-heading {
+          display: flex;
+          align-items: end;
+          justify-content: space-between;
+          gap: 28px;
+          margin: 0 auto 58px;
+          max-width: 1320px;
+        }
+        .section-heading--center {
+          display: block;
+          text-align: center;
+        }
+        .section-heading h2 {
+          max-width: 720px;
+          color: var(--paper);
+          font-size: clamp(2.2rem, 4vw, 4.1rem);
+          font-weight: 760;
+          line-height: 1.08;
+        }
+        .section-heading p {
+          max-width: 680px;
+          color: rgba(216,210,197,.45);
+          font-size: 18px;
+          line-height: 1.85;
+        }
+        .section-heading--center p {
+          margin: 18px auto 0;
+        }
+        .capability-grid {
+          display: grid;
+          max-width: 1320px;
+          margin: 0 auto;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 26px;
+        }
+        .capability-card {
+          position: relative;
+          min-height: 360px;
+          overflow: hidden;
+          border: 1px solid rgba(241,238,230,.13);
+          border-radius: 22px;
+          background: linear-gradient(180deg, rgba(18,18,17,.96), rgba(8,9,8,.96));
+          padding: 30px;
+          transition: transform .45s var(--ease), border-color .45s var(--ease), box-shadow .45s var(--ease);
+        }
+        .capability-card::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: radial-gradient(circle at 42% 36%, var(--glow), transparent 42%);
+          opacity: 0;
+          transition: opacity .45s var(--ease);
+        }
+        .capability-card:hover {
+          transform: translateY(-8px);
+          border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+          box-shadow: 0 34px 120px rgba(0,0,0,.48), 0 0 90px var(--glow);
+        }
+        .capability-card:hover::before {
+          opacity: 1;
+        }
+        .capability-visual {
+          position: absolute;
+          inset: 0;
+          opacity: .78;
+        }
+        .capability-planet {
+          position: absolute;
+          left: 50%;
+          top: 38%;
+          width: 150px;
+          height: 150px;
+          transform: translate(-50%, -50%);
+          border-radius: 50%;
+          background:
+            radial-gradient(circle at 42% 36%, var(--accent), transparent 18%),
+            radial-gradient(circle at 58% 58%, rgba(241,238,230,.28), transparent 36%),
+            rgba(241,238,230,.06);
+          filter: blur(.2px);
+        }
+        .capability-line {
+          position: absolute;
+          left: 16%;
+          right: 16%;
+          top: 38%;
+          height: 1px;
+          background: linear-gradient(90deg, transparent, rgba(241,238,230,.22), transparent);
+        }
+        .capability-line--a { transform: rotate(18deg); }
+        .capability-line--b { transform: rotate(-18deg); }
+        .capability-card--horizontal .capability-line--a { transform: rotate(7deg); }
+        .capability-card--horizontal .capability-line--b { transform: rotate(-7deg); }
+        .capability-card--vertical .capability-planet {
+          top: 36%;
+          width: 128px;
+          height: 178px;
+        }
+        .capability-card--vertical .capability-line {
+          left: 50%;
+          right: auto;
+          top: 18%;
+          width: 1px;
+          height: 220px;
+          background: linear-gradient(to bottom, transparent, rgba(241,238,230,.24), transparent);
+          transform-origin: center;
+        }
+        .capability-card--vertical .capability-line--a { transform: translateX(-50%) rotate(0deg); }
+        .capability-card--vertical .capability-line--b { transform: translateX(-50%) rotate(82deg); }
+        .capability-card--diagonal .capability-planet {
+          left: 58%;
+          top: 34%;
+          width: 136px;
+          height: 136px;
+        }
+        .capability-card--diagonal .capability-line--a { transform: rotate(23deg); }
+        .capability-card--diagonal .capability-line--b { transform: rotate(-31deg); }
+        .capability-meta {
+          position: relative;
+          z-index: 1;
+          margin-top: 190px;
+        }
+        .capability-meta > span {
+          display: inline-flex;
+          width: 42px;
+          height: 42px;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid rgba(241,238,230,.14);
+          border-radius: 999px;
+          color: var(--accent);
+        }
+        .capability-meta h3 {
+          margin-top: 18px;
+          font-size: 28px;
+          font-weight: 760;
+          transition: color .35s var(--ease), text-shadow .35s var(--ease);
+        }
+        .capability-meta p {
+          margin-top: 12px;
+          color: rgba(216,210,197,.48);
+          line-height: 1.8;
+          transition: color .35s var(--ease);
+        }
+        .capability-card:hover .capability-meta h3 {
+          color: var(--accent);
+          text-shadow: 0 0 30px var(--glow);
+        }
+        .capability-card:hover .capability-meta p {
+          color: color-mix(in srgb, var(--accent) 36%, rgba(216,210,197,.6));
+        }
+        .capability-labels {
+          position: relative;
+          z-index: 1;
+          margin-top: 22px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .capability-labels span {
+          border: 1px solid transparent;
+          border-radius: 999px;
+          background: rgba(241,238,230,.07);
+          padding: 8px 11px;
+          color: rgba(241,238,230,.72);
+          font-size: 12px;
+          font-weight: 700;
+          transition: background .35s var(--ease), border-color .35s var(--ease), color .35s var(--ease), transform .35s var(--ease);
+        }
+        .capability-card:hover .capability-labels span {
+          border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+          background: color-mix(in srgb, var(--accent) 18%, rgba(241,238,230,.06));
+          color: color-mix(in srgb, var(--accent) 76%, var(--paper));
+          transform: translateY(-2px);
+        }
+        .product-reel-section {
+          min-height: 100vh;
+        }
+        .reel-window {
+          position: relative;
+          margin: 60px auto 0;
+          height: 690px;
+          max-width: 1420px;
+          overflow: hidden;
+        }
+        .reel-rail {
+          position: absolute;
+          left: 3%;
+          top: 230px;
+          z-index: 3;
+          display: flex;
+          height: 138px;
+          width: 12px;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+        }
+        .reel-rail span {
+          position: relative;
+          z-index: 1;
+          width: 7px;
+          height: 28px;
+          border-radius: 999px;
+          background: rgba(241,238,230,.22);
+        }
+        .reel-rail span:first-child {
+          height: 44px;
+          background: rgba(241,238,230,.62);
+          box-shadow: 0 0 18px rgba(241,238,230,.16);
+        }
+        .reel-track {
+          height: 300%;
+          animation: reel-shift 20s var(--ease) infinite;
+        }
+        .reel-slide {
+          display: grid;
+          height: 690px;
+          grid-template-columns: .38fr .62fr;
+          align-items: center;
+          gap: 56px;
+          padding-left: 86px;
+        }
+        .reel-copy {
+          max-width: 560px;
+        }
+        .reel-kicker {
+          color: rgba(216,210,197,.42);
+          font-size: 14px;
+          font-weight: 750;
+        }
+        .reel-copy h3 {
+          color: var(--paper);
+          font-size: clamp(3rem, 4.4vw, 5rem);
+          font-weight: 760;
+          line-height: 1.04;
+        }
+        .reel-copy p {
+          margin-top: 26px;
+          color: rgba(216,210,197,.48);
+          font-size: 20px;
+          line-height: 1.8;
+        }
+        .reel-copy a {
+          margin-top: 56px;
+        }
+        .visual-stage {
+          position: relative;
+          height: 560px;
+          perspective: 1300px;
+          transform-style: preserve-3d;
+        }
+        .visual-stage--analysis {
+          display: block;
+        }
+        .visual-stage--single {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .framed-shot {
+          position: relative;
+          overflow: hidden;
+          border: 1px solid rgba(241,238,230,.12);
+          border-radius: 24px;
+          background:
+            linear-gradient(180deg, rgba(32,32,31,.88), rgba(10,12,10,.92)),
+            radial-gradient(circle at 18% 0%, rgba(70,215,187,.12), transparent 32%);
+          padding: 58px 0 0;
+          box-shadow: 0 48px 140px rgba(0,0,0,.58), inset 0 1px 0 rgba(241,238,230,.08);
+          transition: opacity .45s var(--ease), filter .45s var(--ease), transform .45s var(--ease);
+        }
+        .framed-shot::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          background:
+            linear-gradient(135deg, rgba(241,238,230,.08), transparent 26%, rgba(0,0,0,.24)),
+            radial-gradient(circle at 22% 0%, rgba(70,215,187,.13), transparent 32%);
+          opacity: .58;
+          pointer-events: none;
+        }
+        .framed-shot-caption {
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: 0;
+          z-index: 2;
+          display: flex;
+          min-height: 58px;
+          align-items: center;
+          gap: 12px;
+          border-bottom: 1px solid rgba(241,238,230,.08);
+          background: rgba(31,31,30,.88);
+          padding: 0 22px;
+          color: rgba(241,238,230,.82);
+          font-size: 15px;
+          font-weight: 760;
+          letter-spacing: 0;
+          backdrop-filter: blur(14px);
+        }
+        .framed-shot-caption::before {
+          content: '';
+          width: 18px;
+          height: 18px;
+          flex: 0 0 auto;
+          border: 2px solid currentColor;
+          border-radius: 6px;
+          opacity: .8;
+          box-shadow: inset 0 -5px 0 rgba(241,238,230,.16);
+        }
+        .framed-shot-image {
+          position: relative;
+          z-index: 1;
+          height: 100%;
+          overflow: hidden;
+          border: 0;
+          border-radius: 0 0 24px 24px;
+          background: #030604;
+        }
+        .framed-shot-image img {
+          object-fit: contain !important;
+          object-position: center;
+          opacity: .82;
+          filter: brightness(1.02) contrast(1.05) saturate(.92);
+          transition: opacity .45s var(--ease), filter .45s var(--ease);
+        }
+        .framed-shot-image::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(135deg, rgba(241,238,230,.08), transparent 30%, rgba(0,0,0,.2));
+          pointer-events: none;
+        }
+        .framed-shot--panorama,
+        .framed-shot--scenario {
+          position: absolute;
+          height: 390px;
+          width: min(760px, 88%);
+        }
+        .framed-shot--panorama {
+          right: 1%;
+          top: 0;
+          opacity: .62;
+          transform: translate3d(38px,-20px,-130px) rotateY(-13deg) rotateZ(3deg);
+        }
+        .framed-shot--scenario {
+          right: 12%;
+          top: 172px;
+          opacity: .9;
+          transform: translate3d(-48px,0,90px) rotateY(-5deg) rotateZ(-2.5deg);
+        }
+        .framed-shot--scenario::before {
+          background: linear-gradient(135deg, rgba(240,201,120,.18), transparent 34%, rgba(70,215,187,.12));
+        }
+        .framed-shot--scenario .framed-shot-caption {
+          color: rgba(240,201,120,.9);
+        }
+        .framed-shot--wide {
+          position: absolute;
+          right: 7%;
+          top: 62px;
+          width: min(880px, 92%);
+          height: 440px;
+          transform: translate3d(0,0,90px) rotateY(-8deg) rotateZ(1.2deg);
+        }
+        .framed-shot--chat {
+          width: min(960px, 100%);
+          transform: translate3d(0,0,90px) rotateY(-7deg) rotateZ(-1.4deg);
+        }
+        .framed-shot--settings::before {
+          background: linear-gradient(135deg, rgba(240,201,120,.18), transparent 32%, rgba(70,215,187,.12));
+        }
+        .framed-shot:hover {
+          opacity: .95;
+          filter: brightness(1.04);
+        }
+        .framed-shot:hover .framed-shot-image img {
+          opacity: .94;
+          filter: brightness(1.08) contrast(1.08) saturate(.98);
+        }
+        .brand-portal {
+          position: relative;
+          min-height: 940px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          padding: 140px 24px;
+          text-align: center;
+        }
+        .portal-grid {
+          width: min(70vw, 1040px);
+          height: 280px;
+        }
+        .portal-grid--ceiling {
+          top: 120px;
+          mask-image: linear-gradient(to bottom, black, transparent);
+        }
+        .portal-grid--floor {
+          bottom: 70px;
+          transform: translateX(-50%) perspective(760px) rotateX(64deg) rotate(180deg);
+          mask-image: linear-gradient(to top, black, transparent);
+        }
+        .portal-logo {
+          position: relative;
+          z-index: 2;
+          animation: portal-float 6s var(--ease) infinite;
+        }
+        .portal-logo .aperture-logo {
+          width: 132px;
+          height: 132px;
+          border-radius: 34px;
+        }
+        .brand-portal h2 {
+          margin-top: 42px;
+          font-size: clamp(2.8rem, 5vw, 5.4rem);
+          font-weight: 760;
+        }
+        .brand-portal p {
+          margin-top: 20px;
+          max-width: 680px;
+          --heat-x: 50%;
+          --heat-y: 50%;
+          color: rgba(216,210,197,.48);
+          -webkit-text-fill-color: currentColor;
+          filter: none;
+          font-size: 20px;
+          line-height: 1.8;
+          cursor: default;
+          transition: color .35s var(--ease), filter .35s var(--ease), opacity .35s var(--ease);
+        }
+        .brand-portal p:hover {
+          color: transparent;
+          background:
+            radial-gradient(
+              340px circle at var(--heat-x) var(--heat-y),
+              rgba(255,255,255,.96) 0%,
+              rgba(255,235,59,.88) 6%,
+              rgba(255,61,0,.76) 17%,
+              rgba(233,30,99,.48) 28%,
+              rgba(33,150,243,.42) 48%,
+              rgba(0,0,128,.24) 66%,
+              transparent 82%
+            ),
+            linear-gradient(90deg, rgba(216,210,197,.46) 0%, rgba(42,163,241,.42) 44%, rgba(216,210,197,.38) 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
+          filter: drop-shadow(0 0 26px rgba(255,104,28,.18));
+        }
+        .portal-prompt {
+          margin-top: 70px;
+          display: grid;
+          width: min(560px, 92vw);
+          grid-template-columns: auto 1fr auto;
+          align-items: center;
+          gap: 16px;
+          border: 1px solid rgba(241,238,230,.13);
+          border-radius: 999px;
+          background: rgba(28,28,26,.88);
+          padding: 17px 22px;
+          color: rgba(216,210,197,.52);
+          box-shadow: 0 34px 100px rgba(0,0,0,.45);
+        }
+        .portal-prompt b {
+          color: rgba(241,238,230,.72);
+          font-size: 15px;
+        }
+        .faq-section {
+          padding-top: 40px;
+        }
+        .faq-list {
+          max-width: 960px;
+          margin: 0 auto;
+          border: 1px solid rgba(241,238,230,.1);
+          border-radius: 28px;
+          background: rgba(22,22,20,.8);
+        }
+        .faq-list details {
+          padding: 24px 28px;
+        }
+        .faq-list details.with-border {
+          border-bottom: 1px solid rgba(241,238,230,.08);
+        }
+        .faq-list summary {
+          display: grid;
+          cursor: pointer;
+          grid-template-columns: 1fr 24px;
+          align-items: center;
+          gap: 20px;
+          list-style: none;
+          color: var(--paper);
+          font-size: 18px;
+          font-weight: 760;
+        }
+        .faq-list summary::-webkit-details-marker {
+          display: none;
+        }
+        .faq-list summary span:last-child {
+          color: rgba(216,210,197,.42);
+          transition: transform .25s var(--ease);
+        }
+        .faq-list details[open] summary span:last-child {
+          transform: rotate(45deg);
+        }
+        .faq-list p {
+          margin-top: 18px;
+          max-width: 780px;
+          color: rgba(216,210,197,.52);
+          line-height: 1.9;
+        }
+        .site-footer {
+          display: flex;
+          align-items: end;
+          justify-content: space-between;
+          gap: 36px;
+          border-top: 1px solid rgba(241,238,230,.08);
+          margin: 40px clamp(24px, 7vw, 140px) 0;
+          padding: 42px 0;
+          color: rgba(216,210,197,.42);
+        }
+        .site-footer p {
+          margin-top: 12px;
+          max-width: 520px;
+          line-height: 1.8;
+        }
+        .footer-links {
+          display: flex;
+          gap: 32px;
+          font-size: 14px;
+        }
+        .footer-links a:hover {
+          color: var(--paper);
+        }
+        @media (max-width: 1100px) {
+          .site-nav { display: none; }
+          .capability-grid { grid-template-columns: 1fr; }
+          .reel-window {
+            height: auto;
+            overflow: visible;
+          }
+          .reel-track {
+            height: auto;
+            animation: none;
+          }
+          .reel-slide {
+            height: auto;
+            grid-template-columns: 1fr;
+            padding: 40px 0 80px;
+          }
+          .reel-rail { display: none; }
+          .visual-stage {
+            height: 520px;
+          }
+        }
+        @media (max-width: 720px) {
+          .site-header {
+            padding: 22px 24px;
+          }
+          .site-brand {
+            font-size: 26px;
+          }
+          .site-brand .aperture-logo {
+            width: 42px;
+            height: 42px;
+          }
+          .nav-actions a:first-child { display: none; }
+          .nav-actions a:last-child {
+            min-height: 44px;
+            padding: 12px 18px;
+          }
+          .hero-section {
+            align-items: start;
+            min-height: 860px;
+            padding-top: 132px;
+          }
+          .hero-grid--top { top: 120px; }
+          .hero-mark {
+            top: 180px;
+            height: 160px;
+          }
+          .hero-word {
+            font-size: clamp(5rem, 27vw, 7.8rem);
+          }
+          .hero-copy {
+            transform: translateY(210px);
+          }
+          .hero-copy h1 {
+            font-size: clamp(2.2rem, 12vw, 3.4rem);
+            text-align: left;
+          }
+          .hero-copy p {
+            text-align: left;
+            font-size: 16px;
+          }
+          .prompt-bar {
+            border-radius: 24px;
+          }
+          .prompt-text {
+            padding: 15px 16px;
+            font-size: 13px;
+          }
+          .prompt-button {
+            width: 48px;
+            height: 48px;
+          }
+          .hero-actions {
+            justify-content: flex-start;
+          }
+          .section-shell,
+          .product-reel-section,
+          .faq-section {
+            padding: 84px 24px;
+          }
+          .section-heading {
+            display: block;
+            margin-bottom: 34px;
+          }
+          .section-heading p {
+            margin-top: 14px;
+            font-size: 16px;
+          }
+          .capability-card {
+            min-height: 320px;
+            padding: 24px;
+          }
+          .capability-meta {
+            margin-top: 160px;
+          }
+          .reel-copy h3 {
+            font-size: clamp(2.4rem, 14vw, 3.8rem);
+          }
+          .reel-copy p {
+            font-size: 16px;
+          }
+          .visual-stage {
+            height: auto;
+            min-height: 420px;
+            transform: none;
+          }
+          .visual-stage--analysis {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+          }
+          .framed-shot,
+          .framed-shot--panorama,
+          .framed-shot--scenario,
+          .framed-shot--wide {
+            position: relative;
+            left: auto;
+            right: auto;
+            top: auto;
+            width: 100%;
+            height: 360px;
+            transform: none;
+            opacity: .86;
+            padding: 58px 12px 12px;
+          }
+          .framed-shot-caption {
+            left: 12px;
+            right: 12px;
+            font-size: 12px;
+          }
+          .brand-portal {
+            min-height: 780px;
+            padding: 110px 24px;
+          }
+          .portal-grid {
+            width: 760px;
+          }
+          .site-footer {
+            flex-direction: column;
+            align-items: flex-start;
+            margin-inline: 24px;
+          }
+          .footer-links {
+            flex-wrap: wrap;
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .aperture-orbit,
+          .aperture-scan,
+          .hero-word--main,
+          .space-dot,
+          .reel-track,
+          .portal-logo {
+            animation: none;
+          }
+        }
+      `}</style>
+
+      <header className="site-header">
+        <Link href="/" className="site-brand" aria-label="Specta AI 首页">
+          <ApertureLogo compact />
+          <span>Specta AI</span>
+        </Link>
+        <nav className="site-nav">
+          <a href="#capabilities">平台能力</a>
+          <a href="#product-reel">产品功能</a>
+          <a href="#faq">Q&A</a>
+        </nav>
+        <div className="nav-actions">
+          <Link href="/auth?mode=login">登录</Link>
+          <Link href="/auth?mode=apply">
+            申请体验
+            <RiArrowRightUpLine className="h-4 w-4" />
+          </Link>
+        </div>
+      </header>
+
+      <HeroSignal />
+      <CapabilitySection />
+      <ProductReelSection />
+      <BrandPortalSection />
+      <FaqSection />
+
+      <footer className="site-footer">
+        <div>
+          <Link href="/" className="site-brand" aria-label="Specta AI 首页">
+            <ApertureLogo compact />
+            <span>Specta AI</span>
+          </Link>
+          <p>看清品牌在 AI 答案中的表现，找到竞品优势、官网短板和下一步优化方向。</p>
+        </div>
+        <div className="footer-links">
+          <a href="#capabilities">平台能力</a>
+          <a href="#product-reel">产品功能</a>
+          <Link href="/auth?mode=apply">申请体验</Link>
+        </div>
+      </footer>
+      <Script id="specta-heat-pointer" strategy="afterInteractive">
+        {`
+          (() => {
+            document.querySelectorAll('[data-heat-target]').forEach((target) => {
+              target.addEventListener('mousemove', (event) => {
+                const rect = target.getBoundingClientRect();
+                target.style.setProperty('--heat-x', event.clientX - rect.left + 'px');
+                target.style.setProperty('--heat-y', event.clientY - rect.top + 'px');
+              }, { passive: true });
+
+              target.addEventListener('mouseleave', () => {
+                target.style.setProperty('--heat-x', '50%');
+                target.style.setProperty('--heat-y', '50%');
+              }, { passive: true });
+            });
+          })();
+        `}
+      </Script>
     </main>
   );
 }
+
+export default HomePage;

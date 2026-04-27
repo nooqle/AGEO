@@ -82,7 +82,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
           <Dialog.Overlay className={modalScrimClassName('z-50')} />
           <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
-              className="w-full max-w-2xl flex flex-col rounded-2xl overflow-hidden max-h-[80vh]"
+              className="w-full max-w-2xl flex flex-col rounded-xl overflow-hidden max-h-[80vh]"
               style={{
                 background: 'var(--bg-secondary)',
                 border: '1px solid var(--border-subtle)',
@@ -146,7 +146,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
                       暂无品牌
                     </p>
                     <p className="text-sm mb-6" style={{ color: 'var(--text-muted)' }}>
-                      创建您的首个品牌，开始 AI 可见度分析
+                      创建首个品牌，开始跟踪答案可见度
                     </p>
                     <button
                       className="btn-primary px-5 py-2.5 text-sm cursor-pointer"
@@ -166,7 +166,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
                           style={{
                             background: 'var(--bg-tertiary)',
                             border: isSelected ? '1px solid var(--color-primary)' : '1px solid var(--border-subtle)',
-                            boxShadow: isSelected ? '0 0 0 1px var(--color-primary), 0 0 20px var(--color-primary-glow)' : 'none',
+                            boxShadow: isSelected ? '0 0 0 1px color-mix(in srgb, var(--color-primary) 28%, transparent)' : 'none',
                           }}
                           onClick={() => setSelectedId(isSelected ? null : entity.id)}
                           whileHover={{ scale: 1.02 }}

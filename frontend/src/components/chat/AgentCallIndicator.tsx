@@ -1,6 +1,6 @@
 'use client';
 
-import { RiRobotLine, RiLoader4Line, RiCheckLine, RiCloseLine } from '@remixicon/react';
+import { RiCodeLine, RiLoader4Line, RiCheckLine, RiCloseLine } from '@remixicon/react';
 import { cn } from '@/lib/cn';
 
 export type AgentStatus = 'running' | 'completed' | 'error';
@@ -63,27 +63,27 @@ function resolveAgentDisplayName(call: AgentCall): string {
 const statusConfig = {
   running: {
     icon: RiLoader4Line,
-    iconClass: 'text-[#F59E0B] animate-spin',
-    bgClass: 'bg-[#F59E0B15]',
-    borderClass: 'border-[#F59E0B30]',
+    iconClass: 'text-[var(--warning)] animate-spin',
+    bgClass: 'bg-[var(--status-warning-bg)]',
+    borderClass: 'border-[var(--border-hover)]',
     label: '运行中',
-    labelClass: 'text-[#F59E0B]',
+    labelClass: 'text-[var(--warning)]',
   },
   completed: {
     icon: RiCheckLine,
-    iconClass: 'text-[#22C55E]',
-    bgClass: 'bg-[#22C55E15]',
-    borderClass: 'border-[#22C55E30]',
+    iconClass: 'text-[var(--success)]',
+    bgClass: 'bg-[var(--status-success-bg)]',
+    borderClass: 'border-[var(--border-hover)]',
     label: '已完成',
-    labelClass: 'text-[#22C55E]',
+    labelClass: 'text-[var(--success)]',
   },
   error: {
     icon: RiCloseLine,
-    iconClass: 'text-[#EF4444]',
-    bgClass: 'bg-[#EF444415]',
-    borderClass: 'border-[#EF444430]',
+    iconClass: 'text-[var(--error)]',
+    bgClass: 'bg-[var(--status-error-bg)]',
+    borderClass: 'border-[var(--border-hover)]',
     label: '执行出错',
-    labelClass: 'text-[#EF4444]',
+    labelClass: 'text-[var(--error)]',
   },
 };
 
@@ -140,7 +140,7 @@ export function AgentCallIndicator({
             {call.status === 'running' ? (
               <Icon className={cn('w-4 h-4', config.iconClass)} />
             ) : (
-              <RiRobotLine className={cn('w-4 h-4', config.iconClass)} />
+              <RiCodeLine className={cn('w-4 h-4', config.iconClass)} />
             )}
           </div>
 
@@ -177,8 +177,8 @@ export function AgentCallIndicator({
 
       {/* 错误信息 */}
       {call.status === 'error' && call.error && (
-        <div className="px-4 py-2 bg-[#EF444410] border-t border-[#EF444430]">
-          <div className="text-xs text-[#EF4444]">
+        <div className="px-4 py-2 bg-[var(--status-error-bg)] border-t border-[var(--border-hover)]">
+          <div className="text-xs text-[var(--error)]">
             错误: {call.error}
           </div>
         </div>
@@ -210,11 +210,11 @@ export function AgentCallList({
           <span className="text-sm font-medium text-[var(--text-primary)]">{title}</span>
           <div className="flex items-center gap-3 text-xs">
             {runningCount > 0 && (
-              <span className="text-[#F59E0B]">
+              <span className="text-[var(--warning)]">
                 {runningCount} 运行中
               </span>
             )}
-            <span className="text-[#22C55E]">
+            <span className="text-[var(--success)]">
               {completedCount}/{calls.length} 完成
             </span>
           </div>

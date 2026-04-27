@@ -47,13 +47,13 @@ const DIMENSIONS: DimensionConfig[] = [
   {
     key: 'sentiment_score',
     label: '情感倾向',
-    color: chart.colors.purple,
+    color: chart.colors.source,
     formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
   },
   {
     key: 'coverage_score',
     label: '平台覆盖',
-    color: chart.colors.cyan,
+    color: chart.colors.primary,
     formatValue: (v) => (v != null ? v.toFixed(1) : '--'),
   },
   {
