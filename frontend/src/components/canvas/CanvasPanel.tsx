@@ -46,6 +46,8 @@ export function CanvasPanel() {
     }
     return rawContent;
   })();
+  const isActiveContentHydrating =
+    Boolean(activeContent?.isHydrationStub) && activeContent?.type !== 'browser';
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -182,6 +184,20 @@ export function CanvasPanel() {
       {/* Tab 栏（多内容时显示） */}
       {activeContent?.type !== 'browser' && contents.length > 1 && <CanvasTabs />}
 
+      {isActiveContentHydrating && (
+        <div
+          className="flex items-center gap-2 px-4 py-2 text-xs"
+          style={{
+            color: 'var(--text-secondary)',
+            backgroundColor: 'var(--bg-secondary)',
+            borderBottom: '1px solid var(--border-subtle)',
+          }}
+        >
+          <RiLoader4Line className="h-4 w-4 animate-spin" style={{ color: 'var(--color-primary)' }} />
+          <span>正在加载完整交付物...</span>
+        </div>
+      )}
+
       {/* 内容区 */}
       {/* pipeline 类型：不在此层滚动，让 PipelineContent 自控滚动与固定底栏 */}
       {/* 其他类型：在此层滚动（原有行为不变） */}
@@ -241,7 +257,7 @@ export function CanvasToggle({ onClick, hasContent = false }: CanvasToggleProps)
         'w-10 h-10 rounded-full flex items-center justify-center',
         'bg-[var(--bg-secondary)] border border-[var(--border-subtle)] shadow-lg',
         'hover:bg-[var(--bg-tertiary)] hover:border-[var(--border-hover)] transition-all duration-200',
-        hasContent && 'ring-2 ring-[#6366F1] ring-offset-2 ring-offset-[var(--bg-primary)]'
+        hasContent && 'ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--bg-primary)]'
       )}
       initial={{ x: 20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
@@ -251,7 +267,7 @@ export function CanvasToggle({ onClick, hasContent = false }: CanvasToggleProps)
     >
       <RiLayoutRightLine className="w-5 h-5 text-[var(--text-secondary)]" />
       {hasContent && (
-        <span className="absolute -top-1 -right-1 w-3 h-3 bg-[#6366F1] rounded-full" />
+        <span className="absolute -top-1 -right-1 w-3 h-3 bg-[var(--color-primary)] rounded-full" />
       )}
     </motion.button>
   );
