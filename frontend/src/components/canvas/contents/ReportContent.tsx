@@ -170,7 +170,7 @@ function MarkdownDocument({ markdown }: { markdown: string }) {
               </td>
             ),
             blockquote: ({ children }) => (
-              <blockquote className="mt-5 border-l-2 border-[var(--border-strong)] pl-4 text-[16px] leading-8 text-[var(--text-secondary)]">
+              <blockquote className="mt-4 rounded-md border border-[var(--border-subtle)] border-l-4 border-l-[var(--text-accent)] bg-[var(--bg-secondary)] px-5 py-3 text-[15px] leading-8 text-[var(--text-secondary)]">
                 {children}
               </blockquote>
             ),

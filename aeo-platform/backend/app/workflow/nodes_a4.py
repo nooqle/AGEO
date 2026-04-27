@@ -409,6 +409,109 @@ def _fetch_results_arg(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+async def _enrich_fetch_result_citation_domains(
+    *,
+    fetch_results: list[dict[str, Any]],
+    brand_profile: dict[str, Any],
+    entity_id: str | None,
+) -> None:
+    """Attach domain-memory resolution to A4 canonical citation rows."""
+
+    brand_name = str(brand_profile.get("brand_name") or "").strip()
+    if not brand_name:
+        return
+
+    from app.core.database import AsyncSessionLocal
+    from app.core.domain_normalization import normalize_domain
+    from app.core.utils import extract_domain
+    from app.services.domain_memory_service import DomainMemoryService
+
+    official_domain = normalize_domain(brand_profile.get("official_website"))
+    official_domains = [official_domain] if official_domain else []
+
+    async with AsyncSessionLocal() as db:
+        domain_memory = DomainMemoryService(db)
+        for fetch_result in fetch_results:
+            question_text = str(fetch_result.get("question_text") or "")
+            for platform_result in fetch_result.get("platform_results", []) or []:
+                if not isinstance(platform_result, dict):
+                    continue
+                platform = str(platform_result.get("platform") or "")
+                for citation in platform_result.get("citations", []) or []:
+                    if not isinstance(citation, dict):
+                        continue
+                    url = str(citation.get("url") or "").strip()
+                    raw_domain = str(citation.get("domain") or "").strip()
+                    if not raw_domain:
+                        raw_domain = extract_domain(url)
+                    title = str(citation.get("title") or "").strip()
+                    snippet = str(
+                        citation.get("snippet")
+                        or citation.get("summary")
+                        or question_text
+                        or ""
+                    ).strip()
+                    site_name = str(
+                        citation.get("site_name")
+                        or citation.get("source")
+                        or citation.get("site_display_name")
+                        or ""
+                    ).strip()
+                    resolution = await domain_memory.resolve_citation_domain(
+                        url=url,
+                        raw_domain=raw_domain,
+                        title=title,
+                        snippet=snippet,
+                        site_name=site_name,
+                        brand_name=brand_name,
+                        entity_id=entity_id,
+                        official_domains=official_domains,
+                        platform=platform,
+                    )
+                    resolution_payload = {
+                        "canonical_domain": resolution.canonical_domain,
+                        "display_name": resolution.display_name,
+                        "owner_name": resolution.owner_name,
+                        "source_type": resolution.source_type,
+                        "site_category": resolution.site_category,
+                        "relation_type": resolution.relation_type,
+                        "confidence": resolution.confidence,
+                        "status": resolution.status,
+                        "resolved_by": resolution.resolved_by,
+                    }
+                    metadata = dict(citation.get("metadata") or {})
+                    metadata.update(
+                        {
+                            "site_display_name": resolution.display_name,
+                            "source_type": resolution.source_type,
+                            "canonical_domain": resolution.canonical_domain,
+                            "domain_relation_type": resolution.relation_type,
+                            "domain_resolution_confidence": resolution.confidence,
+                            "domain_resolution_status": resolution.status,
+                            "domain_resolved_by": resolution.resolved_by,
+                            "is_official": resolution.is_official,
+                            "domain_resolution": resolution_payload,
+                        }
+                    )
+                    citation.update(
+                        {
+                            "metadata": metadata,
+                            "site_display_name": resolution.display_name,
+                            "source_type": resolution.source_type,
+                            "canonical_domain": resolution.canonical_domain,
+                            "domain_relation_type": resolution.relation_type,
+                            "domain_resolution_confidence": resolution.confidence,
+                            "domain_resolution_status": resolution.status,
+                            "domain_resolved_by": resolution.resolved_by,
+                            "is_official": bool(
+                                citation.get("is_official")
+                                or resolution.is_official
+                            ),
+                        }
+                    )
+        await db.commit()
+
+
 def _build_browser_phase_start_message(
     fetch_mode: str,
     platforms: list[str],
@@ -2477,6 +2580,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
         )
         if not merge_validation.passed:
             raise RuntimeError(merge_validation.reason)
+
+        try:
+            await _enrich_fetch_result_citation_domains(
+                fetch_results=final_fetch_results,
+                brand_profile=brand_profile,
+                entity_id=str(state.get("entity_id") or "") or None,
+            )
+        except Exception as domain_enrichment_err:
+            logger.warning(
+                "[A4] Citation domain enrichment failed; continuing with raw citations: %s",
+                domain_enrichment_err,
+            )
 
         projected_fetch_results = final_fetch_results
         authoritative_projection: dict[str, Any] | None = None

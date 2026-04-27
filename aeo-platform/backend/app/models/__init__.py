@@ -6,6 +6,7 @@ from app.models.aio_runtime_session import (
     AioRuntimeTakeover,
 )
 from app.models.brand import BrandProfile
+from app.models.domain_memory import BrandDomainRelation, DomainIdentityRecord
 from app.models.entity import Entity, EntityVisibilityScope
 from app.models.fetch_run_platform_state import FetchRunPlatformState
 from app.models.file_metadata import FileMetadata
@@ -63,6 +64,8 @@ __all__ = [
     "Session",
     "Message",
     "BrandProfile",
+    "DomainIdentityRecord",
+    "BrandDomainRelation",
     "User",
     "UserStatus",
     "UserRole",

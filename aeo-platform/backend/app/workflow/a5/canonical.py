@@ -10,7 +10,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.core.utils import extract_domain
+from app.core.domain_normalization import (
+    domain_matches as resolve_domain_match,
+    normalize_domain as normalize_identity_domain,
+)
 from app.workflow.a5.metrics import analyze_sentiment
 from app.workflow.brand_mentions import extract_brand_aliases
 from app.workflow.nodes_a4 import PLATFORMS
@@ -225,70 +228,6 @@ PLATFORM_DISPLAY = {
     "yuanbao": "元宝",
 }
 
-DOMAIN_PROFILE_HINTS = [
-    {
-        "suffix": "youjia-pc.bdstatic.com",
-        "display_name": "有驾",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "chejiahao.autohome.com.cn",
-        "display_name": "汽车之家·车家号",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "autohome.com.cn",
-        "display_name": "汽车之家",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "dongchedi.com",
-        "display_name": "懂车帝",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "yiche.com",
-        "display_name": "易车",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "bitauto.com",
-        "display_name": "易车",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "pcauto.com.cn",
-        "display_name": "太平洋汽车",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "yoojia.com",
-        "display_name": "有驾",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "auto.zol.com.cn",
-        "display_name": "中关村在线汽车",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "zol.com.cn",
-        "display_name": "中关村在线",
-        "source_type": "vertical_media",
-    },
-    {
-        "suffix": "post.smzdm.com",
-        "display_name": "什么值得买",
-        "source_type": "community",
-    },
-    {
-        "suffix": "smzdm.com",
-        "display_name": "什么值得买",
-        "source_type": "community",
-    },
-]
-
-
 def normalize_platform(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     return CANONICAL_PLATFORM_ALIASES.get(normalized, normalized)
@@ -334,35 +273,21 @@ def _normalize_enum(value: Any, aliases: dict[str, str], default: str = "other")
 
 
 def _normalize_domain(url: str | None) -> str | None:
-    domain = extract_domain(url or "")
-    return domain or None
+    return normalize_identity_domain(url)
 
 
-OFFICIAL_DOMAIN_ALIAS_MAP: dict[str, tuple[str, ...]] = {
-    "li.auto": ("lixiang.com",),
-    "lixiang.com": ("li.auto",),
-}
-
-
-def _expand_official_domains(primary_domain: str | None) -> list[str]:
+def _expand_official_domains(
+    primary_domain: str | None,
+    *,
+    brand_name: str | None = None,
+    aliases: list[str] | None = None,
+) -> list[str]:
     normalized = _normalize_domain(primary_domain)
-    if not normalized:
-        return []
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for domain in (normalized, *OFFICIAL_DOMAIN_ALIAS_MAP.get(normalized, ())):
-        cleaned = _normalize_domain(domain)
-        if not cleaned or cleaned in seen:
-            continue
-        seen.add(cleaned)
-        ordered.append(cleaned)
-    return ordered
+    return [normalized] if normalized else []
 
 
 def _domain_matches(domain: str | None, official_domains: list[str]) -> bool:
-    if not domain:
-        return False
-    return any(domain == item or domain.endswith(f".{item}") for item in official_domains if item)
+    return resolve_domain_match(domain, official_domains)
 
 
 def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
@@ -745,12 +670,6 @@ def _collect_other_domain_notes(bundle: InputBundle) -> list[dict[str, Any]]:
             domain=domain,
             sample_titles=[str(example.get("title") or "")] if example.get("title") else [],
         )
-        if "bdstatic.com" in domain and "youjia" in domain:
-            display_name = "有驾静态域名"
-            reason = "返回的是有驾静态域名，只有裸域名，没有标题和摘要，暂不单列为稳定来源。"
-        elif "veryol.com" in domain:
-            display_name = "VeryOL"
-            reason = "本轮只出现 1 次，且没有足够标题或摘要辅助判断站点类型。"
         notes.append(
             {
                 "domain": domain,
@@ -764,17 +683,6 @@ def _collect_other_domain_notes(bundle: InputBundle) -> list[dict[str, Any]]:
     return notes
 
 
-def _match_domain_hint(domain: str) -> dict[str, Any] | None:
-    normalized = str(domain or "").strip().lower()
-    if not normalized:
-        return None
-    for hint in DOMAIN_PROFILE_HINTS:
-        suffix = str(hint["suffix"]).lower()
-        if normalized == suffix or normalized.endswith(f".{suffix}"):
-            return hint
-    return None
-
-
 def _resolve_site_display_name(
     *,
     domain: str | None,
@@ -783,27 +691,11 @@ def _resolve_site_display_name(
     taxonomy: Any = None,
 ) -> str:
     normalized_domain = str(domain or "").strip().lower()
-    if taxonomy and getattr(taxonomy, "display_name", None):
-        return str(getattr(taxonomy, "display_name"))
-    hint = _match_domain_hint(normalized_domain)
-    if hint:
-        return str(hint["display_name"])
     explicit_name = str(site_name or "").strip()
     if explicit_name and explicit_name.lower() != normalized_domain:
         return explicit_name
-    title_text = " ".join(sample_titles or [])
-    title_name_hints = {
-        "懂车帝": "懂车帝",
-        "易车": "易车",
-        "汽车之家": "汽车之家",
-        "车家号": "汽车之家·车家号",
-        "太平洋汽车": "太平洋汽车",
-        "有驾": "有驾",
-        "中关村在线": "中关村在线汽车",
-    }
-    for marker, label in title_name_hints.items():
-        if marker in title_text:
-            return label
+    if taxonomy and getattr(taxonomy, "display_name", None):
+        return str(getattr(taxonomy, "display_name"))
     return normalized_domain or "N/A"
 
 
@@ -1014,77 +906,20 @@ class ComparisonBundle(BaseModel):
 
 
 def build_domain_taxonomy(official_domains: list[str]) -> list[DomainTaxonomyRecord]:
-    seed = [
+    return [
         DomainTaxonomyRecord(domain=domain, source_type="official", display_name=domain)
         for domain in official_domains
         if domain
     ]
-    seed.extend(
-        [
-            DomainTaxonomyRecord(
-                domain="mp.weixin.qq.com",
-                source_type="community",
-                ecosystem_tag="wechat",
-                is_platform_ecosystem=True,
-                display_name="微信公众平台",
-            ),
-            DomainTaxonomyRecord(domain="zhihu.com", source_type="community", display_name="知乎"),
-            DomainTaxonomyRecord(
-                domain="xiaohongshu.com",
-                source_type="community",
-                ecosystem_tag="xiaohongshu",
-                display_name="小红书",
-            ),
-            DomainTaxonomyRecord(domain="36kr.com", source_type="vertical_media", display_name="36氪"),
-            DomainTaxonomyRecord(
-                domain="bilibili.com",
-                source_type="video_or_content",
-                ecosystem_tag="bilibili",
-                is_platform_ecosystem=True,
-                display_name="哔哩哔哩",
-            ),
-        ]
-    )
-    return seed
 
 
 def _infer_domain_taxonomy(domain: str, official_domains: list[str], platform: str) -> DomainTaxonomyRecord:
-    if _domain_matches(domain, official_domains):
-        return DomainTaxonomyRecord(domain=domain, source_type="official", display_name=domain)
-    hint = _match_domain_hint(domain)
-    if hint:
-        return DomainTaxonomyRecord(
-            domain=domain,
-            source_type=str(hint["source_type"]),  # type: ignore[arg-type]
-            display_name=str(hint["display_name"]),
-        )
-    if any(token in domain for token in ("gov.cn", "people.com.cn", "xinhuanet.com", "cctv.com")):
-        return DomainTaxonomyRecord(domain=domain, source_type="authority_media", display_name=domain)
-    if any(token in domain for token in ("36kr.com", "huxiu.com", "iyiou.com", "cyzone.cn", "leiphone.com")):
-        return DomainTaxonomyRecord(domain=domain, source_type="vertical_media", display_name=domain)
-    if any(token in domain for token in ("zhihu.com", "xiaohongshu.com", "weibo.com", "mp.weixin.qq.com", "qq.com")):
-        ecosystem_tag = "wechat" if "qq.com" in domain or "weixin" in domain else "xiaohongshu" if "xiaohongshu" in domain else "none"
-        return DomainTaxonomyRecord(
-            domain=domain,
-            source_type="community",
-            ecosystem_tag=ecosystem_tag,  # type: ignore[arg-type]
-            is_platform_ecosystem=platform == "yuanbao" and ecosystem_tag == "wechat",
-            display_name=domain,
-        )
-    if any(token in domain for token in ("bilibili.com", "douyin.com", "iesdouyin.com", "ixigua.com", "toutiao.com")):
-        ecosystem_tag = "bilibili"
-        if "douyin" in domain or "iesdouyin" in domain:
-            ecosystem_tag = "douyin"
-        elif "toutiao" in domain or "ixigua" in domain:
-            ecosystem_tag = "toutiao"
-        return DomainTaxonomyRecord(
-            domain=domain,
-            source_type="video_or_content",
-            ecosystem_tag=ecosystem_tag,  # type: ignore[arg-type]
-            is_platform_ecosystem=platform == "doubao",
-            display_name=domain,
-        )
-    return DomainTaxonomyRecord(domain=domain, source_type="other", display_name=domain)
+    is_official = _domain_matches(domain, official_domains)
+    return DomainTaxonomyRecord(
+        domain=domain,
+        source_type="official" if is_official else "other",
+        display_name=domain,
+    )
 
 
 def _match_brand_from_text(text: str, candidate_name: str, aliases: list[str]) -> bool:
@@ -1237,6 +1072,36 @@ def _infer_recommendation_pattern(archetype: str) -> str:
     return mapping.get(archetype, "explain_then_example")
 
 
+ANSWER_CONTENT_FEATURES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "theory": ("原理/机制解释", ("原理", "机制", "吸收", "作用", "原因", "区别", "通常", "一般", "研究")),
+    "evidence": ("证据背书", ("研究", "临床", "数据", "证据", "文献", "权威", "专家", "指南", "认证")),
+    "product": ("产品/品牌介绍", ("产品", "品牌", "成分", "配方", "型号", "规格", "功效", "适合")),
+    "risk_or_compliance": ("风险/合规提醒", ("注意", "风险", "副作用", "禁忌", "不建议", "遵医嘱", "医生", "药物", "冲突", "争议")),
+    "purchase_guidance": ("购买/选择建议", ("推荐", "选择", "购买", "渠道", "官方", "正规", "预算", "性价比", "优先")),
+}
+
+
+def _answer_feature_flags(answer_text: str, citations: list[CitationFetchRecord]) -> set[str]:
+    text = str(answer_text or "")
+    flags: set[str] = set()
+    for code, (_label, keywords) in ANSWER_CONTENT_FEATURES.items():
+        if _contains_any(text, keywords):
+            flags.add(code)
+    if citations:
+        flags.add("evidence")
+    return flags
+
+
+def _format_feature_mix(feature_mix: dict[str, float | None]) -> str:
+    parts: list[str] = []
+    for code, (label, _keywords) in ANSWER_CONTENT_FEATURES.items():
+        value = feature_mix.get(code)
+        if value is None or value <= 0:
+            continue
+        parts.append(f"{label} {_format_ratio(value)}")
+    return "、".join(parts) or "暂未形成稳定行文特征"
+
+
 def _is_comparison_question(question: QuestionRecord, answer_text: str) -> bool:
     if question.intent in {"which_is_better", "how_to_choose", "alternative_or_replace", "vendor_recommendation"}:
         return True
@@ -1292,9 +1157,13 @@ def build_input_bundle(
 ) -> InputBundle:
     report_kind = normalize_report_kind(analysis_mode)
     brand_name = str(brand_profile.get("brand_name") or "品牌").strip() or "品牌"
-    official_domain = _normalize_domain(str(brand_profile.get("official_website") or ""))
-    official_domains = _expand_official_domains(official_domain)
     aliases = _normalize_text_list(extract_brand_aliases(brand_profile) + [brand_name])
+    official_domain = _normalize_domain(str(brand_profile.get("official_website") or ""))
+    official_domains = _expand_official_domains(
+        official_domain,
+        brand_name=brand_name,
+        aliases=aliases,
+    )
     competitor_names = _normalize_text_list(
         [str(item.get("name") or "").strip() for item in competitors if isinstance(item, dict)]
     )
@@ -1377,16 +1246,43 @@ def build_input_bundle(
                 if not url or url in seen_urls:
                     continue
                 seen_urls.add(url)
-                domain = _normalize_domain(url)
+                metadata = (
+                    citation.get("metadata")
+                    if isinstance(citation.get("metadata"), dict)
+                    else {}
+                )
+                domain = _normalize_domain(
+                    citation.get("canonical_domain")
+                    or metadata.get("canonical_domain")
+                    or url
+                )
                 taxonomy = taxonomy_map.get(domain or "")
                 if taxonomy is None and domain:
                     taxonomy = _infer_domain_taxonomy(domain, official_domains, platform)
                     taxonomy_map[domain] = taxonomy
                 title = str(citation.get("title") or citation.get("site_name") or "").strip() or None
-                snippet = str(citation.get("snippet") or "").strip() or None
+                snippet = str(citation.get("snippet") or citation.get("summary") or "").strip() or None
                 brand_related = _domain_matches(domain, official_domains)
                 if not brand_related:
                     brand_related = _match_brand_from_text(f"{title or ''} {snippet or ''}", brand_name, aliases)
+                source_type = str(
+                    citation.get("source_type") or metadata.get("source_type") or ""
+                ).strip()
+                if source_type not in set(SOURCE_TYPE_ORDER):
+                    source_type = taxonomy.source_type if taxonomy else "other"
+                is_official = bool(citation.get("is_official")) or _domain_matches(domain, official_domains)
+                if is_official:
+                    source_type = "official"
+                site_name = (
+                    str(
+                        citation.get("site_display_name")
+                        or metadata.get("site_display_name")
+                        or citation.get("site_name")
+                        or citation.get("source")
+                        or ""
+                    ).strip()
+                    or (taxonomy.display_name if taxonomy else None)
+                )
                 citation_records.append(
                     CitationFetchRecord(
                         citation_id=f"{question_id}:{platform}:{citation_index}",
@@ -1394,16 +1290,13 @@ def build_input_bundle(
                         url=url,
                         domain=domain,
                         snippet=snippet,
-                        site_name=(
-                            str(citation.get("site_name") or "").strip()
-                            or (taxonomy.display_name if taxonomy else None)
-                        ),
-                        source_type=(taxonomy.source_type if taxonomy else "other"),
+                        site_name=site_name,
+                        source_type=source_type,
                         ecosystem_tag=(taxonomy.ecosystem_tag if taxonomy else "none"),
                         is_platform_ecosystem=bool(taxonomy and taxonomy.is_platform_ecosystem),
-                        is_official=bool(taxonomy and taxonomy.source_type == "official"),
+                        is_official=is_official,
                         brand_related=brand_related,
-                        official_conversion_flag=bool(taxonomy and taxonomy.source_type == "official"),
+                        official_conversion_flag=is_official,
                     )
                 )
 
@@ -1548,6 +1441,8 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
     official_links = 0
     source_counter: Counter[str] = Counter()
     domain_counter: Counter[str] = Counter()
+    domain_source_counter: dict[str, Counter[str]] = defaultdict(Counter)
+    domain_display_names: dict[str, Counter[str]] = defaultdict(Counter)
     domain_titles: dict[str, list[str]] = defaultdict(list)
     monitor_brand_answers = [answer for answer in bundle.answers if answer.status == "ok" and answer.mentioned_monitor_brand]
     brand_related_link_answer_count = 0
@@ -1569,6 +1464,9 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
             total_citations += 1
             if citation.domain:
                 domain_counter[citation.domain] += 1
+                domain_source_counter[citation.domain][citation.source_type] += 1
+                if citation.site_name:
+                    domain_display_names[citation.domain][citation.site_name] += 1
                 if citation.title and citation.title not in domain_titles[citation.domain]:
                     domain_titles[citation.domain].append(citation.title)
             if citation.brand_related:
@@ -1619,13 +1517,31 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
     top_domains = []
     for domain, count in sorted(domain_counter.items(), key=lambda item: (-item[1], item[0]))[:10]:
         taxonomy = taxonomy_by_domain.get(domain)
-        source_type = taxonomy.source_type if taxonomy else ("official" if _domain_matches(domain, bundle.brand_master.official_domains) else "other")
+        source_type = (
+            domain_source_counter[domain].most_common(1)[0][0]
+            if domain_source_counter.get(domain)
+            else (
+                taxonomy.source_type
+                if taxonomy
+                else (
+                    "official"
+                    if _domain_matches(domain, bundle.brand_master.official_domains)
+                    else "other"
+                )
+            )
+        )
         sample_titles = domain_titles.get(domain, [])[:3]
+        display_name = (
+            domain_display_names[domain].most_common(1)[0][0]
+            if domain_display_names.get(domain)
+            else ""
+        )
         top_domains.append(
             {
                 "domain": domain,
                 "display_name": _resolve_site_display_name(
                     domain=domain,
+                    site_name=display_name,
                     sample_titles=sample_titles,
                     taxonomy=taxonomy,
                 ),
@@ -1724,6 +1640,12 @@ def _build_question_coverage_analyzer(bundle: InputBundle) -> dict[str, Any]:
         related_answers = answers_by_question.get(question.question_id, [])
         state_counter = Counter(answer.answer_state for answer in related_answers)
         dominant_state = sorted(state_counter.items(), key=lambda item: (-item[1], item[0]))[0][0] if state_counter else "no_brand"
+        state_platforms = {
+            state: sorted(
+                {answer.platform for answer in related_answers if answer.answer_state == state}
+            )
+            for state in ("no_brand", "competitor_only", "monitor_only", "monitor_plus_others")
+        }
         competitors_present = _normalize_text_list([brand for answer in related_answers for brand in answer.competitor_brands])
         negative_topics = _normalize_text_list([topic for answer in related_answers for topic in answer.negative_topics])
         row = {
@@ -1734,6 +1656,7 @@ def _build_question_coverage_analyzer(bundle: InputBundle) -> dict[str, Any]:
             "decision_stage": _stage_label(question.decision_stage),
             "brand_present": question.question_id in brand_question_ids,
             "present_platforms": sorted({answer.platform for answer in related_answers}),
+            "state_platforms": state_platforms,
             "official_citation_present": any(any(citation.is_official for citation in answer.citation_records) for answer in related_answers if answer.mentioned_monitor_brand),
             "competitors_present": competitors_present,
             "answer_state": dominant_state,
@@ -1771,6 +1694,7 @@ def _build_sentiment_risk_analyzer(bundle: InputBundle) -> dict[str, Any]:
     distribution_counter = Counter(answer.sentiment for answer in monitor_answers)
     positive_reason_counter: Counter[str] = Counter()
     positive_reason_questions: dict[str, Counter[str]] = defaultdict(Counter)
+    positive_reason_examples: dict[str, list[str]] = defaultdict(list)
     negative_topic_counter: Counter[str] = Counter()
     negative_topic_examples: dict[str, list[str]] = defaultdict(list)
     platform_negative_counter: dict[str, Counter[str]] = defaultdict(Counter)
@@ -1783,6 +1707,10 @@ def _build_sentiment_risk_analyzer(bundle: InputBundle) -> dict[str, Any]:
         for reason in unique_reasons:
             positive_reason_counter[reason] += 1
             positive_reason_questions[reason][answer.question_text] += 1
+            if len(positive_reason_examples[reason]) < 2 and answer.answer_text:
+                positive_reason_examples[reason].append(
+                    _clean_report_text(answer.answer_text, max_length=72)
+                )
         unique_negative_topics = _normalize_text_list(answer.negative_topics)
         if unique_negative_topics:
             negative_answer_count += 1
@@ -1823,6 +1751,7 @@ def _build_sentiment_risk_analyzer(bundle: InputBundle) -> dict[str, Any]:
                 "display": _positive_reason_label(reason),
                 "rate": safe_ratio(count, positive_total),
                 "major_question_type": major_question_type,
+                "common_conclusion": "；".join(positive_reason_examples.get(reason, [])[:2]) or "N/A",
             }
         )
 
@@ -1883,6 +1812,7 @@ def _build_platform_profile_analyzer(bundle: InputBundle, citation_summary: dict
                 "no_citation_strong_recommend_rate": None,
                 "source_preferences": {source_type: "low" for source_type in SOURCE_TYPE_ORDER},
                 "ecosystem_preference": "low",
+                "answer_feature_mix": {},
             }
             continue
 
@@ -1891,6 +1821,10 @@ def _build_platform_profile_analyzer(bundle: InputBundle, citation_summary: dict
         comparison_answers = [answer for answer in answers if answer.comparison_answer_flag]
         comparison_with_brand = [answer for answer in comparison_answers if answer.mentioned_monitor_brand]
         no_citation_strong = [answer for answer in answers if answer.no_citation_strong_recommend_flag]
+        feature_counter: Counter[str] = Counter()
+        for answer in answers:
+            for feature in _answer_feature_flags(answer.answer_text or "", answer.citation_records):
+                feature_counter[feature] += 1
 
         friendly_rows = []
         unfriendly_rows = []
@@ -1921,6 +1855,10 @@ def _build_platform_profile_analyzer(bundle: InputBundle, citation_summary: dict
             "no_citation_strong_recommend_rate": safe_ratio(len(no_citation_strong), len(answers)),
             "source_preferences": citation_profile.get("source_preferences", {source_type: "low" for source_type in SOURCE_TYPE_ORDER}),
             "ecosystem_preference": citation_profile.get("ecosystem_preference", "low"),
+            "answer_feature_mix": {
+                code: safe_ratio(feature_counter.get(code, 0), len(answers))
+                for code in ANSWER_CONTENT_FEATURES
+            },
         }
 
     def _pick_platform(metric_getter) -> str | None:
@@ -2241,6 +2179,21 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
         if metrics.brand_rank
         else "当前样本里还没有形成稳定的品牌排名，需要先让品牌更稳定地进入答案。"
     )
+    if strong_visibility:
+        visibility_bullet = f"{bundle.meta.brand_name}已经能被平台带进大多数答案。"
+        first_key_fact = (
+            f"{bundle.meta.brand_name}已经进入大多数答案，其中 **{_format_ratio(metrics.monitor_only_rate)}** "
+            f"的答案只提{bundle.meta.brand_name}，**{_format_ratio(metrics.monitor_plus_others_rate)}** 的答案会和竞品同台出现。"
+        )
+    elif (metrics.brand_visibility or 0) > 0:
+        visibility_bullet = f"{bundle.meta.brand_name}只进入了一部分答案，还不能算稳定进入。"
+        first_key_fact = (
+            f"{bundle.meta.brand_name}已经有基础露出，但进入还不稳定；只提{bundle.meta.brand_name}的答案占 **{_format_ratio(metrics.monitor_only_rate)}**，"
+            f"和竞品同台出现的答案占 **{_format_ratio(metrics.monitor_plus_others_rate)}**。"
+        )
+    else:
+        visibility_bullet = f"{bundle.meta.brand_name}当前还没有稳定进入答案。"
+        first_key_fact = f"{bundle.meta.brand_name}当前还没有稳定进入答案，第一优先级是先减少无品牌回答和只提竞品回答。"
     competitor_bullet = (
         f"这部分答案会优先给竞品，不写{bundle.meta.brand_name}。"
         if (metrics.competitor_pressure or 0) > 0
@@ -2273,7 +2226,7 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
             "",
             summary_opening,
             "",
-            "- " + _format_metric_emphasis("品牌可见度", _format_ratio(metrics.brand_visibility)) + f"。{bundle.meta.brand_name}已经能被平台带进大多数答案。",
+            "- " + _format_metric_emphasis("品牌可见度", _format_ratio(metrics.brand_visibility)) + f"。{visibility_bullet}",
             "- " + _format_metric_emphasis("品牌提及排名", f"#{metrics.brand_rank}" if metrics.brand_rank else "N/A") + f"。{_brand_rank_sentence(bundle.meta.brand_name, metrics.brand_rank)}",
             "- "
             + _format_metric_emphasis("竞品挤压率", _format_ratio(metrics.competitor_pressure))
@@ -2285,7 +2238,7 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
             "",
             "### 最值得先看的三件事",
             "",
-            f"1. {bundle.meta.brand_name}已经进入大多数答案，其中 **{_format_ratio(metrics.monitor_only_rate)}** 的答案只提{bundle.meta.brand_name}，**{_format_ratio(metrics.monitor_plus_others_rate)}** 的答案会和竞品同台出现。",
+            f"1. {first_key_fact}",
             f"2. {second_key_fact}",
             f"3. {third_key_fact}",
             *baseline_fact_lines,
@@ -2342,13 +2295,19 @@ def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, compar
         if not metrics.higher_brands
         else f"当前排位高于{bundle.meta.brand_name}的品牌有{'、'.join(metrics.higher_brands)}，需要继续复核这些品牌在哪类问题上更容易被优先提及。"
     )
+    if (metrics.brand_visibility or 0) >= 0.6:
+        visibility_sentence = f"大多数答案会提到{bundle.meta.brand_name}。"
+    elif (metrics.brand_visibility or 0) > 0:
+        visibility_sentence = f"只有一部分答案会提到{bundle.meta.brand_name}，还不能算稳定进入。"
+    else:
+        visibility_sentence = f"当前样本里还没有答案稳定提到{bundle.meta.brand_name}。"
     markdown = "\n".join(
         [
             "## 1. 可见度分析",
             "",
             opening_line,
             "",
-            f"- {_format_metric_emphasis('品牌可见度', _format_ratio(metrics.brand_visibility))}。大多数答案会提到{bundle.meta.brand_name}。",
+            f"- {_format_metric_emphasis('品牌可见度', _format_ratio(metrics.brand_visibility))}。{visibility_sentence}",
             f"- {_format_metric_emphasis(f'只提{bundle.meta.brand_name}的答案', _format_ratio(metrics.monitor_only_rate))}。这部分回答会把{bundle.meta.brand_name}作为更明确的推荐对象。",
             f"- {_format_metric_emphasis(f'同时提到{bundle.meta.brand_name}和竞品的答案', _format_ratio(metrics.monitor_plus_others_rate))}。这类回答更像比较名单，{bundle.meta.brand_name}和竞品会一起出现。",
             f"- {_format_metric_emphasis('无品牌率', _format_ratio(metrics.no_brand_rate))}。这部分回答更偏知识性建议，没有带出任何品牌。",
@@ -2384,7 +2343,7 @@ def _build_citation_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
         ratio = metrics.source_type_breakdown.get(source_type)
         if ratio is None:
             continue
-        if ratio <= 0 and source_type != "official":
+        if ratio <= 0:
             continue
         source_parts.append(f"{_source_type_label(source_type)} **{_format_ratio(ratio)}**")
     other_domain_notes = _collect_other_domain_notes(bundle)
@@ -2473,6 +2432,8 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
     scene_label = _report_label(scene_summary["label"])
     comparison_label = _report_label(comparison_summary["label"])
     coverage_text = _top_scene_coverage_text(metrics.coverage_by_scene)
+    comparison_entered = comparison_summary["entered_count"]
+    comparison_total = comparison_summary["question_count"]
     entry_lines = []
     for summary in entry_scene_summaries[:2]:
         entry_rate = safe_ratio(summary["entered_count"], summary["question_count"])
@@ -2496,7 +2457,6 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
     dropout_lines = []
     for summary in dropout_scene_summaries[:2]:
         missed_count = summary["competitor_only_count"] + summary["no_brand_count"]
-        missed_rate = safe_ratio(missed_count, summary["question_count"])
         if not summary["question_count"] or not missed_count:
             continue
         gap_quotes = _state_question_quotes(
@@ -2511,60 +2471,113 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
             prefix="其中 ",
         )
         block = [
-            f"- {_report_label(summary['label'])}共有 {summary['question_count']} 个问题，{dropout_clause}，没有把{bundle.meta.brand_name}写进答案的比例是 **{_format_ratio(missed_rate)}**。"
+            f"- {_report_label(summary['label'])}共有 {summary['question_count']} 个问题，{dropout_clause}。"
             if dropout_clause
-            else f"- {_report_label(summary['label'])}共有 {summary['question_count']} 个问题，没有把{bundle.meta.brand_name}写进答案的比例是 **{_format_ratio(missed_rate)}**。"
+            else f"- {_report_label(summary['label'])}共有 {summary['question_count']} 个问题，是本轮需要复查的掉出问题。"
         ]
         block.extend(gap_quotes)
         dropout_lines.append("\n".join(block))
-    risk_line = (
-        (
-            f"这轮和风险、顾虑有关的问题有 {risk_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {risk_summary['entered_count']} 个，其中最后只提{bundle.meta.brand_name}的有 **{risk_summary['exclusive_count']} 个**；也就是说，平台更愿意把它放进比较名单，而不是直接给出结论。"
-            if (risk_summary["exclusive_count"] or 0) > 0
-            else f"这轮和风险、顾虑有关的问题有 {risk_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {risk_summary['entered_count']} 个；这些问题里，品牌更多是被放进比较名单，而不是直接成为结论。"
+    if not risk_summary["question_count"]:
+        risk_line = "这轮暂时没有形成明显的风险顾虑问题带。"
+    elif not risk_summary["entered_count"]:
+        risk_line = (
+            f"这轮和风险、顾虑有关的问题有 {risk_summary['question_count']} 个，"
+            f"本轮没有稳定把{bundle.meta.brand_name}写进答案；这些问题需要优先补充可引用的安全边界、适用条件和证据出处。"
         )
-        if risk_summary["question_count"]
-        else "这轮暂时没有形成明显的风险顾虑问题带。"
-    )
+    elif (risk_summary["exclusive_count"] or 0) > 0:
+        risk_line = (
+            f"这轮和风险、顾虑有关的问题有 {risk_summary['question_count']} 个。"
+            f"至少有一个平台把{bundle.meta.brand_name}写进答案的有 {risk_summary['entered_count']} 个，"
+            f"其中最后只提{bundle.meta.brand_name}的有 **{risk_summary['exclusive_count']} 个**；"
+            "也就是说，平台更愿意把它放进比较名单，而不是直接给出结论。"
+        )
+    else:
+        risk_line = (
+            f"这轮和风险、顾虑有关的问题有 {risk_summary['question_count']} 个。"
+            f"至少有一个平台把{bundle.meta.brand_name}写进答案的有 {risk_summary['entered_count']} 个；"
+            "这些问题里，品牌更多是被放进比较名单，而不是直接成为结论。"
+        )
     price_drop_samples = _state_question_samples(price_summary["questions"], states={"competitor_only", "no_brand"}, limit=2)
-    price_line = (
-        (
-            f"这轮和价格、成本有关的问题有 {price_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {price_summary['entered_count']} 个；其中「{'、'.join(price_drop_samples)}」已经出现品牌掉出。"
-            if price_drop_samples
-            else f"这轮和价格、成本有关的问题有 {price_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {price_summary['entered_count']} 个。"
+    if not price_summary["question_count"]:
+        price_line = "这轮暂时没有形成明显的价格和成本问题带。"
+    elif not price_summary["entered_count"]:
+        sample_clause = f"例如「{'、'.join(price_drop_samples)}」。" if price_drop_samples else ""
+        price_line = (
+            f"这轮和价格、成本有关的问题有 {price_summary['question_count']} 个，"
+            f"本轮没有稳定把{bundle.meta.brand_name}写进答案；需要补清价格理由、购买渠道和替代方案对比。"
+            f"{sample_clause}"
         )
-        if price_summary["question_count"]
-        else "这轮暂时没有形成明显的价格和成本问题带。"
-    )
-    scene_line = (
-        (
-            f"{scene_label}共有 {scene_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {scene_summary['entered_count']} 个，其中最后只提{bundle.meta.brand_name}的有 **{scene_summary['exclusive_count']} 个**；这也是当前最容易直接不给品牌的一类问题。"
-            if (scene_summary["exclusive_count"] or 0) > 0
-            else f"{scene_label}共有 {scene_summary['question_count']} 个。至少有一个平台把{bundle.meta.brand_name}写进答案的有 {scene_summary['entered_count']} 个；这也是当前最容易直接不给品牌的一类问题。"
+    elif price_drop_samples:
+        price_line = (
+            f"这轮和价格、成本有关的问题有 {price_summary['question_count']} 个。"
+            f"至少有一个平台把{bundle.meta.brand_name}写进答案的有 {price_summary['entered_count']} 个；"
+            f"其中「{'、'.join(price_drop_samples)}」已经出现品牌掉出。"
         )
-        if scene_summary["question_count"]
-        else "这轮暂时还没有形成稳定的具体使用场景问题带。"
-    )
-    comparison_line = (
-        f"相对更有利的是{comparison_label}：共 {comparison_summary['question_count']} 个问题，至少有一个平台把{bundle.meta.brand_name}写进答案的有 {comparison_summary['entered_count']} 个。也就是说，只要问题进入比较语境，{bundle.meta.brand_name}更容易被纳入候选名单。"
-        if comparison_summary["question_count"]
-        else "当前样本里还没有哪一类问题，能稳定把品牌带进答案。"
-    )
+    else:
+        price_line = (
+            f"这轮和价格、成本有关的问题有 {price_summary['question_count']} 个。"
+            f"至少有一个平台把{bundle.meta.brand_name}写进答案的有 {price_summary['entered_count']} 个。"
+        )
+    if not scene_summary["question_count"]:
+        scene_line = "这轮暂时还没有形成稳定的具体使用场景问题带。"
+    elif not scene_summary["entered_count"]:
+        scene_line = (
+            f"{scene_label}共有 {scene_summary['question_count']} 个，"
+            f"本轮没有稳定把{bundle.meta.brand_name}写进答案；这是当前最容易掉出的使用场景，需要补具体人群、场景痛点和产品适配证据。"
+        )
+    elif (scene_summary["exclusive_count"] or 0) > 0:
+        scene_line = (
+            f"{scene_label}共有 {scene_summary['question_count']} 个。"
+            f"至少有一个平台把{bundle.meta.brand_name}写进答案的有 {scene_summary['entered_count']} 个，"
+            f"其中最后只提{bundle.meta.brand_name}的有 **{scene_summary['exclusive_count']} 个**；"
+            "这也是当前最容易直接不给品牌的一类问题。"
+        )
+    else:
+        scene_line = (
+            f"{scene_label}共有 {scene_summary['question_count']} 个。"
+            f"至少有一个平台把{bundle.meta.brand_name}写进答案的有 {scene_summary['entered_count']} 个；"
+            "这也是当前最容易直接不给品牌的一类问题。"
+        )
+    comparison_line = ""
+    if comparison_total and comparison_entered:
+        comparison_line = (
+            f"{comparison_label}相对更容易带出品牌：共 {comparison_total} 个问题，"
+            f"其中 {comparison_entered} 个问题至少有一个平台提到{bundle.meta.brand_name}。"
+        )
+    elif comparison_total:
+        comparison_line = f"{comparison_label}本轮没有稳定带出{bundle.meta.brand_name}，暂不把它作为优势问题类型。"
     gap_question_lines = []
     for row in sorted(
         [row for row in question_rows if row["answer_state"] in {"competitor_only", "no_brand"}],
         key=lambda item: (0 if item["answer_state"] == "no_brand" else 1, item["question_text"]),
     )[:4]:
+        state = str(row["answer_state"])
+        state_platforms = row.get("state_platforms") or {}
+        platforms = (
+            state_platforms.get(state)
+            if isinstance(state_platforms, dict)
+            else None
+        ) or row.get("present_platforms", [])
+        platform_clause = (
+            "未提及任何品牌的平台"
+            if state == "no_brand"
+            else f"只提竞品、未提{bundle.meta.brand_name}的平台"
+        )
         gap_question_lines.append(
             "\n".join(
                 [
-                    f"{len(gap_question_lines) + 1}. 当前结果：{_state_label(row['answer_state'])}；出现平台：{_sample_platform_labels(row.get('present_platforms', []))}。",
+                    f"{len(gap_question_lines) + 1}. {platform_clause}：{_sample_platform_labels(platforms)}。",
                     _markdown_quote_block(_clean_report_text(row["question_text"], max_length=80)),
                 ]
             )
         )
-    conclusion = f"{bundle.meta.brand_name}不是完全进不去答案，而是在不同问题上的表现差得很大：直接问品牌和{comparison_label}时更容易进去，{scene_label}和风险顾虑这类问题更容易不给品牌。"
-    subtitle = f"直接问品牌和{comparison_label}更容易进入；{scene_label}与风险顾虑更容易掉出。"
+    entry_hint = (
+        f"直接问品牌和{comparison_label}"
+        if comparison_total and comparison_entered
+        else "直接问品牌"
+    )
+    conclusion = f"{bundle.meta.brand_name}不是完全进不去答案，而是在不同问题上的表现差得很大：{entry_hint}时更容易进去，{scene_label}和风险顾虑这类问题更容易不给品牌。"
+    subtitle = f"{entry_hint}更容易进入；{scene_label}与风险顾虑更容易掉出。"
     markdown = "\n".join(
         [
             "## 3. 问题解析",
@@ -2575,7 +2588,7 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
             "",
             "### 3.1 更容易写进答案的问题",
             "",
-            f"- {comparison_line}",
+            *(([f"- {comparison_line}"] if comparison_line else [])),
             *((entry_lines or ["- 当前样本里还没有形成稳定的进入优势。"])),
             "",
             f"### 3.2 最容易不提{bundle.meta.brand_name}的问题",
@@ -2611,7 +2624,15 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
 
 def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict[str, Any]:
     distribution_rows = [["正向", _format_ratio(metrics.sentiment_distribution.get("positive"))], ["中性", _format_ratio(metrics.sentiment_distribution.get("neutral"))], ["负向", _format_ratio(metrics.sentiment_distribution.get("negative"))]]
-    positive_rows = [[index, row["display"], _format_ratio(row["rate"]), row["major_question_type"]] for index, row in enumerate(metrics.top_positive_reasons, start=1)]
+    positive_rows = [
+        [
+            index,
+            row["display"],
+            _format_ratio(row["rate"]),
+            row.get("common_conclusion") or row["major_question_type"],
+        ]
+        for index, row in enumerate(metrics.top_positive_reasons, start=1)
+    ]
     display_negative_topics = _strip_false_negative_topics(metrics.top_negative_topics)
     fallback_negative_issues = _fallback_negative_issue_rows(bundle) if not display_negative_topics else []
     if not display_negative_topics:
@@ -2637,8 +2658,8 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
         positive_lines.append(
             "\n".join(
                 [
-                    f"- {row[1]}，出现率 **{row[2]}**。",
-                    _markdown_quote_block(_clean_report_text(str(row[3]), max_length=64)),
+                    f"- {row[1]}，出现率 **{row[2]}**；典型说法：",
+                    _markdown_quote_block(_clean_report_text(str(row[3]), max_length=88)),
                 ]
             )
         )
@@ -2648,8 +2669,13 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
             negative_lines.append(
                 "\n".join(
                     [
-                        f"- {row['display']}，影响答案占比 **{_format_ratio(row['rate'])}**。",
+                        f"- {row['display']}，影响答案占比 **{_format_ratio(row['rate'])}**；对应问题：",
                         _markdown_quote_block(row["question_text"]),
+                        *(
+                            [_markdown_quote_block(row["common_conclusion"])]
+                            if row.get("common_conclusion")
+                            else []
+                        ),
                     ]
                 )
             )
@@ -2658,7 +2684,7 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
             negative_lines.append(
                 "\n".join(
                     [
-                        f"- {row[1]}，影响答案占比 **{row[2]}**。",
+                        f"- {row[1]}，影响答案占比 **{row[2]}**；典型负面/顾虑说法：",
                         _markdown_quote_block(_clean_report_text(str(row[3]), max_length=72)),
                     ]
                 )
@@ -2668,8 +2694,6 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
         platform_label, price_count, deployment_count, ecosystem_count, service_count = row
         total_negative = int(price_count) + int(deployment_count) + int(ecosystem_count) + int(service_count)
         if total_negative <= 0:
-            if platform_label in ("豆包", "Kimi"):
-                platform_lines.append(f"- **{platform_label}**：本轮没有有效答案，不下平台判断。")
             continue
         focus_pairs = []
         if deployment_count:
@@ -2718,7 +2742,7 @@ def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
         platform_label = _platform_label(platform)
         source_preferences = profile.get("source_preferences", {})
         if profile.get("data_status") != "ok":
-            logic_rows.append([platform_label, "本轮无有效答案", "N/A", "N/A", "N/A"])
+            logic_rows.append([platform_label, "样本不足", "N/A", "N/A", "N/A"])
             comparison_rows.append([platform_label, "N/A"])
             preference_rows.append([platform_label, "暂无明显来源偏好", {"high": "高", "medium": "中", "low": "低"}.get(profile.get("ecosystem_preference"), "低"), "N/A"])
             empty_platforms.append(platform_label)
@@ -2753,8 +2777,10 @@ def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
             if preferred_sources != "暂无明显来源偏好"
             else "本轮没有看到稳定的来源偏好"
         )
+        feature_mix = _format_feature_mix(profile.get("answer_feature_mix", {}))
         platform_note = (
-            f"{platform_label}更常先做横向比较，再决定是否推荐{bundle.meta.brand_name}。"
+            f"{platform_label}的答案结构里，{feature_mix}。"
+            f" 常见组织方式是“{profile.get('dominant_logic_display') or 'N/A'} / {profile.get('recommendation_pattern_display') or 'N/A'}”。"
             f" 比较类问题里，{bundle.meta.brand_name}进入答案的比例是 **{comparison_rate}**；{mention_sentence}，{miss_sentence}。"
             f" {source_sentence}。"
         )
@@ -2775,7 +2801,7 @@ def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
         )
     )
     empty_platform_line = (
-        f"### {'、'.join(empty_platforms)}\n本轮没有有效答案，先不下判断。"
+        f"### {'、'.join(empty_platforms)}\n本轮可用于平台偏好判断的样本不足，先不下平台性格结论。"
         if empty_platforms
         else None
     )

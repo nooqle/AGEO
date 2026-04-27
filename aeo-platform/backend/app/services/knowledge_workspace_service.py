@@ -14,8 +14,10 @@ from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import PlatformConstants
+from app.core.domain_normalization import normalize_domain
 from app.core.utils import extract_domain
 from app.models.knowledge import KnowledgeRecord, KnowledgeSegment
+from app.services.domain_memory_service import DomainMemoryService
 
 
 def _id_or_none(value: str | UUID | None) -> str | None:
@@ -627,6 +629,11 @@ class KnowledgeWorkspaceService:
                     ),
                 )
 
+                official_domain = normalize_domain(
+                    _text(brand_profile.get("official_website"))
+                )
+                official_domains = [official_domain] if official_domain else []
+                domain_memory = DomainMemoryService(self.db)
                 citations = platform_result.get("citations", []) or []
                 for citation_index, citation in enumerate(citations):
                     url = _text(citation.get("url"))
@@ -635,21 +642,41 @@ class KnowledgeWorkspaceService:
                         or url
                         or f"citation-{citation_index + 1}"
                     )
-                    domain = _text(citation.get("domain")) or extract_domain(url)
+                    raw_domain = _text(citation.get("domain")) or extract_domain(url)
                     site_name = _text(
                         citation.get("site_name") or citation.get("source")
                     )
-                    is_official = bool(
-                        domain
-                        and extract_domain(_text(brand_profile.get("official_website")))
-                        == domain
+                    resolution = await domain_memory.resolve_citation_domain(
+                        url=url,
+                        raw_domain=raw_domain,
+                        title=title,
+                        snippet=_text(citation.get("snippet")),
+                        site_name=site_name,
+                        brand_name=brand_name,
+                        entity_id=entity_id,
+                        official_domains=official_domains,
+                        platform=platform,
                     )
+                    domain = resolution.canonical_domain
+                    site_name = site_name or resolution.display_name
+                    is_official = resolution.is_official
                     citation_payload = {
                         "question_id": question_id,
                         "question_text": question_text,
                         "platform": platform,
                         "citation": citation,
                         "is_official": is_official,
+                        "domain_resolution": {
+                            "canonical_domain": resolution.canonical_domain,
+                            "display_name": resolution.display_name,
+                            "owner_name": resolution.owner_name,
+                            "source_type": resolution.source_type,
+                            "site_category": resolution.site_category,
+                            "relation_type": resolution.relation_type,
+                            "confidence": resolution.confidence,
+                            "status": resolution.status,
+                            "resolved_by": resolution.resolved_by,
+                        },
                     }
                     await self._upsert_record(
                         dedupe_key=(
@@ -680,6 +707,13 @@ class KnowledgeWorkspaceService:
                         extra_metadata={
                             "url": url,
                             "site_name": site_name,
+                            "site_display_name": resolution.display_name,
+                            "source_type": resolution.source_type,
+                            "canonical_domain": resolution.canonical_domain,
+                            "domain_relation_type": resolution.relation_type,
+                            "domain_resolution_confidence": resolution.confidence,
+                            "domain_resolution_status": resolution.status,
+                            "domain_resolved_by": resolution.resolved_by,
                             "is_official": is_official,
                         },
                         segments=self._build_citation_segments(
