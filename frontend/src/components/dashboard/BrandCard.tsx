@@ -60,14 +60,14 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
               ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 86%, var(--brand-primary) 14%), color-mix(in srgb, var(--bg-secondary) 94%, #181510 6%))'
               : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 92%, #1c211c 8%), color-mix(in srgb, var(--bg-secondary) 96%, #17130f 4%))')
           : (isSelected
-              ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, #f7efdf 10%), color-mix(in srgb, var(--bg-secondary) 94%, #e9dcc7 6%))'
-              : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #fbf7ef 6%), color-mix(in srgb, var(--bg-tertiary) 98%, #f4ede1 2%))'),
+              ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 93%, #e6f0ec 7%), color-mix(in srgb, var(--bg-secondary) 98%, #dfe8e4 2%))'
+              : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 98%, #eef1ee 2%), var(--bg-secondary))'),
         borderColor: isDark
           ? (isSelected ? 'color-mix(in srgb, var(--brand-primary) 38%, var(--border-subtle) 62%)' : 'rgba(255,255,255,0.08)')
-          : (isSelected ? 'color-mix(in srgb, #8a6f46 36%, var(--border-subtle) 64%)' : 'color-mix(in srgb, var(--border-subtle) 88%, #d7c4a6 12%)'),
+          : (isSelected ? 'color-mix(in srgb, var(--brand-primary) 30%, var(--border-subtle) 70%)' : 'color-mix(in srgb, var(--border-subtle) 92%, #c9d0c9 8%)'),
         boxShadow: isDark
           ? (isSelected ? '0 20px 44px rgba(8,12,24,0.34)' : '0 12px 28px rgba(8,12,24,0.22)')
-          : (isSelected ? '0 18px 36px rgba(65, 49, 24, 0.08)' : '0 10px 24px rgba(65, 49, 24, 0.03)'),
+          : (isSelected ? '0 18px 36px rgba(24, 30, 28, 0.07)' : '0 10px 24px rgba(24, 30, 28, 0.035)'),
       }}
       whileHover={{ y: -2 }}
       transition={{ duration: 0.18 }}
@@ -160,11 +160,13 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
               style={{
                 background: isDark
                   ? 'linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025))'
-                  : 'color-mix(in srgb, var(--bg-secondary) 86%, var(--bg-elevated) 14%)',
-                color: isDark ? 'rgba(255,255,255,0.90)' : 'var(--text-secondary)',
+                  : 'color-mix(in srgb, var(--bg-secondary) 72%, var(--bg-tertiary) 28%)',
+                color: isDark
+                  ? 'rgba(255,255,255,0.90)'
+                  : 'color-mix(in srgb, var(--text-primary) 74%, var(--text-secondary) 26%)',
                 border: isDark
                   ? '1px solid rgba(255,255,255,0.12)'
-                  : '1px solid color-mix(in srgb, var(--border-subtle) 90%, #cdb89b 10%)',
+                  : '1px solid color-mix(in srgb, var(--border-subtle) 84%, #b8c1b9 16%)',
                 boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.03)' : 'none',
               }}
               onClick={(event) => {
@@ -193,10 +195,10 @@ export function AddBrandCard({ onClick }: AddBrandCardProps) {
       style={{
         background: isDark
           ? 'linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018))'
-          : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 92%, #fbf7ef 8%), color-mix(in srgb, var(--bg-tertiary) 98%, #f2ebdf 2%))',
+          : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 96%, #eef1ee 4%), color-mix(in srgb, var(--bg-secondary) 99%, #e7e9e5 1%))',
         borderColor: isDark
           ? 'rgba(255,255,255,0.10)'
-          : 'color-mix(in srgb, var(--border-subtle) 86%, #d3bea2 14%)',
+          : 'color-mix(in srgb, var(--border-subtle) 90%, #c6cec6 10%)',
       }}
       onClick={onClick}
       whileHover={{ y: -2 }}

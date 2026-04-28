@@ -42,20 +42,20 @@ const COMPETITOR_GROUP_META: Record<
 > = {
   直接竞争: {
     accent: '#ef5b5b',
-    surface: 'color-mix(in srgb, var(--bg-elevated) 78%, #ffe7e7 22%)',
-    badge: 'color-mix(in srgb, var(--bg-elevated) 60%, #ffd7d7 40%)',
+    surface: 'color-mix(in srgb, var(--bg-elevated) 90%, #f4e4e4 10%)',
+    badge: 'color-mix(in srgb, var(--bg-elevated) 78%, #f0cfcf 22%)',
     text: '#d14a4a',
   },
   间接竞争: {
-    accent: '#d99822',
-    surface: 'color-mix(in srgb, var(--bg-elevated) 78%, #fff1cf 22%)',
-    badge: 'color-mix(in srgb, var(--bg-elevated) 60%, #ffe7a6 40%)',
-    text: '#b57914',
+    accent: '#9e7445',
+    surface: 'color-mix(in srgb, var(--bg-elevated) 92%, #efe3d0 8%)',
+    badge: 'color-mix(in srgb, var(--bg-elevated) 82%, #e8d3b4 18%)',
+    text: '#85623b',
   },
   潜在竞争: {
     accent: '#3f83f8',
-    surface: 'color-mix(in srgb, var(--bg-elevated) 78%, #e2edff 22%)',
-    badge: 'color-mix(in srgb, var(--bg-elevated) 60%, #d2e3ff 40%)',
+    surface: 'color-mix(in srgb, var(--bg-elevated) 90%, #e2eaf4 10%)',
+    badge: 'color-mix(in srgb, var(--bg-elevated) 80%, #d3dfef 20%)',
     text: '#3569d6',
   },
 };

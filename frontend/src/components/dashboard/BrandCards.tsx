@@ -90,8 +90,8 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
         <div
           className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[20px] border px-4 py-3"
           style={{
-            background: 'color-mix(in srgb, var(--bg-elevated) 92%, #fff5e8 8%)',
-            borderColor: 'color-mix(in srgb, #d79b45 26%, var(--border-subtle) 74%)',
+            background: 'color-mix(in srgb, var(--bg-elevated) 94%, var(--status-warning-bg) 6%)',
+            borderColor: 'color-mix(in srgb, var(--status-warning) 18%, var(--border-subtle) 82%)',
           }}
         >
           <div>

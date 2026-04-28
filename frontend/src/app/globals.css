@@ -788,63 +788,80 @@ html.theme-transitioning *::after {
 }
 
 html[data-theme="light"] .dashboard-page-bg {
+  --bg-primary: #F5F4EF;
+  --bg-secondary: #FAF9F5;
+  --bg-tertiary: #E8E6DE;
+  --bg-elevated: #FFFDF9;
+  --bg-card: rgba(255, 253, 249, 0.96);
+  --bg-report-muted: #EFEEE8;
+  --text-secondary: #5F665F;
+  --text-tertiary: #848A82;
+  --text-muted: #989C94;
+  --border-default: rgba(35, 40, 37, 0.11);
+  --border-hover: rgba(31, 122, 107, 0.26);
+  --border-subtle: rgba(35, 40, 37, 0.075);
+  --surface-command: #F0EFE9;
+  --surface-command-hover: #E6E4DC;
+  --bg-dashboard-band: #E4E2DA;
+  --dashboard-shadow: rgba(24, 30, 28, 0.055);
+  --dashboard-shadow-strong: rgba(24, 30, 28, 0.085);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 96%, var(--bg-dashboard-band) 4%), color-mix(in srgb, var(--bg-primary) 99%, #efe7da 1%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 96%, #dfe5e1 4%), var(--bg-primary));
 }
 
 html[data-theme="light"] .dashboard-shell {
   border-color: var(--border-subtle);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 95%, #f5ead8 5%), color-mix(in srgb, var(--bg-secondary) 99%, #f3ebdf 1%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 92%, #edf1ee 8%), var(--bg-secondary));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.5),
-    0 16px 34px rgba(65, 49, 24, 0.045);
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    0 14px 30px var(--dashboard-shadow);
 }
 
 html[data-theme="light"] .dashboard-inner-panel {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 95%, #fbf7ef 5%), color-mix(in srgb, var(--bg-tertiary) 98%, #f2ebdf 2%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 96%, #edf1ee 4%), color-mix(in srgb, var(--bg-secondary) 98%, #e4e8e4 2%));
   box-shadow: none;
 }
 
 html[data-theme="light"] .dashboard-board {
-  box-shadow: 0 18px 38px rgba(65, 49, 24, 0.05);
+  box-shadow: 0 16px 34px var(--dashboard-shadow);
 }
 
 html[data-theme="light"] .dashboard-board--analysis {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #edf3f1 6%), color-mix(in srgb, var(--bg-elevated) 99%, #f7f2eb 1%));
-  border-color: color-mix(in srgb, var(--border-subtle) 84%, var(--evidence-source) 16%);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #e6f0ec 6%), color-mix(in srgb, var(--bg-elevated) 99%, #e9eeeb 1%));
+  border-color: color-mix(in srgb, var(--border-subtle) 82%, var(--brand-primary) 18%);
 }
 
 html[data-theme="light"] .dashboard-board--amber {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, #fbf2e6 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f7f3eb 2%));
-  border-color: color-mix(in srgb, var(--border-subtle) 82%, #caa06f 18%);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 96%, #efe7d9 4%), color-mix(in srgb, var(--bg-elevated) 99%, #e8e8e0 1%));
+  border-color: color-mix(in srgb, var(--border-subtle) 88%, #9e8059 12%);
 }
 
 html[data-theme="light"] .dashboard-board--mint {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 90%, #edf5f2 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f7f2eb 2%));
-  border-color: color-mix(in srgb, var(--border-subtle) 82%, #88a99d 18%);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #e7f1ed 6%), color-mix(in srgb, var(--bg-elevated) 99%, #e8eeeb 1%));
+  border-color: color-mix(in srgb, var(--border-subtle) 84%, #6f988a 16%);
 }
 
 html[data-theme="light"] .dashboard-dialog-shell {
-  border-color: color-mix(in srgb, var(--border-subtle) 82%, #b99969 18%);
+  border-color: color-mix(in srgb, var(--border-subtle) 86%, #7d958c 14%);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 96%, #f6efe2 4%), color-mix(in srgb, var(--bg-secondary) 99%, #efe7da 1%));
-  box-shadow: 0 30px 80px rgba(20, 25, 38, 0.18);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 94%, #edf1ee 6%), var(--bg-secondary));
+  box-shadow: 0 30px 80px rgba(20, 25, 38, 0.14);
 }
 
 html[data-theme="light"] .dashboard-dialog-hero {
   border-color: var(--border-subtle);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 90%, #fbf2e6 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f6f1e8 2%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 94%, #eef2ef 6%), color-mix(in srgb, var(--bg-elevated) 99%, #e7ebe7 1%));
 }
 
 html[data-theme="light"] .dashboard-report-panel {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 92%, #faf4ea 8%), color-mix(in srgb, var(--bg-elevated) 98%, #f0e8dc 2%));
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 94%, #eef0eb 6%), color-mix(in srgb, var(--bg-elevated) 99%, #e6e9e4 1%));
 }
 
 /* Glass Morphism Light 覆盖 */

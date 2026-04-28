@@ -50,10 +50,10 @@ export function MentionBoard({ data, onClick }: MentionBoardProps) {
                 borderColor: 'var(--border-subtle)',
                 background:
                   key === 'positive'
-                    ? 'color-mix(in srgb, var(--bg-tertiary) 78%, #e9f6ee 22%)'
+                    ? 'color-mix(in srgb, var(--bg-tertiary) 88%, #e7f1eb 12%)'
                     : key === 'neutral'
-                      ? 'color-mix(in srgb, var(--bg-tertiary) 84%, #f6f1e8 16%)'
-                      : 'color-mix(in srgb, var(--bg-tertiary) 80%, #fbefef 20%)',
+                      ? 'color-mix(in srgb, var(--bg-tertiary) 92%, #eef0eb 8%)'
+                      : 'color-mix(in srgb, var(--bg-tertiary) 88%, #f2e5e4 12%)',
               }}
             >
               <div className="text-[11px] tracking-[0.08em] text-[var(--text-tertiary)]">{sentimentText[key]}</div>

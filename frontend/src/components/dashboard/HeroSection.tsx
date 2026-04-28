@@ -100,7 +100,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
                 key={step.title}
                 className="rounded-[20px] border px-4 py-4"
                 style={{
-                  background: 'color-mix(in srgb, var(--bg-elevated) 94%, #faf7f1 6%)',
+                  background: 'color-mix(in srgb, var(--bg-elevated) 96%, #eef1ee 4%)',
                   borderColor: 'var(--border-subtle)',
                 }}
                 variants={itemVariants}
@@ -151,8 +151,8 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
             <span
               className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
               style={{
-                background: 'color-mix(in srgb, var(--bg-elevated) 92%, #faf5ec 8%)',
-                borderColor: 'color-mix(in srgb, var(--border-subtle) 80%, #b99968 20%)',
+                background: 'color-mix(in srgb, var(--bg-elevated) 96%, #eef1ee 4%)',
+                borderColor: 'color-mix(in srgb, var(--border-subtle) 88%, #87988f 12%)',
                 color: 'var(--text-secondary)',
               }}
             >
@@ -161,7 +161,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
             <span
               className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
               style={{
-                background: 'color-mix(in srgb, var(--bg-elevated) 92%, #f1eadf 8%)',
+                background: 'color-mix(in srgb, var(--bg-elevated) 96%, #e9f1ed 4%)',
                 borderColor: 'color-mix(in srgb, var(--border-subtle) 82%, var(--color-primary) 18%)',
                 color: 'var(--text-secondary)',
               }}
@@ -183,7 +183,7 @@ export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoa
           </div>
         </div>
         {lastActiveBrand ? (
-          <div className="rounded-full border px-3 py-1 text-[11px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'color-mix(in srgb, var(--bg-elevated) 90%, #f1eadf 10%)' }}>
+          <div className="rounded-full border px-3 py-1 text-[11px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'color-mix(in srgb, var(--bg-elevated) 96%, #e9f1ed 4%)' }}>
             当前查看：{lastActiveBrand}
           </div>
         ) : null}

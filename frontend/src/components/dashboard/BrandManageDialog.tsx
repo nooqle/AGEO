@@ -84,9 +84,9 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
               className="flex h-[min(88vh,980px)] w-[min(94vw,1320px)] flex-col overflow-hidden rounded-[30px] border"
               style={{
                 background:
-                  'linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 96%, #f6efe2 4%), color-mix(in srgb, var(--bg-secondary) 99%, #efe7da 1%))',
-                borderColor: 'color-mix(in srgb, var(--border-subtle) 82%, #b99969 18%)',
-                boxShadow: '0 30px 80px rgba(20, 25, 38, 0.18)',
+                  'linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 96%, #edf1ee 4%), var(--bg-secondary))',
+                borderColor: 'color-mix(in srgb, var(--border-subtle) 86%, #7d958c 14%)',
+                boxShadow: '0 30px 80px rgba(20, 25, 38, 0.14)',
               }}
               initial={{ opacity: 0, scale: 0.97, y: 8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -116,7 +116,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                   <div
                     className="flex flex-1 items-center gap-3 rounded-[18px] border px-4 py-3"
                     style={{
-                      background: 'color-mix(in srgb, var(--bg-elevated) 88%, #faf4ea 12%)',
+                      background: 'color-mix(in srgb, var(--bg-elevated) 96%, #eef1ee 4%)',
                       borderColor: 'var(--border-subtle)',
                     }}
                   >
@@ -159,8 +159,8 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                           key={entity.id}
                           className="rounded-[24px] border px-5 py-5"
                           style={{
-                            background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #fbf7ef 6%), color-mix(in srgb, var(--bg-tertiary) 98%, #f4ede1 2%))',
-                            borderColor: 'color-mix(in srgb, var(--border-subtle) 88%, #d7c4a6 12%)',
+                            background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 98%, #eef1ee 2%), var(--bg-secondary))',
+                            borderColor: 'color-mix(in srgb, var(--border-subtle) 92%, #c9d0c9 8%)',
                           }}
                           layout
                           initial={{ opacity: 0, y: 8 }}

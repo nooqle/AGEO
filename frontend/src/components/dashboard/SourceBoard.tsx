@@ -23,8 +23,8 @@ export function SourceBoard({ data, onClick }: SourceBoardProps) {
     >
       <div className="relative flex h-full flex-col">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'color-mix(in srgb, #d6a05c 16%, var(--bg-elevated) 84%)' }}>
-            <RiBookMarkedLine className="h-5 w-5" style={{ color: '#b67e38' }} />
+          <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'color-mix(in srgb, #9e8059 10%, var(--bg-elevated) 90%)' }}>
+            <RiBookMarkedLine className="h-5 w-5" style={{ color: '#85623b' }} />
           </div>
           <div className="min-w-0">
             <div className="text-[20px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">内容引用率</div>
@@ -37,14 +37,14 @@ export function SourceBoard({ data, onClick }: SourceBoardProps) {
           <div className="pb-1 text-[13px] leading-6 text-[var(--text-secondary)]">被引用内容 {data.cited_content_count} 条</div>
         </div>
 
-        <DashboardBoardTrendStrip trend={data.trend} accentColor="#b67e38" />
+        <DashboardBoardTrendStrip trend={data.trend} accentColor="#85623b" />
 
         <div className="mt-5 grid grid-cols-3 gap-3">
           <div className="rounded-[18px] border px-3 py-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--bg-tertiary) 80%, #edf4f0 20%)' }}>
             <div className="text-[11px] tracking-[0.08em] text-[var(--text-tertiary)]">官网引用</div>
             <div className="mt-1 text-[20px] font-semibold text-[var(--text-primary)]">{officialCount}</div>
           </div>
-          <div className="rounded-[18px] border px-3 py-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--bg-tertiary) 82%, #f8f0e6 18%)' }}>
+          <div className="rounded-[18px] border px-3 py-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--bg-tertiary) 92%, #efe8dc 8%)' }}>
             <div className="text-[11px] tracking-[0.08em] text-[var(--text-tertiary)]">第三方引用</div>
             <div className="mt-1 text-[20px] font-semibold text-[var(--text-primary)]">{nonOfficialCount}</div>
           </div>

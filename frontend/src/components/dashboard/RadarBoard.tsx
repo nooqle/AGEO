@@ -43,7 +43,7 @@ export function RadarBoard({ data, onClick }: RadarBoardProps) {
             </div>
           </div>
 
-          <div className="h-[196px] rounded-[20px] border p-4" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--bg-tertiary) 84%, #f6faf8 16%)' }}>
+          <div className="h-[196px] rounded-[20px] border p-4" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--bg-tertiary) 90%, #eef4f1 10%)' }}>
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={data.dimensions} outerRadius="68%">
                 <PolarGrid stroke="var(--border-subtle)" />

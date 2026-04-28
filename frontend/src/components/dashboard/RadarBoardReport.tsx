@@ -13,7 +13,7 @@ export function RadarBoardReport({ data }: RadarBoardReportProps) {
         className="rounded-[24px] border p-7"
         style={{
           borderColor: 'var(--border-subtle)',
-          background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 90%, #edf5f2 10%), color-mix(in srgb, var(--bg-elevated) 98%, #f6f1e8 2%))',
+          background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 94%, #eef4f1 6%), color-mix(in srgb, var(--bg-elevated) 99%, #e7ebe7 1%))',
         }}
       >
         <h3 className="text-[28px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">用五个维度概括整体战况</h3>
