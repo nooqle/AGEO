@@ -3,8 +3,9 @@
 from typing import Any
 
 from app.core.utils import extract_domain
-from app.workflow.brand_mentions import content_mentions_brand, extract_brand_aliases
+from app.workflow.brand_mentions import content_mentions_brand
 from app.workflow.nodes_a4 import PLATFORMS
+
 
 def _safe_rate(numerator: int | float, denominator: int | float) -> float:
     """Return a normalized 0..1 rate."""
@@ -43,14 +44,20 @@ def _build_source_overview(citation_analysis: dict[str, Any]) -> dict[str, Any]:
             continue
         count = int(item.get("count", 0) or 0)
         raw_share = item.get("share", 0) or 0
-        share = raw_share / 100 if isinstance(raw_share, (int, float)) and raw_share > 1 else raw_share
-        top_domains.append({
-            "domain": item.get("domain", ""),
-            "count": count,
-            "share": round(max(0.0, min(1.0, float(share or 0))), 4),
-            "is_official": bool(item.get("is_official", False)),
-            "sample_titles": item.get("sample_titles", []) or [],
-        })
+        share = (
+            raw_share / 100
+            if isinstance(raw_share, (int, float)) and raw_share > 1
+            else raw_share
+        )
+        top_domains.append(
+            {
+                "domain": item.get("domain", ""),
+                "count": count,
+                "share": round(max(0.0, min(1.0, float(share or 0))), 4),
+                "is_official": bool(item.get("is_official", False)),
+                "sample_titles": item.get("sample_titles", []) or [],
+            }
+        )
 
     raw_platform_stats = citation_analysis.get("platform_citation_stats", {}) or {}
     platform_citation_stats: dict[str, Any] = {}
@@ -114,7 +121,6 @@ def _build_scenario_matrix(
     """Build scenario rows from A4 fetch results."""
     brand_name = str(brand_profile.get("brand_name", "") or "")
     brand_name_en = str(brand_profile.get("brand_name_en", "") or "")
-    brand_aliases = extract_brand_aliases(brand_profile)
     brand_label = brand_name or brand_name_en or "本品牌"
     brand_domain = str(source_overview.get("brand_domain", "") or "")
     competitor_names = [
@@ -130,8 +136,7 @@ def _build_scenario_matrix(
         scenario_priority = _infer_scenario_priority(result)
         platform_results = result.get("platform_results", []) or []
         successful_results = [
-            pr for pr in platform_results
-            if isinstance(pr, dict) and pr.get("success")
+            pr for pr in platform_results if isinstance(pr, dict) and pr.get("success")
         ]
 
         present_platforms: list[str] = []
@@ -143,7 +148,9 @@ def _build_scenario_matrix(
         for pr in successful_results:
             platform = str(pr.get("platform", "") or "")
             answer = pr.get("answer", {})
-            content = answer.get("content", "") if isinstance(answer, dict) else str(answer)
+            content = (
+                answer.get("content", "") if isinstance(answer, dict) else str(answer)
+            )
             has_brand_mention = (
                 bool(answer.get("has_brand_mention", False))
                 if isinstance(answer, dict)
@@ -161,7 +168,9 @@ def _build_scenario_matrix(
             for competitor_name in competitor_names:
                 if _name_in_text(competitor_name, content):
                     competitors_present.add(competitor_name)
-                    winner_counts[competitor_name] = winner_counts.get(competitor_name, 0) + 1
+                    winner_counts[competitor_name] = (
+                        winner_counts.get(competitor_name, 0) + 1
+                    )
 
             for citation in pr.get("citations", []) or []:
                 if not isinstance(citation, dict):
@@ -177,19 +186,28 @@ def _build_scenario_matrix(
                 ):
                     official_source_domains.add(citation_domain)
 
-        unique_platforms = sorted({platform for platform in present_platforms if platform})
+        unique_platforms = sorted(
+            {platform for platform in present_platforms if platform}
+        )
         official_citation_present = bool(official_source_domains)
         competitor_names_sorted = sorted(competitors_present)
 
         max_mentions = max(winner_counts.values(), default=0)
-        winner_brands = sorted([
-            name for name, count in winner_counts.items()
-            if max_mentions > 0 and count == max_mentions
-        ])
+        winner_brands = sorted(
+            [
+                name
+                for name, count in winner_counts.items()
+                if max_mentions > 0 and count == max_mentions
+            ]
+        )
 
         if not brand_present and competitor_names_sorted:
             battle_status = "missing"
-        elif brand_present and winner_brands == [brand_label] and not competitor_names_sorted:
+        elif (
+            brand_present
+            and winner_brands == [brand_label]
+            and not competitor_names_sorted
+        ):
             battle_status = "advantage"
         elif brand_present and brand_label in winner_brands:
             battle_status = "defend"
@@ -224,26 +242,30 @@ def _build_scenario_matrix(
             evidence = "品牌在该场景中稳定出现，暂未观察到明显竞品压力。"
             action_hint = "维持当前内容优势，持续巩固该场景表现。"
 
-        scenario_matrix.append({
-            "scenario_id": scenario_id,
-            "scenario_label": scenario_label,
-            "scenario_priority": scenario_priority,
-            "brand_present": brand_present,
-            "present_platforms": unique_platforms,
-            "official_citation_present": official_citation_present,
-            "official_source_domains": sorted(official_source_domains),
-            "competitors_present": competitor_names_sorted,
-            "winner_brands": winner_brands,
-            "battle_status": battle_status,
-            "risk_level": "low",
-            "evidence": evidence,
-            "query_examples": [scenario_label],
-            "action_hint": action_hint,
-            "confidence": round(
-                max(0.0, min(1.0, len(successful_results) / max(len(PLATFORMS), 1))),
-                2,
-            ),
-        })
+        scenario_matrix.append(
+            {
+                "scenario_id": scenario_id,
+                "scenario_label": scenario_label,
+                "scenario_priority": scenario_priority,
+                "brand_present": brand_present,
+                "present_platforms": unique_platforms,
+                "official_citation_present": official_citation_present,
+                "official_source_domains": sorted(official_source_domains),
+                "competitors_present": competitor_names_sorted,
+                "winner_brands": winner_brands,
+                "battle_status": battle_status,
+                "risk_level": "low",
+                "evidence": evidence,
+                "query_examples": [scenario_label],
+                "action_hint": action_hint,
+                "confidence": round(
+                    max(
+                        0.0, min(1.0, len(successful_results) / max(len(PLATFORMS), 1))
+                    ),
+                    2,
+                ),
+            }
+        )
 
     return scenario_matrix
 
@@ -258,7 +280,9 @@ def _build_summary_metrics(
     scenario_total = len(scenario_matrix)
     scenario_hit_count = sum(1 for item in scenario_matrix if item.get("brand_present"))
     mention_rate = float(metrics.get("mention_rate", 0) or 0)
-    official_citation_rate = float(source_overview.get("official_citation_rate", 0) or 0)
+    official_citation_rate = float(
+        source_overview.get("official_citation_rate", 0) or 0
+    )
     content_citation_rate = float(
         source_overview.get("brand_content_citation_rate", 0) or 0
     )
@@ -282,8 +306,9 @@ def _build_summary_metrics(
     }
 
 
-
-def _build_report_summary_metrics(summary_metrics: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_report_summary_metrics(
+    summary_metrics: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Build metric cards for Report V2 summary section."""
     mention_rate = float(summary_metrics.get("brand_mention_rate", 0) or 0)
     content_citation_rate = float(summary_metrics.get("content_citation_rate", 0) or 0)
@@ -297,7 +322,11 @@ def _build_report_summary_metrics(summary_metrics: dict[str, Any]) -> list[dict[
             "value": mention_rate,
             "unit": "ratio",
             "description": "品牌在 AI 回答中被直接提到的频率。",
-            "status": "good" if mention_rate >= 0.5 else "warning" if mention_rate >= 0.2 else "risk",
+            "status": (
+                "good"
+                if mention_rate >= 0.5
+                else "warning" if mention_rate >= 0.2 else "risk"
+            ),
         },
         {
             "id": "content_citation_rate",
@@ -305,7 +334,11 @@ def _build_report_summary_metrics(summary_metrics: dict[str, Any]) -> list[dict[
             "value": content_citation_rate,
             "unit": "ratio",
             "description": "品牌被提及的问题里，有多少已经进入了引用来源链。",
-            "status": "good" if content_citation_rate >= 0.3 else "warning" if content_citation_rate >= 0.1 else "risk",
+            "status": (
+                "good"
+                if content_citation_rate >= 0.3
+                else "warning" if content_citation_rate >= 0.1 else "risk"
+            ),
         },
         {
             "id": "scenario_coverage_count",
@@ -317,14 +350,25 @@ def _build_report_summary_metrics(summary_metrics: dict[str, Any]) -> list[dict[
     ]
 
 
-
 def _build_mentions_section(
     mention_sentiment_analysis: dict[str, Any],
 ) -> dict[str, Any]:
-    brand_payload = mention_sentiment_analysis.get("brand", {}) if isinstance(mention_sentiment_analysis, dict) else {}
-    brand_items = brand_payload.get("items", []) if isinstance(brand_payload, dict) else []
-    groups = mention_sentiment_analysis.get("groups", []) if isinstance(mention_sentiment_analysis, dict) else []
-    summary = brand_payload.get("summary", {}) if isinstance(brand_payload, dict) else {}
+    brand_payload = (
+        mention_sentiment_analysis.get("brand", {})
+        if isinstance(mention_sentiment_analysis, dict)
+        else {}
+    )
+    brand_items = (
+        brand_payload.get("items", []) if isinstance(brand_payload, dict) else []
+    )
+    groups = (
+        mention_sentiment_analysis.get("groups", [])
+        if isinstance(mention_sentiment_analysis, dict)
+        else []
+    )
+    summary = (
+        brand_payload.get("summary", {}) if isinstance(brand_payload, dict) else {}
+    )
 
     positive = int(summary.get("positive", 0) or 0)
     neutral = int(summary.get("neutral", 0) or 0)
@@ -333,11 +377,15 @@ def _build_mentions_section(
     return {
         "title": "提及率分析",
         "description": "",
-        "mention_count": len({
-            str(item.get("scenario_id") or item.get("scenario_label") or "")
-            for item in brand_items
-            if str(item.get("scenario_id") or item.get("scenario_label") or "").strip()
-        }),
+        "mention_count": len(
+            {
+                str(item.get("scenario_id") or item.get("scenario_label") or "")
+                for item in brand_items
+                if str(
+                    item.get("scenario_id") or item.get("scenario_label") or ""
+                ).strip()
+            }
+        ),
         "sentiment_summary": {
             "positive": positive,
             "neutral": neutral,
@@ -354,6 +402,7 @@ def _build_mentions_section(
         "groups": groups,
     }
 
+
 def _build_report_v2_sections(
     report_data: dict[str, Any],
     summary_metrics: dict[str, Any],
@@ -363,14 +412,24 @@ def _build_report_v2_sections(
     mention_sentiment_analysis: dict[str, Any],
 ) -> dict[str, Any]:
     """Build minimal Report V2 sections from facts and explicit agent output."""
+    executive_summary_payload = report_data.get("executive_summary", "")
+    if isinstance(executive_summary_payload, dict):
+        executive_summary_text = str(
+            executive_summary_payload.get("one_line_judgment") or ""
+        ).strip()
+    else:
+        executive_summary_text = str(
+            report_data.get("executive_summary_text") or executive_summary_payload or ""
+        ).strip()
     report_summary = {
         "title": "品牌现状",
         "description": "",
         "subtitle": "",
-        "summary": report_data.get("executive_summary", ""),
+        "summary": executive_summary_text,
         "status_summary": "",
         "metrics": _build_report_summary_metrics(summary_metrics),
-        "executive_summary": report_data.get("executive_summary", ""),
+        "executive_summary": executive_summary_payload,
+        "executive_summary_text": executive_summary_text,
         "key_findings": report_data.get("key_findings", []),
     }
 
@@ -404,4 +463,3 @@ def _build_report_v2_sections(
             "sources": source_section,
         },
     }
-

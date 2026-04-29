@@ -16,12 +16,14 @@ import {
 } from '@remixicon/react';
 import { BrandAvatar } from './BrandAvatar';
 import { DashboardSectionHeader } from './DashboardSectionHeader';
+import { Skeleton } from '@/components/ui/skeleton';
 import type { Entity } from '@/types/entity';
 import type { WorkflowBrandProfile, WorkflowCompetitor } from '@/types/canvas';
 
 interface DashboardBrandOverviewProps {
   entity: Entity;
   archive?: DashboardBrandArchiveData | null;
+  isLoading?: boolean;
 }
 
 export interface DashboardBrandArchiveData {
@@ -116,7 +118,44 @@ function FieldLabel({
   );
 }
 
-export function DashboardBrandOverview({ entity, archive }: DashboardBrandOverviewProps) {
+function DashboardBrandOverviewLoading() {
+  return (
+    <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+      <div className="dashboard-inner-panel rounded-[24px] px-5 py-5">
+        <Skeleton width={112} height={16} animation="wave" />
+        <div className="mt-4 flex items-start gap-4">
+          <Skeleton variant="rounded" width={56} height={56} animation="wave" className="rounded-[18px]" />
+          <div className="min-w-0 flex-1 space-y-3">
+            <Skeleton width="42%" height={26} animation="wave" />
+            <Skeleton width="34%" height={15} animation="wave" />
+          </div>
+        </div>
+        <div className="mt-5 space-y-2">
+          <Skeleton width="96%" height={14} animation="wave" />
+          <Skeleton width="92%" height={14} animation="wave" />
+          <Skeleton width="76%" height={14} animation="wave" />
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <Skeleton height={96} animation="wave" className="rounded-[18px]" />
+          <Skeleton height={96} animation="wave" className="rounded-[18px]" />
+          <Skeleton height={78} animation="wave" className="rounded-[18px]" />
+          <Skeleton height={78} animation="wave" className="rounded-[18px]" />
+        </div>
+      </div>
+
+      <div className="dashboard-inner-panel rounded-[24px] px-5 py-5">
+        <Skeleton width={96} height={16} animation="wave" />
+        <div className="mt-5 space-y-3">
+          <Skeleton height={96} animation="wave" className="rounded-[20px]" />
+          <Skeleton height={96} animation="wave" className="rounded-[20px]" />
+          <Skeleton height={96} animation="wave" className="rounded-[20px]" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function DashboardBrandOverview({ entity, archive, isLoading = false }: DashboardBrandOverviewProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const profile = archive?.brandProfile;
   const competitors = archive?.competitors || [];
@@ -162,8 +201,12 @@ export function DashboardBrandOverview({ entity, archive }: DashboardBrandOvervi
           className="dashboard-inner-panel rounded-[22px] px-4 py-4 text-[14px] leading-7"
           style={{ color: 'var(--text-secondary)' }}
           >
-            品牌档案与竞品分类已收起，可按需展开查看 {displayName} 的品牌信息与竞品分类。
+            {isLoading
+              ? `${entity.name} 的品牌档案与竞品分类正在加载。`
+              : `品牌档案与竞品分类已收起，可按需展开查看 ${displayName} 的品牌信息与竞品分类。`}
           </div>
+      ) : isLoading ? (
+        <DashboardBrandOverviewLoading />
       ) : (
         <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
           <div

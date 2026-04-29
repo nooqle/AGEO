@@ -1,0 +1,719 @@
+{
+  "industries": [
+    {
+      "industry_keywords": ["咨询", "管理咨询", "战略咨询"],
+      "scenarios": [
+        {
+          "decision_scenario": "顶级咨询公司比较",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["麦肯锡", "贝恩", "BCG", "波士顿咨询"],
+          "content_gap": "缺少顶级咨询公司差异化、适配边界和选型方法说明。",
+          "recommended_asset": "顶级咨询公司怎么选：麦肯锡、BCG、贝恩差异化方法论"
+        },
+        {
+          "decision_scenario": "数字化转型咨询选型",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["数字化转型", "埃森哲", "技术落地", "系统实施"],
+          "content_gap": "缺少战略咨询与系统实施分工的权威解释。",
+          "recommended_asset": "数字化转型中，战略咨询公司与系统实施商如何分工"
+        },
+        {
+          "decision_scenario": "制造业降本增效",
+          "journey_stage": "value_validation",
+          "business_value": "high",
+          "keywords": ["制造业", "降本增效", "运营优化", "ROI"],
+          "content_gap": "缺少运营优化 ROI 衡量口径和案例证据。",
+          "recommended_asset": "制造业运营优化项目如何衡量 ROI"
+        },
+        {
+          "decision_scenario": "中型企业组织调整",
+          "journey_stage": "fit_evaluation",
+          "business_value": "medium",
+          "keywords": ["中型企业", "组织架构", "预算有限"],
+          "content_gap": "缺少预算有限场景下的服务适配边界说明。",
+          "recommended_asset": "中型企业什么时候适合找顶级咨询做组织调整"
+        },
+        {
+          "decision_scenario": "并购尽调",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["并购尽调", "尽调"],
+          "content_gap": "缺少并购尽调范围、证据和交付边界说明。",
+          "recommended_asset": "并购尽调咨询包含哪些工作和交付物"
+        },
+        {
+          "decision_scenario": "PMI 并购整合",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["PMI", "pmi", "并购后", "整合咨询"],
+          "content_gap": "缺少并购后整合工作内容和风险边界的可引用说明。",
+          "recommended_asset": "并购后整合 PMI 包含哪些关键工作"
+        },
+        {
+          "decision_scenario": "ESG 可持续发展",
+          "journey_stage": "awareness",
+          "business_value": "medium",
+          "keywords": ["ESG", "esg", "可持续发展"],
+          "content_gap": "缺少 ESG 咨询实用性、边界和案例证据。",
+          "recommended_asset": "ESG 咨询什么时候实用，什么时候只是报告工作"
+        },
+        {
+          "decision_scenario": "经济下行周期",
+          "journey_stage": "awareness",
+          "business_value": "medium",
+          "keywords": ["经济下行", "管理咨询行业", "愿意为哪类咨询买单"],
+          "content_gap": "缺少经济周期下咨询投入优先级和业务价值解释。",
+          "recommended_asset": "经济下行周期企业还会为什么咨询服务买单"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["保健", "营养", "健康"],
+      "scenarios": [
+        {
+          "decision_scenario": "老人营养",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "high",
+          "keywords": ["老人", "老年", "蛋白粉"],
+          "content_gap": "缺少老年人适用人群、肠胃耐受和成分边界说明。",
+          "recommended_asset": "老年人蛋白粉怎么选：适用人群、成分和注意事项"
+        },
+        {
+          "decision_scenario": "儿童营养",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["儿童", "小孩子", "维生素"],
+          "content_gap": "缺少儿童长期使用、安全性和是否必要的解释。",
+          "recommended_asset": "儿童维生素是否必要：适用条件和安全边界"
+        },
+        {
+          "decision_scenario": "成分对比",
+          "journey_stage": "value_validation",
+          "business_value": "medium",
+          "keywords": ["天然维", "合成维", "成分", "植物提取"],
+          "content_gap": "缺少成分差异、价格理由和适用边界说明。",
+          "recommended_asset": "天然成分和合成成分有什么区别"
+        },
+        {
+          "decision_scenario": "安全合规",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["蓝帽子", "海外代购", "安全"],
+          "content_gap": "缺少蓝帽子、渠道和合规证据的集中说明。",
+          "recommended_asset": "保健品蓝帽子和海外代购安全性说明"
+        },
+        {
+          "decision_scenario": "疲劳熬夜",
+          "journey_stage": "scenario_solution",
+          "business_value": "medium",
+          "keywords": ["熬夜", "疲劳", "护肝", "B 族", "b 族"],
+          "content_gap": "缺少场景化成分选择和不适用人群说明。",
+          "recommended_asset": "熬夜疲劳场景下营养品怎么选"
+        },
+        {
+          "decision_scenario": "直销信任",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["直销", "药店品牌"],
+          "content_gap": "缺少渠道信任、售后和购买路径说明。",
+          "recommended_asset": "直销品牌和药店品牌的区别与购买建议"
+        },
+        {
+          "decision_scenario": "预算选择",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "medium",
+          "keywords": ["500", "预算", "送爸妈"],
+          "content_gap": "缺少价格理由、购买优先级和预算分层建议。",
+          "recommended_asset": "不同预算下给父母买营养品的选择建议"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["汽车", "新能源车", "新能源汽车", "智能汽车", "理想", "问界", "蔚来", "小鹏", "特斯拉", "比亚迪"],
+      "scenarios": [
+        {
+          "decision_scenario": "家用 SUV 选型",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "high",
+          "keywords": ["家用", "SUV", "奶爸车", "理想L", "问界M", "六座", "大五座"],
+          "content_gap": "缺少家庭用车场景下空间、安全、补能和使用成本的综合选型解释。",
+          "recommended_asset": "家用新能源 SUV 怎么选：空间、安全、补能和预算对比"
+        },
+        {
+          "decision_scenario": "增程纯电路线选择",
+          "journey_stage": "value_validation",
+          "business_value": "high",
+          "keywords": ["增程", "纯电", "插混", "续航", "补能", "里程焦虑"],
+          "content_gap": "缺少不同能源路线在长途、城市通勤和充电条件下的适配边界说明。",
+          "recommended_asset": "增程、纯电和插混怎么选：补能条件与使用场景对照"
+        },
+        {
+          "decision_scenario": "智能驾驶信任",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["智能驾驶", "辅助驾驶", "NOA", "城市NOA", "AEB", "智驾"],
+          "content_gap": "缺少智能驾驶能力边界、安全责任和实际可用场景的证据说明。",
+          "recommended_asset": "智能驾驶是否值得买单：能力边界、安全提示和场景验证"
+        },
+        {
+          "decision_scenario": "价格保值与用车成本",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "medium",
+          "keywords": ["价格", "优惠", "保值", "二手", "用车成本", "预算"],
+          "content_gap": "缺少购车预算、保值率、保险维修和长期用车成本的统一解释。",
+          "recommended_asset": "新能源车真实持有成本：价格、保值、保险和维修"
+        },
+        {
+          "decision_scenario": "售后服务与补能体验",
+          "journey_stage": "post_purchase",
+          "business_value": "medium",
+          "keywords": ["售后", "维修", "充电", "换电", "服务网点", "补能"],
+          "content_gap": "缺少服务网点、维修便利性和补能体验对购买决策的解释。",
+          "recommended_asset": "新能源车售后和补能体验如何影响长期使用"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["美妆", "护肤", "美容", "个护", "彩妆", "精华", "面霜"],
+      "scenarios": [
+        {
+          "decision_scenario": "抗老功效验证",
+          "journey_stage": "value_validation",
+          "business_value": "high",
+          "keywords": ["抗老", "抗衰", "淡纹", "紧致", "视黄醇", "胜肽"],
+          "content_gap": "缺少功效成分、实验依据、使用周期和适用边界说明。",
+          "recommended_asset": "抗老精华怎么选：成分证据、使用周期和适用边界"
+        },
+        {
+          "decision_scenario": "敏感肌安全",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["敏感肌", "屏障", "泛红", "刺痛", "修护", "过敏"],
+          "content_gap": "缺少敏感肌可用性、刺激风险和建立耐受的说明。",
+          "recommended_asset": "敏感肌护肤怎么选：屏障修护、避雷成分和试用方法"
+        },
+        {
+          "decision_scenario": "成分党对比",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "medium",
+          "keywords": ["成分", "烟酰胺", "玻色因", "A醇", "水杨酸", "配方"],
+          "content_gap": "缺少成分浓度、复配逻辑和竞品配方差异说明。",
+          "recommended_asset": "热门护肤成分怎么比较：浓度、复配和适用人群"
+        },
+        {
+          "decision_scenario": "高端护肤预算",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "medium",
+          "keywords": ["贵妇", "高端", "平替", "预算", "性价比"],
+          "content_gap": "缺少高端价格理由、平替边界和预算分层建议。",
+          "recommended_asset": "高端护肤是否值得买：价格理由和平替边界"
+        },
+        {
+          "decision_scenario": "渠道正品信任",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["正品", "代购", "旗舰店", "免税", "小样", "渠道"],
+          "content_gap": "缺少正品渠道、价格异常和售后风险的解释。",
+          "recommended_asset": "护肤品在哪里买更可靠：官方渠道、代购和免税风险"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["母婴", "婴儿", "宝宝", "儿童用品", "奶粉", "纸尿裤", "童车"],
+      "scenarios": [
+        {
+          "decision_scenario": "婴幼儿安全合规",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["安全", "国标", "认证", "新生儿", "婴儿", "有害物质"],
+          "content_gap": "缺少婴幼儿用品安全标准、认证和风险边界的集中说明。",
+          "recommended_asset": "婴幼儿用品安全怎么判断：标准、认证和避坑清单"
+        },
+        {
+          "decision_scenario": "奶粉营养选择",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "high",
+          "keywords": ["奶粉", "配方", "A2", "水解", "乳糖", "转奶"],
+          "content_gap": "缺少配方差异、适用宝宝状态和转奶注意事项说明。",
+          "recommended_asset": "婴幼儿奶粉怎么选：配方差异、适用人群和转奶方法"
+        },
+        {
+          "decision_scenario": "纸尿裤适配",
+          "journey_stage": "scenario_solution",
+          "business_value": "medium",
+          "keywords": ["纸尿裤", "红屁屁", "漏尿", "拉拉裤", "尺码"],
+          "content_gap": "缺少尺码、吸收、透气和皮肤适配的判断方法。",
+          "recommended_asset": "纸尿裤怎么选：尺码、吸收、透气和红屁屁风险"
+        },
+        {
+          "decision_scenario": "童车座椅出行",
+          "journey_stage": "risk_validation",
+          "business_value": "medium",
+          "keywords": ["安全座椅", "童车", "推车", "出行", "ISOFIX"],
+          "content_gap": "缺少年龄体重段、安全标准和使用场景适配说明。",
+          "recommended_asset": "儿童出行用品怎么选：安全座椅、推车和使用场景"
+        },
+        {
+          "decision_scenario": "价格预算分层",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "medium",
+          "keywords": ["预算", "平价", "高端", "囤货", "性价比"],
+          "content_gap": "缺少不同预算下必要项和非必要项的优先级解释。",
+          "recommended_asset": "母婴用品预算怎么花：刚需清单、升级项和避坑项"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["家电", "消费电子", "手机", "电脑", "电视", "冰箱", "洗衣机", "空调", "智能家居"],
+      "scenarios": [
+        {
+          "decision_scenario": "手机电脑选型",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "high",
+          "keywords": ["手机", "电脑", "笔记本", "平板", "性能", "续航"],
+          "content_gap": "缺少按人群、预算、性能和生态划分的选型方法。",
+          "recommended_asset": "手机电脑怎么选：预算、人群、性能和生态对照"
+        },
+        {
+          "decision_scenario": "大家电耐用售后",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["冰箱", "洗衣机", "空调", "耐用", "售后", "维修"],
+          "content_gap": "缺少耐用性、售后覆盖和长期维修成本说明。",
+          "recommended_asset": "大家电怎么选：耐用性、售后和长期使用成本"
+        },
+        {
+          "decision_scenario": "智能家居生态",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "medium",
+          "keywords": ["智能家居", "生态", "全屋智能", "Matter", "联动"],
+          "content_gap": "缺少生态兼容、安装门槛和后期扩展边界说明。",
+          "recommended_asset": "智能家居生态怎么选：兼容、安装和扩展边界"
+        },
+        {
+          "decision_scenario": "参数与体验对比",
+          "journey_stage": "value_validation",
+          "business_value": "medium",
+          "keywords": ["参数", "配置", "屏幕", "芯片", "噪音", "能效"],
+          "content_gap": "缺少参数指标和真实体验之间的关系解释。",
+          "recommended_asset": "家电数码参数怎么看：哪些指标真的影响体验"
+        },
+        {
+          "decision_scenario": "老人儿童适配",
+          "journey_stage": "fit_evaluation",
+          "business_value": "medium",
+          "keywords": ["老人", "儿童", "护眼", "易用", "安全", "家用"],
+          "content_gap": "缺少特殊人群易用性、安全性和功能边界说明。",
+          "recommended_asset": "给老人和儿童买家电数码：安全、易用和护眼要点"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["SaaS", "企业软件", "CRM", "ERP", "SCRM", "协同办公", "飞书", "钉钉", "AI软件", "大模型应用"],
+      "scenarios": [
+        {
+          "decision_scenario": "企业软件选型",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["CRM", "ERP", "SCRM", "OA", "协同办公", "怎么选"],
+          "content_gap": "缺少业务规模、部门流程和系统边界对应的选型方法。",
+          "recommended_asset": "企业软件怎么选：业务流程、组织规模和系统边界"
+        },
+        {
+          "decision_scenario": "实施成本与 ROI",
+          "journey_stage": "value_validation",
+          "business_value": "high",
+          "keywords": ["实施", "ROI", "成本", "上线", "周期", "预算"],
+          "content_gap": "缺少实施成本、上线周期和收益衡量口径说明。",
+          "recommended_asset": "SaaS 实施 ROI 怎么算：成本、周期和收益指标"
+        },
+        {
+          "decision_scenario": "数据迁移与集成",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["数据迁移", "集成", "API", "对接", "历史数据", "迁移风险"],
+          "content_gap": "缺少迁移风险、接口能力和系统集成边界说明。",
+          "recommended_asset": "企业软件数据迁移和系统集成风险清单"
+        },
+        {
+          "decision_scenario": "安全合规与权限",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["安全", "合规", "权限", "私有化", "等保", "数据安全"],
+          "content_gap": "缺少数据安全、权限模型和合规部署方式说明。",
+          "recommended_asset": "企业软件安全合规怎么评估：权限、等保和部署模式"
+        },
+        {
+          "decision_scenario": "AI 能力真实性",
+          "journey_stage": "value_validation",
+          "business_value": "medium",
+          "keywords": ["AI", "大模型", "智能体", "自动化", "Copilot", "效果"],
+          "content_gap": "缺少 AI 功能真实业务价值、边界和验证方法说明。",
+          "recommended_asset": "企业软件 AI 能力怎么评估：场景、效果和风险边界"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["金融", "保险", "银行", "理财", "基金", "证券", "养老", "重疾险", "医疗险"],
+      "scenarios": [
+        {
+          "decision_scenario": "家庭保障规划",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "high",
+          "keywords": ["家庭保障", "保险配置", "家庭", "保额", "预算"],
+          "content_gap": "缺少家庭收入、责任结构和保障顺序的配置方法。",
+          "recommended_asset": "家庭保险怎么配置：预算、保额和优先级"
+        },
+        {
+          "decision_scenario": "重疾医疗险对比",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["重疾险", "百万医疗", "医疗险", "疾病", "免赔额"],
+          "content_gap": "缺少重疾险与医疗险功能差异、适用人群和理赔边界说明。",
+          "recommended_asset": "重疾险和百万医疗险怎么选：保障差异与理赔边界"
+        },
+        {
+          "decision_scenario": "理财风险收益",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["理财", "基金", "收益", "风险", "亏损", "稳健"],
+          "content_gap": "缺少风险等级、收益预期和投资期限的解释。",
+          "recommended_asset": "理财产品怎么选：风险等级、收益预期和持有期限"
+        },
+        {
+          "decision_scenario": "养老规划",
+          "journey_stage": "awareness",
+          "business_value": "medium",
+          "keywords": ["养老", "养老金", "年金", "退休", "长期"],
+          "content_gap": "缺少养老产品长期现金流、流动性和适用边界说明。",
+          "recommended_asset": "养老规划怎么做：年金、养老金和长期现金流"
+        },
+        {
+          "decision_scenario": "理赔服务信任",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["理赔", "拒赔", "条款", "健康告知", "服务"],
+          "content_gap": "缺少理赔流程、健康告知和常见拒赔原因说明。",
+          "recommended_asset": "保险理赔是否靠谱：流程、健康告知和拒赔边界"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["教育", "培训", "留学", "考研", "职业教育", "K12", "在线课", "素质教育"],
+      "scenarios": [
+        {
+          "decision_scenario": "K12 提分效果",
+          "journey_stage": "value_validation",
+          "business_value": "high",
+          "keywords": ["K12", "提分", "补课", "辅导", "学习成绩"],
+          "content_gap": "缺少适用学生类型、效果验证和学习周期说明。",
+          "recommended_asset": "K12 辅导是否有效：适用学生、周期和效果验证"
+        },
+        {
+          "decision_scenario": "职业资格考证",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "medium",
+          "keywords": ["考证", "职业资格", "证书", "通过率", "就业"],
+          "content_gap": "缺少证书价值、通过率和就业转化边界说明。",
+          "recommended_asset": "职业资格培训怎么选：证书价值、通过率和就业边界"
+        },
+        {
+          "decision_scenario": "留学语言备考",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["留学", "雅思", "托福", "语言", "备考"],
+          "content_gap": "缺少目标分数、课程强度和学习路径说明。",
+          "recommended_asset": "留学语言培训怎么选：目标分数、课程和备考路径"
+        },
+        {
+          "decision_scenario": "在线课体验",
+          "journey_stage": "fit_evaluation",
+          "business_value": "medium",
+          "keywords": ["在线课", "直播课", "录播", "学习体验", "陪伴"],
+          "content_gap": "缺少在线学习适配人群、互动质量和督学机制说明。",
+          "recommended_asset": "在线课程适合谁：直播、录播和督学机制对比"
+        },
+        {
+          "decision_scenario": "价格效果验证",
+          "journey_stage": "risk_validation",
+          "business_value": "medium",
+          "keywords": ["价格", "退费", "效果", "承诺", "性价比"],
+          "content_gap": "缺少价格构成、退费条件和效果承诺边界说明。",
+          "recommended_asset": "培训课值不值得买：价格、退费和效果承诺边界"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["医疗", "医院", "医生", "药品", "体检", "慢病", "健康管理", "医疗服务"],
+      "scenarios": [
+        {
+          "decision_scenario": "症状科普到就医",
+          "journey_stage": "awareness",
+          "business_value": "high",
+          "keywords": ["症状", "要不要去医院", "挂什么科", "就医", "检查"],
+          "content_gap": "缺少症状分级、就医时机和科室选择说明。",
+          "recommended_asset": "出现症状怎么办：就医时机、科室选择和检查建议"
+        },
+        {
+          "decision_scenario": "医院医生选择",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["医院", "医生", "专家", "排名", "口碑"],
+          "content_gap": "缺少医院医生选择维度、资质和服务边界说明。",
+          "recommended_asset": "医院和医生怎么选：资质、专科能力和就诊体验"
+        },
+        {
+          "decision_scenario": "治疗方案对比",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["治疗方案", "药品", "手术", "副作用", "疗效"],
+          "content_gap": "缺少治疗方案效果、副作用和适用人群边界说明。",
+          "recommended_asset": "治疗方案怎么比较：疗效、副作用和适用边界"
+        },
+        {
+          "decision_scenario": "体检筛查选择",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "medium",
+          "keywords": ["体检", "筛查", "癌筛", "套餐", "指标"],
+          "content_gap": "缺少不同年龄、风险人群和体检套餐选择说明。",
+          "recommended_asset": "体检套餐怎么选：年龄、风险人群和筛查项目"
+        },
+        {
+          "decision_scenario": "慢病长期管理",
+          "journey_stage": "post_purchase",
+          "business_value": "medium",
+          "keywords": ["慢病", "血糖", "血压", "复诊", "长期管理"],
+          "content_gap": "缺少慢病监测、复诊节奏和生活方式管理说明。",
+          "recommended_asset": "慢病长期管理怎么做：监测、复诊和生活方式"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["餐饮", "食品", "饮料", "茶饮", "咖啡", "零食", "新消费", "预制菜"],
+      "scenarios": [
+        {
+          "decision_scenario": "送礼场景选择",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "medium",
+          "keywords": ["送礼", "节日", "礼盒", "长辈", "客户"],
+          "content_gap": "缺少送礼对象、预算和场景体面的选择方法。",
+          "recommended_asset": "食品饮料礼盒怎么选：对象、预算和场景"
+        },
+        {
+          "decision_scenario": "健康成分顾虑",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["健康", "配料表", "糖", "脂肪", "添加剂", "热量"],
+          "content_gap": "缺少配料、营养成分和健康风险边界说明。",
+          "recommended_asset": "食品饮料健康吗：配料表、糖脂和添加剂怎么看"
+        },
+        {
+          "decision_scenario": "口味与场景适配",
+          "journey_stage": "fit_evaluation",
+          "business_value": "medium",
+          "keywords": ["口味", "好喝", "好吃", "早餐", "下午茶", "夜宵"],
+          "content_gap": "缺少口味偏好、消费时段和人群适配说明。",
+          "recommended_asset": "不同消费场景下食品饮料怎么选"
+        },
+        {
+          "decision_scenario": "门店外卖体验",
+          "journey_stage": "post_purchase",
+          "business_value": "medium",
+          "keywords": ["门店", "外卖", "排队", "配送", "服务"],
+          "content_gap": "缺少门店体验、外卖稳定性和服务质量说明。",
+          "recommended_asset": "餐饮品牌体验怎么评估：门店、外卖和服务稳定性"
+        },
+        {
+          "decision_scenario": "食品安全信任",
+          "journey_stage": "trust_validation",
+          "business_value": "high",
+          "keywords": ["食品安全", "质检", "保质期", "产地", "溯源"],
+          "content_gap": "缺少食品安全、产地溯源和质量控制证据说明。",
+          "recommended_asset": "食品安全怎么看：质检、产地和溯源证据"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["酒旅", "旅游", "酒店", "民宿", "文旅", "景区", "航司", "出行"],
+      "scenarios": [
+        {
+          "decision_scenario": "目的地选择",
+          "journey_stage": "awareness",
+          "business_value": "high",
+          "keywords": ["去哪玩", "目的地", "旅游城市", "路线", "行程"],
+          "content_gap": "缺少季节、预算、交通和人群适配的目的地建议。",
+          "recommended_asset": "目的地怎么选：季节、预算、交通和人群适配"
+        },
+        {
+          "decision_scenario": "亲子家庭出行",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "high",
+          "keywords": ["亲子", "家庭", "带孩子", "老人", "度假"],
+          "content_gap": "缺少亲子设施、安全便利和行程强度说明。",
+          "recommended_asset": "亲子家庭旅行怎么选：酒店、交通和行程强度"
+        },
+        {
+          "decision_scenario": "酒店住宿对比",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["酒店", "民宿", "住宿", "位置", "服务"],
+          "content_gap": "缺少位置、服务、设施和价格之间的权衡说明。",
+          "recommended_asset": "酒店和民宿怎么选：位置、服务、设施和价格"
+        },
+        {
+          "decision_scenario": "预算行程规划",
+          "journey_stage": "value_validation",
+          "business_value": "medium",
+          "keywords": ["预算", "省钱", "自由行", "跟团", "攻略"],
+          "content_gap": "缺少预算拆分、自由行和跟团边界说明。",
+          "recommended_asset": "旅行预算怎么规划：交通、住宿、门票和餐饮"
+        },
+        {
+          "decision_scenario": "安全避坑信任",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["避坑", "安全", "投诉", "退改", "强制消费"],
+          "content_gap": "缺少退改政策、投诉风险和安全注意事项说明。",
+          "recommended_asset": "旅行避坑指南：退改政策、安全和投诉风险"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["家装", "家居", "装修", "房地产", "全屋定制", "建材", "家具"],
+      "scenarios": [
+        {
+          "decision_scenario": "装修公司选择",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["装修公司", "半包", "全包", "设计师", "施工队"],
+          "content_gap": "缺少装修服务模式、报价边界和交付风险说明。",
+          "recommended_asset": "装修公司怎么选：半包、全包、设计和施工边界"
+        },
+        {
+          "decision_scenario": "全屋定制比较",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "high",
+          "keywords": ["全屋定制", "橱柜", "衣柜", "板材", "封边"],
+          "content_gap": "缺少板材、工艺、设计能力和售后质保说明。",
+          "recommended_asset": "全屋定制怎么选：板材、工艺、设计和质保"
+        },
+        {
+          "decision_scenario": "环保安全顾虑",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["甲醛", "环保", "儿童房", "气味", "检测"],
+          "content_gap": "缺少环保等级、检测方法和入住风险说明。",
+          "recommended_asset": "家装环保怎么判断：甲醛、板材等级和检测方法"
+        },
+        {
+          "decision_scenario": "预算报价透明",
+          "journey_stage": "value_validation",
+          "business_value": "high",
+          "keywords": ["预算", "报价", "增项", "坑", "合同"],
+          "content_gap": "缺少报价构成、增项风险和合同检查清单。",
+          "recommended_asset": "装修预算怎么看：报价、增项和合同避坑"
+        },
+        {
+          "decision_scenario": "售后质保",
+          "journey_stage": "post_purchase",
+          "business_value": "medium",
+          "keywords": ["售后", "质保", "维修", "返工", "交付"],
+          "content_gap": "缺少质保范围、维修响应和交付验收说明。",
+          "recommended_asset": "家装售后质保怎么评估：验收、维修和返工责任"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["运动", "户外", "服饰", "鞋服", "跑步", "露营", "冲锋衣", "羽绒服", "健身"],
+      "scenarios": [
+        {
+          "decision_scenario": "跑步训练装备",
+          "journey_stage": "purchase_evaluation",
+          "business_value": "medium",
+          "keywords": ["跑步", "跑鞋", "训练", "马拉松", "缓震"],
+          "content_gap": "缺少运动强度、脚型、缓震支撑和训练场景说明。",
+          "recommended_asset": "跑步装备怎么选：脚型、训练强度和跑鞋类型"
+        },
+        {
+          "decision_scenario": "户外露营安全",
+          "journey_stage": "risk_validation",
+          "business_value": "medium",
+          "keywords": ["户外", "露营", "登山", "防水", "保暖", "安全"],
+          "content_gap": "缺少户外环境、天气风险和装备安全边界说明。",
+          "recommended_asset": "户外装备怎么选：防水、保暖和安全边界"
+        },
+        {
+          "decision_scenario": "材质功能对比",
+          "journey_stage": "value_validation",
+          "business_value": "medium",
+          "keywords": ["材质", "面料", "透气", "防晒", "速干", "科技"],
+          "content_gap": "缺少面料技术、功能场景和价格理由说明。",
+          "recommended_asset": "运动户外面料怎么看：透气、防晒、防水和保暖"
+        },
+        {
+          "decision_scenario": "尺码适配",
+          "journey_stage": "fit_evaluation",
+          "business_value": "medium",
+          "keywords": ["尺码", "版型", "偏大", "偏小", "合身"],
+          "content_gap": "缺少尺码、版型和退换货风险说明。",
+          "recommended_asset": "运动服饰尺码怎么选：版型、场景和退换货"
+        },
+        {
+          "decision_scenario": "正品渠道与预算",
+          "journey_stage": "trust_validation",
+          "business_value": "medium",
+          "keywords": ["正品", "折扣", "奥莱", "代购", "预算"],
+          "content_gap": "缺少正品渠道、折扣来源和预算分层建议。",
+          "recommended_asset": "运动户外品牌怎么买更可靠：正品渠道、折扣和预算"
+        }
+      ]
+    },
+    {
+      "industry_keywords": ["工业", "制造", "B2B", "设备", "供应链", "机器人", "自动化", "工厂"],
+      "scenarios": [
+        {
+          "decision_scenario": "设备选型采购",
+          "journey_stage": "supplier_evaluation",
+          "business_value": "high",
+          "keywords": ["设备", "采购", "选型", "供应商", "招标"],
+          "content_gap": "缺少设备能力、交付周期、维护成本和供应商资质说明。",
+          "recommended_asset": "工业设备怎么选：能力、交付、维护和供应商资质"
+        },
+        {
+          "decision_scenario": "降本增效改造",
+          "journey_stage": "value_validation",
+          "business_value": "high",
+          "keywords": ["降本增效", "自动化", "改造", "效率", "ROI"],
+          "content_gap": "缺少改造 ROI、停线风险和产能提升口径说明。",
+          "recommended_asset": "工厂自动化改造 ROI 怎么算：效率、停线和回收期"
+        },
+        {
+          "decision_scenario": "质量稳定性验证",
+          "journey_stage": "risk_validation",
+          "business_value": "high",
+          "keywords": ["质量", "稳定性", "良率", "故障", "可靠性"],
+          "content_gap": "缺少质量指标、可靠性数据和故障响应机制说明。",
+          "recommended_asset": "工业方案稳定性怎么验证：良率、故障和可靠性指标"
+        },
+        {
+          "decision_scenario": "交付售后能力",
+          "journey_stage": "post_purchase",
+          "business_value": "high",
+          "keywords": ["交付", "售后", "维修", "备件", "服务"],
+          "content_gap": "缺少交付实施、备件保障和售后响应边界说明。",
+          "recommended_asset": "工业供应商交付售后怎么评估：实施、备件和响应"
+        },
+        {
+          "decision_scenario": "国产替代与合规",
+          "journey_stage": "trust_validation",
+          "business_value": "medium",
+          "keywords": ["国产替代", "合规", "认证", "标准", "信创"],
+          "content_gap": "缺少国产替代适配、认证标准和合规证据说明。",
+          "recommended_asset": "工业国产替代怎么评估：适配、标准和合规证据"
+        }
+      ]
+    }
+  ]
+}

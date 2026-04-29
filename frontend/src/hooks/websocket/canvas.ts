@@ -3,6 +3,23 @@
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+function readExecutiveSummaryText(raw: Record<string, unknown>): string | undefined {
+  const executiveSummary = raw.executive_summary;
+  if (isRecord(executiveSummary)) {
+    const oneLine = executiveSummary.one_line_judgment;
+    if (typeof oneLine === 'string' && oneLine.trim()) {
+      return oneLine.trim();
+    }
+  }
+  if (typeof raw.executive_summary_text === 'string' && raw.executive_summary_text.trim()) {
+    return raw.executive_summary_text.trim();
+  }
+  if (typeof executiveSummary === 'string' && executiveSummary.trim()) {
+    return executiveSummary.trim();
+  }
+  return undefined;
+}
+
 const PREVIEW_METRIC_PRIORITY = [
   '提及率',
   '品牌排名',
@@ -192,9 +209,7 @@ export const normalizePreviewData = (raw: Record<string, unknown>) => ({
       ? raw.preview_description
       : typeof raw.description === 'string'
       ? raw.description
-      : typeof raw.executive_summary === 'string'
-      ? raw.executive_summary
-      : undefined,
+      : readExecutiveSummaryText(raw),
   metrics: normalizePreviewMetrics(raw),
   itemCount: typeof raw.itemCount === 'number'
     ? raw.itemCount
@@ -250,13 +265,27 @@ export const normalizeCanvasData = <T extends CanvasContentType>(
       insights,
       recommendations,
       content: typeof data.content === 'string' ? data.content : undefined,
-      executive_summary: typeof data.executive_summary === 'string' ? data.executive_summary : undefined,
+      executive_summary:
+        typeof data.executive_summary === 'string' || isRecord(data.executive_summary)
+          ? (data.executive_summary as CanvasContentDataMap['report']['executive_summary'])
+          : undefined,
+      executive_summary_text:
+        typeof data.executive_summary_text === 'string' ? data.executive_summary_text : undefined,
       report_markdown: typeof data.report_markdown === 'string' ? data.report_markdown : undefined,
       full_markdown: typeof data.full_markdown === 'string' ? data.full_markdown : undefined,
       sections: Array.isArray(data.sections) ? data.sections : undefined,
+      report_sections: Array.isArray(data.report_sections) ? data.report_sections : undefined,
       metric_bundle: isRecord(data.metric_bundle) ? data.metric_bundle : undefined,
       comparison_bundle: isRecord(data.comparison_bundle) ? data.comparison_bundle : undefined,
       dashboard_projection: isRecord(data.dashboard_projection) ? data.dashboard_projection : undefined,
+      diagnosis_modules: isRecord(data.diagnosis_modules) ? data.diagnosis_modules : undefined,
+      data_audit: isRecord(data.data_audit) ? data.data_audit : undefined,
+      scenario_diagnostics: isRecord(data.scenario_diagnostics) ? data.scenario_diagnostics : undefined,
+      source_intelligence: isRecord(data.source_intelligence) ? data.source_intelligence : undefined,
+      risk_concern_analysis: isRecord(data.risk_concern_analysis) ? data.risk_concern_analysis : undefined,
+      action_recommendations: Array.isArray(data.action_recommendations) ? data.action_recommendations : undefined,
+      operations_diagnosis: isRecord(data.operations_diagnosis) ? data.operations_diagnosis : undefined,
+      diagnostic_conclusions: Array.isArray(data.diagnostic_conclusions) ? data.diagnostic_conclusions : undefined,
       bwvs_breakdown,
       brand_name: typeof data.brand_name === 'string' ? data.brand_name : undefined,
       analysis_period: typeof data.analysis_period === 'string' ? data.analysis_period : undefined,

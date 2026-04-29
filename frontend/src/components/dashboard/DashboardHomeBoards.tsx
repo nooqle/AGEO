@@ -88,63 +88,132 @@ function MetricStrip({ metrics }: { metrics: DashboardHomeMetric[] }) {
   );
 }
 
-function wordSize(word: DashboardEmotionWord): string {
-  const weight = word.weight <= 1 ? word.weight * 100 : word.weight;
-  const size = 15 + Math.min(34, Math.max(0, weight) * 0.24);
-  return `${size}px`;
+function isUsefulSignalText(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  return !['其他', '--', '-', '无', '暂无', '未知'].includes(normalized);
 }
 
-function WordCloudColumn({
-  title,
-  words,
+function normalizeSignalWords(words: DashboardEmotionWord[], limit: number): DashboardEmotionWord[] {
+  const seen = new Set<string>();
+  const output: DashboardEmotionWord[] = [];
+  for (const word of words) {
+    const text = word.text.trim();
+    if (!isUsefulSignalText(text) || seen.has(text)) continue;
+    seen.add(text);
+    output.push(word);
+    if (output.length >= limit) break;
+  }
+  return output;
+}
+
+function splitSignalText(value?: string): string[] {
+  if (!value) return [];
+  return value
+    .split(/[、,，/|]/)
+    .map((item) => item.trim())
+    .filter(isUsefulSignalText);
+}
+
+function normalizeRiskEvidence(value?: string): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!isUsefulSignalText(trimmed)) return null;
+  if (trimmed === '不提任何品牌') return '未提及品牌';
+  return trimmed;
+}
+
+function buildRiskMeta(risk: DashboardHomeRiskCard): string[] {
+  const meta: string[] = [];
+  if (risk.platform?.trim()) {
+    meta.push(`平台：${risk.platform.trim()}`);
+  }
+
+  const evidence = normalizeRiskEvidence(risk.evidence);
+  if (!evidence) return meta;
+  const evidenceLabel = evidence === '未提及品牌' ? `结果：${evidence}` : `顾虑：${evidence}`;
+  meta.push(evidenceLabel);
+  return meta;
+}
+
+function buildRiskSignals(
+  negative: DashboardEmotionWord[],
+  risks: DashboardHomeRiskCard[],
+): DashboardEmotionWord[] {
+  const fromWords = normalizeSignalWords(negative, 8);
+  if (fromWords.length >= 4) return fromWords;
+
+  const seen = new Set(fromWords.map((word) => word.text));
+  const output = [...fromWords];
+  for (const risk of risks) {
+    for (const label of splitSignalText(risk.evidence)) {
+      if (seen.has(label)) continue;
+      seen.add(label);
+      output.push({
+        text: label,
+        weight: 0,
+        sentiment: 'negative',
+        count: undefined,
+      });
+      if (output.length >= 8) return output;
+    }
+  }
+  return output;
+}
+
+function SignalChip({
+  word,
   tone,
 }: {
-  title: string;
-  words: DashboardEmotionWord[];
+  word: DashboardEmotionWord;
   tone: 'positive' | 'negative';
 }) {
+  const toneClass =
+    tone === 'positive'
+      ? 'text-[var(--success)]'
+      : 'text-[var(--evidence-risk)]';
   const toneStyle =
     tone === 'positive'
-      ? {
-          label: 'var(--success)',
-          chipBg: 'var(--status-success-bg)',
-          word: 'var(--success)',
-          empty: '暂无正向词云数据',
-        }
-      : {
-          label: 'var(--evidence-risk)',
-          chipBg: 'var(--status-error-bg)',
-          word: 'var(--evidence-risk)',
-          empty: '暂无负向词云数据',
-        };
+      ? { backgroundColor: 'var(--status-success-bg)' }
+      : { backgroundColor: 'var(--status-error-bg)' };
 
   return (
-    <div className="min-h-[170px] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-report-muted)] px-5 py-4">
-      <div className="flex items-center gap-2">
-        <span
-          className="h-2 w-2 rounded-full"
-          style={{ backgroundColor: toneStyle.label }}
-        />
-        <div className="text-[14px] font-semibold text-[var(--text-primary)]">{title}</div>
-      </div>
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[12px] font-medium ${toneClass}`}
+      style={toneStyle}
+      title={word.count ? `${word.count} 次` : undefined}
+    >
+      {word.text}
+      {word.count ? <span className="ml-1 opacity-70">{word.count}</span> : null}
+    </span>
+  );
+}
+
+function ThemeSignalColumn({
+  title,
+  description,
+  words,
+  tone,
+  emptyLabel,
+}: {
+  title: string;
+  description: string;
+  words: DashboardEmotionWord[];
+  tone: 'positive' | 'negative';
+  emptyLabel: string;
+}) {
+  return (
+    <div className="min-h-[150px] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-report-muted)] px-5 py-4">
+      <div className="text-[14px] font-semibold text-[var(--text-primary)]">{title}</div>
+      <p className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">{description}</p>
       {words.length === 0 ? (
-        <div className="mt-5 text-[14px] text-[var(--text-tertiary)]">{toneStyle.empty}</div>
+        <div className="mt-4 rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-[13px] text-[var(--text-tertiary)]">
+          {emptyLabel}
+        </div>
       ) : (
-        <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-3">
-          {words.slice(0, 18).map((word) => (
-            <span
-              key={`${tone}-${word.text}`}
-              className="leading-none"
-              style={{
-                fontSize: wordSize(word),
-                fontWeight: word.weight > 50 || word.weight > 0.5 ? 700 : 500,
-                color: toneStyle.word,
-                opacity: word.weight > 50 || word.weight > 0.5 ? 0.92 : 0.68,
-              }}
-              title={word.count ? `${word.count} 次` : undefined}
-            >
-              {word.text}
-            </span>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {words.map((word) => (
+            <SignalChip key={`${tone}-${word.text}`} word={word} tone={tone} />
           ))}
         </div>
       )}
@@ -152,13 +221,51 @@ function WordCloudColumn({
   );
 }
 
-function EmotionWordCloud({ positive, negative }: { positive: DashboardEmotionWord[]; negative: DashboardEmotionWord[] }) {
+function ThemeSignals({
+  positive,
+  negative,
+  risks,
+}: {
+  positive: DashboardEmotionWord[];
+  negative: DashboardEmotionWord[];
+  risks: DashboardHomeRiskCard[];
+}) {
+  const positiveSignals = normalizeSignalWords(positive, 8);
+  const riskSignals = buildRiskSignals(negative, risks);
+  const sampleRisk = risks.find((risk) => risk.title);
+  const sampleRiskMeta = sampleRisk ? buildRiskMeta(sampleRisk) : [];
+
   return (
-    <SectionBlock title="正负词云">
+    <SectionBlock title="主题信号">
       <div className="grid gap-3 xl:grid-cols-2">
-        <WordCloudColumn title="正向" words={positive} tone="positive" />
-        <WordCloudColumn title="负向" words={negative} tone="negative" />
+        <ThemeSignalColumn
+          title="正向信号"
+          description="AI 回答中用于支持品牌推荐的主要理由。"
+          words={positiveSignals}
+          tone="positive"
+          emptyLabel="本轮没有可展示的正向主题信号。"
+        />
+        <ThemeSignalColumn
+          title="风险顾虑"
+          description="会影响决策的提醒，不直接等同于品牌口碑负面。"
+          words={riskSignals}
+          tone="negative"
+          emptyLabel="本轮没有可展示的风险顾虑主题。"
+        />
       </div>
+      {sampleRisk ? (
+        <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-report-muted)] px-4 py-3 text-[13px] leading-6 text-[var(--text-secondary)]">
+          <div>
+            <span className="font-medium text-[var(--text-primary)]">触发问题：</span>
+            {sampleRisk.title}
+          </div>
+          {sampleRiskMeta.length ? (
+            <div className="mt-1 text-[12px] text-[var(--text-tertiary)]">
+              {sampleRiskMeta.join(' · ')}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </SectionBlock>
   );
 }
@@ -235,7 +342,9 @@ function RiskCards({ risks }: { risks: DashboardHomeRiskCard[] }) {
               </div>
               <div className="mt-3 flex flex-wrap gap-2 text-[13px] text-[var(--text-secondary)]">
                 {risk.platform ? <span>{risk.platform}</span> : null}
-                {risk.evidence ? <span>{risk.evidence}</span> : null}
+                {normalizeRiskEvidence(risk.evidence) ? (
+                  <span>{normalizeRiskEvidence(risk.evidence)}</span>
+                ) : null}
               </div>
             </div>
           ))}
@@ -439,7 +548,11 @@ export function DashboardHomeBoards({ home, onOpenLatestReport, isOpeningLatestR
         </div>
 
         <MetricStrip metrics={metrics} />
-        <EmotionWordCloud positive={wordCloud.positive} negative={wordCloud.negative} />
+        <ThemeSignals
+          positive={wordCloud.positive}
+          negative={wordCloud.negative}
+          risks={home.risks || []}
+        />
         <PlatformDiagnosis rows={home.platform_diagnosis || []} />
         <RiskCards risks={home.risks || []} />
         <AdvantageCards advantages={home.advantages || []} />

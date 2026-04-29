@@ -22,6 +22,7 @@ from app.models.session import Session
 from app.models.user import User
 from app.core.utils import extract_domain
 from app.services.access_scope_service import AccessScopeService
+from app.workflow.a5.diagnosis import extract_geo_report_diagnosis
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,19 @@ def _aeo_status(value: float, metric_key: str) -> str:
     if value >= thresholds["warning"]:
         return "warning"
     return "poor"
+
+
+def _executive_summary_text(data: dict[str, Any]) -> str:
+    summary = data.get("executive_summary")
+    if isinstance(summary, dict):
+        one_line = str(summary.get("one_line_judgment") or "").strip()
+        if one_line:
+            return one_line
+    for key in ("executive_summary_text", "subtitle", "executive_summary"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "最近一轮报告已经生成，可直接查看核心指标和引用分布。"
 
 
 class AnalyticsService:
@@ -145,7 +159,9 @@ class AnalyticsService:
                 logger.warning(f"Failed to parse output_data for message {msg.id}")
         return None
 
-    async def _get_all_outputs(self, brand_id: str | None = None) -> list[dict[str, Any]]:
+    async def _get_all_outputs(
+        self, brand_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """Get all OUTPUT messages' output_data."""
         query = (
             select(Message)
@@ -187,7 +203,9 @@ class AnalyticsService:
                         except (json.JSONDecodeError, TypeError):
                             metadata = None
                     data["_output_type"] = msg.output_type
-                    data["_created_at"] = msg.created_at.isoformat() if msg.created_at else None
+                    data["_created_at"] = (
+                        msg.created_at.isoformat() if msg.created_at else None
+                    )
                     data["_artifact_kind"] = (
                         metadata.get("artifact_kind")
                         if isinstance(metadata, dict)
@@ -198,13 +216,10 @@ class AnalyticsService:
                         if isinstance(metadata, dict)
                         else None
                     )
-                    data["_triggered_by"] = (
-                        data.get("triggered_by")
-                        or (
-                            metadata.get("triggered_by")
-                            if isinstance(metadata, dict)
-                            else None
-                        )
+                    data["_triggered_by"] = data.get("triggered_by") or (
+                        metadata.get("triggered_by")
+                        if isinstance(metadata, dict)
+                        else None
                     )
                     outputs.append(data)
                 except (json.JSONDecodeError, TypeError):
@@ -214,18 +229,21 @@ class AnalyticsService:
     def _is_dashboard_report_output(self, output: dict[str, Any]) -> bool:
         """Return True when the artifact is an A5 report suitable for dashboard boards."""
         output_type = str(output.get("_output_type") or "")
-        artifact_kind = str(
-            output.get("_artifact_kind")
-            or output.get("artifact_kind")
-            or ""
-        ).strip().lower()
-        report_kind = str(
-            output.get("_report_kind")
-            or output.get("report_kind")
-            or ""
-        ).strip().lower()
+        artifact_kind = (
+            str(output.get("_artifact_kind") or output.get("artifact_kind") or "")
+            .strip()
+            .lower()
+        )
+        report_kind = (
+            str(output.get("_report_kind") or output.get("report_kind") or "")
+            .strip()
+            .lower()
+        )
 
-        if artifact_kind in {"confidence_signal", "confidence_analysis"} or report_kind in {
+        if artifact_kind in {
+            "confidence_signal",
+            "confidence_analysis",
+        } or report_kind in {
             "confidence_signal",
             "confidence_analysis",
         }:
@@ -295,7 +313,9 @@ class AnalyticsService:
         if "fetch_results" in data and isinstance(data["fetch_results"], list):
             return data["fetch_results"]
         # A5 saves a flattened summary for analytics
-        if "fetch_results_summary" in data and isinstance(data["fetch_results_summary"], list):
+        if "fetch_results_summary" in data and isinstance(
+            data["fetch_results_summary"], list
+        ):
             return [{"platform_results": data["fetch_results_summary"]}]
         if "results" in data and isinstance(data["results"], list):
             return data["results"]
@@ -348,7 +368,9 @@ class AnalyticsService:
                     except (json.JSONDecodeError, TypeError):
                         metadata = None
                 data["_output_type"] = msg.output_type
-                data["_created_at"] = msg.created_at.isoformat() if msg.created_at else None
+                data["_created_at"] = (
+                    msg.created_at.isoformat() if msg.created_at else None
+                )
                 data["_message_id"] = str(msg.id)
                 data["_session_id"] = str(msg.session_id)
                 data["_artifact_id"] = (
@@ -363,17 +385,10 @@ class AnalyticsService:
                     else None
                 )
                 data["_report_kind"] = (
-                    metadata.get("report_kind")
-                    if isinstance(metadata, dict)
-                    else None
+                    metadata.get("report_kind") if isinstance(metadata, dict) else None
                 )
-                data["_triggered_by"] = (
-                    data.get("triggered_by")
-                    or (
-                        metadata.get("triggered_by")
-                        if isinstance(metadata, dict)
-                        else None
-                    )
+                data["_triggered_by"] = data.get("triggered_by") or (
+                    metadata.get("triggered_by") if isinstance(metadata, dict) else None
                 )
                 if self._is_dashboard_report_output(data):
                     outputs.append(data)
@@ -414,21 +429,31 @@ class AnalyticsService:
 
         payload = {
             **report_data,
-            "metric_bundle": raw_data.get("metric_bundle")
-            if isinstance(raw_data.get("metric_bundle"), dict)
-            else report_data.get("metric_bundle"),
-            "comparison_bundle": raw_data.get("comparison_bundle")
-            if isinstance(raw_data.get("comparison_bundle"), dict)
-            else report_data.get("comparison_bundle"),
-            "dashboard_projection": raw_data.get("dashboard_projection")
-            if isinstance(raw_data.get("dashboard_projection"), dict)
-            else report_data.get("dashboard_projection"),
+            "metric_bundle": (
+                raw_data.get("metric_bundle")
+                if isinstance(raw_data.get("metric_bundle"), dict)
+                else report_data.get("metric_bundle")
+            ),
+            "comparison_bundle": (
+                raw_data.get("comparison_bundle")
+                if isinstance(raw_data.get("comparison_bundle"), dict)
+                else report_data.get("comparison_bundle")
+            ),
+            "dashboard_projection": (
+                raw_data.get("dashboard_projection")
+                if isinstance(raw_data.get("dashboard_projection"), dict)
+                else report_data.get("dashboard_projection")
+            ),
             "_output_type": "report",
-            "_created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "_created_at": (
+                snapshot.created_at.isoformat() if snapshot.created_at else None
+            ),
             "_session_id": str(snapshot.session_id) if snapshot.session_id else "",
             "_artifact_id": "",
             "_artifact_kind": "geo_report",
-            "_report_kind": str(raw_data.get("report_kind") or snapshot.snapshot_type or ""),
+            "_report_kind": str(
+                raw_data.get("report_kind") or snapshot.snapshot_type or ""
+            ),
             "_triggered_by": str(snapshot.triggered_by or ""),
         }
         return payload
@@ -444,15 +469,24 @@ class AnalyticsService:
         """Extract V2 contract fields from artifact, report_data, or metrics_raw."""
         dashboard_projection = data.get("dashboard_projection")
         if isinstance(dashboard_projection, dict):
+            sections_payload = data.get("sections")
+            sections_payload = (
+                sections_payload if isinstance(sections_payload, dict) else {}
+            )
             return {
                 "summary_metrics": data.get("metric_bundle", {}),
                 "scenario_matrix": data.get("scenario_matrix", []),
                 "competitor_battles": data.get("competitor_battles", []),
-                "risk_map": data.get("sections", {}).get("risk_map", []),
-                "action_queue": data.get("sections", {}).get("recommendations_board", {}).get("items", []),
+                "risk_map": sections_payload.get("risk_map", []),
+                "action_queue": sections_payload.get("recommendations_board", {}).get(
+                    "items", []
+                ),
                 "source_overview": data.get("source_overview", {}),
-                "mention_sentiment_analysis": data.get("mention_sentiment_analysis", {}),
+                "mention_sentiment_analysis": data.get(
+                    "mention_sentiment_analysis", {}
+                ),
                 "citation_analysis": data.get("source_overview", {}),
+                "diagnosis_modules": extract_geo_report_diagnosis(data),
             }
         nested_report = data.get("report_data")
         nested_report = nested_report if isinstance(nested_report, dict) else {}
@@ -480,6 +514,8 @@ class AnalyticsService:
             or nested_report.get("citation_analysis")
             or metrics_raw.get("citation_analysis")
             or {},
+            "diagnosis_modules": pick("diagnosis_modules", {})
+            or extract_geo_report_diagnosis(data),
         }
 
     def _extract_report_data(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -525,23 +561,23 @@ class AnalyticsService:
         questions = input_bundle.get("questions", [])
         questions = [question for question in questions if isinstance(question, dict)]
 
-        report_kind = str(
-            data.get("_report_kind")
-            or data.get("report_kind")
-            or data.get("meta", {}).get("report_kind")
-            or dashboard_projection.get("report_kind")
-            or "panorama"
-        ).strip().lower()
-        triggered_by = str(
-            data.get("_triggered_by")
-            or data.get("triggered_by")
-            or ""
-        ).strip().lower()
-        summary_headline = str(
-            data.get("subtitle")
-            or data.get("executive_summary")
-            or "最近一轮报告已经生成，可直接查看核心指标和引用分布。"
+        report_kind = (
+            str(
+                data.get("_report_kind")
+                or data.get("report_kind")
+                or data.get("meta", {}).get("report_kind")
+                or dashboard_projection.get("report_kind")
+                or "panorama"
+            )
+            .strip()
+            .lower()
         )
+        triggered_by = (
+            str(data.get("_triggered_by") or data.get("triggered_by") or "")
+            .strip()
+            .lower()
+        )
+        summary_headline = _executive_summary_text(data)
         session_id = str(data.get("_session_id") or "")
 
         raw_source_types = source_summary.get("source_type_breakdown", {})
@@ -568,10 +604,16 @@ class AnalyticsService:
                     or ""
                 ),
                 "count": int(item.get("count", 0) or 0),
-                "share": item.get("share") if isinstance(item.get("share"), (int, float)) else None,
+                "share": (
+                    item.get("share")
+                    if isinstance(item.get("share"), (int, float))
+                    else None
+                ),
                 "isOfficial": bool(item.get("is_official", False)),
                 "sourceType": str(item.get("source_type", "") or "other"),
-                "sourceTypeLabel": self._source_type_label(str(item.get("source_type", "") or "other")),
+                "sourceTypeLabel": self._source_type_label(
+                    str(item.get("source_type", "") or "other")
+                ),
             }
             for item in source_summary.get("top_domains", []) or []
             if isinstance(item, dict) and item.get("domain")
@@ -595,8 +637,14 @@ class AnalyticsService:
         if not isinstance(official_conversion_rate, (int, float)):
             official_conversion_rate = source_summary.get("official_conversion_rate")
 
-        answer_sample_count = int(metric_bundle.get("successful_answers") or metric_bundle.get("total_answers") or 0)
-        current_brand = str(data.get("brand_name") or data.get("meta", {}).get("brand_name") or "").strip()
+        answer_sample_count = int(
+            metric_bundle.get("successful_answers")
+            or metric_bundle.get("total_answers")
+            or 0
+        )
+        current_brand = str(
+            data.get("brand_name") or data.get("meta", {}).get("brand_name") or ""
+        ).strip()
         home_v4 = dashboard_projection.get("home_v4")
         home_v4 = home_v4 if isinstance(home_v4, dict) else {}
 
@@ -611,11 +659,13 @@ class AnalyticsService:
                 text = str(item.get("display") or item.get("reason") or "").strip()
                 if not text:
                     continue
-                positive_rows.append({
-                    "text": text,
-                    "weight": numeric(item.get("rate")) or 0,
-                    "sentiment": "positive",
-                })
+                positive_rows.append(
+                    {
+                        "text": text,
+                        "weight": numeric(item.get("rate")) or 0,
+                        "sentiment": "positive",
+                    }
+                )
 
             negative_rows = []
             for item in metric_bundle.get("top_negative_topics", []) or []:
@@ -624,18 +674,24 @@ class AnalyticsService:
                 text = str(item.get("display") or item.get("topic") or "").strip()
                 if not text:
                     continue
-                negative_rows.append({
-                    "text": text,
-                    "weight": numeric(item.get("rate")) or 0,
-                    "sentiment": "negative",
-                    "count": int(item.get("count", 0) or 0),
-                })
+                negative_rows.append(
+                    {
+                        "text": text,
+                        "weight": numeric(item.get("rate")) or 0,
+                        "sentiment": "negative",
+                        "count": int(item.get("count", 0) or 0),
+                    }
+                )
 
             return {"positive": positive_rows, "negative": negative_rows}
 
         def build_platform_diagnosis() -> list[dict[str, Any]]:
             answers = input_bundle.get("answers", [])
-            answers = [answer for answer in answers if isinstance(answer, dict) and answer.get("status") == "ok"]
+            answers = [
+                answer
+                for answer in answers
+                if isinstance(answer, dict) and answer.get("status") == "ok"
+            ]
             platform_rows: dict[str, dict[str, Any]] = {}
             negative_topics_by_platform: dict[str, dict[str, int]] = {}
 
@@ -670,7 +726,10 @@ class AnalyticsService:
                         topics[topic_key] = topics.get(topic_key, 0) + 1
 
             for platform, row in platform_rows.items():
-                if row["negativeCount"] > row["positiveCount"] and row["negativeCount"] > 0:
+                if (
+                    row["negativeCount"] > row["positiveCount"]
+                    and row["negativeCount"] > 0
+                ):
                     row["status"] = "risk"
                 elif row["brandMentionCount"] > 0:
                     row["status"] = "good"
@@ -679,52 +738,106 @@ class AnalyticsService:
                 topics = negative_topics_by_platform.get(platform, {})
                 if topics:
                     row["mainConcern"] = self._negative_topic_label(
-                        sorted(topics.items(), key=lambda item: (-item[1], item[0]))[0][0]
+                        sorted(topics.items(), key=lambda item: (-item[1], item[0]))[0][
+                            0
+                        ]
                     )
 
             return sorted(
                 platform_rows.values(),
-                key=lambda row: (row["status"] == "risk", row["brandMentionCount"], row["platform"]),
+                key=lambda row: (
+                    row["status"] == "risk",
+                    row["brandMentionCount"],
+                    row["platform"],
+                ),
                 reverse=True,
             )
 
         question_diagnostics = metric_bundle.get("question_diagnostics", {})
-        question_diagnostics = question_diagnostics if isinstance(question_diagnostics, dict) else {}
-        risk_rows = [row for row in question_diagnostics.get("risk_rows", []) or [] if isinstance(row, dict)]
-        question_rows = [row for row in question_diagnostics.get("question_rows", []) or [] if isinstance(row, dict)]
+        question_diagnostics = (
+            question_diagnostics if isinstance(question_diagnostics, dict) else {}
+        )
+        risk_rows = [
+            row
+            for row in question_diagnostics.get("risk_rows", []) or []
+            if isinstance(row, dict)
+        ]
+        question_rows = [
+            row
+            for row in question_diagnostics.get("question_rows", []) or []
+            if isinstance(row, dict)
+        ]
 
         def build_risks() -> list[dict[str, Any]]:
             rows = []
-            for item in sorted(risk_rows, key=lambda row: (str(row.get("risk_level") or ""), str(row.get("question_text") or "")))[:4]:
-                title = str(item.get("question_text") or item.get("scene") or "").strip()
+            for item in sorted(
+                risk_rows,
+                key=lambda row: (
+                    str(row.get("risk_level") or ""),
+                    str(row.get("question_text") or ""),
+                ),
+            )[:4]:
+                title = str(
+                    item.get("question_text") or item.get("scene") or ""
+                ).strip()
                 if not title:
                     continue
                 topics = item.get("negative_topics", []) or []
-                rows.append({
-                    "title": title,
-                    "level": "high" if item.get("risk_level") == "high" else "medium",
-                    "platform": "、".join(self._platform_label(str(platform)) for platform in item.get("present_platforms", []) or [] if platform),
-                    "evidence": "、".join(self._negative_topic_label(str(topic)) for topic in topics if topic) or self._answer_state_label(str(item.get("answer_state") or "")),
-                })
+                rows.append(
+                    {
+                        "title": title,
+                        "level": (
+                            "high" if item.get("risk_level") == "high" else "medium"
+                        ),
+                        "platform": "、".join(
+                            self._platform_label(str(platform))
+                            for platform in item.get("present_platforms", []) or []
+                            if platform
+                        ),
+                        "evidence": "、".join(
+                            self._negative_topic_label(str(topic))
+                            for topic in topics
+                            if topic
+                        )
+                        or self._answer_state_label(
+                            str(item.get("answer_state") or "")
+                        ),
+                    }
+                )
             return rows
 
         def build_advantages() -> list[dict[str, Any]]:
             rows = []
             candidates = [
-                row for row in question_rows
-                if row.get("brand_present") and str(row.get("risk_level") or "") in {"low", "medium"}
+                row
+                for row in question_rows
+                if row.get("brand_present")
+                and str(row.get("risk_level") or "") in {"low", "medium"}
             ]
-            candidates.sort(key=lambda row: (-len(row.get("present_platforms", []) or []), str(row.get("question_text") or "")))
+            candidates.sort(
+                key=lambda row: (
+                    -len(row.get("present_platforms", []) or []),
+                    str(row.get("question_text") or ""),
+                )
+            )
             for item in candidates[:4]:
-                title = str(item.get("question_text") or item.get("scene") or "").strip()
+                title = str(
+                    item.get("question_text") or item.get("scene") or ""
+                ).strip()
                 if not title:
                     continue
                 platforms = item.get("present_platforms", []) or []
-                rows.append({
-                    "title": title,
-                    "platformCount": len(platforms),
-                    "evidence": "、".join(self._platform_label(str(platform)) for platform in platforms if platform),
-                })
+                rows.append(
+                    {
+                        "title": title,
+                        "platformCount": len(platforms),
+                        "evidence": "、".join(
+                            self._platform_label(str(platform))
+                            for platform in platforms
+                            if platform
+                        ),
+                    }
+                )
             return rows
 
         def build_mention_ranking() -> list[dict[str, Any]]:
@@ -737,19 +850,29 @@ class AnalyticsService:
                 mention_count = int(item.get("brand_presence_count", 0) or 0)
                 if not brand or not isinstance(rank, int):
                     continue
-                rows.append({
-                    "rank": rank,
-                    "brand": brand,
-                    "mentionRate": round(mention_count / answer_sample_count, 4) if answer_sample_count else None,
-                    "mentionCount": mention_count,
-                    "isCurrentBrand": bool(current_brand and brand == current_brand),
-                })
+                rows.append(
+                    {
+                        "rank": rank,
+                        "brand": brand,
+                        "mentionRate": (
+                            round(mention_count / answer_sample_count, 4)
+                            if answer_sample_count
+                            else None
+                        ),
+                        "mentionCount": mention_count,
+                        "isCurrentBrand": bool(
+                            current_brand and brand == current_brand
+                        ),
+                    }
+                )
             return rows[:10]
 
         source_structure = {
-            "officialConversionRate": official_conversion_rate
-            if isinstance(official_conversion_rate, (int, float))
-            else None,
+            "officialConversionRate": (
+                official_conversion_rate
+                if isinstance(official_conversion_rate, (int, float))
+                else None
+            ),
             "sourceTypes": source_types,
             "topDomains": top_domains,
         }
@@ -758,13 +881,15 @@ class AnalyticsService:
             "summary": {"headline": summary_headline},
             "latestReport": {
                 "title": str(data.get("title") or "分析报告"),
-                "subtitle": "",
+                "subtitle": summary_headline,
                 "reportKind": report_kind,
                 "reportKindLabel": self._report_kind_label(report_kind),
                 "badgeLabel": "自动监测" if triggered_by == "scheduled" else None,
                 "triggeredBy": triggered_by or None,
                 "sessionId": session_id,
-                "artifactId": str(data.get("_artifact_id") or data.get("_message_id") or ""),
+                "artifactId": str(
+                    data.get("_artifact_id") or data.get("_message_id") or ""
+                ),
                 "outputId": str(data.get("_message_id") or ""),
                 "createdAt": str(data.get("_created_at") or ""),
                 "actionLabel": "打开报告",
@@ -773,44 +898,60 @@ class AnalyticsService:
                 {
                     "id": "mention_rate",
                     "label": "提及率",
-                    "value": mention_rate if isinstance(mention_rate, (int, float)) else None,
+                    "value": (
+                        mention_rate if isinstance(mention_rate, (int, float)) else None
+                    ),
                     "format": "percent",
                     "subtitle": "",
                 },
                 {
                     "id": "brand_rank",
                     "label": "排名",
-                    "value": metric_bundle.get("brand_rank")
-                    if isinstance(metric_bundle.get("brand_rank"), int)
-                    else None,
+                    "value": (
+                        metric_bundle.get("brand_rank")
+                        if isinstance(metric_bundle.get("brand_rank"), int)
+                        else None
+                    ),
                     "format": "rank",
                     "subtitle": "",
                 },
                 {
                     "id": "official_conversion_rate",
                     "label": "官网转化率",
-                    "value": official_conversion_rate
-                    if isinstance(official_conversion_rate, (int, float))
-                    else None,
+                    "value": (
+                        official_conversion_rate
+                        if isinstance(official_conversion_rate, (int, float))
+                        else None
+                    ),
                     "format": "percent",
                     "subtitle": "",
                 },
                 {
                     "id": "negative_rate",
                     "label": "负向率",
-                    "value": metric_bundle.get("negative_rate")
-                    if isinstance(metric_bundle.get("negative_rate"), (int, float))
-                    else None,
+                    "value": (
+                        metric_bundle.get("negative_rate")
+                        if isinstance(metric_bundle.get("negative_rate"), (int, float))
+                        else None
+                    ),
                     "format": "percent",
                     "subtitle": "",
                 },
             ],
-            "wordCloud": home_v4.get("wordCloud") or home_v4.get("word_cloud") or build_word_cloud(),
-            "platformDiagnosis": home_v4.get("platformDiagnosis") or home_v4.get("platform_diagnosis") or build_platform_diagnosis(),
+            "wordCloud": home_v4.get("wordCloud")
+            or home_v4.get("word_cloud")
+            or build_word_cloud(),
+            "platformDiagnosis": home_v4.get("platformDiagnosis")
+            or home_v4.get("platform_diagnosis")
+            or build_platform_diagnosis(),
             "risks": home_v4.get("risks") or build_risks(),
             "advantages": home_v4.get("advantages") or build_advantages(),
-            "mentionRanking": home_v4.get("mentionRanking") or home_v4.get("mention_ranking") or build_mention_ranking(),
-            "sourceStructure": home_v4.get("sourceStructure") or home_v4.get("source_structure") or source_structure,
+            "mentionRanking": home_v4.get("mentionRanking")
+            or home_v4.get("mention_ranking")
+            or build_mention_ranking(),
+            "sourceStructure": home_v4.get("sourceStructure")
+            or home_v4.get("source_structure")
+            or source_structure,
             "citationDistribution": {
                 "summary": "",
                 "sourceTypes": source_types,
@@ -820,12 +961,19 @@ class AnalyticsService:
                 "summary": "",
                 "items": question_items,
             },
+            "diagnosisModules": extract_geo_report_diagnosis(data),
         }
 
     def _extract_platform_analysis(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         report_data = self._extract_report_data(data)
-        platform_analysis = report_data.get("platform_analysis", data.get("platform_analysis", []))
-        return [item for item in platform_analysis if isinstance(item, dict)] if isinstance(platform_analysis, list) else []
+        platform_analysis = report_data.get(
+            "platform_analysis", data.get("platform_analysis", [])
+        )
+        return (
+            [item for item in platform_analysis if isinstance(item, dict)]
+            if isinstance(platform_analysis, list)
+            else []
+        )
 
     def _extract_competitor_deep_analysis(self, data: dict[str, Any]) -> dict[str, Any]:
         report_data = self._extract_report_data(data)
@@ -833,11 +981,17 @@ class AnalyticsService:
             "competitor_deep_analysis",
             data.get("competitor_deep_analysis", {}),
         )
-        return competitor_deep_analysis if isinstance(competitor_deep_analysis, dict) else {}
+        return (
+            competitor_deep_analysis
+            if isinstance(competitor_deep_analysis, dict)
+            else {}
+        )
 
     def _legacy_sentiment_summary(self, data: dict[str, Any]) -> dict[str, int]:
         metrics = self._extract_metrics(data) or {}
-        raw = metrics.get("sentiment_distribution", data.get("sentiment_distribution", {}))
+        raw = metrics.get(
+            "sentiment_distribution", data.get("sentiment_distribution", {})
+        )
         raw = raw if isinstance(raw, dict) else {}
 
         def read_count(key: str) -> int:
@@ -867,20 +1021,29 @@ class AnalyticsService:
         lowered = fallback_text.lower()
         if any(token in lowered for token in ["优势", "较强", "领先", "正向", "推荐"]):
             return "positive"
-        if any(token in lowered for token in ["缺失", "不足", "短板", "风险", "偏弱", "负向"]):
+        if any(
+            token in lowered
+            for token in ["缺失", "不足", "短板", "风险", "偏弱", "负向"]
+        ):
             return "negative"
         return "neutral"
 
-    def _sentiment_summary_from_mentions(self, mentions: list[dict[str, Any]]) -> dict[str, int]:
+    def _sentiment_summary_from_mentions(
+        self, mentions: list[dict[str, Any]]
+    ) -> dict[str, int]:
         summary = {"positive": 0, "neutral": 0, "negative": 0}
         for item in mentions:
-            sentiment = str(item.get("sentiment", "neutral") or "neutral").strip().lower()
+            sentiment = (
+                str(item.get("sentiment", "neutral") or "neutral").strip().lower()
+            )
             if sentiment not in summary:
                 sentiment = "neutral"
             summary[sentiment] += 1
         return summary
 
-    def _legacy_brand_mentions_from_fetch_results(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+    def _legacy_brand_mentions_from_fetch_results(
+        self, data: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         fetch_results = self._extract_fetch_results(data)
         mentions: list[dict[str, Any]] = []
 
@@ -888,7 +1051,11 @@ class AnalyticsService:
             if not isinstance(row, dict):
                 continue
 
-            scenario_id = str(row.get("question_id") or row.get("id") or f"legacy-question-{question_index}")
+            scenario_id = str(
+                row.get("question_id")
+                or row.get("id")
+                or f"legacy-question-{question_index}"
+            )
             scenario_label = str(
                 row.get("question_text")
                 or row.get("query")
@@ -896,7 +1063,11 @@ class AnalyticsService:
                 or row.get("title")
                 or ""
             ).strip()
-            platform_results = row.get("platform_results", []) if isinstance(row.get("platform_results"), list) else []
+            platform_results = (
+                row.get("platform_results", [])
+                if isinstance(row.get("platform_results"), list)
+                else []
+            )
 
             # 仅当旧数据里真实保留了问题或查询文本时，才重建问题级提及明细。
             if not scenario_label:
@@ -906,15 +1077,30 @@ class AnalyticsService:
                 if not isinstance(item, dict) or not item.get("success"):
                     continue
 
-                answer = item.get("answer", {}) if isinstance(item.get("answer"), dict) else {}
+                answer = (
+                    item.get("answer", {})
+                    if isinstance(item.get("answer"), dict)
+                    else {}
+                )
                 has_brand_mention = bool(
-                    answer.get("has_brand_mention") if isinstance(answer, dict) else item.get("has_brand_mention", False)
+                    answer.get("has_brand_mention")
+                    if isinstance(answer, dict)
+                    else item.get("has_brand_mention", False)
                 )
                 if not has_brand_mention:
                     continue
 
-                content = str(answer.get("content") or item.get("content") or item.get("answer_text") or "")
-                citations = item.get("citations", []) if isinstance(item.get("citations"), list) else []
+                content = str(
+                    answer.get("content")
+                    or item.get("content")
+                    or item.get("answer_text")
+                    or ""
+                )
+                citations = (
+                    item.get("citations", [])
+                    if isinstance(item.get("citations"), list)
+                    else []
+                )
                 citation_domains: list[str] = []
                 citation_titles: list[str] = []
                 citation_urls: list[str] = []
@@ -922,7 +1108,12 @@ class AnalyticsService:
                     if not isinstance(citation, dict):
                         continue
                     url = str(citation.get("url", "") or "").strip()
-                    domain = str(citation.get("domain") or extract_domain(url) or citation.get("source") or "").strip()
+                    domain = str(
+                        citation.get("domain")
+                        or extract_domain(url)
+                        or citation.get("source")
+                        or ""
+                    ).strip()
                     title = str(citation.get("title", "") or "").strip()
                     if domain and domain not in citation_domains:
                         citation_domains.append(domain)
@@ -931,17 +1122,24 @@ class AnalyticsService:
                     if url and url not in citation_urls:
                         citation_urls.append(url)
 
-                mentions.append({
-                    "scenarioId": scenario_id or f"legacy-question-{question_index}-{platform_index}",
-                    "scenarioLabel": scenario_label or f"问题 {question_index}",
-                    "platform": str(item.get("platform") or item.get("platform_name") or ""),
-                    "sentiment": self._legacy_sentiment_label(answer.get("sentiment"), content),
-                    "evidence": content[:280].strip(),
-                    "citationDomains": citation_domains,
-                    "citationTitles": citation_titles,
-                    "citationUrls": citation_urls,
-                    "officialCitationPresent": False,
-                })
+                mentions.append(
+                    {
+                        "scenarioId": scenario_id
+                        or f"legacy-question-{question_index}-{platform_index}",
+                        "scenarioLabel": scenario_label or f"问题 {question_index}",
+                        "platform": str(
+                            item.get("platform") or item.get("platform_name") or ""
+                        ),
+                        "sentiment": self._legacy_sentiment_label(
+                            answer.get("sentiment"), content
+                        ),
+                        "evidence": content[:280].strip(),
+                        "citationDomains": citation_domains,
+                        "citationTitles": citation_titles,
+                        "citationUrls": citation_urls,
+                        "officialCitationPresent": False,
+                    }
+                )
 
         return mentions
 
@@ -969,19 +1167,27 @@ class AnalyticsService:
                     or default_reason
                 )
                 platforms = row.get("platforms") or row.get("present_platforms") or []
-                normalized.append({
-                    "scenarioId": str(row.get("scenario_id", f"legacy-{index + 1}")),
-                    "scenarioLabel": str(label),
-                    "reason": str(reason),
-                    "platforms": [str(platform) for platform in platforms if platform],
-                })
+                normalized.append(
+                    {
+                        "scenarioId": str(
+                            row.get("scenario_id", f"legacy-{index + 1}")
+                        ),
+                        "scenarioLabel": str(label),
+                        "reason": str(reason),
+                        "platforms": [
+                            str(platform) for platform in platforms if platform
+                        ],
+                    }
+                )
             elif row:
-                normalized.append({
-                    "scenarioId": f"legacy-{index + 1}",
-                    "scenarioLabel": str(row),
-                    "reason": default_reason,
-                    "platforms": [],
-                })
+                normalized.append(
+                    {
+                        "scenarioId": f"legacy-{index + 1}",
+                        "scenarioLabel": str(row),
+                        "reason": default_reason,
+                        "platforms": [],
+                    }
+                )
         return normalized
 
     def _build_legacy_mention_board(
@@ -995,7 +1201,9 @@ class AnalyticsService:
             "品牌已经在该场景建立一定存在感。",
         )
         weaknesses = self._legacy_scenario_insight_rows(
-            self._extract_report_data(data).get("weaknesses", data.get("weaknesses", [])),
+            self._extract_report_data(data).get(
+                "weaknesses", data.get("weaknesses", [])
+            ),
             "该场景仍需要补强品牌提及和证据表现。",
         )
 
@@ -1004,7 +1212,9 @@ class AnalyticsService:
         brand_mentions = self._legacy_brand_mentions_from_fetch_results(data)
 
         comparison_matrix = competitor_deep_analysis.get("comparison_matrix", [])
-        comparison_matrix = comparison_matrix if isinstance(comparison_matrix, list) else []
+        comparison_matrix = (
+            comparison_matrix if isinstance(comparison_matrix, list) else []
+        )
         leading_competitors = []
         competitor_mentions: list[dict[str, Any]] = []
         for row in comparison_matrix[:3]:
@@ -1012,30 +1222,50 @@ class AnalyticsService:
                 continue
             competitor_only = int(row.get("competitor_only_scenarios", 0) or 0)
             shared = int(row.get("shared_scenarios", 0) or 0)
-            pressure = "high" if competitor_only >= max(shared, 1) else "medium" if (competitor_only or shared) else "low"
-            leading_competitors.append({
-                "competitor": str(row.get("competitor", "")),
-                "pressureLevel": pressure,
-                "competitorOnlyScenarios": competitor_only,
-                "sentimentSummary": {"positive": 0, "neutral": shared + competitor_only, "negative": 0},
-            })
-            for conflict_index, scenario in enumerate((row.get("top_conflict_scenarios") or [])[:3]):
-                competitor_mentions.append({
+            pressure = (
+                "high"
+                if competitor_only >= max(shared, 1)
+                else "medium" if (competitor_only or shared) else "low"
+            )
+            leading_competitors.append(
+                {
                     "competitor": str(row.get("competitor", "")),
-                    "scenarioId": f"legacy-competitor-{conflict_index + 1}",
-                    "scenarioLabel": str(scenario),
-                    "platform": "",
-                    "sentiment": "neutral",
-                    "evidence": "该竞品在该场景被频繁共同提及或独占提及。",
-                    "citationDomains": [],
-                    "citationTitles": [],
-                    "officialCitationPresent": False,
-                })
+                    "pressureLevel": pressure,
+                    "competitorOnlyScenarios": competitor_only,
+                    "sentimentSummary": {
+                        "positive": 0,
+                        "neutral": shared + competitor_only,
+                        "negative": 0,
+                    },
+                }
+            )
+            for conflict_index, scenario in enumerate(
+                (row.get("top_conflict_scenarios") or [])[:3]
+            ):
+                competitor_mentions.append(
+                    {
+                        "competitor": str(row.get("competitor", "")),
+                        "scenarioId": f"legacy-competitor-{conflict_index + 1}",
+                        "scenarioLabel": str(scenario),
+                        "platform": "",
+                        "sentiment": "neutral",
+                        "evidence": "该竞品在该场景被频繁共同提及或独占提及。",
+                        "citationDomains": [],
+                        "citationTitles": [],
+                        "officialCitationPresent": False,
+                    }
+                )
 
         sentiment_summary = self._sentiment_summary_from_mentions(brand_mentions)
         mention_count = len(brand_mentions)
-        total_questions = int((self._extract_metrics(data) or {}).get("total_questions", 0) or 0)
-        leading_competitor = leading_competitors[0]["competitor"] if leading_competitors else "暂无明显竞品压力"
+        total_questions = int(
+            (self._extract_metrics(data) or {}).get("total_questions", 0) or 0
+        )
+        leading_competitor = (
+            leading_competitors[0]["competitor"]
+            if leading_competitors
+            else "暂无明显竞品压力"
+        )
         headline = (
             f"品牌当前约在 {mention_count}/{total_questions or 0} 个问题中被提及，"
             f"其中正向提及 {sentiment_summary['positive']} 条，主要竞争压力来自 {leading_competitor}。"
@@ -1054,10 +1284,14 @@ class AnalyticsService:
             },
         }
 
-    def _build_legacy_source_board(self, data: dict[str, Any], source_overview: dict[str, Any]) -> dict[str, Any]:
+    def _build_legacy_source_board(
+        self, data: dict[str, Any], source_overview: dict[str, Any]
+    ) -> dict[str, Any]:
         brand_domain = str(source_overview.get("brand_domain", "") or "")
         fetch_results_summary = data.get("fetch_results_summary", [])
-        fetch_results_summary = fetch_results_summary if isinstance(fetch_results_summary, list) else []
+        fetch_results_summary = (
+            fetch_results_summary if isinstance(fetch_results_summary, list) else []
+        )
 
         total_brand_mentions = 0
         cited_brand_answers = 0
@@ -1071,7 +1305,11 @@ class AnalyticsService:
                 continue
             total_brand_mentions += 1
             platform = str(row.get("platform", "") or "")
-            citations = row.get("citations", []) if isinstance(row.get("citations"), list) else []
+            citations = (
+                row.get("citations", [])
+                if isinstance(row.get("citations"), list)
+                else []
+            )
             if not citations:
                 continue
             cited_brand_answers += 1
@@ -1088,7 +1326,9 @@ class AnalyticsService:
                     or citation.get("source")
                     or ""
                 )
-                title = str(citation.get("title") or citation.get("source") or domain or "")
+                title = str(
+                    citation.get("title") or citation.get("source") or domain or ""
+                )
                 if domain:
                     citation_domains.append(domain)
                 if title:
@@ -1114,7 +1354,12 @@ class AnalyticsService:
 
             platform_row = platform_stats.setdefault(
                 platform or "unknown",
-                {"platform": platform or "unknown", "total": 0, "cited": 0, "official": 0},
+                {
+                    "platform": platform or "unknown",
+                    "total": 0,
+                    "cited": 0,
+                    "official": 0,
+                },
             )
             platform_row["total"] += 1
             platform_row["cited"] += 1
@@ -1126,28 +1371,42 @@ class AnalyticsService:
             f"其中 {len(official_cases)} 条来自官网，{len(non_official_cases)} 条来自第三方站点。"
         )
 
-        platform_citation_stats = source_overview.get("platform_citation_stats", {}) or {}
+        platform_citation_stats = (
+            source_overview.get("platform_citation_stats", {}) or {}
+        )
         platform_rows = []
         for platform, stats in platform_stats.items():
-            stat_payload = platform_citation_stats.get(platform, {}) if isinstance(platform_citation_stats, dict) else {}
+            stat_payload = (
+                platform_citation_stats.get(platform, {})
+                if isinstance(platform_citation_stats, dict)
+                else {}
+            )
             total = int(stats.get("total", 0) or 0)
             cited = int(stats.get("cited", 0) or 0)
-            platform_rows.append({
-                "platform": platform,
-                "contentCitationRate": round(cited / total, 4) if total else 0.0,
-                "officialCitationRate": float(stat_payload.get("official_citation_rate", 0) or 0),
-                "topDomains": [
-                    {
-                        "domain": domain_item.get("domain", ""),
-                        "count": int(domain_item.get("count", 0) or 0),
-                    }
-                    for domain_item in stat_payload.get("top_domains", []) or []
-                    if isinstance(domain_item, dict)
-                ],
-            })
+            platform_rows.append(
+                {
+                    "platform": platform,
+                    "contentCitationRate": round(cited / total, 4) if total else 0.0,
+                    "officialCitationRate": float(
+                        stat_payload.get("official_citation_rate", 0) or 0
+                    ),
+                    "topDomains": [
+                        {
+                            "domain": domain_item.get("domain", ""),
+                            "count": int(domain_item.get("count", 0) or 0),
+                        }
+                        for domain_item in stat_payload.get("top_domains", []) or []
+                        if isinstance(domain_item, dict)
+                    ],
+                }
+            )
 
         return {
-            "contentCitationRate": round(cited_brand_answers / total_brand_mentions, 4) if total_brand_mentions else None,
+            "contentCitationRate": (
+                round(cited_brand_answers / total_brand_mentions, 4)
+                if total_brand_mentions
+                else None
+            ),
             "citedAnswerCount": cited_brand_answers,
             "citedContentCount": len(unique_contents),
             "headline": source_headline,
@@ -1185,18 +1444,40 @@ class AnalyticsService:
     ) -> dict[str, Any]:
         metrics = self._extract_metrics(data) or {}
         platform_analysis = self._extract_platform_analysis(data)
-        weaknesses = self._extract_report_data(data).get("weaknesses", data.get("weaknesses", []))
-        risk_alerts = self._extract_report_data(data).get("risk_alerts", data.get("risk_alerts", []))
+        weaknesses = self._extract_report_data(data).get(
+            "weaknesses", data.get("weaknesses", [])
+        )
+        risk_alerts = self._extract_report_data(data).get(
+            "risk_alerts", data.get("risk_alerts", [])
+        )
         sentiment_summary = self._legacy_sentiment_summary(data)
         mention_value = float(mention_rate or metrics.get("mention_rate", 0) or 0)
         total_questions = float(metrics.get("total_questions", 0) or 0)
         total_mentions = float(metrics.get("total_mentions", 0) or 0)
 
-        platform_coverage_count = len([item for item in platform_analysis if int(item.get("mentions", item.get("mention_count", 0)) or 0) > 0])
-        platform_coverage_rate = min(1.0, platform_coverage_count / 4) if platform_coverage_count else 0.0
-        scenario_coverage_rate = min(1.0, (total_mentions / total_questions)) if total_questions else mention_value
-        positive_total = sentiment_summary["positive"] + sentiment_summary["neutral"] + sentiment_summary["negative"]
-        positive_rate = (sentiment_summary["positive"] / positive_total) if positive_total else 0.0
+        platform_coverage_count = len(
+            [
+                item
+                for item in platform_analysis
+                if int(item.get("mentions", item.get("mention_count", 0)) or 0) > 0
+            ]
+        )
+        platform_coverage_rate = (
+            min(1.0, platform_coverage_count / 4) if platform_coverage_count else 0.0
+        )
+        scenario_coverage_rate = (
+            min(1.0, (total_mentions / total_questions))
+            if total_questions
+            else mention_value
+        )
+        positive_total = (
+            sentiment_summary["positive"]
+            + sentiment_summary["neutral"]
+            + sentiment_summary["negative"]
+        )
+        positive_rate = (
+            (sentiment_summary["positive"] / positive_total) if positive_total else 0.0
+        )
         risk_penalty = min(100.0, len(weaknesses) * 12 + len(risk_alerts) * 16)
 
         radar_dimensions = [
@@ -1233,7 +1514,9 @@ class AnalyticsService:
         ]
         sorted_dimensions = sorted(radar_dimensions, key=lambda item: item["score"])
         weakest_dimension = sorted_dimensions[0]["label"] if sorted_dimensions else ""
-        strongest_dimension = sorted_dimensions[-1]["label"] if sorted_dimensions else ""
+        strongest_dimension = (
+            sorted_dimensions[-1]["label"] if sorted_dimensions else ""
+        )
         return {
             "headline": f"当前最大优势在 {strongest_dimension}，最大短板在 {weakest_dimension}。",
             "strongestDimension": strongest_dimension,
@@ -1256,12 +1539,14 @@ class AnalyticsService:
             share = item.get("share", 0) or 0
             if isinstance(share, (int, float)) and share > 1:
                 share = share / 100
-            top_domains.append({
-                "domain": item.get("domain", ""),
-                "count": int(item.get("count", 0) or 0),
-                "share": round(max(0.0, min(1.0, float(share or 0))), 4),
-                "is_official": bool(item.get("is_official", False)),
-            })
+            top_domains.append(
+                {
+                    "domain": item.get("domain", ""),
+                    "count": int(item.get("count", 0) or 0),
+                    "share": round(max(0.0, min(1.0, float(share or 0))), 4),
+                    "is_official": bool(item.get("is_official", False)),
+                }
+            )
 
         platform_citation_stats = {}
         raw_platform_stats = citation_analysis.get("platform_citation_stats", {}) or {}
@@ -1274,7 +1559,11 @@ class AnalyticsService:
                 platform_citation_stats[str(platform)] = {
                     "total_citations": platform_total,
                     "official_citations": platform_official,
-                    "official_citation_rate": round(platform_official / platform_total, 4) if platform_total > 0 else 0.0,
+                    "official_citation_rate": (
+                        round(platform_official / platform_total, 4)
+                        if platform_total > 0
+                        else 0.0
+                    ),
                     "unique_domains": int(stats.get("unique_domains", 0) or 0),
                     "top_domains": [
                         {
@@ -1287,7 +1576,11 @@ class AnalyticsService:
                 }
 
         return {
-            "official_citation_rate": round(official_citations / total_citations, 4) if total_citations > 0 else 0.0,
+            "official_citation_rate": (
+                round(official_citations / total_citations, 4)
+                if total_citations > 0
+                else 0.0
+            ),
             "official_citations": official_citations,
             "total_citations": total_citations,
             "unique_domains": int(citation_analysis.get("unique_domains", 0) or 0),
@@ -1306,7 +1599,9 @@ class AnalyticsService:
         mention_rate = float(metrics.get("mention_rate", 0) or 0)
         return {
             "brand_mention_rate": mention_rate,
-            "official_citation_rate": float(source_overview.get("official_citation_rate", 0) or 0),
+            "official_citation_rate": float(
+                source_overview.get("official_citation_rate", 0) or 0
+            ),
             "platform_coverage_count": None,
             "platform_total_count": None,
             "scenario_total": None,
@@ -1332,7 +1627,9 @@ class AnalyticsService:
             "scenarioPriority": row.get("scenario_priority", "medium"),
             "brandPresent": bool(row.get("brand_present", False)),
             "presentPlatforms": row.get("present_platforms", []) or [],
-            "officialCitationPresent": bool(row.get("official_citation_present", False)),
+            "officialCitationPresent": bool(
+                row.get("official_citation_present", False)
+            ),
             "officialSourceDomains": row.get("official_source_domains", []) or [],
             "competitorsPresent": row.get("competitors_present", []) or [],
             "winnerBrands": row.get("winner_brands", []) or [],
@@ -1348,7 +1645,9 @@ class AnalyticsService:
         return {
             "competitor": row.get("competitor", ""),
             "sharedScenarios": int(row.get("shared_scenarios", 0) or 0),
-            "competitorOnlyScenarios": int(row.get("competitor_only_scenarios", 0) or 0),
+            "competitorOnlyScenarios": int(
+                row.get("competitor_only_scenarios", 0) or 0
+            ),
             "brandOnlyScenarios": int(row.get("brand_only_scenarios", 0) or 0),
             "pressureLevel": row.get("pressure_level", "low"),
             "topConflictScenarios": row.get("top_conflict_scenarios", []) or [],
@@ -1376,7 +1675,9 @@ class AnalyticsService:
                 platform: {
                     "totalCitations": int(stats.get("total_citations", 0) or 0),
                     "officialCitations": int(stats.get("official_citations", 0) or 0),
-                    "officialCitationRate": float(stats.get("official_citation_rate", 0) or 0),
+                    "officialCitationRate": float(
+                        stats.get("official_citation_rate", 0) or 0
+                    ),
                     "uniqueDomains": int(stats.get("unique_domains", 0) or 0),
                     "topDomains": [
                         {
@@ -1428,7 +1729,9 @@ class AnalyticsService:
             for item in sorted(
                 competitors,
                 key=lambda row: (
-                    self._risk_rank("high" if row.get("pressure_level") == "high" else "medium"),
+                    self._risk_rank(
+                        "high" if row.get("pressure_level") == "high" else "medium"
+                    ),
                     -(int(row.get("competitor_only_scenarios", 0) or 0)),
                 ),
             )
@@ -1439,12 +1742,18 @@ class AnalyticsService:
         for scenario in scenario_matrix:
             brand_state = "absent"
             if scenario.get("brand_present"):
-                brand_state = "win" if scenario.get("battle_status") in {"advantage", "defend"} else "present"
+                brand_state = (
+                    "win"
+                    if scenario.get("battle_status") in {"advantage", "defend"}
+                    else "present"
+                )
 
             brand_states = {
                 "本品牌": {
                     "state": brand_state,
-                    "officialCited": bool(scenario.get("official_citation_present", False)),
+                    "officialCited": bool(
+                        scenario.get("official_citation_present", False)
+                    ),
                 }
             }
             competitors_present = scenario.get("competitors_present", []) or []
@@ -1459,15 +1768,17 @@ class AnalyticsService:
                     "officialCited": False,
                 }
 
-            rows.append({
-                "scenarioId": scenario.get("scenario_id", ""),
-                "scenarioLabel": scenario.get("scenario_label", ""),
-                "scenarioPriority": scenario.get("scenario_priority", "medium"),
-                "winnerBrand": (scenario.get("winner_brands", []) or [""])[0],
-                "battleStatus": scenario.get("battle_status", "missing"),
-                "recommendedFocus": scenario.get("action_hint", ""),
-                "brandStates": brand_states,
-            })
+            rows.append(
+                {
+                    "scenarioId": scenario.get("scenario_id", ""),
+                    "scenarioLabel": scenario.get("scenario_label", ""),
+                    "scenarioPriority": scenario.get("scenario_priority", "medium"),
+                    "winnerBrand": (scenario.get("winner_brands", []) or [""])[0],
+                    "battleStatus": scenario.get("battle_status", "missing"),
+                    "recommendedFocus": scenario.get("action_hint", ""),
+                    "brandStates": brand_states,
+                }
+            )
         return rows
 
     async def get_overview(
@@ -1535,10 +1846,12 @@ class AnalyticsService:
                     select(AnalysisSnapshot)
                     .where(
                         AnalysisSnapshot.entity_id == UUID(brand_id),
-                        AnalysisSnapshot.status.in_([
-                            SnapshotStatus.COMPLETED,
-                            SnapshotStatus.PARTIAL,
-                        ]),
+                        AnalysisSnapshot.status.in_(
+                            [
+                                SnapshotStatus.COMPLETED,
+                                SnapshotStatus.PARTIAL,
+                            ]
+                        ),
                     )
                     .order_by(AnalysisSnapshot.created_at)
                     .limit(100)
@@ -1548,11 +1861,13 @@ class AnalyticsService:
 
                 for snap in snapshots:
                     if snap.bwvs_index is not None:
-                        visibility_points.append({
-                            "date": snap.created_at.strftime("%Y-%m-%d"),
-                            "score": round(snap.bwvs_index, 2),
-                            "snapshot_id": str(snap.id),
-                        })
+                        visibility_points.append(
+                            {
+                                "date": snap.created_at.strftime("%Y-%m-%d"),
+                                "score": round(snap.bwvs_index, 2),
+                                "snapshot_id": str(snap.id),
+                            }
+                        )
             except Exception as snap_err:
                 logger.warning("Failed to query snapshots for visibility: %s", snap_err)
 
@@ -1565,16 +1880,16 @@ class AnalyticsService:
                     created_at = output.get("_created_at", "")
                     bwvs = metrics.get("bwvs_index", 0)
                     if bwvs and created_at:
-                        visibility_points.append({
-                            "date": created_at[:10],
-                            "score": round(bwvs, 2),
-                        })
+                        visibility_points.append(
+                            {
+                                "date": created_at[:10],
+                                "score": round(bwvs, 2),
+                            }
+                        )
 
         return {"visibility": visibility_points}
 
-    async def get_platform_data(
-        self, brand_id: str | None
-    ) -> dict[str, Any]:
+    async def get_platform_data(self, brand_id: str | None) -> dict[str, Any]:
         """Get platform comparison data from fetch results."""
         outputs = await self._get_all_outputs(brand_id=brand_id)
 
@@ -1598,8 +1913,13 @@ class AnalyticsService:
                         # A5 _calculate_metrics uses total/mentions/success keys
                         total = stats.get("total", 0)
                         mentions = stats.get("mentions", 0)
-                        ps["mentionRate"] = stats.get("mention_rate", mentions / total if total > 0 else ps["mentionRate"])
-                        ps["totalQueries"] = stats.get("total_queries", total or ps["totalQueries"])
+                        ps["mentionRate"] = stats.get(
+                            "mention_rate",
+                            mentions / total if total > 0 else ps["mentionRate"],
+                        )
+                        ps["totalQueries"] = stats.get(
+                            "total_queries", total or ps["totalQueries"]
+                        )
                         ps["sentiment"] = stats.get("sentiment", ps["sentiment"])
                     elif isinstance(stats, (int, float)):
                         ps["mentionRate"] = stats
@@ -1636,9 +1956,7 @@ class AnalyticsService:
 
         return {"platforms": platforms}
 
-    async def get_source_data(
-        self, brand_id: str | None
-    ) -> dict[str, Any]:
+    async def get_source_data(self, brand_id: str | None) -> dict[str, Any]:
         """Get source distribution data from fetch results citations."""
         outputs = await self._get_all_outputs(brand_id=brand_id)
 
@@ -1648,11 +1966,17 @@ class AnalyticsService:
         for output in outputs:
             fetch_results = self._extract_fetch_results(output)
             for fr in fetch_results:
-                results_list = fr.get("platform_results", [fr] if "platform" in fr else [])
+                results_list = fr.get(
+                    "platform_results", [fr] if "platform" in fr else []
+                )
                 for pr in results_list:
                     citations = pr.get("citations", [])
                     for citation in citations:
-                        source = citation.get("domain") or citation.get("source") or citation.get("url", "unknown")
+                        source = (
+                            citation.get("domain")
+                            or citation.get("source")
+                            or citation.get("url", "unknown")
+                        )
                         # Extract domain from URL
                         if source.startswith("http"):
                             source = extract_domain(source) or source
@@ -1661,21 +1985,23 @@ class AnalyticsService:
 
         sources = []
         for source, count in sorted(source_counts.items(), key=lambda x: -x[1])[:20]:
-            sources.append({
-                "source": source,
-                "count": count,
-                "percentage": round(count / total * 100, 1) if total > 0 else 0,
-            })
+            sources.append(
+                {
+                    "source": source,
+                    "count": count,
+                    "percentage": round(count / total * 100, 1) if total > 0 else 0,
+                }
+            )
 
         return {"sources": sources}
 
-    async def get_aeo_metrics(
-        self, brand_id: str | None
-    ) -> dict[str, Any]:
+    async def get_aeo_metrics(self, brand_id: str | None) -> dict[str, Any]:
         """Get legacy metric cards using current product-facing wording."""
         outputs = await self._get_all_outputs(brand_id=brand_id)
 
-        def inverse_status(value: int | float | None, good: float, warning: float) -> str:
+        def inverse_status(
+            value: int | float | None, good: float, warning: float
+        ) -> str:
             if value is None:
                 return "warning"
             if value <= good:
@@ -1705,64 +2031,78 @@ class AnalyticsService:
             high_risk_count = summary_metrics.get("high_risk_scenario_count")
 
             if mention_rate is not None:
-                aeo_metrics.append({
-                    "metric": "品牌提及率",
-                    "value": round(float(mention_rate) * 100, 1),
-                    "benchmark": 30.0,
-                    "status": _aeo_status(float(mention_rate), "mention_rate"),
-                })
+                aeo_metrics.append(
+                    {
+                        "metric": "品牌提及率",
+                        "value": round(float(mention_rate) * 100, 1),
+                        "benchmark": 30.0,
+                        "status": _aeo_status(float(mention_rate), "mention_rate"),
+                    }
+                )
 
             if official_citation_rate is not None:
                 citation_rate = float(official_citation_rate)
-                aeo_metrics.append({
-                    "metric": "官网引用率",
-                    "value": round(citation_rate * 100, 1),
-                    "benchmark": 20.0,
-                    "status": "good" if citation_rate >= 0.20 else "warning" if citation_rate >= 0.08 else "poor",
-                })
+                aeo_metrics.append(
+                    {
+                        "metric": "官网引用率",
+                        "value": round(citation_rate * 100, 1),
+                        "benchmark": 20.0,
+                        "status": (
+                            "good"
+                            if citation_rate >= 0.20
+                            else "warning" if citation_rate >= 0.08 else "poor"
+                        ),
+                    }
+                )
 
             if scenario_hit_count is not None:
                 hit_count = int(scenario_hit_count)
-                aeo_metrics.append({
-                    "metric": "有效场景数",
-                    "value": hit_count,
-                    "benchmark": 5,
-                    "status": "good" if hit_count >= 5 else "warning" if hit_count >= 2 else "poor",
-                })
+                aeo_metrics.append(
+                    {
+                        "metric": "有效场景数",
+                        "value": hit_count,
+                        "benchmark": 5,
+                        "status": (
+                            "good"
+                            if hit_count >= 5
+                            else "warning" if hit_count >= 2 else "poor"
+                        ),
+                    }
+                )
 
             if missing_count is not None:
                 missing = int(missing_count)
-                aeo_metrics.append({
-                    "metric": "缺席高价值场景",
-                    "value": missing,
-                    "benchmark": 2,
-                    "status": inverse_status(missing, good=1, warning=3),
-                })
+                aeo_metrics.append(
+                    {
+                        "metric": "缺席高价值场景",
+                        "value": missing,
+                        "benchmark": 2,
+                        "status": inverse_status(missing, good=1, warning=3),
+                    }
+                )
 
             if high_risk_count is not None:
                 high_risk = int(high_risk_count)
-                aeo_metrics.append({
-                    "metric": "高风险场景",
-                    "value": high_risk,
-                    "benchmark": 1,
-                    "status": inverse_status(high_risk, good=0, warning=2),
-                })
+                aeo_metrics.append(
+                    {
+                        "metric": "高风险场景",
+                        "value": high_risk,
+                        "benchmark": 1,
+                        "status": inverse_status(high_risk, good=0, warning=2),
+                    }
+                )
 
             if aeo_metrics:
                 break
 
         return {"aeoMetrics": aeo_metrics}
 
-    async def get_sentiment_data(
-        self, brand_id: str | None
-    ) -> dict[str, Any]:
+    async def get_sentiment_data(self, brand_id: str | None) -> dict[str, Any]:
         """Get sentiment analysis data (deprecated - returns empty array)."""
         # Sentiment analysis feature removed as per product decision
         return {"sentiment": []}
 
-    async def get_competitor_data(
-        self, brand_id: str | None
-    ) -> dict[str, Any]:
+    async def get_competitor_data(self, brand_id: str | None) -> dict[str, Any]:
         """Get competitor comparison data from analysis results."""
         outputs = await self._get_all_outputs(brand_id=brand_id)
 
@@ -1771,13 +2111,15 @@ class AnalyticsService:
             comp_list = self._extract_competitors(output)
             if comp_list:
                 for comp in comp_list:
-                    competitors.append({
-                        "name": comp.get("name", "Unknown"),
-                        "visibility": comp.get("relevance_score", 0),
-                        "mentionRate": comp.get("mention_rate", 0),
-                        "avgRanking": comp.get("avg_ranking", 0),
-                        "sentiment": max(0, (comp.get("sentiment", 0) + 1) / 2),
-                    })
+                    competitors.append(
+                        {
+                            "name": comp.get("name", "Unknown"),
+                            "visibility": comp.get("relevance_score", 0),
+                            "mentionRate": comp.get("mention_rate", 0),
+                            "avgRanking": comp.get("avg_ranking", 0),
+                            "sentiment": max(0, (comp.get("sentiment", 0) + 1) / 2),
+                        }
+                    )
                 break
 
             # Also check report for competitor mentions
@@ -1785,13 +2127,15 @@ class AnalyticsService:
             if report and "competitors" in report:
                 for comp in report["competitors"]:
                     if isinstance(comp, dict):
-                        competitors.append({
-                            "name": comp.get("name", "Unknown"),
-                            "visibility": comp.get("visibility", 0),
-                            "mentionRate": comp.get("mention_rate", 0),
-                            "avgRanking": comp.get("avg_ranking", 0),
-                            "sentiment": max(0, (comp.get("sentiment", 0) + 1) / 2),
-                        })
+                        competitors.append(
+                            {
+                                "name": comp.get("name", "Unknown"),
+                                "visibility": comp.get("visibility", 0),
+                                "mentionRate": comp.get("mention_rate", 0),
+                                "avgRanking": comp.get("avg_ranking", 0),
+                                "sentiment": max(0, (comp.get("sentiment", 0) + 1) / 2),
+                            }
+                        )
                 break
 
         return {"competitors": competitors}
@@ -1825,7 +2169,9 @@ class AnalyticsService:
             }
 
         current_payload = self._extract_v2_payload(current)
-        current_summary = current_payload["summary_metrics"] or self._fallback_summary_metrics(current)
+        current_summary = current_payload[
+            "summary_metrics"
+        ] or self._fallback_summary_metrics(current)
         current_scenarios = current_payload["scenario_matrix"] or []
         current_competitors = current_payload["competitor_battles"] or []
         current_actions = current_payload["action_queue"] or []
@@ -1833,7 +2179,9 @@ class AnalyticsService:
         previous_summary: dict[str, Any] | None = None
         if previous:
             prev_payload = self._extract_v2_payload(previous)
-            previous_summary = prev_payload["summary_metrics"] or self._fallback_summary_metrics(previous)
+            previous_summary = prev_payload[
+                "summary_metrics"
+            ] or self._fallback_summary_metrics(previous)
 
         def trend_value(key: str) -> int | float | None:
             if not previous_summary:
@@ -1847,7 +2195,9 @@ class AnalyticsService:
         sorted_scenarios = sorted(
             [row for row in current_scenarios if isinstance(row, dict)],
             key=lambda row: (
-                self._scenario_priority_rank(str(row.get("scenario_priority", "medium"))),
+                self._scenario_priority_rank(
+                    str(row.get("scenario_priority", "medium"))
+                ),
                 self._risk_rank(str(row.get("risk_level", "low"))),
                 str(row.get("scenario_label", "")),
             ),
@@ -1855,14 +2205,19 @@ class AnalyticsService:
         sorted_competitors = sorted(
             [row for row in current_competitors if isinstance(row, dict)],
             key=lambda row: (
-                self._risk_rank("high" if row.get("pressure_level") == "high" else "medium"),
+                self._risk_rank(
+                    "high" if row.get("pressure_level") == "high" else "medium"
+                ),
                 -(int(row.get("competitor_only_scenarios", 0) or 0)),
                 str(row.get("competitor", "")),
             ),
         )
         sorted_actions = sorted(
             [row for row in current_actions if isinstance(row, dict)],
-            key=lambda row: (int(row.get("priority", 3) or 3), str(row.get("scenario_label", ""))),
+            key=lambda row: (
+                int(row.get("priority", 3) or 3),
+                str(row.get("scenario_label", "")),
+            ),
         )
 
         return {
@@ -1870,12 +2225,18 @@ class AnalyticsService:
                 "brandMentionRate": current_summary.get("brand_mention_rate"),
                 "officialCitationRate": current_summary.get("official_citation_rate"),
                 "effectiveScenarioCount": current_summary.get("scenario_hit_count"),
-                "missingHighValueScenarioCount": current_summary.get("missing_high_value_scenario_count"),
-                "highRiskScenarioCount": current_summary.get("high_risk_scenario_count"),
+                "missingHighValueScenarioCount": current_summary.get(
+                    "missing_high_value_scenario_count"
+                ),
+                "highRiskScenarioCount": current_summary.get(
+                    "high_risk_scenario_count"
+                ),
                 "mentionRateTrend": trend_value("brand_mention_rate"),
                 "officialCitationRateTrend": trend_value("official_citation_rate"),
                 "effectiveScenarioTrend": trend_value("scenario_hit_count"),
-                "missingHighValueScenarioTrend": trend_value("missing_high_value_scenario_count"),
+                "missingHighValueScenarioTrend": trend_value(
+                    "missing_high_value_scenario_count"
+                ),
                 "highRiskScenarioTrend": trend_value("high_risk_scenario_count"),
             },
             "summary": {
@@ -1887,9 +2248,7 @@ class AnalyticsService:
             "competitorPressure": [
                 self._to_competitor_battle_camel(row) for row in sorted_competitors[:5]
             ],
-            "actionQueue": [
-                self._to_action_camel(row) for row in sorted_actions[:5]
-            ],
+            "actionQueue": [self._to_action_camel(row) for row in sorted_actions[:5]],
         }
 
     async def get_scenarios_v2(self, brand_id: str | None) -> dict[str, Any]:
@@ -1909,24 +2268,25 @@ class AnalyticsService:
             }
 
         payload = self._extract_v2_payload(current)
-        scenarios = [
-            row for row in payload["scenario_matrix"]
-            if isinstance(row, dict)
-        ]
+        scenarios = [row for row in payload["scenario_matrix"] if isinstance(row, dict)]
         scenarios = sorted(
             scenarios,
             key=lambda row: (
-                self._scenario_priority_rank(str(row.get("scenario_priority", "medium"))),
+                self._scenario_priority_rank(
+                    str(row.get("scenario_priority", "medium"))
+                ),
                 self._risk_rank(str(row.get("risk_level", "low"))),
                 str(row.get("scenario_label", "")),
             ),
         )
-        platforms = sorted({
-            str(platform)
-            for row in scenarios
-            for platform in row.get("present_platforms", []) or []
-            if platform
-        })
+        platforms = sorted(
+            {
+                str(platform)
+                for row in scenarios
+                for platform in row.get("present_platforms", []) or []
+                if platform
+            }
+        )
         return {
             "scenarios": [self._to_scenario_row_camel(row) for row in scenarios],
             "total": len(scenarios),
@@ -1947,32 +2307,36 @@ class AnalyticsService:
 
         payload = self._extract_v2_payload(current)
         competitors = [
-            row for row in payload["competitor_battles"]
-            if isinstance(row, dict)
+            row for row in payload["competitor_battles"] if isinstance(row, dict)
         ]
         competitors = sorted(
             competitors,
             key=lambda row: (
-                self._risk_rank("high" if row.get("pressure_level") == "high" else "medium"),
+                self._risk_rank(
+                    "high" if row.get("pressure_level") == "high" else "medium"
+                ),
                 -(int(row.get("competitor_only_scenarios", 0) or 0)),
                 str(row.get("competitor", "")),
             ),
         )
-        scenarios = [
-            row for row in payload["scenario_matrix"]
-            if isinstance(row, dict)
-        ]
+        scenarios = [row for row in payload["scenario_matrix"] if isinstance(row, dict)]
         scenarios = sorted(
             scenarios,
             key=lambda row: (
-                self._scenario_priority_rank(str(row.get("scenario_priority", "medium"))),
+                self._scenario_priority_rank(
+                    str(row.get("scenario_priority", "medium"))
+                ),
                 self._risk_rank(str(row.get("risk_level", "low"))),
                 str(row.get("scenario_label", "")),
             ),
         )
         return {
-            "competitors": [self._to_competitor_battle_camel(row) for row in competitors],
-            "scenarioMatrix": self._build_competitor_matrix_rows(scenarios, competitors),
+            "competitors": [
+                self._to_competitor_battle_camel(row) for row in competitors
+            ],
+            "scenarioMatrix": self._build_competitor_matrix_rows(
+                scenarios, competitors
+            ),
         }
 
     async def get_sources_v2(self, brand_id: str | None) -> dict[str, Any]:
@@ -1983,7 +2347,9 @@ class AnalyticsService:
             return {"sourceOverview": {}}
 
         payload = self._extract_v2_payload(current)
-        source_overview = payload["source_overview"] or self._fallback_source_overview(current)
+        source_overview = payload["source_overview"] or self._fallback_source_overview(
+            current
+        )
         return {"sourceOverview": self._to_source_overview_camel(source_overview)}
 
     async def get_risks_actions_v2(self, brand_id: str | None) -> dict[str, Any]:
@@ -2014,11 +2380,14 @@ class AnalyticsService:
             "risks": [self._to_risk_camel(row) for row in risks],
             "actionQueue": [self._to_action_camel(row) for row in actions],
         }
+
     async def get_dashboard_home_v2(self, brand_id: str | None) -> dict[str, Any]:
         """Get Dashboard homepage latest-report summary data."""
         report_outputs = await self._get_report_like_outputs(brand_id=brand_id)
         latest_output = report_outputs[0] if report_outputs else None
-        latest_snapshot = await self._get_latest_snapshot_report_source(brand_id=brand_id)
+        latest_snapshot = await self._get_latest_snapshot_report_source(
+            brand_id=brand_id
+        )
         current = self._select_latest_home_source(latest_output, latest_snapshot)
         if not current:
             return {
@@ -2073,13 +2442,31 @@ class AnalyticsService:
             return projection_home
 
         payload = self._extract_v2_payload(current)
-        summary = payload.get("summary_metrics") or self._fallback_summary_metrics(current)
-        source_overview = payload.get("source_overview") or self._fallback_source_overview(current)
-        scenario_matrix = [row for row in payload.get("scenario_matrix", []) if isinstance(row, dict)]
-        competitor_battles = [row for row in payload.get("competitor_battles", []) if isinstance(row, dict)]
+        summary = payload.get("summary_metrics") or self._fallback_summary_metrics(
+            current
+        )
+        source_overview = payload.get(
+            "source_overview"
+        ) or self._fallback_source_overview(current)
+        scenario_matrix = [
+            row for row in payload.get("scenario_matrix", []) if isinstance(row, dict)
+        ]
+        competitor_battles = [
+            row
+            for row in payload.get("competitor_battles", [])
+            if isinstance(row, dict)
+        ]
         mention_payload = payload.get("mention_sentiment_analysis") or {}
-        brand_payload = mention_payload.get("brand", {}) if isinstance(mention_payload, dict) else {}
-        competitor_payloads = mention_payload.get("competitors", []) if isinstance(mention_payload, dict) else []
+        brand_payload = (
+            mention_payload.get("brand", {})
+            if isinstance(mention_payload, dict)
+            else {}
+        )
+        competitor_payloads = (
+            mention_payload.get("competitors", [])
+            if isinstance(mention_payload, dict)
+            else []
+        )
         metrics = self._extract_metrics(current) or {}
 
         def normalize_sentiment_summary(raw: Any) -> dict[str, int]:
@@ -2095,23 +2482,40 @@ class AnalyticsService:
                 {
                     "scenarioId": row.get("scenario_id", ""),
                     "scenarioLabel": row.get("scenario_label", ""),
-                    "reason": row.get("evidence") or row.get("action_hint") or "需要继续观察该场景。",
+                    "reason": row.get("evidence")
+                    or row.get("action_hint")
+                    or "需要继续观察该场景。",
                     "platforms": row.get("present_platforms", []) or [],
                 }
                 for row in rows
             ]
 
         brand_summary = normalize_sentiment_summary(brand_payload.get("summary"))
-        brand_mentions = [row for row in brand_payload.get("items", []) if isinstance(row, dict)]
+        brand_mentions = [
+            row for row in brand_payload.get("items", []) if isinstance(row, dict)
+        ]
         brand_mentions = sorted(
             brand_mentions,
             key=lambda row: (
-                self._risk_rank(str(next((item.get("risk_level", "medium") for item in scenario_matrix if item.get("scenario_id") == row.get("scenario_id")), "medium"))),
+                self._risk_rank(
+                    str(
+                        next(
+                            (
+                                item.get("risk_level", "medium")
+                                for item in scenario_matrix
+                                if item.get("scenario_id") == row.get("scenario_id")
+                            ),
+                            "medium",
+                        )
+                    )
+                ),
                 str(row.get("scenario_label", "")),
             ),
         )
 
-        legacy_mention_board = self._build_legacy_mention_board(current, summary.get("brand_mention_rate"))
+        legacy_mention_board = self._build_legacy_mention_board(
+            current, summary.get("brand_mention_rate")
+        )
         if not brand_mentions:
             brand_mentions = legacy_mention_board["report"]["brandMentions"]
 
@@ -2120,34 +2524,55 @@ class AnalyticsService:
             if not isinstance(item, dict):
                 continue
             scenario_id = str(item.get("scenario_id", item.get("scenarioId", "")) or "")
-            scenario_label = str(item.get("scenario_label", item.get("scenarioLabel", "")) or "")
+            scenario_label = str(
+                item.get("scenario_label", item.get("scenarioLabel", "")) or ""
+            )
             platform = str(item.get("platform", "") or "")
             sentiment = str(item.get("sentiment", "neutral") or "neutral")
             evidence = str(item.get("evidence", "") or "")
-            citation_domains = item.get("citation_domains", item.get("citationDomains", [])) or []
-            citation_titles = item.get("citation_titles", item.get("citationTitles", [])) or []
-            citation_urls = item.get("citation_urls", item.get("citationUrls", [])) or []
-            official_present = bool(item.get("official_citation_present", item.get("officialCitationPresent", False)))
+            citation_domains = (
+                item.get("citation_domains", item.get("citationDomains", [])) or []
+            )
+            citation_titles = (
+                item.get("citation_titles", item.get("citationTitles", [])) or []
+            )
+            citation_urls = (
+                item.get("citation_urls", item.get("citationUrls", [])) or []
+            )
+            official_present = bool(
+                item.get(
+                    "official_citation_present",
+                    item.get("officialCitationPresent", False),
+                )
+            )
             if not scenario_id and not scenario_label:
                 continue
-            normalized_mentions.append({
-                "scenario_id": scenario_id,
-                "scenario_label": scenario_label,
-                "platform": platform,
-                "sentiment": sentiment,
-                "evidence": evidence,
-                "citation_domains": [str(domain) for domain in citation_domains if domain],
-                "citation_titles": [str(title) for title in citation_titles if title],
-                "citation_urls": [str(url) for url in citation_urls if url],
-                "official_citation_present": official_present,
-            })
+            normalized_mentions.append(
+                {
+                    "scenario_id": scenario_id,
+                    "scenario_label": scenario_label,
+                    "platform": platform,
+                    "sentiment": sentiment,
+                    "evidence": evidence,
+                    "citation_domains": [
+                        str(domain) for domain in citation_domains if domain
+                    ],
+                    "citation_titles": [
+                        str(title) for title in citation_titles if title
+                    ],
+                    "citation_urls": [str(url) for url in citation_urls if url],
+                    "official_citation_present": official_present,
+                }
+            )
         brand_mentions = normalized_mentions
         brand_summary = self._sentiment_summary_from_mentions(brand_mentions)
 
         top_competitors = sorted(
             competitor_battles,
             key=lambda row: (
-                self._risk_rank("high" if row.get("pressure_level") == "high" else "medium"),
+                self._risk_rank(
+                    "high" if row.get("pressure_level") == "high" else "medium"
+                ),
                 -(int(row.get("competitor_only_scenarios", 0) or 0)),
                 str(row.get("competitor", "")),
             ),
@@ -2167,32 +2592,43 @@ class AnalyticsService:
         for competitor in top_competitors:
             payload_row = next(
                 (
-                    item for item in competitor_payloads
-                    if isinstance(item, dict) and str(item.get("competitor", "")) == str(competitor.get("competitor", ""))
+                    item
+                    for item in competitor_payloads
+                    if isinstance(item, dict)
+                    and str(item.get("competitor", ""))
+                    == str(competitor.get("competitor", ""))
                 ),
                 {},
             )
             sentiment_summary = normalize_sentiment_summary(payload_row.get("summary"))
-            competitor_summaries.append({
-                "competitor": competitor.get("competitor", ""),
-                "pressureLevel": competitor.get("pressure_level", "medium"),
-                "competitorOnlyScenarios": int(competitor.get("competitor_only_scenarios", 0) or 0),
-                "sentimentSummary": sentiment_summary,
-            })
+            competitor_summaries.append(
+                {
+                    "competitor": competitor.get("competitor", ""),
+                    "pressureLevel": competitor.get("pressure_level", "medium"),
+                    "competitorOnlyScenarios": int(
+                        competitor.get("competitor_only_scenarios", 0) or 0
+                    ),
+                    "sentimentSummary": sentiment_summary,
+                }
+            )
             for item in payload_row.get("items", [])[:4]:
                 if not isinstance(item, dict):
                     continue
-                competitor_mentions.append({
-                    "competitor": payload_row.get("competitor", ""),
-                    "scenarioId": item.get("scenario_id", ""),
-                    "scenarioLabel": item.get("scenario_label", ""),
-                    "platform": item.get("platform", ""),
-                    "sentiment": item.get("sentiment", "neutral"),
-                    "evidence": item.get("evidence", ""),
-                    "citationDomains": item.get("citation_domains", []) or [],
-                    "citationTitles": item.get("citation_titles", []) or [],
-                    "officialCitationPresent": bool(item.get("official_citation_present", False)),
-                })
+                competitor_mentions.append(
+                    {
+                        "competitor": payload_row.get("competitor", ""),
+                        "scenarioId": item.get("scenario_id", ""),
+                        "scenarioLabel": item.get("scenario_label", ""),
+                        "platform": item.get("platform", ""),
+                        "sentiment": item.get("sentiment", "neutral"),
+                        "evidence": item.get("evidence", ""),
+                        "citationDomains": item.get("citation_domains", []) or [],
+                        "citationTitles": item.get("citation_titles", []) or [],
+                        "officialCitationPresent": bool(
+                            item.get("official_citation_present", False)
+                        ),
+                    }
+                )
         if not competitor_summaries:
             competitor_summaries = legacy_mention_board["leadingCompetitors"]
         if not competitor_mentions:
@@ -2201,7 +2637,12 @@ class AnalyticsService:
         mention_rate = summary.get("brand_mention_rate")
         if mention_rate is None:
             mention_rate = metrics.get("mention_rate")
-        scenario_total = int(summary.get("scenario_total", len(scenario_matrix)) or metrics.get("total_questions") or len(scenario_matrix) or 0)
+        scenario_total = int(
+            summary.get("scenario_total", len(scenario_matrix))
+            or metrics.get("total_questions")
+            or len(scenario_matrix)
+            or 0
+        )
         unique_brand_scenarios = {
             str(item.get("scenario_id") or item.get("scenario_label") or "")
             for item in brand_mentions
@@ -2210,18 +2651,31 @@ class AnalyticsService:
         scenario_hit_count = len(unique_brand_scenarios)
         if unique_brand_scenarios and scenario_total > 0:
             mention_rate = round(len(unique_brand_scenarios) / scenario_total, 4)
-        leading_competitor_name = competitor_summaries[0]["competitor"] if competitor_summaries else "暂无明显竞品压力"
+        leading_competitor_name = (
+            competitor_summaries[0]["competitor"]
+            if competitor_summaries
+            else "暂无明显竞品压力"
+        )
         mention_headline = (
             f"品牌当前在 {scenario_hit_count}/{scenario_total or 0} 个场景进入回答，"
             f"正向提及 {brand_summary['positive']} 条，主要竞争压力来自 {leading_competitor_name}。"
         )
 
         cited_brand_mentions = [
-            item for item in brand_mentions
+            item
+            for item in brand_mentions
             if (item.get("citation_domains") or item.get("citation_titles"))
         ]
-        official_cases = [item for item in cited_brand_mentions if bool(item.get("official_citation_present", False))]
-        non_official_cases = [item for item in cited_brand_mentions if not bool(item.get("official_citation_present", False))]
+        official_cases = [
+            item
+            for item in cited_brand_mentions
+            if bool(item.get("official_citation_present", False))
+        ]
+        non_official_cases = [
+            item
+            for item in cited_brand_mentions
+            if not bool(item.get("official_citation_present", False))
+        ]
 
         def to_citation_case(item: dict[str, Any], is_official: bool) -> dict[str, Any]:
             return {
@@ -2237,10 +2691,16 @@ class AnalyticsService:
                 "aiceDimensions": item.get("aice_dimensions"),
             }
 
-        official_question_cases = [to_citation_case(item, True) for item in official_cases[:8]]
-        non_official_question_cases = [to_citation_case(item, False) for item in non_official_cases[:8]]
+        official_question_cases = [
+            to_citation_case(item, True) for item in official_cases[:8]
+        ]
+        non_official_question_cases = [
+            to_citation_case(item, False) for item in non_official_cases[:8]
+        ]
 
-        def unique_content_rows(items: list[dict[str, Any]], is_official: bool) -> list[dict[str, Any]]:
+        def unique_content_rows(
+            items: list[dict[str, Any]], is_official: bool
+        ) -> list[dict[str, Any]]:
             rows = []
             seen: set[tuple[str, str]] = set()
             for item in items:
@@ -2252,23 +2712,33 @@ class AnalyticsService:
                     if key in seen:
                         continue
                     seen.add(key)
-                    rows.append({
-                        "title": title or fallback_domain or "未命名引用内容",
-                        "domain": fallback_domain or None,
-                        "isOfficial": is_official,
-                    })
+                    rows.append(
+                        {
+                            "title": title or fallback_domain or "未命名引用内容",
+                            "domain": fallback_domain or None,
+                            "isOfficial": is_official,
+                        }
+                    )
             return rows[:12]
 
         official_contents = unique_content_rows(official_cases, True)
         non_official_contents = unique_content_rows(non_official_cases, False)
-        content_citation_rate = (len(cited_brand_mentions) / len(brand_mentions)) if brand_mentions else None
+        content_citation_rate = (
+            (len(cited_brand_mentions) / len(brand_mentions))
+            if brand_mentions
+            else None
+        )
         legacy_source_board = self._build_legacy_source_board(current, source_overview)
-        if content_citation_rate is None or (content_citation_rate == 0 and legacy_source_board["citedAnswerCount"] > 0):
+        if content_citation_rate is None or (
+            content_citation_rate == 0 and legacy_source_board["citedAnswerCount"] > 0
+        ):
             content_citation_rate = legacy_source_board["contentCitationRate"]
         if not official_question_cases:
             official_question_cases = legacy_source_board["report"]["officialCases"]
         if not non_official_question_cases:
-            non_official_question_cases = legacy_source_board["report"]["nonOfficialCases"]
+            non_official_question_cases = legacy_source_board["report"][
+                "nonOfficialCases"
+            ]
         if not official_contents:
             official_contents = legacy_source_board["report"]["officialContents"]
         if not non_official_contents:
@@ -2276,23 +2746,49 @@ class AnalyticsService:
 
         platform_stat_map = source_overview.get("platform_citation_stats", {}) or {}
         platform_rows = []
-        for platform_name in sorted({str(item.get("platform", "") or "") for item in brand_mentions if item.get("platform")}):
-            platform_mentions = [item for item in brand_mentions if str(item.get("platform", "") or "") == platform_name]
-            platform_cited = [item for item in platform_mentions if (item.get("citation_domains") or item.get("citation_titles"))]
-            stats = platform_stat_map.get(platform_name, {}) if isinstance(platform_stat_map, dict) else {}
-            platform_rows.append({
-                "platform": platform_name,
-                "contentCitationRate": round(len(platform_cited) / len(platform_mentions), 4) if platform_mentions else 0.0,
-                "officialCitationRate": float(stats.get("official_citation_rate", 0) or 0),
-                "topDomains": [
-                    {
-                        "domain": domain_item.get("domain", ""),
-                        "count": int(domain_item.get("count", 0) or 0),
-                    }
-                    for domain_item in stats.get("top_domains", []) or []
-                    if isinstance(domain_item, dict)
-                ],
-            })
+        for platform_name in sorted(
+            {
+                str(item.get("platform", "") or "")
+                for item in brand_mentions
+                if item.get("platform")
+            }
+        ):
+            platform_mentions = [
+                item
+                for item in brand_mentions
+                if str(item.get("platform", "") or "") == platform_name
+            ]
+            platform_cited = [
+                item
+                for item in platform_mentions
+                if (item.get("citation_domains") or item.get("citation_titles"))
+            ]
+            stats = (
+                platform_stat_map.get(platform_name, {})
+                if isinstance(platform_stat_map, dict)
+                else {}
+            )
+            platform_rows.append(
+                {
+                    "platform": platform_name,
+                    "contentCitationRate": (
+                        round(len(platform_cited) / len(platform_mentions), 4)
+                        if platform_mentions
+                        else 0.0
+                    ),
+                    "officialCitationRate": float(
+                        stats.get("official_citation_rate", 0) or 0
+                    ),
+                    "topDomains": [
+                        {
+                            "domain": domain_item.get("domain", ""),
+                            "count": int(domain_item.get("count", 0) or 0),
+                        }
+                        for domain_item in stats.get("top_domains", []) or []
+                        if isinstance(domain_item, dict)
+                    ],
+                }
+            )
         if not platform_rows:
             platform_rows = legacy_source_board["report"]["platformStats"]
 
@@ -2304,29 +2800,63 @@ class AnalyticsService:
             source_headline = legacy_source_board["headline"]
 
         platform_coverage_count = float(summary.get("platform_coverage_count") or 0)
-        platform_total_count = float(summary.get("platform_total_count") or max(platform_coverage_count, 1) or 1)
-        platform_coverage_rate = min(1.0, platform_coverage_count / platform_total_count) if platform_total_count else 0.0
+        platform_total_count = float(
+            summary.get("platform_total_count") or max(platform_coverage_count, 1) or 1
+        )
+        platform_coverage_rate = (
+            min(1.0, platform_coverage_count / platform_total_count)
+            if platform_total_count
+            else 0.0
+        )
         scenario_effective_rate = summary.get("scenario_effective_rate")
         if scenario_effective_rate is None:
-            scenario_effective_rate = (scenario_hit_count / scenario_total) if scenario_total else 0.0
+            scenario_effective_rate = (
+                (scenario_hit_count / scenario_total) if scenario_total else 0.0
+            )
 
-        high_priority_rows = [row for row in scenario_matrix if str(row.get("scenario_priority", "medium")) == "high"]
-        high_priority_hits = [row for row in high_priority_rows if bool(row.get("brand_present", False))]
+        high_priority_rows = [
+            row
+            for row in scenario_matrix
+            if str(row.get("scenario_priority", "medium")) == "high"
+        ]
+        high_priority_hits = [
+            row for row in high_priority_rows if bool(row.get("brand_present", False))
+        ]
         audience_coverage_rate = (
-            (len(high_priority_hits) / len(high_priority_rows)) if high_priority_rows else platform_coverage_rate
+            (len(high_priority_hits) / len(high_priority_rows))
+            if high_priority_rows
+            else platform_coverage_rate
         )
 
-        sentiment_total = brand_summary["positive"] + brand_summary["neutral"] + brand_summary["negative"]
-        positive_rate = (brand_summary["positive"] / sentiment_total) if sentiment_total else 0.0
+        sentiment_total = (
+            brand_summary["positive"]
+            + brand_summary["neutral"]
+            + brand_summary["negative"]
+        )
+        positive_rate = (
+            (brand_summary["positive"] / sentiment_total) if sentiment_total else 0.0
+        )
         missing_count = float(summary.get("missing_high_value_scenario_count") or 0)
         high_risk_count = float(summary.get("high_risk_scenario_count") or 0)
-        risk_control_score = max(0.0, min(100.0, 100.0 - min(100.0, missing_count * 12 + high_risk_count * 18)))
+        risk_control_score = max(
+            0.0,
+            min(100.0, 100.0 - min(100.0, missing_count * 12 + high_risk_count * 18)),
+        )
 
         radar_dimensions = [
             {
                 "id": "industry_influence",
                 "label": "行业影响",
-                "score": round(max(0.0, min(100.0, (float(mention_rate or 0) * 100 * 0.7) + (platform_coverage_rate * 100 * 0.3)))),
+                "score": round(
+                    max(
+                        0.0,
+                        min(
+                            100.0,
+                            (float(mention_rate or 0) * 100 * 0.7)
+                            + (platform_coverage_rate * 100 * 0.3),
+                        ),
+                    )
+                ),
                 "summary": "基于品牌提及率和平台覆盖估算行业可见度。",
             },
             {
@@ -2338,7 +2868,9 @@ class AnalyticsService:
             {
                 "id": "scenario_coverage",
                 "label": "场景覆盖",
-                "score": round(max(0.0, min(100.0, float(scenario_effective_rate or 0) * 100))),
+                "score": round(
+                    max(0.0, min(100.0, float(scenario_effective_rate or 0) * 100))
+                ),
                 "summary": "反映品牌已进入回答的场景覆盖比例。",
             },
             {
@@ -2359,8 +2891,12 @@ class AnalyticsService:
             radar_dimensions = legacy_radar_board["dimensions"]
         sorted_dimensions = sorted(radar_dimensions, key=lambda row: row["score"])
         weakest_dimension = sorted_dimensions[0]["label"] if sorted_dimensions else ""
-        strongest_dimension = sorted_dimensions[-1]["label"] if sorted_dimensions else ""
-        radar_headline = f"当前最大优势在 {strongest_dimension}，最大短板在 {weakest_dimension}。"
+        strongest_dimension = (
+            sorted_dimensions[-1]["label"] if sorted_dimensions else ""
+        )
+        radar_headline = (
+            f"当前最大优势在 {strongest_dimension}，最大短板在 {weakest_dimension}。"
+        )
         if not strongest_dimension and not weakest_dimension:
             legacy_radar_board = self._build_legacy_radar_board(current, mention_rate)
             strongest_dimension = legacy_radar_board["strongestDimension"]
@@ -2384,7 +2920,11 @@ class AnalyticsService:
             },
             "mentionBoard": {
                 "mentionRate": mention_rate,
-                "headline": mention_headline if brand_mentions else legacy_mention_board["headline"],
+                "headline": (
+                    mention_headline
+                    if brand_mentions
+                    else legacy_mention_board["headline"]
+                ),
                 "sentimentSummary": brand_summary,
                 "leadingCompetitors": competitor_summaries,
                 "report": {
@@ -2398,31 +2938,46 @@ class AnalyticsService:
                             "citationDomains": item.get("citation_domains", []) or [],
                             "citationTitles": item.get("citation_titles", []) or [],
                             "citationUrls": item.get("citation_urls", []) or [],
-                            "officialCitationPresent": bool(item.get("official_citation_present", False)),
+                            "officialCitationPresent": bool(
+                                item.get("official_citation_present", False)
+                            ),
                         }
                         for item in brand_mentions[:10]
                     ],
                     "competitorMentions": competitor_mentions[:12],
                     "strongScenarios": (
-                        scenario_insight_rows([
-                        row for row in scenario_matrix
-                        if bool(row.get("brand_present", False)) and str(row.get("battle_status", "")) in {"advantage", "defend"}
-                    ][:4])
-                        if scenario_matrix else legacy_mention_board["report"]["strongScenarios"]
+                        scenario_insight_rows(
+                            [
+                                row
+                                for row in scenario_matrix
+                                if bool(row.get("brand_present", False))
+                                and str(row.get("battle_status", ""))
+                                in {"advantage", "defend"}
+                            ][:4]
+                        )
+                        if scenario_matrix
+                        else legacy_mention_board["report"]["strongScenarios"]
                     ),
                     "weakScenarios": (
-                        scenario_insight_rows([
-                        row for row in scenario_matrix
-                        if str(row.get("battle_status", "")) in {"missing", "contested"}
-                    ][:6])
-                        if scenario_matrix else legacy_mention_board["report"]["weakScenarios"]
+                        scenario_insight_rows(
+                            [
+                                row
+                                for row in scenario_matrix
+                                if str(row.get("battle_status", ""))
+                                in {"missing", "contested"}
+                            ][:6]
+                        )
+                        if scenario_matrix
+                        else legacy_mention_board["report"]["weakScenarios"]
                     ),
                 },
             },
             "sourceBoard": {
                 "contentCitationRate": content_citation_rate,
-                "citedAnswerCount": len(cited_brand_mentions) or legacy_source_board["citedAnswerCount"],
-                "citedContentCount": len(official_contents) + len(non_official_contents) or legacy_source_board["citedContentCount"],
+                "citedAnswerCount": len(cited_brand_mentions)
+                or legacy_source_board["citedAnswerCount"],
+                "citedContentCount": len(official_contents) + len(non_official_contents)
+                or legacy_source_board["citedContentCount"],
                 "headline": source_headline,
                 "report": {
                     "officialCases": official_question_cases,
@@ -2438,7 +2993,8 @@ class AnalyticsService:
                         }
                         for item in source_overview.get("top_domains", []) or []
                         if isinstance(item, dict)
-                    ] or legacy_source_board["report"]["topDomains"],
+                    ]
+                    or legacy_source_board["report"]["topDomains"],
                     "platformStats": platform_rows,
                 },
             },
@@ -2454,4 +3010,3 @@ class AnalyticsService:
                 "ctaLabel": "进入监测",
             },
         }
-

@@ -15,6 +15,18 @@ from app.core.domain_normalization import (
     normalize_domain as normalize_identity_domain,
 )
 from app.workflow.a5.metrics import analyze_sentiment
+from app.workflow.a5.diagnosis import (
+    build_action_recommendations,
+    build_data_audit,
+    build_report_route,
+    build_risk_concern_analysis,
+    build_scenario_diagnostics,
+    build_source_intelligence,
+    build_structured_report,
+    extract_geo_report_diagnosis,
+    repair_report_artifact,
+    validate_report_artifact,
+)
 from app.workflow.brand_mentions import extract_brand_aliases
 from app.workflow.nodes_a4 import PLATFORMS
 
@@ -133,13 +145,76 @@ SOURCE_TYPE_DISPLAY = {
 }
 
 NEGATIVE_TOPIC_RULES = {
-    "price": ("太贵", "偏贵", "价格高", "成本高", "预算高", "门槛高", "不划算", "溢价", "费用高", "price"),
-    "deployment": ("部署复杂", "实施复杂", "改造复杂", "维护复杂", "结构复杂", "周期长", "门槛高", "改造难", "部署难", "deployment"),
-    "service": ("服务差", "售后差", "响应慢", "排队", "不方便", "麻烦", "补能焦虑", "等待时间长", "服务区排队", "service"),
-    "ecosystem": ("生态封闭", "生态绑定", "兼容差", "适配差", "接入难", "绑定生态", "ecosystem"),
-    "case": ("案例少", "样本少", "验证不足", "缺少案例", "经验不足", "参考案例有限", "case"),
-    "usability": ("学习成本高", "操作复杂", "上手难", "不易上手", "不友好", "usability"),
-    "credibility": ("证据不足", "口径不一", "存在争议", "不确定", "真实性存疑", "credibility"),
+    "price": (
+        "太贵",
+        "偏贵",
+        "价格高",
+        "成本高",
+        "预算高",
+        "门槛高",
+        "不划算",
+        "溢价",
+        "费用高",
+        "price",
+    ),
+    "deployment": (
+        "部署复杂",
+        "实施复杂",
+        "改造复杂",
+        "维护复杂",
+        "结构复杂",
+        "周期长",
+        "门槛高",
+        "改造难",
+        "部署难",
+        "deployment",
+    ),
+    "service": (
+        "服务差",
+        "售后差",
+        "响应慢",
+        "排队",
+        "不方便",
+        "麻烦",
+        "补能焦虑",
+        "等待时间长",
+        "服务区排队",
+        "service",
+    ),
+    "ecosystem": (
+        "生态封闭",
+        "生态绑定",
+        "兼容差",
+        "适配差",
+        "接入难",
+        "绑定生态",
+        "ecosystem",
+    ),
+    "case": (
+        "案例少",
+        "样本少",
+        "验证不足",
+        "缺少案例",
+        "经验不足",
+        "参考案例有限",
+        "case",
+    ),
+    "usability": (
+        "学习成本高",
+        "操作复杂",
+        "上手难",
+        "不易上手",
+        "不友好",
+        "usability",
+    ),
+    "credibility": (
+        "证据不足",
+        "口径不一",
+        "存在争议",
+        "不确定",
+        "真实性存疑",
+        "credibility",
+    ),
     "other": (),
 }
 
@@ -228,6 +303,7 @@ PLATFORM_DISPLAY = {
     "yuanbao": "元宝",
 }
 
+
 def normalize_platform(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     return CANONICAL_PLATFORM_ALIASES.get(normalized, normalized)
@@ -295,7 +371,9 @@ def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword.lower() in lowered for keyword in keywords if keyword)
 
 
-def _dedupe_dict_rows(rows: list[dict[str, Any]], key_fields: tuple[str, ...]) -> list[dict[str, Any]]:
+def _dedupe_dict_rows(
+    rows: list[dict[str, Any]], key_fields: tuple[str, ...]
+) -> list[dict[str, Any]]:
     seen: set[tuple[str, ...]] = set()
     output: list[dict[str, Any]] = []
     for row in rows:
@@ -319,7 +397,9 @@ def _count_clause(count: int | float | None, text: str) -> str:
     return f"{int(count)} 个{text}"
 
 
-def _join_nonempty_clauses(clauses: list[str], prefix: str = "", separator: str = "，") -> str:
+def _join_nonempty_clauses(
+    clauses: list[str], prefix: str = "", separator: str = "，"
+) -> str:
     parts = [item for item in clauses if item]
     if not parts:
         return ""
@@ -448,10 +528,14 @@ def _unique_preserve(items: list[str]) -> list[str]:
     return output
 
 
-def _sample_question_titles(rows: list[dict[str, Any]], limit: int = 3, *, max_length: int = 30) -> list[str]:
+def _sample_question_titles(
+    rows: list[dict[str, Any]], limit: int = 3, *, max_length: int = 30
+) -> list[str]:
     samples: list[str] = []
     for row in rows[:limit]:
-        text = _clean_report_text(str(row.get("question_text") or ""), max_length=max_length)
+        text = _clean_report_text(
+            str(row.get("question_text") or ""), max_length=max_length
+        )
         if not text:
             continue
         samples.append(f"「{text}」")
@@ -467,7 +551,9 @@ def _sample_question_quotes(
     quotes: list[str] = []
     seen: set[str] = set()
     for row in rows:
-        text = _clean_report_text(str(row.get("question_text") or ""), max_length=max_length)
+        text = _clean_report_text(
+            str(row.get("question_text") or ""), max_length=max_length
+        )
         if not text:
             continue
         key = text.lower()
@@ -497,7 +583,12 @@ def _sample_platform_labels(platforms: list[str]) -> str:
 
 
 def _question_state_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
-    counter = {"no_brand": 0, "competitor_only": 0, "monitor_only": 0, "monitor_plus_others": 0}
+    counter = {
+        "no_brand": 0,
+        "competitor_only": 0,
+        "monitor_only": 0,
+        "monitor_plus_others": 0,
+    }
     for row in rows:
         state = str(row.get("answer_state") or "")
         if state in counter:
@@ -586,13 +677,21 @@ def _top_scene_coverage_text(rows: list[dict[str, Any]], limit: int = 3) -> str:
 
 def _derive_negative_issue_label(question_text: str, conclusion_text: str) -> str:
     combined = f"{question_text} {conclusion_text}".lower()
-    if any(token in combined for token in ("预算", "价格", "成本", "贵不贵", "值不值", "划算")):
+    if any(
+        token in combined
+        for token in ("预算", "价格", "成本", "贵不贵", "值不值", "划算")
+    ):
         return "价格和成本顾虑"
-    if any(token in combined for token in ("服务", "响应", "排队", "等待", "支持", "不方便")):
+    if any(
+        token in combined
+        for token in ("服务", "响应", "排队", "等待", "支持", "不方便")
+    ):
         return "服务与便利性顾虑"
     if any(token in combined for token in ("兼容", "接入", "适配", "生态", "集成")):
         return "兼容与适配顾虑"
-    if any(token in combined for token in ("部署", "维护", "上手", "实施", "使用", "复杂")):
+    if any(
+        token in combined for token in ("部署", "维护", "上手", "实施", "使用", "复杂")
+    ):
         return "使用和实施顾虑"
     return _clean_report_text(question_text, max_length=22)
 
@@ -632,9 +731,13 @@ def _fallback_negative_issue_rows(bundle: InputBundle) -> list[dict[str, Any]]:
             {
                 "display": label,
                 "rate": safe_ratio(count, monitor_brand_answers),
-                "question_text": _clean_report_text(str(example.get("question_text") or ""), max_length=80),
+                "question_text": _clean_report_text(
+                    str(example.get("question_text") or ""), max_length=80
+                ),
                 "platform": _platform_label(str(example.get("platform") or "")),
-                "common_conclusion": _clean_report_text(str(example.get("conclusion_text") or ""), max_length=72),
+                "common_conclusion": _clean_report_text(
+                    str(example.get("conclusion_text") or ""), max_length=72
+                ),
             }
         )
     return rows
@@ -668,7 +771,9 @@ def _collect_other_domain_notes(bundle: InputBundle) -> list[dict[str, Any]]:
         reason = "站点画像不足，暂保留为其他。"
         display_name = _resolve_site_display_name(
             domain=domain,
-            sample_titles=[str(example.get("title") or "")] if example.get("title") else [],
+            sample_titles=(
+                [str(example.get("title") or "")] if example.get("title") else []
+            ),
         )
         notes.append(
             {
@@ -676,7 +781,9 @@ def _collect_other_domain_notes(bundle: InputBundle) -> list[dict[str, Any]]:
                 "display_name": display_name,
                 "count": count,
                 "platform": _platform_label(str(example.get("platform") or "")),
-                "question_text": _clean_report_text(str(example.get("question_text") or ""), max_length=38),
+                "question_text": _clean_report_text(
+                    str(example.get("question_text") or ""), max_length=38
+                ),
                 "reason": reason,
             }
         )
@@ -719,7 +826,20 @@ def _normalize_intent_value(raw_value: Any, question_text: str) -> str:
         (("案例", "实测", "用户", "口碑"), "case_or_example"),
         (("推荐", "最合适", "买哪", "哪款", "选哪"), "vendor_recommendation"),
         (("怎么选", "如何选", "如何挑", "选择"), "how_to_choose"),
-        (("对比", "比较", "哪个好", "区别", "差异", "排名", "排行", "第一梯队", "共性"), "which_is_better"),
+        (
+            (
+                "对比",
+                "比较",
+                "哪个好",
+                "区别",
+                "差异",
+                "排名",
+                "排行",
+                "第一梯队",
+                "共性",
+            ),
+            "which_is_better",
+        ),
         (("怎么用", "使用", "步骤", "流程"), "how_to_use"),
         (("是什么", "了解", "原理", "特点"), "what_is_it"),
     ]
@@ -734,11 +854,19 @@ def _normalize_decision_stage_value(raw_value: Any, question_text: str) -> str:
     if normalized in DECISION_STAGE_ALIASES:
         return DECISION_STAGE_ALIASES[normalized]
     combined = f"{raw_value or ''} {question_text}".lower()
-    if any(keyword in combined for keyword in ("怎么用", "实施", "流程", "配置", "部署")):
+    if any(
+        keyword in combined for keyword in ("怎么用", "实施", "流程", "配置", "部署")
+    ):
         return "implementation"
-    if any(keyword in combined for keyword in ("推荐", "买哪", "选哪", "预算", "值不值", "哪个好", "怎么选")):
+    if any(
+        keyword in combined
+        for keyword in ("推荐", "买哪", "选哪", "预算", "值不值", "哪个好", "怎么选")
+    ):
         return "evaluation"
-    if any(keyword in combined for keyword in ("是什么", "趋势", "会不会", "为什么", "了解")):
+    if any(
+        keyword in combined
+        for keyword in ("是什么", "趋势", "会不会", "为什么", "了解")
+    ):
         return "awareness"
     return "understanding"
 
@@ -801,8 +929,24 @@ class CitationFetchRecord(BaseModel):
     domain: str | None = None
     snippet: str | None = None
     site_name: str | None = None
-    source_type: Literal["official", "authority_media", "vertical_media", "community", "video_or_content", "other"]
-    ecosystem_tag: Literal["none", "wechat", "douyin", "xiaohongshu", "bilibili", "toutiao", "tencent", "byte"] = "none"
+    source_type: Literal[
+        "official",
+        "authority_media",
+        "vertical_media",
+        "community",
+        "video_or_content",
+        "other",
+    ]
+    ecosystem_tag: Literal[
+        "none",
+        "wechat",
+        "douyin",
+        "xiaohongshu",
+        "bilibili",
+        "toutiao",
+        "tencent",
+        "byte",
+    ] = "none"
     is_platform_ecosystem: bool = False
     is_official: bool = False
     brand_related: bool = False
@@ -822,21 +966,53 @@ class AnswerRecord(BaseModel):
     mentioned_monitor_brand: bool = False
     competitor_brands: list[str] = Field(default_factory=list)
     primary_recommended_brand: str | None = None
-    answer_state: Literal["no_brand", "competitor_only", "monitor_only", "monitor_plus_others"]
+    answer_state: Literal[
+        "no_brand", "competitor_only", "monitor_only", "monitor_plus_others"
+    ]
     sentiment: Literal["positive", "neutral", "negative"] = "neutral"
     positive_reasons: list[str] = Field(default_factory=list)
     negative_conclusions: list[dict[str, Any]] = Field(default_factory=list)
     negative_topics: list[str] = Field(default_factory=list)
     comparison_answer_flag: bool = False
     no_citation_strong_recommend_flag: bool = False
-    logic_archetype: Literal["principle_first", "list_recommendation", "comparison_review", "risk_warning", "scenario_solution", "ecosystem_oriented"] = "principle_first"
-    recommendation_pattern_code: Literal["explain_then_example", "compare_then_recommend", "scenario_then_solution", "list_then_brief_reason", "risk_then_fit", "ecosystem_aggregation"] = "explain_then_example"
+    logic_archetype: Literal[
+        "principle_first",
+        "list_recommendation",
+        "comparison_review",
+        "risk_warning",
+        "scenario_solution",
+        "ecosystem_oriented",
+    ] = "principle_first"
+    recommendation_pattern_code: Literal[
+        "explain_then_example",
+        "compare_then_recommend",
+        "scenario_then_solution",
+        "list_then_brief_reason",
+        "risk_then_fit",
+        "ecosystem_aggregation",
+    ] = "explain_then_example"
 
 
 class DomainTaxonomyRecord(BaseModel):
     domain: str
-    source_type: Literal["official", "authority_media", "vertical_media", "community", "video_or_content", "other"]
-    ecosystem_tag: Literal["none", "wechat", "douyin", "xiaohongshu", "bilibili", "toutiao", "tencent", "byte"] = "none"
+    source_type: Literal[
+        "official",
+        "authority_media",
+        "vertical_media",
+        "community",
+        "video_or_content",
+        "other",
+    ]
+    ecosystem_tag: Literal[
+        "none",
+        "wechat",
+        "douyin",
+        "xiaohongshu",
+        "bilibili",
+        "toutiao",
+        "tencent",
+        "byte",
+    ] = "none"
     is_platform_ecosystem: bool = False
     display_name: str | None = None
 
@@ -913,7 +1089,9 @@ def build_domain_taxonomy(official_domains: list[str]) -> list[DomainTaxonomyRec
     ]
 
 
-def _infer_domain_taxonomy(domain: str, official_domains: list[str], platform: str) -> DomainTaxonomyRecord:
+def _infer_domain_taxonomy(
+    domain: str, official_domains: list[str], platform: str
+) -> DomainTaxonomyRecord:
     is_official = _domain_matches(domain, official_domains)
     return DomainTaxonomyRecord(
         domain=domain,
@@ -929,7 +1107,9 @@ def _match_brand_from_text(text: str, candidate_name: str, aliases: list[str]) -
     return any(alias.lower() in lowered for alias in aliases if alias)
 
 
-def _detect_mentioned_brands(answer_text: str, brand_master: BrandMaster) -> tuple[list[str], bool, list[str]]:
+def _detect_mentioned_brands(
+    answer_text: str, brand_master: BrandMaster
+) -> tuple[list[str], bool, list[str]]:
     mentioned: list[str] = []
     monitor_mentioned = _match_brand_from_text(
         answer_text,
@@ -943,10 +1123,16 @@ def _detect_mentioned_brands(answer_text: str, brand_master: BrandMaster) -> tup
         if competitor and competitor.lower() in answer_text.lower():
             competitors_present.append(competitor)
             mentioned.append(competitor)
-    return _normalize_text_list(mentioned), monitor_mentioned, _normalize_text_list(competitors_present)
+    return (
+        _normalize_text_list(mentioned),
+        monitor_mentioned,
+        _normalize_text_list(competitors_present),
+    )
 
 
-def _infer_primary_recommended_brand(text: str, mentioned_brands: list[str]) -> str | None:
+def _infer_primary_recommended_brand(
+    text: str, mentioned_brands: list[str]
+) -> str | None:
     if not any(cue in text for cue in ("推荐", "优先", "首选", "更适合", "建议选择")):
         return None
     lowered = text.lower()
@@ -980,23 +1166,35 @@ def _detect_positive_reasons(text: str, sentiment: str) -> list[str]:
     ][:3]
 
 
-def _infer_negative_source_attribution(sentence: str, citations: list[CitationFetchRecord]) -> tuple[str, list[str]]:
+def _infer_negative_source_attribution(
+    sentence: str, citations: list[CitationFetchRecord]
+) -> tuple[str, list[str]]:
     citation_urls = []
     sentence_lower = sentence.lower()
     for citation in citations:
         haystack = f"{citation.title or ''} {citation.snippet or ''}".lower()
         if not haystack.strip():
             continue
-        if any(keyword.lower() in haystack for topic in NEGATIVE_TOPIC_RULES.values() for keyword in topic if keyword and keyword.lower() in sentence_lower):
+        if any(
+            keyword.lower() in haystack
+            for topic in NEGATIVE_TOPIC_RULES.values()
+            for keyword in topic
+            if keyword and keyword.lower() in sentence_lower
+        ):
             citation_urls.append(citation.url)
-    if citation_urls and any(keyword in sentence_lower for keyword in ("认为", "可能", "通常", "往往", "更高")):
+    if citation_urls and any(
+        keyword in sentence_lower
+        for keyword in ("认为", "可能", "通常", "往往", "更高")
+    ):
         return "mixed", citation_urls
     if citation_urls:
         return "cited_source", citation_urls
     return "model_inference", []
 
 
-def _detect_negative_conclusions(text: str, citations: list[CitationFetchRecord]) -> tuple[list[dict[str, Any]], list[str]]:
+def _detect_negative_conclusions(
+    text: str, citations: list[CitationFetchRecord]
+) -> tuple[list[dict[str, Any]], list[str]]:
     conclusions: list[dict[str, Any]] = []
     topics: list[str] = []
     seen_conclusions: set[str] = set()
@@ -1015,7 +1213,9 @@ def _detect_negative_conclusions(text: str, citations: list[CitationFetchRecord]
         if key in seen_conclusions:
             continue
         seen_conclusions.add(key)
-        attribution, citation_urls = _infer_negative_source_attribution(cleaned_sentence, citations)
+        attribution, citation_urls = _infer_negative_source_attribution(
+            cleaned_sentence, citations
+        )
         conclusions.append(
             {
                 "text": cleaned_sentence,
@@ -1025,9 +1225,14 @@ def _detect_negative_conclusions(text: str, citations: list[CitationFetchRecord]
             }
         )
         topics.extend(matched_topics)
-    if not conclusions and any(word in text.lower() for word in ("太贵", "偏贵", "复杂", "风险", "争议", "不方便")):
+    if not conclusions and any(
+        word in text.lower()
+        for word in ("太贵", "偏贵", "复杂", "风险", "争议", "不方便")
+    ):
         fallback_text = _clean_report_text(text[:80], max_length=80)
-        attribution, citation_urls = _infer_negative_source_attribution(fallback_text, citations)
+        attribution, citation_urls = _infer_negative_source_attribution(
+            fallback_text, citations
+        )
         conclusions.append(
             {
                 "text": fallback_text,
@@ -1040,22 +1245,32 @@ def _detect_negative_conclusions(text: str, citations: list[CitationFetchRecord]
     return conclusions, _normalize_text_list(topics)
 
 
-def _infer_logic_archetype(question: QuestionRecord, answer_text: str, citations: list[CitationFetchRecord]) -> str:
+def _infer_logic_archetype(
+    question: QuestionRecord, answer_text: str, citations: list[CitationFetchRecord]
+) -> str:
     text = answer_text.lower()
-    if any(token in text for token in ("对比", "相比", "优缺点", "更适合", "横向")) or question.intent in {
+    if any(
+        token in text for token in ("对比", "相比", "优缺点", "更适合", "横向")
+    ) or question.intent in {
         "which_is_better",
         "how_to_choose",
         "alternative_or_replace",
         "vendor_recommendation",
     }:
         return "comparison_review"
-    if any(token in text for token in ("风险", "注意", "门槛", "挑战", "限制")) or question.intent == "risk_or_problem":
+    if (
+        any(token in text for token in ("风险", "注意", "门槛", "挑战", "限制"))
+        or question.intent == "risk_or_problem"
+    ):
         return "risk_warning"
     if any(token in text for token in ("场景", "方案", "适合", "落地", "部署")):
         return "scenario_solution"
     if any(citation.is_platform_ecosystem for citation in citations):
         return "ecosystem_oriented"
-    if len(re.findall(r"[\\d一二三四五六七八九十]+[\\.、]", answer_text)) >= 2 or answer_text.count("；") >= 2:
+    if (
+        len(re.findall(r"[\\d一二三四五六七八九十]+[\\.、]", answer_text)) >= 2
+        or answer_text.count("；") >= 2
+    ):
         return "list_recommendation"
     return "principle_first"
 
@@ -1073,15 +1288,43 @@ def _infer_recommendation_pattern(archetype: str) -> str:
 
 
 ANSWER_CONTENT_FEATURES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "theory": ("原理/机制解释", ("原理", "机制", "吸收", "作用", "原因", "区别", "通常", "一般", "研究")),
-    "evidence": ("证据背书", ("研究", "临床", "数据", "证据", "文献", "权威", "专家", "指南", "认证")),
-    "product": ("产品/品牌介绍", ("产品", "品牌", "成分", "配方", "型号", "规格", "功效", "适合")),
-    "risk_or_compliance": ("风险/合规提醒", ("注意", "风险", "副作用", "禁忌", "不建议", "遵医嘱", "医生", "药物", "冲突", "争议")),
-    "purchase_guidance": ("购买/选择建议", ("推荐", "选择", "购买", "渠道", "官方", "正规", "预算", "性价比", "优先")),
+    "theory": (
+        "原理/机制解释",
+        ("原理", "机制", "吸收", "作用", "原因", "区别", "通常", "一般", "研究"),
+    ),
+    "evidence": (
+        "证据背书",
+        ("研究", "临床", "数据", "证据", "文献", "权威", "专家", "指南", "认证"),
+    ),
+    "product": (
+        "产品/品牌介绍",
+        ("产品", "品牌", "成分", "配方", "型号", "规格", "功效", "适合"),
+    ),
+    "risk_or_compliance": (
+        "风险/合规提醒",
+        (
+            "注意",
+            "风险",
+            "副作用",
+            "禁忌",
+            "不建议",
+            "遵医嘱",
+            "医生",
+            "药物",
+            "冲突",
+            "争议",
+        ),
+    ),
+    "purchase_guidance": (
+        "购买/选择建议",
+        ("推荐", "选择", "购买", "渠道", "官方", "正规", "预算", "性价比", "优先"),
+    ),
 }
 
 
-def _answer_feature_flags(answer_text: str, citations: list[CitationFetchRecord]) -> set[str]:
+def _answer_feature_flags(
+    answer_text: str, citations: list[CitationFetchRecord]
+) -> set[str]:
     text = str(answer_text or "")
     flags: set[str] = set()
     for code, (_label, keywords) in ANSWER_CONTENT_FEATURES.items():
@@ -1103,9 +1346,16 @@ def _format_feature_mix(feature_mix: dict[str, float | None]) -> str:
 
 
 def _is_comparison_question(question: QuestionRecord, answer_text: str) -> bool:
-    if question.intent in {"which_is_better", "how_to_choose", "alternative_or_replace", "vendor_recommendation"}:
+    if question.intent in {
+        "which_is_better",
+        "how_to_choose",
+        "alternative_or_replace",
+        "vendor_recommendation",
+    }:
         return True
-    return any(token in answer_text for token in ("对比", "比较", "替代", "哪个好", "推荐"))
+    return any(
+        token in answer_text for token in ("对比", "比较", "替代", "哪个好", "推荐")
+    )
 
 
 def _preference_strength(share: float | None) -> str:
@@ -1118,7 +1368,9 @@ def _preference_strength(share: float | None) -> str:
     return "low"
 
 
-def _normalize_question_record(raw_question: dict[str, Any], fallback_index: int) -> QuestionRecord:
+def _normalize_question_record(
+    raw_question: dict[str, Any], fallback_index: int
+) -> QuestionRecord:
     question_text = str(
         raw_question.get("question_text")
         or raw_question.get("core_question")
@@ -1136,11 +1388,26 @@ def _normalize_question_record(raw_question: dict[str, Any], fallback_index: int
             raw_question.get("decision_stage"),
             question_text,
         ),
-        persona=str(raw_question.get("persona_id") or raw_question.get("source_persona") or "").strip() or None,
-        scene=str(raw_question.get("linked_scenario") or raw_question.get("category") or "").strip() or "其他",
+        persona=str(
+            raw_question.get("persona_id") or raw_question.get("source_persona") or ""
+        ).strip()
+        or None,
+        scene=str(
+            raw_question.get("linked_scenario") or raw_question.get("category") or ""
+        ).strip()
+        or "其他",
         pain_point=str(raw_question.get("linked_pain_point") or "").strip() or None,
-        tags=_normalize_text_list(list(raw_question.get("keywords") or []) + list(raw_question.get("seo_keywords") or [])),
-        priority=str(raw_question.get("scenario_priority") or raw_question.get("priority") or "medium").strip().lower(),
+        tags=_normalize_text_list(
+            list(raw_question.get("keywords") or [])
+            + list(raw_question.get("seo_keywords") or [])
+        ),
+        priority=str(
+            raw_question.get("scenario_priority")
+            or raw_question.get("priority")
+            or "medium"
+        )
+        .strip()
+        .lower(),
     )
 
 
@@ -1158,14 +1425,20 @@ def build_input_bundle(
     report_kind = normalize_report_kind(analysis_mode)
     brand_name = str(brand_profile.get("brand_name") or "品牌").strip() or "品牌"
     aliases = _normalize_text_list(extract_brand_aliases(brand_profile) + [brand_name])
-    official_domain = _normalize_domain(str(brand_profile.get("official_website") or ""))
+    official_domain = _normalize_domain(
+        str(brand_profile.get("official_website") or "")
+    )
     official_domains = _expand_official_domains(
         official_domain,
         brand_name=brand_name,
         aliases=aliases,
     )
     competitor_names = _normalize_text_list(
-        [str(item.get("name") or "").strip() for item in competitors if isinstance(item, dict)]
+        [
+            str(item.get("name") or "").strip()
+            for item in competitors
+            if isinstance(item, dict)
+        ]
     )
     brand_master = BrandMaster(
         monitor_brand=brand_name,
@@ -1178,7 +1451,11 @@ def build_input_bundle(
     raw_questions: list[dict[str, Any]]
     selected_personas: list[str] = []
     if isinstance(simulated_questions, dict):
-        raw_questions = list(simulated_questions.get("simulated_questions") or simulated_questions.get("questions") or [])
+        raw_questions = list(
+            simulated_questions.get("simulated_questions")
+            or simulated_questions.get("questions")
+            or []
+        )
         selected_personas = _normalize_text_list(
             list(
                 simulated_questions.get("selectedPersonas")
@@ -1198,10 +1475,15 @@ def build_input_bundle(
 
     if report_kind == "scenario" and not selected_personas:
         selected_personas = _normalize_text_list(
-            [str(question.get("source_persona") or "").strip() for question in raw_questions]
+            [
+                str(question.get("source_persona") or "").strip()
+                for question in raw_questions
+            ]
         )
 
-    taxonomy_map = {item.domain: item for item in build_domain_taxonomy(official_domains)}
+    taxonomy_map = {
+        item.domain: item for item in build_domain_taxonomy(official_domains)
+    }
     answers: list[AnswerRecord] = []
     platforms_seen: set[str] = set()
     enforce_question_boundary = report_kind == "scenario" and bool(question_map)
@@ -1218,14 +1500,19 @@ def build_input_bundle(
                     "category": fetch_row.get("category"),
                     "linked_scenario": fetch_row.get("linked_scenario"),
                     "linked_pain_point": fetch_row.get("linked_pain_point"),
-                    "user_intent": fetch_row.get("intent") or fetch_row.get("user_intent"),
+                    "user_intent": fetch_row.get("intent")
+                    or fetch_row.get("user_intent"),
                     "decision_stage": fetch_row.get("decision_stage"),
                 },
                 question_index,
             )
 
         question = question_map[question_id]
-        platform_results = fetch_row.get("platform_results") if isinstance(fetch_row.get("platform_results"), list) else []
+        platform_results = (
+            fetch_row.get("platform_results")
+            if isinstance(fetch_row.get("platform_results"), list)
+            else []
+        )
         for platform_index, platform_result in enumerate(platform_results, start=1):
             if not isinstance(platform_result, dict):
                 continue
@@ -1233,9 +1520,21 @@ def build_input_bundle(
             if platform:
                 platforms_seen.add(platform)
             success = bool(platform_result.get("success"))
-            answer_payload = platform_result.get("answer") if isinstance(platform_result.get("answer"), dict) else {}
-            answer_text = str(answer_payload.get("content") or platform_result.get("answer_text") or "").strip()
-            citations_raw = platform_result.get("citations") or answer_payload.get("search_references") or []
+            answer_payload = (
+                platform_result.get("answer")
+                if isinstance(platform_result.get("answer"), dict)
+                else {}
+            )
+            answer_text = str(
+                answer_payload.get("content")
+                or platform_result.get("answer_text")
+                or ""
+            ).strip()
+            citations_raw = (
+                platform_result.get("citations")
+                or answer_payload.get("search_references")
+                or []
+            )
 
             citation_records: list[CitationFetchRecord] = []
             seen_urls: set[str] = set()
@@ -1258,31 +1557,44 @@ def build_input_bundle(
                 )
                 taxonomy = taxonomy_map.get(domain or "")
                 if taxonomy is None and domain:
-                    taxonomy = _infer_domain_taxonomy(domain, official_domains, platform)
+                    taxonomy = _infer_domain_taxonomy(
+                        domain, official_domains, platform
+                    )
                     taxonomy_map[domain] = taxonomy
-                title = str(citation.get("title") or citation.get("site_name") or "").strip() or None
-                snippet = str(citation.get("snippet") or citation.get("summary") or "").strip() or None
+                title = (
+                    str(
+                        citation.get("title") or citation.get("site_name") or ""
+                    ).strip()
+                    or None
+                )
+                snippet = (
+                    str(
+                        citation.get("snippet") or citation.get("summary") or ""
+                    ).strip()
+                    or None
+                )
                 brand_related = _domain_matches(domain, official_domains)
                 if not brand_related:
-                    brand_related = _match_brand_from_text(f"{title or ''} {snippet or ''}", brand_name, aliases)
+                    brand_related = _match_brand_from_text(
+                        f"{title or ''} {snippet or ''}", brand_name, aliases
+                    )
                 source_type = str(
                     citation.get("source_type") or metadata.get("source_type") or ""
                 ).strip()
                 if source_type not in set(SOURCE_TYPE_ORDER):
                     source_type = taxonomy.source_type if taxonomy else "other"
-                is_official = bool(citation.get("is_official")) or _domain_matches(domain, official_domains)
+                is_official = bool(citation.get("is_official")) or _domain_matches(
+                    domain, official_domains
+                )
                 if is_official:
                     source_type = "official"
-                site_name = (
-                    str(
-                        citation.get("site_display_name")
-                        or metadata.get("site_display_name")
-                        or citation.get("site_name")
-                        or citation.get("source")
-                        or ""
-                    ).strip()
-                    or (taxonomy.display_name if taxonomy else None)
-                )
+                site_name = str(
+                    citation.get("site_display_name")
+                    or metadata.get("site_display_name")
+                    or citation.get("site_name")
+                    or citation.get("source")
+                    or ""
+                ).strip() or (taxonomy.display_name if taxonomy else None)
                 citation_records.append(
                     CitationFetchRecord(
                         citation_id=f"{question_id}:{platform}:{citation_index}",
@@ -1293,24 +1605,34 @@ def build_input_bundle(
                         site_name=site_name,
                         source_type=source_type,
                         ecosystem_tag=(taxonomy.ecosystem_tag if taxonomy else "none"),
-                        is_platform_ecosystem=bool(taxonomy and taxonomy.is_platform_ecosystem),
+                        is_platform_ecosystem=bool(
+                            taxonomy and taxonomy.is_platform_ecosystem
+                        ),
                         is_official=is_official,
                         brand_related=brand_related,
                         official_conversion_flag=is_official,
                     )
                 )
 
-            mentioned_brands, monitor_mentioned, competitor_brands = _detect_mentioned_brands(answer_text, brand_master)
+            mentioned_brands, monitor_mentioned, competitor_brands = (
+                _detect_mentioned_brands(answer_text, brand_master)
+            )
             answer_state = _classify_answer_state(
                 mentioned_brands=mentioned_brands,
                 monitor_mentioned=monitor_mentioned,
             )
             sentiment = analyze_sentiment(answer_text) if answer_text else "neutral"
             positive_reasons = _detect_positive_reasons(answer_text, sentiment)
-            negative_conclusions, negative_topics = _detect_negative_conclusions(answer_text, citation_records)
-            logic_archetype = _infer_logic_archetype(question, answer_text, citation_records)
+            negative_conclusions, negative_topics = _detect_negative_conclusions(
+                answer_text, citation_records
+            )
+            logic_archetype = _infer_logic_archetype(
+                question, answer_text, citation_records
+            )
             recommendation_pattern_code = _infer_recommendation_pattern(logic_archetype)
-            primary_recommended_brand = _infer_primary_recommended_brand(answer_text, mentioned_brands)
+            primary_recommended_brand = _infer_primary_recommended_brand(
+                answer_text, mentioned_brands
+            )
 
             answers.append(
                 AnswerRecord(
@@ -1327,15 +1649,24 @@ def build_input_bundle(
                     competitor_brands=competitor_brands,
                     primary_recommended_brand=primary_recommended_brand,
                     answer_state=answer_state,
-                    sentiment=sentiment if sentiment in {"positive", "neutral", "negative"} else "neutral",
+                    sentiment=(
+                        sentiment
+                        if sentiment in {"positive", "neutral", "negative"}
+                        else "neutral"
+                    ),
                     positive_reasons=positive_reasons,
                     negative_conclusions=negative_conclusions,
                     negative_topics=negative_topics,
-                    comparison_answer_flag=_is_comparison_question(question, answer_text),
+                    comparison_answer_flag=_is_comparison_question(
+                        question, answer_text
+                    ),
                     no_citation_strong_recommend_flag=bool(
                         primary_recommended_brand == brand_name
                         and not citation_records
-                        and any(token in answer_text for token in ("推荐", "优先", "首选", "更适合"))
+                        and any(
+                            token in answer_text
+                            for token in ("推荐", "优先", "首选", "更适合")
+                        )
                     ),
                     logic_archetype=logic_archetype,  # type: ignore[arg-type]
                     recommendation_pattern_code=recommendation_pattern_code,  # type: ignore[arg-type]
@@ -1356,7 +1687,9 @@ def build_input_bundle(
         session_id=session_id,
         entity_id=entity_id,
         generated_at=datetime.now(timezone.utc).date().isoformat(),
-        platforms=sorted(platforms_seen or {normalize_platform(platform) for platform in PLATFORMS}),
+        platforms=sorted(
+            platforms_seen or {normalize_platform(platform) for platform in PLATFORMS}
+        ),
     )
 
     return InputBundle(
@@ -1372,7 +1705,9 @@ def _build_visibility_analyzer(bundle: InputBundle) -> dict[str, Any]:
     successful_answers = [answer for answer in bundle.answers if answer.status == "ok"]
     total_answers = len(successful_answers)
     answer_state_counter = Counter(answer.answer_state for answer in successful_answers)
-    brand_answers = [answer for answer in successful_answers if answer.mentioned_monitor_brand]
+    brand_answers = [
+        answer for answer in successful_answers if answer.mentioned_monitor_brand
+    ]
 
     brand_counter: Counter[str] = Counter()
     for answer in successful_answers:
@@ -1404,10 +1739,18 @@ def _build_visibility_analyzer(bundle: InputBundle) -> dict[str, Any]:
         "answer_sample_count": total_answers,
         "platform_count": len(bundle.meta.platforms),
         "brand_visibility": safe_ratio(len(brand_answers), total_answers),
-        "competitor_pressure": safe_ratio(answer_state_counter.get("competitor_only", 0), total_answers),
-        "no_brand_rate": safe_ratio(answer_state_counter.get("no_brand", 0), total_answers),
-        "monitor_only_rate": safe_ratio(answer_state_counter.get("monitor_only", 0), total_answers),
-        "monitor_plus_others_rate": safe_ratio(answer_state_counter.get("monitor_plus_others", 0), total_answers),
+        "competitor_pressure": safe_ratio(
+            answer_state_counter.get("competitor_only", 0), total_answers
+        ),
+        "no_brand_rate": safe_ratio(
+            answer_state_counter.get("no_brand", 0), total_answers
+        ),
+        "monitor_only_rate": safe_ratio(
+            answer_state_counter.get("monitor_only", 0), total_answers
+        ),
+        "monitor_plus_others_rate": safe_ratio(
+            answer_state_counter.get("monitor_plus_others", 0), total_answers
+        ),
         "brand_rank": brand_rank,
         "ranked_brand_count": len(ranked_brands),
         "brand_presence_count": brand_counter.get(bundle.brand_master.monitor_brand, 0),
@@ -1444,19 +1787,27 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
     domain_source_counter: dict[str, Counter[str]] = defaultdict(Counter)
     domain_display_names: dict[str, Counter[str]] = defaultdict(Counter)
     domain_titles: dict[str, list[str]] = defaultdict(list)
-    monitor_brand_answers = [answer for answer in bundle.answers if answer.status == "ok" and answer.mentioned_monitor_brand]
+    monitor_brand_answers = [
+        answer
+        for answer in bundle.answers
+        if answer.status == "ok" and answer.mentioned_monitor_brand
+    ]
     brand_related_link_answer_count = 0
     official_link_answer_count = 0
     platform_citation_counter: dict[str, Counter[str]] = defaultdict(Counter)
     platform_brand_related_totals: Counter[str] = Counter()
     platform_ecosystem_counts: Counter[str] = Counter()
     answer_rows: list[dict[str, Any]] = []
-    taxonomy_by_domain = {record.domain: record for record in bundle.domain_taxonomy if record.domain}
+    taxonomy_by_domain = {
+        record.domain: record for record in bundle.domain_taxonomy if record.domain
+    }
 
     for answer in bundle.answers:
         if answer.status != "ok":
             continue
-        deduped = _dedupe_dict_rows([item.model_dump() for item in answer.citation_records], ("url",))
+        deduped = _dedupe_dict_rows(
+            [item.model_dump() for item in answer.citation_records], ("url",)
+        )
         citations = [CitationFetchRecord(**item) for item in deduped]
         brand_related_in_answer = 0
         official_in_answer = 0
@@ -1467,7 +1818,10 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
                 domain_source_counter[citation.domain][citation.source_type] += 1
                 if citation.site_name:
                     domain_display_names[citation.domain][citation.site_name] += 1
-                if citation.title and citation.title not in domain_titles[citation.domain]:
+                if (
+                    citation.title
+                    and citation.title not in domain_titles[citation.domain]
+                ):
                     domain_titles[citation.domain].append(citation.title)
             if citation.brand_related:
                 brand_related_links += 1
@@ -1492,7 +1846,11 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
                 "brand_related_link_count": brand_related_in_answer,
                 "official_link_count": official_in_answer,
                 "official_conversion_flag": bool(official_in_answer),
-                "brand_related_links": [citation.model_dump() for citation in citations if citation.brand_related],
+                "brand_related_links": [
+                    citation.model_dump()
+                    for citation in citations
+                    if citation.brand_related
+                ],
             }
         )
 
@@ -1505,17 +1863,25 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
     for platform in bundle.meta.platforms:
         total = platform_brand_related_totals.get(platform, 0)
         source_preferences = {
-            source_type: _preference_strength(safe_ratio(platform_citation_counter[platform].get(source_type, 0), total))
+            source_type: _preference_strength(
+                safe_ratio(
+                    platform_citation_counter[platform].get(source_type, 0), total
+                )
+            )
             for source_type in SOURCE_TYPE_ORDER
         }
         platform_profiles[platform] = {
             "source_preferences": source_preferences,
-            "ecosystem_preference": _preference_strength(safe_ratio(platform_ecosystem_counts.get(platform, 0), total)),
+            "ecosystem_preference": _preference_strength(
+                safe_ratio(platform_ecosystem_counts.get(platform, 0), total)
+            ),
             "brand_related_link_count": total,
         }
 
     top_domains = []
-    for domain, count in sorted(domain_counter.items(), key=lambda item: (-item[1], item[0]))[:10]:
+    for domain, count in sorted(
+        domain_counter.items(), key=lambda item: (-item[1], item[0])
+    )[:10]:
         taxonomy = taxonomy_by_domain.get(domain)
         source_type = (
             domain_source_counter[domain].most_common(1)[0][0]
@@ -1547,7 +1913,9 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
                 ),
                 "count": count,
                 "share": safe_ratio(count, total_citations),
-                "is_official": _domain_matches(domain, bundle.brand_master.official_domains),
+                "is_official": _domain_matches(
+                    domain, bundle.brand_master.official_domains
+                ),
                 "source_type": source_type,
                 "sample_titles": sample_titles,
             }
@@ -1556,7 +1924,9 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
     summary = {
         "brand_link_penetration": safe_ratio(brand_related_links, total_citations),
         "official_share": safe_ratio(official_links, brand_related_links),
-        "official_conversion_rate": safe_ratio(official_link_answer_count, len(monitor_brand_answers)),
+        "official_conversion_rate": safe_ratio(
+            official_link_answer_count, len(monitor_brand_answers)
+        ),
         "source_type_breakdown": source_type_breakdown,
         "official_funnel": {
             "monitor_brand_answer_count": len(monitor_brand_answers),
@@ -1579,11 +1949,19 @@ def _build_question_coverage_analyzer(bundle: InputBundle) -> dict[str, Any]:
             answers_by_question[answer.question_id].append(answer)
 
     successful_answers = [answer for answer in bundle.answers if answer.status == "ok"]
-    brand_question_ids = {answer.question_id for answer in successful_answers if answer.mentioned_monitor_brand}
+    brand_question_ids = {
+        answer.question_id
+        for answer in successful_answers
+        if answer.mentioned_monitor_brand
+    }
 
     coverage_scene = Counter(question.scene or "其他" for question in bundle.questions)
-    coverage_intent = Counter(_intent_label(question.intent) for question in bundle.questions)
-    coverage_stage = Counter(_stage_label(question.decision_stage) for question in bundle.questions)
+    coverage_intent = Counter(
+        _intent_label(question.intent) for question in bundle.questions
+    )
+    coverage_stage = Counter(
+        _stage_label(question.decision_stage) for question in bundle.questions
+    )
 
     trigger_rows: list[dict[str, Any]] = []
     dropout_rows: list[dict[str, Any]] = []
@@ -1606,31 +1984,72 @@ def _build_question_coverage_analyzer(bundle: InputBundle) -> dict[str, Any]:
                 {
                     "dimension": dimension,
                     "value": value,
-                    "rate": safe_ratio(sum(1 for answer in relevant_answers if answer.mentioned_monitor_brand), total),
+                    "rate": safe_ratio(
+                        sum(
+                            1
+                            for answer in relevant_answers
+                            if answer.mentioned_monitor_brand
+                        ),
+                        total,
+                    ),
                 }
             )
             dropout_rows.append(
                 {
                     "dimension": dimension,
                     "value": value,
-                    "rate": safe_ratio(sum(1 for answer in relevant_answers if answer.answer_state in {"no_brand", "competitor_only"}), total),
+                    "rate": safe_ratio(
+                        sum(
+                            1
+                            for answer in relevant_answers
+                            if answer.answer_state in {"no_brand", "competitor_only"}
+                        ),
+                        total,
+                    ),
                 }
             )
 
-    overall_state_counter = Counter(answer.answer_state for answer in successful_answers)
+    overall_state_counter = Counter(
+        answer.answer_state for answer in successful_answers
+    )
     answer_state_matrix = {
         "overall": {
-            state: safe_ratio(overall_state_counter.get(state, 0), len(successful_answers))
-            for state in ("no_brand", "competitor_only", "monitor_only", "monitor_plus_others")
+            state: safe_ratio(
+                overall_state_counter.get(state, 0), len(successful_answers)
+            )
+            for state in (
+                "no_brand",
+                "competitor_only",
+                "monitor_only",
+                "monitor_plus_others",
+            )
         },
         "by_intent": {},
     }
-    for intent in sorted({_intent_label(question.intent) for question in bundle.questions}):
-        question_ids = {question.question_id for question in bundle.questions if _intent_label(question.intent) == intent}
-        intent_answers = [answer for answer in successful_answers if answer.question_id in question_ids]
+    for intent in sorted(
+        {_intent_label(question.intent) for question in bundle.questions}
+    ):
+        question_ids = {
+            question.question_id
+            for question in bundle.questions
+            if _intent_label(question.intent) == intent
+        }
+        intent_answers = [
+            answer
+            for answer in successful_answers
+            if answer.question_id in question_ids
+        ]
         answer_state_matrix["by_intent"][intent] = {
-            state: safe_ratio(sum(1 for answer in intent_answers if answer.answer_state == state), len(intent_answers))
-            for state in ("no_brand", "competitor_only", "monitor_only", "monitor_plus_others")
+            state: safe_ratio(
+                sum(1 for answer in intent_answers if answer.answer_state == state),
+                len(intent_answers),
+            )
+            for state in (
+                "no_brand",
+                "competitor_only",
+                "monitor_only",
+                "monitor_plus_others",
+            )
         }
 
     question_rows: list[dict[str, Any]] = []
@@ -1639,15 +2058,32 @@ def _build_question_coverage_analyzer(bundle: InputBundle) -> dict[str, Any]:
     for question in bundle.questions:
         related_answers = answers_by_question.get(question.question_id, [])
         state_counter = Counter(answer.answer_state for answer in related_answers)
-        dominant_state = sorted(state_counter.items(), key=lambda item: (-item[1], item[0]))[0][0] if state_counter else "no_brand"
+        dominant_state = (
+            sorted(state_counter.items(), key=lambda item: (-item[1], item[0]))[0][0]
+            if state_counter
+            else "no_brand"
+        )
         state_platforms = {
             state: sorted(
-                {answer.platform for answer in related_answers if answer.answer_state == state}
+                {
+                    answer.platform
+                    for answer in related_answers
+                    if answer.answer_state == state
+                }
             )
-            for state in ("no_brand", "competitor_only", "monitor_only", "monitor_plus_others")
+            for state in (
+                "no_brand",
+                "competitor_only",
+                "monitor_only",
+                "monitor_plus_others",
+            )
         }
-        competitors_present = _normalize_text_list([brand for answer in related_answers for brand in answer.competitor_brands])
-        negative_topics = _normalize_text_list([topic for answer in related_answers for topic in answer.negative_topics])
+        competitors_present = _normalize_text_list(
+            [brand for answer in related_answers for brand in answer.competitor_brands]
+        )
+        negative_topics = _normalize_text_list(
+            [topic for answer in related_answers for topic in answer.negative_topics]
+        )
         row = {
             "question_id": question.question_id,
             "question_text": question.question_text,
@@ -1655,13 +2091,23 @@ def _build_question_coverage_analyzer(bundle: InputBundle) -> dict[str, Any]:
             "intent": _intent_label(question.intent),
             "decision_stage": _stage_label(question.decision_stage),
             "brand_present": question.question_id in brand_question_ids,
-            "present_platforms": sorted({answer.platform for answer in related_answers}),
+            "present_platforms": sorted(
+                {answer.platform for answer in related_answers}
+            ),
             "state_platforms": state_platforms,
-            "official_citation_present": any(any(citation.is_official for citation in answer.citation_records) for answer in related_answers if answer.mentioned_monitor_brand),
+            "official_citation_present": any(
+                any(citation.is_official for citation in answer.citation_records)
+                for answer in related_answers
+                if answer.mentioned_monitor_brand
+            ),
             "competitors_present": competitors_present,
             "answer_state": dominant_state,
             "negative_topics": negative_topics,
-            "risk_level": "high" if dominant_state in {"competitor_only", "no_brand"} or negative_topics else "medium" if competitors_present else "low",
+            "risk_level": (
+                "high"
+                if dominant_state in {"competitor_only", "no_brand"} or negative_topics
+                else "medium" if competitors_present else "low"
+            ),
         }
         question_rows.append(row)
         if dominant_state in {"competitor_only", "no_brand"}:
@@ -1671,11 +2117,24 @@ def _build_question_coverage_analyzer(bundle: InputBundle) -> dict[str, Any]:
 
     summary = {
         "question_count": len(bundle.questions),
-        "coverage_by_scene": [{"label": item["label"], "count": item["count"], "rate": item["rate"]} for item in _sort_counter_rows(coverage_scene, len(bundle.questions))],
-        "coverage_by_intent": [{"label": item["label"], "count": item["count"], "rate": item["rate"]} for item in _sort_counter_rows(coverage_intent, len(bundle.questions))],
-        "coverage_by_stage": [{"label": item["label"], "count": item["count"], "rate": item["rate"]} for item in _sort_counter_rows(coverage_stage, len(bundle.questions))],
-        "top_trigger_categories": sorted(trigger_rows, key=lambda item: (-(item["rate"] or -1), item["value"]))[:3],
-        "top_dropout_categories": sorted(dropout_rows, key=lambda item: (-(item["rate"] or -1), item["value"]))[:3],
+        "coverage_by_scene": [
+            {"label": item["label"], "count": item["count"], "rate": item["rate"]}
+            for item in _sort_counter_rows(coverage_scene, len(bundle.questions))
+        ],
+        "coverage_by_intent": [
+            {"label": item["label"], "count": item["count"], "rate": item["rate"]}
+            for item in _sort_counter_rows(coverage_intent, len(bundle.questions))
+        ],
+        "coverage_by_stage": [
+            {"label": item["label"], "count": item["count"], "rate": item["rate"]}
+            for item in _sort_counter_rows(coverage_stage, len(bundle.questions))
+        ],
+        "top_trigger_categories": sorted(
+            trigger_rows, key=lambda item: (-(item["rate"] or -1), item["value"])
+        )[:3],
+        "top_dropout_categories": sorted(
+            dropout_rows, key=lambda item: (-(item["rate"] or -1), item["value"])
+        )[:3],
         "answer_state_matrix": answer_state_matrix,
         "scenario_total": len(bundle.questions),
         "scenario_hit_count": len(brand_question_ids),
@@ -1690,7 +2149,11 @@ def _build_question_coverage_analyzer(bundle: InputBundle) -> dict[str, Any]:
 
 
 def _build_sentiment_risk_analyzer(bundle: InputBundle) -> dict[str, Any]:
-    monitor_answers = [answer for answer in bundle.answers if answer.status == "ok" and answer.mentioned_monitor_brand]
+    monitor_answers = [
+        answer
+        for answer in bundle.answers
+        if answer.status == "ok" and answer.mentioned_monitor_brand
+    ]
     distribution_counter = Counter(answer.sentiment for answer in monitor_answers)
     positive_reason_counter: Counter[str] = Counter()
     positive_reason_questions: dict[str, Counter[str]] = defaultdict(Counter)
@@ -1726,7 +2189,9 @@ def _build_sentiment_risk_analyzer(bundle: InputBundle) -> dict[str, Any]:
             for topic in conclusion.get("topics", []):
                 if len(negative_topic_examples[topic]) < 2:
                     negative_topic_examples[topic].append(
-                        _clean_report_text(str(conclusion.get("text") or ""), max_length=60)
+                        _clean_report_text(
+                            str(conclusion.get("text") or ""), max_length=60
+                        )
                     )
         answer_items.append(
             {
@@ -1735,6 +2200,9 @@ def _build_sentiment_risk_analyzer(bundle: InputBundle) -> dict[str, Any]:
                 "question_text": answer.question_text,
                 "platform": answer.platform,
                 "sentiment": answer.sentiment,
+                "answer_excerpt": _clean_report_text(
+                    str(answer.answer_text or ""), max_length=96
+                ),
                 "positive_reasons": unique_reasons,
                 "negative_topics": unique_negative_topics,
                 "negative_conclusions": answer.negative_conclusions,
@@ -1743,43 +2211,78 @@ def _build_sentiment_risk_analyzer(bundle: InputBundle) -> dict[str, Any]:
 
     positive_total = distribution_counter.get("positive", 0)
     top_positive_reasons = []
-    for reason, count in sorted(positive_reason_counter.items(), key=lambda item: (-item[1], item[0]))[:3]:
-        major_question_type = sorted(positive_reason_questions[reason].items(), key=lambda item: (-item[1], item[0]))[0][0] if positive_reason_questions[reason] else "N/A"
+    for reason, count in sorted(
+        positive_reason_counter.items(), key=lambda item: (-item[1], item[0])
+    )[:3]:
+        major_question_type = (
+            sorted(
+                positive_reason_questions[reason].items(),
+                key=lambda item: (-item[1], item[0]),
+            )[0][0]
+            if positive_reason_questions[reason]
+            else "N/A"
+        )
         top_positive_reasons.append(
             {
                 "reason": reason,
                 "display": _positive_reason_label(reason),
                 "rate": safe_ratio(count, positive_total),
                 "major_question_type": major_question_type,
-                "common_conclusion": "；".join(positive_reason_examples.get(reason, [])[:2]) or "N/A",
+                "common_conclusion": "；".join(
+                    positive_reason_examples.get(reason, [])[:2]
+                )
+                or "N/A",
             }
         )
 
     top_negative_topics = []
-    for topic, count in sorted(negative_topic_counter.items(), key=lambda item: (-item[1], item[0]))[:4]:
+    for topic, count in sorted(
+        negative_topic_counter.items(), key=lambda item: (-item[1], item[0])
+    )[:4]:
         top_negative_topics.append(
             {
                 "topic": topic,
                 "display": _negative_topic_label(topic),
                 "rate": safe_ratio(count, len(monitor_answers)),
-                "common_conclusion": "；".join(negative_topic_examples.get(topic, [])[:2]) or "N/A",
+                "common_conclusion": "；".join(
+                    negative_topic_examples.get(topic, [])[:2]
+                )
+                or "N/A",
                 "count": count,
             }
         )
 
     per_platform_negative_topics = {
-        platform: {topic: platform_negative_counter[platform].get(topic, 0) for topic in NEGATIVE_TOPIC_DISPLAY}
+        platform: {
+            topic: platform_negative_counter[platform].get(topic, 0)
+            for topic in NEGATIVE_TOPIC_DISPLAY
+        }
         for platform in bundle.meta.platforms
     }
     negative_source_distribution = {
-        "model_inference": safe_ratio(negative_source_counter.get("model_inference", 0), sum(negative_source_counter.values())),
-        "cited_source": safe_ratio(negative_source_counter.get("cited_source", 0), sum(negative_source_counter.values())),
-        "mixed": safe_ratio(negative_source_counter.get("mixed", 0), sum(negative_source_counter.values())),
+        "model_inference": safe_ratio(
+            negative_source_counter.get("model_inference", 0),
+            sum(negative_source_counter.values()),
+        ),
+        "cited_source": safe_ratio(
+            negative_source_counter.get("cited_source", 0),
+            sum(negative_source_counter.values()),
+        ),
+        "mixed": safe_ratio(
+            negative_source_counter.get("mixed", 0),
+            sum(negative_source_counter.values()),
+        ),
     }
     summary = {
-        "positive": safe_ratio(distribution_counter.get("positive", 0), len(monitor_answers)),
-        "neutral": safe_ratio(distribution_counter.get("neutral", 0), len(monitor_answers)),
-        "negative": safe_ratio(distribution_counter.get("negative", 0), len(monitor_answers)),
+        "positive": safe_ratio(
+            distribution_counter.get("positive", 0), len(monitor_answers)
+        ),
+        "neutral": safe_ratio(
+            distribution_counter.get("neutral", 0), len(monitor_answers)
+        ),
+        "negative": safe_ratio(
+            distribution_counter.get("negative", 0), len(monitor_answers)
+        ),
     }
     return {
         "summary": summary,
@@ -1791,14 +2294,20 @@ def _build_sentiment_risk_analyzer(bundle: InputBundle) -> dict[str, Any]:
     }
 
 
-def _build_platform_profile_analyzer(bundle: InputBundle, citation_summary: dict[str, Any]) -> dict[str, Any]:
+def _build_platform_profile_analyzer(
+    bundle: InputBundle, citation_summary: dict[str, Any]
+) -> dict[str, Any]:
     platform_answers: dict[str, list[AnswerRecord]] = defaultdict(list)
     for answer in bundle.answers:
         platform_answers[answer.platform].append(answer)
 
     platform_profiles: dict[str, Any] = {}
     for platform in bundle.meta.platforms:
-        answers = [answer for answer in platform_answers.get(platform, []) if answer.status == "ok"]
+        answers = [
+            answer
+            for answer in platform_answers.get(platform, [])
+            if answer.status == "ok"
+        ]
         if not answers:
             platform_profiles[platform] = {
                 "data_status": "missing",
@@ -1810,50 +2319,122 @@ def _build_platform_profile_analyzer(bundle: InputBundle, citation_summary: dict
                 "brand_unfriendly_question_types": [],
                 "comparison_answer_inclusion_rate": None,
                 "no_citation_strong_recommend_rate": None,
-                "source_preferences": {source_type: "low" for source_type in SOURCE_TYPE_ORDER},
+                "source_preferences": {
+                    source_type: "low" for source_type in SOURCE_TYPE_ORDER
+                },
                 "ecosystem_preference": "low",
                 "answer_feature_mix": {},
             }
             continue
 
         logic_counter = Counter(answer.logic_archetype for answer in answers)
-        pattern_counter = Counter(answer.recommendation_pattern_code for answer in answers)
-        comparison_answers = [answer for answer in answers if answer.comparison_answer_flag]
-        comparison_with_brand = [answer for answer in comparison_answers if answer.mentioned_monitor_brand]
-        no_citation_strong = [answer for answer in answers if answer.no_citation_strong_recommend_flag]
+        pattern_counter = Counter(
+            answer.recommendation_pattern_code for answer in answers
+        )
+        comparison_answers = [
+            answer for answer in answers if answer.comparison_answer_flag
+        ]
+        comparison_with_brand = [
+            answer for answer in comparison_answers if answer.mentioned_monitor_brand
+        ]
+        no_citation_strong = [
+            answer for answer in answers if answer.no_citation_strong_recommend_flag
+        ]
         feature_counter: Counter[str] = Counter()
         for answer in answers:
-            for feature in _answer_feature_flags(answer.answer_text or "", answer.citation_records):
+            for feature in _answer_feature_flags(
+                answer.answer_text or "", answer.citation_records
+            ):
                 feature_counter[feature] += 1
 
         friendly_rows = []
         unfriendly_rows = []
-        for scene in sorted({question.scene or "其他" for question in bundle.questions}):
+        for scene in sorted(
+            {question.scene or "其他" for question in bundle.questions}
+        ):
             scene_answers = [
                 answer
                 for answer in answers
-                if next((question.scene or "其他") for question in bundle.questions if question.question_id == answer.question_id) == scene
+                if next(
+                    (question.scene or "其他")
+                    for question in bundle.questions
+                    if question.question_id == answer.question_id
+                )
+                == scene
             ]
             total = len(scene_answers)
             if not total:
                 continue
-            friendly_rows.append({"scene": scene, "rate": safe_ratio(sum(1 for answer in scene_answers if answer.mentioned_monitor_brand), total)})
-            unfriendly_rows.append({"scene": scene, "rate": safe_ratio(sum(1 for answer in scene_answers if answer.answer_state in {"no_brand", "competitor_only"}), total)})
+            friendly_rows.append(
+                {
+                    "scene": scene,
+                    "rate": safe_ratio(
+                        sum(
+                            1
+                            for answer in scene_answers
+                            if answer.mentioned_monitor_brand
+                        ),
+                        total,
+                    ),
+                }
+            )
+            unfriendly_rows.append(
+                {
+                    "scene": scene,
+                    "rate": safe_ratio(
+                        sum(
+                            1
+                            for answer in scene_answers
+                            if answer.answer_state in {"no_brand", "competitor_only"}
+                        ),
+                        total,
+                    ),
+                }
+            )
 
-        citation_profile = citation_summary.get("platform_profiles", {}).get(platform, {})
-        dominant_logic = sorted(logic_counter.items(), key=lambda item: (-item[1], item[0]))[0][0]
-        dominant_pattern = sorted(pattern_counter.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        citation_profile = citation_summary.get("platform_profiles", {}).get(
+            platform, {}
+        )
+        dominant_logic = sorted(
+            logic_counter.items(), key=lambda item: (-item[1], item[0])
+        )[0][0]
+        dominant_pattern = sorted(
+            pattern_counter.items(), key=lambda item: (-item[1], item[0])
+        )[0][0]
         platform_profiles[platform] = {
             "data_status": "ok",
             "dominant_logic_archetype": dominant_logic,
-            "dominant_logic_display": LOGIC_ARCHETYPE_DISPLAY.get(dominant_logic, dominant_logic),
+            "dominant_logic_display": LOGIC_ARCHETYPE_DISPLAY.get(
+                dominant_logic, dominant_logic
+            ),
             "recommendation_pattern_code": dominant_pattern,
-            "recommendation_pattern_display": RECOMMENDATION_PATTERN_DISPLAY.get(dominant_pattern, dominant_pattern),
-            "brand_friendly_question_types": [row["scene"] for row in sorted(friendly_rows, key=lambda item: (-(item["rate"] or -1), item["scene"]))[:2]],
-            "brand_unfriendly_question_types": [row["scene"] for row in sorted(unfriendly_rows, key=lambda item: (-(item["rate"] or -1), item["scene"]))[:2]],
-            "comparison_answer_inclusion_rate": safe_ratio(len(comparison_with_brand), len(comparison_answers)),
-            "no_citation_strong_recommend_rate": safe_ratio(len(no_citation_strong), len(answers)),
-            "source_preferences": citation_profile.get("source_preferences", {source_type: "low" for source_type in SOURCE_TYPE_ORDER}),
+            "recommendation_pattern_display": RECOMMENDATION_PATTERN_DISPLAY.get(
+                dominant_pattern, dominant_pattern
+            ),
+            "brand_friendly_question_types": [
+                row["scene"]
+                for row in sorted(
+                    friendly_rows,
+                    key=lambda item: (-(item["rate"] or -1), item["scene"]),
+                )[:2]
+            ],
+            "brand_unfriendly_question_types": [
+                row["scene"]
+                for row in sorted(
+                    unfriendly_rows,
+                    key=lambda item: (-(item["rate"] or -1), item["scene"]),
+                )[:2]
+            ],
+            "comparison_answer_inclusion_rate": safe_ratio(
+                len(comparison_with_brand), len(comparison_answers)
+            ),
+            "no_citation_strong_recommend_rate": safe_ratio(
+                len(no_citation_strong), len(answers)
+            ),
+            "source_preferences": citation_profile.get(
+                "source_preferences",
+                {source_type: "low" for source_type in SOURCE_TYPE_ORDER},
+            ),
             "ecosystem_preference": citation_profile.get("ecosystem_preference", "low"),
             "answer_feature_mix": {
                 code: safe_ratio(feature_counter.get(code, 0), len(answers))
@@ -1875,10 +2456,34 @@ def _build_platform_profile_analyzer(bundle: InputBundle, citation_summary: dict
         return sorted(rows, key=lambda item: (-item[1], item[0]))[0][0]
 
     judgments = {
-        "most_official_friendly": _pick_platform(lambda profile: 2 if profile["source_preferences"].get("official") == "high" else 1 if profile["source_preferences"].get("official") == "medium" else 0),
-        "most_vertical_media_influenced": _pick_platform(lambda profile: 2 if profile["source_preferences"].get("vertical_media") == "high" else 1 if profile["source_preferences"].get("vertical_media") == "medium" else 0),
-        "most_no_citation_strong_recommend": _pick_platform(lambda profile: profile.get("no_citation_strong_recommend_rate") or 0),
-        "best_comparison_answer_breakthrough": _pick_platform(lambda profile: profile.get("comparison_answer_inclusion_rate") or 0),
+        "most_official_friendly": _pick_platform(
+            lambda profile: (
+                2
+                if profile["source_preferences"].get("official") == "high"
+                else (
+                    1
+                    if profile["source_preferences"].get("official") == "medium"
+                    else 0
+                )
+            )
+        ),
+        "most_vertical_media_influenced": _pick_platform(
+            lambda profile: (
+                2
+                if profile["source_preferences"].get("vertical_media") == "high"
+                else (
+                    1
+                    if profile["source_preferences"].get("vertical_media") == "medium"
+                    else 0
+                )
+            )
+        ),
+        "most_no_citation_strong_recommend": _pick_platform(
+            lambda profile: profile.get("no_citation_strong_recommend_rate") or 0
+        ),
+        "best_comparison_answer_breakthrough": _pick_platform(
+            lambda profile: profile.get("comparison_answer_inclusion_rate") or 0
+        ),
     }
     return {"platform_profiles": platform_profiles, "platform_judgments": judgments}
 
@@ -1929,7 +2534,9 @@ def build_metric_bundle(
         platform_judgments=platform_profile["platform_judgments"],
         scenario_total=question_coverage["summary"]["scenario_total"],
         scenario_hit_count=question_coverage["summary"]["scenario_hit_count"],
-        high_risk_scenario_count=question_coverage["summary"]["high_risk_scenario_count"],
+        high_risk_scenario_count=question_coverage["summary"][
+            "high_risk_scenario_count"
+        ],
         mention_rate=visibility["summary"]["brand_visibility"],
         content_citation_rate=citations["summary"]["brand_link_penetration"],
         official_citation_rate=citations["summary"]["official_conversion_rate"],
@@ -1939,15 +2546,23 @@ def build_metric_bundle(
             "question_rows": question_coverage["question_rows"],
             "missing_rows": question_coverage["missing_rows"],
             "risk_rows": question_coverage["risk_rows"],
-            "top_trigger_categories": question_coverage["summary"]["top_trigger_categories"],
-            "top_dropout_categories": question_coverage["summary"]["top_dropout_categories"],
+            "top_trigger_categories": question_coverage["summary"][
+                "top_trigger_categories"
+            ],
+            "top_dropout_categories": question_coverage["summary"][
+                "top_dropout_categories"
+            ],
         },
         sentiment_risk={
             "items": sentiment_risk["items"],
             "top_positive_reasons": sentiment_risk["top_positive_reasons"],
             "top_negative_topics": sentiment_risk["top_negative_topics"],
-            "per_platform_negative_topics": sentiment_risk["per_platform_negative_topics"],
-            "negative_source_distribution": sentiment_risk["negative_source_distribution"],
+            "per_platform_negative_topics": sentiment_risk[
+                "per_platform_negative_topics"
+            ],
+            "negative_source_distribution": sentiment_risk[
+                "negative_source_distribution"
+            ],
         },
         platform_profile={
             "platform_profiles": platform_profile["platform_profiles"],
@@ -1991,7 +2606,9 @@ def build_comparison_bundle(
     baseline_report: dict[str, Any] | None = None,
 ) -> ComparisonBundle:
     if bundle.meta.report_kind != "scenario":
-        return ComparisonBundle(comparable=False, reason="panorama_report_has_no_baseline_delta")
+        return ComparisonBundle(
+            comparable=False, reason="panorama_report_has_no_baseline_delta"
+        )
     baseline_payload = baseline_report or {}
     baseline_metric_bundle = baseline_payload.get("metric_bundle")
     if not isinstance(baseline_metric_bundle, dict):
@@ -2002,48 +2619,125 @@ def build_comparison_bundle(
         )
 
     visibility_delta = {
-        "brand_visibility": round(metric_bundle.brand_visibility - baseline_metric_bundle.get("brand_visibility"), 4)
-        if isinstance(metric_bundle.brand_visibility, (int, float)) and isinstance(baseline_metric_bundle.get("brand_visibility"), (int, float))
-        else None,
-        "brand_rank": baseline_metric_bundle.get("brand_rank") - metric_bundle.brand_rank
-        if isinstance(metric_bundle.brand_rank, int) and isinstance(baseline_metric_bundle.get("brand_rank"), int)
-        else None,
-        "competitor_pressure": round(metric_bundle.competitor_pressure - baseline_metric_bundle.get("competitor_pressure"), 4)
-        if isinstance(metric_bundle.competitor_pressure, (int, float)) and isinstance(baseline_metric_bundle.get("competitor_pressure"), (int, float))
-        else None,
-        "no_brand_rate": round(metric_bundle.no_brand_rate - baseline_metric_bundle.get("no_brand_rate"), 4)
-        if isinstance(metric_bundle.no_brand_rate, (int, float)) and isinstance(baseline_metric_bundle.get("no_brand_rate"), (int, float))
-        else None,
+        "brand_visibility": (
+            round(
+                metric_bundle.brand_visibility
+                - baseline_metric_bundle.get("brand_visibility"),
+                4,
+            )
+            if isinstance(metric_bundle.brand_visibility, (int, float))
+            and isinstance(baseline_metric_bundle.get("brand_visibility"), (int, float))
+            else None
+        ),
+        "brand_rank": (
+            baseline_metric_bundle.get("brand_rank") - metric_bundle.brand_rank
+            if isinstance(metric_bundle.brand_rank, int)
+            and isinstance(baseline_metric_bundle.get("brand_rank"), int)
+            else None
+        ),
+        "competitor_pressure": (
+            round(
+                metric_bundle.competitor_pressure
+                - baseline_metric_bundle.get("competitor_pressure"),
+                4,
+            )
+            if isinstance(metric_bundle.competitor_pressure, (int, float))
+            and isinstance(
+                baseline_metric_bundle.get("competitor_pressure"), (int, float)
+            )
+            else None
+        ),
+        "no_brand_rate": (
+            round(
+                metric_bundle.no_brand_rate
+                - baseline_metric_bundle.get("no_brand_rate"),
+                4,
+            )
+            if isinstance(metric_bundle.no_brand_rate, (int, float))
+            and isinstance(baseline_metric_bundle.get("no_brand_rate"), (int, float))
+            else None
+        ),
     }
     citation_delta = {
-        "brand_link_penetration": round(metric_bundle.brand_link_penetration - baseline_metric_bundle.get("brand_link_penetration"), 4)
-        if isinstance(metric_bundle.brand_link_penetration, (int, float)) and isinstance(baseline_metric_bundle.get("brand_link_penetration"), (int, float))
-        else None,
-        "official_share": round(metric_bundle.official_share - baseline_metric_bundle.get("official_share"), 4)
-        if isinstance(metric_bundle.official_share, (int, float)) and isinstance(baseline_metric_bundle.get("official_share"), (int, float))
-        else None,
-        "official_conversion_rate": round(metric_bundle.official_conversion_rate - baseline_metric_bundle.get("official_conversion_rate"), 4)
-        if isinstance(metric_bundle.official_conversion_rate, (int, float)) and isinstance(baseline_metric_bundle.get("official_conversion_rate"), (int, float))
-        else None,
+        "brand_link_penetration": (
+            round(
+                metric_bundle.brand_link_penetration
+                - baseline_metric_bundle.get("brand_link_penetration"),
+                4,
+            )
+            if isinstance(metric_bundle.brand_link_penetration, (int, float))
+            and isinstance(
+                baseline_metric_bundle.get("brand_link_penetration"), (int, float)
+            )
+            else None
+        ),
+        "official_share": (
+            round(
+                metric_bundle.official_share
+                - baseline_metric_bundle.get("official_share"),
+                4,
+            )
+            if isinstance(metric_bundle.official_share, (int, float))
+            and isinstance(baseline_metric_bundle.get("official_share"), (int, float))
+            else None
+        ),
+        "official_conversion_rate": (
+            round(
+                metric_bundle.official_conversion_rate
+                - baseline_metric_bundle.get("official_conversion_rate"),
+                4,
+            )
+            if isinstance(metric_bundle.official_conversion_rate, (int, float))
+            and isinstance(
+                baseline_metric_bundle.get("official_conversion_rate"), (int, float)
+            )
+            else None
+        ),
     }
     sentiment_delta = {
-        "negative_rate": round(metric_bundle.negative_rate - baseline_metric_bundle.get("negative_rate"), 4)
-        if isinstance(metric_bundle.negative_rate, (int, float)) and isinstance(baseline_metric_bundle.get("negative_rate"), (int, float))
-        else None
+        "negative_rate": (
+            round(
+                metric_bundle.negative_rate
+                - baseline_metric_bundle.get("negative_rate"),
+                4,
+            )
+            if isinstance(metric_bundle.negative_rate, (int, float))
+            and isinstance(baseline_metric_bundle.get("negative_rate"), (int, float))
+            else None
+        )
     }
-    baseline_platforms = baseline_metric_bundle.get("platform_profiles", {}) if isinstance(baseline_metric_bundle.get("platform_profiles"), dict) else {}
+    baseline_platforms = (
+        baseline_metric_bundle.get("platform_profiles", {})
+        if isinstance(baseline_metric_bundle.get("platform_profiles"), dict)
+        else {}
+    )
     per_platform_delta = {}
     for platform, profile in metric_bundle.platform_profiles.items():
-        baseline_profile = baseline_platforms.get(platform, {}) if isinstance(baseline_platforms.get(platform), dict) else {}
+        baseline_profile = (
+            baseline_platforms.get(platform, {})
+            if isinstance(baseline_platforms.get(platform), dict)
+            else {}
+        )
         per_platform_delta[platform] = {
-            "comparison_answer_inclusion_rate": round((profile.get("comparison_answer_inclusion_rate") or 0) - (baseline_profile.get("comparison_answer_inclusion_rate") or 0), 4)
-            if baseline_profile
-            else None
+            "comparison_answer_inclusion_rate": (
+                round(
+                    (profile.get("comparison_answer_inclusion_rate") or 0)
+                    - (baseline_profile.get("comparison_answer_inclusion_rate") or 0),
+                    4,
+                )
+                if baseline_profile
+                else None
+            )
         }
 
     return ComparisonBundle(
         comparable=True,
-        baseline_report_id=bundle.meta.baseline_report_id or str(baseline_payload.get("artifact_id") or baseline_payload.get("report_id") or ""),
+        baseline_report_id=bundle.meta.baseline_report_id
+        or str(
+            baseline_payload.get("artifact_id")
+            or baseline_payload.get("report_id")
+            or ""
+        ),
         visibility_delta=visibility_delta,
         citation_delta=citation_delta,
         sentiment_delta=sentiment_delta,
@@ -2068,9 +2762,13 @@ def _build_header_markdown(bundle: InputBundle) -> tuple[dict[str, Any], str]:
         lines.append(f"**行业**：{bundle.meta.industry or 'N/A'}  ")
     else:
         lines.append(f"**场景主题**：{bundle.meta.scenario_theme or 'N/A'}  ")
-    lines.append(f"**监测平台**：{' / '.join(_platform_label(platform) for platform in bundle.meta.platforms)}  ")
+    lines.append(
+        f"**监测平台**：{' / '.join(_platform_label(platform) for platform in bundle.meta.platforms)}  "
+    )
     lines.append(f"**问题样本数**：{len(bundle.questions)}  ")
-    lines.append(f"**答案样本数**：{len([answer for answer in bundle.answers if answer.status == 'ok'])}  ")
+    lines.append(
+        f"**答案样本数**：{len([answer for answer in bundle.answers if answer.status == 'ok'])}  "
+    )
     lines.append(f"**监测时间**：{bundle.meta.generated_at}  ")
     if bundle.meta.report_kind == "scenario":
         lines.append(
@@ -2094,13 +2792,35 @@ def _build_header_markdown(bundle: InputBundle) -> tuple[dict[str, Any], str]:
     )
 
 
-def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, comparison: ComparisonBundle) -> dict[str, Any]:
+def _build_summary_section(
+    bundle: InputBundle, metrics: MetricBundle, comparison: ComparisonBundle
+) -> dict[str, Any]:
     summary_rows = [
-        ["品牌可见度", _format_ratio(metrics.brand_visibility), "所有答案中提及监测品牌的比例"],
-        ["品牌提及排名", f"#{metrics.brand_rank}" if metrics.brand_rank else "N/A", "在全部被提及品牌中排名"],
-        ["竞品挤压率", _format_ratio(metrics.competitor_pressure), "提及品牌但未提监测品牌的答案占比"],
-        ["品牌负向提及率", _format_ratio(metrics.negative_rate), "提及监测品牌的答案中出现负向信息的比例"],
-        ["官网引用转化率", _format_ratio(metrics.official_conversion_rate), "提及监测品牌的答案中，同时引用官网链接的答案占比"],
+        [
+            "品牌可见度",
+            _format_ratio(metrics.brand_visibility),
+            "所有答案中提及监测品牌的比例",
+        ],
+        [
+            "品牌提及排名",
+            f"#{metrics.brand_rank}" if metrics.brand_rank else "N/A",
+            "在全部被提及品牌中排名",
+        ],
+        [
+            "竞品挤压率",
+            _format_ratio(metrics.competitor_pressure),
+            "提及品牌但未提监测品牌的答案占比",
+        ],
+        [
+            "品牌负向提及率",
+            _format_ratio(metrics.negative_rate),
+            "提及监测品牌的答案中出现负向信息的比例",
+        ],
+        [
+            "官网引用转化率",
+            _format_ratio(metrics.official_conversion_rate),
+            "提及监测品牌的答案中，同时引用官网链接的答案占比",
+        ],
     ]
     biggest_gap = "竞品把答案拿走"
     if (metrics.no_brand_rate or 0) > (metrics.competitor_pressure or 0):
@@ -2110,8 +2830,14 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
     strong_visibility = (metrics.brand_visibility or 0) >= 0.6
     leading_rank = metrics.brand_rank == 1 if metrics.brand_rank else False
     top_negative = _strip_false_negative_topics(metrics.top_negative_topics)[:2]
-    fallback_negative_issues = _fallback_negative_issue_rows(bundle) if not top_negative else []
-    topic_text = "、".join(item["display"] for item in top_negative) if top_negative else "负面信息暂不集中"
+    fallback_negative_issues = (
+        _fallback_negative_issue_rows(bundle) if not top_negative else []
+    )
+    topic_text = (
+        "、".join(item["display"] for item in top_negative)
+        if top_negative
+        else "负面信息暂不集中"
+    )
     if not metrics.brand_visibility or metrics.brand_visibility <= 0:
         one_line = f"{bundle.meta.brand_name}在当前样本中还没有稳定进入答案，眼下最要紧的是先让平台愿意提到品牌；最大缺口在于{biggest_gap}。"
     else:
@@ -2129,21 +2855,35 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
                 one_line = f"{bundle.meta.brand_name}已经能被提到，也具备一定进入能力；官网已经开始承接流量，接下来更值得继续优化的是把这种露出变成更稳定的主推荐。"
     suggestions: list[str] = []
     if not metrics.brand_visibility or (metrics.no_brand_rate or 0) >= 0.5:
-        suggestions.append(f"先解决平台不给品牌的问题：补品牌定义页、适用场景页和替代对比页，让平台先愿意把{bundle.meta.brand_name}带进答案。")
+        suggestions.append(
+            f"先解决平台不给品牌的问题：补品牌定义页、适用场景页和替代对比页，让平台先愿意把{bundle.meta.brand_name}带进答案。"
+        )
     if (metrics.official_conversion_rate or 0) < 0.2:
-        suggestions.append("优先补价格、使用场景、核心差异和替代对比这几类官网内容，把品牌露出接回官网。")
+        suggestions.append(
+            "优先补价格、使用场景、核心差异和替代对比这几类官网内容，把品牌露出接回官网。"
+        )
     if (metrics.competitor_pressure or 0) >= 0.3:
-        suggestions.append("优先治理比较型问题里的竞品压制，强化对比页、案例页和选型说明。")
+        suggestions.append(
+            "优先治理比较型问题里的竞品压制，强化对比页、案例页和选型说明。"
+        )
     if top_negative:
-        suggestions.append(f"优先处理 {topic_text} 相关的负向认知，并同步清理外部高频来源。")
+        suggestions.append(
+            f"优先处理 {topic_text} 相关的负向认知，并同步清理外部高频来源。"
+        )
     elif fallback_negative_issues:
-        suggestions.append(f"优先把{('、'.join(row['display'] for row in fallback_negative_issues[:2]))}这些决策顾虑讲清楚，减少模型自己补出结论。")
+        suggestions.append(
+            f"优先把{('、'.join(row['display'] for row in fallback_negative_issues[:2]))}这些决策顾虑讲清楚，减少模型自己补出结论。"
+        )
     if bundle.meta.report_kind == "scenario" and comparison.comparable:
         no_brand_delta = comparison.visibility_delta.get("no_brand_rate")
         if isinstance(no_brand_delta, (int, float)) and no_brand_delta > 0:
-            suggestions.append("优先补这个场景里最容易不提品牌的问题，先把相关顾虑和使用条件写成能被直接摘用的结论。")
+            suggestions.append(
+                "优先补这个场景里最容易不提品牌的问题，先把相关顾虑和使用条件写成能被直接摘用的结论。"
+            )
     if not suggestions:
-        suggestions.append("优先围绕当前场景补一页式结论页和 FAQ，再看品牌可见度和官网引用转化率会不会继续抬高。")
+        suggestions.append(
+            "优先围绕当前场景补一页式结论页和 FAQ，再看品牌可见度和官网引用转化率会不会继续抬高。"
+        )
     subtitle = (
         "这个场景下，品牌进入、官网承接，以及相对全景基线的变化，是最值得关注的三件事。"
         if bundle.meta.report_kind == "scenario"
@@ -2175,9 +2915,11 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
     second_key_fact = (
         f"在被提及的品牌里，{bundle.meta.brand_name}目前排在 **第 {metrics.brand_rank} 位**；这轮更值得继续优化的，是让更多比较类回答把品牌写成更明确的推荐。"
         if leading_rank
-        else f"在被提及的品牌里，{bundle.meta.brand_name}目前排在 **第 {metrics.brand_rank} 位**；后续可以继续看哪些问题更容易把品牌带进答案。"
-        if metrics.brand_rank
-        else "当前样本里还没有形成稳定的品牌排名，需要先让品牌更稳定地进入答案。"
+        else (
+            f"在被提及的品牌里，{bundle.meta.brand_name}目前排在 **第 {metrics.brand_rank} 位**；后续可以继续看哪些问题更容易把品牌带进答案。"
+            if metrics.brand_rank
+            else "当前样本里还没有形成稳定的品牌排名，需要先让品牌更稳定地进入答案。"
+        )
     )
     if strong_visibility:
         visibility_bullet = f"{bundle.meta.brand_name}已经能被平台带进大多数答案。"
@@ -2186,7 +2928,9 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
             f"的答案只提{bundle.meta.brand_name}，**{_format_ratio(metrics.monitor_plus_others_rate)}** 的答案会和竞品同台出现。"
         )
     elif (metrics.brand_visibility or 0) > 0:
-        visibility_bullet = f"{bundle.meta.brand_name}只进入了一部分答案，还不能算稳定进入。"
+        visibility_bullet = (
+            f"{bundle.meta.brand_name}只进入了一部分答案，还不能算稳定进入。"
+        )
         first_key_fact = (
             f"{bundle.meta.brand_name}已经有基础露出，但进入还不稳定；只提{bundle.meta.brand_name}的答案占 **{_format_ratio(metrics.monitor_only_rate)}**，"
             f"和竞品同台出现的答案占 **{_format_ratio(metrics.monitor_plus_others_rate)}**。"
@@ -2203,14 +2947,20 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
     if bundle.meta.report_kind == "scenario" and comparison.comparable:
         official_delta = comparison.citation_delta.get("official_conversion_rate")
         no_brand_delta = comparison.visibility_delta.get("no_brand_rate")
-        if isinstance(official_delta, (int, float)) or isinstance(no_brand_delta, (int, float)):
+        if isinstance(official_delta, (int, float)) or isinstance(
+            no_brand_delta, (int, float)
+        ):
             baseline_fact = []
             if isinstance(official_delta, (int, float)):
                 direction = "高了" if official_delta >= 0 else "低了"
-                baseline_fact.append(f"官网引用转化率比全景基线{direction} **{_format_delta_points_cn(official_delta)}**")
+                baseline_fact.append(
+                    f"官网引用转化率比全景基线{direction} **{_format_delta_points_cn(official_delta)}**"
+                )
             if isinstance(no_brand_delta, (int, float)):
                 direction = "更高" if no_brand_delta >= 0 else "更低"
-                baseline_fact.append(f"不提任何品牌的答案占比也{direction} **{_format_delta_points_cn(no_brand_delta)}**")
+                baseline_fact.append(
+                    f"不提任何品牌的答案占比也{direction} **{_format_delta_points_cn(no_brand_delta)}**"
+                )
             if baseline_fact:
                 baseline_fact_lines.extend(
                     [
@@ -2226,13 +2976,32 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
             "",
             summary_opening,
             "",
-            "- " + _format_metric_emphasis("品牌可见度", _format_ratio(metrics.brand_visibility)) + f"。{visibility_bullet}",
-            "- " + _format_metric_emphasis("品牌提及排名", f"#{metrics.brand_rank}" if metrics.brand_rank else "N/A") + f"。{_brand_rank_sentence(bundle.meta.brand_name, metrics.brand_rank)}",
             "- "
-            + _format_metric_emphasis("竞品挤压率", _format_ratio(metrics.competitor_pressure))
+            + _format_metric_emphasis(
+                "品牌可见度", _format_ratio(metrics.brand_visibility)
+            )
+            + f"。{visibility_bullet}",
+            "- "
+            + _format_metric_emphasis(
+                "品牌提及排名",
+                f"#{metrics.brand_rank}" if metrics.brand_rank else "N/A",
+            )
+            + f"。{_brand_rank_sentence(bundle.meta.brand_name, metrics.brand_rank)}",
+            "- "
+            + _format_metric_emphasis(
+                "竞品挤压率", _format_ratio(metrics.competitor_pressure)
+            )
             + ("。" + competitor_bullet if competitor_bullet else "。"),
-            "- " + _format_metric_emphasis("品牌负向提及率", _format_ratio(metrics.negative_rate)) + "。负面信息比例不高，但几类顾虑已经开始重复出现。",
-            "- " + _format_metric_emphasis("官网引用转化率", _format_ratio(metrics.official_conversion_rate)) + f"。{official_bullet}",
+            "- "
+            + _format_metric_emphasis(
+                "品牌负向提及率", _format_ratio(metrics.negative_rate)
+            )
+            + "。负面信息比例不高，但几类顾虑已经开始重复出现。",
+            "- "
+            + _format_metric_emphasis(
+                "官网引用转化率", _format_ratio(metrics.official_conversion_rate)
+            )
+            + f"。{official_bullet}",
             "",
             f"一句话判断：{one_line}",
             "",
@@ -2244,7 +3013,10 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
             *baseline_fact_lines,
             "",
             "### 当前最值得先做的事",
-            "\n".join(f"{index}. {suggestion}" for index, suggestion in enumerate(suggestions[:3], start=1)),
+            "\n".join(
+                f"{index}. {suggestion}"
+                for index, suggestion in enumerate(suggestions[:3], start=1)
+            ),
         ]
     ).strip()
     return {
@@ -2252,11 +3024,20 @@ def _build_summary_section(bundle: InputBundle, metrics: MetricBundle, compariso
         "title": "执行摘要",
         "subtitle": subtitle,
         "markdown": markdown,
-        "data": {"metrics": summary_rows, "one_line_conclusion": one_line, "suggestions": suggestions[:3]},
+        "data": {
+            "metrics": summary_rows,
+            "one_line_conclusion": one_line,
+            "suggestions": suggestions[:3],
+        },
     }
 
 
-def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, comparison: ComparisonBundle, visibility_data: dict[str, Any]) -> dict[str, Any]:
+def _build_visibility_section(
+    bundle: InputBundle,
+    metrics: MetricBundle,
+    comparison: ComparisonBundle,
+    visibility_data: dict[str, Any],
+) -> dict[str, Any]:
     core_rows = [
         ["问题样本数", metrics.total_questions],
         ["答案样本数", metrics.successful_answers],
@@ -2269,8 +3050,14 @@ def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, compar
     ranking_rows = [
         [
             row["rank"],
-            f"**{row['brand']}**" if row["brand"] == bundle.brand_master.monitor_brand else row["brand"],
-            _format_ratio(safe_ratio(row["brand_presence_count"], metrics.successful_answers)),
+            (
+                f"**{row['brand']}**"
+                if row["brand"] == bundle.brand_master.monitor_brand
+                else row["brand"]
+            ),
+            _format_ratio(
+                safe_ratio(row["brand_presence_count"], metrics.successful_answers)
+            ),
         ]
         for row in metrics.top_brand_ranking
     ]
@@ -2298,7 +3085,9 @@ def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, compar
     if (metrics.brand_visibility or 0) >= 0.6:
         visibility_sentence = f"大多数答案会提到{bundle.meta.brand_name}。"
     elif (metrics.brand_visibility or 0) > 0:
-        visibility_sentence = f"只有一部分答案会提到{bundle.meta.brand_name}，还不能算稳定进入。"
+        visibility_sentence = (
+            f"只有一部分答案会提到{bundle.meta.brand_name}，还不能算稳定进入。"
+        )
     else:
         visibility_sentence = f"当前样本里还没有答案稳定提到{bundle.meta.brand_name}。"
     markdown = "\n".join(
@@ -2322,22 +3111,54 @@ def _build_visibility_section(bundle: InputBundle, metrics: MetricBundle, compar
             f"结论：{conclusion}",
         ]
     ).strip()
-    return {"section_name": "visibility", "title": "可见度分析", "subtitle": subtitle, "markdown": markdown, "data": {"core_rows": core_rows, "ranking_rows": ranking_rows, "higher_brands": metrics.higher_brands, "conclusion": conclusion}}
+    return {
+        "section_name": "visibility",
+        "title": "可见度分析",
+        "subtitle": subtitle,
+        "markdown": markdown,
+        "data": {
+            "core_rows": core_rows,
+            "ranking_rows": ranking_rows,
+            "higher_brands": metrics.higher_brands,
+            "conclusion": conclusion,
+        },
+    }
 
 
-def _build_citation_section(bundle: InputBundle, metrics: MetricBundle) -> dict[str, Any]:
-    source_rows = [[_source_type_label(source_type), _format_ratio(metrics.source_type_breakdown.get(source_type))] for source_type in SOURCE_TYPE_ORDER]
+def _build_citation_section(
+    bundle: InputBundle, metrics: MetricBundle
+) -> dict[str, Any]:
+    source_rows = [
+        [
+            _source_type_label(source_type),
+            _format_ratio(metrics.source_type_breakdown.get(source_type)),
+        ]
+        for source_type in SOURCE_TYPE_ORDER
+    ]
     funnel = metrics.official_funnel
-    top_domains = metrics.source_summary.get("top_domains", []) if isinstance(metrics.source_summary, dict) else []
+    top_domains = (
+        metrics.source_summary.get("top_domains", [])
+        if isinstance(metrics.source_summary, dict)
+        else []
+    )
     domain_rows = [
         [
             _format_site_cell(row),
-            _source_type_label(str(row.get("source_type") or ("official" if row.get("is_official") else "other"))),
+            _source_type_label(
+                str(
+                    row.get("source_type")
+                    or ("official" if row.get("is_official") else "other")
+                )
+            ),
             row.get("count") or 0,
         ]
         for row in top_domains[:8]
     ]
-    top_sites = "、".join(str(row.get("display_name") or row.get("domain") or "") for row in top_domains[:3] if row.get("display_name") or row.get("domain"))
+    top_sites = "、".join(
+        str(row.get("display_name") or row.get("domain") or "")
+        for row in top_domains[:3]
+        if row.get("display_name") or row.get("domain")
+    )
     source_parts = []
     for source_type in SOURCE_TYPE_ORDER:
         ratio = metrics.source_type_breakdown.get(source_type)
@@ -2345,7 +3166,9 @@ def _build_citation_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
             continue
         if ratio <= 0:
             continue
-        source_parts.append(f"{_source_type_label(source_type)} **{_format_ratio(ratio)}**")
+        source_parts.append(
+            f"{_source_type_label(source_type)} **{_format_ratio(ratio)}**"
+        )
     other_domain_notes = _collect_other_domain_notes(bundle)
     ranked_site_lines = [
         f"{index}. **{row.get('display_name') or row.get('domain') or 'N/A'}**，{row.get('count') or 0} 次，{_source_type_label(str(row.get('source_type') or 'other'))}"
@@ -2402,11 +3225,18 @@ def _build_citation_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
         "title": "链接可见度分析",
         "subtitle": subtitle,
         "markdown": markdown,
-        "data": {"source_rows": source_rows, "domain_rows": domain_rows, "official_funnel": funnel, "conclusion": conclusion},
+        "data": {
+            "source_rows": source_rows,
+            "domain_rows": domain_rows,
+            "official_funnel": funnel,
+            "conclusion": conclusion,
+        },
     }
 
 
-def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer_outputs: dict[str, Any]) -> dict[str, Any]:
+def _build_question_section(
+    bundle: InputBundle, metrics: MetricBundle, analyzer_outputs: dict[str, Any]
+) -> dict[str, Any]:
     question_rows = analyzer_outputs["question_coverage_mapper"]["question_rows"]
     scene_labels = [str(row["label"]) for row in metrics.coverage_by_scene]
     entry_scene_summaries = sorted(
@@ -2420,15 +3250,29 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
     dropout_scene_summaries = sorted(
         _meaningful_band_summaries(question_rows, field="scene", labels=scene_labels),
         key=lambda item: (
-            -(safe_ratio(item["competitor_only_count"] + item["no_brand_count"], item["question_count"]) or -1),
+            -(
+                safe_ratio(
+                    item["competitor_only_count"] + item["no_brand_count"],
+                    item["question_count"],
+                )
+                or -1
+            ),
             -item["question_count"],
             item["label"],
         ),
     )
-    risk_summary = _category_question_summary(question_rows, field="intent", value=_intent_label("risk_or_problem"))
-    price_summary = _category_question_summary(question_rows, field="intent", value=_intent_label("price_or_cost"))
-    scene_summary = _category_question_summary(question_rows, field="scene", value="画像痛点场景")
-    comparison_summary = _category_question_summary(question_rows, field="scene", value="品类选购对比")
+    risk_summary = _category_question_summary(
+        question_rows, field="intent", value=_intent_label("risk_or_problem")
+    )
+    price_summary = _category_question_summary(
+        question_rows, field="intent", value=_intent_label("price_or_cost")
+    )
+    scene_summary = _category_question_summary(
+        question_rows, field="scene", value="画像痛点场景"
+    )
+    comparison_summary = _category_question_summary(
+        question_rows, field="scene", value="品类选购对比"
+    )
     scene_label = _report_label(scene_summary["label"])
     comparison_label = _report_label(comparison_summary["label"])
     coverage_text = _top_scene_coverage_text(metrics.coverage_by_scene)
@@ -2471,9 +3315,11 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
             prefix="其中 ",
         )
         block = [
-            f"- {_report_label(summary['label'])}共有 {summary['question_count']} 个问题，{dropout_clause}。"
-            if dropout_clause
-            else f"- {_report_label(summary['label'])}共有 {summary['question_count']} 个问题，是本轮需要复查的掉出问题。"
+            (
+                f"- {_report_label(summary['label'])}共有 {summary['question_count']} 个问题，{dropout_clause}。"
+                if dropout_clause
+                else f"- {_report_label(summary['label'])}共有 {summary['question_count']} 个问题，是本轮需要复查的掉出问题。"
+            )
         ]
         block.extend(gap_quotes)
         dropout_lines.append("\n".join(block))
@@ -2497,11 +3343,15 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
             f"至少有一个平台把{bundle.meta.brand_name}写进答案的有 {risk_summary['entered_count']} 个；"
             "这些问题里，品牌更多是被放进比较名单，而不是直接成为结论。"
         )
-    price_drop_samples = _state_question_samples(price_summary["questions"], states={"competitor_only", "no_brand"}, limit=2)
+    price_drop_samples = _state_question_samples(
+        price_summary["questions"], states={"competitor_only", "no_brand"}, limit=2
+    )
     if not price_summary["question_count"]:
         price_line = "这轮暂时没有形成明显的价格和成本问题带。"
     elif not price_summary["entered_count"]:
-        sample_clause = f"例如「{'、'.join(price_drop_samples)}」。" if price_drop_samples else ""
+        sample_clause = (
+            f"例如「{'、'.join(price_drop_samples)}」。" if price_drop_samples else ""
+        )
         price_line = (
             f"这轮和价格、成本有关的问题有 {price_summary['question_count']} 个，"
             f"本轮没有稳定把{bundle.meta.brand_name}写进答案；需要补清价格理由、购买渠道和替代方案对比。"
@@ -2548,15 +3398,20 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
         comparison_line = f"{comparison_label}本轮没有稳定带出{bundle.meta.brand_name}，暂不把它作为优势问题类型。"
     gap_question_lines = []
     for row in sorted(
-        [row for row in question_rows if row["answer_state"] in {"competitor_only", "no_brand"}],
-        key=lambda item: (0 if item["answer_state"] == "no_brand" else 1, item["question_text"]),
+        [
+            row
+            for row in question_rows
+            if row["answer_state"] in {"competitor_only", "no_brand"}
+        ],
+        key=lambda item: (
+            0 if item["answer_state"] == "no_brand" else 1,
+            item["question_text"],
+        ),
     )[:4]:
         state = str(row["answer_state"])
         state_platforms = row.get("state_platforms") or {}
         platforms = (
-            state_platforms.get(state)
-            if isinstance(state_platforms, dict)
-            else None
+            state_platforms.get(state) if isinstance(state_platforms, dict) else None
         ) or row.get("present_platforms", [])
         platform_clause = (
             "未提及任何品牌的平台"
@@ -2567,7 +3422,9 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
             "\n".join(
                 [
                     f"{len(gap_question_lines) + 1}. {platform_clause}：{_sample_platform_labels(platforms)}。",
-                    _markdown_quote_block(_clean_report_text(row["question_text"], max_length=80)),
+                    _markdown_quote_block(
+                        _clean_report_text(row["question_text"], max_length=80)
+                    ),
                 ]
             )
         )
@@ -2622,8 +3479,14 @@ def _build_question_section(bundle: InputBundle, metrics: MetricBundle, analyzer
     }
 
 
-def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict[str, Any]:
-    distribution_rows = [["正向", _format_ratio(metrics.sentiment_distribution.get("positive"))], ["中性", _format_ratio(metrics.sentiment_distribution.get("neutral"))], ["负向", _format_ratio(metrics.sentiment_distribution.get("negative"))]]
+def _build_sentiment_section(
+    bundle: InputBundle, metrics: MetricBundle
+) -> dict[str, Any]:
+    distribution_rows = [
+        ["正向", _format_ratio(metrics.sentiment_distribution.get("positive"))],
+        ["中性", _format_ratio(metrics.sentiment_distribution.get("neutral"))],
+        ["负向", _format_ratio(metrics.sentiment_distribution.get("negative"))],
+    ]
     positive_rows = [
         [
             index,
@@ -2634,14 +3497,40 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
         for index, row in enumerate(metrics.top_positive_reasons, start=1)
     ]
     display_negative_topics = _strip_false_negative_topics(metrics.top_negative_topics)
-    fallback_negative_issues = _fallback_negative_issue_rows(bundle) if not display_negative_topics else []
+    fallback_negative_issues = (
+        _fallback_negative_issue_rows(bundle) if not display_negative_topics else []
+    )
     if not display_negative_topics:
         display_negative_topics = []
-    negative_rows = [[index, row["display"], _format_ratio(row["rate"]), row["common_conclusion"]] for index, row in enumerate(display_negative_topics, start=1)]
+    negative_rows = [
+        [index, row["display"], _format_ratio(row["rate"]), row["common_conclusion"]]
+        for index, row in enumerate(display_negative_topics, start=1)
+    ]
     per_platform_topics = metrics.sentiment_risk.get("per_platform_negative_topics", {})
-    per_platform_rows = [[_platform_label(platform), per_platform_topics.get(platform, {}).get("price", 0), per_platform_topics.get(platform, {}).get("deployment", 0), per_platform_topics.get(platform, {}).get("ecosystem", 0), per_platform_topics.get(platform, {}).get("service", 0)] for platform in bundle.meta.platforms]
-    negative_source_rows = [["模型自身归纳", _format_ratio(metrics.negative_source_distribution.get("model_inference"))], ["引用来源带出", _format_ratio(metrics.negative_source_distribution.get("cited_source"))], ["混合", _format_ratio(metrics.negative_source_distribution.get("mixed"))]]
-    if not any(value for value in metrics.sentiment_distribution.values() if value is not None):
+    per_platform_rows = [
+        [
+            _platform_label(platform),
+            per_platform_topics.get(platform, {}).get("price", 0),
+            per_platform_topics.get(platform, {}).get("deployment", 0),
+            per_platform_topics.get(platform, {}).get("ecosystem", 0),
+            per_platform_topics.get(platform, {}).get("service", 0),
+        ]
+        for platform in bundle.meta.platforms
+    ]
+    negative_source_rows = [
+        [
+            "模型自身归纳",
+            _format_ratio(metrics.negative_source_distribution.get("model_inference")),
+        ],
+        [
+            "引用来源带出",
+            _format_ratio(metrics.negative_source_distribution.get("cited_source")),
+        ],
+        ["混合", _format_ratio(metrics.negative_source_distribution.get("mixed"))],
+    ]
+    if not any(
+        value for value in metrics.sentiment_distribution.values() if value is not None
+    ):
         conclusion = "当前样本里品牌几乎没有被明确提及，因此还谈不上稳定的品牌情感画像；应先让品牌进入答案，再看正负反馈结构。"
     elif fallback_negative_issues:
         focus_text = "、".join(row["display"] for row in fallback_negative_issues[:2])
@@ -2659,7 +3548,9 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
             "\n".join(
                 [
                     f"- {row[1]}，出现率 **{row[2]}**；典型说法：",
-                    _markdown_quote_block(_clean_report_text(str(row[3]), max_length=88)),
+                    _markdown_quote_block(
+                        _clean_report_text(str(row[3]), max_length=88)
+                    ),
                 ]
             )
         )
@@ -2685,26 +3576,45 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
                 "\n".join(
                     [
                         f"- {row[1]}，影响答案占比 **{row[2]}**；典型负面/顾虑说法：",
-                        _markdown_quote_block(_clean_report_text(str(row[3]), max_length=72)),
+                        _markdown_quote_block(
+                            _clean_report_text(str(row[3]), max_length=72)
+                        ),
                     ]
                 )
             )
     platform_lines = []
     for row in per_platform_rows:
-        platform_label, price_count, deployment_count, ecosystem_count, service_count = row
-        total_negative = int(price_count) + int(deployment_count) + int(ecosystem_count) + int(service_count)
+        (
+            platform_label,
+            price_count,
+            deployment_count,
+            ecosystem_count,
+            service_count,
+        ) = row
+        total_negative = (
+            int(price_count)
+            + int(deployment_count)
+            + int(ecosystem_count)
+            + int(service_count)
+        )
         if total_negative <= 0:
             continue
         focus_pairs = []
         if deployment_count:
-            focus_pairs.append(f"{_negative_topic_label('deployment')} {deployment_count} 次")
+            focus_pairs.append(
+                f"{_negative_topic_label('deployment')} {deployment_count} 次"
+            )
         if service_count:
             focus_pairs.append(f"{_negative_topic_label('service')} {service_count} 次")
         if price_count:
             focus_pairs.append(f"{_negative_topic_label('price')} {price_count} 次")
         if ecosystem_count:
-            focus_pairs.append(f"{_negative_topic_label('ecosystem')} {ecosystem_count} 次")
-        platform_lines.append(f"- **{platform_label}**：本轮更容易放大 {'、'.join(focus_pairs)}。")
+            focus_pairs.append(
+                f"{_negative_topic_label('ecosystem')} {ecosystem_count} 次"
+            )
+        platform_lines.append(
+            f"- **{platform_label}**：本轮更容易放大 {'、'.join(focus_pairs)}。"
+        )
     markdown = "\n".join(
         [
             "## 4. 情感与风险解析",
@@ -2717,7 +3627,14 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
             *((positive_lines or ["- 当前样本里还没有形成稳定的正向判断。"])),
             "",
             "### 4.2 最需要澄清的顾虑",
-            *((negative_lines or ["- 当前样本里的负面信息还不够集中，暂时没有形成稳定的高频负面说法。"])),
+            *(
+                (
+                    negative_lines
+                    or [
+                        "- 当前样本里的负面信息还不够集中，暂时没有形成稳定的高频负面说法。"
+                    ]
+                )
+            ),
             "",
             "### 4.3 哪些平台更容易放大这些顾虑",
             *((platform_lines or ["- 当前还没有足够样本判断平台差异。"])),
@@ -2727,10 +3644,25 @@ def _build_sentiment_section(bundle: InputBundle, metrics: MetricBundle) -> dict
             f"结论：{conclusion}",
         ]
     ).strip()
-    return {"section_name": "sentiment_risk", "title": "情感与风险解析", "subtitle": subtitle, "markdown": markdown, "data": {"distribution_rows": distribution_rows, "positive_rows": positive_rows, "negative_rows": negative_rows, "per_platform_rows": per_platform_rows, "negative_source_rows": negative_source_rows, "conclusion": conclusion}}
+    return {
+        "section_name": "sentiment_risk",
+        "title": "情感与风险解析",
+        "subtitle": subtitle,
+        "markdown": markdown,
+        "data": {
+            "distribution_rows": distribution_rows,
+            "positive_rows": positive_rows,
+            "negative_rows": negative_rows,
+            "per_platform_rows": per_platform_rows,
+            "negative_source_rows": negative_source_rows,
+            "conclusion": conclusion,
+        },
+    }
 
 
-def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[str, Any]:
+def _build_platform_section(
+    bundle: InputBundle, metrics: MetricBundle
+) -> dict[str, Any]:
     platform_profiles = metrics.platform_profiles
     logic_rows = []
     comparison_rows = []
@@ -2744,22 +3676,63 @@ def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
         if profile.get("data_status") != "ok":
             logic_rows.append([platform_label, "样本不足", "N/A", "N/A", "N/A"])
             comparison_rows.append([platform_label, "N/A"])
-            preference_rows.append([platform_label, "暂无明显来源偏好", {"high": "高", "medium": "中", "low": "低"}.get(profile.get("ecosystem_preference"), "低"), "N/A"])
+            preference_rows.append(
+                [
+                    platform_label,
+                    "暂无明显来源偏好",
+                    {"high": "高", "medium": "中", "low": "低"}.get(
+                        profile.get("ecosystem_preference"), "低"
+                    ),
+                    "N/A",
+                ]
+            )
             empty_platforms.append(platform_label)
             continue
-        logic_rows.append([platform_label, profile.get("dominant_logic_display") or "N/A", profile.get("recommendation_pattern_display") or "N/A", "、".join(profile.get("brand_friendly_question_types") or []) or "N/A", "、".join(profile.get("brand_unfriendly_question_types") or []) or "N/A"])
-        comparison_rows.append([platform_label, _format_ratio(profile.get("comparison_answer_inclusion_rate"))])
-        preferred_sources = "、".join(_preferred_source_labels(source_preferences)) or "暂无明显来源偏好"
-        preference_rows.append([platform_label, preferred_sources, {"high": "高", "medium": "中", "low": "低"}.get(profile.get("ecosystem_preference"), "低"), _format_ratio(profile.get("no_citation_strong_recommend_rate"))])
+        logic_rows.append(
+            [
+                platform_label,
+                profile.get("dominant_logic_display") or "N/A",
+                profile.get("recommendation_pattern_display") or "N/A",
+                "、".join(profile.get("brand_friendly_question_types") or []) or "N/A",
+                "、".join(profile.get("brand_unfriendly_question_types") or [])
+                or "N/A",
+            ]
+        )
+        comparison_rows.append(
+            [
+                platform_label,
+                _format_ratio(profile.get("comparison_answer_inclusion_rate")),
+            ]
+        )
+        preferred_sources = (
+            "、".join(_preferred_source_labels(source_preferences))
+            or "暂无明显来源偏好"
+        )
+        preference_rows.append(
+            [
+                platform_label,
+                preferred_sources,
+                {"high": "高", "medium": "中", "low": "低"}.get(
+                    profile.get("ecosystem_preference"), "低"
+                ),
+                _format_ratio(profile.get("no_citation_strong_recommend_rate")),
+            ]
+        )
         comparison_rate = _format_ratio(profile.get("comparison_answer_inclusion_rate"))
         friendly_labels = [
             label
-            for label in (_report_label(item) for item in (profile.get("brand_friendly_question_types") or []))
+            for label in (
+                _report_label(item)
+                for item in (profile.get("brand_friendly_question_types") or [])
+            )
             if label and label != "其他"
         ]
         unfriendly_labels = [
             label
-            for label in (_report_label(item) for item in (profile.get("brand_unfriendly_question_types") or []))
+            for label in (
+                _report_label(item)
+                for item in (profile.get("brand_unfriendly_question_types") or [])
+            )
             if label and label != "其他"
         ]
         mention_sentence = (
@@ -2788,15 +3761,26 @@ def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
     judgments = metrics.platform_judgments
     subtitle = (
         f"本轮只有{_platform_label(next((p for p in bundle.meta.platforms if platform_profiles.get(p, {}).get('data_status') == 'ok'), ''))}有稳定样本，适合先做验证。"
-        if any(platform_profiles.get(p, {}).get("data_status") == "ok" for p in bundle.meta.platforms)
+        if any(
+            platform_profiles.get(p, {}).get("data_status") == "ok"
+            for p in bundle.meta.platforms
+        )
         else "当前样本还不足，暂时看不出稳定的平台差异。"
     )
     lead_line = (
         f"这轮能稳定下判断的平台，主要是{'和'.join([_platform_label(p) for p in bundle.meta.platforms if platform_profiles.get(p, {}).get('data_status') == 'ok'][:2])}。"
-        if sum(1 for p in bundle.meta.platforms if platform_profiles.get(p, {}).get("data_status") == "ok") >= 2
+        if sum(
+            1
+            for p in bundle.meta.platforms
+            if platform_profiles.get(p, {}).get("data_status") == "ok"
+        )
+        >= 2
         else (
             f"这轮能稳定下判断的平台，主要是{_platform_label(next((p for p in bundle.meta.platforms if platform_profiles.get(p, {}).get('data_status') == 'ok'), ''))}。"
-            if any(platform_profiles.get(p, {}).get("data_status") == "ok" for p in bundle.meta.platforms)
+            if any(
+                platform_profiles.get(p, {}).get("data_status") == "ok"
+                for p in bundle.meta.platforms
+            )
             else "这轮样本还不足，暂时看不出稳定的平台差异。"
         )
     )
@@ -2806,19 +3790,26 @@ def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
         else None
     )
     validation_platform = judgments.get("best_comparison_answer_breakthrough")
-    validation_platform_label = _platform_label(validation_platform) if validation_platform else None
+    validation_platform_label = (
+        _platform_label(validation_platform) if validation_platform else None
+    )
     validation_reason = None
     if validation_platform:
         validation_profile = platform_profiles.get(validation_platform, {})
-        validation_rate = _format_ratio(validation_profile.get("comparison_answer_inclusion_rate"))
+        validation_rate = _format_ratio(
+            validation_profile.get("comparison_answer_inclusion_rate")
+        )
         source_preferences = validation_profile.get("source_preferences", {})
-        preferred_sources = "、".join(_preferred_source_labels(source_preferences)) or "暂无明显来源偏好"
+        preferred_sources = (
+            "、".join(_preferred_source_labels(source_preferences))
+            or "暂无明显来源偏好"
+        )
         if validation_rate not in {"N/A", "0.0%"}:
             validation_reason = (
                 f"最适合先验证内容调整的平台是{validation_platform_label}。"
                 f" 这个平台在比较类问题里已经更愿意让{bundle.meta.brand_name}进入答案（当前为 **{validation_rate}**），"
                 f"而且它的引用更受{preferred_sources}影响；如果官网结论页和可引用内容补齐，"
-            "也最容易先看到品牌可见度和官网引用转化率的变化。"
+                "也最容易先看到品牌可见度和官网引用转化率的变化。"
             )
         else:
             validation_reason = (
@@ -2831,9 +3822,7 @@ def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
         f"最适合先验证内容调整：{validation_platform_label or 'N/A'}",
     ]
     comparison_summary = "；".join(
-        f"{row[0]} **{row[1]}**"
-        for row in comparison_rows
-        if row[1] != "N/A"
+        f"{row[0]} **{row[1]}**" for row in comparison_rows if row[1] != "N/A"
     )
     conclusion = (
         validation_reason.replace("最适合先验证内容调整的平台是", "").strip()
@@ -2854,29 +3843,60 @@ def _build_platform_section(bundle: InputBundle, metrics: MetricBundle) -> dict[
             *([validation_reason] if validation_reason else []),
         ]
     ).strip()
-    return {"section_name": "platform_preference", "title": "平台偏好分析", "subtitle": subtitle, "markdown": markdown, "data": {"logic_rows": logic_rows, "comparison_rows": comparison_rows, "preference_rows": preference_rows, "platform_notes": effective_platform_notes, "judgment_lines": judgment_lines, "conclusion": conclusion}}
+    return {
+        "section_name": "platform_preference",
+        "title": "平台偏好分析",
+        "subtitle": subtitle,
+        "markdown": markdown,
+        "data": {
+            "logic_rows": logic_rows,
+            "comparison_rows": comparison_rows,
+            "preference_rows": preference_rows,
+            "platform_notes": effective_platform_notes,
+            "judgment_lines": judgment_lines,
+            "conclusion": conclusion,
+        },
+    }
 
 
-def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, comparison: ComparisonBundle, analyzer_outputs: dict[str, Any]) -> dict[str, Any]:
+def _build_recommendation_section(
+    bundle: InputBundle,
+    metrics: MetricBundle,
+    comparison: ComparisonBundle,
+    analyzer_outputs: dict[str, Any],
+) -> dict[str, Any]:
     recommendations: list[list[Any]] = []
     question_rows = analyzer_outputs["question_coverage_mapper"]["question_rows"]
-    price_summary = _category_question_summary(question_rows, field="intent", value=_intent_label("price_or_cost"))
-    scene_summary = _category_question_summary(question_rows, field="scene", value="画像痛点场景")
+    price_summary = _category_question_summary(
+        question_rows, field="intent", value=_intent_label("price_or_cost")
+    )
+    scene_summary = _category_question_summary(
+        question_rows, field="scene", value="画像痛点场景"
+    )
     citation_summary = analyzer_outputs["citation_analyzer"]["summary"]
-    top_domains = citation_summary.get("top_domains", []) if isinstance(citation_summary, dict) else []
-    top_source_names = "、".join(
-        str(row.get("display_name") or row.get("domain") or "")
-        for row in top_domains[:3]
-        if row.get("display_name") or row.get("domain")
-    ) or "主要垂媒"
+    top_domains = (
+        citation_summary.get("top_domains", [])
+        if isinstance(citation_summary, dict)
+        else []
+    )
+    top_source_names = (
+        "、".join(
+            str(row.get("display_name") or row.get("domain") or "")
+            for row in top_domains[:3]
+            if row.get("display_name") or row.get("domain")
+        )
+        or "主要垂媒"
+    )
     if not metrics.brand_visibility or (metrics.no_brand_rate or 0) >= 0.5:
-        recommendations.append([
-            "P1",
-            "先把品牌带进答案",
-            f"当前无品牌率是 **{_format_ratio(metrics.no_brand_rate)}**，说明品牌还没有稳定进入答案。",
-            "先把品牌定义、适用场景和替代对比三类基础内容写成可直接引用的官网结论句，不要只放产品参数。",
-            "观察品牌可见度和无品牌率是否一起改善。",
-        ])
+        recommendations.append(
+            [
+                "P1",
+                "先把品牌带进答案",
+                f"当前无品牌率是 **{_format_ratio(metrics.no_brand_rate)}**，说明品牌还没有稳定进入答案。",
+                "先把品牌定义、适用场景和替代对比三类基础内容写成可直接引用的官网结论句，不要只放产品参数。",
+                "观察品牌可见度和无品牌率是否一起改善。",
+            ]
+        )
     elif price_summary["question_count"] or scene_summary["question_count"]:
         dropped_samples = _state_question_samples(
             price_summary["questions"] + scene_summary["questions"],
@@ -2884,43 +3904,57 @@ def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, co
             limit=3,
         )
         sample_text = "、".join(dropped_samples) or "当前最容易没有把品牌写进答案的问题"
-        recommendations.append([
-            "P1",
-            "先补最接近决策的问题",
-            f"这轮和价格、成本有关的问题有 **{price_summary['question_count']}** 个，{_report_label(scene_summary['label'])}有 **{scene_summary['question_count']}** 个。当前最常没有把品牌写进答案的问题是 {sample_text}。",
-            "先把这些决策问题整理成官网结论页，再准备可被平台直接摘用的短答案。",
-            "观察这几类问题里的品牌可见度，以及官网引用转化率是否继续抬高。",
-        ])
+        recommendations.append(
+            [
+                "P1",
+                "先补最接近决策的问题",
+                f"这轮和价格、成本有关的问题有 **{price_summary['question_count']}** 个，{_report_label(scene_summary['label'])}有 **{scene_summary['question_count']}** 个。当前最常没有把品牌写进答案的问题是 {sample_text}。",
+                "先把这些决策问题整理成官网结论页，再准备可被平台直接摘用的短答案。",
+                "观察这几类问题里的品牌可见度，以及官网引用转化率是否继续抬高。",
+            ]
+        )
     if (metrics.official_conversion_rate or 0) < 0.2:
-        recommendations.append([
-            "P1",
-            "把品牌露出接回官网",
-            f"现在有 **{metrics.official_funnel.get('monitor_brand_answer_count', 0)}** 条答案提到品牌，其中 **{metrics.official_funnel.get('official_link_answer_count', 0)}** 条答案引用官网，流量主要被 {top_source_names} 接走。",
-            "先把价格对比、使用顾虑、核心差异和典型场景这几类页面改成结论页，而不是只放产品页。",
-            "观察官网引用转化率和品牌相关链接数能不能先抬起来。",
-        ])
+        recommendations.append(
+            [
+                "P1",
+                "把品牌露出接回官网",
+                f"现在有 **{metrics.official_funnel.get('monitor_brand_answer_count', 0)}** 条答案提到品牌，其中 **{metrics.official_funnel.get('official_link_answer_count', 0)}** 条答案引用官网，流量主要被 {top_source_names} 接走。",
+                "先把价格对比、使用顾虑、核心差异和典型场景这几类页面改成结论页，而不是只放产品页。",
+                "观察官网引用转化率和品牌相关链接数能不能先抬起来。",
+            ]
+        )
     if (metrics.competitor_pressure or 0) >= 0.3:
-        recommendations.append([
-            "P1",
-            "把比较题做成品牌主场",
-            f"竞品挤压率已经到 **{_format_ratio(metrics.competitor_pressure)}**，说明比较问题里还有明显的替代风险。",
-            f"先把核心竞品对比、关键差异和适合谁用写成一页式内容，让平台在横向比较时更容易先给出{bundle.meta.brand_name}的理由。",
-            "观察竞品挤压率和比较类问题里的品牌可见度。",
-        ])
+        recommendations.append(
+            [
+                "P1",
+                "把比较题做成品牌主场",
+                f"竞品挤压率已经到 **{_format_ratio(metrics.competitor_pressure)}**，说明比较问题里还有明显的替代风险。",
+                f"先把核心竞品对比、关键差异和适合谁用写成一页式内容，让平台在横向比较时更容易先给出{bundle.meta.brand_name}的理由。",
+                "观察竞品挤压率和比较类问题里的品牌可见度。",
+            ]
+        )
     display_negative_topics = _strip_false_negative_topics(metrics.top_negative_topics)
     if display_negative_topics:
         focus_topics = "、".join(row["display"] for row in display_negative_topics[:2])
-        recommendations.append([
-            "P2",
-            "先把反复出现的顾虑讲清楚",
-            f"当前重复出现的顾虑集中在 {focus_topics}。",
-            "先围绕这些问题补 FAQ 和短句结论，把真实限制、适用条件和边界说清楚，减少模型自己补出负面判断。",
-            "观察品牌负面提及率，以及这些顾虑是否还在反复出现。",
-        ])
+        recommendations.append(
+            [
+                "P2",
+                "先把反复出现的顾虑讲清楚",
+                f"当前重复出现的顾虑集中在 {focus_topics}。",
+                "先围绕这些问题补 FAQ 和短句结论，把真实限制、适用条件和边界说清楚，减少模型自己补出负面判断。",
+                "观察品牌负面提及率，以及这些顾虑是否还在反复出现。",
+            ]
+        )
     if metrics.platform_judgments.get("best_comparison_answer_breakthrough"):
-        target_platform = _platform_label(metrics.platform_judgments["best_comparison_answer_breakthrough"])
-        target_profile = metrics.platform_profiles.get(metrics.platform_judgments["best_comparison_answer_breakthrough"], {})
-        target_rate = _format_ratio(target_profile.get("comparison_answer_inclusion_rate"))
+        target_platform = _platform_label(
+            metrics.platform_judgments["best_comparison_answer_breakthrough"]
+        )
+        target_profile = metrics.platform_profiles.get(
+            metrics.platform_judgments["best_comparison_answer_breakthrough"], {}
+        )
+        target_rate = _format_ratio(
+            target_profile.get("comparison_answer_inclusion_rate")
+        )
         if target_rate not in {"N/A", "0.0%"}:
             action_text = (
                 f"{target_platform}在比较类问题里已经更愿意让{bundle.meta.brand_name}进入答案，当前比例是 **{target_rate}**。"
@@ -2931,13 +3965,19 @@ def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, co
                 f"{target_platform}已经形成可复查的比较类样本，适合先拿来验证内容调整。"
                 "先把新内容投到这个平台最常见的比较问题里，再看调整后品牌会不会更容易进入答案。"
             )
-        recommendations.append([
-            "P2",
-            "先在最容易起量的平台验证",
-            action_text.split("先把", 1)[0].strip(),
-            ("先把" + action_text.split("先把", 1)[1]) if "先把" in action_text else action_text,
-              "观察该平台的比较类问题品牌可见度，再看官网引用转化率。",
-          ])
+        recommendations.append(
+            [
+                "P2",
+                "先在最容易起量的平台验证",
+                action_text.split("先把", 1)[0].strip(),
+                (
+                    ("先把" + action_text.split("先把", 1)[1])
+                    if "先把" in action_text
+                    else action_text
+                ),
+                "观察该平台的比较类问题品牌可见度，再看官网引用转化率。",
+            ]
+        )
     if bundle.meta.report_kind == "scenario":
         comparison_line = None
         if comparison.comparable:
@@ -2946,23 +3986,29 @@ def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, co
             facts = []
             if isinstance(no_brand_delta, (int, float)):
                 direction = "更高" if no_brand_delta >= 0 else "更低"
-                facts.append(f"这个场景里不提任何品牌的答案占比比全景基线{direction} **{_format_delta_points_cn(no_brand_delta)}**")
+                facts.append(
+                    f"这个场景里不提任何品牌的答案占比比全景基线{direction} **{_format_delta_points_cn(no_brand_delta)}**"
+                )
             if isinstance(official_delta, (int, float)):
                 direction = "更高" if official_delta >= 0 else "更低"
-                facts.append(f"官网引用转化率也比全景基线{direction} **{_format_delta_points_cn(official_delta)}**")
+                facts.append(
+                    f"官网引用转化率也比全景基线{direction} **{_format_delta_points_cn(official_delta)}**"
+                )
             if facts:
                 comparison_line = "，".join(facts)
-        recommendations.append([
-            "P3",
-            "把这个场景单独做成可引用内容",
-            (
-                  f"围绕{bundle.meta.scenario_theme or '当前场景'}，这批问题和全景基线相比，{comparison_line}。"
-                  if comparison_line
-                  else f"围绕{bundle.meta.scenario_theme or '当前场景'}，这批问题已经形成了稳定样本。"
-              ),
-              "把这个场景下反复出现的顾虑、比较点和使用条件整理成专题页、FAQ 和短结论。",
-              "观察相对全景基线的无品牌率和官网引用转化率，还要看这几个场景问题里品牌会不会更容易被直接写进答案。",
-          ])
+        recommendations.append(
+            [
+                "P3",
+                "把这个场景单独做成可引用内容",
+                (
+                    f"围绕{bundle.meta.scenario_theme or '当前场景'}，这批问题和全景基线相比，{comparison_line}。"
+                    if comparison_line
+                    else f"围绕{bundle.meta.scenario_theme or '当前场景'}，这批问题已经形成了稳定样本。"
+                ),
+                "把这个场景下反复出现的顾虑、比较点和使用条件整理成专题页、FAQ 和短结论。",
+                "观察相对全景基线的无品牌率和官网引用转化率，还要看这几个场景问题里品牌会不会更容易被直接写进答案。",
+            ]
+        )
     subtitle = "优先做最容易改善品牌进入、官网承接和场景内容复用的动作。"
     action_blocks: list[str] = []
     for index, row in enumerate(recommendations[:4], start=1):
@@ -2994,23 +4040,32 @@ def _build_recommendation_section(bundle: InputBundle, metrics: MetricBundle, co
             ),
         ]
     ).strip()
-    return {"section_name": "recommendations", "title": "行动建议", "subtitle": subtitle, "markdown": markdown, "data": {"recommendations": recommendations[:4]}}
+    return {
+        "section_name": "recommendations",
+        "title": "行动建议",
+        "subtitle": subtitle,
+        "markdown": markdown,
+        "data": {"recommendations": recommendations[:4]},
+    }
 
 
-def _build_appendix_section(bundle: InputBundle, metrics: MetricBundle, analyzer_outputs: dict[str, Any]) -> dict[str, Any]:
+def _build_appendix_section(
+    bundle: InputBundle, metrics: MetricBundle, analyzer_outputs: dict[str, Any]
+) -> dict[str, Any]:
     question_rows = analyzer_outputs["question_coverage_mapper"]["question_rows"]
     citation_answers = analyzer_outputs["citation_analyzer"]["answers"]
     answer_lookup = {
-        answer.answer_id: answer
-        for answer in bundle.answers
-        if answer.status == "ok"
+        answer.answer_id: answer for answer in bundle.answers if answer.status == "ok"
     }
-    high_risk_rows = [row for row in question_rows[:10] if row["risk_level"] == "high"][:4]
+    high_risk_rows = [row for row in question_rows[:10] if row["risk_level"] == "high"][
+        :4
+    ]
     other_domain_notes = _collect_other_domain_notes(bundle)
     citation_sample_rows = [
         row
         for row in citation_answers
-        if (row.get("brand_related_link_count") or 0) > 0 or (row.get("official_link_count") or 0) > 0
+        if (row.get("brand_related_link_count") or 0) > 0
+        or (row.get("official_link_count") or 0) > 0
     ][:4]
     markdown = "\n".join(
         [
@@ -3020,75 +4075,129 @@ def _build_appendix_section(bundle: InputBundle, metrics: MetricBundle, analyzer
             "",
             "### 7.1 高风险问题样本",
             "",
-            *(([
-                "\n".join(
+            *(
+                (
                     [
-                        f"{index}. 当前状态：{_state_label(row['answer_state'])}；平台：{_sample_platform_labels(row.get('present_platforms', []))}；负面信息：{('、'.join(_negative_topic_label(topic) for topic in row.get('negative_topics', []) if topic != 'other') or '暂不集中')}。",
-                        _markdown_quote_block(_clean_report_text(row['question_text'], max_length=80)),
+                        "\n".join(
+                            [
+                                f"{index}. 当前状态：{_state_label(row['answer_state'])}；平台：{_sample_platform_labels(row.get('present_platforms', []))}；负面信息：{('、'.join(_negative_topic_label(topic) for topic in row.get('negative_topics', []) if topic != 'other') or '暂不集中')}。",
+                                _markdown_quote_block(
+                                    _clean_report_text(
+                                        row["question_text"], max_length=80
+                                    )
+                                ),
+                            ]
+                        )
+                        for index, row in enumerate(high_risk_rows, start=1)
                     ]
                 )
-                for index, row in enumerate(high_risk_rows, start=1)
-            ]) or ["- 当前样本里暂无高风险问题。"]),
+                or ["- 当前样本里暂无高风险问题。"]
+            ),
             "",
             "### 7.2 暂时还没法准确定类的来源站点",
             "",
-            *(([
-                f"- **{row['display_name']}（{row['domain']}）**：出现 {row['count']} 次；{row['reason']}"
-                for row in other_domain_notes
-            ]) or ["- 当前没有待继续归一的品牌相关来源站点。"]),
+            *(
+                (
+                    [
+                        f"- **{row['display_name']}（{row['domain']}）**：出现 {row['count']} 次；{row['reason']}"
+                        for row in other_domain_notes
+                    ]
+                )
+                or ["- 当前没有待继续归一的品牌相关来源站点。"]
+            ),
             "",
             "### 7.3 品牌相关链接样本",
             "",
-            *(([
-                "\n".join(
+            *(
+                (
                     [
-                        f"{index}. 平台：{_platform_label(str(row['platform']))}；品牌相关链接 {row['brand_related_link_count']} 个，其中官网链接 {row['official_link_count']} 个。",
-                        _markdown_quote_block(
-                            _clean_report_text(
-                                answer_lookup.get(row['answer_id']).question_text if answer_lookup.get(row['answer_id']) else 'N/A',
-                                max_length=80,
-                            )
-                        ),
+                        "\n".join(
+                            [
+                                f"{index}. 平台：{_platform_label(str(row['platform']))}；品牌相关链接 {row['brand_related_link_count']} 个，其中官网链接 {row['official_link_count']} 个。",
+                                _markdown_quote_block(
+                                    _clean_report_text(
+                                        (
+                                            answer_lookup.get(
+                                                row["answer_id"]
+                                            ).question_text
+                                            if answer_lookup.get(row["answer_id"])
+                                            else "N/A"
+                                        ),
+                                        max_length=80,
+                                    )
+                                ),
+                            ]
+                        )
+                        for index, row in enumerate(citation_sample_rows, start=1)
                     ]
                 )
-                for index, row in enumerate(citation_sample_rows, start=1)
-            ]) or ["- 当前没有可复核的品牌相关链接样本。"]),
+                or ["- 当前没有可复核的品牌相关链接样本。"]
+            ),
         ]
     ).strip()
-    return {"section_name": "appendix", "title": "附录", "subtitle": "保留必要样本，方便人工复核。", "markdown": markdown, "data": {"question_count": len(bundle.questions), "high_risk_scenario_count": metrics.high_risk_scenario_count}}
+    return {
+        "section_name": "appendix",
+        "title": "附录",
+        "subtitle": "保留必要样本，方便人工复核。",
+        "markdown": markdown,
+        "data": {
+            "question_count": len(bundle.questions),
+            "high_risk_scenario_count": metrics.high_risk_scenario_count,
+        },
+    }
 
 
-def build_report_sections(*, bundle: InputBundle, metric_bundle: MetricBundle, comparison_bundle: ComparisonBundle, analyzer_outputs: dict[str, Any]) -> list[dict[str, Any]]:
+def build_report_sections(
+    *,
+    bundle: InputBundle,
+    metric_bundle: MetricBundle,
+    comparison_bundle: ComparisonBundle,
+    analyzer_outputs: dict[str, Any],
+) -> list[dict[str, Any]]:
     visibility_data = _build_visibility_analyzer(bundle)
     header_section, _ = _build_header_markdown(bundle)
     return [
         header_section,
         _build_summary_section(bundle, metric_bundle, comparison_bundle),
-        _build_visibility_section(bundle, metric_bundle, comparison_bundle, visibility_data),
+        _build_visibility_section(
+            bundle, metric_bundle, comparison_bundle, visibility_data
+        ),
         _build_citation_section(bundle, metric_bundle),
         _build_question_section(bundle, metric_bundle, analyzer_outputs),
         _build_sentiment_section(bundle, metric_bundle),
         _build_platform_section(bundle, metric_bundle),
-        _build_recommendation_section(bundle, metric_bundle, comparison_bundle, analyzer_outputs),
+        _build_recommendation_section(
+            bundle, metric_bundle, comparison_bundle, analyzer_outputs
+        ),
         _build_appendix_section(bundle, metric_bundle, analyzer_outputs),
     ]
 
 
 def build_full_markdown(*, sections: list[dict[str, Any]]) -> str:
-    return "\n\n".join(section["markdown"].strip() for section in sections if section.get("markdown")).strip()
+    return "\n\n".join(
+        section["markdown"].strip() for section in sections if section.get("markdown")
+    ).strip()
 
 
-def build_home_v4_projection(*, bundle: InputBundle, metric_bundle: MetricBundle) -> dict[str, Any]:
+def build_home_v4_projection(
+    *, bundle: InputBundle, metric_bundle: MetricBundle
+) -> dict[str, Any]:
     def word_rows(rows: list[dict[str, Any]], sentiment: str) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
         for row in rows:
-            text = str(row.get("display") or row.get("reason") or row.get("topic") or "").strip()
+            text = str(
+                row.get("display") or row.get("reason") or row.get("topic") or ""
+            ).strip()
             if not text:
                 continue
             output.append(
                 {
                     "text": text,
-                    "weight": row.get("rate") if isinstance(row.get("rate"), (int, float)) else 0,
+                    "weight": (
+                        row.get("rate")
+                        if isinstance(row.get("rate"), (int, float))
+                        else 0
+                    ),
                     "sentiment": sentiment,
                     "count": int(row.get("count", 0) or 0),
                 }
@@ -3133,73 +4242,125 @@ def build_home_v4_projection(*, bundle: InputBundle, metric_bundle: MetricBundle
             row["mainConcern"] = _negative_topic_label(topic)
 
     question_rows = [
-        row for row in metric_bundle.question_diagnostics.get("question_rows", [])
+        row
+        for row in metric_bundle.question_diagnostics.get("question_rows", [])
         if isinstance(row, dict)
     ]
     risk_rows = [
-        row for row in metric_bundle.question_diagnostics.get("risk_rows", [])
+        row
+        for row in metric_bundle.question_diagnostics.get("risk_rows", [])
         if isinstance(row, dict)
     ]
     risks = [
         {
-            "title": _clean_report_text(str(row.get("question_text") or row.get("scene") or ""), max_length=42),
+            "title": _clean_report_text(
+                str(row.get("question_text") or row.get("scene") or ""), max_length=42
+            ),
             "level": "high" if row.get("risk_level") == "high" else "medium",
-            "platform": "、".join(_platform_label(str(platform)) for platform in row.get("present_platforms", []) or [] if platform),
-            "evidence": "、".join(_negative_topic_label(str(topic)) for topic in row.get("negative_topics", []) or [] if topic) or _state_label(str(row.get("answer_state") or "")),
+            "platform": "、".join(
+                _platform_label(str(platform))
+                for platform in row.get("present_platforms", []) or []
+                if platform
+            ),
+            "evidence": "、".join(
+                _negative_topic_label(str(topic))
+                for topic in row.get("negative_topics", []) or []
+                if topic and str(topic) != "other"
+            )
+            or _state_label(str(row.get("answer_state") or "")),
         }
-        for row in sorted(risk_rows, key=lambda item: (str(item.get("risk_level") or ""), str(item.get("question_text") or "")))[:4]
+        for row in sorted(
+            risk_rows,
+            key=lambda item: (
+                str(item.get("risk_level") or ""),
+                str(item.get("question_text") or ""),
+            ),
+        )[:4]
         if row.get("question_text") or row.get("scene")
     ]
 
     advantage_candidates = [
-        row for row in question_rows
-        if row.get("brand_present") and str(row.get("risk_level") or "") in {"low", "medium"}
+        row
+        for row in question_rows
+        if row.get("brand_present")
+        and str(row.get("risk_level") or "") in {"low", "medium"}
     ]
-    advantage_candidates.sort(key=lambda row: (-len(row.get("present_platforms", []) or []), str(row.get("question_text") or "")))
+    advantage_candidates.sort(
+        key=lambda row: (
+            -len(row.get("present_platforms", []) or []),
+            str(row.get("question_text") or ""),
+        )
+    )
     advantages = [
         {
-            "title": _clean_report_text(str(row.get("question_text") or row.get("scene") or ""), max_length=42),
+            "title": _clean_report_text(
+                str(row.get("question_text") or row.get("scene") or ""), max_length=42
+            ),
             "platformCount": len(row.get("present_platforms", []) or []),
-            "evidence": "、".join(_platform_label(str(platform)) for platform in row.get("present_platforms", []) or [] if platform),
+            "evidence": "、".join(
+                _platform_label(str(platform))
+                for platform in row.get("present_platforms", []) or []
+                if platform
+            ),
         }
         for row in advantage_candidates[:4]
         if row.get("question_text") or row.get("scene")
     ]
 
-    answer_sample_count = metric_bundle.successful_answers or metric_bundle.total_answers
+    answer_sample_count = (
+        metric_bundle.successful_answers or metric_bundle.total_answers
+    )
     mention_ranking = [
         {
             "rank": int(row.get("rank", 0) or 0),
             "brand": str(row.get("brand") or ""),
-            "mentionRate": safe_ratio(int(row.get("brand_presence_count", 0) or 0), answer_sample_count),
+            "mentionRate": safe_ratio(
+                int(row.get("brand_presence_count", 0) or 0), answer_sample_count
+            ),
             "mentionCount": int(row.get("brand_presence_count", 0) or 0),
-            "isCurrentBrand": str(row.get("brand") or "") == bundle.brand_master.monitor_brand,
+            "isCurrentBrand": str(row.get("brand") or "")
+            == bundle.brand_master.monitor_brand,
         }
         for row in metric_bundle.top_brand_ranking[:10]
         if isinstance(row, dict) and row.get("brand")
     ]
 
-    source_type_breakdown = metric_bundle.source_summary.get("source_type_breakdown", {})
-    source_types = [
-        {
-            "key": key,
-            "label": _source_type_label(key),
-            "share": value,
-        }
-        for key, value in source_type_breakdown.items()
-        if isinstance(value, (int, float)) and value > 0
-    ] if isinstance(source_type_breakdown, dict) else []
+    source_type_breakdown = metric_bundle.source_summary.get(
+        "source_type_breakdown", {}
+    )
+    source_types = (
+        [
+            {
+                "key": key,
+                "label": _source_type_label(key),
+                "share": value,
+            }
+            for key, value in source_type_breakdown.items()
+            if isinstance(value, (int, float)) and value > 0
+        ]
+        if isinstance(source_type_breakdown, dict)
+        else []
+    )
     source_types.sort(key=lambda item: (-(item["share"] or 0), item["label"]))
 
     top_domains = [
         {
             "domain": str(row.get("domain") or ""),
-            "displayName": str(row.get("display_name") or row.get("site_name") or row.get("domain") or ""),
+            "displayName": str(
+                row.get("display_name")
+                or row.get("site_name")
+                or row.get("domain")
+                or ""
+            ),
             "count": int(row.get("count", 0) or 0),
-            "share": row.get("share") if isinstance(row.get("share"), (int, float)) else None,
+            "share": (
+                row.get("share") if isinstance(row.get("share"), (int, float)) else None
+            ),
             "isOfficial": bool(row.get("is_official", False)),
             "sourceType": str(row.get("source_type") or "other"),
-            "sourceTypeLabel": _source_type_label(str(row.get("source_type") or "other")),
+            "sourceTypeLabel": _source_type_label(
+                str(row.get("source_type") or "other")
+            ),
         }
         for row in metric_bundle.source_summary.get("top_domains", []) or []
         if isinstance(row, dict) and row.get("domain")
@@ -3212,7 +4373,11 @@ def build_home_v4_projection(*, bundle: InputBundle, metric_bundle: MetricBundle
         },
         "platformDiagnosis": sorted(
             platform_rows.values(),
-            key=lambda row: (row["status"] == "risk", row["brandMentionCount"], row["platform"]),
+            key=lambda row: (
+                row["status"] == "risk",
+                row["brandMentionCount"],
+                row["platform"],
+            ),
             reverse=True,
         ),
         "risks": risks,
@@ -3226,7 +4391,13 @@ def build_home_v4_projection(*, bundle: InputBundle, metric_bundle: MetricBundle
     }
 
 
-def build_dashboard_projection(*, bundle: InputBundle, metric_bundle: MetricBundle, comparison_bundle: ComparisonBundle, sections: list[dict[str, Any]]) -> dict[str, Any]:
+def build_dashboard_projection(
+    *,
+    bundle: InputBundle,
+    metric_bundle: MetricBundle,
+    comparison_bundle: ComparisonBundle,
+    sections: list[dict[str, Any]],
+) -> dict[str, Any]:
     section_map = {section["section_name"]: section.get("data") for section in sections}
     return {
         "report_kind": bundle.meta.report_kind,
@@ -3237,7 +4408,11 @@ def build_dashboard_projection(*, bundle: InputBundle, metric_bundle: MetricBund
             "question_diagnostics": section_map.get("question_diagnostics"),
             "sentiment_risk": section_map.get("sentiment_risk"),
             "platform_profile": section_map.get("platform_preference"),
-            "scenario_delta": comparison_bundle.model_dump() if bundle.meta.report_kind == "scenario" else None,
+            "scenario_delta": (
+                comparison_bundle.model_dump()
+                if bundle.meta.report_kind == "scenario"
+                else None
+            ),
             "recommendations": section_map.get("recommendations"),
         },
         "headline_metrics": {
@@ -3272,39 +4447,119 @@ def build_canonical_report_artifact(
         ).strip()
         or None
     )
-    bundle = build_input_bundle(session_id=session_id, entity_id=entity_id, analysis_mode=analysis_mode, brand_profile=brand_profile, competitors=competitors, fetch_results=fetch_results, simulated_questions=simulated_questions, baseline_report_id=resolved_baseline_report_id)
-    analyzer_outputs, metric_bundle = build_metric_bundle(bundle, base_metrics=base_metrics)
-    comparison_bundle = build_comparison_bundle(bundle=bundle, metric_bundle=metric_bundle, baseline_report=baseline_report)
-    analyzer_outputs["comparison_engine"] = comparison_bundle.model_dump()
-    sections = build_report_sections(bundle=bundle, metric_bundle=metric_bundle, comparison_bundle=comparison_bundle, analyzer_outputs=analyzer_outputs)
-    full_markdown = build_full_markdown(sections=sections)
-    dashboard_projection = build_dashboard_projection(bundle=bundle, metric_bundle=metric_bundle, comparison_bundle=comparison_bundle, sections=sections)
-    title = (
-        f"{bundle.meta.brand_name}｜品牌全景分析报告"
-        if bundle.meta.report_kind == "panorama"
-        else f"{bundle.meta.brand_name}｜用户场景分析报告"
+    bundle = build_input_bundle(
+        session_id=session_id,
+        entity_id=entity_id,
+        analysis_mode=analysis_mode,
+        brand_profile=brand_profile,
+        competitors=competitors,
+        fetch_results=fetch_results,
+        simulated_questions=simulated_questions,
+        baseline_report_id=resolved_baseline_report_id,
     )
-    summary_section = next((section for section in sections if section["section_name"] == "summary"), None)
-    summary_data = summary_section.get("data", {}) if isinstance(summary_section, dict) else {}
-    return {
+    analyzer_outputs, metric_bundle = build_metric_bundle(
+        bundle, base_metrics=base_metrics
+    )
+    comparison_bundle = build_comparison_bundle(
+        bundle=bundle, metric_bundle=metric_bundle, baseline_report=baseline_report
+    )
+    analyzer_outputs["comparison_engine"] = comparison_bundle.model_dump()
+
+    metric_bundle_payload = metric_bundle.model_dump()
+    input_bundle_payload = bundle.model_dump()
+    data_audit = build_data_audit(metric_bundle_payload)
+    report_route = build_report_route(data_audit, report_kind=bundle.meta.report_kind)
+    scenario_diagnostics = build_scenario_diagnostics(
+        input_bundle_payload, analyzer_outputs
+    )
+    source_intelligence = build_source_intelligence(
+        metric_bundle_payload,
+        competitors=competitors,
+    )
+    risk_concern_analysis = build_risk_concern_analysis(
+        metric_bundle_payload,
+        analyzer_outputs,
+    )
+    action_recommendations = build_action_recommendations(
+        data_audit=data_audit,
+        scenario_diagnostics=scenario_diagnostics,
+        source_intelligence=source_intelligence,
+        risk_concern_analysis=risk_concern_analysis,
+        metric_bundle=metric_bundle_payload,
+        brand_name=bundle.meta.brand_name,
+    )
+
+    structured_report = build_structured_report(
+        brand_name=bundle.meta.brand_name,
+        report_kind=bundle.meta.report_kind,
+        metric_bundle=metric_bundle_payload,
+        data_audit=data_audit,
+        report_route=report_route,
+        scenario_diagnostics=scenario_diagnostics,
+        source_intelligence=source_intelligence,
+        risk_concern_analysis=risk_concern_analysis,
+        action_recommendations=action_recommendations,
+    )
+    sections = build_report_sections(
+        bundle=bundle,
+        metric_bundle=metric_bundle,
+        comparison_bundle=comparison_bundle,
+        analyzer_outputs=analyzer_outputs,
+    )
+    full_markdown = structured_report["report_markdown"]
+    executive_summary = structured_report["executive_summary"]
+    executive_summary_text = str(
+        executive_summary.get("one_line_judgment")
+        if isinstance(executive_summary, dict)
+        else ""
+    ).strip()
+    operations_diagnosis = structured_report["operations_diagnosis"]
+    diagnostic_conclusions = structured_report["diagnostic_conclusions"]
+    report_sections = structured_report["report_sections"]
+    title = f"{bundle.meta.brand_name}｜{report_route.get('title') or '品牌 AI 答案诊断报告'}"
+    insight_candidates = [
+        item.get("action") or item.get("fact")
+        for item in diagnostic_conclusions
+        if isinstance(item, dict)
+    ]
+
+    dashboard_projection = build_dashboard_projection(
+        bundle=bundle,
+        metric_bundle=metric_bundle,
+        comparison_bundle=comparison_bundle,
+        sections=sections,
+    )
+    artifact = {
         "artifact_kind": "geo_report",
         "report_kind": bundle.meta.report_kind,
+        "report_mode": data_audit.get("report_mode"),
         "title": title,
         "headline": title,
-        "subtitle": summary_data.get("one_line_conclusion"),
+        "subtitle": executive_summary_text,
         "brand_name": bundle.meta.brand_name,
         "meta": bundle.meta.model_dump(),
-        "input_bundle": bundle.model_dump(),
+        "input_bundle": input_bundle_payload,
         "skill_outputs": analyzer_outputs,
-        "metric_bundle": metric_bundle.model_dump(),
+        "metric_bundle": metric_bundle_payload,
         "comparison_bundle": comparison_bundle.model_dump(),
-        "insight_candidates": summary_data.get("suggestions", []),
+        "data_audit": data_audit,
+        "report_route": report_route,
+        "scenario_diagnostics": scenario_diagnostics,
+        "source_intelligence": source_intelligence,
+        "risk_concern_analysis": risk_concern_analysis,
+        "action_recommendations": action_recommendations,
+        "diagnostic_conclusions": diagnostic_conclusions,
+        "insight_candidates": insight_candidates,
         "sections": sections,
+        "report_sections": report_sections,
         "full_markdown": full_markdown,
         "report_markdown": full_markdown,
         "dashboard_projection": dashboard_projection,
-        "executive_summary": summary_data.get("one_line_conclusion"),
-        "key_findings": summary_data.get("suggestions", []),
+        "executive_report": executive_summary,
+        "executive_summary": executive_summary,
+        "executive_summary_text": executive_summary_text,
+        "operations_diagnosis": operations_diagnosis,
+        "key_findings": diagnostic_conclusions,
         "metrics": {
             "brand_visibility": metric_bundle.brand_visibility,
             "brand_rank": metric_bundle.brand_rank,
@@ -3316,3 +4571,18 @@ def build_canonical_report_artifact(
         },
         "metrics_raw": base_metrics or {},
     }
+    artifact["diagnosis_modules"] = extract_geo_report_diagnosis(artifact)
+    initial_validator_result = validate_report_artifact(artifact)
+    if not initial_validator_result["pass"]:
+        artifact = repair_report_artifact(artifact)
+    validator_result = validate_report_artifact(artifact)
+    artifact["validator_result"] = validator_result
+    if not initial_validator_result["pass"]:
+        artifact["validator_result"]["initial_issues"] = initial_validator_result[
+            "issues"
+        ]
+    if not validator_result["pass"]:
+        raise ValueError(
+            f"A5 report validation failed: {validator_result['required_fixes']}"
+        )
+    return artifact

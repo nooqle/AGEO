@@ -10,6 +10,7 @@ import type {
 } from '@/types/canvas';
 import {
   buildCanvasContentTextFromDescriptor,
+  getReportExecutiveSummaryText,
   type ExportDescriptor,
 } from '@/lib/canvasExportShared';
 
@@ -597,6 +598,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function getCanonicalSections(content: ReportCanvasContent): CanonicalSection[] {
+  if (Array.isArray(content.data.report_sections)) {
+    return content.data.report_sections.filter(isRecord) as CanonicalSection[];
+  }
   return Array.isArray(content.data.sections)
     ? content.data.sections.filter(isRecord) as CanonicalSection[]
     : [];
@@ -660,7 +664,7 @@ function ReportPdfDocument({ content, descriptor }: { content: ReportCanvasConte
     ? [`平台：${content.data.platform_scope.join(' / ')}`]
     : [];
   const title = content.data.title || content.data.headline || descriptor.title || descriptor.deliverableName;
-  const subtitle = content.data.subtitle || content.data.executive_summary || content.data.content;
+  const subtitle = getReportExecutiveSummaryText(content);
 
   return (
     <DocumentFrame
