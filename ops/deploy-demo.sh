@@ -394,6 +394,16 @@ wait_for_url() {
   return 1
 }
 
+dump_service_diagnostics() {
+  local service
+  for service in "$BACKEND_SERVICE" "$FRONTEND_SERVICE"; do
+    log "systemd status for $service"
+    sudo systemctl status "$service" --no-pager --lines=40 || true
+    log "journal tail for $service"
+    sudo journalctl -u "$service" --no-pager -n 160 || true
+  done
+}
+
 health_check() {
   local status=0
   log "Running health checks"
@@ -474,6 +484,7 @@ deploy() {
   install_systemd_units
 
   if ! restart_services || ! health_check; then
+    dump_service_diagnostics
     log "Deployment health check failed; attempting rollback"
     if [[ -L "$PREVIOUS_LINK" ]]; then
       rollback_to_previous
