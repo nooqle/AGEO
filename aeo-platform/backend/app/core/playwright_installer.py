@@ -5,6 +5,8 @@
 
 import asyncio
 import logging
+import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -65,21 +67,9 @@ class PlaywrightInstaller:
         which can fail inside uvicorn's event loop.
         """
         try:
-            # Method 1: Check the well-known install location directly
-            import platform as _platform
-            ms_pw = Path.home() / "AppData" / "Local" / "ms-playwright"
-            if _platform.system() != "Windows":
-                ms_pw = Path.home() / ".cache" / "ms-playwright"
-
-            if ms_pw.exists():
-                # Look for any chromium-* directory with a chrome executable
-                for d in ms_pw.iterdir():
-                    if d.is_dir() and d.name.startswith("chromium"):
-                        # Windows: chrome-win64/chrome.exe; Linux: chrome-linux/chrome
-                        for exe in d.rglob("chrome.exe" if _platform.system() == "Windows" else "chrome"):
-                            if exe.is_file():
-                                logger.debug("[Playwright] Found browser at %s", exe)
-                                return True
+            # Method 1: Check the well-known install location directly.
+            if cls._browser_executable_exists():
+                return True
 
             # Method 2: Fallback to patchright's executable_path (sync, no server)
             try:
@@ -95,6 +85,38 @@ class PlaywrightInstaller:
         except Exception as e:
             logger.debug(f"[Playwright] 浏览器检查失败: {e}")
             return False
+
+    @classmethod
+    def _browser_executable_exists(cls) -> bool:
+        roots: list[Path] = []
+        for env_name in ("PLAYWRIGHT_BROWSERS_PATH", "PATCHRIGHT_BROWSERS_PATH"):
+            configured = os.getenv(env_name)
+            if configured:
+                roots.append(Path(configured).expanduser())
+
+        if platform.system() == "Windows":
+            roots.append(Path.home() / "AppData" / "Local" / "ms-playwright")
+            executable_name = "chrome.exe"
+        else:
+            roots.append(Path.home() / ".cache" / "ms-playwright")
+            executable_name = "chrome"
+
+        seen: set[Path] = set()
+        for root in roots:
+            if root in seen:
+                continue
+            seen.add(root)
+            if not root.exists():
+                continue
+            for directory in root.iterdir():
+                if not directory.is_dir() or not directory.name.startswith("chromium"):
+                    continue
+                for exe in directory.rglob(executable_name):
+                    if exe.is_file():
+                        logger.debug("[Playwright] Found browser at %s", exe)
+                        return True
+
+        return False
 
     @classmethod
     async def _install_browser(cls) -> bool:
@@ -132,12 +154,18 @@ class PlaywrightInstaller:
         try:
             logger.info("[Playwright] 检查浏览器安装状态...")
 
+            if cls._browser_executable_exists():
+                logger.info("[Playwright] 浏览器已安装，跳过安装")
+                return True
+
+            timeout_seconds = int(os.getenv("PLAYWRIGHT_INSTALL_TIMEOUT_SECONDS", "90"))
+
             # 运行 playwright install chromium
             result = subprocess.run(
                 [sys.executable, "-m", "patchright", "install", "chromium"],
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 分钟超时
+                timeout=timeout_seconds,
             )
 
             if result.returncode == 0:

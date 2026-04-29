@@ -406,10 +406,11 @@ dump_service_diagnostics() {
 
 health_check() {
   local status=0
+  local backend_attempts="${BACKEND_HEALTH_ATTEMPTS:-120}"
   log "Running health checks"
   systemctl is-active "$BACKEND_SERVICE" >/dev/null || status=1
   systemctl is-active "$FRONTEND_SERVICE" >/dev/null || status=1
-  wait_for_url "backend" "http://127.0.0.1:8000/health" 30 || status=1
+  wait_for_url "backend" "http://127.0.0.1:8000/health" "$backend_attempts" || status=1
   wait_for_url "frontend" "http://127.0.0.1:3000" 30 || status=1
   wait_for_url "external" "$EXTERNAL_URL" 15 || status=1
   return "$status"
