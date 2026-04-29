@@ -43,6 +43,13 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
   }, [entity.lastAnalyzed, renderedAt]);
 
   const isDark = theme === 'dark';
+  const selectedPrimaryText = isDark ? 'var(--brand-contrast)' : 'var(--text-primary)';
+  const selectedActionText = 'var(--brand-contrast)';
+  const selectedSecondaryText = isDark ? 'rgba(244,241,232,0.78)' : 'var(--text-secondary)';
+  const selectedTertiaryText = isDark ? 'rgba(244,241,232,0.62)' : 'var(--text-tertiary)';
+  const primaryText = isSelected ? selectedPrimaryText : 'var(--text-primary)';
+  const secondaryText = isSelected ? selectedSecondaryText : 'var(--text-secondary)';
+  const tertiaryText = isSelected ? selectedTertiaryText : 'var(--text-tertiary)';
   const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!onClick) return;
     if (event.key === 'Enter' || event.key === ' ') {
@@ -53,21 +60,21 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
 
   return (
     <motion.div
-      className="w-full min-w-0 rounded-[22px] border px-3.5 py-3 text-left transition-all duration-200"
+      className="relative w-full min-w-0 overflow-hidden rounded-[22px] border px-3.5 py-3 text-left transition-all duration-200"
       style={{
         background: isDark
           ? (isSelected
-              ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 86%, var(--brand-primary) 14%), color-mix(in srgb, var(--bg-secondary) 94%, #181510 6%))'
+              ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 70%, var(--brand-primary) 30%), color-mix(in srgb, var(--bg-secondary) 84%, var(--brand-active) 16%))'
               : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 92%, #1c211c 8%), color-mix(in srgb, var(--bg-secondary) 96%, #17130f 4%))')
           : (isSelected
-              ? 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 93%, #e6f0ec 7%), color-mix(in srgb, var(--bg-secondary) 98%, #dfe8e4 2%))'
+              ? 'linear-gradient(180deg, color-mix(in srgb, var(--brand-bg) 78%, var(--bg-elevated) 22%), color-mix(in srgb, var(--bg-elevated) 92%, var(--brand-bg-hover) 8%))'
               : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 98%, #eef1ee 2%), var(--bg-secondary))'),
         borderColor: isDark
-          ? (isSelected ? 'color-mix(in srgb, var(--brand-primary) 38%, var(--border-subtle) 62%)' : 'rgba(255,255,255,0.08)')
-          : (isSelected ? 'color-mix(in srgb, var(--brand-primary) 30%, var(--border-subtle) 70%)' : 'color-mix(in srgb, var(--border-subtle) 92%, #c9d0c9 8%)'),
+          ? (isSelected ? 'color-mix(in srgb, var(--brand-primary) 68%, rgba(255,255,255,0.18) 32%)' : 'rgba(255,255,255,0.08)')
+          : (isSelected ? 'color-mix(in srgb, var(--brand-primary) 72%, var(--border-subtle) 28%)' : 'color-mix(in srgb, var(--border-subtle) 92%, #c9d0c9 8%)'),
         boxShadow: isDark
-          ? (isSelected ? '0 20px 44px rgba(8,12,24,0.34)' : '0 12px 28px rgba(8,12,24,0.22)')
-          : (isSelected ? '0 18px 36px rgba(24, 30, 28, 0.07)' : '0 10px 24px rgba(24, 30, 28, 0.035)'),
+          ? (isSelected ? '0 0 0 2px color-mix(in srgb, var(--brand-primary) 22%, transparent), 0 20px 46px rgba(4,10,8,0.42)' : '0 12px 28px rgba(8,12,24,0.22)')
+          : (isSelected ? '0 0 0 2px color-mix(in srgb, var(--brand-primary) 16%, transparent), 0 18px 38px rgba(20, 52, 45, 0.12)' : '0 10px 24px rgba(24, 30, 28, 0.035)'),
       }}
       whileHover={{ y: -2 }}
       transition={{ duration: 0.18 }}
@@ -83,10 +90,27 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
           onKeyDown={handleCardKeyDown}
         >
           <div className="flex items-start justify-between gap-3">
-            <BrandAvatar name={displayName} domain={entity.domain} size={42} />
+            <div
+              className="rounded-[15px] p-1 transition-colors"
+              style={{
+                background: isSelected
+                  ? (isDark ? 'rgba(255,253,247,0.12)' : 'rgba(255,253,247,0.72)')
+                  : 'transparent',
+              }}
+            >
+              <BrandAvatar name={displayName} domain={entity.domain} size={42} />
+            </div>
             <span
               className="rounded-full border px-2.5 py-1 text-[10px]"
-              style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-tertiary)' }}
+              style={{
+                background: isSelected
+                  ? (isDark ? 'rgba(255,253,247,0.10)' : 'rgba(255,253,247,0.78)')
+                  : 'transparent',
+                borderColor: isSelected
+                  ? (isDark ? 'rgba(255,253,247,0.20)' : 'color-mix(in srgb, var(--brand-primary) 20%, var(--border-subtle) 80%)')
+                  : 'var(--border-subtle)',
+                color: tertiaryText,
+              }}
             >
               {lastAnalyzedLabel}
             </span>
@@ -94,34 +118,52 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
 
           <div className="mt-2.5 min-w-0">
             <div className="flex items-center gap-2">
-              <div className="truncate text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+              <div className="truncate text-[14px] font-semibold" style={{ color: primaryText }}>
                 {displayName}
               </div>
               <span
                 className="inline-flex flex-shrink-0 rounded-full border px-2 py-0.5 text-[10px]"
-                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-tertiary)' }}
+                style={{
+                  background: isSelected
+                    ? (isDark ? 'rgba(255,253,247,0.08)' : 'rgba(255,253,247,0.72)')
+                    : 'transparent',
+                  borderColor: isSelected
+                    ? (isDark ? 'rgba(255,253,247,0.18)' : 'color-mix(in srgb, var(--brand-primary) 18%, var(--border-subtle) 82%)')
+                    : 'var(--border-subtle)',
+                  color: tertiaryText,
+                }}
               >
                 {entity.visibilityScope === 'organization' ? '组织空间' : '个人空间'}
               </span>
             </div>
             {entity.domain && (
-              <div className="mt-0.5 truncate text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              <div className="mt-0.5 truncate text-[11px]" style={{ color: tertiaryText }}>
                 {entity.domain}
               </div>
             )}
           </div>
 
           <div className="mt-2.5 flex items-center justify-between gap-3">
-            <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            <div className="text-[11px]" style={{ color: secondaryText }}>
               {industryLabel}
             </div>
-            <div className="text-[11px]" style={{ color: isSelected ? 'var(--color-primary)' : 'var(--text-tertiary)' }}>
+            <div
+              className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+              style={{
+                background: isSelected
+                  ? (isDark ? 'rgba(255,253,247,0.14)' : 'var(--brand-primary)')
+                  : 'transparent',
+                color: isSelected
+                  ? (isDark ? selectedPrimaryText : 'var(--brand-contrast)')
+                  : 'var(--text-tertiary)',
+              }}
+            >
               {isSelected ? '当前查看中' : '点击切换'}
             </div>
           </div>
         </div>
 
-        <div className="mt-2.5 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="mt-2.5 border-t pt-2" style={{ borderColor: isSelected ? 'rgba(255,253,247,0.16)' : 'var(--border-subtle)' }}>
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -131,17 +173,17 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
               style={{
                 background: isDark
                   ? (isSelected
-                      ? 'color-mix(in srgb, var(--brand-primary) 22%, var(--bg-elevated) 78%)'
+                      ? 'color-mix(in srgb, var(--brand-primary) 26%, var(--bg-elevated) 74%)'
                       : 'color-mix(in srgb, var(--brand-primary) 14%, var(--bg-elevated) 86%)')
                   : (isSelected
-                      ? 'color-mix(in srgb, var(--color-primary) 10%, var(--bg-elevated) 90%)'
+                      ? 'var(--brand-primary)'
                       : 'color-mix(in srgb, var(--color-primary) 6%, var(--bg-elevated) 94%)'),
                 color: isDark
-                  ? 'var(--brand-text)'
-                  : 'color-mix(in srgb, var(--color-primary) 62%, var(--text-primary) 38%)',
+                  ? (isSelected ? selectedActionText : 'var(--brand-text)')
+                  : (isSelected ? selectedActionText : 'color-mix(in srgb, var(--color-primary) 62%, var(--text-primary) 38%)'),
                 border: isDark
-                  ? '1px solid color-mix(in srgb, var(--brand-primary) 34%, var(--border-subtle) 66%)'
-                  : '1px solid color-mix(in srgb, var(--color-primary) 16%, var(--border-subtle) 84%)',
+                  ? (isSelected ? '1px solid color-mix(in srgb, var(--brand-primary) 40%, rgba(255,255,255,0.16) 60%)' : '1px solid color-mix(in srgb, var(--brand-primary) 34%, var(--border-subtle) 66%)')
+                  : (isSelected ? '1px solid var(--brand-primary)' : '1px solid color-mix(in srgb, var(--color-primary) 16%, var(--border-subtle) 84%)'),
                 boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.04)' : 'none',
               }}
               onClick={(event) => {
@@ -159,14 +201,14 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
               className="flex min-h-8 items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-[11px] font-medium transition-colors disabled:cursor-wait disabled:opacity-70"
               style={{
                 background: isDark
-                  ? 'linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025))'
-                  : 'color-mix(in srgb, var(--bg-secondary) 72%, var(--bg-tertiary) 28%)',
+                  ? (isSelected ? 'rgba(255,253,247,0.07)' : 'linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.025))')
+                  : (isSelected ? 'rgba(255,253,247,0.78)' : 'color-mix(in srgb, var(--bg-secondary) 72%, var(--bg-tertiary) 28%)'),
                 color: isDark
-                  ? 'rgba(255,255,255,0.90)'
-                  : 'color-mix(in srgb, var(--text-primary) 74%, var(--text-secondary) 26%)',
+                  ? (isSelected ? selectedPrimaryText : 'rgba(255,255,255,0.90)')
+                  : (isSelected ? 'var(--brand-primary)' : 'color-mix(in srgb, var(--text-primary) 74%, var(--text-secondary) 26%)'),
                 border: isDark
-                  ? '1px solid rgba(255,255,255,0.12)'
-                  : '1px solid color-mix(in srgb, var(--border-subtle) 84%, #b8c1b9 16%)',
+                  ? (isSelected ? '1px solid rgba(255,253,247,0.20)' : '1px solid rgba(255,255,255,0.12)')
+                  : (isSelected ? '1px solid color-mix(in srgb, var(--brand-primary) 18%, var(--border-subtle) 82%)' : '1px solid color-mix(in srgb, var(--border-subtle) 84%, #b8c1b9 16%)'),
                 boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.03)' : 'none',
               }}
               onClick={(event) => {

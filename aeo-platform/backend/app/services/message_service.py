@@ -115,7 +115,9 @@ def _extract_preview_item_count(payload: dict[str, Any]) -> int | None:
     return None
 
 
-def _compact_summary_metrics_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+def _compact_summary_metrics_payload(
+    payload: dict[str, Any] | None
+) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
 
@@ -133,8 +135,7 @@ def _compact_summary_metrics_payload(payload: dict[str, Any] | None) -> dict[str
             primitive_items = [
                 item
                 for item in value
-                if isinstance(item, (str, int, float, bool))
-                and len(str(item)) <= 120
+                if isinstance(item, (str, int, float, bool)) and len(str(item)) <= 120
             ]
             if primitive_items:
                 compact[key] = primitive_items[:6]
@@ -169,6 +170,7 @@ def _compact_output_payload(
         "artifact_kind",
         "preview_description",
         "description",
+        "executive_summary_text",
         "executive_summary",
         "updated_at",
         "brand_name",
@@ -180,7 +182,9 @@ def _compact_output_payload(
         if isinstance(value, (str, int, float, bool)) and value != "":
             compact[key] = value
 
-    summary_metrics = _compact_summary_metrics_payload(_extract_summary_metrics(payload))
+    summary_metrics = _compact_summary_metrics_payload(
+        _extract_summary_metrics(payload)
+    )
     if summary_metrics:
         compact["summary_metrics"] = summary_metrics
 
@@ -305,7 +309,10 @@ class MessageService:
         # Reverse to get chronological order
         messages = list(reversed(messages))
 
-        return [self._message_to_dict(msg, compact_output=compact_output) for msg in messages]
+        return [
+            self._message_to_dict(msg, compact_output=compact_output)
+            for msg in messages
+        ]
 
     async def save_message(
         self,
@@ -390,7 +397,9 @@ class MessageService:
         result = await self.db.execute(query)
         messages = result.scalars().all()
         for message in messages:
-            metadata = json.loads(message.extra_metadata) if message.extra_metadata else None
+            metadata = (
+                json.loads(message.extra_metadata) if message.extra_metadata else None
+            )
             if not isinstance(metadata, dict):
                 continue
             if str(metadata.get("output_id") or "").strip() != normalized_artifact_id:
@@ -412,7 +421,9 @@ class MessageService:
         Returns:
             Message dict
         """
-        metadata = json.loads(message.extra_metadata) if message.extra_metadata else None
+        metadata = (
+            json.loads(message.extra_metadata) if message.extra_metadata else None
+        )
         role = "agent" if message.role == MessageRole.ASSISTANT else message.role.value
         history_metadata = (
             _compact_history_metadata(metadata)
@@ -428,7 +439,9 @@ class MessageService:
             "content": _sanitize_history_message_content(
                 role=role,
                 content=message.content,
-                metadata=history_metadata if isinstance(history_metadata, dict) else None,
+                metadata=(
+                    history_metadata if isinstance(history_metadata, dict) else None
+                ),
             ),
             "sequence": message.sequence,
             "metadata": history_metadata,

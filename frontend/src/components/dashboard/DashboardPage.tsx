@@ -23,6 +23,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const searchParams = useSearchParams();
   const isMonitoringMode = searchParams.get('tab') === 'monitoring';
   const [brandArchive, setBrandArchive] = useState<DashboardBrandArchiveData | null>(null);
+  const [isBrandArchiveLoading, setIsBrandArchiveLoading] = useState(false);
   const [isOpeningLatestReport, setIsOpeningLatestReport] = useState(false);
   const {
     selectedBrandId,
@@ -52,8 +53,12 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     const fetchBrandArchive = async () => {
       if (!selectedBrandId) {
         setBrandArchive(null);
+        setIsBrandArchiveLoading(false);
         return;
       }
+
+      setBrandArchive(null);
+      setIsBrandArchiveLoading(true);
 
       try {
         const session = await api.getSessionByEntity(selectedBrandId);
@@ -62,8 +67,13 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           .filter((output) => output.type === 'workflow')
           .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
 
-        if (!workflowOutput || cancelled) {
+        if (cancelled) {
+          return;
+        }
+
+        if (!workflowOutput) {
           setBrandArchive(null);
+          setIsBrandArchiveLoading(false);
           return;
         }
 
@@ -76,10 +86,12 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
             brandProfile,
             competitors,
           });
+          setIsBrandArchiveLoading(false);
         }
       } catch {
         if (!cancelled) {
           setBrandArchive(null);
+          setIsBrandArchiveLoading(false);
         }
       }
     };
@@ -219,7 +231,11 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
           {hasData && !isMonitoringMode && selectedBrand && !isHomeLoading && hasSelectedBrandAnalysis && home && (
             <div className="space-y-6">
-              <DashboardBrandOverview entity={selectedBrand} archive={brandArchive} />
+              <DashboardBrandOverview
+                entity={selectedBrand}
+                archive={brandArchive}
+                isLoading={isBrandArchiveLoading}
+              />
               <DashboardHomeBoards home={home} onOpenLatestReport={handleOpenLatestReport} isOpeningLatestReport={isOpeningLatestReport} />
             </div>
           )}

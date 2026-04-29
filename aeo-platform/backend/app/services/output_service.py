@@ -88,6 +88,7 @@ def _compact_output_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "artifact_kind",
         "preview_description",
         "description",
+        "executive_summary_text",
         "executive_summary",
         "updated_at",
         "brand_name",
@@ -225,7 +226,9 @@ class OutputService:
 
         return str(file_path)
 
-    def _output_to_dict(self, message: Message, *, compact: bool = False) -> dict[str, Any]:
+    def _output_to_dict(
+        self, message: Message, *, compact: bool = False
+    ) -> dict[str, Any]:
         data = None
         metadata = None
         if message.output_data:
@@ -248,19 +251,29 @@ class OutputService:
         category = None
         artifact_kind = (
             metadata.get("artifact_kind")
-            if isinstance(metadata, dict) and isinstance(metadata.get("artifact_kind"), str)
+            if isinstance(metadata, dict)
+            and isinstance(metadata.get("artifact_kind"), str)
             else None
         )
         report_kind = (
             metadata.get("report_kind")
-            if isinstance(metadata, dict) and isinstance(metadata.get("report_kind"), str)
+            if isinstance(metadata, dict)
+            and isinstance(metadata.get("report_kind"), str)
             else None
         )
         if (
             artifact_kind
-            not in {"confidence_signal", "confidence_analysis", "site_confidence_report"}
+            not in {
+                "confidence_signal",
+                "confidence_analysis",
+                "site_confidence_report",
+            }
             and report_kind
-            not in {"confidence_signal", "confidence_analysis", "site_confidence_report"}
+            not in {
+                "confidence_signal",
+                "confidence_analysis",
+                "site_confidence_report",
+            }
             and message.output_type
             and message.output_type.startswith("report")
         ):
@@ -334,7 +347,9 @@ class OutputService:
         return {
             "id": str(latest_row.task_run_id),
             "artifact_id": f"{session_id}_fetchResults",
-            "message_id": str(fetch_anchor_message.id) if fetch_anchor_message else None,
+            "message_id": (
+                str(fetch_anchor_message.id) if fetch_anchor_message else None
+            ),
             "session_id": str(session_id),
             "type": "fetchResults",
             "title": (
@@ -365,9 +380,11 @@ class OutputService:
         outputs: list[dict[str, Any]],
         compact: bool = False,
     ) -> list[dict[str, Any]]:
-        authoritative_fetch_results = await self._get_authoritative_fetch_results_output(
-            session_id=session_id,
-            compact=compact,
+        authoritative_fetch_results = (
+            await self._get_authoritative_fetch_results_output(
+                session_id=session_id,
+                compact=compact,
+            )
         )
         if not authoritative_fetch_results:
             return outputs
@@ -378,9 +395,11 @@ class OutputService:
         non_fetch_outputs.append(authoritative_fetch_results)
         non_fetch_outputs.sort(
             key=lambda output: (
-                output.get("sequence")
-                if isinstance(output.get("sequence"), int)
-                else 10**9,
+                (
+                    output.get("sequence")
+                    if isinstance(output.get("sequence"), int)
+                    else 10**9
+                ),
                 str(output.get("created_at") or ""),
             ),
         )

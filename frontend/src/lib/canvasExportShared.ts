@@ -131,6 +131,22 @@ function toStringValue(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+export function getReportExecutiveSummaryText(content: ReportCanvasContent): string | undefined {
+  const executiveSummary = content.data.executive_summary;
+  if (isRecord(executiveSummary)) {
+    const oneLine = executiveSummary.one_line_judgment;
+    if (typeof oneLine === 'string' && oneLine.trim()) {
+      return oneLine.trim();
+    }
+  }
+  return (
+    toStringValue(content.data.executive_summary_text) ||
+    toStringValue(executiveSummary) ||
+    toStringValue(content.data.subtitle) ||
+    toStringValue(content.data.content)
+  );
+}
+
 function formatScore(value?: number): string {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return '--';
@@ -545,7 +561,7 @@ function buildFetchResultsMarkdown(content: Extract<CanvasContent, { type: 'fetc
 function buildStandardReportMarkdown(content: ReportCanvasContent, descriptor: ExportDescriptor): string {
   const reportMarkdown = buildCustomerReportMarkdown(content);
   const title = content.data.title || content.data.headline || descriptor.title || descriptor.deliverableName;
-  const subtitle = content.data.subtitle || content.data.executive_summary || content.data.content;
+  const subtitle = getReportExecutiveSummaryText(content);
   const lines: string[] = [
     `# ${title}`,
     '',

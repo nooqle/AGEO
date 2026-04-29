@@ -317,6 +317,14 @@ export type ActionQueueData = {
   items?: ActionQueueItem[];
 };
 
+export type ReportExecutiveSummary = {
+  section_title?: string;
+  one_line_judgment?: string;
+  key_findings?: unknown[];
+  top_actions?: unknown[];
+  not_judged?: unknown[];
+};
+
 export type InsightSectionItem = {
   title: string;
   scenario?: string;
@@ -597,13 +605,23 @@ export type ReportCanvasData = CanvasPreviewData & {
   insights?: ReportInsight[];
   recommendations?: ReportRecommendation[];
   content?: string;
-  executive_summary?: string;
+  executive_summary?: string | ReportExecutiveSummary;
+  executive_summary_text?: string;
   report_markdown?: string;
   full_markdown?: string;
   sections?: unknown;
+  report_sections?: unknown;
   metric_bundle?: unknown;
   comparison_bundle?: unknown;
   dashboard_projection?: unknown;
+  diagnosis_modules?: unknown;
+  data_audit?: unknown;
+  scenario_diagnostics?: unknown;
+  source_intelligence?: unknown;
+  risk_concern_analysis?: unknown;
+  action_recommendations?: unknown;
+  operations_diagnosis?: unknown;
+  diagnostic_conclusions?: unknown;
   bwvs_breakdown?: import('@/types/dashboard').BwvsBreakdown;
   brand_name?: string;
   analysis_period?: string;

@@ -47,12 +47,21 @@ function formatUpdatedAt(value?: string) {
 }
 
 function getCanonicalSections(content: ReportCanvasContent): CanonicalSection[] {
+  if (Array.isArray(content.data.report_sections)) {
+    return content.data.report_sections.filter(isRecord) as CanonicalSection[];
+  }
   return Array.isArray(content.data.sections)
     ? content.data.sections.filter(isRecord) as CanonicalSection[]
     : [];
 }
 
 function getFullMarkdown(content: ReportCanvasContent, sections: CanonicalSection[]): string {
+  if (typeof content.data.report_markdown === 'string' && content.data.report_markdown.trim()) {
+    return content.data.report_markdown.trim();
+  }
+  if (typeof content.data.full_markdown === 'string' && content.data.full_markdown.trim()) {
+    return content.data.full_markdown.trim();
+  }
   const bodySections = sections.filter((section) => section.section_name !== 'header');
   if (bodySections.length > 0) {
     const sectionMarkdown = bodySections
@@ -63,12 +72,6 @@ function getFullMarkdown(content: ReportCanvasContent, sections: CanonicalSectio
     if (sectionMarkdown) {
       return sectionMarkdown;
     }
-  }
-  if (typeof content.data.full_markdown === 'string' && content.data.full_markdown.trim()) {
-    return content.data.full_markdown.trim();
-  }
-  if (typeof content.data.report_markdown === 'string' && content.data.report_markdown.trim()) {
-    return content.data.report_markdown.trim();
   }
   return sections
     .map((section) => (typeof section.markdown === 'string' ? section.markdown.trim() : ''))
@@ -92,6 +95,23 @@ function getSummaryMetrics(sections: CanonicalSection[]): SummaryMetricRow[] {
       typeof row[1] === 'string' &&
       typeof row[2] === 'string'
   );
+}
+
+function getExecutiveSummaryText(content: ReportCanvasContent): string | undefined {
+  const executiveSummary = content.data.executive_summary;
+  if (isRecord(executiveSummary)) {
+    const oneLine = executiveSummary.one_line_judgment;
+    if (typeof oneLine === 'string' && oneLine.trim()) {
+      return oneLine.trim();
+    }
+  }
+  if (typeof content.data.executive_summary_text === 'string' && content.data.executive_summary_text.trim()) {
+    return content.data.executive_summary_text.trim();
+  }
+  if (typeof executiveSummary === 'string' && executiveSummary.trim()) {
+    return executiveSummary.trim();
+  }
+  return undefined;
 }
 
 function SummaryMetricStrip({ rows }: { rows: SummaryMetricRow[] }) {
@@ -251,8 +271,8 @@ export function ReportContent({ content, printMode = false }: { content: ReportC
   const eyebrow =
     content.category === 'scenario' ? '用户场景分析报告' : '品牌全景分析报告';
   const subtitle =
+    getExecutiveSummaryText(content) ||
     content.data.subtitle ||
-    content.data.executive_summary ||
     '这里展示的是本次分析生成的最新报告内容。';
   const updatedAt = formatUpdatedAt(content.data.updated_at);
   const isMissingCanonicalMarkdown = !markdown;

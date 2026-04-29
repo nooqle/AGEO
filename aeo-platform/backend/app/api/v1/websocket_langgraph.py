@@ -388,7 +388,10 @@ async def replay_pending_browser_actions_to_websocket(
             continue
 
         authoritative_row = authoritative_rows_by_request_id.get(request_id)
-        if authoritative_row is not None and authoritative_row.status != "takeover_required":
+        if (
+            authoritative_row is not None
+            and authoritative_row.status != "takeover_required"
+        ):
             filtered_runtime_count += 1
             continue
 
@@ -448,7 +451,10 @@ async def replay_pending_browser_actions_to_websocket(
         if not request_id or request_id in seen_request_ids:
             continue
         authoritative_row = authoritative_rows_by_request_id.get(request_id)
-        if authoritative_row is not None and authoritative_row.status != "takeover_required":
+        if (
+            authoritative_row is not None
+            and authoritative_row.status != "takeover_required"
+        ):
             continue
         takeover = await _rehydrate_aio_takeover_bundle(
             request_id=request_id,
@@ -1356,6 +1362,9 @@ async def rebuild_state_from_db(
                 }
                 state["report"] = {
                     "executive_summary": output_data.get("executive_summary", ""),
+                    "executive_summary_text": output_data.get(
+                        "executive_summary_text", ""
+                    ),
                     "key_findings": output_data.get("key_findings", []),
                     "strengths": output_data.get("strengths", []),
                     "weaknesses": output_data.get("weaknesses", []),
@@ -1374,6 +1383,9 @@ async def rebuild_state_from_db(
                 }
                 state["baseline_report"] = {
                     "executive_summary": output_data.get("executive_summary", ""),
+                    "executive_summary_text": output_data.get(
+                        "executive_summary_text", ""
+                    ),
                     "key_findings": output_data.get("key_findings", []),
                     "strengths": output_data.get("strengths", []),
                     "weaknesses": output_data.get("weaknesses", []),
@@ -1411,8 +1423,10 @@ async def rebuild_state_from_db(
                         UUID(state["run_id"])
                     )
                 elif state.get("task_id"):
-                    authoritative_rows = await platform_state_service.list_latest_for_task(
-                        UUID(state["task_id"])
+                    authoritative_rows = (
+                        await platform_state_service.list_latest_for_task(
+                            UUID(state["task_id"])
+                        )
                     )
 
                 if authoritative_rows:
@@ -1476,7 +1490,7 @@ async def rebuild_state_from_db(
         f"has_brand={state['brand_profile'] is not None}, "
         f"has_competitors={state['competitors'] is not None}, "
         f"brand_name={state['brand_name']!r}"
-        )
+    )
 
     if best_fetch_results:
         state["fetch_results"] = best_fetch_results
@@ -2121,7 +2135,19 @@ async def _save_final_message(session_id: str, workflow, config: dict):
             elif orchestrator_reply:
                 content = orchestrator_reply
             elif report:
-                content = report.get("executive_summary", "分析完成")
+                executive_summary = report.get("executive_summary")
+                if isinstance(executive_summary, dict):
+                    content = (
+                        executive_summary.get("one_line_judgment")
+                        or report.get("executive_summary_text")
+                        or "分析完成"
+                    )
+                else:
+                    content = (
+                        report.get("executive_summary_text")
+                        or executive_summary
+                        or "分析完成"
+                    )
             else:
                 content = "分析完成"
 
@@ -2268,9 +2294,11 @@ async def handle_confirmation_langgraph(
             history.append({"role": "user", "content": user_content})
 
             preview_message = "这是本次上传识别到的问题列表，请先查看右侧问题内容。确认无误后，再选择是否导入。"
-            confirm_message, confirm_options, step_name = build_table_import_confirmation_payload(
-                table_intake_result,
-                include_view_option=False,
+            confirm_message, confirm_options, step_name = (
+                build_table_import_confirmation_payload(
+                    table_intake_result,
+                    include_view_option=False,
+                )
             )
             preview_request_id = (
                 f"table_import_preview_{int(datetime.now().timestamp() * 1000)}"
@@ -2740,7 +2768,7 @@ async def handle_artifact_action_langgraph(
     await _emit_session_error(
         session_id,
         {
-                            "message": "旧版引用来源评估已退役，当前不再支持额外评估动作。",
+            "message": "旧版引用来源评估已退役，当前不再支持额外评估动作。",
             "recoverable": True,
         },
     )
