@@ -141,6 +141,110 @@ def test_deepseek_messages_preserve_reasoning_content():
     assert model._build_messages(messages)[0]["reasoning_content"] == "需要调用工具。"
 
 
+def test_deepseek_thinking_converts_legacy_tool_call_without_reasoning():
+    model = DeepSeekModel(DeepSeekConfig(api_key="test-key", thinking_enabled=True))
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "我先调用工具。",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "answer_fetch", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "工具完成。",
+        },
+        {"role": "user", "content": "继续"},
+    ]
+
+    built = model._build_messages(messages)
+
+    assert built[0]["role"] == "assistant"
+    assert "tool_calls" not in built[0]
+    assert built[1]["role"] == "assistant"
+    assert built[2]["role"] == "user"
+
+
+def test_deepseek_repairs_orphan_tool_message():
+    model = DeepSeekModel(DeepSeekConfig(api_key="test-key", thinking_enabled=True))
+
+    built = model._build_messages(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call_orphan",
+                "content": "等待用户选择采集模式...",
+            },
+            {"role": "user", "content": "继续"},
+        ]
+    )
+
+    assert built[0]["role"] == "assistant"
+    assert "tool_call_id" not in built[0]
+    assert built[1]["role"] == "user"
+
+
+def test_deepseek_repairs_mismatched_tool_call_id_with_reasoning():
+    model = DeepSeekModel(DeepSeekConfig(api_key="test-key", thinking_enabled=True))
+
+    built = model._build_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "需要调用工具。",
+                "tool_calls": [
+                    {
+                        "id": "call_expected",
+                        "type": "function",
+                        "function": {"name": "answer_fetch", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "defense_fetch_1",
+                "content": "等待用户选择采集模式...",
+            },
+        ]
+    )
+
+    assert built[0]["tool_calls"][0]["id"] == "call_expected"
+    assert built[1]["role"] == "tool"
+    assert built[1]["tool_call_id"] == "call_expected"
+
+
+def test_deepseek_non_thinking_keeps_valid_tool_calls_without_reasoning():
+    model = DeepSeekModel(DeepSeekConfig(api_key="test-key", thinking_enabled=False))
+
+    built = model._build_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "调用工具。",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "answer_fetch", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "完成。"},
+        ]
+    )
+
+    assert built[0]["tool_calls"][0]["id"] == "call_1"
+    assert built[1]["role"] == "tool"
+
+
 def test_deepseek_thinking_drops_sampling_temperature():
     model = DeepSeekModel(DeepSeekConfig(api_key="test-key", thinking_enabled=True))
     request_kwargs = model.config.to_completion_kwargs()
