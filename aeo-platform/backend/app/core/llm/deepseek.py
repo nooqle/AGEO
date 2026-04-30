@@ -130,12 +130,131 @@ class DeepSeekModel(BaseLLMModel):
             return [ThinkingBlock(text=message.reasoning_content)]
         return []
 
-    def _build_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _normalize_tool_calls(message: dict[str, Any]) -> list[str]:
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            return []
+
+        ids: list[str] = []
+        normalized_calls: list[dict[str, Any]] = []
+        for index, call in enumerate(tool_calls, start=1):
+            if not isinstance(call, dict):
+                continue
+            normalized = dict(call)
+            call_id = str(normalized.get("id") or f"call_{index}")
+            normalized["id"] = call_id
+            normalized.setdefault("type", "function")
+            function = normalized.get("function")
+            if isinstance(function, dict):
+                normalized_function = dict(function)
+                arguments = normalized_function.get("arguments")
+                if isinstance(arguments, (dict, list)):
+                    normalized_function["arguments"] = json.dumps(
+                        arguments,
+                        ensure_ascii=False,
+                    )
+                elif arguments is None:
+                    normalized_function["arguments"] = "{}"
+                normalized["function"] = normalized_function
+            normalized_calls.append(normalized)
+            ids.append(call_id)
+        message["tool_calls"] = normalized_calls
+        return ids
+
+    @staticmethod
+    def _as_historical_assistant_note(message: dict[str, Any]) -> dict[str, Any]:
+        content = str(message.get("content") or "").strip()
+        if not content:
+            content = "Historical tool result is available in the surrounding context."
+        return {
+            "role": "assistant",
+            "content": f"[historical tool result] {content}",
+        }
+
+    @staticmethod
+    def _missing_tool_result_message(tool_call_id: str) -> dict[str, Any]:
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": "Historical tool result was archived before this request.",
+        }
+
+    def _repair_tool_history(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        thinking_enabled: bool,
+    ) -> list[dict[str, Any]]:
+        repaired: list[dict[str, Any]] = []
+        pending_tool_call_ids: list[str] = []
+
+        def close_pending_tool_calls() -> None:
+            nonlocal pending_tool_call_ids
+            for pending_id in pending_tool_call_ids:
+                repaired.append(self._missing_tool_result_message(pending_id))
+            pending_tool_call_ids = []
+
+        for message in messages:
+            role = message.get("role")
+            if role == "tool":
+                if pending_tool_call_ids:
+                    fixed = dict(message)
+                    tool_call_id = str(fixed.get("tool_call_id") or "")
+                    if tool_call_id not in pending_tool_call_ids:
+                        tool_call_id = pending_tool_call_ids[0]
+                    fixed["tool_call_id"] = tool_call_id
+                    repaired.append(fixed)
+                    pending_tool_call_ids.remove(tool_call_id)
+                else:
+                    repaired.append(self._as_historical_assistant_note(message))
+                continue
+
+            if pending_tool_call_ids:
+                close_pending_tool_calls()
+
+            if role == "assistant" and message.get("tool_calls"):
+                fixed = dict(message)
+                tool_call_ids = self._normalize_tool_calls(fixed)
+                if thinking_enabled and not fixed.get("reasoning_content"):
+                    fixed.pop("tool_calls", None)
+                    fixed.pop("reasoning_content", None)
+                    if not str(fixed.get("content") or "").strip():
+                        fixed["content"] = (
+                            "Historical tool call omitted because the original "
+                            "DeepSeek reasoning_content is unavailable."
+                        )
+                    repaired.append(fixed)
+                    continue
+                repaired.append(fixed)
+                pending_tool_call_ids = tool_call_ids
+                continue
+
+            repaired.append(message)
+
+        if pending_tool_call_ids:
+            close_pending_tool_calls()
+
+        return repaired
+
+    def _build_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        thinking_enabled: bool | None = None,
+    ) -> list[dict[str, Any]]:
         formatted = super()._build_messages(messages)
         for source, target in zip(messages, formatted, strict=False):
             if source.get("reasoning_content"):
                 target["reasoning_content"] = source["reasoning_content"]
-        return formatted
+        return self._repair_tool_history(
+            formatted,
+            thinking_enabled=(
+                self.config.thinking_enabled
+                if thinking_enabled is None
+                else thinking_enabled
+            ),
+        )
 
     def _parse_tool_calls(self, message: Any) -> list[ToolCallBlock]:
         tool_calls = []
@@ -192,7 +311,15 @@ class DeepSeekModel(BaseLLMModel):
     ) -> LLMResponse:
         thinking_enabled_override = kwargs.pop("thinking_enabled", None)
         request_kwargs = self.config.to_completion_kwargs()
-        request_kwargs["messages"] = self._build_messages(messages)
+        effective_thinking_enabled = (
+            self.config.thinking_enabled
+            if thinking_enabled_override is None
+            else thinking_enabled_override
+        )
+        request_kwargs["messages"] = self._build_messages(
+            messages,
+            thinking_enabled=bool(effective_thinking_enabled),
+        )
         if tools:
             fn_tools = [t for t in tools if t.get("type") == "function"]
             if fn_tools:
@@ -225,7 +352,15 @@ class DeepSeekModel(BaseLLMModel):
     ) -> Generator[LLMResponse, None, None]:
         thinking_enabled_override = kwargs.pop("thinking_enabled", None)
         request_kwargs = self.config.to_completion_kwargs()
-        request_kwargs["messages"] = self._build_messages(messages)
+        effective_thinking_enabled = (
+            self.config.thinking_enabled
+            if thinking_enabled_override is None
+            else thinking_enabled_override
+        )
+        request_kwargs["messages"] = self._build_messages(
+            messages,
+            thinking_enabled=bool(effective_thinking_enabled),
+        )
         request_kwargs["stream"] = True
         if tools:
             fn_tools = [t for t in tools if t.get("type") == "function"]
