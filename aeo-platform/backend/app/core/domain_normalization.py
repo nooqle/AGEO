@@ -18,6 +18,8 @@ def normalize_domain(url_or_domain: str | None) -> str | None:
     domain = extract_domain(str(url_or_domain or "")).strip().lower().rstrip(".")
     if not domain:
         return None
+    if ":" in domain and not domain.startswith("["):
+        domain = domain.split(":", 1)[0]
     labels = [label for label in domain.split(".") if label]
     if len(labels) >= 3 and labels[0] in MOBILE_PREFIXES:
         domain = ".".join(labels[1:])

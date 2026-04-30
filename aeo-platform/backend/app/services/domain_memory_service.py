@@ -6,6 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any, Mapping
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +47,7 @@ class DomainResolution:
     confidence: float | None
     status: str
     resolved_by: str | None
+    url_intelligence: dict[str, Any] | None = None
 
 
 class DomainMemoryService:
@@ -66,6 +68,7 @@ class DomainMemoryService:
         entity_id: str | None,
         official_domains: list[str],
         platform: str | None,
+        url_intelligence: Mapping[str, Any] | None = None,
     ) -> DomainResolution:
         """Resolve citation domains without model calls for request-time paths."""
 
@@ -83,6 +86,7 @@ class DomainMemoryService:
                 confidence=None,
                 status="missing_domain",
                 resolved_by=None,
+                url_intelligence=dict(url_intelligence or {}) or None,
             )
 
         identity = await self._get_identity_record(canonical_domain)
@@ -101,19 +105,28 @@ class DomainMemoryService:
         source_type = (
             "official"
             if is_official
-            else (identity.source_type if identity is not None else "other")
+            else (
+                identity.source_type
+                if identity is not None
+                else _url_intelligence_category(url_intelligence) or "other"
+            )
         )
         display_name = (
             (identity.display_name if identity is not None else None)
             or site_name
+            or _url_intelligence_site_name(url_intelligence)
             or canonical_domain
         )
+        site_category = (
+            identity.site_category if identity is not None else None
+        ) or _url_intelligence_category(url_intelligence)
         confidence_values = [
             value
             for value in (
                 0.99 if official else None,
                 identity.confidence if identity is not None else None,
                 relation.confidence if relation is not None else None,
+                _url_intelligence_confidence_score(url_intelligence),
             )
             if isinstance(value, (int, float))
         ]
@@ -126,22 +139,32 @@ class DomainMemoryService:
                 else (
                     identity.resolved_by
                     if identity is not None and identity.resolved_by
-                    else "fast_fallback"
+                    else (
+                        "url_intelligence_skill"
+                        if url_intelligence
+                        else "fast_fallback"
+                    )
                 )
             )
         )
         has_memory = identity is not None or relation is not None
+        has_url_intelligence = bool(url_intelligence)
         return DomainResolution(
             canonical_domain=canonical_domain,
             display_name=display_name,
             owner_name=identity.owner_name if identity is not None else None,
             source_type=source_type,
-            site_category=identity.site_category if identity is not None else None,
+            site_category=site_category,
             is_official=is_official,
             relation_type=relation_type,
             confidence=max(confidence_values) if confidence_values else None,
-            status="resolved" if official or has_memory else "fast_fallback",
+            status=(
+                "resolved"
+                if official or has_memory or has_url_intelligence
+                else "fast_fallback"
+            ),
             resolved_by=resolved_by,
+            url_intelligence=dict(url_intelligence or {}) or None,
         )
 
     async def resolve_citation_domain(
@@ -510,6 +533,37 @@ class DomainMemoryService:
             )
             fallback["error"] = str(exc)
             return fallback
+
+
+def _url_intelligence_site_name(
+    payload: Mapping[str, Any] | None,
+) -> str | None:
+    text = str((payload or {}).get("site_name") or "").strip()
+    if not text or text == "缺乏特征，无法识别":
+        return None
+    return text
+
+
+def _url_intelligence_category(
+    payload: Mapping[str, Any] | None,
+) -> str | None:
+    text = str((payload or {}).get("category") or "").strip()
+    if not text or text == "缺乏特征，无法识别":
+        return None
+    return text
+
+
+def _url_intelligence_confidence_score(
+    payload: Mapping[str, Any] | None,
+) -> float | None:
+    confidence = str((payload or {}).get("confidence") or "").strip()
+    if confidence == "High":
+        return 0.9
+    if confidence == "Medium":
+        return 0.6
+    if confidence == "Low":
+        return 0.2
+    return None
 
 
 def _parse_json_object(content: str) -> dict[str, object]:

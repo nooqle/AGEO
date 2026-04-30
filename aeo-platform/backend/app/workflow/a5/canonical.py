@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import math
 import re
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from pydantic import BaseModel, Field
 
@@ -413,7 +413,19 @@ def _format_delta_pp(value: float | None) -> str:
 
 
 def _source_type_label(source_type: str) -> str:
-    return SOURCE_TYPE_DISPLAY.get(source_type, SOURCE_TYPE_DISPLAY["other"])
+    text = str(source_type or "").strip()
+    return SOURCE_TYPE_DISPLAY.get(text, text or SOURCE_TYPE_DISPLAY["other"])
+
+
+def _ordered_source_types(source_types: Iterable[str]) -> list[str]:
+    normalized = [
+        str(item or "").strip() for item in source_types if str(item or "").strip()
+    ]
+    seen = set(normalized)
+    known = set(SOURCE_TYPE_ORDER)
+    ordered = [item for item in SOURCE_TYPE_ORDER if item in seen]
+    ordered.extend(sorted(item for item in seen if item not in known))
+    return ordered
 
 
 def _negative_topic_label(topic: str) -> str:
@@ -873,7 +885,7 @@ def _normalize_decision_stage_value(raw_value: Any, question_text: str) -> str:
 
 def _preferred_source_labels(source_preferences: dict[str, Any]) -> list[str]:
     preferred: list[str] = []
-    for source_type in SOURCE_TYPE_ORDER:
+    for source_type in _ordered_source_types(source_preferences.keys()):
         strength = str(source_preferences.get(source_type) or "low")
         if strength in {"high", "medium"}:
             preferred.append(_source_type_label(source_type))
@@ -929,14 +941,11 @@ class CitationFetchRecord(BaseModel):
     domain: str | None = None
     snippet: str | None = None
     site_name: str | None = None
-    source_type: Literal[
-        "official",
-        "authority_media",
-        "vertical_media",
-        "community",
-        "video_or_content",
-        "other",
-    ]
+    source_type: str = "other"
+    site_category: str | None = None
+    url_intelligence: dict[str, Any] = Field(default_factory=dict)
+    information_updated_at: str | None = None
+    information_updated_at_source: str | None = None
     ecosystem_tag: Literal[
         "none",
         "wechat",
@@ -995,14 +1004,7 @@ class AnswerRecord(BaseModel):
 
 class DomainTaxonomyRecord(BaseModel):
     domain: str
-    source_type: Literal[
-        "official",
-        "authority_media",
-        "vertical_media",
-        "community",
-        "video_or_content",
-        "other",
-    ]
+    source_type: str
     ecosystem_tag: Literal[
         "none",
         "wechat",
@@ -1581,8 +1583,29 @@ def build_input_bundle(
                 source_type = str(
                     citation.get("source_type") or metadata.get("source_type") or ""
                 ).strip()
-                if source_type not in set(SOURCE_TYPE_ORDER):
-                    source_type = taxonomy.source_type if taxonomy else "other"
+                url_intelligence = (
+                    citation.get("url_intelligence")
+                    if isinstance(citation.get("url_intelligence"), dict)
+                    else (
+                        metadata.get("url_intelligence")
+                        if isinstance(metadata.get("url_intelligence"), dict)
+                        else {}
+                    )
+                )
+                site_category = str(
+                    citation.get("site_category")
+                    or metadata.get("site_category")
+                    or (
+                        url_intelligence.get("category")
+                        if isinstance(url_intelligence, dict)
+                        else ""
+                    )
+                    or ""
+                ).strip()
+                if not source_type:
+                    source_type = site_category or (
+                        taxonomy.source_type if taxonomy else "other"
+                    )
                 is_official = bool(citation.get("is_official")) or _domain_matches(
                     domain, official_domains
                 )
@@ -1595,6 +1618,16 @@ def build_input_bundle(
                     or citation.get("source")
                     or ""
                 ).strip() or (taxonomy.display_name if taxonomy else None)
+                information_updated_at = str(
+                    citation.get("information_updated_at")
+                    or metadata.get("information_updated_at")
+                    or ""
+                ).strip()
+                information_updated_at_source = str(
+                    citation.get("information_updated_at_source")
+                    or metadata.get("information_updated_at_source")
+                    or ""
+                ).strip()
                 citation_records.append(
                     CitationFetchRecord(
                         citation_id=f"{question_id}:{platform}:{citation_index}",
@@ -1604,6 +1637,16 @@ def build_input_bundle(
                         snippet=snippet,
                         site_name=site_name,
                         source_type=source_type,
+                        site_category=site_category or None,
+                        url_intelligence=(
+                            dict(url_intelligence)
+                            if isinstance(url_intelligence, dict)
+                            else {}
+                        ),
+                        information_updated_at=information_updated_at or None,
+                        information_updated_at_source=(
+                            information_updated_at_source or None
+                        ),
                         ecosystem_tag=(taxonomy.ecosystem_tag if taxonomy else "none"),
                         is_platform_ecosystem=bool(
                             taxonomy and taxonomy.is_platform_ecosystem
@@ -1786,6 +1829,7 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
     domain_counter: Counter[str] = Counter()
     domain_source_counter: dict[str, Counter[str]] = defaultdict(Counter)
     domain_display_names: dict[str, Counter[str]] = defaultdict(Counter)
+    domain_site_categories: dict[str, Counter[str]] = defaultdict(Counter)
     domain_titles: dict[str, list[str]] = defaultdict(list)
     monitor_brand_answers = [
         answer
@@ -1818,6 +1862,8 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
                 domain_source_counter[citation.domain][citation.source_type] += 1
                 if citation.site_name:
                     domain_display_names[citation.domain][citation.site_name] += 1
+                if citation.site_category:
+                    domain_site_categories[citation.domain][citation.site_category] += 1
                 if (
                     citation.title
                     and citation.title not in domain_titles[citation.domain]
@@ -1854,9 +1900,10 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
             }
         )
 
+    source_type_keys = _ordered_source_types(source_counter.keys())
     source_type_breakdown = {
         source_type: safe_ratio(source_counter.get(source_type, 0), brand_related_links)
-        for source_type in SOURCE_TYPE_ORDER
+        for source_type in source_type_keys
     }
 
     platform_profiles: dict[str, Any] = {}
@@ -1868,7 +1915,7 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
                     platform_citation_counter[platform].get(source_type, 0), total
                 )
             )
-            for source_type in SOURCE_TYPE_ORDER
+            for source_type in source_type_keys
         }
         platform_profiles[platform] = {
             "source_preferences": source_preferences,
@@ -1902,6 +1949,11 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
             if domain_display_names.get(domain)
             else ""
         )
+        site_category = (
+            domain_site_categories[domain].most_common(1)[0][0]
+            if domain_site_categories.get(domain)
+            else None
+        )
         top_domains.append(
             {
                 "domain": domain,
@@ -1917,6 +1969,7 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
                     domain, bundle.brand_master.official_domains
                 ),
                 "source_type": source_type,
+                "site_category": site_category,
                 "sample_titles": sample_titles,
             }
         )
@@ -2319,9 +2372,7 @@ def _build_platform_profile_analyzer(
                 "brand_unfriendly_question_types": [],
                 "comparison_answer_inclusion_rate": None,
                 "no_citation_strong_recommend_rate": None,
-                "source_preferences": {
-                    source_type: "low" for source_type in SOURCE_TYPE_ORDER
-                },
+                "source_preferences": {},
                 "ecosystem_preference": "low",
                 "answer_feature_mix": {},
             }
@@ -2433,7 +2484,7 @@ def _build_platform_profile_analyzer(
             ),
             "source_preferences": citation_profile.get(
                 "source_preferences",
-                {source_type: "low" for source_type in SOURCE_TYPE_ORDER},
+                {},
             ),
             "ecosystem_preference": citation_profile.get("ecosystem_preference", "low"),
             "answer_feature_mix": {
@@ -3133,7 +3184,7 @@ def _build_citation_section(
             _source_type_label(source_type),
             _format_ratio(metrics.source_type_breakdown.get(source_type)),
         ]
-        for source_type in SOURCE_TYPE_ORDER
+        for source_type in _ordered_source_types(metrics.source_type_breakdown.keys())
     ]
     funnel = metrics.official_funnel
     top_domains = (
@@ -3160,7 +3211,7 @@ def _build_citation_section(
         if row.get("display_name") or row.get("domain")
     )
     source_parts = []
-    for source_type in SOURCE_TYPE_ORDER:
+    for source_type in _ordered_source_types(metrics.source_type_breakdown.keys()):
         ratio = metrics.source_type_breakdown.get(source_type)
         if ratio is None:
             continue
@@ -4361,6 +4412,7 @@ def build_home_v4_projection(
             "sourceTypeLabel": _source_type_label(
                 str(row.get("source_type") or "other")
             ),
+            "siteCategory": str(row.get("site_category") or ""),
         }
         for row in metric_bundle.source_summary.get("top_domains", []) or []
         if isinstance(row, dict) and row.get("domain")

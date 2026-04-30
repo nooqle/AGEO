@@ -681,9 +681,7 @@ def _summarize_scenario_rows(
         )
         no_brand_count = status_counter.get("no_brand", 0)
         competitor_only_count = status_counter.get("competitor_only", 0)
-        target_with_competitors_count = status_counter.get(
-            "target_with_competitors", 0
-        )
+        target_with_competitors_count = status_counter.get("target_with_competitors", 0)
         representative_questions = [
             _clip(row.get("question_text"), 72)
             for row in scenario_rows[:3]
@@ -728,13 +726,10 @@ def _summarize_scenario_rows(
                 "missing_questions": missing_questions,
                 "competitors_present": competitor_names[:5],
                 "content_gap": str(
-                    (scenario_rows[0] if scenario_rows else {}).get("content_gap")
-                    or ""
+                    (scenario_rows[0] if scenario_rows else {}).get("content_gap") or ""
                 ),
                 "recommended_asset": str(
-                    (scenario_rows[0] if scenario_rows else {}).get(
-                        "recommended_asset"
-                    )
+                    (scenario_rows[0] if scenario_rows else {}).get("recommended_asset")
                     or ""
                 ),
             }
@@ -906,11 +901,7 @@ def build_source_intelligence(
         explicit_site_name = str(item.get("site_name") or "").strip()
         competitor_site_name = _competitor_site_name(domain, competitors)
         site_name = (
-            (
-                display_name
-                if display_name and display_name.lower() != domain
-                else ""
-            )
+            (display_name if display_name and display_name.lower() != domain else "")
             or (
                 explicit_site_name
                 if explicit_site_name and explicit_site_name.lower() != domain
@@ -919,12 +910,28 @@ def build_source_intelligence(
             or competitor_site_name
             or domain
         )
-        source_type, display, authority, control, action = _classify_source(
-            domain=domain,
-            is_official=bool(item.get("is_official")),
-            titles=titles,
-            competitors=competitors,
-        )
+        skill_source_type = str(item.get("source_type") or "").strip()
+        site_category = str(item.get("site_category") or "").strip()
+        if bool(item.get("is_official")):
+            source_type, display, authority, control, action = _classify_source(
+                domain=domain,
+                is_official=True,
+                titles=titles,
+                competitors=competitors,
+            )
+        elif skill_source_type and skill_source_type != "other":
+            source_type = skill_source_type
+            display = site_category or skill_source_type
+            authority = 35
+            control = 0
+            action = "基于 URL intelligence 分类继续观察并治理对应来源。"
+        else:
+            source_type, display, authority, control, action = _classify_source(
+                domain=domain,
+                is_official=False,
+                titles=titles,
+                competitors=competitors,
+            )
         count = _as_int(item.get("count"))
         type_counter[display] += count
         rows.append(
@@ -934,6 +941,7 @@ def build_source_intelligence(
                 "site_display": _format_site_name(domain, site_name),
                 "source_type": source_type,
                 "source_type_label": display,
+                "site_category": site_category,
                 "authority_score": authority,
                 "brand_control_score": control,
                 "ai_citation_frequency": count,
@@ -1041,18 +1049,50 @@ def _infer_concerns_from_text(text: str) -> list[str]:
         concerns.append("delivery_complexity")
     if any(
         token in text
-        for token in ("案例少", "证据不足", "证据", "成分", "浓度", "实验", "方法论", "数据支撑", "可信度")
+        for token in (
+            "案例少",
+            "证据不足",
+            "证据",
+            "成分",
+            "浓度",
+            "实验",
+            "方法论",
+            "数据支撑",
+            "可信度",
+        )
     ):
         concerns.append("evidence_sufficiency")
     if any(
         token in text
-        for token in ("中型企业", "中小企业", "适配", "不适合", "不如本土", "客群", "肤质", "敏感肌", "耐受", "屏障", "试用", "香精")
+        for token in (
+            "中型企业",
+            "中小企业",
+            "适配",
+            "不适合",
+            "不如本土",
+            "客群",
+            "肤质",
+            "敏感肌",
+            "耐受",
+            "屏障",
+            "试用",
+            "香精",
+        )
     ):
         concerns.append("fit_boundary")
     if (
         any(
             token in text
-            for token in ("竞品", "替代", "更适合", "不如", "相比", "优先提到", "大众知名度", "公开讨论")
+            for token in (
+                "竞品",
+                "替代",
+                "更适合",
+                "不如",
+                "相比",
+                "优先提到",
+                "大众知名度",
+                "公开讨论",
+            )
         )
         or "competitor" in lowered
     ):
@@ -1947,16 +1987,16 @@ def _build_sentiment_probe(
                 "mapped_concern": CONCERN_LABELS.get(concern_type, concern_type),
                 "rate": item.get("rate"),
                 "count": item.get("count"),
-                "common_conclusion": _text_or_pending(
-                    item.get("common_conclusion")
-                ),
+                "common_conclusion": _text_or_pending(item.get("common_conclusion")),
             }
         )
     negative_samples: list[dict[str, Any]] = []
     for item in sentiment_risk.get("items", []) or []:
         if not isinstance(item, dict):
             continue
-        topics = [str(topic) for topic in item.get("negative_topics", []) or [] if topic]
+        topics = [
+            str(topic) for topic in item.get("negative_topics", []) or [] if topic
+        ]
         conclusions = [
             _clip(conclusion.get("text"), 96)
             for conclusion in item.get("negative_conclusions", []) or []
@@ -1964,7 +2004,11 @@ def _build_sentiment_probe(
         ]
         if not conclusions and item.get("answer_excerpt"):
             conclusions = [_clip(item.get("answer_excerpt"), 96)]
-        if str(item.get("sentiment") or "") != "negative" and not topics and not conclusions:
+        if (
+            str(item.get("sentiment") or "") != "negative"
+            and not topics
+            and not conclusions
+        ):
             continue
         mapped_topics = _unique_values(
             CONCERN_LABELS.get(_map_negative_topic(topic), topic) for topic in topics
@@ -1989,9 +2033,7 @@ def _build_sentiment_probe(
     if not judgeable:
         narrative = "本轮没有品牌提及样本，不能判断正向、中性、负向情绪；应先进入品牌未进入诊断。"
     else:
-        narrative = (
-            "情绪分布用于观察 AI 回答语气和决策顾虑，负向信号需要进一步映射为价格门槛、证据充分性、适配边界等风险顾虑，不能直接写成品牌口碑负面。"
-        )
+        narrative = "情绪分布用于观察 AI 回答语气和决策顾虑，负向信号需要进一步映射为价格门槛、证据充分性、适配边界等风险顾虑，不能直接写成品牌口碑负面。"
     return {
         "judgeable": judgeable,
         "distribution": {
@@ -2057,7 +2099,9 @@ def _build_platform_diagnostics(
     )
     for row in question_rows:
         state_platforms = (
-            row.get("state_platforms") if isinstance(row.get("state_platforms"), dict) else {}
+            row.get("state_platforms")
+            if isinstance(row.get("state_platforms"), dict)
+            else {}
         )
         scenario = scenario_by_question.get(str(row.get("question_id") or "")) or str(
             row.get("scene") or ""
@@ -2076,14 +2120,16 @@ def _build_platform_diagnostics(
                             "brand_entry"
                         ] += 1
                     if state in {"no_brand", "competitor_only"}:
-                        platform_scenario_counts[platform_key][scenario][
-                            "missing"
-                        ] += 1
+                        platform_scenario_counts[platform_key][scenario]["missing"] += 1
 
     platform_names = sorted(set(profiles) | set(platform_state_counts))
     items: list[dict[str, Any]] = []
     for platform in platform_names:
-        profile = profiles.get(platform, {}) if isinstance(profiles.get(platform), dict) else {}
+        profile = (
+            profiles.get(platform, {})
+            if isinstance(profiles.get(platform), dict)
+            else {}
+        )
         states = platform_state_counts.get(platform, Counter())
         total = states.get("total", 0)
         brand_entry_count = states.get("monitor_only", 0) + states.get(
@@ -2101,7 +2147,9 @@ def _build_platform_diagnostics(
                 scenario_counts.items(),
                 key=lambda pair: (
                     -(
-                        _safe_rate(pair[1].get("brand_entry", 0), pair[1].get("total", 0))
+                        _safe_rate(
+                            pair[1].get("brand_entry", 0), pair[1].get("total", 0)
+                        )
                         or 0
                     ),
                     -pair[1].get("total", 0),
@@ -2129,9 +2177,8 @@ def _build_platform_diagnostics(
             {
                 "platform": platform,
                 "platform_label": _platform_label(platform),
-                "data_status": profile.get("data_status") or (
-                    "ok" if total else "missing"
-                ),
+                "data_status": profile.get("data_status")
+                or ("ok" if total else "missing"),
                 "answer_sample_count": total,
                 "brand_entry_count": brand_entry_count,
                 "brand_entry_rate": _safe_rate(brand_entry_count, total),
@@ -2350,12 +2397,8 @@ def build_structured_report(
             "brand_rank": metric_bundle.get("brand_rank"),
             "ranked_brand_count": metric_bundle.get("ranked_brand_count"),
             "monitor_only_rate": metric_bundle.get("monitor_only_rate"),
-            "monitor_plus_others_rate": metric_bundle.get(
-                "monitor_plus_others_rate"
-            ),
-            "official_conversion_rate": metric_bundle.get(
-                "official_conversion_rate"
-            ),
+            "monitor_plus_others_rate": metric_bundle.get("monitor_plus_others_rate"),
+            "official_conversion_rate": metric_bundle.get("official_conversion_rate"),
             "official_funnel": metric_bundle.get("official_funnel", {}),
         },
         "scenario_map": scenario_items,
@@ -2606,7 +2649,9 @@ def build_structured_report(
         if cited_source_rate or mixed_source_rate:
             model_inference_rate = source_distribution.get("model_inference")
             if model_inference_rate:
-                source_parts.append(f"模型自身归纳 {_format_rate(model_inference_rate)}")
+                source_parts.append(
+                    f"模型自身归纳 {_format_rate(model_inference_rate)}"
+                )
             if cited_source_rate:
                 source_parts.append(f"引用来源带出 {_format_rate(cited_source_rate)}")
             if mixed_source_rate:
@@ -2640,9 +2685,7 @@ def build_structured_report(
                     lines.append(f"  - 样本证据：{evidence}")
         else:
             lines.append("- 当前没有稳定重复的风险顾虑。")
-        lines.extend(
-            ["", "### 7. 平台差异"]
-        )
+        lines.extend(["", "### 7. 平台差异"])
         platform_items = [
             item
             for item in platform_diagnostics.get("items", []) or []
@@ -2650,7 +2693,9 @@ def build_structured_report(
         ]
         if platform_items:
             for item in platform_items:
-                friendly = "、".join(item.get("brand_friendly_question_types", []) or [])
+                friendly = "、".join(
+                    item.get("brand_friendly_question_types", []) or []
+                )
                 unfriendly = "、".join(
                     item.get("brand_unfriendly_question_types", []) or []
                 )
@@ -2695,7 +2740,9 @@ def build_structured_report(
                 lines.append(
                     f"  - 当前状态：{item.get('answer_state') or '需复核'}；平台：{platforms or '暂无足够数据支撑'}；风险主题：{risk_topics or '暂不集中'}。{item.get('question_text')}"
                 )
-        missing_samples = sample_appendix.get("missing_or_contested_questions", []) or []
+        missing_samples = (
+            sample_appendix.get("missing_or_contested_questions", []) or []
+        )
         if missing_samples:
             lines.append("- 缺席/同台问题样本：")
             for item in missing_samples[:5]:
