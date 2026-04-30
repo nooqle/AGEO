@@ -712,13 +712,20 @@ def _derive_preserved_fetch_results(
             not in targeted_platforms
         ]
         if kept_platform_results:
+            kept_platforms = {
+                _canonicalize_platform_id(platform_result.get("platform"))
+                for platform_result in kept_platform_results
+                if _canonicalize_platform_id(platform_result.get("platform"))
+            }
             preserved.append(
                 {
                     "question_id": question_id,
                     "question_text": existing_entry.get("question_text", ""),
                     "platform_results": kept_platform_results,
-                    "aio_platform_packets": _collect_aio_platform_packets(
-                        kept_platform_results
+                    "aio_platform_packets": _collect_aio_platform_packets_for_platforms(
+                        existing_entry,
+                        platform_results=kept_platform_results,
+                        platforms=kept_platforms,
                     ),
                 }
             )
@@ -812,14 +819,99 @@ def _collect_aio_platform_packets(
     ]
 
 
+def _merge_aio_platform_packets(
+    *packet_groups: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen_platforms: set[str] = set()
+    for packet_group in packet_groups:
+        for packet in packet_group or []:
+            if not isinstance(packet, dict):
+                continue
+            platform = _canonicalize_platform_id(packet.get("platform"))
+            if not platform or platform in seen_platforms:
+                continue
+            merged.append(packet)
+            seen_platforms.add(platform)
+    return merged
+
+
+def _collect_aio_platform_packets_for_platforms(
+    fetch_result: dict[str, Any],
+    *,
+    platform_results: list[dict[str, Any]],
+    platforms: set[str],
+) -> list[dict[str, Any]]:
+    top_level_packets = [
+        packet
+        for packet in fetch_result.get("aio_platform_packets", []) or []
+        if isinstance(packet, dict)
+        and _canonicalize_platform_id(packet.get("platform")) in platforms
+    ]
+    return _merge_aio_platform_packets(
+        top_level_packets,
+        _collect_aio_platform_packets(platform_results),
+    )
+
+
+def _legacy_platform_result_to_packet(
+    platform_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    platform = _canonicalize_platform_id(platform_result.get("platform"))
+    if not platform:
+        return None
+    status = platform_result.get("status")
+    if status is None:
+        status = "success" if platform_result.get("success") else "failed"
+    packet: dict[str, Any] = {
+        "platform": platform,
+        "status": str(status or "failed").strip().lower() or "failed",
+    }
+    for key in (
+        "answer",
+        "citations",
+        "fetch_method",
+        "error",
+        "duration",
+        "failure_layer",
+        "failure_reason",
+        "execution_stage",
+        "retryable",
+        "needs_handoff",
+    ):
+        value = platform_result.get(key)
+        if value is not None:
+            packet[key] = value
+    return packet
+
+
 def _packets_for_fetch_result(fetch_result: dict[str, Any]) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    seen_platforms: set[str] = set()
+
+    def add_packet(packet: dict[str, Any] | None) -> None:
+        if not isinstance(packet, dict):
+            return
+        platform = _canonicalize_platform_id(packet.get("platform"))
+        if not platform or platform in seen_platforms:
+            return
+        collected.append(packet)
+        seen_platforms.add(platform)
+
     packets = fetch_result.get("aio_platform_packets")
     if isinstance(packets, list):
-        return [packet for packet in packets if isinstance(packet, dict)]
+        for packet in packets:
+            add_packet(packet)
+
     platform_results = fetch_result.get("platform_results", [])
     if isinstance(platform_results, list):
-        return _collect_aio_platform_packets(platform_results)
-    return []
+        for platform_result in platform_results:
+            if not isinstance(platform_result, dict):
+                continue
+            aio_packet = platform_result.get("aio_packet")
+            add_packet(aio_packet if isinstance(aio_packet, dict) else None)
+            add_packet(_legacy_platform_result_to_packet(platform_result))
+    return collected
 
 
 def _packet_status(packet: dict[str, Any]) -> str:
@@ -2700,8 +2792,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 question_id = fetch_result.get("question_id", "")
                 new_platform_results = fetch_result.get("platform_results", []) or []
                 if question_id in baseline_map:
+                    baseline_entry = baseline_map.pop(question_id)
                     old_platform_results = (
-                        baseline_map.pop(question_id).get("platform_results", []) or []
+                        baseline_entry.get("platform_results", []) or []
                     )
                     combined_platform_results = (
                         new_platform_results + old_platform_results
@@ -2711,8 +2804,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             "question_id": question_id,
                             "question_text": fetch_result.get("question_text", ""),
                             "platform_results": combined_platform_results,
-                            "aio_platform_packets": _collect_aio_platform_packets(
-                                combined_platform_results
+                            "aio_platform_packets": _merge_aio_platform_packets(
+                                _collect_aio_platform_packets(new_platform_results),
+                                fetch_result.get("aio_platform_packets", []) or [],
+                                baseline_entry.get("aio_platform_packets", []) or [],
+                                _collect_aio_platform_packets(old_platform_results),
                             ),
                         }
                     )

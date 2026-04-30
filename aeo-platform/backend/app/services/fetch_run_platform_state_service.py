@@ -113,6 +113,16 @@ class FetchRunPlatformStateService:
             return "skipped"
         return status
 
+    @classmethod
+    def _derive_status_from_legacy_result(
+        cls,
+        legacy_result: dict[str, Any],
+    ) -> str:
+        status = legacy_result.get("status")
+        if status is None:
+            status = "success" if legacy_result.get("success") else "failed"
+        return cls._normalize_status(status)
+
     @staticmethod
     def _merge_timing(packet: dict[str, Any]) -> dict[str, Any]:
         duration = packet.get("duration")
@@ -542,13 +552,30 @@ class FetchRunPlatformStateService:
                 ),
                 None,
             )
-            if platform_packet is None:
+            legacy_result = next(
+                (
+                    result
+                    for result in fetch_result.get("platform_results", []) or []
+                    if isinstance(result, dict)
+                    and cls.canonicalize_platform(result.get("platform")) == platform
+                ),
+                None,
+            )
+            if platform_packet is None and legacy_result is None:
                 continue
             total += 1
-            status = cls._derive_status_from_packet(platform_packet)
+            status = (
+                cls._derive_status_from_packet(platform_packet)
+                if platform_packet is not None
+                else cls._derive_status_from_legacy_result(legacy_result)
+            )
             if status == "succeeded":
                 completed += 1
-            answer = platform_packet.get("answer")
+            answer = (
+                platform_packet.get("answer")
+                if platform_packet is not None
+                else legacy_result.get("answer")
+            )
             if isinstance(answer, dict) and answer.get("has_brand_mention"):
                 mentions += 1
         return {
@@ -560,6 +587,10 @@ class FetchRunPlatformStateService:
     @classmethod
     def _aggregate_platform_status(cls, packets: list[dict[str, Any]]) -> str:
         statuses = [cls._derive_status_from_packet(packet) for packet in packets]
+        return cls._aggregate_statuses(statuses)
+
+    @classmethod
+    def _aggregate_statuses(cls, statuses: list[str]) -> str:
         if any(status == "succeeded" for status in statuses):
             return "succeeded"
         if any(status == "skipped" for status in statuses):
@@ -584,6 +615,25 @@ class FetchRunPlatformStateService:
             if cls._derive_status_from_packet(packet) == normalized_status:
                 return packet
         return packets[-1]
+
+    @classmethod
+    def _select_representative_legacy_result(
+        cls,
+        packet_entries: list[dict[str, Any]],
+        *,
+        aggregated_status: str,
+    ) -> dict[str, Any]:
+        normalized_status = cls._normalize_status(aggregated_status)
+        fallback: dict[str, Any] = {}
+        for entry in reversed(packet_entries):
+            legacy_result = entry.get("legacy_result")
+            if not isinstance(legacy_result, dict):
+                continue
+            if not fallback:
+                fallback = legacy_result
+            if cls._derive_status_from_legacy_result(legacy_result) == normalized_status:
+                return legacy_result
+        return fallback
 
     @classmethod
     def _normalize_packet_projection(
@@ -784,6 +834,7 @@ class FetchRunPlatformStateService:
         fetch_results: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         platform_packets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        platforms_seen: set[str] = set()
         for fetch_result in fetch_results:
             for packet in fetch_result.get("aio_platform_packets", []) or []:
                 if not isinstance(packet, dict):
@@ -792,17 +843,19 @@ class FetchRunPlatformStateService:
                 if not platform:
                     continue
                 platform_packets[platform].append(packet)
+                platforms_seen.add(platform)
+            for legacy_result in fetch_result.get("platform_results", []) or []:
+                if not isinstance(legacy_result, dict):
+                    continue
+                platform = cls.canonicalize_platform(legacy_result.get("platform"))
+                if platform:
+                    platforms_seen.add(platform)
 
         rows: list[dict[str, Any]] = []
-        for platform, packets in platform_packets.items():
-            status = cls._aggregate_platform_status(packets)
-            representative_packet = cls._select_representative_packet(
-                packets,
-                aggregated_status=status,
-            )
-            auth_state = cls._project_auth_state(representative_packet, status)
-            timing_json = cls._aggregate_packet_timing(packets)
+        for platform in sorted(platforms_seen):
+            packets = platform_packets.get(platform, [])
             packet_entries: list[dict[str, Any]] = []
+            result_statuses: list[str] = []
             for fetch_result in fetch_results:
                 question_id = fetch_result.get("question_id") or ""
                 question_text = fetch_result.get("question_text") or ""
@@ -820,12 +873,19 @@ class FetchRunPlatformStateService:
                     (
                         result
                         for result in fetch_result.get("platform_results", []) or []
-                        if cls.canonicalize_platform(result.get("platform")) == platform
+                        if isinstance(result, dict)
+                        and cls.canonicalize_platform(result.get("platform"))
+                        == platform
                     ),
                     None,
                 )
                 if platform_packet is None and legacy_result is None:
                     continue
+                result_statuses.append(
+                    cls._derive_status_from_packet(platform_packet)
+                    if platform_packet is not None
+                    else cls._derive_status_from_legacy_result(legacy_result)
+                )
                 packet_entries.append(
                     {
                         "question_id": question_id,
@@ -834,6 +894,19 @@ class FetchRunPlatformStateService:
                         "legacy_result": legacy_result,
                     }
                 )
+            status = cls._aggregate_statuses(result_statuses)
+            if packets:
+                representative_packet = cls._select_representative_packet(
+                    packets,
+                    aggregated_status=status,
+                )
+            else:
+                representative_packet = cls._select_representative_legacy_result(
+                    packet_entries,
+                    aggregated_status=status,
+                )
+            auth_state = cls._project_auth_state(representative_packet, status)
+            timing_json = cls._aggregate_packet_timing(packets)
             started_points = [
                 started_at
                 for packet in packets
@@ -856,7 +929,7 @@ class FetchRunPlatformStateService:
                     "user_id": user_id,
                     "platform": platform,
                     "status": status,
-                    "attempt_no": max(1, len(packets)),
+                    "attempt_no": max(1, len(packets) or len(packet_entries)),
                     "auth_state": auth_state,
                     "latest_packet": {
                         "platform": platform,
@@ -876,7 +949,8 @@ class FetchRunPlatformStateService:
                     ),
                     "artifact_write_status": None,
                     "error_kind": representative_packet.get("error_type"),
-                    "error_message": representative_packet.get("error"),
+                    "error_message": representative_packet.get("error")
+                    or representative_packet.get("error_message"),
                     "timing_json": timing_json,
                     "started_at": started_at,
                     "finished_at": finished_at,
