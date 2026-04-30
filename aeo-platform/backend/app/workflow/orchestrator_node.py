@@ -18,7 +18,7 @@ from langgraph.types import Command
 
 from app.workflow.state import AgentState
 from app.core.database import AsyncSessionLocal
-from app.core.llm import get_llm_model
+from app.core.llm.task_routing import get_orchestrator_llm_model
 from app.services.knowledge_workspace_service import KnowledgeWorkspaceService
 from app.services.skill_registry_service import (
     build_builtin_skill_tool_definitions,
@@ -3174,6 +3174,34 @@ async def _force_table_import_confirmation(
     )
 
 
+def _build_orchestrator_assistant_message(
+    *,
+    reply_text: str,
+    tool_call_result: Any | None,
+    raw_thinking_text: str,
+) -> dict[str, Any]:
+    assistant_msg: dict[str, Any] = {
+        "role": "assistant",
+        "content": reply_text,
+    }
+    if raw_thinking_text and tool_call_result:
+        assistant_msg["reasoning_content"] = raw_thinking_text
+    if tool_call_result:
+        assistant_msg["tool_calls"] = [
+            {
+                "id": tool_call_result.id or "call_1",
+                "type": "function",
+                "function": {
+                    "name": tool_call_result.name,
+                    "arguments": json.dumps(
+                        tool_call_result.arguments, ensure_ascii=False
+                    ),
+                },
+            }
+        ]
+    return assistant_msg
+
+
 def build_orchestrator_messages(state: AgentState) -> list[dict[str, Any]]:
     """Build message history for the orchestrator LLM call.
 
@@ -4008,10 +4036,11 @@ async def orchestrator_node(state: AgentState) -> Command:
     tools = await build_agent_tools(llm_state)
 
     # Stream LLM response
-    model = get_llm_model()
+    model = get_orchestrator_llm_model()
 
     reply_text = ""
     thinking_text = ""
+    raw_thinking_text = ""
     tool_call_result = None
     is_first_reply_chunk = True
     last_finish_reason: str | None = None
@@ -4074,6 +4103,10 @@ async def orchestrator_node(state: AgentState) -> Command:
             if chunk.usage:
                 last_usage = chunk.usage
             if chunk.tool_calls:
+                if chunk.thinking_blocks and not raw_thinking_text:
+                    raw_thinking_text = "".join(
+                        block.text for block in chunk.thinking_blocks if block.text
+                    )
                 logger.warning(
                     "[Orchestrator] Stream tool_calls captured for session %s: %s finish=%s",
                     session_id,
@@ -4105,6 +4138,7 @@ async def orchestrator_node(state: AgentState) -> Command:
             if chunk.thinking_blocks:
                 for block in chunk.thinking_blocks:
                     if block.text:
+                        raw_thinking_text += block.text
                         if stream_thoughts:
                             streamed_thought, thinking_placeholder_sent = (
                                 _normalize_thought_text_for_stream(
@@ -4176,23 +4210,11 @@ async def orchestrator_node(state: AgentState) -> Command:
 
         # Build updated orchestrator history
         new_history = list(messages)
-        assistant_msg: dict[str, Any] = {
-            "role": "assistant",
-            "content": reply_text,
-        }
-        if tool_call_result:
-            assistant_msg["tool_calls"] = [
-                {
-                    "id": tool_call_result.id or "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": tool_call_result.name,
-                        "arguments": json.dumps(
-                            tool_call_result.arguments, ensure_ascii=False
-                        ),
-                    },
-                }
-            ]
+        assistant_msg = _build_orchestrator_assistant_message(
+            reply_text=reply_text,
+            tool_call_result=tool_call_result,
+            raw_thinking_text=raw_thinking_text,
+        )
         new_history.append(assistant_msg)
 
         if tool_call_result:

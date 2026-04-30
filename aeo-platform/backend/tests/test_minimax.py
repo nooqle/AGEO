@@ -6,8 +6,8 @@ Usage:
     python tests/test_minimax.py
 """
 
-import json
 import os
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.core.llm import get_llm_model, LLMResponse, ThinkingBlock, ToolCallBlock
 from app.core.llm.minimax import MiniMaxConfig, MiniMaxModel
 from app.core.llm.glm5 import GLM5Config, GLM5Model
+from app.core.llm.deepseek import DeepSeekConfig, DeepSeekModel
 
 
 # Test configuration
@@ -162,13 +163,121 @@ class TestGLM5Config:
         assert "extra_body" not in kwargs
 
 
+class TestDeepSeekConfig:
+    """Test DeepSeek configuration."""
+
+    def test_config_validation(self):
+        config = DeepSeekConfig(api_key="test-key", temperature=0.0)
+        config.validate()
+        assert config.api_key == "test-key"
+
+    def test_config_validation_missing_api_key(self):
+        config = DeepSeekConfig(api_key="")
+        with pytest.raises(ValueError, match="DeepSeek API key is required"):
+            config.validate()
+
+    def test_config_to_completion_kwargs_without_thinking(self):
+        config = DeepSeekConfig(
+            api_key="test-key",
+            model_name="deepseek-v4-flash",
+            thinking_enabled=False,
+            temperature=0.0,
+            max_tokens=1024,
+        )
+        kwargs = config.to_completion_kwargs()
+        assert kwargs["model"] == "deepseek-v4-flash"
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["extra_body"]["thinking"]["type"] == "disabled"
+        assert "reasoning_effort" not in kwargs
+
+    def test_config_to_completion_kwargs_with_thinking(self):
+        config = DeepSeekConfig(
+            api_key="test-key",
+            model_name="deepseek-v4-pro",
+            thinking_enabled=True,
+            reasoning_effort="high",
+        )
+        kwargs = config.to_completion_kwargs()
+        assert kwargs["model"] == "deepseek-v4-pro"
+        assert kwargs["extra_body"]["thinking"]["type"] == "enabled"
+        assert kwargs["reasoning_effort"] == "high"
+        assert "temperature" not in kwargs
+
+
 class TestFactory:
     """Test get_llm_model factory."""
 
-    def test_factory_returns_model(self):
+    def test_factory_returns_model(self, monkeypatch):
+        import app.config as app_config
+        import app.core.llm.glm5 as glm5_module
+
+        monkeypatch.setattr(
+            app_config,
+            "get_settings",
+            lambda: SimpleNamespace(LLM_PROVIDER="glm5"),
+        )
+        monkeypatch.setattr(
+            glm5_module,
+            "get_settings",
+            lambda: SimpleNamespace(
+                GLM5_API_KEY="test-key",
+                GLM5_BASE_URL="https://open.bigmodel.cn/api/paas/v4",
+                GLM5_MODEL_NAME="glm-5",
+                GLM5_THINKING_ENABLED=True,
+                GLM5_TEMPERATURE=0.7,
+                GLM5_MAX_TOKENS=16384,
+            ),
+        )
+
         model = get_llm_model()
         from app.core.llm.base import BaseLLMModel
         assert isinstance(model, BaseLLMModel)
+
+    def test_factory_can_route_to_deepseek_explicitly(self, monkeypatch):
+        import app.core.llm.deepseek as deepseek_module
+
+        monkeypatch.setattr(
+            deepseek_module,
+            "get_settings",
+            lambda: SimpleNamespace(DEEPSEEK_API_KEY="test-key"),
+        )
+
+        model = get_llm_model(
+            provider="deepseek",
+            model_name="deepseek-v4-flash",
+            thinking_enabled=False,
+        )
+
+        assert isinstance(model, DeepSeekModel)
+        assert model.config.model_name == "deepseek-v4-flash"
+        assert model.config.thinking_enabled is False
+
+    def test_browser_agent_uses_glm5_even_when_global_provider_deepseek(
+        self,
+        monkeypatch,
+    ):
+        from app.core.fetchers.browser import browser_agent_loop
+
+        monkeypatch.setattr(
+            browser_agent_loop,
+            "get_settings",
+            lambda: SimpleNamespace(
+                LLM_PROVIDER="deepseek",
+                BROWSER_AGENT_LLM_API_KEY="",
+                GLM5_API_KEY="glm-key",
+                GLM5_BASE_URL="https://open.bigmodel.cn/api/paas/v4",
+                GLM5_MODEL_NAME="glm-5",
+                BROWSER_AGENT_LLM_MODEL_NAME="glm-5",
+                BROWSER_AGENT_LLM_THINKING_ENABLED=False,
+                BROWSER_AGENT_LLM_MAX_TOKENS=384,
+            ),
+        )
+
+        model = browser_agent_loop._get_browser_agent_llm_model()
+
+        assert isinstance(model, GLM5Model)
+        assert model.config.api_key == "glm-key"
+        assert model.config.model_name == "glm-5"
 
 
 # ============================================================================

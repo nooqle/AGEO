@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # GLM5 (智谱AI)
     GLM5_API_KEY: str | None = None
     GLM5_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
-    GLM5_MODEL_NAME: str = "glm-5.1"
+    GLM5_MODEL_NAME: str = "glm-5"
     GLM5_THINKING_ENABLED: bool = True
     GLM5_TEMPERATURE: float = 0.7
     GLM5_MAX_TOKENS: int = 16384
@@ -102,6 +102,35 @@ class Settings(BaseSettings):
     GLM5_TURBO_PRICE_LONG_OUTPUT_PER_MTOKENS: float | None = None
     GLM5_CACHE_HIT_PRICE_FACTOR: float = 0.5
     GLM5_TURBO_CACHE_HIT_PRICE_FACTOR: float = 0.5
+
+    # DeepSeek
+    DEEPSEEK_API_KEY: str | None = None
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL_NAME: str = "deepseek-v4-pro"
+    DEEPSEEK_FLASH_MODEL_NAME: str = "deepseek-v4-flash"
+    DEEPSEEK_PRO_MODEL_NAME: str = "deepseek-v4-pro"
+    DEEPSEEK_THINKING_ENABLED: bool = False
+    DEEPSEEK_REASONING_EFFORT: str = "high"
+    DEEPSEEK_TEMPERATURE: float = 0.0
+    DEEPSEEK_MAX_TOKENS: int = 8192
+    DEEPSEEK_TIMEOUT_SECONDS: float = 120.0
+
+    # Task-level LLM routing
+    ORCHESTRATOR_LLM_PROVIDER: str = "deepseek"
+    ORCHESTRATOR_MODEL_NAME: str = "deepseek-v4-pro"
+    ORCHESTRATOR_THINKING_ENABLED: bool = True
+    LONG_TEXT_LLM_PROVIDER: str = "deepseek"
+    LONG_TEXT_MODEL_NAME: str = "deepseek-v4-pro"
+    LONG_TEXT_THINKING_ENABLED: bool = True
+    A1_LLM_PROVIDER: str = "glm5"
+    A1_MODEL_NAME: str = "glm-5"
+    A1_THINKING_ENABLED: bool = True
+    FAST_STRUCTURED_LLM_PROVIDER: str | None = None
+    FAST_STRUCTURED_MODEL_NAME: str | None = None
+    FAST_STRUCTURED_THINKING_ENABLED: bool = False
+    URL_INTELLIGENCE_LLM_PROVIDER: str = "deepseek"
+    URL_INTELLIGENCE_MODEL_NAME: str = "deepseek-v4-flash"
+    URL_INTELLIGENCE_TIMEOUT_SECONDS: float = 45.0
 
     # MiniMax cost config (optional)
     MINIMAX_PRICE_INPUT_PER_MTOKENS: float | None = None
