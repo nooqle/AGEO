@@ -36,7 +36,7 @@ def get_database_url() -> str:
     """Get database URL from settings."""
     url = settings.DATABASE_URL
     if "postgresql+asyncpg://" in url:
-        return url.replace("postgresql+asyncpg://", "postgresql://")
+        return url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
     if "sqlite+aiosqlite:///" in url:
         return url.replace("sqlite+aiosqlite:///", "sqlite:///")
     if "sqlite+aiosqlite://" in url:
