@@ -22,7 +22,6 @@ from app.workflow.a5.diagnosis import (
     extract_geo_report_diagnosis,
     is_geo_report_topic_judged,
     load_scenario_taxonomy,
-    load_source_taxonomy,
     repair_report_artifact,
     require_geo_report_topic_judged,
     validate_report_artifact,
@@ -258,6 +257,10 @@ def _bcg_concern_fetch_results():
                         {
                             "url": "https://www.bcg.com/publications",
                             "title": "BCG publications",
+                            "canonical_domain": "bcg.com",
+                            "site_display_name": "BCG",
+                            "site_category": "品牌官网",
+                            "source_type": "official",
                             "is_official": True,
                         }
                     ],
@@ -275,6 +278,10 @@ def _bcg_concern_fetch_results():
                         {
                             "url": "https://www.accenture.com/cn-zh/services",
                             "title": "Accenture services",
+                            "canonical_domain": "accenture.com",
+                            "site_display_name": "埃森哲",
+                            "site_category": "竞品官网",
+                            "source_type": "official",
                         }
                     ],
                 )
@@ -291,6 +298,10 @@ def _bcg_concern_fetch_results():
                         {
                             "url": "https://www.mckinsey.com/capabilities",
                             "title": "McKinsey capabilities",
+                            "canonical_domain": "mckinsey.com",
+                            "site_display_name": "麦肯锡",
+                            "site_category": "竞品官网",
+                            "source_type": "official",
                         }
                     ],
                 )
@@ -464,22 +475,45 @@ def test_configured_scenarios_work_for_new_core_industries_without_code_changes(
     assert by_id["industrial1"]["decision_scenario"] == "降本增效改造"
 
 
-def test_source_intelligence_classifies_evidence_ownership():
+def test_source_intelligence_uses_a4_url_skill_fields_without_reclassifying():
     source = build_source_intelligence(
-        _base_metric_bundle(),
+        _base_metric_bundle(
+            source_summary={
+                "total_citations": 72,
+                "top_domains": [
+                    {
+                        "domain": "pcauto.com.cn",
+                        "display_name": "太平洋汽车",
+                        "count": 35,
+                        "is_official": False,
+                        "source_type": "other",
+                        "site_category": "汽车垂直媒体",
+                        "sample_titles": ["增程式与插电混动怎么选"],
+                    },
+                    {
+                        "domain": "abc123x.example",
+                        "count": 2,
+                        "is_official": False,
+                        "source_type": "other",
+                        "site_category": "缺乏特征，无法识别",
+                        "sample_titles": ["unknown"],
+                    },
+                ],
+            }
+        ),
         competitors=[{"name": "Competitor", "website": "https://competitor.com"}],
     )
     by_domain = {item["domain"]: item for item in source["domains"]}
 
-    assert by_domain["pubmed.ncbi.nlm.nih.gov"]["source_type"] == "academic_medical"
-    assert by_domain["pubmed.ncbi.nlm.nih.gov"]["site_name"] == "PubMed"
+    assert by_domain["pcauto.com.cn"]["source_type_label"] == "汽车垂直媒体"
+    assert by_domain["pcauto.com.cn"]["site_name"] == "太平洋汽车"
     assert (
-        by_domain["pubmed.ncbi.nlm.nih.gov"]["site_display"]
-        == "PubMed（pubmed.ncbi.nlm.nih.gov）"
+        by_domain["pcauto.com.cn"]["site_display"]
+        == "太平洋汽车（pcauto.com.cn）"
     )
-    assert by_domain["iesdouyin.com"]["source_type"] == "community_ugc"
-    assert by_domain["docs-share.example"]["source_type"] == "low_quality_scraper"
-    assert by_domain["docs-share.example"]["recommended_action"]
+    assert by_domain["abc123x.example"]["source_type"] == "unknown"
+    assert by_domain["abc123x.example"]["source_type_label"] == "未知"
+    assert "规则库" not in by_domain["abc123x.example"]["recommended_action"]
 
 
 def test_risk_concern_classifier_remaps_negative_to_decision_concerns():
@@ -950,12 +984,10 @@ def test_orchestrator_context_summarizes_structured_not_judged_policy():
     assert "暂不判断=情感,官网承接,平台偏好,品牌口碑" in items[0].summary
 
 
-def test_taxonomy_config_files_drive_scenarios_and_sources():
+def test_scenario_taxonomy_and_a4_source_fields_drive_report_inputs():
     scenario_taxonomy = load_scenario_taxonomy()
-    source_taxonomy = load_source_taxonomy()
 
     assert scenario_taxonomy["industries"]
-    assert source_taxonomy["source_types"]
 
     bundle = {
         "meta": {"industry": "保健品"},
@@ -992,6 +1024,8 @@ def test_taxonomy_config_files_drive_scenarios_and_sources():
                         "domain": "baike.baidu.com",
                         "count": 3,
                         "is_official": False,
+                        "source_type": "other",
+                        "site_category": "百科/知识库",
                         "sample_titles": ["百科词条"],
                     }
                 ]
@@ -999,12 +1033,11 @@ def test_taxonomy_config_files_drive_scenarios_and_sources():
         ),
         competitors=[],
     )
-    assert source["domains"][0]["source_type"] == "encyclopedia"
+    assert source["domains"][0]["source_type_label"] == "百科/知识库"
 
 
 def test_taxonomy_config_failure_uses_safe_fallback(monkeypatch):
     monkeypatch.setattr(diagnosis_module, "load_scenario_taxonomy", lambda: {})
-    monkeypatch.setattr(diagnosis_module, "load_source_taxonomy", lambda: {})
 
     diagnostics = build_scenario_diagnostics(_input_bundle(), _analyzer_outputs())
     assert diagnostics["items"][0]["decision_scenario"] == "数字化转型咨询选型"
@@ -1017,6 +1050,8 @@ def test_taxonomy_config_failure_uses_safe_fallback(monkeypatch):
                         "domain": "pubmed.ncbi.nlm.nih.gov",
                         "count": 1,
                         "is_official": False,
+                        "source_type": "other",
+                        "site_category": "学术/医学",
                         "sample_titles": ["study"],
                     }
                 ]
@@ -1024,4 +1059,4 @@ def test_taxonomy_config_failure_uses_safe_fallback(monkeypatch):
         ),
         competitors=[],
     )
-    assert source["domains"][0]["source_type"] == "academic_medical"
+    assert source["domains"][0]["source_type_label"] == "学术/医学"

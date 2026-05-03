@@ -237,11 +237,6 @@ def load_scenario_taxonomy() -> dict[str, Any]:
     return _read_json_config("scenario_taxonomy.json")
 
 
-@lru_cache(maxsize=1)
-def load_source_taxonomy() -> dict[str, Any]:
-    return _read_json_config("source_taxonomy.json")
-
-
 def _contains_any_token(text: str, tokens: list[Any]) -> bool:
     return any(str(token or "") and str(token) in text for token in tokens)
 
@@ -749,130 +744,42 @@ def _scenario_diagnosis_sentence(scenario: str, status: str) -> str:
     return f"{scenario}需要结合样本继续复核。"
 
 
-def _classify_source(
-    *,
-    domain: str,
-    is_official: bool,
-    titles: list[str],
-    competitors: list[dict[str, Any]],
-) -> tuple[str, str, int, int, str]:
-    title_text = " ".join(titles).lower()
-    taxonomy = load_source_taxonomy()
+_UNKNOWN_SOURCE_VALUES = {
+    "",
+    "unknown",
+    "other",
+    "n/a",
+    "na",
+    "缺乏特征，无法识别",
+    "缺乏特征，无法识别。",
+}
+
+
+def _clean_a4_source_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.lower() in _UNKNOWN_SOURCE_VALUES or text in _UNKNOWN_SOURCE_VALUES:
+        return ""
+    return text
+
+
+def _source_identity_from_a4(item: dict[str, Any]) -> tuple[str, str]:
+    site_category = _clean_a4_source_value(item.get("site_category"))
+    source_type = _clean_a4_source_value(item.get("source_type"))
+    if site_category:
+        return source_type or site_category, site_category
+    if bool(item.get("is_official")):
+        return "official", "品牌官网"
+    if source_type:
+        return source_type, source_type
+    return "unknown", "未知"
+
+
+def _source_action_from_a4_label(label: str, *, is_official: bool) -> str:
+    if label == "未知":
+        return "来源识别未返回有效分类，保留为未知来源。"
     if is_official:
-        official = taxonomy.get("official", {}) if isinstance(taxonomy, dict) else {}
-        document_tokens = (
-            official.get("document_tokens", []) if isinstance(official, dict) else []
-        )
-        if domain.endswith(".pdf") or _contains_any_token(title_text, document_tokens):
-            config = (
-                official.get("official_document", {})
-                if isinstance(official, dict)
-                else {}
-            )
-            return (
-                "official_document",
-                str(config.get("label") or "官方文档/白皮书"),
-                _as_int(config.get("authority_score"), 90),
-                _as_int(config.get("brand_control_score"), 100),
-                str(config.get("recommended_action") or "HTML 化、摘要化、可引用化。"),
-            )
-        config = (
-            official.get("brand_official", {}) if isinstance(official, dict) else {}
-        )
-        return (
-            "brand_official",
-            str(config.get("label") or "品牌官网"),
-            _as_int(config.get("authority_score"), 85),
-            _as_int(config.get("brand_control_score"), 100),
-            str(config.get("recommended_action") or "优先优化结构化内容和可引用结论。"),
-        )
-
-    competitor_domains = {
-        _normalize_domain(item.get("website") or item.get("official_website") or "")
-        for item in competitors
-        if isinstance(item, dict)
-    }
-    competitor_names = [
-        str(item.get("name") or "").lower()
-        for item in competitors
-        if isinstance(item, dict) and item.get("name")
-    ]
-    if domain in competitor_domains or any(
-        name and name in title_text for name in competitor_names
-    ):
-        config = (
-            taxonomy.get("competitor_official", {})
-            if isinstance(taxonomy, dict)
-            else {}
-        )
-        return (
-            "competitor_official",
-            str(config.get("label") or "竞品官网"),
-            _as_int(config.get("authority_score"), 80),
-            _as_int(config.get("brand_control_score"), 0),
-            str(config.get("recommended_action") or "做差异化对比内容。"),
-        )
-
-    source_configs = (
-        taxonomy.get("source_types", []) if isinstance(taxonomy, dict) else []
-    )
-    for config in source_configs:
-        if not isinstance(config, dict):
-            continue
-        if not _contains_any_token(domain, config.get("domain_tokens", []) or []):
-            continue
-        return (
-            str(config.get("source_type") or "unknown"),
-            str(config.get("label") or "未知"),
-            _as_int(config.get("authority_score"), 35),
-            _as_int(config.get("brand_control_score"), 0),
-            str(config.get("recommended_action") or "等待规则库补全。"),
-        )
-
-    if any(token in domain for token in ("pubmed", "nih.gov", "cnki", "wanfangdata")):
-        return "academic_medical", "学术/医学", 88, 0, "保健品/医疗类优先纳入证据链。"
-    if any(token in domain for token in ("gov", "samr", "nhc", "who.int", "fda.gov")):
-        return "government_regulator", "政府/监管", 90, 0, "用于合规背书。"
-    if any(token in domain for token in ("baike", "wikipedia", "mbalib")):
-        return "encyclopedia", "百科/知识库", 68, 0, "治理词条和基础事实口径。"
-    if any(
-        token in domain
-        for token in ("douyin", "zhihu", "xiaohongshu", "weibo", "toutiao", "bilibili")
-    ):
-        return "community_ugc", "社区/UGC", 48, 0, "做口碑治理和内容分发。"
-    if any(
-        token in domain
-        for token in (
-            "jiemian",
-            "36kr",
-            "sina",
-            "sohu",
-            "qq.com",
-            "163.com",
-            "caixin",
-            "pedaily",
-        )
-    ):
-        return "authoritative_media", "权威媒体", 72, 0, "外部内容合作或 PR 治理。"
-    if any(
-        token in domain
-        for token in ("doc", "wenku", "download", "read", "copy", "gii.tw")
-    ):
-        return (
-            "low_quality_scraper",
-            "低质搬运",
-            25,
-            0,
-            "低优先级，不建议投入，但要监控污染。",
-        )
-    unknown = taxonomy.get("unknown", {}) if isinstance(taxonomy, dict) else {}
-    return (
-        str(unknown.get("source_type") or "unknown"),
-        str(unknown.get("label") or "未知"),
-        _as_int(unknown.get("authority_score"), 35),
-        _as_int(unknown.get("brand_control_score"), 0),
-        str(unknown.get("recommended_action") or "等待规则库补全。"),
-    )
+        return "优先优化官网可引用内容和结构化入口。"
+    return f"围绕“{label}”来源维护站点画像与内容治理。"
 
 
 def build_source_intelligence(
@@ -880,6 +787,7 @@ def build_source_intelligence(
     *,
     competitors: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    del competitors
     source_summary = (
         metric_bundle.get("source_summary")
         if isinstance(metric_bundle.get("source_summary"), dict)
@@ -899,7 +807,6 @@ def build_source_intelligence(
         titles = [str(title or "") for title in item.get("sample_titles", []) or []]
         display_name = str(item.get("display_name") or "").strip()
         explicit_site_name = str(item.get("site_name") or "").strip()
-        competitor_site_name = _competitor_site_name(domain, competitors)
         site_name = (
             (display_name if display_name and display_name.lower() != domain else "")
             or (
@@ -907,31 +814,14 @@ def build_source_intelligence(
                 if explicit_site_name and explicit_site_name.lower() != domain
                 else ""
             )
-            or competitor_site_name
             or domain
         )
-        skill_source_type = str(item.get("source_type") or "").strip()
-        site_category = str(item.get("site_category") or "").strip()
-        if bool(item.get("is_official")):
-            source_type, display, authority, control, action = _classify_source(
-                domain=domain,
-                is_official=True,
-                titles=titles,
-                competitors=competitors,
-            )
-        elif skill_source_type and skill_source_type != "other":
-            source_type = skill_source_type
-            display = site_category or skill_source_type
-            authority = 35
-            control = 0
-            action = "基于 URL intelligence 分类继续观察并治理对应来源。"
-        else:
-            source_type, display, authority, control, action = _classify_source(
-                domain=domain,
-                is_official=False,
-                titles=titles,
-                competitors=competitors,
-            )
+        is_official = bool(item.get("is_official"))
+        source_type, display = _source_identity_from_a4(item)
+        site_category = _clean_a4_source_value(item.get("site_category")) or None
+        authority = 85 if is_official else 35
+        control = 100 if is_official else 0
+        action = _source_action_from_a4_label(display, is_official=is_official)
         count = _as_int(item.get("count"))
         type_counter[display] += count
         rows.append(
@@ -947,9 +837,7 @@ def build_source_intelligence(
                 "ai_citation_frequency": count,
                 "citation_share": _safe_rate(count, total_citations),
                 "risk_level": (
-                    "high"
-                    if source_type == "low_quality_scraper"
-                    else "medium" if control == 0 else "low"
+                    "low" if control > 0 else "medium"
                 ),
                 "recommended_action": action,
                 "sample_titles": [_clip(title, 56) for title in titles[:3] if title],
@@ -984,33 +872,11 @@ def build_source_intelligence(
 
 
 def _source_type_diagnosis(label: str) -> str:
-    taxonomy = load_source_taxonomy()
-    if isinstance(taxonomy, dict):
-        for item in taxonomy.get("source_types", []) or []:
-            if isinstance(item, dict) and str(item.get("label") or "") == label:
-                return str(item.get("diagnosis") or "需要继续复核来源价值。")
-        for key in ("competitor_official", "unknown"):
-            item = taxonomy.get(key, {})
-            if isinstance(item, dict) and str(item.get("label") or "") == label:
-                return str(item.get("diagnosis") or "需要继续复核来源价值。")
-        official = taxonomy.get("official", {})
-        if isinstance(official, dict):
-            for key in ("brand_official", "official_document"):
-                item = official.get(key, {})
-                if isinstance(item, dict) and str(item.get("label") or "") == label:
-                    return str(item.get("diagnosis") or "需要继续复核来源价值。")
-    return {
-        "社区/UGC": "影响答案广度，但权威性弱。",
-        "权威媒体": "影响品牌解释权，可通过 PR 和内容合作治理。",
-        "低质搬运": "不建议直接投入，但需要监控是否污染答案。",
-        "品牌官网": "品牌可控，应优先做结构化内容优化。",
-        "官方文档/白皮书": "适合转成 HTML 摘要和可引用结论。",
-        "学术/医学": "适合作为医疗和保健品类证据背书。",
-        "政府/监管": "适合作为合规与安全背书。",
-        "百科/知识库": "适合治理基础事实和词条口径。",
-        "竞品官网": "说明竞品掌握部分解释权，需要做差异化内容。",
-        "未知": "当前规则库不足，等待补全分类。",
-    }.get(label, "需要继续复核来源价值。")
+    if label == "未知":
+        return "来源识别未返回有效分类，保留为未知。"
+    if label == "品牌官网":
+        return "品牌可控来源，应优先做结构化内容和可引用结论优化。"
+    return f"该类型来自引用来源识别结果，用于观察 AI 答案对“{label}”来源的依赖。"
 
 
 CONCERN_LABELS = {
@@ -2752,10 +2618,10 @@ def build_structured_report(
                 )
         unknown_sources = sample_appendix.get("unknown_sources", []) or []
         if unknown_sources:
-            lines.append("- 暂未定类来源：")
+            lines.append("- 未知来源：")
             for item in unknown_sources[:8]:
                 lines.append(
-                    f"  - {item.get('site_display') or item.get('domain')}：出现 {item.get('ai_citation_frequency')} 次；等待规则库补全。"
+                    f"  - {item.get('site_display') or item.get('domain')}：出现 {item.get('ai_citation_frequency')} 次；{item.get('recommended_action') or '来源识别未返回有效分类，保留为未知来源。'}"
                 )
         source_samples = sample_appendix.get("source_samples", []) or []
         if source_samples:
