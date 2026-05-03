@@ -10,11 +10,14 @@ BACKEND_SERVICE="ageo-backend.service"
 FRONTEND_SERVICE="ageo-frontend.service"
 DRY_RUN=0
 ROLLBACK=0
+ALLOW_MIGRATIONS=0
+MIGRATIONS_CHANGED=0
 
 usage() {
   cat <<'EOF'
 Usage:
   deploy-demo.sh --sha <commit-ish> [--repo <repo-url>] [--external-url <url>] [--root <path>] [--dry-run]
+  deploy-demo.sh --sha <commit-ish> --allow-migrations [--repo <repo-url>] [--external-url <url>] [--root <path>]
   deploy-demo.sh --rollback [--root <path>] [--external-url <url>]
 
 Deploys AGEO demo from a git commit into an isolated release directory, then
@@ -51,6 +54,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --allow-migrations)
+      ALLOW_MIGRATIONS=1
       shift
       ;;
     --rollback)
@@ -243,10 +250,27 @@ guard_migrations() {
   local changed
   changed="$(git --git-dir="$REPO_DIR" diff --name-only "$from_sha" "$to_sha" -- 'aeo-platform/backend/alembic/versions/' || true)"
   if [[ -n "$changed" ]]; then
+    if [[ "$ALLOW_MIGRATIONS" -eq 1 ]]; then
+      MIGRATIONS_CHANGED=1
+      log "Alembic migration files changed and explicit migration execution is enabled"
+      printf '%s\n' "$changed" >&2
+      return 0
+    fi
     printf '[deploy-demo] migration_required\n' >&2
     printf '%s\n' "$changed" >&2
     fail "Alembic migration files changed; first-version demo deploy will not run migrations automatically"
   fi
+}
+
+run_backend_migrations() {
+  local release_dir="$1"
+  local backend_dir="$release_dir/aeo-platform/backend"
+
+  log "Running backend database migrations"
+  (
+    cd "$backend_dir"
+    "$backend_dir/.venv/bin/python" -m alembic upgrade head
+  )
 }
 
 create_release_tree() {
@@ -478,6 +502,10 @@ deploy() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "Dry-run complete; built $release_dir without switching systemd"
     return
+  fi
+
+  if [[ "$MIGRATIONS_CHANGED" -eq 1 ]]; then
+    run_backend_migrations "$release_dir"
   fi
 
   service_backup_dir="$(backup_existing_units)"

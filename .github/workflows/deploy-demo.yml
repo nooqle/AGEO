@@ -10,6 +10,11 @@ on:
         description: "Git ref or commit SHA to deploy. Defaults to the workflow commit."
         required: false
         type: string
+      allow_migrations:
+        description: "Run Alembic migrations when migration files changed. Use only after explicit human approval."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -29,6 +34,7 @@ jobs:
       DEMO_EXTERNAL_URL: ${{ vars.DEMO_EXTERNAL_URL || 'https://demo.imspecta.com' }}
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
       REQUESTED_REF: ${{ github.event.inputs.ref || github.sha }}
+      ALLOW_MIGRATIONS: ${{ github.event.inputs.allow_migrations || 'false' }}
 
     steps:
       - name: Check out repository
@@ -119,5 +125,9 @@ jobs:
 
           retry scp "${scp_options[@]}" ops/deploy-demo.sh \
             "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:/tmp/ageo-deploy-demo.sh"
+          allow_migrations_arg=""
+          if [[ "${ALLOW_MIGRATIONS}" == "true" ]]; then
+            allow_migrations_arg=" --allow-migrations"
+          fi
           retry ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
-            "chmod +x /tmp/ageo-deploy-demo.sh && /tmp/ageo-deploy-demo.sh --sha $(printf '%q' "$RESOLVED_SHA") --repo $(printf '%q' "$DEMO_REPO_URL") --external-url $(printf '%q' "$DEMO_EXTERNAL_URL")"
+            "chmod +x /tmp/ageo-deploy-demo.sh && /tmp/ageo-deploy-demo.sh --sha $(printf '%q' "$RESOLVED_SHA") --repo $(printf '%q' "$DEMO_REPO_URL") --external-url $(printf '%q' "$DEMO_EXTERNAL_URL")${allow_migrations_arg}"
