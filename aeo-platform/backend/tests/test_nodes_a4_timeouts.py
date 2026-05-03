@@ -149,6 +149,10 @@ def test_supplemental_preserve_keeps_non_target_question_pairs() -> None:
                     {"platform": "kimi", "answer": {"content": "old"}},
                     {"platform": "deepseek", "answer": {"content": "keep"}},
                 ],
+                "aio_platform_packets": [
+                    {"platform": "kimi", "status": "result"},
+                    {"platform": "deepseek", "status": "result"},
+                ],
             },
             {
                 "question_id": "q2",
@@ -156,6 +160,10 @@ def test_supplemental_preserve_keeps_non_target_question_pairs() -> None:
                 "platform_results": [
                     {"platform": "kimi", "answer": {"content": "keep"}},
                     {"platform": "deepseek", "answer": {"content": "keep"}},
+                ],
+                "aio_platform_packets": [
+                    {"platform": "kimi", "status": "result"},
+                    {"platform": "deepseek", "status": "result"},
                 ],
             },
         ],
@@ -180,3 +188,9 @@ def test_supplemental_preserve_keeps_non_target_question_pairs() -> None:
     assert pair_count == 3
     assert q1_platforms == {"deepseek"}
     assert q2_platforms == {"kimi", "deepseek"}
+    assert [
+        packet["platform"]
+        for item in preserved
+        if item["question_id"] == "q1"
+        for packet in item["aio_platform_packets"]
+    ] == ["deepseek"]

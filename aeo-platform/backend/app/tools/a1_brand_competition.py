@@ -7,7 +7,7 @@ This replaces the old class-based Tool with stateless functions.
 from time import perf_counter
 from typing import Any
 
-from app.core.llm import get_llm_model
+from app.core.llm.task_routing import get_a1_llm_model
 from app.core.utils import (
     extract_json_from_content,
     load_prompt_template,
@@ -56,7 +56,7 @@ async def analyze_brand_competition(
     )
 
     # Call LLM
-    model = get_llm_model()
+    model = get_a1_llm_model()
     started_at = perf_counter()
     response = await model.async_call(
         messages=[

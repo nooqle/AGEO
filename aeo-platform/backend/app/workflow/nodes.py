@@ -21,7 +21,8 @@ from app.workflow.events import (
 )
 from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.summaries import generate_a1_summary
-from app.core.llm import get_llm_model, BaseLLMModel
+from app.core.llm import BaseLLMModel
+from app.core.llm.task_routing import get_a1_llm_model, get_fast_structured_llm_model
 from app.core.utils import (
     extract_json_from_content,
     load_prompt_template,
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 def get_llm_model_compat() -> BaseLLMModel:
     """Get LLM model instance (thin wrapper for backward compat)."""
-    return get_llm_model()
+    return get_a1_llm_model()
 
 
 def _get_fast_model() -> BaseLLMModel:
@@ -47,22 +48,7 @@ def _get_fast_model() -> BaseLLMModel:
     For tasks that only need JSON output (A2 personas, A3 questions), deep
     reasoning adds 30-60s of latency with no quality benefit.
     """
-    from app.config import get_settings
-    settings = get_settings()
-    provider = getattr(settings, "LLM_PROVIDER", "minimax").lower()
-
-    if provider == "glm5":
-        from app.core.llm.glm5 import GLM5Config, GLM5Model
-        config = GLM5Config()
-        config.thinking_enabled = False
-        return GLM5Model(config)
-    if provider == "minimax":
-        from app.core.llm.minimax import MiniMaxConfig, MiniMaxModel
-        config = MiniMaxConfig()
-        config.reasoning_split = False
-        return MiniMaxModel(config)
-    # Fallback: return default model
-    return get_llm_model()
+    return get_fast_structured_llm_model()
 
 
 def parse_llm_response(response) -> dict | None:

@@ -7,12 +7,16 @@ differ significantly.
 
 import json
 import logging
+import re
 from urllib.parse import urlparse
 
 from app.core.fetchers.browser.parsers.base import BaseResponseParser, ParsedResponse
 from app.schemas.fetch import SearchReference
 
 logger = logging.getLogger(__name__)
+
+_YUANBAO_MARK_UNDERLINE_RE = re.compile(r"\[\]\(@mark_[^)]+\)")
+_YUANBAO_CITATION_MARK_RE = re.compile(r"\[citation:\s*\d+(?:\s*[-,]\s*\d+)*\]")
 
 
 def _iter_sse_events(body: str):
@@ -59,6 +63,17 @@ def _domain_from_url(url: str) -> str:
         return host.removeprefix("www.")
     except Exception:
         return url[:60]
+
+
+def clean_yuanbao_answer_text(text: str) -> str:
+    """Remove Yuanbao inline rendering markers from persisted answer text."""
+
+    if not text:
+        return ""
+    cleaned = _YUANBAO_MARK_UNDERLINE_RE.sub("", text)
+    cleaned = _YUANBAO_CITATION_MARK_RE.sub("", cleaned)
+    lines = [line.rstrip() for line in cleaned.splitlines()]
+    return "\n".join(lines).strip()
 
 
 # ------------------------------------------------------------------ DeepSeek
@@ -217,7 +232,7 @@ class YuanbaoSSEParser(BaseResponseParser):
             logger.debug("[YuanbaoSSE] Event types seen: %s", seen_types)
 
         result = ParsedResponse(
-            answer_text="".join(text_parts),
+            answer_text=clean_yuanbao_answer_text("".join(text_parts)),
             references=references,
             raw_body=body[:2000],
             error=error_info,

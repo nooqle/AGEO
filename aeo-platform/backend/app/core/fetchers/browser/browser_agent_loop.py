@@ -11,7 +11,6 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from app.config import get_settings
-from app.core.llm import get_llm_model
 from app.core.llm.glm5 import GLM5Config, GLM5Model
 from app.core.fetchers.browser.browser_agent_contract import (
     BrowserAgentAction,
@@ -283,13 +282,10 @@ def _get_browser_agent_llm_model() -> Any:
     settings = get_settings()
     browser_api_key = str(
         getattr(settings, "BROWSER_AGENT_LLM_API_KEY", "") or ""
-    ).strip()
-    provider = str(getattr(settings, "LLM_PROVIDER", "minimax") or "minimax").lower()
-    if not browser_api_key or provider != "glm5":
-        return get_llm_model()
+    ).strip() or str(getattr(settings, "GLM5_API_KEY", "") or "").strip()
     return GLM5Model(
         GLM5Config(
-            api_key=browser_api_key,
+            api_key=browser_api_key or None,
             base_url=str(
                 getattr(
                     settings,
@@ -297,6 +293,17 @@ def _get_browser_agent_llm_model() -> Any:
                     "https://open.bigmodel.cn/api/paas/v4",
                 )
                 or "https://open.bigmodel.cn/api/paas/v4"
+            ),
+            model_name=str(
+                getattr(settings, "BROWSER_AGENT_LLM_MODEL_NAME", None)
+                or getattr(settings, "GLM5_MODEL_NAME", "glm-5")
+                or "glm-5"
+            ),
+            thinking_enabled=bool(
+                getattr(settings, "BROWSER_AGENT_LLM_THINKING_ENABLED", False)
+            ),
+            max_tokens=int(
+                getattr(settings, "BROWSER_AGENT_LLM_MAX_TOKENS", 384) or 384
             ),
         )
     )

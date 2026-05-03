@@ -271,6 +271,58 @@ def test_build_rows_from_fetch_results_aggregates_packet_timing_across_questions
     assert row["latest_packet"]["stats"]["total"] == 2
 
 
+def test_build_rows_from_fetch_results_preserves_legacy_only_platform_results():
+    service = FetchRunPlatformStateService(db=None)  # type: ignore[arg-type]
+
+    rows = service._build_rows_from_fetch_results(
+        task_run_id=uuid4(),
+        task_id=uuid4(),
+        session_id=uuid4(),
+        entity_id=uuid4(),
+        user_id=uuid4(),
+        fetch_results=[
+            {
+                "question_id": "q1",
+                "question_text": "问题1",
+                "aio_platform_packets": [
+                    {
+                        "platform": "yuanbao",
+                        "status": "result",
+                        "answer": {"content": "new"},
+                    }
+                ],
+                "platform_results": [
+                    {
+                        "platform": "deepseek",
+                        "success": True,
+                        "answer": {"content": "baseline"},
+                    },
+                    {
+                        "platform": "yuanbao",
+                        "success": True,
+                        "answer": {"content": "new"},
+                    },
+                ],
+            }
+        ],
+    )
+
+    assert {row["platform"] for row in rows} == {"deepseek", "yuanbao"}
+    deepseek_row = next(row for row in rows if row["platform"] == "deepseek")
+    assert deepseek_row["status"] == "succeeded"
+    assert deepseek_row["latest_packet"]["stats"]["completed"] == 1
+    assert deepseek_row["latest_packet"]["stats"]["total"] == 1
+
+    projection = service.build_summary_projection(
+        [SimpleNamespace(**row) for row in rows]
+    )
+    fetch_results = projection["fetch_results"]
+    assert len(fetch_results) == 1
+    assert {
+        result["platform"] for result in fetch_results[0]["platform_results"]
+    } == {"deepseek", "yuanbao"}
+
+
 def test_build_rows_from_fetch_results_preserves_platform_success_when_latest_question_failed():
     service = FetchRunPlatformStateService(db=None)  # type: ignore[arg-type]
 

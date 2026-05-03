@@ -11,7 +11,10 @@ from app.core.fetchers.browser.browser_executor import (
     execute_post_submit_capture_flow,
 )
 from app.core.fetchers.browser.parsers.base import BaseResponseParser
-from app.core.fetchers.browser.parsers.sse import YuanbaoSSEParser
+from app.core.fetchers.browser.parsers.sse import (
+    YuanbaoSSEParser,
+    clean_yuanbao_answer_text,
+)
 from app.schemas.fetch import (
     BrowserState,
     Platform,
@@ -69,6 +72,10 @@ class YuanbaoHandler(BaseBrowserHandler):
 
     def _get_response_parser(self) -> BaseResponseParser | None:
         return YuanbaoSSEParser()
+
+    async def _extract_answer_dom(self) -> str:
+        text = await super()._extract_answer_dom()
+        return clean_yuanbao_answer_text(text)
 
     def _dismiss_popups_js(self) -> str:
         """Build popup dismissal JS for Yuanbao."""

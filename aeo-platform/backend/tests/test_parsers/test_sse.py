@@ -6,8 +6,6 @@ that match the real format observed via network sniffing.
 
 import json
 
-import pytest
-
 from app.core.fetchers.browser.parsers.sse import (
     DeepSeekSSEParser,
     DoubaoSSEParser,
@@ -316,6 +314,22 @@ class TestYuanbaoSSEParser:
         result = self.parser.validate(result)
         assert result.parse_ok
         assert result.answer_text == "针对您的皮肤问题，建议使用温和的护肤品。"
+
+    def test_inline_rendering_markers_are_cleaned(self):
+        body = _make_yuanbao_sse(
+            text_content=(
+                "[](@mark_underline=1)### 标题[citation:1]\n"
+                "正文[](@mark_underline=2)[citation:2][](@mark_underline=3)继续。"
+            )
+        )
+
+        result = self.parser.parse(body)
+        result = self.parser.validate(result)
+
+        assert result.parse_ok
+        assert "mark_underline" not in result.answer_text
+        assert "[citation:" not in result.answer_text
+        assert result.answer_text == "### 标题\n正文继续。"
 
     def test_step_events_ignored(self):
         """Step events (status messages) should not appear in answer text."""

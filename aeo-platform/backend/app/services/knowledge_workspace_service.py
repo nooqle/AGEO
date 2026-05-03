@@ -638,6 +638,30 @@ class KnowledgeWorkspaceService:
                     site_name = _text(
                         citation.get("site_name") or citation.get("source")
                     )
+                    citation_metadata = (
+                        citation.get("metadata")
+                        if isinstance(citation.get("metadata"), dict)
+                        else {}
+                    )
+                    url_intelligence = (
+                        citation.get("url_intelligence")
+                        if isinstance(citation.get("url_intelligence"), dict)
+                        else (
+                            citation_metadata.get("url_intelligence")
+                            if isinstance(
+                                citation_metadata.get("url_intelligence"), dict
+                            )
+                            else None
+                        )
+                    )
+                    information_updated_at = _text(
+                        citation.get("information_updated_at")
+                        or citation_metadata.get("information_updated_at")
+                    ) or occurred_at.isoformat()
+                    information_updated_at_source = _text(
+                        citation.get("information_updated_at_source")
+                        or citation_metadata.get("information_updated_at_source")
+                    ) or "knowledge_writeback"
                     resolution = await domain_memory.resolve_citation_domain_fast(
                         url=url,
                         raw_domain=raw_domain,
@@ -648,6 +672,7 @@ class KnowledgeWorkspaceService:
                         entity_id=entity_id,
                         official_domains=official_domains,
                         platform=platform,
+                        url_intelligence=url_intelligence,
                     )
                     domain = resolution.canonical_domain
                     site_name = site_name or resolution.display_name
@@ -658,6 +683,8 @@ class KnowledgeWorkspaceService:
                         "platform": platform,
                         "citation": citation,
                         "is_official": is_official,
+                        "information_updated_at": information_updated_at,
+                        "information_updated_at_source": information_updated_at_source,
                         "domain_resolution": {
                             "canonical_domain": resolution.canonical_domain,
                             "display_name": resolution.display_name,
@@ -700,12 +727,18 @@ class KnowledgeWorkspaceService:
                             "url": url,
                             "site_name": site_name,
                             "site_display_name": resolution.display_name,
+                            "site_category": resolution.site_category,
                             "source_type": resolution.source_type,
                             "canonical_domain": resolution.canonical_domain,
                             "domain_relation_type": resolution.relation_type,
                             "domain_resolution_confidence": resolution.confidence,
                             "domain_resolution_status": resolution.status,
                             "domain_resolved_by": resolution.resolved_by,
+                            "url_intelligence": resolution.url_intelligence,
+                            "information_updated_at": information_updated_at,
+                            "information_updated_at_source": (
+                                information_updated_at_source
+                            ),
                             "is_official": is_official,
                         },
                         segments=self._build_citation_segments(
@@ -1765,6 +1798,7 @@ class KnowledgeWorkspaceService:
             {"key": "domain", "label": "域名", "sortable": True},
             {"key": "site_name", "label": "站点", "sortable": True},
             {"key": "is_official", "label": "官网", "sortable": True},
+            {"key": "information_updated_at", "label": "信息更新时间", "sortable": True},
             {"key": "url", "label": "链接", "sortable": False},
         ]
 
@@ -2052,6 +2086,11 @@ class KnowledgeWorkspaceService:
                 "是"
                 if bool(metadata.get("is_official") or payload.get("is_official"))
                 else "否"
+            ),
+            "information_updated_at": _text(
+                metadata.get("information_updated_at")
+                or citation.get("information_updated_at")
+                or payload.get("information_updated_at")
             ),
             "url": _text(metadata.get("url") or citation.get("url")),
         }

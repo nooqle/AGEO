@@ -24,7 +24,7 @@ from app.workflow.skill_state import (
     build_harness_decision_update,
     build_skill_result_update,
 )
-from app.core.llm import get_llm_model
+from app.core.llm.task_routing import get_long_text_llm_model
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +436,7 @@ async def _generate_drill_down(
 请生成针对「{dim_label}: {focus_value or '全部'}」的深入分析报告。"""
 
     try:
-        model = get_llm_model()
+        model = get_long_text_llm_model()
         response = await call_llm_streaming(
             session_id=session_id,
             model=model,
@@ -648,7 +648,7 @@ async def _generate_comparison(
 请生成两次分析的对比报告。"""
 
     try:
-        model = get_llm_model()
+        model = get_long_text_llm_model()
         response = await call_llm_streaming(
             session_id=session_id,
             model=model,

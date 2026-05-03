@@ -1560,6 +1560,7 @@ class AnalyticsService:
                 "sourceTypeLabel": self._source_type_label(
                     str(item.get("source_type", "") or "other")
                 ),
+                "siteCategory": str(item.get("site_category", "") or ""),
             }
             for item in source_summary.get("top_domains", []) or []
             if isinstance(item, dict) and item.get("domain")

@@ -36,6 +36,16 @@ class SearchReference(BaseModel):
     snippet: Optional[str] = Field(None, description="摘要片段")
     site_name: Optional[str] = Field(None, description="网站名称")
     is_official: bool = Field(False, description="是否为品牌官网")
+    information_updated_at: Optional[str] = Field(
+        None,
+        description="引用链接信息更新时间",
+    )
+    information_updated_at_source: Optional[str] = Field(
+        None,
+        description="引用链接信息更新时间来源",
+    )
+    published_at: Optional[str] = Field(None, description="来源发布时间")
+    updated_at: Optional[str] = Field(None, description="来源更新时间")
 
 
 class FetchResult(BaseModel):

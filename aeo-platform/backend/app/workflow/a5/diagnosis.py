@@ -237,11 +237,6 @@ def load_scenario_taxonomy() -> dict[str, Any]:
     return _read_json_config("scenario_taxonomy.json")
 
 
-@lru_cache(maxsize=1)
-def load_source_taxonomy() -> dict[str, Any]:
-    return _read_json_config("source_taxonomy.json")
-
-
 def _contains_any_token(text: str, tokens: list[Any]) -> bool:
     return any(str(token or "") and str(token) in text for token in tokens)
 
@@ -681,9 +676,7 @@ def _summarize_scenario_rows(
         )
         no_brand_count = status_counter.get("no_brand", 0)
         competitor_only_count = status_counter.get("competitor_only", 0)
-        target_with_competitors_count = status_counter.get(
-            "target_with_competitors", 0
-        )
+        target_with_competitors_count = status_counter.get("target_with_competitors", 0)
         representative_questions = [
             _clip(row.get("question_text"), 72)
             for row in scenario_rows[:3]
@@ -728,13 +721,10 @@ def _summarize_scenario_rows(
                 "missing_questions": missing_questions,
                 "competitors_present": competitor_names[:5],
                 "content_gap": str(
-                    (scenario_rows[0] if scenario_rows else {}).get("content_gap")
-                    or ""
+                    (scenario_rows[0] if scenario_rows else {}).get("content_gap") or ""
                 ),
                 "recommended_asset": str(
-                    (scenario_rows[0] if scenario_rows else {}).get(
-                        "recommended_asset"
-                    )
+                    (scenario_rows[0] if scenario_rows else {}).get("recommended_asset")
                     or ""
                 ),
             }
@@ -754,130 +744,42 @@ def _scenario_diagnosis_sentence(scenario: str, status: str) -> str:
     return f"{scenario}需要结合样本继续复核。"
 
 
-def _classify_source(
-    *,
-    domain: str,
-    is_official: bool,
-    titles: list[str],
-    competitors: list[dict[str, Any]],
-) -> tuple[str, str, int, int, str]:
-    title_text = " ".join(titles).lower()
-    taxonomy = load_source_taxonomy()
+_UNKNOWN_SOURCE_VALUES = {
+    "",
+    "unknown",
+    "other",
+    "n/a",
+    "na",
+    "缺乏特征，无法识别",
+    "缺乏特征，无法识别。",
+}
+
+
+def _clean_a4_source_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.lower() in _UNKNOWN_SOURCE_VALUES or text in _UNKNOWN_SOURCE_VALUES:
+        return ""
+    return text
+
+
+def _source_identity_from_a4(item: dict[str, Any]) -> tuple[str, str]:
+    site_category = _clean_a4_source_value(item.get("site_category"))
+    source_type = _clean_a4_source_value(item.get("source_type"))
+    if site_category:
+        return source_type or site_category, site_category
+    if bool(item.get("is_official")):
+        return "official", "品牌官网"
+    if source_type:
+        return source_type, source_type
+    return "unknown", "未知"
+
+
+def _source_action_from_a4_label(label: str, *, is_official: bool) -> str:
+    if label == "未知":
+        return "来源识别未返回有效分类，保留为未知来源。"
     if is_official:
-        official = taxonomy.get("official", {}) if isinstance(taxonomy, dict) else {}
-        document_tokens = (
-            official.get("document_tokens", []) if isinstance(official, dict) else []
-        )
-        if domain.endswith(".pdf") or _contains_any_token(title_text, document_tokens):
-            config = (
-                official.get("official_document", {})
-                if isinstance(official, dict)
-                else {}
-            )
-            return (
-                "official_document",
-                str(config.get("label") or "官方文档/白皮书"),
-                _as_int(config.get("authority_score"), 90),
-                _as_int(config.get("brand_control_score"), 100),
-                str(config.get("recommended_action") or "HTML 化、摘要化、可引用化。"),
-            )
-        config = (
-            official.get("brand_official", {}) if isinstance(official, dict) else {}
-        )
-        return (
-            "brand_official",
-            str(config.get("label") or "品牌官网"),
-            _as_int(config.get("authority_score"), 85),
-            _as_int(config.get("brand_control_score"), 100),
-            str(config.get("recommended_action") or "优先优化结构化内容和可引用结论。"),
-        )
-
-    competitor_domains = {
-        _normalize_domain(item.get("website") or item.get("official_website") or "")
-        for item in competitors
-        if isinstance(item, dict)
-    }
-    competitor_names = [
-        str(item.get("name") or "").lower()
-        for item in competitors
-        if isinstance(item, dict) and item.get("name")
-    ]
-    if domain in competitor_domains or any(
-        name and name in title_text for name in competitor_names
-    ):
-        config = (
-            taxonomy.get("competitor_official", {})
-            if isinstance(taxonomy, dict)
-            else {}
-        )
-        return (
-            "competitor_official",
-            str(config.get("label") or "竞品官网"),
-            _as_int(config.get("authority_score"), 80),
-            _as_int(config.get("brand_control_score"), 0),
-            str(config.get("recommended_action") or "做差异化对比内容。"),
-        )
-
-    source_configs = (
-        taxonomy.get("source_types", []) if isinstance(taxonomy, dict) else []
-    )
-    for config in source_configs:
-        if not isinstance(config, dict):
-            continue
-        if not _contains_any_token(domain, config.get("domain_tokens", []) or []):
-            continue
-        return (
-            str(config.get("source_type") or "unknown"),
-            str(config.get("label") or "未知"),
-            _as_int(config.get("authority_score"), 35),
-            _as_int(config.get("brand_control_score"), 0),
-            str(config.get("recommended_action") or "等待规则库补全。"),
-        )
-
-    if any(token in domain for token in ("pubmed", "nih.gov", "cnki", "wanfangdata")):
-        return "academic_medical", "学术/医学", 88, 0, "保健品/医疗类优先纳入证据链。"
-    if any(token in domain for token in ("gov", "samr", "nhc", "who.int", "fda.gov")):
-        return "government_regulator", "政府/监管", 90, 0, "用于合规背书。"
-    if any(token in domain for token in ("baike", "wikipedia", "mbalib")):
-        return "encyclopedia", "百科/知识库", 68, 0, "治理词条和基础事实口径。"
-    if any(
-        token in domain
-        for token in ("douyin", "zhihu", "xiaohongshu", "weibo", "toutiao", "bilibili")
-    ):
-        return "community_ugc", "社区/UGC", 48, 0, "做口碑治理和内容分发。"
-    if any(
-        token in domain
-        for token in (
-            "jiemian",
-            "36kr",
-            "sina",
-            "sohu",
-            "qq.com",
-            "163.com",
-            "caixin",
-            "pedaily",
-        )
-    ):
-        return "authoritative_media", "权威媒体", 72, 0, "外部内容合作或 PR 治理。"
-    if any(
-        token in domain
-        for token in ("doc", "wenku", "download", "read", "copy", "gii.tw")
-    ):
-        return (
-            "low_quality_scraper",
-            "低质搬运",
-            25,
-            0,
-            "低优先级，不建议投入，但要监控污染。",
-        )
-    unknown = taxonomy.get("unknown", {}) if isinstance(taxonomy, dict) else {}
-    return (
-        str(unknown.get("source_type") or "unknown"),
-        str(unknown.get("label") or "未知"),
-        _as_int(unknown.get("authority_score"), 35),
-        _as_int(unknown.get("brand_control_score"), 0),
-        str(unknown.get("recommended_action") or "等待规则库补全。"),
-    )
+        return "优先优化官网可引用内容和结构化入口。"
+    return f"围绕“{label}”来源维护站点画像与内容治理。"
 
 
 def build_source_intelligence(
@@ -885,6 +787,7 @@ def build_source_intelligence(
     *,
     competitors: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    del competitors
     source_summary = (
         metric_bundle.get("source_summary")
         if isinstance(metric_bundle.get("source_summary"), dict)
@@ -904,27 +807,21 @@ def build_source_intelligence(
         titles = [str(title or "") for title in item.get("sample_titles", []) or []]
         display_name = str(item.get("display_name") or "").strip()
         explicit_site_name = str(item.get("site_name") or "").strip()
-        competitor_site_name = _competitor_site_name(domain, competitors)
         site_name = (
-            (
-                display_name
-                if display_name and display_name.lower() != domain
-                else ""
-            )
+            (display_name if display_name and display_name.lower() != domain else "")
             or (
                 explicit_site_name
                 if explicit_site_name and explicit_site_name.lower() != domain
                 else ""
             )
-            or competitor_site_name
             or domain
         )
-        source_type, display, authority, control, action = _classify_source(
-            domain=domain,
-            is_official=bool(item.get("is_official")),
-            titles=titles,
-            competitors=competitors,
-        )
+        is_official = bool(item.get("is_official"))
+        source_type, display = _source_identity_from_a4(item)
+        site_category = _clean_a4_source_value(item.get("site_category")) or None
+        authority = 85 if is_official else 35
+        control = 100 if is_official else 0
+        action = _source_action_from_a4_label(display, is_official=is_official)
         count = _as_int(item.get("count"))
         type_counter[display] += count
         rows.append(
@@ -934,14 +831,13 @@ def build_source_intelligence(
                 "site_display": _format_site_name(domain, site_name),
                 "source_type": source_type,
                 "source_type_label": display,
+                "site_category": site_category,
                 "authority_score": authority,
                 "brand_control_score": control,
                 "ai_citation_frequency": count,
                 "citation_share": _safe_rate(count, total_citations),
                 "risk_level": (
-                    "high"
-                    if source_type == "low_quality_scraper"
-                    else "medium" if control == 0 else "low"
+                    "low" if control > 0 else "medium"
                 ),
                 "recommended_action": action,
                 "sample_titles": [_clip(title, 56) for title in titles[:3] if title],
@@ -976,33 +872,11 @@ def build_source_intelligence(
 
 
 def _source_type_diagnosis(label: str) -> str:
-    taxonomy = load_source_taxonomy()
-    if isinstance(taxonomy, dict):
-        for item in taxonomy.get("source_types", []) or []:
-            if isinstance(item, dict) and str(item.get("label") or "") == label:
-                return str(item.get("diagnosis") or "需要继续复核来源价值。")
-        for key in ("competitor_official", "unknown"):
-            item = taxonomy.get(key, {})
-            if isinstance(item, dict) and str(item.get("label") or "") == label:
-                return str(item.get("diagnosis") or "需要继续复核来源价值。")
-        official = taxonomy.get("official", {})
-        if isinstance(official, dict):
-            for key in ("brand_official", "official_document"):
-                item = official.get(key, {})
-                if isinstance(item, dict) and str(item.get("label") or "") == label:
-                    return str(item.get("diagnosis") or "需要继续复核来源价值。")
-    return {
-        "社区/UGC": "影响答案广度，但权威性弱。",
-        "权威媒体": "影响品牌解释权，可通过 PR 和内容合作治理。",
-        "低质搬运": "不建议直接投入，但需要监控是否污染答案。",
-        "品牌官网": "品牌可控，应优先做结构化内容优化。",
-        "官方文档/白皮书": "适合转成 HTML 摘要和可引用结论。",
-        "学术/医学": "适合作为医疗和保健品类证据背书。",
-        "政府/监管": "适合作为合规与安全背书。",
-        "百科/知识库": "适合治理基础事实和词条口径。",
-        "竞品官网": "说明竞品掌握部分解释权，需要做差异化内容。",
-        "未知": "当前规则库不足，等待补全分类。",
-    }.get(label, "需要继续复核来源价值。")
+    if label == "未知":
+        return "来源识别未返回有效分类，保留为未知。"
+    if label == "品牌官网":
+        return "品牌可控来源，应优先做结构化内容和可引用结论优化。"
+    return f"该类型来自引用来源识别结果，用于观察 AI 答案对“{label}”来源的依赖。"
 
 
 CONCERN_LABELS = {
@@ -1041,18 +915,50 @@ def _infer_concerns_from_text(text: str) -> list[str]:
         concerns.append("delivery_complexity")
     if any(
         token in text
-        for token in ("案例少", "证据不足", "证据", "成分", "浓度", "实验", "方法论", "数据支撑", "可信度")
+        for token in (
+            "案例少",
+            "证据不足",
+            "证据",
+            "成分",
+            "浓度",
+            "实验",
+            "方法论",
+            "数据支撑",
+            "可信度",
+        )
     ):
         concerns.append("evidence_sufficiency")
     if any(
         token in text
-        for token in ("中型企业", "中小企业", "适配", "不适合", "不如本土", "客群", "肤质", "敏感肌", "耐受", "屏障", "试用", "香精")
+        for token in (
+            "中型企业",
+            "中小企业",
+            "适配",
+            "不适合",
+            "不如本土",
+            "客群",
+            "肤质",
+            "敏感肌",
+            "耐受",
+            "屏障",
+            "试用",
+            "香精",
+        )
     ):
         concerns.append("fit_boundary")
     if (
         any(
             token in text
-            for token in ("竞品", "替代", "更适合", "不如", "相比", "优先提到", "大众知名度", "公开讨论")
+            for token in (
+                "竞品",
+                "替代",
+                "更适合",
+                "不如",
+                "相比",
+                "优先提到",
+                "大众知名度",
+                "公开讨论",
+            )
         )
         or "competitor" in lowered
     ):
@@ -1947,16 +1853,16 @@ def _build_sentiment_probe(
                 "mapped_concern": CONCERN_LABELS.get(concern_type, concern_type),
                 "rate": item.get("rate"),
                 "count": item.get("count"),
-                "common_conclusion": _text_or_pending(
-                    item.get("common_conclusion")
-                ),
+                "common_conclusion": _text_or_pending(item.get("common_conclusion")),
             }
         )
     negative_samples: list[dict[str, Any]] = []
     for item in sentiment_risk.get("items", []) or []:
         if not isinstance(item, dict):
             continue
-        topics = [str(topic) for topic in item.get("negative_topics", []) or [] if topic]
+        topics = [
+            str(topic) for topic in item.get("negative_topics", []) or [] if topic
+        ]
         conclusions = [
             _clip(conclusion.get("text"), 96)
             for conclusion in item.get("negative_conclusions", []) or []
@@ -1964,7 +1870,11 @@ def _build_sentiment_probe(
         ]
         if not conclusions and item.get("answer_excerpt"):
             conclusions = [_clip(item.get("answer_excerpt"), 96)]
-        if str(item.get("sentiment") or "") != "negative" and not topics and not conclusions:
+        if (
+            str(item.get("sentiment") or "") != "negative"
+            and not topics
+            and not conclusions
+        ):
             continue
         mapped_topics = _unique_values(
             CONCERN_LABELS.get(_map_negative_topic(topic), topic) for topic in topics
@@ -1989,9 +1899,7 @@ def _build_sentiment_probe(
     if not judgeable:
         narrative = "本轮没有品牌提及样本，不能判断正向、中性、负向情绪；应先进入品牌未进入诊断。"
     else:
-        narrative = (
-            "情绪分布用于观察 AI 回答语气和决策顾虑，负向信号需要进一步映射为价格门槛、证据充分性、适配边界等风险顾虑，不能直接写成品牌口碑负面。"
-        )
+        narrative = "情绪分布用于观察 AI 回答语气和决策顾虑，负向信号需要进一步映射为价格门槛、证据充分性、适配边界等风险顾虑，不能直接写成品牌口碑负面。"
     return {
         "judgeable": judgeable,
         "distribution": {
@@ -2057,7 +1965,9 @@ def _build_platform_diagnostics(
     )
     for row in question_rows:
         state_platforms = (
-            row.get("state_platforms") if isinstance(row.get("state_platforms"), dict) else {}
+            row.get("state_platforms")
+            if isinstance(row.get("state_platforms"), dict)
+            else {}
         )
         scenario = scenario_by_question.get(str(row.get("question_id") or "")) or str(
             row.get("scene") or ""
@@ -2076,14 +1986,16 @@ def _build_platform_diagnostics(
                             "brand_entry"
                         ] += 1
                     if state in {"no_brand", "competitor_only"}:
-                        platform_scenario_counts[platform_key][scenario][
-                            "missing"
-                        ] += 1
+                        platform_scenario_counts[platform_key][scenario]["missing"] += 1
 
     platform_names = sorted(set(profiles) | set(platform_state_counts))
     items: list[dict[str, Any]] = []
     for platform in platform_names:
-        profile = profiles.get(platform, {}) if isinstance(profiles.get(platform), dict) else {}
+        profile = (
+            profiles.get(platform, {})
+            if isinstance(profiles.get(platform), dict)
+            else {}
+        )
         states = platform_state_counts.get(platform, Counter())
         total = states.get("total", 0)
         brand_entry_count = states.get("monitor_only", 0) + states.get(
@@ -2101,7 +2013,9 @@ def _build_platform_diagnostics(
                 scenario_counts.items(),
                 key=lambda pair: (
                     -(
-                        _safe_rate(pair[1].get("brand_entry", 0), pair[1].get("total", 0))
+                        _safe_rate(
+                            pair[1].get("brand_entry", 0), pair[1].get("total", 0)
+                        )
                         or 0
                     ),
                     -pair[1].get("total", 0),
@@ -2129,9 +2043,8 @@ def _build_platform_diagnostics(
             {
                 "platform": platform,
                 "platform_label": _platform_label(platform),
-                "data_status": profile.get("data_status") or (
-                    "ok" if total else "missing"
-                ),
+                "data_status": profile.get("data_status")
+                or ("ok" if total else "missing"),
                 "answer_sample_count": total,
                 "brand_entry_count": brand_entry_count,
                 "brand_entry_rate": _safe_rate(brand_entry_count, total),
@@ -2350,12 +2263,8 @@ def build_structured_report(
             "brand_rank": metric_bundle.get("brand_rank"),
             "ranked_brand_count": metric_bundle.get("ranked_brand_count"),
             "monitor_only_rate": metric_bundle.get("monitor_only_rate"),
-            "monitor_plus_others_rate": metric_bundle.get(
-                "monitor_plus_others_rate"
-            ),
-            "official_conversion_rate": metric_bundle.get(
-                "official_conversion_rate"
-            ),
+            "monitor_plus_others_rate": metric_bundle.get("monitor_plus_others_rate"),
+            "official_conversion_rate": metric_bundle.get("official_conversion_rate"),
             "official_funnel": metric_bundle.get("official_funnel", {}),
         },
         "scenario_map": scenario_items,
@@ -2606,7 +2515,9 @@ def build_structured_report(
         if cited_source_rate or mixed_source_rate:
             model_inference_rate = source_distribution.get("model_inference")
             if model_inference_rate:
-                source_parts.append(f"模型自身归纳 {_format_rate(model_inference_rate)}")
+                source_parts.append(
+                    f"模型自身归纳 {_format_rate(model_inference_rate)}"
+                )
             if cited_source_rate:
                 source_parts.append(f"引用来源带出 {_format_rate(cited_source_rate)}")
             if mixed_source_rate:
@@ -2640,9 +2551,7 @@ def build_structured_report(
                     lines.append(f"  - 样本证据：{evidence}")
         else:
             lines.append("- 当前没有稳定重复的风险顾虑。")
-        lines.extend(
-            ["", "### 7. 平台差异"]
-        )
+        lines.extend(["", "### 7. 平台差异"])
         platform_items = [
             item
             for item in platform_diagnostics.get("items", []) or []
@@ -2650,7 +2559,9 @@ def build_structured_report(
         ]
         if platform_items:
             for item in platform_items:
-                friendly = "、".join(item.get("brand_friendly_question_types", []) or [])
+                friendly = "、".join(
+                    item.get("brand_friendly_question_types", []) or []
+                )
                 unfriendly = "、".join(
                     item.get("brand_unfriendly_question_types", []) or []
                 )
@@ -2695,7 +2606,9 @@ def build_structured_report(
                 lines.append(
                     f"  - 当前状态：{item.get('answer_state') or '需复核'}；平台：{platforms or '暂无足够数据支撑'}；风险主题：{risk_topics or '暂不集中'}。{item.get('question_text')}"
                 )
-        missing_samples = sample_appendix.get("missing_or_contested_questions", []) or []
+        missing_samples = (
+            sample_appendix.get("missing_or_contested_questions", []) or []
+        )
         if missing_samples:
             lines.append("- 缺席/同台问题样本：")
             for item in missing_samples[:5]:
@@ -2705,10 +2618,10 @@ def build_structured_report(
                 )
         unknown_sources = sample_appendix.get("unknown_sources", []) or []
         if unknown_sources:
-            lines.append("- 暂未定类来源：")
+            lines.append("- 未知来源：")
             for item in unknown_sources[:8]:
                 lines.append(
-                    f"  - {item.get('site_display') or item.get('domain')}：出现 {item.get('ai_citation_frequency')} 次；等待规则库补全。"
+                    f"  - {item.get('site_display') or item.get('domain')}：出现 {item.get('ai_citation_frequency')} 次；{item.get('recommended_action') or '来源识别未返回有效分类，保留为未知来源。'}"
                 )
         source_samples = sample_appendix.get("source_samples", []) or []
         if source_samples:
