@@ -10,10 +10,20 @@ from dataclasses import dataclass
 import logging
 from typing import Any
 
+from app.workflow.runtime_policy_executor import build_next_required_action
+
 
 logger = logging.getLogger(__name__)
 
 _KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
+    "panorama_fast": "品牌全景分析（快速模式）",
+    "panorama_full": "品牌全景分析（完整模式）",
+    "panorama": "品牌全景分析",
+    "scenario": "场景细化分析",
+    "website": "官网 AI 友好度评估",
+    "ask": "直接提问",
+    "persona_first": "先做用户画像分析",
+    "custom_questions": "我自定义问题",
     "view_questions": "先查看问题内容",
     "still_empty": "问题列表仍未显示",
     "table_import_question_list": "确认导入问题列表",
@@ -329,11 +339,86 @@ def resolve_confirmation_selection(
             resolved_user_content = "按我选中的画像开始出题吧。"
             decisions["a3_mode"] = "persona"
             logger.info("[LangGraph] Inline confirmation: persona_focused mode")
-        elif opt_id == "brand_panorama":
+        elif opt_id == "panorama_fast":
+            clear_question_import_state()
+            resolved_user_content = "先做品牌全景分析，并使用快速采集。"
+            decisions["a3_mode"] = "baseline_dynamic"
+            decisions["fetch_mode_pending"] = False
+            decisions["fetch_mode_confirmed"] = True
+            state_updates["analysis_mode"] = "baseline"
+            state_updates["fetch_mode"] = "fast"
+            state_updates["next_required_action"] = build_next_required_action(
+                tool_name="question_simulation",
+                authority="user_confirmation",
+                tool_args={"mode": "baseline_dynamic"},
+                reason="用户选择品牌全景分析快速模式。",
+                reply_text="好的，我会按品牌全景分析路径继续，并使用快速采集模式。",
+                source_step="confirmation",
+            )
+            logger.info("[LangGraph] Inline confirmation: panorama_fast mode")
+        elif opt_id == "panorama_full":
+            clear_question_import_state()
+            resolved_user_content = "先做品牌全景分析，并使用完整采集。"
+            decisions["a3_mode"] = "baseline_dynamic"
+            decisions["fetch_mode_pending"] = False
+            decisions["fetch_mode_confirmed"] = True
+            state_updates["analysis_mode"] = "baseline"
+            state_updates["fetch_mode"] = "full"
+            state_updates["next_required_action"] = build_next_required_action(
+                tool_name="question_simulation",
+                authority="user_confirmation",
+                tool_args={"mode": "baseline_dynamic"},
+                reason="用户选择品牌全景分析完整模式。",
+                reply_text="好的，我会按品牌全景分析路径继续，并使用完整采集模式。",
+                source_step="confirmation",
+            )
+            logger.info("[LangGraph] Inline confirmation: panorama_full mode")
+        elif opt_id in {"persona_first", "scenario"}:
+            clear_question_import_state()
+            resolved_user_content = "先做用户画像分析。"
+            decisions["a3_mode"] = "persona"
+            state_updates["analysis_mode"] = "persona"
+            state_updates["next_required_action"] = build_next_required_action(
+                tool_name="persona_generation",
+                authority="user_confirmation",
+                reason="用户选择先做用户画像分析。",
+                reply_text="好的，我先生成用户画像，再基于画像继续设计问题。",
+                source_step="confirmation",
+            )
+            logger.info("[LangGraph] Inline confirmation: persona/scenario mode")
+        elif opt_id == "custom_questions":
+            clear_question_import_state()
+            resolved_user_content = "我会自定义问题。"
+            logger.info("[LangGraph] Inline confirmation: custom_questions mode")
+        elif opt_id in {"brand_panorama", "panorama"}:
             clear_question_import_state()
             resolved_user_content = "先做品牌全景分析吧。"
-            decisions["a3_mode"] = "brand"
-            logger.info("[LangGraph] Inline confirmation: brand_panorama mode")
+            decisions["a3_mode"] = "baseline_dynamic"
+            state_updates["analysis_mode"] = "baseline"
+            state_updates["next_required_action"] = build_next_required_action(
+                tool_name="question_simulation",
+                authority="user_confirmation",
+                tool_args={"mode": "baseline_dynamic"},
+                reason="用户选择品牌全景分析。",
+                reply_text="好的，我会继续生成品牌全景分析问题。",
+                source_step="confirmation",
+            )
+            logger.info("[LangGraph] Inline confirmation: brand panorama mode")
+        elif opt_id == "website":
+            clear_question_import_state()
+            resolved_user_content = "请评估官网 AI 友好度。"
+            state_updates["next_required_action"] = build_next_required_action(
+                tool_name="site_confidence_assessment_skill",
+                authority="user_confirmation",
+                reason="用户选择官网 AI 友好度评估。",
+                reply_text="好的，我会继续评估官网在 AI 引用与理解中的友好度。",
+                source_step="confirmation",
+            )
+            logger.info("[LangGraph] Inline confirmation: website assessment mode")
+        elif opt_id == "ask":
+            clear_question_import_state()
+            resolved_user_content = "我想直接提问。"
+            logger.info("[LangGraph] Inline confirmation: direct ask mode")
         elif opt_id == "fast":
             resolved_user_content = "用户选择快速采集"
             decisions["fetch_mode_pending"] = False

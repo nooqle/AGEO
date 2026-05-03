@@ -4369,11 +4369,13 @@ async def orchestrator_node(state: AgentState) -> Command:
             )
 
         user_decisions = dict(state.get("user_decisions", {}))
+        selected_fetch_mode = str(state.get("fetch_mode") or "").strip().lower()
         if (
             last_tool == "question_simulation"
             and state.get("simulated_questions")
             and not user_decisions.get("fetch_mode_confirmed", False)
             and not user_decisions.get("fetch_mode_pending", False)
+            and selected_fetch_mode not in {"fast", "full"}
         ):
             logger.warning(
                 "[Orchestrator] No tool call after A3 completion; "
