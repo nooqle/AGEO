@@ -269,7 +269,7 @@ run_backend_migrations() {
   log "Running backend database migrations"
   (
     cd "$backend_dir"
-    "$backend_dir/.venv/bin/python" -m alembic upgrade head
+    "$backend_dir/.venv/bin/alembic" upgrade head
   )
 }
 
