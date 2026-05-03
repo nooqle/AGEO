@@ -47,6 +47,22 @@ from app.workflow.summaries import generate_a5_summary
 logger = logging.getLogger(__name__)
 
 # Shared BWVS weights and sentiment helpers now live in app.workflow.a5.metrics.
+_UNKNOWN_SOURCE_VALUES = {
+    "",
+    "unknown",
+    "other",
+    "n/a",
+    "na",
+    "缺乏特征，无法识别",
+    "缺乏特征，无法识别。",
+}
+
+
+def _clean_source_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.lower() in _UNKNOWN_SOURCE_VALUES or text in _UNKNOWN_SOURCE_VALUES:
+        return ""
+    return text
 
 
 def _resolved_report_kind_from_output(
@@ -818,6 +834,54 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                     citation_title = (
                         citation.get("title", "") if isinstance(citation, dict) else ""
                     )
+                    citation_metadata = (
+                        citation.get("metadata", {})
+                        if isinstance(citation, dict)
+                        and isinstance(citation.get("metadata"), dict)
+                        else {}
+                    )
+                    url_intelligence = (
+                        citation.get("url_intelligence")
+                        if isinstance(citation, dict)
+                        and isinstance(citation.get("url_intelligence"), dict)
+                        else (
+                            citation_metadata.get("url_intelligence")
+                            if isinstance(
+                                citation_metadata.get("url_intelligence"), dict
+                            )
+                            else {}
+                        )
+                    )
+                    site_category = _clean_source_value(
+                        citation.get("site_category")
+                        if isinstance(citation, dict)
+                        else ""
+                    ) or _clean_source_value(citation_metadata.get("site_category"))
+                    if not site_category and isinstance(url_intelligence, dict):
+                        site_category = _clean_source_value(
+                            url_intelligence.get("category")
+                        )
+                    source_type = _clean_source_value(
+                        citation.get("source_type")
+                        if isinstance(citation, dict)
+                        else ""
+                    ) or _clean_source_value(citation_metadata.get("source_type"))
+                    if not source_type and site_category:
+                        source_type = site_category
+                    display_name = _clean_source_value(
+                        citation.get("site_display_name")
+                        if isinstance(citation, dict)
+                        else ""
+                    ) or _clean_source_value(
+                        citation.get("site_name") if isinstance(citation, dict) else ""
+                    )
+                    if (
+                        not display_name
+                        and isinstance(url_intelligence, dict)
+                    ):
+                        display_name = _clean_source_value(
+                            url_intelligence.get("site_name")
+                        )
                     citation_domain = extract_domain(citation_url)
 
                     # Strict official domain matching (fixes ke.com matching nike.com)
@@ -837,8 +901,35 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                                 "count": 0,
                                 "is_official": is_official,
                                 "sample_titles": [],
+                                "display_names": {},
+                                "source_types": {},
+                                "site_categories": {},
                             }
                         domain_stats[citation_domain]["count"] += 1
+                        domain_stats[citation_domain]["is_official"] = bool(
+                            domain_stats[citation_domain]["is_official"] or is_official
+                        )
+                        if display_name:
+                            display_names = domain_stats[citation_domain][
+                                "display_names"
+                            ]
+                            display_names[display_name] = (
+                                display_names.get(display_name, 0) + 1
+                            )
+                        if source_type:
+                            source_types = domain_stats[citation_domain][
+                                "source_types"
+                            ]
+                            source_types[source_type] = (
+                                source_types.get(source_type, 0) + 1
+                            )
+                        if site_category:
+                            site_categories = domain_stats[citation_domain][
+                                "site_categories"
+                            ]
+                            site_categories[site_category] = (
+                                site_categories.get(site_category, 0) + 1
+                            )
                         if (
                             citation_title
                             and len(domain_stats[citation_domain]["sample_titles"]) < 3
@@ -955,9 +1046,30 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
         "top_domains": [
             {
                 "domain": domain,
+                "display_name": (
+                    max(
+                        stats["display_names"],
+                        key=stats["display_names"].get,
+                    )
+                    if stats.get("display_names")
+                    else ""
+                ),
                 "count": stats["count"],
                 "share": round(stats["count"] / total_cit * 100, 1),
                 "is_official": stats["is_official"],
+                "source_type": (
+                    max(stats["source_types"], key=stats["source_types"].get)
+                    if stats.get("source_types")
+                    else ("official" if stats["is_official"] else "unknown")
+                ),
+                "site_category": (
+                    max(
+                        stats["site_categories"],
+                        key=stats["site_categories"].get,
+                    )
+                    if stats.get("site_categories")
+                    else None
+                ),
                 "sample_titles": stats["sample_titles"][:3],
             }
             for domain, stats in sorted_domains

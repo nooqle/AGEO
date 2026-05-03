@@ -143,6 +143,10 @@ SOURCE_TYPE_DISPLAY = {
     "video_or_content": "视频 / 内容平台",
     "other": "其他",
 }
+UNKNOWN_URL_INTELLIGENCE_VALUES = {
+    "缺乏特征，无法识别",
+    "缺乏特征，无法识别。",
+}
 
 NEGATIVE_TOPIC_RULES = {
     "price": (
@@ -415,6 +419,11 @@ def _format_delta_pp(value: float | None) -> str:
 def _source_type_label(source_type: str) -> str:
     text = str(source_type or "").strip()
     return SOURCE_TYPE_DISPLAY.get(text, text or SOURCE_TYPE_DISPLAY["other"])
+
+
+def _is_meaningful_site_category(value: str | None) -> bool:
+    text = str(value or "").strip()
+    return bool(text and text not in UNKNOWN_URL_INTELLIGENCE_VALUES)
 
 
 def _ordered_source_types(source_types: Iterable[str]) -> list[str]:
@@ -1602,9 +1611,16 @@ def build_input_bundle(
                     )
                     or ""
                 ).strip()
+                if (
+                    _is_meaningful_site_category(site_category)
+                    and source_type.lower() in {"", "other"}
+                ):
+                    source_type = site_category
                 if not source_type:
-                    source_type = site_category or (
-                        taxonomy.source_type if taxonomy else "other"
+                    source_type = (
+                        site_category
+                        if _is_meaningful_site_category(site_category)
+                        else (taxonomy.source_type if taxonomy else "other")
                     )
                 is_official = bool(citation.get("is_official")) or _domain_matches(
                     domain, official_domains
@@ -1637,7 +1653,11 @@ def build_input_bundle(
                         snippet=snippet,
                         site_name=site_name,
                         source_type=source_type,
-                        site_category=site_category or None,
+                        site_category=(
+                            site_category
+                            if _is_meaningful_site_category(site_category)
+                            else None
+                        ),
                         url_intelligence=(
                             dict(url_intelligence)
                             if isinstance(url_intelligence, dict)

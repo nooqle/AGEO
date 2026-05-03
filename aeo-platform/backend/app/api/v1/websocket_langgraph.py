@@ -1200,7 +1200,7 @@ async def rebuild_state_from_db(
         # 2. Fetch all messages for this session
         message_service = MessageService(db)
         messages = await message_service.get_messages(
-            session_id=UUID(session_id), limit=500
+            session_id=UUID(session_id), limit=500, compact_output=False
         )
 
         # 3. Recover the latest active task/run context if it still exists
