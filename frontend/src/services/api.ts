@@ -1,5 +1,5 @@
 import type { Session, Message, Output, AgentControlResponse, ConfirmationResponse } from '@/types/api';
-import type { DashboardData, DashboardHomeData } from '@/types/dashboard';
+import type { DashboardData, DashboardHomeData, DashboardMonitorMode } from '@/types/dashboard';
 import { buildDashboardV2Data } from '@/adapters/dashboardV2';
 import { buildDashboardHomeData } from '@/adapters/dashboardHome';
 import { normalizeEntity } from '@/types/entity';
@@ -48,6 +48,12 @@ import type {
   CreateScheduleInput,
   UpdateScheduleInput,
   SchedulerHealth,
+  MonitoringEndpoint,
+  MonitoringPlan,
+  MonitoringQuestionSet,
+  MonitoringRun,
+  MonitoringTrendGroupBy,
+  MonitoringTrendResponse,
 } from '@/types/monitoring';
 import type {
   AioCanvasConfig,
@@ -599,22 +605,39 @@ class ApiService {
 
   async getAnalyticsDashboardHomeV2(
     brandId?: string,
+    monitorModeOrOptions?: DashboardMonitorMode | RequestOptions,
+    dateRangeOrOptions?: string | RequestOptions,
     options?: RequestOptions,
   ) {
+    const monitorMode = typeof monitorModeOrOptions === 'string' ? monitorModeOrOptions : undefined;
+    const dateRange = typeof dateRangeOrOptions === 'string' ? dateRangeOrOptions : undefined;
+    const requestOptions =
+      typeof monitorModeOrOptions === 'string'
+        ? (typeof dateRangeOrOptions === 'string' ? options : dateRangeOrOptions)
+        : (typeof dateRangeOrOptions === 'string' ? options : monitorModeOrOptions ?? dateRangeOrOptions);
     const params = new URLSearchParams();
     if (brandId) params.set('brand_id', brandId);
+    if (monitorMode) params.set('monitor_mode', monitorMode);
+    if (dateRange) params.set('date_range', dateRange);
     const query = params.toString();
     return this.request<Record<string, unknown>>(
       `/analytics/v2/dashboard-home${query ? `?${query}` : ''}`,
-      options,
+      requestOptions,
     );
   }
 
   async getDashboardHomeSummary(
     brandId?: string,
+    monitorModeOrOptions?: DashboardMonitorMode | RequestOptions,
+    dateRangeOrOptions?: string | RequestOptions,
     options?: RequestOptions,
   ): Promise<DashboardHomeData | null> {
-    const raw = await this.getAnalyticsDashboardHomeV2(brandId, options).catch(() => undefined);
+    const raw = await this.getAnalyticsDashboardHomeV2(
+      brandId,
+      monitorModeOrOptions,
+      dateRangeOrOptions,
+      options,
+    ).catch(() => undefined);
     return buildDashboardHomeData(raw) ?? null;
   }
 
@@ -649,7 +672,7 @@ class ApiService {
       this.getAnalyticsCompetitorBattlesV2(brandId, options),
       this.getAnalyticsSourcesV2(brandId, options),
       this.getAnalyticsRisksActionsV2(brandId, options),
-      this.getAnalyticsDashboardHomeV2(brandId, options),
+      this.getAnalyticsDashboardHomeV2(brandId, undefined, dateRange, options),
     ]);
 
     const ensure = <T,>(result: PromiseSettledResult<T>, fallback: T): T =>
@@ -892,10 +915,16 @@ class ApiService {
   // =========================================================================
 
   /** Get the monitoring schedule for an entity (at most one active/paused) */
-  async getEntitySchedule(entityId: string): Promise<MonitoringSchedule | null> {
+  async getEntitySchedule(
+    entityId: string,
+    monitorMode?: 'panorama' | 'scenario'
+  ): Promise<MonitoringSchedule | null> {
     const resp = await this.request<{ schedules: MonitoringSchedule[]; total: number }>(
       `/monitoring/schedules/entity/${entityId}`
     );
+    if (monitorMode) {
+      return resp.schedules?.find((schedule) => schedule.monitor_mode === monitorMode) ?? null;
+    }
     return resp.schedules?.[0] ?? null;
   }
 
@@ -963,6 +992,153 @@ class ApiService {
     return this.request(`/monitoring/schedules${qs ? `?${qs}` : ''}`);
   }
 
+  async getMonitoringEndpoints(): Promise<{ endpoints: MonitoringEndpoint[]; quick_endpoint_ids: string[] }> {
+    return this.request('/monitoring/endpoints');
+  }
+
+  async listMonitoringQuestionSets(params?: {
+    entityId?: string;
+    monitorMode?: 'panorama' | 'scenario';
+    status?: string;
+    limit?: number;
+  }): Promise<{ question_sets: MonitoringQuestionSet[]; total: number }> {
+    const query = new URLSearchParams();
+    if (params?.entityId) query.set('entity_id', params.entityId);
+    if (params?.monitorMode) query.set('monitor_mode', params.monitorMode);
+    if (params?.status) query.set('status', params.status);
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return this.request(`/monitoring/question-sets${qs ? `?${qs}` : ''}`);
+  }
+
+  async createMonitoringQuestionSet(data: {
+    entity_id: string;
+    monitor_mode?: 'panorama' | 'scenario';
+    title?: string;
+    questions: Array<Record<string, unknown> | string>;
+    source?: string;
+  }): Promise<MonitoringQuestionSet> {
+    const resp = await this.request<{ question_set: MonitoringQuestionSet }>('/monitoring/question-sets', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return resp.question_set;
+  }
+
+  async appendMonitoringQuestionSetQuestions(
+    questionSetId: string,
+    questions: Array<Record<string, unknown> | string>
+  ): Promise<MonitoringQuestionSet> {
+    const resp = await this.request<{ question_set: MonitoringQuestionSet }>(
+      `/monitoring/question-sets/${questionSetId}/append`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ questions }),
+      }
+    );
+    return resp.question_set;
+  }
+
+  async confirmMonitoringQuestionSet(questionSetId: string): Promise<MonitoringQuestionSet> {
+    const resp = await this.request<{ question_set: MonitoringQuestionSet }>(
+      `/monitoring/question-sets/${questionSetId}/confirm`,
+      { method: 'POST' }
+    );
+    return resp.question_set;
+  }
+
+  async listMonitoringPlans(params?: {
+    entityId?: string;
+    monitorMode?: 'panorama' | 'scenario';
+    limit?: number;
+  }): Promise<{ plans: MonitoringPlan[] }> {
+    const query = new URLSearchParams();
+    if (params?.entityId) query.set('entity_id', params.entityId);
+    if (params?.monitorMode) query.set('monitor_mode', params.monitorMode);
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return this.request(`/monitoring/plans${qs ? `?${qs}` : ''}`);
+  }
+
+  async getEntityMonitoringPlan(
+    entityId: string,
+    monitorMode: 'panorama' | 'scenario' = 'panorama'
+  ): Promise<MonitoringPlan | null> {
+    const params = new URLSearchParams({ monitor_mode: monitorMode });
+    const resp = await this.request<{ plan: MonitoringPlan | null }>(
+      `/monitoring/plans/entity/${entityId}?${params}`
+    );
+    return resp.plan ?? null;
+  }
+
+  async createMonitoringPlan(data: {
+    entity_id: string;
+    monitor_mode?: 'panorama' | 'scenario';
+    question_set_ids: string[];
+    endpoint_ids?: string[];
+    run_policy?: 'quick' | 'full_browser' | 'manual';
+    status?: 'draft' | 'active' | 'paused' | 'archived';
+    frequency?: string;
+    preferred_hour?: number;
+    timezone?: string;
+    title?: string;
+  }): Promise<MonitoringPlan> {
+    const resp = await this.request<{ plan: MonitoringPlan }>('/monitoring/plans', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return resp.plan;
+  }
+
+  async updateMonitoringPlan(
+    planId: string,
+    data: Partial<{
+      question_set_ids: string[];
+      endpoint_ids: string[];
+      run_policy: 'quick' | 'full_browser' | 'manual';
+      status: 'draft' | 'active' | 'paused' | 'archived';
+      frequency: string;
+      preferred_hour: number;
+      timezone: string;
+      title: string;
+    }>
+  ): Promise<MonitoringPlan> {
+    const resp = await this.request<{ plan: MonitoringPlan }>(`/monitoring/plans/${planId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+    return resp.plan;
+  }
+
+  async activateMonitoringPlan(planId: string): Promise<MonitoringPlan> {
+    const resp = await this.request<{ plan: MonitoringPlan }>(
+      `/monitoring/plans/${planId}/activate`,
+      { method: 'POST' }
+    );
+    return resp.plan;
+  }
+
+  async pauseMonitoringPlan(planId: string): Promise<MonitoringPlan> {
+    const resp = await this.request<{ plan: MonitoringPlan }>(
+      `/monitoring/plans/${planId}/pause`,
+      { method: 'POST' }
+    );
+    return resp.plan;
+  }
+
+  async submitMonitoringPlanRun(planId: string): Promise<MonitoringRun> {
+    const resp = await this.request<{ run: MonitoringRun }>(
+      `/monitoring/plans/${planId}/runs`,
+      { method: 'POST' }
+    );
+    return resp.run;
+  }
+
+  async listMonitoringPlanRuns(planId: string, limit: number = 20): Promise<{ runs: MonitoringRun[] }> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    return this.request(`/monitoring/plans/${planId}/runs?${params}`);
+  }
+
   // =========================================================================
   // Monitoring Alerts API (Cycle 4)
   // =========================================================================
@@ -1027,6 +1203,30 @@ class ApiService {
     });
     return this.request<{ trend: TrendDataPoint[]; metric: string }>(
       `/analytics/trend?${params}`,
+      options,
+    );
+  }
+
+  async getMonitoringTrendsV2(params: {
+    entityId: string;
+    monitorMode?: 'panorama' | 'scenario';
+    metric?: string;
+    groupBy?: MonitoringTrendGroupBy;
+    endpointId?: string;
+    questionSetId?: string;
+    dateRange?: string;
+  }, options?: RequestOptions): Promise<MonitoringTrendResponse> {
+    const query = new URLSearchParams({
+      brand_id: params.entityId,
+      metric: params.metric || 'mention_rate',
+      group_by: params.groupBy || 'overall',
+      date_range: params.dateRange || 'month',
+    });
+    if (params.monitorMode) query.set('monitor_mode', params.monitorMode);
+    if (params.endpointId) query.set('endpoint_id', params.endpointId);
+    if (params.questionSetId) query.set('question_set_id', params.questionSetId);
+    return this.request<MonitoringTrendResponse>(
+      `/analytics/v2/monitoring-trends?${query}`,
       options,
     );
   }

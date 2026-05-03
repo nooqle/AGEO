@@ -10,6 +10,7 @@ import { useEntityStore } from '@/stores/entityStore';
 import { useDashboardStore } from '@/stores/dashboardStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
+import { buildBrandMonitoringChatUrl } from '@/lib/dashboardChatEntry';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 import { DashboardSectionHeader } from './DashboardSectionHeader';
 
@@ -28,12 +29,20 @@ export function BrandCards({ onAddBrand }: BrandCardsProps) {
   const [monitoringEntityId, setMonitoringEntityId] = useState<string | null>(null);
 
   const handleAddBrand = async (data: CreateEntityInput) => {
+    let createdBrandName = data.name;
     try {
       const created = await api.createEntity(data);
+      createdBrandName = created.name || data.name;
       addEntity(created);
       setAddOpen(false);
+      const session = await api.getOrCreateSessionByEntity(created.id);
+      router.push(buildBrandMonitoringChatUrl({
+        sessionId: session.id,
+        entityId: created.id,
+        brandName: createdBrandName,
+      }));
     } catch {
-      toast.error('品牌创建失败');
+      toast.error(`「${createdBrandName}」创建或打开 AI 对话失败，请稍后重试。`);
     }
   };
 

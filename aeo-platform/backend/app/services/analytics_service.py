@@ -10,6 +10,8 @@ Data sources:
 
 import json
 import logging
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -17,11 +19,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 
 from app.models.message import Message, MessageType, MessageRole
-from app.models.snapshot import AnalysisSnapshot
+from app.models.monitoring_plan import (
+    MonitoringEvidenceRecord,
+    MonitoringPlan,
+    MonitoringRun,
+    MonitoringRunStatus,
+    MonitoringQuestionSet,
+)
+from app.models.snapshot import AnalysisSnapshot, SnapshotStatus
 from app.models.session import Session
 from app.models.user import User
 from app.core.utils import extract_domain
 from app.services.access_scope_service import AccessScopeService
+from app.services.monitoring_plan_service import (
+    ENDPOINT_REGISTRY,
+    MonitoringPlanService,
+)
 from app.workflow.a5.diagnosis import extract_geo_report_diagnosis
 
 logger = logging.getLogger(__name__)
@@ -48,12 +61,63 @@ REPORT_KIND_LABELS = {
     "scenario": "用户场景分析报告",
 }
 
+QUESTION_SCOPE_LABELS = {
+    "brand_direct": "品牌直问",
+    "comparison": "横向比较",
+    "how_to_choose": "选型决策",
+    "trend": "趋势判断",
+    "risk": "风险顾虑",
+    "risk_or_problem": "风险顾虑",
+    "purchase": "购买决策",
+    "value": "价值评估",
+}
+
+EMPTY_SCOPE_LABELS = {"其他", "--", "-", "未知", "other", "unknown"}
+
+DASHBOARD_MONITOR_MODE_ALIASES = {
+    "panorama": "panorama",
+    "panorama_monitoring": "panorama",
+    "baseline": "panorama",
+    "scenario": "scenario",
+    "scenario_monitoring": "scenario",
+    "persona": "scenario",
+}
+
 PLATFORM_LABELS = {
     "deepseek": "DeepSeek",
     "kimi": "Kimi",
     "doubao": "豆包",
     "yuanbao": "元宝",
     "hunyuan": "元宝",
+}
+
+DASHBOARD_REPORT_DEFAULT_LIMIT = 20
+DASHBOARD_REPORT_MONITOR_MODE_SCAN_LIMIT = 200
+DASHBOARD_DEFAULT_DATE_RANGE_DAYS = 30
+
+DASHBOARD_TREND_METRIC_ALIASES = {
+    "bwvs": "bwvs_index",
+    "bwvs_index": "bwvs_index",
+    "brand_visibility": "bwvs_index",
+    "mention": "mention_rate",
+    "mention_rate": "mention_rate",
+    "sentiment": "sentiment_score",
+    "sentiment_score": "sentiment_score",
+    "coverage": "coverage_score",
+    "coverage_score": "coverage_score",
+    "citation": "content_citation_rate",
+    "citation_score": "content_citation_rate",
+    "content_citation_rate": "content_citation_rate",
+    "official_conversion_rate": "official_conversion_rate",
+}
+
+DASHBOARD_TREND_METRIC_LABELS = {
+    "bwvs_index": "品牌可见度",
+    "mention_rate": "提及率",
+    "sentiment_score": "情感倾向",
+    "coverage_score": "平台覆盖",
+    "content_citation_rate": "内容引用率",
+    "official_conversion_rate": "官网转化率",
 }
 
 NEGATIVE_TOPIC_LABELS = {
@@ -276,6 +340,38 @@ class AnalyticsService:
 
         return False
 
+    def _normalize_dashboard_monitor_mode(self, value: str | None) -> str | None:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return None
+        return DASHBOARD_MONITOR_MODE_ALIASES.get(normalized)
+
+    def _dashboard_report_kind(self, output: dict[str, Any]) -> str:
+        meta = output.get("meta")
+        meta = meta if isinstance(meta, dict) else {}
+        dashboard_projection = output.get("dashboard_projection")
+        dashboard_projection = (
+            dashboard_projection if isinstance(dashboard_projection, dict) else {}
+        )
+        report_kind = (
+            output.get("_report_kind")
+            or output.get("report_kind")
+            or meta.get("report_kind")
+            or dashboard_projection.get("report_kind")
+        )
+        return (
+            self._normalize_dashboard_monitor_mode(str(report_kind or "")) or "panorama"
+        )
+
+    def _matches_dashboard_monitor_mode(
+        self,
+        output: dict[str, Any],
+        monitor_mode: str | None,
+    ) -> bool:
+        if not monitor_mode:
+            return True
+        return self._dashboard_report_kind(output) == monitor_mode
+
     def _extract_metrics(self, data: dict[str, Any]) -> dict[str, Any] | None:
         """Extract metrics from output data (supports nested structures)."""
         if "metric_bundle" in data and isinstance(data["metric_bundle"], dict):
@@ -322,7 +418,9 @@ class AnalyticsService:
         return []
 
     async def _get_report_like_outputs(
-        self, brand_id: str | None = None
+        self,
+        brand_id: str | None = None,
+        monitor_mode: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get recent report artifacts only, ordered from newest to oldest."""
         query = (
@@ -333,7 +431,11 @@ class AnalyticsService:
                 Message.output_type == "report",
             )
             .order_by(desc(Message.created_at))
-            .limit(20)
+            .limit(
+                DASHBOARD_REPORT_MONITOR_MODE_SCAN_LIMIT
+                if monitor_mode
+                else DASHBOARD_REPORT_DEFAULT_LIMIT
+            )
         )
         query = query.join(Session, Message.session_id == Session.id)
         if self.viewer is not None:
@@ -390,14 +492,18 @@ class AnalyticsService:
                 data["_triggered_by"] = data.get("triggered_by") or (
                     metadata.get("triggered_by") if isinstance(metadata, dict) else None
                 )
-                if self._is_dashboard_report_output(data):
+                if self._is_dashboard_report_output(
+                    data
+                ) and self._matches_dashboard_monitor_mode(data, monitor_mode):
                     outputs.append(data)
             except (json.JSONDecodeError, TypeError):
                 continue
         return outputs
 
     async def _get_latest_snapshot_report_source(
-        self, brand_id: str | None = None
+        self,
+        brand_id: str | None = None,
+        monitor_mode: str | None = None,
     ) -> dict[str, Any] | None:
         """Get latest snapshot-backed report payload for dashboard home."""
         if not brand_id:
@@ -414,14 +520,28 @@ class AnalyticsService:
                 AnalysisSnapshot.triggered_by == "scheduled",
             )
             .order_by(desc(AnalysisSnapshot.created_at))
-            .limit(1)
+            .limit(DASHBOARD_REPORT_MONITOR_MODE_SCAN_LIMIT if monitor_mode else 1)
         )
         result = await self.db.execute(query)
-        snapshot = result.scalar_one_or_none()
-        if snapshot is None:
+        snapshots = result.scalars().all()
+        selected_snapshot = None
+        selected_raw_data: dict[str, Any] = {}
+        for snapshot in snapshots:
+            raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
+            snapshot_source = {
+                "_report_kind": str(
+                    raw_data.get("report_kind") or snapshot.snapshot_type or ""
+                )
+            }
+            if self._matches_dashboard_monitor_mode(snapshot_source, monitor_mode):
+                selected_snapshot = snapshot
+                selected_raw_data = raw_data
+                break
+        if selected_snapshot is None:
             return None
 
-        raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
+        snapshot = selected_snapshot
+        raw_data = selected_raw_data
         report_data = raw_data.get("report_data", {})
         report_data = report_data if isinstance(report_data, dict) else {}
         if not report_data:
@@ -457,6 +577,776 @@ class AnalyticsService:
             "_triggered_by": str(snapshot.triggered_by or ""),
         }
         return payload
+
+    def _dashboard_date_range_days(self, date_range: str | None) -> int:
+        normalized = str(date_range or "").strip().lower()
+        aliases = {
+            "week": 7,
+            "7d": 7,
+            "last_7_days": 7,
+            "month": 30,
+            "30d": 30,
+            "last_30_days": 30,
+            "quarter": 90,
+            "90d": 90,
+            "last_90_days": 90,
+        }
+        if normalized in aliases:
+            return aliases[normalized]
+        if normalized.isdigit():
+            return max(1, min(365, int(normalized)))
+        return DASHBOARD_DEFAULT_DATE_RANGE_DAYS
+
+    def _snapshot_monitor_mode(self, snapshot: AnalysisSnapshot) -> str:
+        raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
+        return (
+            self._normalize_dashboard_monitor_mode(
+                str(raw_data.get("report_kind") or snapshot.snapshot_type or "")
+            )
+            or "panorama"
+        )
+
+    def _snapshot_to_report_payload(self, snapshot: AnalysisSnapshot) -> dict[str, Any] | None:
+        raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
+        report_data = raw_data.get("report_data")
+        report_data = report_data if isinstance(report_data, dict) else {}
+        if not report_data:
+            return None
+        return {
+            **report_data,
+            "metric_bundle": (
+                raw_data.get("metric_bundle")
+                if isinstance(raw_data.get("metric_bundle"), dict)
+                else report_data.get("metric_bundle")
+            ),
+            "comparison_bundle": (
+                raw_data.get("comparison_bundle")
+                if isinstance(raw_data.get("comparison_bundle"), dict)
+                else report_data.get("comparison_bundle")
+            ),
+            "dashboard_projection": (
+                raw_data.get("dashboard_projection")
+                if isinstance(raw_data.get("dashboard_projection"), dict)
+                else report_data.get("dashboard_projection")
+            ),
+            "_output_type": "report",
+            "_created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "_session_id": str(snapshot.session_id) if snapshot.session_id else "",
+            "_artifact_id": "",
+            "_artifact_kind": "geo_report",
+            "_report_kind": self._snapshot_monitor_mode(snapshot),
+            "_triggered_by": str(snapshot.triggered_by or ""),
+        }
+
+    async def _get_dashboard_snapshots(
+        self,
+        *,
+        brand_id: str | None,
+        monitor_mode: str | None,
+        date_range_days: int,
+    ) -> list[AnalysisSnapshot]:
+        if not brand_id:
+            return []
+        try:
+            brand_uuid = UUID(brand_id)
+        except (ValueError, AttributeError):
+            return []
+        since = datetime.now(timezone.utc) - timedelta(days=date_range_days)
+        query = (
+            select(AnalysisSnapshot)
+            .where(
+                AnalysisSnapshot.entity_id == brand_uuid,
+                AnalysisSnapshot.status.in_(
+                    [SnapshotStatus.COMPLETED, SnapshotStatus.PARTIAL]
+                ),
+                AnalysisSnapshot.created_at >= since,
+            )
+            .order_by(AnalysisSnapshot.created_at)
+            .limit(500)
+        )
+        result = await self.db.execute(query)
+        snapshots = list(result.scalars().all())
+        if not monitor_mode:
+            return snapshots
+        return [
+            snapshot
+            for snapshot in snapshots
+            if self._snapshot_monitor_mode(snapshot) == monitor_mode
+        ]
+
+    def _normalize_trend_metric(self, metric: str | None) -> str:
+        normalized = str(metric or "").strip().lower()
+        return DASHBOARD_TREND_METRIC_ALIASES.get(normalized, "mention_rate")
+
+    def _normalize_rate_value(self, metric: str, value: float | None) -> float | None:
+        if value is None:
+            return None
+        if metric in {
+            "mention_rate",
+            "content_citation_rate",
+            "official_conversion_rate",
+        } and 1 < value <= 100:
+            return value / 100
+        return value
+
+    def _first_numeric(self, *values: Any) -> float | None:
+        for value in values:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+        return None
+
+    def _metric_from_mapping(self, mapping: dict[str, Any], metric: str) -> float | None:
+        if not isinstance(mapping, dict):
+            return None
+        candidate_keys = {
+            "bwvs_index": ["bwvs_index", "bwvs", "brand_visibility"],
+            "mention_rate": ["mention_rate", "brand_mention_rate", "visibility_rate"],
+            "sentiment_score": ["sentiment_score", "sentiment"],
+            "coverage_score": [
+                "coverage_score",
+                "platform_coverage_rate",
+                "scenario_effective_rate",
+            ],
+            "content_citation_rate": [
+                "content_citation_rate",
+                "official_citation_rate",
+                "citation_rate",
+                "citation_score",
+            ],
+            "official_conversion_rate": [
+                "official_conversion_rate",
+                "official_citation_rate",
+            ],
+        }.get(metric, [metric])
+        for key in candidate_keys:
+            value = self._first_numeric(mapping.get(key))
+            if value is not None:
+                return self._normalize_rate_value(metric, value)
+        return None
+
+    def _snapshot_metric_value(
+        self,
+        snapshot: AnalysisSnapshot,
+        metric: str,
+    ) -> float | None:
+        column_value = None
+        if metric in {"bwvs_index", "mention_rate", "sentiment_score", "coverage_score"}:
+            column_value = self._first_numeric(getattr(snapshot, metric, None))
+        elif metric == "content_citation_rate":
+            column_value = self._first_numeric(snapshot.citation_score)
+        if column_value is not None:
+            return self._normalize_rate_value(metric, column_value)
+
+        raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
+        report_data = raw_data.get("report_data")
+        report_data = report_data if isinstance(report_data, dict) else {}
+        dashboard_projection = raw_data.get("dashboard_projection")
+        dashboard_projection = (
+            dashboard_projection if isinstance(dashboard_projection, dict) else {}
+        )
+        source_summary = raw_data.get("source_summary")
+        source_summary = source_summary if isinstance(source_summary, dict) else {}
+        candidates = [
+            raw_data,
+            raw_data.get("metric_bundle") if isinstance(raw_data.get("metric_bundle"), dict) else {},
+            raw_data.get("metrics") if isinstance(raw_data.get("metrics"), dict) else {},
+            report_data,
+            report_data.get("metric_bundle") if isinstance(report_data.get("metric_bundle"), dict) else {},
+            report_data.get("metrics") if isinstance(report_data.get("metrics"), dict) else {},
+            dashboard_projection.get("headline_metrics")
+            if isinstance(dashboard_projection.get("headline_metrics"), dict)
+            else {},
+            source_summary,
+        ]
+        for candidate in candidates:
+            value = self._metric_from_mapping(candidate, metric)
+            if value is not None:
+                return value
+        return None
+
+    def _trend_direction(self, change_absolute: float | None) -> str:
+        if change_absolute is None:
+            return "stable"
+        if abs(change_absolute) < 0.0001:
+            return "stable"
+        return "improving" if change_absolute > 0 else "declining"
+
+    def _summarize_trend_points(
+        self,
+        *,
+        metric: str,
+        label: str,
+        points: list[dict[str, Any]],
+        series_id: str = "overall",
+        group_by: str = "overall",
+    ) -> dict[str, Any]:
+        ordered = sorted(points, key=lambda item: str(item.get("date") or ""))
+        values = [item.get("value") for item in ordered if isinstance(item.get("value"), (int, float))]
+        current_value = values[-1] if values else None
+        previous_value = values[-2] if len(values) >= 2 else None
+        change_absolute = (
+            float(current_value) - float(previous_value)
+            if current_value is not None and previous_value is not None
+            else None
+        )
+        change_percentage = (
+            (change_absolute / abs(float(previous_value))) * 100
+            if change_absolute is not None and previous_value not in (None, 0)
+            else None
+        )
+        average_value = sum(float(value) for value in values) / len(values) if values else None
+        return {
+            "id": series_id,
+            "label": label,
+            "metric": metric,
+            "metric_label": DASHBOARD_TREND_METRIC_LABELS.get(metric, metric),
+            "group_by": group_by,
+            "points": ordered,
+            "data_point_count": len(values),
+            "current_value": current_value,
+            "previous_value": previous_value,
+            "average_value": average_value,
+            "change_absolute": change_absolute,
+            "change_percentage": change_percentage,
+            "direction": self._trend_direction(change_absolute),
+        }
+
+    def _period_summary_from_snapshots(
+        self,
+        snapshots: list[AnalysisSnapshot],
+        *,
+        date_range_days: int,
+    ) -> dict[str, Any]:
+        series = []
+        for metric in [
+            "mention_rate",
+            "bwvs_index",
+            "official_conversion_rate",
+            "content_citation_rate",
+        ]:
+            points = []
+            for snapshot in snapshots:
+                value = self._snapshot_metric_value(snapshot, metric)
+                if value is None:
+                    continue
+                points.append(
+                    {
+                        "date": snapshot.created_at.date().isoformat()
+                        if snapshot.created_at
+                        else "",
+                        "value": value,
+                        "snapshot_id": str(snapshot.id),
+                    }
+                )
+            series.append(
+                self._summarize_trend_points(
+                    metric=metric,
+                    label=DASHBOARD_TREND_METRIC_LABELS.get(metric, metric),
+                    points=points,
+                    series_id=metric,
+                    group_by="overall",
+                )
+            )
+        return {
+            "date_range_days": date_range_days,
+            "period_label": f"近 {date_range_days} 天",
+            "data_point_count": len(snapshots),
+            "metrics": series,
+        }
+
+    def _empty_period_summary(self, date_range_days: int) -> dict[str, Any]:
+        return {
+            "date_range_days": date_range_days,
+            "period_label": f"近 {date_range_days} 天",
+            "data_point_count": 0,
+            "metrics": [],
+        }
+
+    def _augment_home_with_period_context(
+        self,
+        home: dict[str, Any],
+        *,
+        monitoring_plan: dict[str, Any] | None,
+        period_summary: dict[str, Any],
+        recent_issue: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        home["monitoringPlan"] = monitoring_plan
+        home["periodSummary"] = period_summary
+        home["dataPointCount"] = int(period_summary.get("data_point_count") or 0)
+        home["recentIssue"] = recent_issue
+        home["todoItems"] = self._build_dashboard_todo_items(
+            home,
+            monitoring_plan=monitoring_plan,
+            period_summary=period_summary,
+        )
+
+        summary_by_metric = {
+            str(item.get("metric")): item
+            for item in period_summary.get("metrics", []) or []
+            if isinstance(item, dict)
+        }
+        for metric in home.get("metrics", []) or []:
+            if not isinstance(metric, dict):
+                continue
+            metric_summary = summary_by_metric.get(str(metric.get("id") or ""))
+            if not metric_summary:
+                continue
+            metric["dataPointCount"] = metric_summary.get("data_point_count")
+            metric["averageValue"] = metric_summary.get("average_value")
+            metric["changeAbsolute"] = metric_summary.get("change_absolute")
+            metric["trend"] = metric_summary
+        return home
+
+    def _build_dashboard_todo_items(
+        self,
+        home: dict[str, Any],
+        *,
+        monitoring_plan: dict[str, Any] | None,
+        period_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        latest_report = home.get("latestReport")
+        latest_report = latest_report if isinstance(latest_report, dict) else {}
+        report_title = str(latest_report.get("title") or "").strip()
+        report_ref = str(
+            latest_report.get("artifactId")
+            or latest_report.get("outputId")
+            or latest_report.get("sessionId")
+            or ""
+        ).strip()
+        report_created_at = str(latest_report.get("createdAt") or "").strip()
+        has_latest_report = bool(
+            (report_ref or report_created_at)
+            and report_title
+            and report_title != "暂无最新报告"
+        )
+        monitor_mode = (
+            str(
+                latest_report.get("reportKind")
+                or (monitoring_plan or {}).get("monitor_mode")
+                or "panorama"
+            )
+            .strip()
+            .lower()
+        )
+        monitor_mode = self._normalize_dashboard_monitor_mode(monitor_mode) or "panorama"
+
+        plan_status = str((monitoring_plan or {}).get("status") or "").strip().lower()
+        question_count = int((monitoring_plan or {}).get("question_count") or 0)
+        endpoint_ids = (monitoring_plan or {}).get("endpoint_ids") or []
+        has_complete_plan = bool(
+            monitoring_plan
+            and plan_status == "active"
+            and question_count > 0
+            and isinstance(endpoint_ids, list)
+            and len(endpoint_ids) > 0
+        )
+        data_point_count = int(period_summary.get("data_point_count") or 0)
+
+        items: list[dict[str, Any]] = []
+        if not has_latest_report and not monitoring_plan and data_point_count == 0:
+            items.append(
+                {
+                    "id": "analysis_setup_incomplete",
+                    "kind": "analysis_setup_incomplete",
+                    "priority": 1,
+                    "title": "完成品牌基本信息与问题生成",
+                    "description": "当前品牌还没有完成基础分析流程。先通过 AI 对话补齐品牌信息，并生成问题集。",
+                    "action": "ai_conversation",
+                    "actionLabel": "AI 对话处理",
+                    "monitorMode": monitor_mode,
+                }
+            )
+            return items
+
+        if not has_complete_plan:
+            items.append(
+                {
+                    "id": "monitoring_plan_incomplete",
+                    "kind": "monitoring_plan_incomplete",
+                    "priority": 2,
+                    "title": "完成分析计划设置",
+                    "description": "问题集或分析结果已存在，但自动分析计划还没有启用。",
+                    "action": "setup_plan",
+                    "actionLabel": "设置分析计划",
+                    "monitorMode": monitor_mode,
+                    "monitoringPlanId": (monitoring_plan or {}).get("id"),
+                }
+            )
+            return items
+
+        if has_latest_report and report_ref:
+            items.append(
+                {
+                    "id": f"unread_latest_report:{report_ref}",
+                    "kind": "unread_latest_report",
+                    "priority": 3,
+                    "title": "查看新的分析报告",
+                    "description": "已有新的 A5 完整报告生成，建议先查看报告再继续处理后续分析。",
+                    "action": "latest_report",
+                    "actionLabel": "查看报告",
+                    "monitorMode": monitor_mode,
+                    "refId": report_ref,
+                    "reportCreatedAt": report_created_at or None,
+                }
+            )
+        return items
+
+    async def _get_recent_monitoring_issue(
+        self,
+        *,
+        brand_id: str | None,
+        monitor_mode: str | None,
+    ) -> dict[str, Any] | None:
+        if not brand_id:
+            return None
+        try:
+            brand_uuid = UUID(brand_id)
+        except (ValueError, AttributeError):
+            return None
+        stale_before = datetime.now(timezone.utc) - timedelta(hours=2)
+        result = await self.db.execute(
+            select(MonitoringRun)
+            .where(
+                MonitoringRun.entity_id == brand_uuid,
+                MonitoringRun.monitor_mode
+                == (monitor_mode or MonitoringPlanService.normalize_monitor_mode("panorama")),
+            )
+            .order_by(desc(MonitoringRun.updated_at))
+            .limit(30)
+        )
+        runs = list(result.scalars().all())
+        selected: MonitoringRun | None = None
+        issue_kind = "failed"
+        for run in runs:
+            if run.status == MonitoringRunStatus.FAILED.value:
+                selected = run
+                issue_kind = "failed"
+                break
+            updated_at = run.updated_at or run.created_at
+            if updated_at and updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            if (
+                run.status in {MonitoringRunStatus.PENDING.value, MonitoringRunStatus.RUNNING.value}
+                and updated_at
+                and updated_at < stale_before
+            ):
+                selected = run
+                issue_kind = "stale"
+                break
+        if selected is None:
+            return None
+
+        plan_title = ""
+        if selected.plan_id:
+            plan = await self.db.get(MonitoringPlan, selected.plan_id)
+            plan_title = plan.title if plan else ""
+        return {
+            "id": str(selected.id),
+            "type": issue_kind,
+            "status": selected.status,
+            "title": "自动监测运行失败" if issue_kind == "failed" else "自动监测可能卡住",
+            "error_stage": selected.error_stage or "monitoring_run",
+            "error_message": selected.error_message
+            or ("运行长时间未完成，请通过 AI 对话查看上下文。" if issue_kind == "stale" else ""),
+            "monitor_mode": selected.monitor_mode,
+            "monitoring_plan_id": str(selected.plan_id),
+            "monitoring_run_id": str(selected.id),
+            "plan_title": plan_title,
+            "question_count": int(selected.question_count or 0),
+            "endpoint_ids": selected.endpoint_ids or [],
+            "endpoint_labels": MonitoringPlanService.endpoint_ids_to_labels(
+                selected.endpoint_ids or []
+            ),
+            "question_set_ids": selected.question_set_ids or [],
+            "created_at": selected.created_at.isoformat() if selected.created_at else None,
+            "updated_at": selected.updated_at.isoformat() if selected.updated_at else None,
+        }
+
+    def _is_successful_evidence(self, evidence: MonitoringEvidenceRecord) -> bool:
+        status = str(evidence.answer_status or "").strip().lower()
+        return status in {"", "ok", "success", "completed"}
+
+    def _evidence_mentions_brand(self, evidence: MonitoringEvidenceRecord) -> bool:
+        raw = evidence.raw_evidence if isinstance(evidence.raw_evidence, dict) else {}
+        for key in (
+            "mentioned_monitor_brand",
+            "brand_present",
+            "monitor_brand_present",
+            "is_mentioned",
+        ):
+            if isinstance(raw.get(key), bool):
+                return bool(raw[key])
+        state = str(raw.get("answer_state") or raw.get("state") or "").strip().lower()
+        if state in {"monitor_only", "monitor_plus_others", "brand_present"}:
+            return True
+        if state in {"no_brand", "competitor_only"}:
+            return False
+        return False
+
+    def _endpoint_metric_from_accumulator(
+        self,
+        metric: str,
+        accumulator: dict[str, int],
+    ) -> float | None:
+        answered = accumulator.get("answered", 0)
+        total = accumulator.get("total", 0)
+        if metric in {"mention_rate", "bwvs_index"}:
+            if not answered:
+                return None
+            value = accumulator.get("mentioned", 0) / answered
+            return round(value * 100, 2) if metric == "bwvs_index" else round(value, 4)
+        if metric in {"content_citation_rate", "official_conversion_rate"}:
+            if not answered:
+                return None
+            return round(accumulator.get("cited", 0) / answered, 4)
+        if metric == "coverage_score":
+            if not total:
+                return None
+            return round(answered / total, 4)
+        return None
+
+    async def get_monitoring_trends_v2(
+        self,
+        *,
+        brand_id: str,
+        monitor_mode: str | None = None,
+        metric: str = "mention_rate",
+        group_by: str = "overall",
+        endpoint_id: str | None = None,
+        question_set_id: str | None = None,
+        date_range: str | None = None,
+    ) -> dict[str, Any]:
+        """Return monitoring trends grouped by overall, endpoint, or question set."""
+        try:
+            brand_uuid = UUID(brand_id)
+        except (ValueError, AttributeError):
+            return {
+                "metric": self._normalize_trend_metric(metric),
+                "group_by": group_by,
+                "monitor_mode": self._normalize_dashboard_monitor_mode(monitor_mode)
+                or "panorama",
+                "date_range_days": self._dashboard_date_range_days(date_range),
+                "series": [],
+                "data_point_count": 0,
+            }
+
+        normalized_metric = self._normalize_trend_metric(metric)
+        normalized_group_by = str(group_by or "overall").strip().lower()
+        if normalized_group_by not in {"overall", "endpoint", "question_set"}:
+            normalized_group_by = "overall"
+        normalized_monitor_mode = (
+            self._normalize_dashboard_monitor_mode(monitor_mode) or "panorama"
+        )
+        date_range_days = self._dashboard_date_range_days(date_range)
+        since = datetime.now(timezone.utc) - timedelta(days=date_range_days)
+
+        snapshots = await self._get_dashboard_snapshots(
+            brand_id=brand_id,
+            monitor_mode=normalized_monitor_mode,
+            date_range_days=date_range_days,
+        )
+        snapshot_by_id = {str(snapshot.id): snapshot for snapshot in snapshots}
+
+        if normalized_group_by == "overall":
+            points = []
+            for snapshot in snapshots:
+                value = self._snapshot_metric_value(snapshot, normalized_metric)
+                if value is None:
+                    continue
+                points.append(
+                    {
+                        "date": snapshot.created_at.date().isoformat()
+                        if snapshot.created_at
+                        else "",
+                        "value": value,
+                        "snapshot_id": str(snapshot.id),
+                        "data_point_count": 1,
+                    }
+                )
+            series = [
+                self._summarize_trend_points(
+                    metric=normalized_metric,
+                    label="总览",
+                    points=points,
+                    series_id="overall",
+                    group_by="overall",
+                )
+            ]
+        elif normalized_group_by == "question_set":
+            run_result = await self.db.execute(
+                select(MonitoringRun)
+                .where(
+                    MonitoringRun.entity_id == brand_uuid,
+                    MonitoringRun.monitor_mode == normalized_monitor_mode,
+                    MonitoringRun.status.in_(
+                        [
+                            MonitoringRunStatus.COMPLETED.value,
+                            MonitoringRunStatus.PARTIAL.value,
+                        ]
+                    ),
+                    MonitoringRun.snapshot_id.is_not(None),
+                    MonitoringRun.created_at >= since,
+                )
+                .order_by(MonitoringRun.created_at)
+                .limit(500)
+            )
+            runs = [
+                run
+                for run in run_result.scalars().all()
+                if str(run.snapshot_id) in snapshot_by_id
+            ]
+            series_points: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            observed_question_set_ids: set[str] = set()
+            for run in runs:
+                question_set_ids = [str(item) for item in run.question_set_ids or []]
+                if question_set_id:
+                    question_set_ids = [
+                        item for item in question_set_ids if item == question_set_id
+                    ]
+                if not question_set_ids:
+                    continue
+                snapshot = snapshot_by_id[str(run.snapshot_id)]
+                value = self._snapshot_metric_value(snapshot, normalized_metric)
+                if value is None:
+                    continue
+                for qsid in question_set_ids:
+                    observed_question_set_ids.add(qsid)
+                    series_points[qsid].append(
+                        {
+                            "date": snapshot.created_at.date().isoformat()
+                            if snapshot.created_at
+                            else "",
+                            "value": value,
+                            "snapshot_id": str(snapshot.id),
+                            "run_id": str(run.id),
+                            "data_point_count": 1,
+                        }
+                    )
+            labels: dict[str, str] = {}
+            if observed_question_set_ids:
+                ids = [UUID(item) for item in observed_question_set_ids]
+                question_set_result = await self.db.execute(
+                    select(MonitoringQuestionSet).where(
+                        MonitoringQuestionSet.id.in_(ids)
+                    )
+                )
+                labels = {
+                    str(item.id): item.title or "问题集"
+                    for item in question_set_result.scalars().all()
+                }
+            series = [
+                self._summarize_trend_points(
+                    metric=normalized_metric,
+                    label=labels.get(qsid, "问题集"),
+                    points=points,
+                    series_id=qsid,
+                    group_by="question_set",
+                )
+                for qsid, points in sorted(series_points.items())
+            ]
+        else:
+            run_result = await self.db.execute(
+                select(MonitoringRun)
+                .where(
+                    MonitoringRun.entity_id == brand_uuid,
+                    MonitoringRun.monitor_mode == normalized_monitor_mode,
+                    MonitoringRun.status.in_(
+                        [
+                            MonitoringRunStatus.COMPLETED.value,
+                            MonitoringRunStatus.PARTIAL.value,
+                        ]
+                    ),
+                    MonitoringRun.created_at >= since,
+                )
+                .order_by(MonitoringRun.created_at)
+                .limit(500)
+            )
+            runs = list(run_result.scalars().all())
+            run_by_id = {str(run.id): run for run in runs}
+            if not run_by_id:
+                series = []
+            else:
+                evidence_result = await self.db.execute(
+                    select(MonitoringEvidenceRecord)
+                    .where(
+                        MonitoringEvidenceRecord.entity_id == brand_uuid,
+                        MonitoringEvidenceRecord.monitoring_run_id.in_(
+                            [UUID(item) for item in run_by_id]
+                        ),
+                        MonitoringEvidenceRecord.created_at >= since,
+                    )
+                    .order_by(MonitoringEvidenceRecord.created_at)
+                    .limit(5000)
+                )
+                evidence_rows = list(evidence_result.scalars().all())
+                grouped: dict[tuple[str, str], dict[str, int]] = defaultdict(
+                    lambda: {"total": 0, "answered": 0, "mentioned": 0, "cited": 0}
+                )
+                for evidence in evidence_rows:
+                    if endpoint_id and evidence.endpoint_id != endpoint_id:
+                        continue
+                    run = run_by_id.get(str(evidence.monitoring_run_id))
+                    if run is None:
+                        continue
+                    date_source = run.completed_at or evidence.created_at
+                    date_label = (
+                        date_source.date().isoformat() if date_source else ""
+                    )
+                    key = (str(evidence.endpoint_id or ""), date_label)
+                    grouped[key]["total"] += 1
+                    if self._is_successful_evidence(evidence):
+                        grouped[key]["answered"] += 1
+                    if self._evidence_mentions_brand(evidence):
+                        grouped[key]["mentioned"] += 1
+                    if evidence.cited_domains:
+                        grouped[key]["cited"] += 1
+
+                series_points: dict[str, list[dict[str, Any]]] = defaultdict(list)
+                for (endpoint_key, date_label), accumulator in grouped.items():
+                    value = self._endpoint_metric_from_accumulator(
+                        normalized_metric,
+                        accumulator,
+                    )
+                    if value is None:
+                        continue
+                    series_points[endpoint_key].append(
+                        {
+                            "date": date_label,
+                            "value": value,
+                            "data_point_count": accumulator.get("answered", 0),
+                        }
+                    )
+                series = [
+                    self._summarize_trend_points(
+                        metric=normalized_metric,
+                        label=ENDPOINT_REGISTRY.get(endpoint_key, {}).get(
+                            "display_name",
+                            endpoint_key,
+                        ),
+                        points=points,
+                        series_id=endpoint_key,
+                        group_by="endpoint",
+                    )
+                    for endpoint_key, points in sorted(series_points.items())
+                ]
+
+        return {
+            "metric": normalized_metric,
+            "metric_label": DASHBOARD_TREND_METRIC_LABELS.get(
+                normalized_metric,
+                normalized_metric,
+            ),
+            "group_by": normalized_group_by,
+            "monitor_mode": normalized_monitor_mode,
+            "date_range_days": date_range_days,
+            "period_label": f"近 {date_range_days} 天",
+            "series": series,
+            "data_point_count": sum(
+                int(item.get("data_point_count") or 0)
+                for item in series
+                if isinstance(item, dict)
+            ),
+        }
 
     def _select_latest_home_source(
         self,
@@ -534,6 +1424,56 @@ class AnalyticsService:
         normalized = str(platform or "").strip()
         return PLATFORM_LABELS.get(normalized.lower(), normalized)
 
+    def _normalize_fetch_method(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"api", "app_api", "llm_api", "messages_api"}:
+            return "api"
+        if normalized in {"browser", "web", "webpage", "web_page", "网页版"}:
+            return "browser"
+        return ""
+
+    def _answer_fetch_method(self, answer: dict[str, Any]) -> str:
+        provenance = answer.get("provenance")
+        provenance = provenance if isinstance(provenance, dict) else {}
+        return self._normalize_fetch_method(
+            answer.get("fetch_method")
+            or answer.get("fetchMethod")
+            or answer.get("source_variant")
+            or answer.get("sourceVariant")
+            or provenance.get("source_type")
+        )
+
+    def _ai_source_label(
+        self,
+        platform: str | None,
+        fetch_method: str | None = None,
+    ) -> str:
+        normalized_platform = str(platform or "").strip().lower()
+        normalized_method = self._normalize_fetch_method(fetch_method)
+        if normalized_platform in {"doubao", "豆包"}:
+            if normalized_method == "api":
+                return "豆包API"
+            if normalized_method == "browser":
+                return "豆包网页版"
+            return "豆包"
+        if normalized_platform in {"yuanbao", "hunyuan", "元宝"}:
+            if normalized_method == "api":
+                return "元宝API"
+            if normalized_method == "browser":
+                return "元宝网页版"
+            return "元宝"
+        if normalized_platform in {"kimi", "kimi k1.5", "kimi-k1.5"}:
+            if normalized_method == "api":
+                return "Kimi API"
+            if normalized_method == "browser":
+                return "Kimi 网页版"
+            return "Kimi"
+        if normalized_platform in {"deepseek", "deep seek"}:
+            if normalized_method == "api":
+                return "DeepSeek API"
+            return "DeepSeek网页版"
+        return self._platform_label(platform)
+
     def _negative_topic_label(self, topic: str | None) -> str:
         normalized = str(topic or "").strip().lower()
         return NEGATIVE_TOPIC_LABELS.get(normalized, str(topic or "").strip())
@@ -561,16 +1501,17 @@ class AnalyticsService:
         questions = input_bundle.get("questions", [])
         questions = [question for question in questions if isinstance(question, dict)]
 
+        meta = data.get("meta")
+        meta = meta if isinstance(meta, dict) else {}
+        raw_report_kind = (
+            data.get("_report_kind")
+            or data.get("report_kind")
+            or meta.get("report_kind")
+            or dashboard_projection.get("report_kind")
+        )
         report_kind = (
-            str(
-                data.get("_report_kind")
-                or data.get("report_kind")
-                or data.get("meta", {}).get("report_kind")
-                or dashboard_projection.get("report_kind")
-                or "panorama"
-            )
-            .strip()
-            .lower()
+            self._normalize_dashboard_monitor_mode(str(raw_report_kind or ""))
+            or "panorama"
         )
         triggered_by = (
             str(data.get("_triggered_by") or data.get("triggered_by") or "")
@@ -579,6 +1520,11 @@ class AnalyticsService:
         )
         summary_headline = _executive_summary_text(data)
         session_id = str(data.get("_session_id") or "")
+        answers_for_scope = [
+            answer
+            for answer in input_bundle.get("answers", []) or []
+            if isinstance(answer, dict) and answer.get("status") == "ok"
+        ]
 
         raw_source_types = source_summary.get("source_type_breakdown", {})
         source_types = []
@@ -619,15 +1565,83 @@ class AnalyticsService:
             if isinstance(item, dict) and item.get("domain")
         ][:8]
 
-        question_items = [
-            {
-                "questionId": str(question.get("question_id", "") or ""),
-                "questionText": str(question.get("question_text", "") or ""),
-                "scene": str(question.get("scene", "") or ""),
+        question_items = []
+        seen_question_texts = set()
+        for question in questions:
+            question_text = str(question.get("question_text") or "").strip()
+            if not question_text or question_text in seen_question_texts:
+                continue
+            seen_question_texts.add(question_text)
+            question_items.append(
+                {
+                    "questionId": str(question.get("question_id", "") or ""),
+                    "questionText": question_text,
+                    "scene": str(question.get("scene", "") or ""),
+                }
+            )
+
+        def build_latest_report_context() -> dict[str, Any]:
+            question_count = len(question_items)
+            platform_labels = sorted(
+                {
+                    self._ai_source_label(
+                        str(answer.get("platform") or ""),
+                        self._answer_fetch_method(answer),
+                    )
+                    for answer in answers_for_scope
+                    if answer.get("platform")
+                }
+            )
+            sample_parts = []
+            if question_count:
+                sample_parts.append(f"{question_count} 个问题")
+            if platform_labels:
+                sample_parts.append(f"{len(platform_labels)} 个 AI 来源")
+            if answers_for_scope:
+                sample_parts.append(f"{len(answers_for_scope)} 条有效回答")
+
+            scene_labels = []
+            seen_scenes = set()
+            for item in question_items:
+                scene = str(item.get("scene") or "").strip()
+                scene = QUESTION_SCOPE_LABELS.get(scene, scene)
+                if not scene or scene in EMPTY_SCOPE_LABELS:
+                    continue
+                if scene in seen_scenes:
+                    continue
+                seen_scenes.add(scene)
+                scene_labels.append(scene)
+                if len(scene_labels) >= 3:
+                    break
+
+            if report_kind == "scenario":
+                scope_label = "用户场景口径"
+                scope_description = (
+                    "以下指标仅基于本轮用户场景问题集，不代表完整品牌全景。"
+                )
+                question_set_label = (
+                    "、".join(scene_labels) if scene_labels else "本轮用户场景问题集"
+                )
+            else:
+                scope_label = "品牌全景口径"
+                scope_description = (
+                    "以下指标来自本轮品牌全景问题集，用于观察整体 AI 可见度。"
+                )
+                question_set_label = (
+                    "、".join(scene_labels) if scene_labels else "本轮品牌全景问题集"
+                )
+
+            return {
+                "scopeLabel": scope_label,
+                "scopeDescription": scope_description,
+                "questionSetLabel": question_set_label,
+                "sampleSummary": " · ".join(sample_parts),
+                "questionPreview": [
+                    item["questionText"]
+                    for item in question_items[:3]
+                    if item.get("questionText")
+                ],
             }
-            for question in questions
-            if question.get("question_text")
-        ]
 
         mention_rate = metric_bundle.get("brand_visibility")
         if not isinstance(mention_rate, (int, float)):
@@ -643,7 +1657,7 @@ class AnalyticsService:
             or 0
         )
         current_brand = str(
-            data.get("brand_name") or data.get("meta", {}).get("brand_name") or ""
+            data.get("brand_name") or meta.get("brand_name") or ""
         ).strip()
         home_v4 = dashboard_projection.get("home_v4")
         home_v4 = home_v4 if isinstance(home_v4, dict) else {}
@@ -699,10 +1713,15 @@ class AnalyticsService:
                 platform = str(answer.get("platform") or "").strip()
                 if not platform:
                     continue
+                fetch_method = self._answer_fetch_method(answer)
+                source_label = self._ai_source_label(platform, fetch_method)
+                source_key = f"{platform.strip().lower()}:{fetch_method or 'unknown'}"
                 row = platform_rows.setdefault(
-                    platform,
+                    source_key,
                     {
-                        "platform": self._platform_label(platform),
+                        "platform": source_label,
+                        "platformId": platform.strip().lower(),
+                        "fetchMethod": fetch_method or None,
                         "status": "unknown",
                         "answerCount": 0,
                         "brandMentionCount": 0,
@@ -721,11 +1740,11 @@ class AnalyticsService:
                     for topic in answer.get("negative_topics", []) or []:
                         if not topic:
                             continue
-                        topics = negative_topics_by_platform.setdefault(platform, {})
+                        topics = negative_topics_by_platform.setdefault(source_key, {})
                         topic_key = str(topic)
                         topics[topic_key] = topics.get(topic_key, 0) + 1
 
-            for platform, row in platform_rows.items():
+            for source_key, row in platform_rows.items():
                 if (
                     row["negativeCount"] > row["positiveCount"]
                     and row["negativeCount"] > 0
@@ -735,7 +1754,7 @@ class AnalyticsService:
                     row["status"] = "good"
                 elif row["answerCount"] > 0:
                     row["status"] = "watch"
-                topics = negative_topics_by_platform.get(platform, {})
+                topics = negative_topics_by_platform.get(source_key, {})
                 if topics:
                     row["mainConcern"] = self._negative_topic_label(
                         sorted(topics.items(), key=lambda item: (-item[1], item[0]))[0][
@@ -884,6 +1903,7 @@ class AnalyticsService:
                 "subtitle": summary_headline,
                 "reportKind": report_kind,
                 "reportKindLabel": self._report_kind_label(report_kind),
+                **build_latest_report_context(),
                 "badgeLabel": "自动监测" if triggered_by == "scheduled" else None,
                 "triggeredBy": triggered_by or None,
                 "sessionId": session_id,
@@ -941,9 +1961,9 @@ class AnalyticsService:
             "wordCloud": home_v4.get("wordCloud")
             or home_v4.get("word_cloud")
             or build_word_cloud(),
-            "platformDiagnosis": home_v4.get("platformDiagnosis")
-            or home_v4.get("platform_diagnosis")
-            or build_platform_diagnosis(),
+            "platformDiagnosis": build_platform_diagnosis()
+            or home_v4.get("platformDiagnosis")
+            or home_v4.get("platform_diagnosis"),
             "risks": home_v4.get("risks") or build_risks(),
             "advantages": home_v4.get("advantages") or build_advantages(),
             "mentionRanking": home_v4.get("mentionRanking")
@@ -2381,16 +3401,80 @@ class AnalyticsService:
             "actionQueue": [self._to_action_camel(row) for row in actions],
         }
 
-    async def get_dashboard_home_v2(self, brand_id: str | None) -> dict[str, Any]:
-        """Get Dashboard homepage latest-report summary data."""
-        report_outputs = await self._get_report_like_outputs(brand_id=brand_id)
-        latest_output = report_outputs[0] if report_outputs else None
-        latest_snapshot = await self._get_latest_snapshot_report_source(
-            brand_id=brand_id
+    async def _get_dashboard_monitoring_plan(
+        self,
+        *,
+        brand_id: str | None,
+        monitor_mode: str | None,
+    ) -> dict[str, Any] | None:
+        if not brand_id or self.viewer is None:
+            return None
+        try:
+            brand_uuid = UUID(brand_id)
+        except (ValueError, AttributeError):
+            return None
+        try:
+            service = MonitoringPlanService(self.db)
+            plan = await service.get_entity_plan(
+                user_id=self.viewer.id,
+                entity_id=brand_uuid,
+                monitor_mode=monitor_mode or "panorama",
+            )
+            if plan is None:
+                return None
+            return await service.plan_to_dict(plan)
+        except Exception as exc:
+            logger.warning("[Dashboard] Failed to load monitoring plan: %s", exc)
+            return None
+
+    async def get_dashboard_home_v2(
+        self,
+        brand_id: str | None,
+        monitor_mode: str | None = None,
+        date_range: str | None = None,
+    ) -> dict[str, Any]:
+        """Get Dashboard homepage summary data with period Snapshot aggregation."""
+        normalized_monitor_mode = self._normalize_dashboard_monitor_mode(monitor_mode)
+        date_range_days = self._dashboard_date_range_days(date_range)
+        monitoring_plan = await self._get_dashboard_monitoring_plan(
+            brand_id=brand_id,
+            monitor_mode=normalized_monitor_mode,
         )
-        current = self._select_latest_home_source(latest_output, latest_snapshot)
+        recent_issue = await self._get_recent_monitoring_issue(
+            brand_id=brand_id,
+            monitor_mode=normalized_monitor_mode,
+        )
+        period_snapshots = await self._get_dashboard_snapshots(
+            brand_id=brand_id,
+            monitor_mode=normalized_monitor_mode,
+            date_range_days=date_range_days,
+        )
+        period_summary = self._period_summary_from_snapshots(
+            period_snapshots,
+            date_range_days=date_range_days,
+        )
+        latest_period_snapshot = period_snapshots[-1] if period_snapshots else None
+        current = (
+            self._snapshot_to_report_payload(latest_period_snapshot)
+            if latest_period_snapshot
+            else None
+        )
+        if current is None:
+            report_outputs = await self._get_report_like_outputs(
+                brand_id=brand_id,
+                monitor_mode=normalized_monitor_mode,
+            )
+            latest_output = report_outputs[0] if report_outputs else None
+            latest_snapshot = await self._get_latest_snapshot_report_source(
+                brand_id=brand_id,
+                monitor_mode=normalized_monitor_mode,
+            )
+            current = self._select_latest_home_source(latest_output, latest_snapshot)
+        if not period_snapshots:
+            period_summary = self._empty_period_summary(date_range_days)
         if not current:
-            return {
+            return self._augment_home_with_period_context(
+                {
                 "summary": {"headline": "暂无最近分析"},
                 "latestReport": {
                     "title": "暂无最新报告",
@@ -2435,11 +3519,20 @@ class AnalyticsService:
                     "summary": "",
                     "items": [],
                 },
-            }
+                },
+                monitoring_plan=monitoring_plan,
+                period_summary=period_summary,
+                recent_issue=recent_issue,
+            )
 
         projection_home = self._build_dashboard_home_from_projection(current)
         if projection_home is not None:
-            return projection_home
+            return self._augment_home_with_period_context(
+                projection_home,
+                monitoring_plan=monitoring_plan,
+                period_summary=period_summary,
+                recent_issue=recent_issue,
+            )
 
         payload = self._extract_v2_payload(current)
         summary = payload.get("summary_metrics") or self._fallback_summary_metrics(
@@ -2914,10 +4007,11 @@ class AnalyticsService:
                 f"建议优先查看 {leading_competitor_name} 的竞争问题和主要引用来源。"
             )
 
-        return {
+        home_payload = {
             "summary": {
                 "headline": summary_headline,
             },
+            "monitoringPlan": monitoring_plan,
             "mentionBoard": {
                 "mentionRate": mention_rate,
                 "headline": (
@@ -3010,3 +4104,9 @@ class AnalyticsService:
                 "ctaLabel": "进入监测",
             },
         }
+        return self._augment_home_with_period_context(
+            home_payload,
+            monitoring_plan=monitoring_plan,
+            period_summary=period_summary,
+            recent_issue=recent_issue,
+        )

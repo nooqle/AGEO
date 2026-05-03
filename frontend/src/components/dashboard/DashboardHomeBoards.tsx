@@ -8,7 +8,9 @@ import type {
   DashboardHomeAdvantageCard,
   DashboardHomeData,
   DashboardHomeMetric,
+  DashboardMonitoringIssue,
   DashboardHomeRiskCard,
+  DashboardLatestReport,
   DashboardMentionRankingRow,
   DashboardPlatformDiagnosisRow,
   DashboardSourceStructure,
@@ -19,6 +21,9 @@ interface DashboardHomeBoardsProps {
   home: DashboardHomeData;
   onOpenLatestReport?: () => void;
   isOpeningLatestReport?: boolean;
+  onAskMetric?: (metric: DashboardHomeMetric) => void;
+  onOpenIssueChat?: (issue: DashboardMonitoringIssue) => void;
+  onRetryIssue?: (issue: DashboardMonitoringIssue) => void;
 }
 
 function formatMetricValue(metric: DashboardHomeMetric): string {
@@ -66,7 +71,13 @@ function EmptyInline({ label = '暂无数据' }: { label?: string }) {
   return <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-report-muted)] px-4 py-3 text-[14px] text-[var(--text-tertiary)]">{label}</div>;
 }
 
-function MetricStrip({ metrics }: { metrics: DashboardHomeMetric[] }) {
+function MetricStrip({
+  metrics,
+  onAskMetric,
+}: {
+  metrics: DashboardHomeMetric[];
+  onAskMetric?: (metric: DashboardHomeMetric) => void;
+}) {
   if (metrics.length === 0) {
     return <EmptyInline />;
   }
@@ -78,12 +89,67 @@ function MetricStrip({ metrics }: { metrics: DashboardHomeMetric[] }) {
           key={metric.id}
           className="rounded-[20px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-4"
         >
-          <div className="text-[13px] text-[var(--text-tertiary)]">{metric.label}</div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-[13px] text-[var(--text-tertiary)]">{metric.label}</div>
+            {onAskMetric ? (
+              <button
+                type="button"
+                onClick={() => onAskMetric(metric)}
+                className="shrink-0 rounded-lg border px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--bg-elevated)',
+                }}
+              >
+                让 AI 分析
+              </button>
+            ) : null}
+          </div>
           <div className="mt-2 text-[30px] font-semibold text-[var(--text-primary)]">
             {formatMetricValue(metric)}
           </div>
+          {metric.subtitle ? (
+            <div className="mt-1 text-[12px] leading-5 text-[var(--text-tertiary)]">
+              {metric.subtitle}
+            </div>
+          ) : null}
         </div>
       ))}
+    </div>
+  );
+}
+
+function LatestReportScope({ report }: { report?: DashboardLatestReport }) {
+  if (!report) return null;
+
+  const facts = [
+    report.scope_label ? `指标口径：${report.scope_label}` : null,
+    report.question_set_label ? `问题集：${report.question_set_label}` : null,
+    report.sample_summary ? `样本：${report.sample_summary}` : null,
+  ].filter((item): item is string => Boolean(item));
+
+  if (facts.length === 0 && !report.scope_description && !report.question_preview?.length) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 border-t border-[var(--border-subtle)] pt-3 text-[13px] leading-6 text-[var(--text-secondary)]">
+      {facts.length ? (
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {facts.map((fact) => (
+            <span key={fact}>{fact}</span>
+          ))}
+        </div>
+      ) : null}
+      {report.scope_description ? (
+        <p className="mt-1 text-[var(--text-tertiary)]">{report.scope_description}</p>
+      ) : null}
+      {report.question_preview?.length ? (
+        <div className="mt-1 text-[var(--text-tertiary)]">
+          <span className="text-[var(--text-secondary)]">问题样例：</span>
+          {report.question_preview.slice(0, 2).join('；')}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -126,7 +192,7 @@ function normalizeRiskEvidence(value?: string): string | null {
 function buildRiskMeta(risk: DashboardHomeRiskCard): string[] {
   const meta: string[] = [];
   if (risk.platform?.trim()) {
-    meta.push(`平台：${risk.platform.trim()}`);
+    meta.push(`AI来源：${risk.platform.trim()}`);
   }
 
   const evidence = normalizeRiskEvidence(risk.evidence);
@@ -279,7 +345,7 @@ const PLATFORM_STATUS_LABEL: Record<DashboardPlatformDiagnosisRow['status'], str
 
 function PlatformDiagnosis({ rows }: { rows: DashboardPlatformDiagnosisRow[] }) {
   return (
-    <SectionBlock title="平台诊断">
+    <SectionBlock title="AI 来源诊断">
       {rows.length === 0 ? (
         <EmptyInline />
       ) : (
@@ -287,7 +353,7 @@ function PlatformDiagnosis({ rows }: { rows: DashboardPlatformDiagnosisRow[] }) 
           <table className="w-full min-w-[680px] border-separate border-spacing-0 text-left">
             <thead>
               <tr className="text-[12px] text-[var(--text-tertiary)]">
-                <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">平台</th>
+                <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">AI 来源</th>
                 <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">状态</th>
                 <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">回答</th>
                 <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">提及</th>
@@ -368,7 +434,7 @@ function AdvantageCards({ advantages }: { advantages: DashboardHomeAdvantageCard
                 <span className="rounded-full px-2.5 py-1 text-[12px] font-medium text-[var(--success)]" style={{ backgroundColor: 'var(--status-success-bg)' }}>优势</span>
               </div>
               <div className="mt-3 flex flex-wrap gap-2 text-[13px] text-[var(--text-secondary)]">
-                {advantage.platform_count ? <span>{advantage.platform_count} 个平台</span> : null}
+                {advantage.platform_count ? <span>{advantage.platform_count} 个 AI 来源</span> : null}
                 {advantage.evidence ? <span>{advantage.evidence}</span> : null}
               </div>
             </div>
@@ -495,7 +561,69 @@ function SourceStructure({ source }: { source: DashboardSourceStructure }) {
   );
 }
 
-export function DashboardHomeBoards({ home, onOpenLatestReport, isOpeningLatestReport = false }: DashboardHomeBoardsProps) {
+function MonitoringIssueBanner({
+  issue,
+  onOpenChat,
+  onRetry,
+}: {
+  issue?: DashboardMonitoringIssue;
+  onOpenChat?: (issue: DashboardMonitoringIssue) => void;
+  onRetry?: (issue: DashboardMonitoringIssue) => void;
+}) {
+  if (!issue) return null;
+  const sourceLabel = issue.endpoint_labels.join('、') || 'AI 来源待确认';
+  return (
+    <div
+      className="rounded-[20px] border px-5 py-4"
+      style={{
+        background: 'var(--status-error-bg)',
+        borderColor: 'color-mix(in srgb, var(--evidence-risk) 22%, var(--border-subtle) 78%)',
+      }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="text-[12px] font-semibold text-[var(--evidence-risk)]">监测异常</div>
+          <div className="mt-1 text-[16px] font-semibold text-[var(--text-primary)]">
+            {issue.title}
+          </div>
+          <p className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">
+            阶段：{issue.error_stage || 'monitoring_run'} · {issue.question_count} 个问题 · {sourceLabel}
+          </p>
+          {issue.error_message && (
+            <p className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">
+              {issue.error_message}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenChat?.(issue)}
+            className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 text-[13px] font-medium text-[var(--text-primary)]"
+          >
+            AI 对话处理
+          </button>
+          <button
+            type="button"
+            onClick={() => onRetry?.(issue)}
+            className="rounded-full bg-[var(--brand-primary)] px-4 py-2 text-[13px] font-medium text-white"
+          >
+            重新触发快速复测
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function DashboardHomeBoards({
+  home,
+  onOpenLatestReport,
+  isOpeningLatestReport = false,
+  onAskMetric,
+  onOpenIssueChat,
+  onRetryIssue,
+}: DashboardHomeBoardsProps) {
   const metrics = home.metrics || [];
   const latestReport = home.latest_report;
   const sourceStructure = resolveSourceStructure(home);
@@ -504,7 +632,7 @@ export function DashboardHomeBoards({ home, onOpenLatestReport, isOpeningLatestR
   return (
     <section className="dashboard-shell rounded-[30px] px-6 py-6">
       <DashboardSectionHeader
-        title="最近一轮分析"
+        title="周期监测结果"
         action={latestReport?.created_at ? (
           <div className="text-right">
             <div className="text-[11px] tracking-[0.12em] text-[var(--text-tertiary)]">最近更新</div>
@@ -516,10 +644,16 @@ export function DashboardHomeBoards({ home, onOpenLatestReport, isOpeningLatestR
       />
 
       <div className="space-y-4 rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-5 py-5">
+        <MonitoringIssueBanner
+          issue={home.recent_issue}
+          onOpenChat={onOpenIssueChat}
+          onRetry={onRetryIssue}
+        />
+
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <div className="text-[12px] tracking-[0.12em] text-[var(--text-tertiary)]">
-              {latestReport?.report_kind_label || '分析报告'}
+              最新诊断报告
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <h2 className="text-[28px] font-semibold text-[var(--text-primary)]">
@@ -531,6 +665,7 @@ export function DashboardHomeBoards({ home, onOpenLatestReport, isOpeningLatestR
                 </span>
               ) : null}
             </div>
+            <LatestReportScope report={latestReport} />
           </div>
 
           {onOpenLatestReport && latestReport?.session_id ? (
@@ -547,7 +682,7 @@ export function DashboardHomeBoards({ home, onOpenLatestReport, isOpeningLatestR
           ) : null}
         </div>
 
-        <MetricStrip metrics={metrics} />
+        <MetricStrip metrics={metrics} onAskMetric={onAskMetric} />
         <ThemeSignals
           positive={wordCloud.positive}
           negative={wordCloud.negative}

@@ -12,6 +12,12 @@
 export type ScheduleFrequency = 'daily' | 'weekly' | 'biweekly' | 'monthly';
 
 export type ScheduleStatus = 'active' | 'paused' | 'completed' | 'error';
+export type MonitorMode = 'panorama' | 'scenario';
+export type QuestionSetStatus = 'draft' | 'confirmed' | 'archived';
+export type MonitoringPlanStatus = 'draft' | 'active' | 'paused' | 'archived';
+export type MonitoringRunPolicy = 'quick' | 'full_browser' | 'manual';
+export type MonitoringRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'partial';
+export type MonitoringTrendGroupBy = 'overall' | 'endpoint' | 'question_set';
 
 export type AlertSeverity = 'critical' | 'high' | 'medium' | 'low';
 
@@ -60,6 +66,12 @@ export interface MonitoringSchedule {
   preferred_hour: number;
   timezone: string;
   platforms: string[] | null;
+  monitor_mode: MonitorMode;
+  question_set_ids: string[];
+  endpoint_ids: string[];
+  endpoint_labels: string[];
+  run_policy: MonitoringRunPolicy;
+  monitoring_plan_id: string | null;
   alert_on_significant_change: boolean;
   alert_threshold_bwvs: number;
   has_baseline: boolean;
@@ -83,6 +95,10 @@ export interface CreateScheduleInput {
   preferred_hour?: number;
   timezone?: string;
   platforms?: string[];
+  monitor_mode?: MonitorMode;
+  question_set_ids?: string[];
+  endpoint_ids?: string[];
+  run_policy?: MonitoringRunPolicy;
   alert_on_significant_change?: boolean;
   alert_threshold_bwvs?: number;
   max_runs?: number;
@@ -95,8 +111,91 @@ export interface UpdateScheduleInput {
   preferred_hour?: number;
   timezone?: string;
   platforms?: string[];
+  monitor_mode?: MonitorMode;
+  question_set_ids?: string[];
+  endpoint_ids?: string[];
+  run_policy?: MonitoringRunPolicy;
   alert_on_significant_change?: boolean;
   alert_threshold_bwvs?: number;
+}
+
+export interface MonitoringEndpoint {
+  id: string;
+  platform: string;
+  fetch_method: 'api' | 'browser';
+  display_name: string;
+}
+
+export interface MonitoringQuestion {
+  question_id: string;
+  question_text: string;
+  scene?: string;
+  intent?: string;
+  stage?: string;
+}
+
+export interface MonitoringQuestionSet {
+  id: string;
+  user_id: string;
+  entity_id: string;
+  monitor_mode: MonitorMode;
+  status: QuestionSetStatus;
+  source: string;
+  title: string;
+  version: number;
+  questions: MonitoringQuestion[];
+  question_count: number;
+  source_session_id: string | null;
+  source_task_id: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MonitoringPlan {
+  id: string;
+  user_id: string;
+  entity_id: string;
+  monitor_mode: MonitorMode;
+  status: MonitoringPlanStatus;
+  title: string;
+  question_set_ids: string[];
+  question_set_label: string;
+  question_count: number;
+  endpoint_ids: string[];
+  endpoint_labels: string[];
+  run_policy: MonitoringRunPolicy;
+  frequency: ScheduleFrequency;
+  preferred_hour: number;
+  timezone: string;
+  schedule_id: string | null;
+  schedule_status: ScheduleStatus | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MonitoringRun {
+  id: string;
+  user_id: string;
+  entity_id: string;
+  plan_id: string;
+  schedule_id: string | null;
+  task_id: string | null;
+  task_run_id: string | null;
+  snapshot_id: string | null;
+  status: MonitoringRunStatus;
+  run_policy: MonitoringRunPolicy;
+  monitor_mode: MonitorMode;
+  endpoint_ids: string[];
+  endpoint_labels: string[];
+  question_set_ids: string[];
+  question_count: number;
+  error_message: string | null;
+  error_stage: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // =========================================================================
@@ -135,6 +234,43 @@ export interface TrendDataPoint {
   snapshot_id: string;
   triggered_by: string;
   is_significant: boolean;
+  run_id?: string | null;
+  data_point_count?: number;
+}
+
+export interface MonitoringTrendSeriesPoint {
+  date: string;
+  value: number | null;
+  snapshot_id?: string | null;
+  run_id?: string | null;
+  data_point_count?: number;
+}
+
+export interface MonitoringTrendSeries {
+  id: string;
+  label: string;
+  metric: string;
+  metric_label?: string;
+  group_by: MonitoringTrendGroupBy;
+  points: MonitoringTrendSeriesPoint[];
+  data_point_count: number;
+  current_value: number | null;
+  previous_value: number | null;
+  average_value: number | null;
+  change_absolute: number | null;
+  change_percentage: number | null;
+  direction: TrendDirection;
+}
+
+export interface MonitoringTrendResponse {
+  metric: string;
+  metric_label?: string;
+  group_by: MonitoringTrendGroupBy;
+  monitor_mode: MonitorMode;
+  date_range_days: number;
+  period_label: string;
+  series: MonitoringTrendSeries[];
+  data_point_count: number;
 }
 
 /** Period delta nested inside TrendMetricSummary */

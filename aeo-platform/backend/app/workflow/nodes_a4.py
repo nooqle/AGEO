@@ -1195,6 +1195,44 @@ def _parse_429_error(response: httpx.Response) -> tuple[str, float | None]:
     return error_type, retry_seconds
 
 
+def _build_api_rate_limit_failure(
+    *,
+    platform: str,
+    method: str,
+    error_type: str,
+    error_detail: str,
+    retry_after_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Build a user-safe API rate-limit failure payload."""
+
+    platform_name = PlatformConstants.PLATFORM_DISPLAY_NAMES.get(platform, platform)
+    if error_type == "quota_exceeded":
+        error = f"{platform_name} API 当前配额不足，本题已跳过。"
+        retryable = False
+    elif error_type == "engine_overloaded":
+        error = f"{platform_name} API 当前服务繁忙，本题已跳过，可稍后重试。"
+        retryable = True
+    else:
+        error = f"{platform_name} API 当前请求过于频繁，本题已跳过，可稍后重试。"
+        retryable = True
+
+    return {
+        "platform": platform,
+        "platform_name": platform_name,
+        "fetch_method": method,
+        "success": False,
+        "error": error,
+        "error_detail": error_detail,
+        "error_type": "api_rate_limited",
+        "provider_error_type": error_type,
+        "failure_layer": "api_provider",
+        "failure_reason": error_type,
+        "status_code": 429,
+        "retryable": retryable,
+        "retry_after_seconds": retry_after_seconds,
+    }
+
+
 async def _retry_fetch(
     fetch_fn: Callable[..., Coroutine[Any, Any, dict[str, Any]]],
     *args: Any,
@@ -1245,6 +1283,22 @@ async def _retry_fetch(
             )
             if is_429:
                 error_type, hint_seconds = _parse_429_error(e.response)
+                try:
+                    header_val = float(e.response.headers.get("Retry-After", 0))
+                except (ValueError, TypeError):
+                    header_val = 0
+                retry_after = (
+                    hint_seconds
+                    or (header_val or None)
+                    or WorkflowConstants.DEFAULT_429_RETRY_SECONDS
+                )
+                last_result = _build_api_rate_limit_failure(
+                    platform=platform,
+                    method=method,
+                    error_type=error_type,
+                    error_detail=f"HTTP 429: {error_type}",
+                    retry_after_seconds=retry_after,
+                )
 
                 if error_type == "quota_exceeded":
                     logger.error(
@@ -1299,15 +1353,6 @@ async def _retry_fetch(
 
                 # rate_limit or unknown
                 if attempt < max_retries:
-                    try:
-                        header_val = float(e.response.headers.get("Retry-After", 0))
-                    except (ValueError, TypeError):
-                        header_val = 0
-                    retry_after = (
-                        hint_seconds
-                        or (header_val or None)
-                        or WorkflowConstants.DEFAULT_429_RETRY_SECONDS
-                    )
                     logger.warning(
                         "[A4] %s 429 (%s), waiting %.0fs before retry",
                         platform,
@@ -1539,6 +1584,59 @@ def _build_duration_msg(fetch_mode: str, question_count: int) -> str:
         )
 
 
+def _monitor_mode_from_fetch_state(state: AgentState) -> str:
+    analysis_mode = str(state.get("analysis_mode") or "").strip().lower()
+    if analysis_mode == "persona":
+        return "scenario"
+    return "panorama"
+
+
+async def _activate_plan_after_question_confirmation(
+    state: AgentState,
+    *,
+    fetch_mode: str,
+) -> dict[str, Any]:
+    """Promote the latest draft question set once the user confirms A4 fetch."""
+    if state.get("headless_mode"):
+        return {}
+    question_set_id = str(state.get("latest_question_set_id") or "").strip()
+    user_id = str(state.get("user_id") or "").strip()
+    entity_id = str(state.get("entity_id") or "").strip()
+    if not question_set_id or not user_id or not entity_id:
+        return {}
+    try:
+        from uuid import UUID
+
+        from app.core.database import AsyncSessionLocal
+        from app.services.monitoring_plan_service import MonitoringPlanService
+
+        async with AsyncSessionLocal() as db:
+            service = MonitoringPlanService(db)
+            plan = await service.create_or_update_active_plan_from_question_set(
+                user_id=UUID(user_id),
+                entity_id=UUID(entity_id),
+                question_set_id=UUID(question_set_id),
+                monitor_mode=_monitor_mode_from_fetch_state(state),
+                fetch_mode=fetch_mode,
+            )
+            plan_payload = await service.plan_to_dict(plan)
+            logger.info(
+                "[A4] Activated monitoring plan %s from question set %s",
+                plan.id,
+                question_set_id,
+            )
+            return {
+                "monitoring_plan_id": str(plan.id),
+                "latest_monitoring_plan_id": str(plan.id),
+                "question_set_ids": plan_payload.get("question_set_ids") or [],
+                "endpoint_ids": plan_payload.get("endpoint_ids") or [],
+                "run_policy": plan_payload.get("run_policy") or "quick",
+            }
+    except Exception as exc:
+        logger.warning("[A4] Failed to activate monitoring plan: %s", exc)
+        return {}
+
+
 async def a4_fetch_node(state: AgentState) -> Command:
     """A4: Fetch answers from AI platforms for all questions.
 
@@ -1627,6 +1725,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 "progress": 0.6,
             },
         )
+    monitoring_plan_update = await _activate_plan_after_question_confirmation(
+        state,
+        fetch_mode=fetch_mode,
+    )
 
     # Send user-visible reply with expected duration based on actual execution path.
     if platform_filter:
@@ -2914,6 +3016,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     **merge_validation_update,
                     **artifact_validation_update,
                     **decision_update,
+                    **monitoring_plan_update,
                 }
             )
 
@@ -2992,6 +3095,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         if platform_filter or pair_targeted_merge:
             update_dict["platform_filter"] = None
             update_dict["preserved_fetch_results"] = None
+        update_dict.update(monitoring_plan_update)
 
         if len(successful_platforms) == 0:
             update_dict["error_info"] = {

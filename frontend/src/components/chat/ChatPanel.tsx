@@ -559,6 +559,72 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const autoStartBrand = initialArtifactId ? null : searchParams.get('brand');
   const autoStartDraft = initialArtifactId ? null : searchParams.get('draft');
   const shouldAutoSendDraft = !initialArtifactId && searchParams.get('autosend') === '1';
+  const dashboardAutoContext = useMemo<ContextTag[]>(() => {
+    if (initialArtifactId) return [];
+
+    const entrySource = searchParams.get('entry_source')?.trim();
+    const monitorMode = searchParams.get('monitor_mode')?.trim();
+    const questionSetLabel = searchParams.get('question_set_label')?.trim();
+    const sampleSummary = searchParams.get('sample_summary')?.trim();
+    const aiSources = searchParams.get('ai_sources')?.trim();
+    const entityId = searchParams.get('entity_id')?.trim();
+    const brand = searchParams.get('brand')?.trim();
+    const monitoringPlanId = searchParams.get('monitoring_plan_id')?.trim();
+    const questionSetIds = searchParams.get('question_set_ids')?.trim();
+    const endpointIds = searchParams.get('endpoint_ids')?.trim();
+    const tags: ContextTag[] = [];
+
+    if (entrySource || monitorMode) {
+      const modeLabel = monitorMode?.includes('scenario')
+        ? '用户场景监测'
+        : '全景监测';
+      tags.push({
+        id: 'dashboard-structured-context',
+        type: 'intent',
+        label: 'Dashboard结构化上下文',
+        data: {
+          entry_source: entrySource,
+          monitor_mode: monitorMode,
+          entity_id: entityId,
+          brand,
+          monitoring_plan_id: monitoringPlanId,
+          question_set_ids: questionSetIds ? questionSetIds.split(',').filter(Boolean) : [],
+          endpoint_ids: endpointIds ? endpointIds.split(',').filter(Boolean) : [],
+          question_set_label: questionSetLabel,
+          sample_summary: sampleSummary,
+          ai_sources: aiSources ? aiSources.split('、').filter(Boolean) : [],
+        },
+      });
+      tags.push({
+        id: 'dashboard-monitor-mode',
+        type: 'intent',
+        label: `Dashboard入口：${modeLabel}`,
+      });
+    }
+    if (questionSetLabel) {
+      tags.push({
+        id: 'dashboard-question-set',
+        type: 'scenario',
+        label: `问题集：${questionSetLabel}`,
+      });
+    }
+    if (sampleSummary) {
+      tags.push({
+        id: 'dashboard-sample-summary',
+        type: 'intent',
+        label: `样本：${sampleSummary}`,
+      });
+    }
+    if (aiSources) {
+      tags.push({
+        id: 'dashboard-ai-sources',
+        type: 'intent',
+        label: `AI来源：${aiSources}`,
+      });
+    }
+
+    return tags;
+  }, [initialArtifactId, searchParams]);
   const autoSentRef = useRef(false);
   const [isAutoStartingPrompt, setIsAutoStartingPrompt] = useState(Boolean(autoStartBrand || autoStartDraft));
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
@@ -2121,7 +2187,11 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     autoSentRef.current = true;
     const timer = setTimeout(() => {
-      handleSendMessage(autoMessage);
+      handleSendMessage(
+        autoMessage,
+        undefined,
+        dashboardAutoContext.length > 0 ? dashboardAutoContext : undefined,
+      );
       setIsAutoStartingPrompt(false);
       router.replace(`/chat/${sessionId}`);
     }, 500);
@@ -2130,6 +2200,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   }, [
     autoStartBrand,
     autoStartDraft,
+    dashboardAutoContext,
     shouldAutoSendDraft,
     messages.length,
     isConnected,

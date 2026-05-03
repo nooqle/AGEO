@@ -1,192 +1,136 @@
-﻿'use client';
+'use client';
 
-import { RiAddLine, RiFileChartLine, RiLineChartLine } from '@remixicon/react';
+import { useState, type FormEvent } from 'react';
+import { RiAddLine, RiSendPlane2Line } from '@remixicon/react';
 import { motion } from 'framer-motion';
+import { BrandAvatar } from './BrandAvatar';
 
 interface HeroSectionProps {
-  totalSessions: number;
   totalBrands: number;
-  lastActiveBrand?: string;
+  selectedBrandName?: string;
+  selectedBrandDomain?: string;
+  analysisLabel?: string;
+  monitoringStatusLabel?: string;
+  hasMonitoringContext?: boolean;
   isLoading: boolean;
   onNewAnalysis: () => void;
+  onCommandSubmit?: (value: string) => void;
+  isCommandSubmitting?: boolean;
 }
 
-const STEPS = [
-  {
-    icon: RiAddLine,
-    title: '创建品牌',
-    desc: '录入品牌与竞品信息，形成分析对象。',
-  },
-  {
-    icon: RiFileChartLine,
-    title: '进入分析',
-    desc: '通过对话发起采集，生成结构化判断。',
-  },
-  {
-    icon: RiLineChartLine,
-    title: '查看结果',
-    desc: '在首页看最近一轮摘要，再打开完整报告。',
-  },
-];
+export function HeroSection({
+  totalBrands,
+  selectedBrandName,
+  selectedBrandDomain,
+  analysisLabel = '全景分析',
+  monitoringStatusLabel = '待监测',
+  hasMonitoringContext = false,
+  isLoading,
+  onNewAnalysis,
+  onCommandSubmit,
+  isCommandSubmitting = false,
+}: HeroSectionProps) {
+  const [commandInput, setCommandInput] = useState('');
 
-const containerVariants = {
-  hidden: {},
-  show: {
-    transition: { staggerChildren: 0.08 },
-  },
-};
-
-const itemVariants = {
-  hidden: { opacity: 0, y: 12 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.28 } },
-};
-
-export function HeroSection({ totalSessions, totalBrands, lastActiveBrand, isLoading, onNewAnalysis }: HeroSectionProps) {
   if (isLoading) return null;
 
-  const isEmpty = totalBrands === 0;
-
-  if (isEmpty) {
+  if (totalBrands === 0) {
     return (
       <motion.section
-        className="dashboard-shell overflow-hidden rounded-[30px] px-7 py-8 lg:px-8 lg:py-9"
-        style={{
-          position: 'relative',
-        }}
+        className="dashboard-shell rounded-[26px] px-7 py-8"
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.32 }}
       >
-        <div className="grid gap-8 xl:grid-cols-[1.02fr_0.98fr] xl:items-end">
-          <div className="space-y-4">
-            <div className="text-[11px] font-medium tracking-[0.18em]" style={{ color: 'var(--text-tertiary)' }}>
-              品牌分析首页
-            </div>
-            <h1
-              className="max-w-3xl text-[clamp(1.65rem,2.3vw,2.2rem)] font-semibold leading-[1.08]"
-              style={{ color: 'var(--text-primary)', letterSpacing: '-0.03em' }}
-            >
-              用首页判断层快速看清品牌是否被提到、内容是否进入答案，以及整体战况。
-            </h1>
-            <p className="max-w-2xl text-[14px] leading-8" style={{ color: 'var(--text-secondary)' }}>
-              创建品牌并完成首次分析后，可直接查看最近一轮报告的关键指标、引用来源和关联问题。
-            </p>
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <button
-                className="rounded-full px-5 py-2.5 text-sm font-medium transition-opacity hover:opacity-90"
-                style={{
-                  background: 'var(--brand-primary)',
-                  color: 'var(--brand-contrast)',
-                  boxShadow: 'var(--shadow-sm)',
-                }}
-                onClick={onNewAnalysis}
-              >
-                新建品牌
-              </button>
-              <div className="text-[12px]" style={{ color: 'var(--text-tertiary)' }}>
-                创建后即可进入对话分析并生成首页判断。
-              </div>
-            </div>
+        <div className="max-w-3xl">
+          <div className="text-[11px] font-medium tracking-[0.18em] text-[var(--text-tertiary)]">
+            品牌分析首页
           </div>
-
-          <motion.div
-            className="grid gap-3 md:grid-cols-3 xl:grid-cols-1"
-            variants={containerVariants}
-            initial="hidden"
-            animate="show"
+          <h1 className="mt-3 text-[clamp(1.65rem,2.3vw,2.2rem)] font-semibold leading-[1.12] text-[var(--text-primary)]">
+            先建立品牌，再通过 AI 对话完成基础信息和问题集。
+          </h1>
+          <p className="mt-4 text-[14px] leading-8 text-[var(--text-secondary)]">
+            确认后，Dashboard 会展示周期趋势、平台表现和最新报告。
+          </p>
+          <button
+            type="button"
+            onClick={onNewAnalysis}
+            className="mt-5 inline-flex min-h-10 items-center gap-2 rounded-[12px] bg-[var(--brand-primary)] px-4 text-[14px] font-medium text-[var(--brand-contrast)] transition-opacity hover:opacity-90"
           >
-            {STEPS.map((step) => (
-              <motion.div
-                key={step.title}
-                className="rounded-[20px] border px-4 py-4"
-                style={{
-                  background: 'color-mix(in srgb, var(--bg-elevated) 96%, #eef1ee 4%)',
-                  borderColor: 'var(--border-subtle)',
-                }}
-                variants={itemVariants}
-              >
-                <div className="flex items-start gap-3">
-                  <div
-                    className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl"
-                    style={{ background: 'var(--bg-secondary)' }}
-                  >
-                    <step.icon className="h-4 w-4" style={{ color: 'var(--color-primary)' }} />
-                  </div>
-                  <div>
-                    <div className="text-[14px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-                      {step.title}
-                    </div>
-                    <div className="mt-1 text-[12px] leading-6" style={{ color: 'var(--text-tertiary)' }}>
-                      {step.desc}
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </motion.div>
+            <RiAddLine className="h-4 w-4" />
+            新建品牌
+          </button>
         </div>
       </motion.section>
     );
   }
 
+  const brandName = selectedBrandName || '当前品牌';
+  const helperText = hasMonitoringContext
+    ? `${analysisLabel}已有上下文，可直接提问或继续调整问题集。`
+    : `${analysisLabel}尚未开始，需先通过 AI 对话完成问题集确认。`;
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onCommandSubmit?.(commandInput.trim());
+  };
+
   return (
     <motion.section
-      className="dashboard-shell overflow-hidden rounded-[24px] px-5 py-3"
-      style={{
-        position: 'relative',
-      }}
+      className="dashboard-shell relative overflow-hidden rounded-[24px] px-6 py-6"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.28 }}
     >
-      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-        <div className="max-w-3xl">
-          <div className="text-[10px] font-medium tracking-[0.16em]" style={{ color: 'var(--text-tertiary)' }}>
-            概览
-          </div>
-          <div className="mt-1 text-[clamp(0.94rem,1.02vw,1.08rem)] font-semibold tracking-[-0.03em]" style={{ color: 'var(--text-primary)' }}>
-            当前已管理 {totalBrands} 个品牌，累计完成 {totalSessions} 次分析
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <span
-              className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
-              style={{
-                background: 'color-mix(in srgb, var(--bg-elevated) 96%, #eef1ee 4%)',
-                borderColor: 'color-mix(in srgb, var(--border-subtle) 88%, #87988f 12%)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              {totalBrands} 个品牌
-            </span>
-            <span
-              className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
-              style={{
-                background: 'color-mix(in srgb, var(--bg-elevated) 96%, #e9f1ed 4%)',
-                borderColor: 'color-mix(in srgb, var(--border-subtle) 82%, var(--color-primary) 18%)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              {totalSessions} 次分析
-            </span>
-            {lastActiveBrand ? (
-              <span
-                className="rounded-full border px-2.5 py-0.5 text-[11px] font-medium"
-                style={{
-                  background: 'color-mix(in srgb, var(--bg-elevated) 94%, #eef6f4 6%)',
-                  borderColor: 'color-mix(in srgb, var(--border-subtle) 84%, #7ca89a 16%)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                最近活跃：{lastActiveBrand}
-              </span>
-            ) : null}
+      <span
+        className="absolute right-5 top-5 rounded-full border px-3 py-1.5 text-[12px] font-semibold"
+        style={{
+          background: 'var(--status-warning-bg)',
+          borderColor: 'color-mix(in srgb, var(--status-warning) 24%, var(--border-subtle) 76%)',
+          color: 'var(--status-warning)',
+        }}
+      >
+        {monitoringStatusLabel}
+      </span>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)] xl:items-end">
+        <div className="grid min-w-0 grid-cols-[52px_minmax(0,1fr)] items-center gap-4 pr-24">
+          <BrandAvatar name={brandName} domain={selectedBrandDomain} size={52} className="flex-shrink-0" />
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
+              当前品牌
+            </div>
+            <h1 className="mt-1 truncate text-[30px] font-semibold leading-tight text-[var(--text-primary)]">
+              {brandName}
+            </h1>
+            <p className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">
+              {selectedBrandDomain ? `${selectedBrandDomain} · ` : ''}
+              {helperText}
+            </p>
           </div>
         </div>
-        {lastActiveBrand ? (
-          <div className="rounded-full border px-3 py-1 text-[11px] font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)', background: 'color-mix(in srgb, var(--bg-elevated) 96%, #e9f1ed 4%)' }}>
-            当前查看：{lastActiveBrand}
-          </div>
-        ) : null}
+
+        <form className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={handleSubmit}>
+          <input
+            value={commandInput}
+            onChange={(event) => setCommandInput(event.target.value)}
+            placeholder="输入您的问题..."
+            className="min-h-12 min-w-0 rounded-[13px] border bg-[var(--bg-secondary)] px-4 text-[14px] text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--brand-primary)]"
+            style={{ borderColor: 'var(--border-subtle)' }}
+          />
+          <button
+            type="submit"
+            disabled={isCommandSubmitting}
+            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-[13px] bg-[var(--brand-primary)] px-5 text-[14px] font-semibold text-[var(--brand-contrast)] transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-70"
+          >
+            {isCommandSubmitting ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : (
+              <RiSendPlane2Line className="h-4 w-4" />
+            )}
+            AI 对话
+          </button>
+        </form>
       </div>
     </motion.section>
   );

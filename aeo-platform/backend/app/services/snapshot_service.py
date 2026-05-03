@@ -37,6 +37,7 @@ class SnapshotService:
         is_degraded: bool = False,
         triggered_by: str = "manual",
         snapshot_type: str = "legacy",
+        monitoring_metadata: dict[str, Any] | None = None,
     ) -> AnalysisSnapshot:
         """在 metrics 计算完成后一次性创建 Snapshot。
 
@@ -63,6 +64,21 @@ class SnapshotService:
         breakdown = metrics.get("bwvs_breakdown", {})
 
         normalized_snapshot_type = normalize_report_kind(snapshot_type)
+        raw_data = {
+            "artifact_kind": "geo_report",
+            "report_kind": normalized_snapshot_type,
+            "metrics": metrics,
+            "report_data": report_data,
+            "competitor_metrics": competitor_metrics,
+            "fetch_results_summary": fetch_results_summary,
+            "metric_bundle": report_data.get("metric_bundle") if isinstance(report_data, dict) else None,
+            "comparison_bundle": report_data.get("comparison_bundle") if isinstance(report_data, dict) else None,
+            "dashboard_projection": report_data.get("dashboard_projection") if isinstance(report_data, dict) else None,
+            "sections": report_data.get("sections") if isinstance(report_data, dict) else None,
+        }
+        if monitoring_metadata:
+            raw_data["monitoring"] = monitoring_metadata
+
         snapshot = AnalysisSnapshot(
             entity_id=entity_id,
             session_id=session_id,
@@ -78,18 +94,7 @@ class SnapshotService:
                 p for p in metrics.get("platform_breakdown", {}).values()
                 if isinstance(p, dict) and p.get("success", 0) > 0
             ]),
-            raw_data={
-                "artifact_kind": "geo_report",
-                "report_kind": normalized_snapshot_type,
-                "metrics": metrics,
-                "report_data": report_data,
-                "competitor_metrics": competitor_metrics,
-                "fetch_results_summary": fetch_results_summary,
-                "metric_bundle": report_data.get("metric_bundle") if isinstance(report_data, dict) else None,
-                "comparison_bundle": report_data.get("comparison_bundle") if isinstance(report_data, dict) else None,
-                "dashboard_projection": report_data.get("dashboard_projection") if isinstance(report_data, dict) else None,
-                "sections": report_data.get("sections") if isinstance(report_data, dict) else None,
-            },
+            raw_data=raw_data,
             triggered_by=triggered_by,
             snapshot_type=normalized_snapshot_type,
             completed_at=datetime.now(timezone.utc),

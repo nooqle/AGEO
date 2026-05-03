@@ -12,7 +12,13 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { RiArrowUpLine, RiArrowDownLine, RiSubtractLine, RiFlashlightLine } from '@remixicon/react';
-import type { TrendDataPoint, TrendSummary, TrendDirection } from '@/types/monitoring';
+import type {
+  MonitoringTrendGroupBy,
+  MonitoringTrendSeries,
+  TrendDataPoint,
+  TrendSummary,
+  TrendDirection,
+} from '@/types/monitoring';
 import { chart, axisTick } from '@/styles/chart-theme';
 import { cn } from '@/lib/cn';
 
@@ -64,6 +70,29 @@ const DIMENSIONS: DimensionConfig[] = [
   },
 ];
 
+const API_DIMENSION_MAP: Record<DimensionKey, string> = {
+  mention_rate: 'mention_rate',
+  bwvs_index: 'bwvs',
+  sentiment_score: 'sentiment',
+  coverage_score: 'coverage',
+  content_citation_rate: 'citation',
+};
+
+const GROUP_BY_OPTIONS: Array<{ key: MonitoringTrendGroupBy; label: string }> = [
+  { key: 'overall', label: '总览' },
+  { key: 'endpoint', label: 'AI 来源' },
+  { key: 'question_set', label: '问题集' },
+];
+
+const SERIES_COLORS = [
+  chart.colors.primary,
+  chart.colors.green,
+  chart.colors.yellow,
+  chart.colors.source,
+  'var(--evidence-risk)',
+  'var(--text-secondary)',
+];
+
 // =========================================================================
 // Trend direction display
 // =========================================================================
@@ -87,15 +116,19 @@ interface TrendTooltipProps {
   payload?: Array<{
     value: number;
     dataKey: string;
-    payload: TrendDataPoint;
+    color?: string;
+    name?: string;
+    payload: TrendDataPoint & Record<string, unknown>;
   }>;
   dimension: DimensionConfig;
+  seriesByKey?: Record<string, { label: string; color: string }>;
 }
 
-function TrendTooltip({ active, payload, dimension }: TrendTooltipProps) {
+function TrendTooltip({ active, payload, dimension, seriesByKey }: TrendTooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
   const point = payload[0]?.payload;
   if (!point) return null;
+  const entries = payload.filter((item) => item.value != null);
 
   return (
     <div
@@ -108,12 +141,19 @@ function TrendTooltip({ active, payload, dimension }: TrendTooltipProps) {
     >
       <div className="font-medium mb-1.5">{point.date}</div>
       <div className="space-y-1">
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-[var(--text-secondary)]">{dimension.label}:</span>
-          <span className="font-semibold" style={{ color: dimension.color }}>
-            {dimension.formatValue(point.value)}
-          </span>
-        </div>
+        {entries.map((item) => {
+          const config = seriesByKey?.[item.dataKey];
+          return (
+            <div key={item.dataKey} className="flex items-center justify-between gap-4">
+              <span className="text-[var(--text-secondary)]">
+                {config?.label || dimension.label}:
+              </span>
+              <span className="font-semibold" style={{ color: config?.color || dimension.color }}>
+                {dimension.formatValue(Number(item.value))}
+              </span>
+            </div>
+          );
+        })}
       </div>
       {point.is_significant && (
         <div
@@ -131,7 +171,7 @@ function TrendTooltip({ active, payload, dimension }: TrendTooltipProps) {
 }
 
 // =========================================================================
-// Custom Dot (significant data point glow)
+// Custom Dot (significant data point)
 // =========================================================================
 
 interface CustomDotProps {
@@ -147,7 +187,6 @@ function SignificantDot({ cx, cy, payload, color }: CustomDotProps) {
   if (payload.is_significant) {
     return (
       <g>
-        {/* Glow effect */}
         <circle cx={cx} cy={cy} r={8} fill={color} fillOpacity={0.2} />
         <circle cx={cx} cy={cy} r={5} fill={color} stroke="var(--bg-primary)" strokeWidth={2} />
       </g>
@@ -163,12 +202,23 @@ function SignificantDot({ cx, cy, payload, color }: CustomDotProps) {
 
 interface TrendChartProps {
   data: TrendDataPoint[];
+  series?: MonitoringTrendSeries[];
+  groupBy?: MonitoringTrendGroupBy;
   summary: TrendSummary | null;
   isLoading?: boolean;
   onDimensionChange?: (dimension: string) => void;
+  onGroupByChange?: (groupBy: MonitoringTrendGroupBy, dimension: string) => void;
 }
 
-export function TrendChart({ data, summary, isLoading, onDimensionChange }: TrendChartProps) {
+export function TrendChart({
+  data,
+  series = [],
+  groupBy = 'overall',
+  summary,
+  isLoading,
+  onDimensionChange,
+  onGroupByChange,
+}: TrendChartProps) {
   const [activeDimension, setActiveDimension] = useState<DimensionKey>('mention_rate');
 
   const dimConfig = useMemo(
@@ -179,16 +229,7 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
   const handleDimensionChange = useCallback(
     (key: DimensionKey) => {
       setActiveDimension(key);
-      // Pass the dimension key directly as the API metric parameter
-      // The monitoringStore maps this to the backend metric name
-      const apiDimMap: Record<DimensionKey, string> = {
-        mention_rate: 'mention_rate',
-        bwvs_index: 'bwvs',
-        sentiment_score: 'sentiment',
-        coverage_score: 'coverage',
-        content_citation_rate: 'citation',
-      };
-      onDimensionChange?.(apiDimMap[key]);
+      onDimensionChange?.(API_DIMENSION_MAP[key]);
     },
     [onDimensionChange]
   );
@@ -207,6 +248,45 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
   const DirectionIcon = directionConfig?.Icon;
 
   const hasLowData = data.length > 0 && data.length < 3;
+  const activeSeries = useMemo(
+    () => (series.length ? series.filter((item) => item.points.length > 0) : []),
+    [series],
+  );
+  const chartSeries = useMemo(
+    () =>
+      activeSeries.length
+        ? activeSeries.map((item, index) => ({
+            key: `series_${index}`,
+            id: item.id,
+            label: item.label,
+            color: SERIES_COLORS[index % SERIES_COLORS.length],
+          }))
+        : [{ key: 'value', id: 'overall', label: dimConfig.label, color: dimConfig.color }],
+    [activeSeries, dimConfig.label, dimConfig.color],
+  );
+  const seriesByKey = useMemo(
+    () =>
+      chartSeries.reduce<Record<string, { label: string; color: string }>>((acc, item) => {
+        acc[item.key] = { label: item.label, color: item.color };
+        return acc;
+      }, {}),
+    [chartSeries],
+  );
+  const chartData = useMemo(() => {
+    if (!activeSeries.length) {
+      return data;
+    }
+    const rows = new Map<string, Record<string, string | number | null>>();
+    activeSeries.forEach((item, seriesIndex) => {
+      const key = `series_${seriesIndex}`;
+      item.points.forEach((point) => {
+        const current = rows.get(point.date) || { date: point.date };
+        current[key] = point.value;
+        rows.set(point.date, current);
+      });
+    });
+    return Array.from(rows.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  }, [activeSeries, data]);
 
   return (
     <div
@@ -265,6 +345,24 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
         ))}
       </div>
 
+      <div className="mb-4 inline-flex rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-1">
+        {GROUP_BY_OPTIONS.map((option) => (
+          <button
+            key={option.key}
+            type="button"
+            onClick={() => onGroupByChange?.(option.key, API_DIMENSION_MAP[activeDimension])}
+            className={cn(
+              'rounded-full px-3 py-1 text-[11px] font-medium transition-colors',
+              groupBy === option.key
+                ? 'bg-[var(--brand-primary)] text-white'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
+            )}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
       {/* Low data notice */}
       {hasLowData && (
         <div
@@ -279,15 +377,14 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
         </div>
       )}
 
-      {/* Chart — dataKey is always "value" since backend returns single-metric data */}
       <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={data}>
+        <LineChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
           <XAxis dataKey="date" tick={axisTick} />
           <YAxis tick={axisTick} tickFormatter={formatYAxis} />
-          <Tooltip content={<TrendTooltip dimension={dimConfig} />} />
+          <Tooltip content={<TrendTooltip dimension={dimConfig} seriesByKey={seriesByKey} />} />
           {/* Reference lines for significant changes */}
-          {data
+          {!activeSeries.length && data
             .filter((p) => p.is_significant)
             .map((point, i) => (
               <ReferenceLine
@@ -298,16 +395,20 @@ export function TrendChart({ data, summary, isLoading, onDimensionChange }: Tren
                 strokeOpacity={0.5}
               />
             ))}
-          <Line
-            type="monotone"
-            dataKey="value"
-            stroke={dimConfig.color}
-            strokeWidth={2}
-            dot={<SignificantDot color={dimConfig.color} />}
-            activeDot={{ r: 5 }}
-            animationDuration={300}
-            connectNulls
-          />
+          {chartSeries.map((item) => (
+            <Line
+              key={item.key}
+              type="monotone"
+              dataKey={item.key}
+              name={item.label}
+              stroke={item.color}
+              strokeWidth={2}
+              dot={activeSeries.length ? { r: 2.5 } : <SignificantDot color={item.color} />}
+              activeDot={{ r: 5 }}
+              animationDuration={300}
+              connectNulls
+            />
+          ))}
         </LineChart>
       </ResponsiveContainer>
 

@@ -24,6 +24,7 @@ from app.models.snapshot import JSONText
 
 if TYPE_CHECKING:
     from app.models.entity import Entity
+    from app.models.monitoring_plan import MonitoringPlan
     from app.models.task import AnalysisTask
     from app.models.user import User
 
@@ -50,7 +51,8 @@ class MonitoringSchedule(Base):
     """Defines an automated periodic analysis configuration for a brand entity.
 
     Design notes:
-    - One Entity can have at most ONE active schedule (enforced at service layer).
+    - Legacy schedules without a plan keep one active schedule per entity/mode.
+    - Plan-backed schedules are independent so multiple active plans can run.
     - Each scheduled execution creates an AnalysisTask (via monitoring_schedule_id FK).
     - The scheduler reads active schedules and creates tasks when next_run_at <= now().
     - Chat-first: schedules can be created via natural language OR settings UI.
@@ -73,6 +75,12 @@ class MonitoringSchedule(Base):
         UUID(as_uuid=True),
         ForeignKey("entities.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    monitoring_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("monitoring_plans.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 
@@ -102,6 +110,18 @@ class MonitoringSchedule(Base):
     # Platform configuration (JSON list of platform names)
     platforms: Mapped[list | None] = mapped_column(
         JSONText, nullable=True
+    )
+    monitor_mode: Mapped[str] = mapped_column(
+        String(32), default="panorama", nullable=False, index=True
+    )
+    question_set_ids: Mapped[list | None] = mapped_column(
+        JSONText, nullable=True
+    )
+    endpoint_ids: Mapped[list | None] = mapped_column(
+        JSONText, nullable=True
+    )
+    run_policy: Mapped[str] = mapped_column(
+        String(32), default="quick", nullable=False
     )
 
     # Alert configuration
@@ -165,6 +185,11 @@ class MonitoringSchedule(Base):
     user: Mapped["User"] = relationship("User", backref="monitoring_schedules")
     entity: Mapped["Entity"] = relationship(
         "Entity", backref="monitoring_schedules"
+    )
+    monitoring_plan: Mapped["MonitoringPlan | None"] = relationship(
+        "MonitoringPlan",
+        back_populates="schedules",
+        foreign_keys=[monitoring_plan_id],
     )
     tasks: Mapped[list["AnalysisTask"]] = relationship(
         "AnalysisTask",

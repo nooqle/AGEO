@@ -7,6 +7,10 @@ import type {
   DashboardHomeAdvantageCard,
   DashboardHomeData,
   DashboardHomeMetric,
+  DashboardTodoItem,
+  DashboardMonitoringIssue,
+  DashboardMonitoringPlanSummary,
+  DashboardPeriodSummary,
   DashboardHomeRiskCard,
   DashboardLatestReport,
   DashboardMentionRankingRow,
@@ -14,6 +18,7 @@ import type {
   DashboardRelatedQuestion,
   DashboardSourceStructure,
 } from '@/types/dashboard';
+import { normalizeAiSourceDisplayName } from '@/lib/aiSourceDisplay';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -64,6 +69,11 @@ function emptyHome(): DashboardHomeData {
       summary: '',
       items: [],
     },
+    monitoring_plan: undefined,
+    period_summary: undefined,
+    data_point_count: 0,
+    recent_issue: undefined,
+    todo_items: [],
     word_cloud: {
       positive: [],
       negative: [],
@@ -123,21 +133,71 @@ function emptyHome(): DashboardHomeData {
   };
 }
 
+function normalizeMonitorMode(value: unknown): DashboardMonitoringPlanSummary['monitor_mode'] {
+  return value === 'scenario' || value === 'scenario_monitoring' || value === 'persona'
+    ? 'scenario'
+    : 'panorama';
+}
+
+function normalizePlanStatus(value: unknown): DashboardMonitoringPlanSummary['status'] {
+  if (value === 'draft' || value === 'active' || value === 'paused' || value === 'archived') {
+    return value;
+  }
+  return 'draft';
+}
+
+function normalizeRunPolicy(value: unknown): DashboardMonitoringPlanSummary['run_policy'] {
+  if (value === 'quick' || value === 'full_browser' || value === 'manual') {
+    return value;
+  }
+  return 'quick';
+}
+
+function normalizeMonitoringPlan(value: unknown): DashboardMonitoringPlanSummary | undefined {
+  const row = value && typeof value === 'object' ? (value as UnknownRecord) : null;
+  if (!row) return undefined;
+  const id = toStringValue(row.id);
+  if (!id) return undefined;
+  return {
+    id,
+    status: normalizePlanStatus(row.status),
+    monitor_mode: normalizeMonitorMode(pick(row, 'monitorMode', 'monitor_mode')),
+    title: toStringValue(row.title) ?? '',
+    question_set_ids: normalizeStringArray(pick(row, 'questionSetIds', 'question_set_ids')) ?? [],
+    question_set_label: toStringValue(pick(row, 'questionSetLabel', 'question_set_label')) ?? '',
+    question_count: toInteger(pick(row, 'questionCount', 'question_count')),
+    endpoint_ids: normalizeStringArray(pick(row, 'endpointIds', 'endpoint_ids')) ?? [],
+    endpoint_labels: normalizeStringArray(pick(row, 'endpointLabels', 'endpoint_labels')) ?? [],
+    run_policy: normalizeRunPolicy(pick(row, 'runPolicy', 'run_policy')),
+    frequency: toStringValue(row.frequency),
+    schedule_id: toStringValue(pick(row, 'scheduleId', 'schedule_id')) ?? null,
+    schedule_status: toStringValue(pick(row, 'scheduleStatus', 'schedule_status')) ?? null,
+  };
+}
+
 function normalizeLatestReport(value: unknown): DashboardLatestReport | undefined {
   const row = value && typeof value === 'object' ? (value as UnknownRecord) : null;
   if (!row) return undefined;
+  const preview = pick(row, 'questionPreview', 'question_preview');
   return {
     title: toStringValue(row.title) ?? '分析报告',
     subtitle: toStringValue(row.subtitle),
-    report_kind: toStringValue(row.reportKind),
-    report_kind_label: toStringValue(row.reportKindLabel),
-    badge_label: toStringValue(row.badgeLabel),
-    triggered_by: toStringValue(row.triggeredBy),
-    session_id: toStringValue(row.sessionId),
-    artifact_id: toStringValue(row.artifactId),
-    output_id: toStringValue(row.outputId),
-    created_at: toStringValue(row.createdAt),
-    action_label: toStringValue(row.actionLabel),
+    report_kind: toStringValue(pick(row, 'reportKind', 'report_kind')),
+    report_kind_label: toStringValue(pick(row, 'reportKindLabel', 'report_kind_label')),
+    scope_label: toStringValue(pick(row, 'scopeLabel', 'scope_label')),
+    scope_description: toStringValue(pick(row, 'scopeDescription', 'scope_description')),
+    question_set_label: toStringValue(pick(row, 'questionSetLabel', 'question_set_label')),
+    sample_summary: toStringValue(pick(row, 'sampleSummary', 'sample_summary')),
+    question_preview: Array.isArray(preview)
+      ? preview.map((item) => toStringValue(item)).filter((item): item is string => Boolean(item)).slice(0, 3)
+      : [],
+    badge_label: toStringValue(pick(row, 'badgeLabel', 'badge_label')),
+    triggered_by: toStringValue(pick(row, 'triggeredBy', 'triggered_by')),
+    session_id: toStringValue(pick(row, 'sessionId', 'session_id')),
+    artifact_id: toStringValue(pick(row, 'artifactId', 'artifact_id')),
+    output_id: toStringValue(pick(row, 'outputId', 'output_id')),
+    created_at: toStringValue(pick(row, 'createdAt', 'created_at')),
+    action_label: toStringValue(pick(row, 'actionLabel', 'action_label')),
   };
 }
 
@@ -158,9 +218,109 @@ function normalizeMetrics(value: unknown): DashboardHomeMetric[] {
           ? row.format
           : 'percent',
       subtitle: toStringValue(row.subtitle),
+      data_point_count: toInteger(pick(row, 'dataPointCount', 'data_point_count')),
+      average_value: toNumber(pick(row, 'averageValue', 'average_value')),
+      change_absolute: toNumber(pick(row, 'changeAbsolute', 'change_absolute')),
     });
   }
   return metrics;
+}
+
+function normalizePeriodSummary(value: unknown): DashboardPeriodSummary | undefined {
+  const row = value && typeof value === 'object' ? (value as UnknownRecord) : null;
+  if (!row) return undefined;
+  const rawMetrics = pick(row, 'metrics');
+  const metrics = Array.isArray(rawMetrics)
+    ? rawMetrics
+        .map((item) => {
+          const metric = item && typeof item === 'object' ? (item as UnknownRecord) : null;
+          if (!metric) return null;
+          const id = toStringValue(metric.id) ?? toStringValue(metric.metric) ?? '';
+          if (!id) return null;
+          const rawPoints = pick(metric, 'points');
+          return {
+            id,
+            label: toStringValue(metric.label) ?? id,
+            metric: toStringValue(metric.metric) ?? id,
+            data_point_count: toInteger(pick(metric, 'dataPointCount', 'data_point_count')),
+            current_value: toNumber(pick(metric, 'currentValue', 'current_value')),
+            previous_value: toNumber(pick(metric, 'previousValue', 'previous_value')),
+            average_value: toNumber(pick(metric, 'averageValue', 'average_value')),
+            change_absolute: toNumber(pick(metric, 'changeAbsolute', 'change_absolute')),
+            change_percentage: toNumber(pick(metric, 'changePercentage', 'change_percentage')),
+            direction: toStringValue(metric.direction) ?? null,
+            points: Array.isArray(rawPoints)
+              ? rawPoints
+                  .map((point) => {
+                    const pointRow = point && typeof point === 'object' ? (point as UnknownRecord) : null;
+                    if (!pointRow) return null;
+                    const date = toStringValue(pointRow.date) ?? '';
+                    if (!date) return null;
+                    return { date, value: toNumber(pointRow.value) };
+                  })
+                  .filter((point): point is { date: string; value: number | null } => Boolean(point))
+              : [],
+          };
+        })
+        .filter((item): item is DashboardPeriodSummary['metrics'][number] => Boolean(item))
+    : [];
+  return {
+    date_range_days: toInteger(pick(row, 'dateRangeDays', 'date_range_days')),
+    period_label: toStringValue(pick(row, 'periodLabel', 'period_label')) ?? '',
+    data_point_count: toInteger(pick(row, 'dataPointCount', 'data_point_count')),
+    metrics,
+  };
+}
+
+function normalizeMonitoringIssue(value: unknown): DashboardMonitoringIssue | undefined {
+  const row = value && typeof value === 'object' ? (value as UnknownRecord) : null;
+  if (!row) return undefined;
+  const id = toStringValue(row.id) ?? toStringValue(pick(row, 'monitoringRunId', 'monitoring_run_id'));
+  if (!id) return undefined;
+  return {
+    id,
+    type: toStringValue(row.type) ?? 'failed',
+    status: toStringValue(row.status) ?? '',
+    title: toStringValue(row.title) ?? '自动监测异常',
+    error_stage: toStringValue(pick(row, 'errorStage', 'error_stage')) ?? null,
+    error_message: toStringValue(pick(row, 'errorMessage', 'error_message')) ?? null,
+    monitor_mode: normalizeMonitorMode(pick(row, 'monitorMode', 'monitor_mode')),
+    monitoring_plan_id: toStringValue(pick(row, 'monitoringPlanId', 'monitoring_plan_id')) ?? null,
+    monitoring_run_id: toStringValue(pick(row, 'monitoringRunId', 'monitoring_run_id')) ?? id,
+    plan_title: toStringValue(pick(row, 'planTitle', 'plan_title')) ?? null,
+    question_count: toInteger(pick(row, 'questionCount', 'question_count')),
+    endpoint_ids: normalizeStringArray(pick(row, 'endpointIds', 'endpoint_ids')) ?? [],
+    endpoint_labels: normalizeStringArray(pick(row, 'endpointLabels', 'endpoint_labels')) ?? [],
+    question_set_ids: normalizeStringArray(pick(row, 'questionSetIds', 'question_set_ids')) ?? [],
+    created_at: toStringValue(pick(row, 'createdAt', 'created_at')) ?? null,
+    updated_at: toStringValue(pick(row, 'updatedAt', 'updated_at')) ?? null,
+  };
+}
+
+function normalizeTodoItems(value: unknown): DashboardTodoItem[] {
+  if (!Array.isArray(value)) return [];
+  const items: DashboardTodoItem[] = [];
+  for (const item of value) {
+    const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
+    if (!row) continue;
+    const id = toStringValue(row.id) ?? toStringValue(pick(row, 'refId', 'ref_id'));
+    const title = toStringValue(row.title);
+    if (!id || !title) continue;
+    items.push({
+      id,
+      kind: toStringValue(row.kind) ?? id,
+      priority: toInteger(row.priority),
+      title,
+      description: toStringValue(row.description) ?? '',
+      action: toStringValue(row.action) ?? '',
+      action_label: toStringValue(pick(row, 'actionLabel', 'action_label')) ?? '',
+      monitor_mode: normalizeMonitorMode(pick(row, 'monitorMode', 'monitor_mode')),
+      monitoring_plan_id: toStringValue(pick(row, 'monitoringPlanId', 'monitoring_plan_id')) ?? null,
+      ref_id: toStringValue(pick(row, 'refId', 'ref_id')) ?? null,
+      report_created_at: toStringValue(pick(row, 'reportCreatedAt', 'report_created_at')) ?? null,
+    });
+  }
+  return items.sort((a, b) => a.priority - b.priority);
 }
 
 function normalizeSourceTypes(value: unknown): DashboardCitationSourceType[] {
@@ -273,10 +433,13 @@ function normalizePlatformDiagnosis(value: unknown): DashboardPlatformDiagnosisR
   for (const item of value) {
     const row = item && typeof item === 'object' ? (item as UnknownRecord) : null;
     if (!row) continue;
-    const platform = toStringValue(row.platform) ?? '';
+    const fetchMethod = toStringValue(pick(row, 'fetchMethod', 'fetch_method'));
+    const platform = normalizeAiSourceDisplayName(toStringValue(row.platform), fetchMethod);
     if (!platform) continue;
     rows.push({
       platform,
+      platform_id: toStringValue(pick(row, 'platformId', 'platform_id')),
+      fetch_method: fetchMethod,
       status: normalizePlatformStatus(pick(row, 'status')),
       answer_count: toInteger(pick(row, 'answerCount', 'answer_count')),
       brand_mention_count: toInteger(pick(row, 'brandMentionCount', 'brand_mention_count')),
@@ -306,7 +469,7 @@ function normalizeRisks(value: unknown): DashboardHomeRiskCard[] {
     rows.push({
       title,
       level: normalizeRiskLevel(pick(row, 'level', 'severity')),
-      platform: toStringValue(row.platform),
+      platform: normalizeAiSourceDisplayName(toStringValue(row.platform)),
       evidence: toStringValue(pick(row, 'evidence', 'reason')),
     });
   }
@@ -381,7 +544,12 @@ export function buildDashboardHomeData(value: unknown): DashboardHomeData | unde
     summary: {
       headline: toStringValue(summary.headline) ?? '',
     },
-    latest_report: normalizeLatestReport(row.latestReport),
+    latest_report: normalizeLatestReport(pick(row, 'latestReport', 'latest_report')),
+    monitoring_plan: normalizeMonitoringPlan(pick(row, 'monitoringPlan', 'monitoring_plan')),
+    period_summary: normalizePeriodSummary(pick(row, 'periodSummary', 'period_summary')),
+    data_point_count: toInteger(pick(row, 'dataPointCount', 'data_point_count')),
+    recent_issue: normalizeMonitoringIssue(pick(row, 'recentIssue', 'recent_issue')),
+    todo_items: normalizeTodoItems(pick(row, 'todoItems', 'todo_items')),
     metrics: normalizeMetrics(row.metrics),
     word_cloud: normalizeWordCloud(pick(row, 'wordCloud', 'word_cloud')),
     platform_diagnosis: normalizePlatformDiagnosis(pick(row, 'platformDiagnosis', 'platform_diagnosis')),

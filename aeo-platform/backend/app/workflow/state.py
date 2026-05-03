@@ -341,6 +341,16 @@ class AgentState(TypedDict):
     headless_mode: Annotated[
         bool, _last_bool
     ]  # True when running from scheduler without user interaction
+    dashboard_context: dict | None
+    latest_question_set_id: str | None
+    latest_monitoring_plan_id: str | None
+    monitoring_schedule_id: str | None
+    monitoring_plan_id: str | None
+    monitoring_plan: dict | None
+    question_set_ids: list | None
+    endpoint_ids: list | None
+    pending_question_set_confirmation: Annotated[dict | None, _merge_error_info]
+    run_policy: str | None
 
     # =========================================================================
     # Baseline Analysis (Issue #4, Phase 4a)

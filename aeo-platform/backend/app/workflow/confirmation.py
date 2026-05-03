@@ -25,6 +25,9 @@ _KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
     "run_answer_fetch": "先执行答案抓取",
     "run_supplemental_fetch": "补采上一轮失败项",
     "run_analysis_report": "重新生成分析报告",
+    "confirm_question_set_enable_quick": "确认并启用快速监测",
+    "append_question_set_questions": "继续补充问题",
+    "decline_question_set_enable": "暂不启用",
 }
 
 TABLE_IMPORT_QUESTION_LIST_ARTIFACT_KIND = "table_import_question_list"

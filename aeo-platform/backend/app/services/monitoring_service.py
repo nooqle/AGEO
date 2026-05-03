@@ -10,7 +10,6 @@ from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.constants import PlatformConstants
 from app.models.monitoring_schedule import (
     MonitoringSchedule,
     ScheduleFrequency,
@@ -29,11 +28,13 @@ class MonitoringService:
 
     MAX_SCHEDULES_PER_USER = 10
     MAX_SCHEDULES_GLOBAL = 100
-    DEFAULT_PLATFORMS = ["doubao", "yuanbao", "kimi"]
+    DEFAULT_PLATFORMS = ["doubao", "yuanbao", "kimi", "deepseek"]
     MONITORING_PLATFORM_ALIASES = {
         "hunyuan": "yuanbao",
     }
-    SUPPORTED_PLATFORM_SET = frozenset({"doubao", "yuanbao", "hunyuan", "kimi"})
+    SUPPORTED_PLATFORM_SET = frozenset(
+        {"doubao", "yuanbao", "hunyuan", "kimi", "deepseek"}
+    )
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -56,6 +57,12 @@ class MonitoringService:
         max_runs: int | None = None,
         end_date: datetime | None = None,
         status: ScheduleStatus = ScheduleStatus.ACTIVE,
+        monitor_mode: str = "panorama",
+        question_set_ids: list[str] | None = None,
+        endpoint_ids: list[str] | None = None,
+        run_policy: str = "quick",
+        monitoring_plan_id: UUID | None = None,
+        baseline_data: dict | None = None,
     ) -> MonitoringSchedule:
         """Create a new monitoring schedule.
 
@@ -81,13 +88,25 @@ class MonitoringService:
                 "Please try again later."
             )
 
-        # Check duplicate: no other ACTIVE schedule for this entity
-        existing = await self.get_entity_active_schedule(entity_id)
-        if existing is not None:
-            raise ValueError(
-                "An active schedule already exists for this entity. "
-                "Pause or delete the existing schedule first."
+        # Legacy schedules remain one-active-per-entity/mode. Plan-backed
+        # schedules are independent so each active plan can own its schedule.
+        if monitoring_plan_id is None:
+            existing = await self.get_entity_active_schedule(
+                entity_id,
+                monitor_mode=monitor_mode,
             )
+            if existing is not None:
+                raise ValueError(
+                    "An active schedule already exists for this entity. "
+                    "Pause or delete the existing schedule first."
+                )
+        else:
+            existing = await self.get_plan_active_schedule(monitoring_plan_id)
+            if existing is not None:
+                raise ValueError(
+                    "An active schedule already exists for this monitoring plan. "
+                    "Pause or update the existing schedule first."
+                )
 
         normalized_platforms = self._normalize_platforms(
             platforms, use_default_when_missing=True
@@ -105,12 +124,18 @@ class MonitoringService:
             preferred_hour=preferred_hour,
             timezone=timezone_str,
             platforms=normalized_platforms,
+            monitor_mode=monitor_mode,
+            question_set_ids=question_set_ids,
+            endpoint_ids=endpoint_ids,
+            run_policy=run_policy,
+            monitoring_plan_id=monitoring_plan_id,
             alert_on_significant_change=alert_on_significant_change,
             alert_threshold_bwvs=alert_threshold_bwvs,
             max_runs=max_runs,
             end_date=end_date,
             next_run_at=next_run,
             status=status,
+            baseline_data=baseline_data,
         )
         self.db.add(schedule)
         await self.db.commit()
@@ -151,13 +176,32 @@ class MonitoringService:
         return result.scalar_one_or_none()
 
     async def get_entity_active_schedule(
-        self, entity_id: UUID
+        self, entity_id: UUID, monitor_mode: str | None = None
     ) -> MonitoringSchedule | None:
-        """Get the active schedule for an entity (at most one)."""
+        """Get the active schedule for an entity and optional monitoring mode."""
+        conditions = [
+            MonitoringSchedule.entity_id == entity_id,
+            MonitoringSchedule.status == ScheduleStatus.ACTIVE,
+        ]
+        if monitor_mode:
+            conditions.append(MonitoringSchedule.monitor_mode == monitor_mode)
+        stmt = (
+            select(MonitoringSchedule)
+            .where(*conditions)
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_plan_active_schedule(
+        self,
+        monitoring_plan_id: UUID,
+    ) -> MonitoringSchedule | None:
+        """Get the active schedule owned by a monitoring plan."""
         stmt = (
             select(MonitoringSchedule)
             .where(
-                MonitoringSchedule.entity_id == entity_id,
+                MonitoringSchedule.monitoring_plan_id == monitoring_plan_id,
                 MonitoringSchedule.status == ScheduleStatus.ACTIVE,
             )
             .limit(1)
@@ -171,6 +215,7 @@ class MonitoringService:
         *,
         entity_id: UUID | None = None,
         status: ScheduleStatus | None = None,
+        monitor_mode: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[MonitoringSchedule], int]:
@@ -180,6 +225,8 @@ class MonitoringService:
             conditions.append(MonitoringSchedule.entity_id == entity_id)
         if status is not None:
             conditions.append(MonitoringSchedule.status == status)
+        if monitor_mode is not None:
+            conditions.append(MonitoringSchedule.monitor_mode == monitor_mode)
 
         count_stmt = (
             select(func.count()).select_from(MonitoringSchedule).where(*conditions)
@@ -205,6 +252,7 @@ class MonitoringService:
         *,
         entity_id: UUID | None = None,
         status: ScheduleStatus | None = None,
+        monitor_mode: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[MonitoringSchedule], int]:
@@ -213,6 +261,8 @@ class MonitoringService:
             conditions.append(MonitoringSchedule.entity_id == entity_id)
         if status is not None:
             conditions.append(MonitoringSchedule.status == status)
+        if monitor_mode is not None:
+            conditions.append(MonitoringSchedule.monitor_mode == monitor_mode)
 
         count_stmt = (
             select(func.count()).select_from(MonitoringSchedule).where(*conditions)
@@ -689,7 +739,7 @@ class MonitoringService:
                 normalized.append(platform)
 
         if invalid:
-            supported = ", ".join(["doubao", "yuanbao", "kimi"])
+            supported = ", ".join(["doubao", "yuanbao", "kimi", "deepseek"])
             raise ValueError(
                 "Unsupported monitoring platforms: "
                 f"{', '.join(invalid)}. Must be one of: {supported}"

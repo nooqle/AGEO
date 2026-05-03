@@ -15,6 +15,7 @@ from app.api.deps import get_current_user, get_db
 from app.models.snapshot import AnalysisSnapshot
 from app.models.monitoring_schedule import ScheduleFrequency, ScheduleStatus
 from app.services.entity_service import EntityService
+from app.services.monitoring_plan_service import MonitoringPlanService
 from app.services.monitoring_service import MonitoringService
 from app.services.access_scope_service import AccessScopeService
 from app.services.task_service import task_to_dict
@@ -41,6 +42,11 @@ class CreateScheduleRequest(BaseModel):
     alert_on_significant_change: bool = True
     alert_threshold_bwvs: float = 10.0
     max_runs: int | None = None
+    monitor_mode: str = "panorama"
+    question_set_ids: list[str] | None = None
+    endpoint_ids: list[str] | None = None
+    run_policy: str = "quick"
+    monitoring_plan_id: str | None = None
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -53,6 +59,49 @@ class UpdateScheduleRequest(BaseModel):
     platforms: list[str] | None = None
     alert_on_significant_change: bool | None = None
     alert_threshold_bwvs: float | None = None
+    monitor_mode: str | None = None
+    question_set_ids: list[str] | None = None
+    endpoint_ids: list[str] | None = None
+    run_policy: str | None = None
+
+
+class CreateQuestionSetRequest(BaseModel):
+    entity_id: str
+    monitor_mode: str = "panorama"
+    title: str | None = None
+    questions: list[Any]
+    source: str = "chat_generated"
+    source_session_id: str | None = None
+    source_task_id: str | None = None
+    extra_metadata: dict[str, Any] | None = None
+
+
+class AppendQuestionSetRequest(BaseModel):
+    questions: list[Any]
+
+
+class CreateMonitoringPlanRequest(BaseModel):
+    entity_id: str
+    monitor_mode: str = "panorama"
+    question_set_ids: list[str]
+    endpoint_ids: list[str] | None = None
+    run_policy: str = "quick"
+    status: str = "draft"
+    frequency: str = "weekly"
+    preferred_hour: int = Field(default=3, ge=0, le=23)
+    timezone: str = "Asia/Shanghai"
+    title: str | None = None
+
+
+class UpdateMonitoringPlanRequest(BaseModel):
+    question_set_ids: list[str] | None = None
+    endpoint_ids: list[str] | None = None
+    run_policy: str | None = None
+    status: str | None = None
+    frequency: str | None = None
+    preferred_hour: int | None = Field(default=None, ge=0, le=23)
+    timezone: str | None = None
+    title: str | None = None
 
 
 def _parse_uuid(value: str, field_name: str = "id") -> UUID:
@@ -128,6 +177,16 @@ def schedule_to_dict(schedule) -> dict[str, Any]:
         "preferred_hour": schedule.preferred_hour,
         "timezone": schedule.timezone,
         "platforms": normalized_platforms or None,
+        "monitor_mode": schedule.monitor_mode or "panorama",
+        "question_set_ids": schedule.question_set_ids or [],
+        "endpoint_ids": schedule.endpoint_ids or [],
+        "endpoint_labels": MonitoringPlanService.endpoint_ids_to_labels(
+            schedule.endpoint_ids or []
+        ),
+        "run_policy": schedule.run_policy or "quick",
+        "monitoring_plan_id": (
+            str(schedule.monitoring_plan_id) if schedule.monitoring_plan_id else None
+        ),
         "alert_on_significant_change": schedule.alert_on_significant_change,
         "alert_threshold_bwvs": schedule.alert_threshold_bwvs,
         "has_baseline": has_baseline,
@@ -156,6 +215,312 @@ def schedule_to_dict(schedule) -> dict[str, Any]:
 # =========================================================================
 # Endpoints
 # =========================================================================
+
+
+@router.get("/endpoints")
+async def get_monitoring_endpoints():
+    """Return user-facing AI source options for monitoring plans."""
+    return {
+        "endpoints": MonitoringPlanService.endpoint_catalog(),
+        "quick_endpoint_ids": [
+            "doubao_api",
+            "yuanbao_api",
+            "kimi_api",
+            "deepseek_browser",
+        ],
+    }
+
+
+@router.post("/question-sets")
+async def create_question_set(
+    body: CreateQuestionSetRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity_id = _parse_uuid(body.entity_id, "entity_id")
+    entity_service = EntityService(db)
+    entity_model = await entity_service.get_entity_model(str(entity_id), current_user)
+    if entity_model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
+    if not AccessScopeService.can_manage_entity(entity_model, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="仅品牌创建者或内部管理员可创建问题集",
+        )
+    service = MonitoringPlanService(db)
+    try:
+        question_set = await service.create_question_set(
+            user_id=current_user.id,
+            entity_id=entity_id,
+            monitor_mode=body.monitor_mode,
+            title=body.title,
+            questions=body.questions,
+            source=body.source,
+            source_session_id=(
+                _parse_uuid(body.source_session_id, "source_session_id")
+                if body.source_session_id
+                else None
+            ),
+            source_task_id=(
+                _parse_uuid(body.source_task_id, "source_task_id")
+                if body.source_task_id
+                else None
+            ),
+            extra_metadata=body.extra_metadata,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"question_set": await service.question_set_to_dict(question_set)}
+
+
+@router.get("/question-sets")
+async def list_question_sets(
+    entity_id: str | None = Query(None),
+    monitor_mode: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=100),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    eid = _parse_uuid(entity_id, "entity_id") if entity_id else None
+    service = MonitoringPlanService(db)
+    try:
+        question_sets = await service.list_question_sets(
+            user_id=current_user.id,
+            entity_id=eid,
+            monitor_mode=monitor_mode,
+            status=status_filter,
+            limit=limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {
+        "question_sets": [
+            await service.question_set_to_dict(item) for item in question_sets
+        ],
+        "total": len(question_sets),
+    }
+
+
+@router.post("/question-sets/{question_set_id}/append")
+async def append_question_set_questions(
+    question_set_id: str,
+    body: AppendQuestionSetRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    try:
+        question_set = await service.append_questions(
+            question_set_id=_parse_uuid(question_set_id, "question_set_id"),
+            user_id=current_user.id,
+            questions=body.questions,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"question_set": await service.question_set_to_dict(question_set)}
+
+
+@router.post("/question-sets/{question_set_id}/confirm")
+async def confirm_question_set(
+    question_set_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    try:
+        question_set = await service.confirm_question_set(
+            question_set_id=_parse_uuid(question_set_id, "question_set_id"),
+            user_id=current_user.id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"question_set": await service.question_set_to_dict(question_set)}
+
+
+@router.post("/plans")
+async def create_monitoring_plan(
+    body: CreateMonitoringPlanRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity_id = _parse_uuid(body.entity_id, "entity_id")
+    entity_service = EntityService(db)
+    entity_model = await entity_service.get_entity_model(str(entity_id), current_user)
+    if entity_model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
+    if not AccessScopeService.can_manage_entity(entity_model, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="仅品牌创建者或内部管理员可创建监测计划",
+        )
+    service = MonitoringPlanService(db)
+    try:
+        plan = await service.create_plan(
+            user_id=current_user.id,
+            entity_id=entity_id,
+            monitor_mode=body.monitor_mode,
+            question_set_ids=[
+                _parse_uuid(item, "question_set_id") for item in body.question_set_ids
+            ],
+            endpoint_ids=body.endpoint_ids,
+            run_policy=body.run_policy,
+            status=body.status,
+            frequency=body.frequency,
+            preferred_hour=body.preferred_hour,
+            timezone_str=body.timezone,
+            title=body.title,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"plan": await service.plan_to_dict(plan)}
+
+
+@router.get("/plans")
+async def list_monitoring_plans(
+    entity_id: str | None = Query(None),
+    monitor_mode: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    plans = await service.list_plans(
+        user_id=current_user.id,
+        entity_id=_parse_uuid(entity_id, "entity_id") if entity_id else None,
+        monitor_mode=monitor_mode,
+        limit=limit,
+    )
+    return {"plans": [await service.plan_to_dict(item) for item in plans]}
+
+
+@router.get("/plans/entity/{entity_id}")
+async def get_entity_monitoring_plan(
+    entity_id: str,
+    monitor_mode: str = Query("panorama"),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    try:
+        plan = await service.get_entity_plan(
+            user_id=current_user.id,
+            entity_id=_parse_uuid(entity_id, "entity_id"),
+            monitor_mode=monitor_mode,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"plan": await service.plan_to_dict(plan) if plan else None}
+
+
+@router.get("/plans/{plan_id}")
+async def get_monitoring_plan(
+    plan_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    plan = await service.get_plan(_parse_uuid(plan_id, "plan_id"), user_id=current_user.id)
+    if plan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+    return {"plan": await service.plan_to_dict(plan)}
+
+
+@router.patch("/plans/{plan_id}")
+async def update_monitoring_plan(
+    plan_id: str,
+    body: UpdateMonitoringPlanRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    try:
+        plan = await service.update_plan(
+            plan_id=_parse_uuid(plan_id, "plan_id"),
+            user_id=current_user.id,
+            question_set_ids=(
+                [_parse_uuid(item, "question_set_id") for item in body.question_set_ids]
+                if body.question_set_ids is not None
+                else None
+            ),
+            endpoint_ids=body.endpoint_ids,
+            run_policy=body.run_policy,
+            status=body.status,
+            frequency=body.frequency,
+            preferred_hour=body.preferred_hour,
+            timezone_str=body.timezone,
+            title=body.title,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"plan": await service.plan_to_dict(plan)}
+
+
+@router.post("/plans/{plan_id}/activate")
+async def activate_monitoring_plan(
+    plan_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    try:
+        plan = await service.activate_plan(
+            plan_id=_parse_uuid(plan_id, "plan_id"),
+            user_id=current_user.id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"plan": await service.plan_to_dict(plan)}
+
+
+@router.post("/plans/{plan_id}/pause")
+async def pause_monitoring_plan(
+    plan_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    try:
+        plan = await service.pause_plan(
+            plan_id=_parse_uuid(plan_id, "plan_id"),
+            user_id=current_user.id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"plan": await service.plan_to_dict(plan)}
+
+
+@router.post("/plans/{plan_id}/runs")
+async def submit_monitoring_plan_run(
+    plan_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    try:
+        run = await service.submit_plan_run(
+            plan_id=_parse_uuid(plan_id, "plan_id"),
+            user_id=current_user.id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"run": await service.run_to_dict(run)}
+
+
+@router.get("/plans/{plan_id}/runs")
+async def list_monitoring_plan_runs(
+    plan_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    runs = await service.list_runs(
+        plan_id=_parse_uuid(plan_id, "plan_id"),
+        user_id=current_user.id,
+        limit=limit,
+    )
+    return {"runs": [await service.run_to_dict(item) for item in runs]}
 
 
 @router.post("/schedules")
@@ -192,6 +557,11 @@ async def create_schedule(
 
     service = MonitoringService(db)
     try:
+        monitoring_plan_id = (
+            _parse_uuid(body.monitoring_plan_id, "monitoring_plan_id")
+            if body.monitoring_plan_id
+            else None
+        )
         schedule = await service.create_schedule(
             user_id=current_user.id,
             entity_id=entity_id,
@@ -203,6 +573,13 @@ async def create_schedule(
             alert_on_significant_change=body.alert_on_significant_change,
             alert_threshold_bwvs=body.alert_threshold_bwvs,
             max_runs=body.max_runs,
+            monitor_mode=MonitoringPlanService.normalize_monitor_mode(
+                body.monitor_mode
+            ),
+            question_set_ids=body.question_set_ids,
+            endpoint_ids=body.endpoint_ids,
+            run_policy=body.run_policy,
+            monitoring_plan_id=monitoring_plan_id,
         )
     except ValueError as e:
         raise HTTPException(
@@ -341,6 +718,16 @@ async def update_schedule(
         update_kwargs["status"] = _parse_schedule_status(body.status)
     if body.platforms is not None:
         update_kwargs["platforms"] = body.platforms
+    if body.monitor_mode is not None:
+        update_kwargs["monitor_mode"] = MonitoringPlanService.normalize_monitor_mode(
+            body.monitor_mode
+        )
+    if body.question_set_ids is not None:
+        update_kwargs["question_set_ids"] = body.question_set_ids
+    if body.endpoint_ids is not None:
+        update_kwargs["endpoint_ids"] = body.endpoint_ids
+    if body.run_policy is not None:
+        update_kwargs["run_policy"] = body.run_policy
     if body.alert_on_significant_change is not None:
         update_kwargs["alert_on_significant_change"] = body.alert_on_significant_change
     if body.alert_threshold_bwvs is not None:

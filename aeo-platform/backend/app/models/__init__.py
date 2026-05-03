@@ -19,6 +19,17 @@ from app.models.monitoring_schedule import (
     ScheduleFrequency,
     ScheduleStatus,
 )
+from app.models.monitoring_plan import (
+    MonitoringEvidenceRecord,
+    MonitoringPlan,
+    MonitoringPlanStatus,
+    MonitoringQuestionSet,
+    MonitoringRun,
+    MonitoringRunPolicy,
+    MonitoringRunStatus,
+    QuestionSetSource,
+    QuestionSetStatus,
+)
 from app.models.organization import Organization, OrganizationStatus
 from app.models.registration_application import (
     RegistrationApplication,
@@ -107,6 +118,15 @@ __all__ = [
     "MonitoringSchedule",
     "ScheduleFrequency",
     "ScheduleStatus",
+    "MonitoringQuestionSet",
+    "QuestionSetStatus",
+    "QuestionSetSource",
+    "MonitoringPlan",
+    "MonitoringPlanStatus",
+    "MonitoringRun",
+    "MonitoringRunStatus",
+    "MonitoringRunPolicy",
+    "MonitoringEvidenceRecord",
     "MonitoringAlert",
     "AlertSeverity",
     "AlertStatus",

@@ -43,7 +43,9 @@ export function SessionCard({ session }: SessionCardProps) {
           className="w-1.5 h-1.5 rounded-full flex-shrink-0"
           style={{
             background: isActive ? 'var(--status-success)' : 'var(--text-muted)',
-            boxShadow: isActive ? '0 0 6px var(--color-secondary-glow)' : 'none',
+            boxShadow: isActive
+              ? '0 0 0 3px color-mix(in srgb, var(--status-success) 18%, transparent)'
+              : 'none',
           }}
         />
       </div>

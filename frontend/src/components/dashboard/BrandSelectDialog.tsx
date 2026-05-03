@@ -11,6 +11,7 @@ import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
+import { buildBrandMonitoringChatUrl } from '@/lib/dashboardChatEntry';
 import type { CreateEntityInput } from '@/types/entity';
 
 interface BrandSelectDialogProps {
@@ -68,10 +69,15 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
       const created = await api.createEntity(data);
       addEntity(created);
       setFormOpen(false);
-      // Auto-select the newly created brand
-      setSelectedId(created.id);
+      onClose();
+      const session = await api.getOrCreateSessionByEntity(created.id);
+      router.push(buildBrandMonitoringChatUrl({
+        sessionId: session.id,
+        entityId: created.id,
+        brandName: created.name || data.name,
+      }));
     } catch {
-      toast.error('品牌创建失败');
+      toast.error('品牌创建或打开 AI 对话失败');
     }
   };
 

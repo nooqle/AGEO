@@ -20,10 +20,6 @@ function ChatPageContent() {
   const isCreatingSessionRef = useRef(false);
   const queryEntityId = searchParams.get('entity_id') || undefined;
   const queryBrand = searchParams.get('brand') || undefined;
-  const queryArtifactId = searchParams.get('artifact_id') || undefined;
-  const queryOutputId = searchParams.get('output_id') || undefined;
-  const queryDraft = searchParams.get('draft') || undefined;
-  const queryAutoSend = searchParams.get('autosend') || undefined;
   const [resolvedEntityId, setResolvedEntityId] = useState<string | undefined>(
     () => queryEntityId
   );
@@ -67,22 +63,10 @@ function ChatPageContent() {
       }
       setResolvedEntityId(queryEntityId);
       if (fallback.id !== sessionId) {
-        const nextQuery = new URLSearchParams();
+        const nextQuery = new URLSearchParams(searchParams.toString());
         nextQuery.set('entity_id', queryEntityId);
         if (queryBrand) {
           nextQuery.set('brand', queryBrand);
-        }
-        if (queryArtifactId) {
-          nextQuery.set('artifact_id', queryArtifactId);
-        }
-        if (queryOutputId) {
-          nextQuery.set('output_id', queryOutputId);
-        }
-        if (queryDraft) {
-          nextQuery.set('draft', queryDraft);
-        }
-        if (queryAutoSend) {
-          nextQuery.set('autosend', queryAutoSend);
         }
         router.replace(`/chat/${fallback.id}?${nextQuery.toString()}`);
       }
@@ -126,7 +110,7 @@ function ChatPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [queryArtifactId, queryAutoSend, queryBrand, queryDraft, queryEntityId, queryOutputId, router, sessionId]);
+  }, [queryBrand, queryEntityId, router, searchParams, sessionId]);
 
   // Handle /chat/new - create a new session and redirect
   useEffect(() => {
@@ -143,7 +127,9 @@ function ChatPageContent() {
       api.getOrCreateSessionByEntity(entityId)
         .then((session) => {
           console.log('[ChatPage] Resolved session:', session.id);
-          router.replace(`/chat/${session.id}`);
+          const nextQuery = new URLSearchParams(searchParams.toString());
+          nextQuery.set('entity_id', entityId);
+          router.replace(`/chat/${session.id}?${nextQuery.toString()}`);
         })
         .catch((error) => {
           console.error('[ChatPage] Failed to create session:', error);

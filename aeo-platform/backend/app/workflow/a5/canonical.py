@@ -958,6 +958,7 @@ class AnswerRecord(BaseModel):
     question_id: str
     question_text: str
     platform: str
+    fetch_method: str | None = None
     status: Literal["ok", "missing"]
     answer_text: str | None = None
     answer_time: str | None = None
@@ -1520,6 +1521,24 @@ def build_input_bundle(
             if platform:
                 platforms_seen.add(platform)
             success = bool(platform_result.get("success"))
+            aio_packet = (
+                platform_result.get("aio_packet")
+                if isinstance(platform_result.get("aio_packet"), dict)
+                else {}
+            )
+            provenance = (
+                aio_packet.get("provenance")
+                if isinstance(aio_packet.get("provenance"), dict)
+                else {}
+            )
+            fetch_method = (
+                str(
+                    platform_result.get("fetch_method")
+                    or provenance.get("source_type")
+                    or ""
+                ).strip()
+                or None
+            )
             answer_payload = (
                 platform_result.get("answer")
                 if isinstance(platform_result.get("answer"), dict)
@@ -1640,6 +1659,7 @@ def build_input_bundle(
                     question_id=question_id,
                     question_text=question.question_text,
                     platform=platform or "unknown",
+                    fetch_method=fetch_method,
                     status="ok" if success else "missing",
                     answer_text=answer_text or None,
                     answer_time=datetime.now(timezone.utc).isoformat(),

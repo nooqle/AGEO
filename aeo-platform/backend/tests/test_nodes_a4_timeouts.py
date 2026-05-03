@@ -1,5 +1,7 @@
 import asyncio
 
+import httpx
+
 from app.core.constants import PlatformConstants
 from app.workflow import nodes_a4
 
@@ -91,6 +93,46 @@ async def test_browser_fetch_timeout_also_applies_to_aio_handlers() -> None:
 
     assert result["success"] is False
     assert result["error_type"] == "question_timeout"
+
+
+async def test_api_retry_fetch_converts_kimi_429_to_structured_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(nodes_a4.settings, "A4_KIMI_API_MAX_RETRIES", 0)
+
+    async def _rate_limited_fetch() -> dict[str, object]:
+        request = httpx.Request("POST", "https://api.moonshot.cn/v1/chat/completions")
+        response = httpx.Response(
+            429,
+            request=request,
+            json={
+                "error": {
+                    "type": "rate_limit_reached_error",
+                    "message": "try again after 7 seconds",
+                }
+            },
+        )
+        raise httpx.HTTPStatusError(
+            "Client error '429 Too Many Requests'",
+            request=request,
+            response=response,
+        )
+
+    result = await nodes_a4._retry_fetch(
+        _rate_limited_fetch,
+        platform="kimi",
+        method="api",
+    )
+
+    assert result["success"] is False
+    assert result["platform"] == "kimi"
+    assert result["platform_name"] == "Kimi"
+    assert result["error_type"] == "api_rate_limited"
+    assert result["provider_error_type"] == "rate_limit"
+    assert result["retry_after_seconds"] == 7.0
+    assert "api.moonshot.cn" not in result["error"]
+    assert "api.moonshot.cn" not in result["error_detail"]
+    assert "请求过于频繁" in result["error"]
 
 
 def test_supplemental_preserve_keeps_non_target_question_pairs() -> None:

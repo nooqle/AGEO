@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DashboardData, DashboardHomeData } from '@/types/dashboard';
+import type { DashboardData, DashboardHomeData, DashboardMonitorMode } from '@/types/dashboard';
 import { api } from '@/services/api';
 
 type DashboardDateRange = 'week' | 'month' | 'quarter';
@@ -9,6 +9,14 @@ function buildCacheKey(
   dateRange: DashboardDateRange,
 ): string {
   return `${selectedBrandId ?? 'all'}:${dateRange}`;
+}
+
+function buildHomeCacheKey(
+  selectedBrandId: string | null,
+  dateRange: DashboardDateRange,
+  monitorMode: DashboardMonitorMode,
+): string {
+  return `${selectedBrandId ?? 'all'}:${dateRange}:${monitorMode}`;
 }
 
 let activeDashboardRequestController: AbortController | null = null;
@@ -23,6 +31,7 @@ interface DashboardState {
   homeError: string | null;
   selectedBrandId: string | null;
   dateRange: DashboardDateRange;
+  homeMonitorMode: DashboardMonitorMode;
   cache: Record<string, DashboardData>;
   homeCache: Record<string, DashboardHomeData | null>;
   activeRequestId: number;
@@ -36,6 +45,7 @@ interface DashboardState {
   setHomeError: (error: string | null) => void;
   setSelectedBrandId: (id: string | null) => void;
   setDateRange: (range: DashboardDateRange) => void;
+  setHomeMonitorMode: (mode: DashboardMonitorMode) => void;
   fetchData: () => Promise<void>;
   fetchHome: () => Promise<void>;
   reset: () => void;
@@ -50,6 +60,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   homeError: null,
   selectedBrandId: null,
   dateRange: 'month',
+  homeMonitorMode: 'panorama',
   cache: {},
   homeCache: {},
   activeRequestId: 0,
@@ -70,7 +81,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }),
   setHome: (home) =>
     set((state) => {
-      const cacheKey = buildCacheKey(state.selectedBrandId, state.dateRange);
+      const cacheKey = buildHomeCacheKey(
+        state.selectedBrandId,
+        state.dateRange,
+        state.homeMonitorMode,
+      );
       return {
         home,
         isHomeLoading: false,
@@ -87,11 +102,18 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   setHomeError: (homeError) => set({ homeError, isHomeLoading: false }),
   setSelectedBrandId: (selectedBrandId) =>
     set((state) => {
+      const homeMonitorMode: DashboardMonitorMode = 'panorama';
       const cacheKey = buildCacheKey(selectedBrandId, state.dateRange);
+      const homeCacheKey = buildHomeCacheKey(
+        selectedBrandId,
+        state.dateRange,
+        homeMonitorMode,
+      );
       return {
         selectedBrandId,
+        homeMonitorMode,
         data: state.cache[cacheKey] ?? null,
-        home: state.homeCache[cacheKey] ?? null,
+        home: state.homeCache[homeCacheKey] ?? null,
         error: null,
         homeError: null,
       };
@@ -99,11 +121,34 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   setDateRange: (dateRange) =>
     set((state) => {
       const cacheKey = buildCacheKey(state.selectedBrandId, dateRange);
+      const homeCacheKey = buildHomeCacheKey(
+        state.selectedBrandId,
+        dateRange,
+        state.homeMonitorMode,
+      );
       return {
         dateRange,
         data: state.cache[cacheKey] ?? null,
-        home: state.homeCache[cacheKey] ?? null,
+        home: state.homeCache[homeCacheKey] ?? null,
         error: null,
+        homeError: null,
+      };
+    }),
+  setHomeMonitorMode: (homeMonitorMode) =>
+    set((state) => {
+      const homeCacheKey = buildHomeCacheKey(
+        state.selectedBrandId,
+        state.dateRange,
+        homeMonitorMode,
+      );
+      const hasCachedHome = Object.prototype.hasOwnProperty.call(
+        state.homeCache,
+        homeCacheKey,
+      );
+      return {
+        homeMonitorMode,
+        home: state.homeCache[homeCacheKey] ?? null,
+        isHomeLoading: !hasCachedHome,
         homeError: null,
       };
     }),
@@ -167,8 +212,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   fetchHome: async () => {
-    const { selectedBrandId, dateRange, homeCache, activeHomeRequestId } = get();
-    const cacheKey = buildCacheKey(selectedBrandId, dateRange);
+    const {
+      selectedBrandId,
+      dateRange,
+      homeMonitorMode,
+      homeCache,
+      activeHomeRequestId,
+    } = get();
+    const cacheKey = buildHomeCacheKey(selectedBrandId, dateRange, homeMonitorMode);
     const requestId = activeHomeRequestId + 1;
     const cachedHome = homeCache[cacheKey] ?? null;
     activeDashboardHomeRequestController?.abort();
@@ -183,6 +234,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       const home = await api.getDashboardHomeSummary(
         selectedBrandId || undefined,
+        homeMonitorMode,
+        dateRange,
         { signal: controller.signal },
       );
       const latest = get();
@@ -190,7 +243,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         activeDashboardHomeRequestController !== controller ||
         latest.activeHomeRequestId !== requestId ||
         latest.selectedBrandId !== selectedBrandId ||
-        latest.dateRange !== dateRange
+        latest.dateRange !== dateRange ||
+        latest.homeMonitorMode !== homeMonitorMode
       ) {
         return;
       }
@@ -211,7 +265,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       const latest = get();
       if (
         activeDashboardHomeRequestController !== controller ||
-        latest.activeHomeRequestId !== requestId
+        latest.activeHomeRequestId !== requestId ||
+        latest.selectedBrandId !== selectedBrandId ||
+        latest.dateRange !== dateRange ||
+        latest.homeMonitorMode !== homeMonitorMode
       ) {
         return;
       }
@@ -234,6 +291,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       error: null,
       selectedBrandId: null,
       dateRange: 'month',
+      homeMonitorMode: 'panorama',
       cache: {},
       activeRequestId: 0,
       activeHomeRequestId: 0,

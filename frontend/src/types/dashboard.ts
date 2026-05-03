@@ -334,12 +334,17 @@ export interface DashboardMonitoringEntry {
   cta_label: string;
 }
 
+export type DashboardMonitorMode = 'panorama' | 'scenario';
+
 export interface DashboardHomeMetric {
   id: string;
   label: string;
   value: number | null;
   format: 'percent' | 'rank' | 'count';
   subtitle?: string;
+  data_point_count?: number;
+  average_value?: number | null;
+  change_absolute?: number | null;
 }
 
 export interface DashboardLatestReport {
@@ -347,6 +352,11 @@ export interface DashboardLatestReport {
   subtitle?: string;
   report_kind?: string | null;
   report_kind_label?: string | null;
+  scope_label?: string | null;
+  scope_description?: string | null;
+  question_set_label?: string | null;
+  sample_summary?: string | null;
+  question_preview?: string[];
   badge_label?: string | null;
   triggered_by?: string | null;
   session_id?: string;
@@ -410,6 +420,8 @@ export type DashboardPlatformDiagnosisStatus = 'good' | 'watch' | 'risk' | 'unkn
 
 export interface DashboardPlatformDiagnosisRow {
   platform: string;
+  platform_id?: string | null;
+  fetch_method?: string | null;
   status: DashboardPlatformDiagnosisStatus;
   answer_count: number;
   brand_mention_count: number;
@@ -447,11 +459,92 @@ export interface DashboardSourceStructure {
   top_domains: DashboardCitationDomain[];
 }
 
+export interface DashboardMonitoringPlanSummary {
+  id: string;
+  status: 'draft' | 'active' | 'paused' | 'archived';
+  monitor_mode: DashboardMonitorMode;
+  title: string;
+  question_set_ids: string[];
+  question_set_label: string;
+  question_count: number;
+  endpoint_ids: string[];
+  endpoint_labels: string[];
+  run_policy: 'quick' | 'full_browser' | 'manual';
+  frequency?: string;
+  schedule_id?: string | null;
+  schedule_status?: string | null;
+}
+
+export interface DashboardPeriodMetricSummary {
+  id: string;
+  label: string;
+  metric: string;
+  data_point_count: number;
+  current_value: number | null;
+  previous_value: number | null;
+  average_value: number | null;
+  change_absolute: number | null;
+  change_percentage: number | null;
+  direction: string | null;
+  points: DashboardBoardTrendPoint[];
+}
+
+export interface DashboardPeriodSummary {
+  date_range_days: number;
+  period_label: string;
+  data_point_count: number;
+  metrics: DashboardPeriodMetricSummary[];
+}
+
+export interface DashboardMonitoringIssue {
+  id: string;
+  type: 'failed' | 'stale' | string;
+  status: string;
+  title: string;
+  error_stage?: string | null;
+  error_message?: string | null;
+  monitor_mode: DashboardMonitorMode;
+  monitoring_plan_id?: string | null;
+  monitoring_run_id?: string | null;
+  plan_title?: string | null;
+  question_count: number;
+  endpoint_ids: string[];
+  endpoint_labels: string[];
+  question_set_ids: string[];
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export type DashboardTodoKind =
+  | 'analysis_setup_incomplete'
+  | 'monitoring_plan_incomplete'
+  | 'unread_latest_report'
+  | string;
+
+export interface DashboardTodoItem {
+  id: string;
+  kind: DashboardTodoKind;
+  priority: number;
+  title: string;
+  description: string;
+  action: 'ai_conversation' | 'setup_plan' | 'latest_report' | string;
+  action_label: string;
+  monitor_mode: DashboardMonitorMode;
+  monitoring_plan_id?: string | null;
+  ref_id?: string | null;
+  report_created_at?: string | null;
+}
+
 export interface DashboardHomeData {
   summary: {
     headline: string;
   };
   latest_report?: DashboardLatestReport;
+  monitoring_plan?: DashboardMonitoringPlanSummary;
+  period_summary?: DashboardPeriodSummary;
+  data_point_count?: number;
+  recent_issue?: DashboardMonitoringIssue;
+  todo_items?: DashboardTodoItem[];
   metrics?: DashboardHomeMetric[];
   word_cloud?: DashboardEmotionWordCloud;
   platform_diagnosis?: DashboardPlatformDiagnosisRow[];

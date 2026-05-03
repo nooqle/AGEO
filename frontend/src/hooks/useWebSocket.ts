@@ -66,7 +66,7 @@ interface AttachmentRefPayload {
 interface QueuedUserMessage {
   clientMessageId: string;
   content: string;
-  context?: Array<{ id: string; type: string; label: string }>;
+  context?: Array<{ id: string; type: string; label: string; data?: Record<string, unknown> }>;
   attachments?: AttachmentRefPayload[];
   tool_mode?: ToolMode;
 }
@@ -1214,7 +1214,7 @@ export function useWebSocket(sessionId: string | null) {
   // Send user message
   const sendMessage = useCallback((
     content: string,
-    context?: Array<{ id: string; type: string; label: string }>,
+    context?: Array<{ id: string; type: string; label: string; data?: Record<string, unknown> }>,
     attachments?: Attachment[],
     toolMode?: ToolMode | null,
   ) => {

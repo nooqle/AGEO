@@ -449,6 +449,16 @@ async def a5_analytics_node(state: AgentState) -> Command:
             if state.get("headless_mode") or state.get("monitoring_schedule_id")
             else "manual"
         )
+        monitoring_metadata = {
+            "monitoring_schedule_id": state.get("monitoring_schedule_id"),
+            "monitoring_plan_id": state.get("monitoring_plan_id"),
+            "question_set_ids": state.get("question_set_ids") or [],
+            "endpoint_ids": state.get("endpoint_ids") or [],
+            "run_policy": state.get("run_policy"),
+        }
+        monitoring_metadata = {
+            key: value for key, value in monitoring_metadata.items() if value
+        }
 
         # --- Snapshot writing + Delta vs previous (single DB session) ---
         is_degraded = report_data.get("_degraded", False)
@@ -471,6 +481,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
                         is_degraded=is_degraded,
                         triggered_by=triggered_by,
                         snapshot_type="panorama" if is_baseline else "scenario",
+                        monitoring_metadata=monitoring_metadata or None,
                     )
                     logger.info(
                         "[A5] Snapshot created: id=%s, bwvs=%.1f",
@@ -534,6 +545,7 @@ async def a5_analytics_node(state: AgentState) -> Command:
             "competitors": competitor_metrics,
             "delta_vs_previous": delta_vs_previous,
             "triggered_by": triggered_by,
+            "monitoring": monitoring_metadata or None,
         }
         artifact_message_id = await save_and_send_artifact(
             session_id=session_id,

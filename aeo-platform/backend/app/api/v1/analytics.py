@@ -212,17 +212,75 @@ async def get_sources_v2(
 @router.get("/v2/dashboard-home")
 async def get_dashboard_home_v2(
     brand_id: str | None = Query(None),
+    monitor_mode: str | None = Query(None),
+    date_range: str = Query("month"),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Get Dashboard homepage three-board aggregate data."""
+    allowed_monitor_modes = {
+        "panorama",
+        "panorama_monitoring",
+        "baseline",
+        "scenario",
+        "scenario_monitoring",
+        "persona",
+    }
+    if monitor_mode and monitor_mode not in allowed_monitor_modes:
+        raise HTTPException(status_code=400, detail="Invalid monitor_mode")
     await _ensure_brand_access(brand_id, db=db, current_user=current_user)
     service = AnalyticsService(
         db,
         viewer=current_user,
         allow_internal_admin_bypass=False,
     )
-    return await service.get_dashboard_home_v2(brand_id)
+    return await service.get_dashboard_home_v2(
+        brand_id,
+        monitor_mode=monitor_mode,
+        date_range=date_range,
+    )
+
+
+@router.get("/v2/monitoring-trends")
+async def get_monitoring_trends_v2(
+    brand_id: str = Query(...),
+    monitor_mode: str | None = Query(None),
+    metric: str = Query("mention_rate"),
+    group_by: str = Query("overall"),
+    endpoint_id: str | None = Query(None),
+    question_set_id: str | None = Query(None),
+    date_range: str = Query("month"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Get monitoring trend series grouped by overall, AI source, or question set."""
+    allowed_monitor_modes = {
+        "panorama",
+        "panorama_monitoring",
+        "baseline",
+        "scenario",
+        "scenario_monitoring",
+        "persona",
+    }
+    if monitor_mode and monitor_mode not in allowed_monitor_modes:
+        raise HTTPException(status_code=400, detail="Invalid monitor_mode")
+    if group_by not in {"overall", "endpoint", "question_set"}:
+        raise HTTPException(status_code=400, detail="Invalid group_by")
+    await _ensure_brand_access(brand_id, db=db, current_user=current_user)
+    service = AnalyticsService(
+        db,
+        viewer=current_user,
+        allow_internal_admin_bypass=False,
+    )
+    return await service.get_monitoring_trends_v2(
+        brand_id=brand_id,
+        monitor_mode=monitor_mode,
+        metric=metric,
+        group_by=group_by,
+        endpoint_id=endpoint_id,
+        question_set_id=question_set_id,
+        date_range=date_range,
+    )
 
 
 @router.get("/v2/risks-actions")

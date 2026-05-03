@@ -6,6 +6,7 @@ Pure question-generation logic is delegated to the internal `question_generation
 
 import logging
 from datetime import datetime
+from uuid import UUID
 
 from langgraph.types import Command
 
@@ -17,6 +18,7 @@ from app.workflow.events import (
     send_error_event,
     save_and_send_artifact,
     send_stage_result,
+    send_confirmation_request,
 )
 from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.nodes import _get_fast_model
@@ -80,6 +82,115 @@ def _build_generation_context(identity: str | None) -> dict[str, str | None]:
 
 def _identity_suffix(identity: str | None) -> str:
     return f"（以“{identity}”身份视角）" if identity else ""
+
+
+def _monitor_mode_from_a3_mode(a3_mode: str | None) -> str:
+    return "scenario" if str(a3_mode or "").strip().lower() == "persona" else "panorama"
+
+
+async def _persist_draft_question_set(
+    state: AgentState,
+    *,
+    flattened_questions: list[dict],
+    title: str,
+    monitor_mode: str,
+    source: str = "chat_generated",
+) -> str | None:
+    """Persist A3 output as a draft question set for later user confirmation."""
+    user_id = state.get("user_id")
+    entity_id = state.get("entity_id")
+    if not user_id or not entity_id or not flattened_questions:
+        return None
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.monitoring_plan_service import MonitoringPlanService
+
+        async with AsyncSessionLocal() as db:
+            service = MonitoringPlanService(db)
+            question_set = await service.create_question_set(
+                user_id=UUID(str(user_id)),
+                entity_id=UUID(str(entity_id)),
+                monitor_mode=monitor_mode,
+                title=title,
+                questions=flattened_questions,
+                source=source,
+                source_session_id=UUID(str(state["session_id"])),
+                source_task_id=(
+                    UUID(str(state["task_id"])) if state.get("task_id") else None
+                ),
+                extra_metadata={
+                    "a3_mode": (state.get("user_decisions") or {}).get("a3_mode"),
+                },
+            )
+            return str(question_set.id)
+    except Exception as exc:
+        logger.warning("[A3] Failed to persist draft question set: %s", exc)
+        return None
+
+
+async def _question_set_confirmation_update(
+    state: AgentState,
+    *,
+    question_set_id: str | None,
+    monitor_mode: str,
+    question_count: int,
+) -> dict:
+    """Build the independent A3 question set confirmation checkpoint."""
+    if not question_set_id or state.get("headless_mode") or state.get("monitoring_schedule_id"):
+        return {}
+
+    session_id = state.get("session_id")
+    if not session_id:
+        return {}
+
+    request_id = f"question_set_confirmation_{question_set_id}"
+    mode_label = "用户场景监测" if monitor_mode == "scenario" else "全景监测"
+    message = (
+        f"已生成「{mode_label}」问题集，共 {question_count} 个问题。"
+        "请确认是否启用快速监测。"
+    )
+    options = [
+        {
+            "id": "confirm_question_set_enable_quick",
+            "label": "确认并启用快速监测",
+            "description": "确认当前问题集，并创建或更新快速监测计划",
+        },
+        {
+            "id": "append_question_set_questions",
+            "label": "继续补充问题",
+            "description": "先补充更多问题，确认后再启用监测",
+        },
+        {
+            "id": "decline_question_set_enable",
+            "label": "暂不启用",
+            "description": "保留为草稿，不启动自动监测",
+        },
+    ]
+    await send_confirmation_request(
+        session_id=session_id,
+        step_id="question_set_confirmation",
+        step_name="确认监测问题集",
+        message=message,
+        options=options,
+    )
+    pending_confirmation = {
+        "request_id": request_id,
+        "type": "question_set_confirmation",
+        "step_id": "question_set_confirmation",
+        "step_name": "确认监测问题集",
+        "message": message,
+        "options": options,
+        "question_set_id": question_set_id,
+        "monitor_mode": monitor_mode,
+        "question_count": question_count,
+    }
+    return {
+        "awaiting_user": True,
+        "execution_status": "awaiting_user",
+        "pending_confirmation": pending_confirmation,
+        "pending_question_set_confirmation": pending_confirmation,
+        "progress_message": message,
+    }
 
 
 async def a3_question_node(state: AgentState) -> Command:
@@ -251,16 +362,35 @@ async def _a3_uploaded_list_mode(state: AgentState) -> Command:
         message=f"已按{import_mode_label}更新 A3 问题列表，共 {len(flattened_questions)} 条问题",
         status="completed",
     )
+    latest_question_set_id = await _persist_draft_question_set(
+        state,
+        flattened_questions=flattened_questions,
+        title=f"上传问题列表（{import_mode_label}）",
+        monitor_mode=_monitor_mode_from_a3_mode(user_decisions.get("a3_mode")),
+        source="imported",
+    )
+    monitor_mode = _monitor_mode_from_a3_mode(user_decisions.get("a3_mode"))
+    confirmation_update = await _question_set_confirmation_update(
+        state,
+        question_set_id=latest_question_set_id,
+        monitor_mode=monitor_mode,
+        question_count=len(flattened_questions),
+    )
 
     return Command(
         update={
             "simulated_questions": result_payload,
             "questions": flattened_questions,
+            "latest_question_set_id": latest_question_set_id,
+            "question_set_ids": (
+                [latest_question_set_id] if latest_question_set_id else []
+            ),
             "current_step": "A3",
             "progress": 0.5,
             "error_info": None,
             "user_decisions": user_decisions,
             "confirmed_import_action": None,
+            **confirmation_update,
         }
     )
 
@@ -437,16 +567,33 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
                     })
             except Exception as e:
                 logger.warning("[A3] Failed to persist stage_result: %s", e)
+        latest_question_set_id = await _persist_draft_question_set(
+            state,
+            flattened_questions=flattened_questions,
+            title="品牌全景问题集",
+            monitor_mode="panorama",
+        )
+        confirmation_update = await _question_set_confirmation_update(
+            state,
+            question_set_id=latest_question_set_id,
+            monitor_mode="panorama",
+            question_count=len(flattened_questions),
+        )
 
         return Command(
             update={
                 "brand_profile": brand_profile,
                 "simulated_questions": generated_payload,
                 "questions": flattened_questions,
+                "latest_question_set_id": latest_question_set_id,
+                "question_set_ids": (
+                    [latest_question_set_id] if latest_question_set_id else []
+                ),
                 "current_step": "A3",
                 "progress": 0.5,
                 "confirmed_import_action": None,
                 "user_decisions": _clear_question_import_state(state),
+                **confirmation_update,
             },
         )
 
@@ -696,16 +843,33 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
                     })
             except Exception as e:
                 logger.warning("[A3] Failed to persist stage_result: %s", e)
+        latest_question_set_id = await _persist_draft_question_set(
+            state,
+            flattened_questions=flattened_questions,
+            title="用户场景问题集",
+            monitor_mode="scenario",
+        )
+        confirmation_update = await _question_set_confirmation_update(
+            state,
+            question_set_id=latest_question_set_id,
+            monitor_mode="scenario",
+            question_count=len(flattened_questions),
+        )
 
         return Command(
             update={
                 "brand_profile": brand_profile,
                 "simulated_questions": generated_payload,
                 "questions": flattened_questions,
+                "latest_question_set_id": latest_question_set_id,
+                "question_set_ids": (
+                    [latest_question_set_id] if latest_question_set_id else []
+                ),
                 "current_step": "A3",
                 "progress": 0.5,
                 "confirmed_import_action": None,
                 "user_decisions": _clear_question_import_state(state),
+                **confirmation_update,
             },
         )
 
@@ -971,6 +1135,18 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
                     })
             except Exception as e:
                 logger.warning("[A3] Failed to persist stage_result: %s", e)
+        latest_question_set_id = await _persist_draft_question_set(
+            state,
+            flattened_questions=flattened_questions,
+            title="品牌全景问题集",
+            monitor_mode="panorama",
+        )
+        confirmation_update = await _question_set_confirmation_update(
+            state,
+            question_set_id=latest_question_set_id,
+            monitor_mode="panorama",
+            question_count=len(flattened_questions),
+        )
 
         # Dual-write: baseline_questions + questions
         return Command(
@@ -979,10 +1155,15 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
                 "simulated_questions": generated_payload,
                 "baseline_questions": flattened_questions,  # Baseline channel (long-term)
                 "questions": flattened_questions,            # Standard channel (A4 reads this)
+                "latest_question_set_id": latest_question_set_id,
+                "question_set_ids": (
+                    [latest_question_set_id] if latest_question_set_id else []
+                ),
                 "current_step": "A3",
                 "progress": 0.5,
                 "confirmed_import_action": None,
                 "user_decisions": _clear_question_import_state(state),
+                **confirmation_update,
             },
         )
 

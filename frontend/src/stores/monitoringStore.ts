@@ -9,6 +9,12 @@ import type {
   RunHistoryEntry,
   UpdateScheduleInput,
   TrendMetricSummary,
+  MonitoringEndpoint,
+  MonitoringPlan,
+  MonitoringQuestionSet,
+  MonitoringRun,
+  MonitoringTrendGroupBy,
+  MonitoringTrendSeries,
 } from '@/types/monitoring';
 import { api } from '@/services/api';
 
@@ -84,6 +90,12 @@ interface MonitoringState {
   metricDeltas: MetricDelta[];
   alerts: MonitoringAlert[];
   runHistory: RunHistoryEntry[];
+  endpoints: MonitoringEndpoint[];
+  plan: MonitoringPlan | null;
+  questionSets: MonitoringQuestionSet[];
+  planRuns: MonitoringRun[];
+  trendGroupBy: MonitoringTrendGroupBy;
+  trendSeries: MonitoringTrendSeries[];
 
   // Loading states
   isLoading: boolean;
@@ -91,12 +103,14 @@ interface MonitoringState {
   isScheduleLoading: boolean;
   isHistoryLoading: boolean;
   isBaselineLoading: boolean;
+  isPlanLoading: boolean;
+  isPlanRunSubmitting: boolean;
 
   // Error
   error: string | null;
 
   // Actions — Schedule
-  fetchSchedule: (entityId: string) => Promise<void>;
+  fetchSchedule: (entityId: string, monitorMode?: 'panorama' | 'scenario') => Promise<void>;
   pauseSchedule: (scheduleId: string) => Promise<void>;
   resumeSchedule: (scheduleId: string) => Promise<void>;
   updateSchedule: (scheduleId: string, data: UpdateScheduleInput) => Promise<void>;
@@ -107,13 +121,22 @@ interface MonitoringState {
   clearBaseline: (scheduleId: string) => Promise<void>;
 
   // Actions — Trend Data
-  fetchTrendData: (entityId: string, dimension?: string) => Promise<void>;
+  fetchTrendData: (
+    entityId: string,
+    dimension?: string,
+    monitorMode?: 'panorama' | 'scenario',
+    groupBy?: MonitoringTrendGroupBy,
+  ) => Promise<void>;
   fetchTrendSummary: (entityId: string, dimension?: string) => Promise<void>;
   fetchMetricDeltas: (entityId: string) => Promise<void>;
 
   // Actions — Alerts & History
   fetchAlerts: (entityId: string, limit?: number) => Promise<void>;
   fetchRunHistory: (scheduleId: string, limit?: number) => Promise<void>;
+  fetchEndpoints: () => Promise<void>;
+  fetchPlan: (entityId: string, monitorMode?: 'panorama' | 'scenario') => Promise<void>;
+  fetchQuestionSets: (entityId: string, monitorMode?: 'panorama' | 'scenario') => Promise<void>;
+  submitPlanRun: (planId: string) => Promise<void>;
 
   // Actions — Reset
   reset: () => void;
@@ -127,11 +150,19 @@ const initialState = {
   metricDeltas: [],
   alerts: [],
   runHistory: [],
+  endpoints: [],
+  plan: null,
+  questionSets: [],
+  planRuns: [],
+  trendGroupBy: 'overall' as MonitoringTrendGroupBy,
+  trendSeries: [],
   isLoading: false,
   isTrendLoading: false,
   isScheduleLoading: false,
   isHistoryLoading: false,
   isBaselineLoading: false,
+  isPlanLoading: false,
+  isPlanRunSubmitting: false,
   error: null,
 };
 
@@ -142,10 +173,10 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
   // Schedule Actions
   // =========================================================================
 
-  fetchSchedule: async (entityId: string) => {
+  fetchSchedule: async (entityId: string, monitorMode?: 'panorama' | 'scenario') => {
     set({ isScheduleLoading: true, error: null });
     try {
-      const schedule = await api.getEntitySchedule(entityId);
+      const schedule = await api.getEntitySchedule(entityId, monitorMode);
       set({ schedule, isScheduleLoading: false });
     } catch {
       // No schedule found — this is normal for entities without monitoring
@@ -223,14 +254,53 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
   // Trend Data Actions
   // =========================================================================
 
-  fetchTrendData: async (entityId: string, dimension = 'mention_rate') => {
+  fetchTrendData: async (
+    entityId: string,
+    dimension = 'mention_rate',
+    monitorMode: 'panorama' | 'scenario' = 'panorama',
+    groupBy: MonitoringTrendGroupBy = 'overall',
+  ) => {
     set({ isTrendLoading: true });
     try {
       const metric = DIMENSION_TO_METRIC[dimension] ?? 'mention_rate';
-      const result = await api.getMonitoringTrend(entityId, metric);
-      set({ trendData: result.trend, isTrendLoading: false });
+      const result = await api.getMonitoringTrendsV2({
+        entityId,
+        metric,
+        monitorMode,
+        groupBy,
+      });
+      const primarySeries = result.series[0];
+      const trendData = primarySeries
+        ? primarySeries.points.map((point) => ({
+            date: point.date,
+            value: point.value,
+            snapshot_id: point.snapshot_id || '',
+            run_id: point.run_id || null,
+            triggered_by: result.group_by,
+            is_significant: false,
+            data_point_count: point.data_point_count,
+          }))
+        : [];
+      const trendSummary: TrendSummary | null = primarySeries
+        ? {
+            direction: primarySeries.direction,
+            current_value: primarySeries.current_value,
+            previous_value: primarySeries.previous_value,
+            change_absolute: primarySeries.change_absolute,
+            change_percentage: primarySeries.change_percentage,
+            data_point_count: primarySeries.data_point_count,
+            period_label: result.period_label,
+          }
+        : null;
+      set({
+        trendData,
+        trendSeries: result.series,
+        trendGroupBy: result.group_by,
+        trendSummary,
+        isTrendLoading: false,
+      });
     } catch {
-      set({ trendData: [], isTrendLoading: false });
+      set({ trendData: [], trendSeries: [], trendSummary: null, isTrendLoading: false });
     }
   },
 
@@ -301,6 +371,55 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
       set({ runHistory: result.tasks, isHistoryLoading: false });
     } catch {
       set({ runHistory: [], isHistoryLoading: false });
+    }
+  },
+
+  fetchEndpoints: async () => {
+    try {
+      const result = await api.getMonitoringEndpoints();
+      set({ endpoints: result.endpoints });
+    } catch {
+      set({ endpoints: [] });
+    }
+  },
+
+  fetchPlan: async (entityId: string, monitorMode: 'panorama' | 'scenario' = 'panorama') => {
+    set({ isPlanLoading: true });
+    try {
+      const plan = await api.getEntityMonitoringPlan(entityId, monitorMode);
+      const runs = plan ? await api.listMonitoringPlanRuns(plan.id, 10).catch(() => ({ runs: [] })) : { runs: [] };
+      set({ plan, planRuns: runs.runs, isPlanLoading: false });
+    } catch {
+      set({ plan: null, planRuns: [], isPlanLoading: false });
+    }
+  },
+
+  fetchQuestionSets: async (entityId: string, monitorMode: 'panorama' | 'scenario' = 'panorama') => {
+    try {
+      const result = await api.listMonitoringQuestionSets({
+        entityId,
+        monitorMode,
+        limit: 20,
+      });
+      set({ questionSets: result.question_sets });
+    } catch {
+      set({ questionSets: [] });
+    }
+  },
+
+  submitPlanRun: async (planId: string) => {
+    set({ isPlanRunSubmitting: true, error: null });
+    try {
+      const run = await api.submitMonitoringPlanRun(planId);
+      set((state) => ({
+        isPlanRunSubmitting: false,
+        planRuns: [run, ...state.planRuns.filter((item) => item.id !== run.id)],
+      }));
+    } catch (err) {
+      set({
+        isPlanRunSubmitting: false,
+        error: err instanceof Error ? err.message : '触发快速复测失败',
+      });
     }
   },
 

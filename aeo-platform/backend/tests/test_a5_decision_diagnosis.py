@@ -167,9 +167,15 @@ def _analyzer_outputs():
     }
 
 
-def _platform_result(platform: str, content: str, citations=None):
+def _platform_result(
+    platform: str,
+    content: str,
+    citations=None,
+    fetch_method: str | None = None,
+):
     return {
         "platform": platform,
+        **({"fetch_method": fetch_method} if fetch_method else {}),
         "success": True,
         "answer": {"content": content},
         "citations": citations or [],
@@ -191,6 +197,7 @@ def _no_signal_fetch_results():
                             "title": "Accenture cloud services",
                         }
                     ],
+                    fetch_method="browser",
                 )
             ],
         },
@@ -207,6 +214,7 @@ def _no_signal_fetch_results():
                             "title": "PMI 词条",
                         }
                     ],
+                    fetch_method="api",
                 )
             ],
         },
@@ -223,6 +231,7 @@ def _no_signal_fetch_results():
                             "title": "监管政策",
                         }
                     ],
+                    fetch_method="api",
                 )
             ],
         },
@@ -239,6 +248,7 @@ def _no_signal_fetch_results():
                             "title": "Copied document",
                         }
                     ],
+                    fetch_method="api",
                 )
             ],
         },
@@ -922,9 +932,69 @@ def test_dashboard_projection_exposes_structured_diagnosis_modules():
     assert home is not None
     assert home["diagnosisModules"]["report_mode"] == REPORT_MODE_NO_SIGNAL
     assert home["latestReport"]["subtitle"] == artifact["executive_summary_text"]
+    assert home["latestReport"]["scopeLabel"] == "品牌全景口径"
+    assert home["latestReport"]["questionSetLabel"] == "本轮品牌全景问题集"
+    assert "4 个问题" in home["latestReport"]["sampleSummary"]
+    assert "4 个 AI 来源" in home["latestReport"]["sampleSummary"]
+    assert home["latestReport"]["questionPreview"][0].startswith("数字化转型项目")
+    ai_sources = {row["platform"] for row in home["platformDiagnosis"]}
+    assert {"DeepSeek网页版", "Kimi API", "豆包API", "元宝API"} <= ai_sources
+    artifact["input_bundle"]["questions"][0]["scene"] = "brand_direct"
+    home_with_internal_scope = service._build_dashboard_home_from_projection(artifact)
+    assert home_with_internal_scope is not None
+    assert home_with_internal_scope["latestReport"]["questionSetLabel"] == "品牌直问"
+    assert (
+        "brand_direct"
+        not in home_with_internal_scope["latestReport"]["questionSetLabel"]
+    )
     risk_evidences = [risk.get("evidence") for risk in home["risks"]]
     assert "其他" not in risk_evidences
     assert "不提任何品牌" in risk_evidences
+
+
+def test_dashboard_monitor_mode_filter_keeps_panorama_and_scenario_separate():
+    service = AnalyticsService(db=None)  # type: ignore[arg-type]
+
+    panorama_output = {"_report_kind": "panorama"}
+    legacy_output = {"_report_kind": ""}
+    scenario_output = {"_report_kind": "scenario"}
+    persona_output = {"_report_kind": "persona"}
+
+    assert service._dashboard_report_kind(persona_output) == "scenario"
+    assert service._matches_dashboard_monitor_mode(panorama_output, "panorama")
+    assert service._matches_dashboard_monitor_mode(legacy_output, "panorama")
+    assert not service._matches_dashboard_monitor_mode(scenario_output, "panorama")
+
+    assert service._matches_dashboard_monitor_mode(scenario_output, "scenario")
+    assert service._matches_dashboard_monitor_mode(persona_output, "scenario")
+    assert not service._matches_dashboard_monitor_mode(panorama_output, "scenario")
+
+
+def test_dashboard_home_normalizes_persona_report_kind_for_frontend_mode():
+    artifact = build_canonical_report_artifact(
+        session_id="session-a5-dashboard-persona",
+        entity_id=None,
+        analysis_mode="scenario",
+        brand_profile={
+            "brand_name": "波士顿咨询公司",
+            "industry": "管理咨询",
+            "official_website": "https://www.bcg.com",
+            "brand_keywords": ["BCG", "波士顿咨询"],
+        },
+        competitors=[],
+        fetch_results=_no_signal_fetch_results(),
+        simulated_questions=None,
+        base_metrics=None,
+    )
+    artifact["meta"]["report_kind"] = "persona"
+    artifact["dashboard_projection"]["report_kind"] = "persona"
+    service = AnalyticsService(db=None)  # type: ignore[arg-type]
+
+    home = service._build_dashboard_home_from_projection(artifact)
+
+    assert home is not None
+    assert home["latestReport"]["reportKind"] == "scenario"
+    assert home["latestReport"]["scopeLabel"] == "用户场景口径"
 
 
 def test_orchestrator_context_summarizes_structured_not_judged_policy():

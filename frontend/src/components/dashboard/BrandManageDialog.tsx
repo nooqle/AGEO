@@ -1,6 +1,7 @@
 ﻿'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import * as Dialog from '@radix-ui/react-dialog';
 import { RiAddLine, RiCloseLine, RiDeleteBinLine, RiEditLine, RiSearchLine } from '@remixicon/react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -10,6 +11,7 @@ import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
+import { buildBrandMonitoringChatUrl } from '@/lib/dashboardChatEntry';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 
 interface BrandManageDialogProps {
@@ -18,6 +20,7 @@ interface BrandManageDialogProps {
 }
 
 export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
+  const router = useRouter();
   const { entities, addEntity, updateEntity, removeEntity } = useEntityStore();
   const [search, setSearch] = useState('');
   const [editEntity, setEditEntity] = useState<Entity | null>(null);
@@ -47,7 +50,16 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
       } else {
         const created = await api.createEntity(data);
         addEntity(created);
-        toast.success('品牌已创建');
+        toast.success('品牌已创建，正在打开 AI 对话');
+        setFormOpen(false);
+        setEditEntity(null);
+        const session = await api.getOrCreateSessionByEntity(created.id);
+        router.push(buildBrandMonitoringChatUrl({
+          sessionId: session.id,
+          entityId: created.id,
+          brandName: created.name || data.name,
+        }));
+        return;
       }
       setFormOpen(false);
       setEditEntity(null);
@@ -56,7 +68,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
         ? error.message
         : editEntity
           ? '品牌更新失败'
-          : '品牌创建失败';
+          : '品牌创建或打开 AI 对话失败';
       toast.error(message);
       throw error;
     }

@@ -4,6 +4,7 @@ export interface ContextTag {
   id: string;
   type: 'profile' | 'scenario' | 'intent';
   label: string;
+  data?: Record<string, unknown>;
 }
 
 interface ContextState {

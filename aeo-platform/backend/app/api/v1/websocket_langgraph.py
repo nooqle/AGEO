@@ -22,6 +22,7 @@ from app.core.database import AsyncSessionLocal
 from app.models.task_run import LIVE_TASK_RUN_STATUSES
 from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
 from app.services.message_service import MessageService
+from app.services.monitoring_plan_service import MonitoringPlanService
 from app.services.entity_service import EntityService
 from app.services.session_event_publisher import session_event_publisher
 from app.services.task_service import TaskService
@@ -1169,6 +1170,16 @@ async def rebuild_state_from_db(
         "agent_retry_counts": {},
         # Execution control flags
         "headless_mode": False,
+        "dashboard_context": None,
+        "latest_question_set_id": None,
+        "latest_monitoring_plan_id": None,
+        "monitoring_schedule_id": None,
+        "monitoring_plan_id": None,
+        "monitoring_plan": None,
+        "question_set_ids": None,
+        "endpoint_ids": None,
+        "pending_question_set_confirmation": None,
+        "run_policy": None,
         # Cycle 3 fields
         "task_id": None,
         "run_id": None,
@@ -1518,6 +1529,17 @@ async def handle_user_message_langgraph(
     client_message_id = data.get("clientMessageId") or data.get("client_message_id")
     attachments = _normalize_attachment_refs(data.get("attachments", []))
     tool_mode = _normalize_tool_mode(data.get("tool_mode"))
+    dashboard_context: dict[str, Any] | None = None
+    if isinstance(context, list):
+        merged_dashboard_context: dict[str, Any] = {}
+        for ctx in context:
+            if not isinstance(ctx, dict):
+                continue
+            ctx_data = ctx.get("data")
+            if isinstance(ctx_data, dict):
+                merged_dashboard_context.update(ctx_data)
+        if merged_dashboard_context:
+            dashboard_context = merged_dashboard_context
 
     # Build context-enhanced content for orchestrator
     enhanced_content = content
@@ -1577,6 +1599,8 @@ async def handle_user_message_langgraph(
                 user_metadata: dict[str, Any] = {"tool_mode": tool_mode}
                 if attachments:
                     user_metadata["attachments"] = attachments
+                if dashboard_context:
+                    user_metadata["dashboard_context"] = dashboard_context
                 saved = await message_service.save_message(
                     session_id=UUID(session_id),
                     role="user",
@@ -1758,6 +1782,8 @@ async def handle_user_message_langgraph(
                     "run_id": resumed_run_id or state_values.get("run_id"),
                     "selected_tool_mode": tool_mode,
                     "latest_user_input": content,
+                    "dashboard_context": dashboard_context
+                    or state_values.get("dashboard_context"),
                     "session_recalled": session_was_recalled,
                 }
                 if _should_seed_follow_up_brand_profile(state_values):
@@ -1860,6 +1886,9 @@ async def handle_user_message_langgraph(
                     restored["run_id"] = resumed_run_id or restored.get("run_id")
                     restored["selected_tool_mode"] = tool_mode
                     restored["latest_user_input"] = content
+                    restored["dashboard_context"] = (
+                        dashboard_context or restored.get("dashboard_context")
+                    )
                     restored["session_recalled"] = session_was_recalled
                     if _should_seed_follow_up_brand_profile(restored):
                         seed_effective_brand_profile(
@@ -2018,12 +2047,22 @@ async def handle_user_message_langgraph(
                 ),
                 "selected_tool_mode": tool_mode,
                 "latest_user_input": content,
+                "dashboard_context": dashboard_context,
                 "session_recalled": session_was_recalled,
                 # Cycle 3: Task persistence + multi-turn
                 "task_id": created_task_id,
                 "run_id": created_run_id,
                 "platform_filter": None,
                 "preserved_fetch_results": None,
+                "latest_question_set_id": None,
+                "latest_monitoring_plan_id": None,
+                "monitoring_schedule_id": None,
+                "monitoring_plan_id": None,
+                "monitoring_plan": None,
+                "question_set_ids": None,
+                "endpoint_ids": None,
+                "pending_question_set_confirmation": None,
+                "run_policy": None,
                 # Baseline Analysis (Issue #4)
                 "analysis_mode": None,
                 "baseline_questions": None,
@@ -2459,6 +2498,69 @@ async def handle_confirmation_langgraph(
                 user_decisions = active_resolution.user_decisions
             else:
                 user_content = "用户确认继续"
+        pending_confirmation = state_values.get("pending_confirmation") or {}
+        if not isinstance(pending_confirmation, dict):
+            pending_confirmation = {}
+        if selected_option_id in {
+            "confirm_question_set_enable_quick",
+            "append_question_set_questions",
+            "decline_question_set_enable",
+        }:
+            question_set_id = str(
+                pending_confirmation.get("question_set_id")
+                or state_values.get("latest_question_set_id")
+                or ""
+            ).strip()
+            monitor_mode = str(
+                pending_confirmation.get("monitor_mode")
+                or state_values.get("monitor_mode")
+                or "panorama"
+            )
+            if selected_option_id == "confirm_question_set_enable_quick":
+                user_content = "用户确认当前问题集，并启用快速监测"
+                if not question_set_id:
+                    raise ValueError("当前确认缺少问题集 ID。")
+                if not state_values.get("user_id") or not state_values.get("entity_id"):
+                    raise ValueError("当前会话缺少品牌或用户上下文。")
+                async with AsyncSessionLocal() as db:
+                    service = MonitoringPlanService(db)
+                    plan = await service.confirm_question_set_and_activate_quick_plan(
+                        user_id=UUID(str(state_values["user_id"])),
+                        entity_id=UUID(str(state_values["entity_id"])),
+                        question_set_id=UUID(question_set_id),
+                        monitor_mode=monitor_mode,
+                    )
+                    plan_payload = await service.plan_to_dict(plan)
+                user_decisions["question_set_confirmation"] = "confirmed"
+                user_decisions["fetch_mode_confirmed"] = True
+                user_decisions["fetch_mode"] = "fast"
+                state_values["fetch_mode"] = "fast"
+                state_values["monitoring_plan_id"] = str(plan.id)
+                state_values["question_set_ids"] = [question_set_id]
+                state_values["endpoint_ids"] = list(plan.endpoint_ids or [])
+                state_values["monitoring_plan"] = plan_payload
+                state_values["pending_question_set_confirmation"] = None
+                state_values["next_required_action"] = build_next_required_action(
+                    tool_name="answer_fetch",
+                    authority="user_confirmation",
+                    tool_args={"fetch_mode": "fast"},
+                    reason="用户确认问题集并启用快速监测。",
+                    reply_text="已确认问题集，并启用快速监测计划。",
+                    source_step="question_set_confirmation",
+                )
+                logger.info("[LangGraph] Question set confirmed: %s", question_set_id)
+            elif selected_option_id == "append_question_set_questions":
+                user_content = "用户希望继续补充问题后再启用监测"
+                user_decisions["question_set_confirmation"] = "append"
+                user_decisions["question_append_requested"] = True
+                state_values["pending_question_set_confirmation"] = None
+                logger.info("[LangGraph] Question set append requested: %s", question_set_id)
+            else:
+                user_content = "用户选择暂不启用当前问题集"
+                user_decisions["question_set_confirmation"] = "declined"
+                user_decisions["fetch_mode_confirmed"] = False
+                state_values["pending_question_set_confirmation"] = None
+                logger.info("[LangGraph] Question set activation declined: %s", question_set_id)
         if selected_option_id == "run_answer_fetch":
             user_content = "用户选择先执行答案抓取"
             state_values["next_required_action"] = build_next_required_action(
@@ -2550,6 +2652,15 @@ async def handle_confirmation_langgraph(
         }
         if state_values.get("fetch_mode"):
             update_state["fetch_mode"] = state_values["fetch_mode"]
+        for key in (
+            "monitoring_plan_id",
+            "monitoring_plan",
+            "question_set_ids",
+            "endpoint_ids",
+            "pending_question_set_confirmation",
+        ):
+            if key in state_values:
+                update_state[key] = state_values.get(key)
         update_state.update(active_resolution.state_updates)
 
         async for event in workflow.astream(update_state, config=config):

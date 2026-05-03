@@ -37,7 +37,7 @@ SCHEDULE_RUN_LEASE_TIMEOUT_SECONDS = 180
 _scheduler_task: asyncio.Task | None = None
 _running_tasks: set[asyncio.Task] = set()
 _concurrency_semaphore: asyncio.Semaphore | None = None
-_DEFAULT_MONITORING_PLATFORMS = ["doubao", "yuanbao", "kimi"]
+_DEFAULT_MONITORING_PLATFORMS = ["doubao", "yuanbao", "kimi", "deepseek"]
 
 
 def _parse_session_metadata(raw_metadata: str | None) -> dict:
@@ -337,6 +337,19 @@ async def _dispatch_queued_runs() -> None:
                 )
                 monitoring_service = MonitoringService(db)
                 await monitoring_service.record_run_failed(task.monitoring_schedule_id)
+                try:
+                    from app.services.monitoring_plan_service import MonitoringPlanService
+
+                    await MonitoringPlanService(db).record_run_failed(
+                        task_id=task.id,
+                        error_message="Scheduled monitoring requires confirmed baseline questions",
+                        error_stage="sched_base",
+                    )
+                except Exception as run_err:
+                    logger.warning(
+                        "[Scheduler] Failed to mark monitoring run failed: %s",
+                        run_err,
+                    )
                 continue
 
             if task.session_id is None:
@@ -352,6 +365,7 @@ async def _dispatch_queued_runs() -> None:
 
             baseline = schedule.baseline_data
             if not baseline or not baseline.get("questions"):
+                error_message = "Scheduled monitoring requires confirmed baseline questions"
                 logger.error(
                     "[Scheduler] Schedule %s missing baseline questions; refusing fast monitoring run",
                     schedule.id,
@@ -359,17 +373,43 @@ async def _dispatch_queued_runs() -> None:
                 task_service = TaskService(db)
                 await task_service.fail_task(
                     task.id,
-                    error_message="Scheduled monitoring requires panorama baseline questions",
+                    error_message=error_message,
                     error_stage="sched_base",
                     run_id=claimed.id,
                 )
                 monitoring_service = MonitoringService(db)
                 await monitoring_service.record_run_failed(task.monitoring_schedule_id)
+                try:
+                    from app.services.monitoring_plan_service import MonitoringPlanService
+
+                    await MonitoringPlanService(db).record_run_failed(
+                        task_id=task.id,
+                        error_message=error_message,
+                        error_stage="sched_base",
+                    )
+                except Exception as run_err:
+                    logger.warning(
+                        "[Scheduler] Failed to mark monitoring run failed: %s",
+                        run_err,
+                    )
                 continue
 
             lease_owner = claimed.lease_owner or "scheduler:dispatcher"
             monitoring_service = MonitoringService(db)
             await monitoring_service.record_run_started(schedule.id, task.id)
+            try:
+                from app.services.monitoring_plan_service import MonitoringPlanService
+
+                await MonitoringPlanService(db).record_scheduler_run_started(
+                    schedule=schedule,
+                    task=task,
+                    task_run_id=claimed.id,
+                )
+            except Exception as run_err:
+                logger.warning(
+                    "[Scheduler] Failed to mark monitoring run started: %s",
+                    run_err,
+                )
             platforms = _resolve_monitoring_platforms(schedule.platforms)
             entity_id = entity.id
             entity_name = entity.name
@@ -379,6 +419,11 @@ async def _dispatch_queued_runs() -> None:
             task_id = task.id
             run_id = claimed.id
             session_id = task.session_id
+            monitor_mode = schedule.monitor_mode or "panorama"
+            run_policy = schedule.run_policy or "quick"
+            monitoring_plan_id = schedule.monitoring_plan_id
+            question_set_ids = schedule.question_set_ids or []
+            endpoint_ids = schedule.endpoint_ids or []
 
         try:
             pipeline_task = asyncio.create_task(
@@ -393,6 +438,11 @@ async def _dispatch_queued_runs() -> None:
                     user_id=user_id,
                     platforms=platforms,
                     baseline=baseline,
+                    monitor_mode=monitor_mode,
+                    run_policy=run_policy,
+                    monitoring_plan_id=monitoring_plan_id,
+                    question_set_ids=question_set_ids,
+                    endpoint_ids=endpoint_ids,
                     lease_owner=lease_owner,
                 )
             )
@@ -407,12 +457,26 @@ async def _dispatch_queued_runs() -> None:
                 monitoring_service = MonitoringService(db)
                 await monitoring_service.record_run_failed(schedule_id)
                 task_service = TaskService(db)
+                error_message = f"Failed to launch pipeline: {e}"
                 await task_service.fail_task(
                     task_id,
-                    error_message=f"Failed to launch pipeline: {e}",
+                    error_message=error_message,
                     error_stage="sched_disp",
                     run_id=run_id,
                 )
+                try:
+                    from app.services.monitoring_plan_service import MonitoringPlanService
+
+                    await MonitoringPlanService(db).record_run_failed(
+                        task_id=task_id,
+                        error_message=error_message,
+                        error_stage="sched_disp",
+                    )
+                except Exception as run_err:
+                    logger.warning(
+                        "[Scheduler] Failed to mark monitoring run failed: %s",
+                        run_err,
+                    )
             continue
 
         _running_tasks.add(pipeline_task)
@@ -456,6 +520,11 @@ async def _run_pipeline_headless(
     user_id: UUID,
     platforms: list[str] | None = None,
     baseline: dict | None = None,
+    monitor_mode: str = "panorama",
+    run_policy: str = "quick",
+    monitoring_plan_id: UUID | None = None,
+    question_set_ids: list[str] | None = None,
+    endpoint_ids: list[str] | None = None,
     lease_owner: str | None = None,
 ) -> None:
     """Run the analysis pipeline using the existing LangGraph compiled_workflow.
@@ -479,6 +548,14 @@ async def _run_pipeline_headless(
             resolved_session_id = str(session_id)
             workflow_thread_id = f"monitoring:{session_id}:{run_id}"
             effective_platforms = _resolve_monitoring_platforms(platforms)
+            effective_run_policy = str(run_policy or "quick").strip().lower()
+            effective_fetch_mode = (
+                "full" if effective_run_policy == "full_browser" else "fast"
+            )
+            effective_monitor_mode = str(monitor_mode or "panorama").strip().lower()
+            effective_analysis_mode = (
+                "persona" if effective_monitor_mode == "scenario" else "baseline"
+            )
 
             # --- Build initial state ---
             base_state = {
@@ -510,24 +587,33 @@ async def _run_pipeline_headless(
                 "task_id": str(task_id),
                 "run_id": str(run_id),
                 "monitoring_schedule_id": str(schedule_id),
+                "monitoring_plan_id": (
+                    str(monitoring_plan_id) if monitoring_plan_id else None
+                ),
+                "question_set_ids": question_set_ids or [],
+                "endpoint_ids": endpoint_ids or [],
+                "run_policy": effective_run_policy,
                 "platform_filter": effective_platforms,
-                "fetch_mode": "fast",
+                "fetch_mode": effective_fetch_mode,
                 "preserved_fetch_results": None,
                 "next_required_action": build_next_required_action(
                     tool_name="answer_fetch",
                     authority="authoritative_resume",
-                    reason="Scheduled monitoring always runs fast A4 on the panorama baseline.",
+                    reason="Scheduled monitoring runs A4/A5 from the confirmed monitoring plan baseline.",
                     tool_args={
-                        "fetch_mode": "fast",
+                        "fetch_mode": effective_fetch_mode,
                         "platforms": effective_platforms,
                     },
                     source_step="scheduler_dispatch",
                     metadata={
                         "headless_mode": True,
                         "monitoring_schedule_id": str(schedule_id),
+                        "monitoring_plan_id": (
+                            str(monitoring_plan_id) if monitoring_plan_id else None
+                        ),
                     },
                 ),
-                "analysis_mode": "baseline",
+                "analysis_mode": effective_analysis_mode,
                 "baseline_questions": None,
                 "baseline_fetch_results": None,
                 "baseline_metrics": None,
@@ -546,8 +632,9 @@ async def _run_pipeline_headless(
                 "orchestrator_history": [],
             }
             logger.info(
-                "[Scheduler] Monitoring run for task %s: fast A4+A5 on %d baseline questions",
+                "[Scheduler] Monitoring run for task %s: %s A4+A5 on %d confirmed questions",
                 task_id,
+                effective_monitor_mode,
                 len(initial_state.get("questions") or []),
             )
 
@@ -624,6 +711,7 @@ async def _handle_pipeline_success(
     """
     from app.services.alert_service import AlertService
     from app.services.monitoring_service import MonitoringService
+    from app.services.monitoring_plan_service import MonitoringPlanService
     from app.services.task_service import TaskService
 
     async with AsyncSessionLocal() as db:
@@ -662,6 +750,11 @@ async def _handle_pipeline_success(
                 run_id=run_id,
             )
             await monitoring_service.record_run_failed(schedule_id)
+            await MonitoringPlanService(db).record_run_failed(
+                task_id=task_id,
+                error_message=error_message,
+                error_stage="sched_snap",
+            )
             return
 
         await task_service.complete_task(
@@ -670,6 +763,11 @@ async def _handle_pipeline_success(
             run_id=run_id,
         )
         await monitoring_service.record_run_completed(schedule_id)
+        await MonitoringPlanService(db).record_run_completed(
+            task_id=task_id,
+            snapshot_id=snapshot_id,
+            final_state=final_state,
+        )
 
         logger.info(
             "[Scheduler] Pipeline completed for task %s (snapshot=%s)",
@@ -686,6 +784,7 @@ async def _handle_pipeline_failure(
 ) -> None:
     """Handle pipeline failure for a scheduled run."""
     from app.services.monitoring_service import MonitoringService
+    from app.services.monitoring_plan_service import MonitoringPlanService
     from app.services.task_service import TaskService
 
     async with AsyncSessionLocal() as db:
@@ -699,3 +798,8 @@ async def _handle_pipeline_failure(
 
         monitoring_service = MonitoringService(db)
         await monitoring_service.record_run_failed(schedule_id)
+        await MonitoringPlanService(db).record_run_failed(
+            task_id=task_id,
+            error_message=error,
+            error_stage="pipeline",
+        )
