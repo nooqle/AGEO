@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 from uuid import uuid4
 
 import pytest
+
+os.environ.setdefault("DEBUG", "true")
+os.environ.setdefault("JWT_SECRET", "test-secret")
 
 from app.api.v1 import websocket_langgraph
 
