@@ -64,8 +64,6 @@ from app.workflow.harness_validation import (
 )
 from app.workflow.nodes_a3 import _a3_baseline_dynamic_mode
 from app.workflow.nodes_a5 import a5_analytics_node
-from app.workflow.nodes_a7 import a7_confidence_signal_node
-from app.workflow.nodes_confidence_analysis import confidence_analysis_executor_node
 from app.workflow.nodes_followup import post_analysis_executor_node
 from app.workflow.orchestrator_instruction_defense import (
     build_instruction_defense_context,
@@ -217,7 +215,6 @@ def test_aio_answer_fetch_tool_builds_contexts_and_execution_paths(monkeypatch):
             "run_id": "run_1",
         },
         questions=[{"id": "q1", "text": "test"}],
-        brand_profile={"brand_name": "雅姿"},
         mode="full",
         platform_filter=["doubao", "yuanbao", "kimi", "deepseek"],
     )
@@ -252,7 +249,6 @@ def test_aio_answer_fetch_tool_attaches_legacy_result_packet(monkeypatch):
             "task_id": "task_1",
         },
         questions=[{"id": "q1", "text": "test"}],
-        brand_profile={"brand_name": "雅姿"},
         mode="fast",
         platform_filter=["yuanbao"],
     )
@@ -397,16 +393,14 @@ def test_a4_packet_fetch_summary_prefers_packet_status_over_legacy_success():
         }
     ]
 
-    summary = nodes_a4._build_aio_packet_fetch_summary(
-        fetch_results,
-        brand_profile={"brand_name": "雅姿"},
-    )
+    summary = nodes_a4._build_aio_packet_fetch_summary(fetch_results)
 
     assert summary["total_fetches"] == 2
-    assert summary["successful_fetches"] == 1
-    assert summary["successful_platforms"] == {"deepseek"}
-    assert summary["platform_statuses"]["deepseek"] == "success"
+    assert summary["successful_fetches"] == 0
+    assert summary["successful_platforms"] == set()
+    assert summary["platform_statuses"]["deepseek"] == "failed"
     assert summary["platform_statuses"]["yuanbao"] == "skipped"
+    assert summary["platform_fetch_stats"]["deepseek"]["failed"] == 1
     assert summary["platform_fetch_stats"]["yuanbao"]["skipped"] == 1
 
 
@@ -792,7 +786,6 @@ async def test_resolve_takeover_releases_login_takeover_without_sync_resume_prob
         current_takeover_id="takeover_login",
         human_takeover_lock=True,
     )
-    resume_probe = AsyncMock(return_value=False)
     takeover = SpectaAioTakeover(
         takeover_id="takeover_login",
         session_id="aio_session_login",
@@ -807,7 +800,6 @@ async def test_resolve_takeover_releases_login_takeover_without_sync_resume_prob
         issued_at=now - timedelta(minutes=1),
         expires_at=now + timedelta(minutes=5),
         action_type="login",
-        resume_probe=resume_probe,
     )
     manager._sessions_by_id[session.session_id] = session
     manager._session_by_workspace[session.workspace_id] = session.session_id
@@ -817,18 +809,14 @@ async def test_resolve_takeover_releases_login_takeover_without_sync_resume_prob
         takeover_id="takeover_login",
         user_id="user_1",
         frontend_id="frontend_1",
-        resume_gate_result="pass",
     )
 
     assert resolved.state == AioTakeoverState.RESOLVED
-    assert resolved.resume_gate_result == "pass"
     assert manager._sessions_by_id["aio_session_login"].human_takeover_lock is False
     assert (
         manager._sessions_by_id["aio_session_login"].session_state
         == AioSessionState.LEASED
     )
-    resume_probe.assert_not_awaited()
-
 
 @pytest.mark.asyncio
 async def test_resolve_takeover_does_not_revive_terminal_bundle(monkeypatch):
@@ -868,7 +856,6 @@ async def test_resolve_takeover_does_not_revive_terminal_bundle(monkeypatch):
         issued_at=now - timedelta(minutes=12),
         expires_at=now - timedelta(minutes=4),
         action_type="login",
-        resume_probe=AsyncMock(return_value=True),
     )
     manager._sessions_by_id[session.session_id] = session
     manager._session_by_workspace[session.workspace_id] = session.session_id
@@ -878,12 +865,9 @@ async def test_resolve_takeover_does_not_revive_terminal_bundle(monkeypatch):
         takeover_id="takeover_terminal_resolve",
         user_id="user_1",
         frontend_id="frontend_1",
-        resume_gate_result="pass",
     )
 
     assert resolved.state == AioTakeoverState.EXPIRED
-    assert resolved.resume_gate_result is None
-    takeover.resume_probe.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1931,7 +1915,7 @@ async def test_fetch_from_browser_retries_after_waiting_login_event(monkeypatch)
     wait_resume = AsyncMock(return_value=(True, "completed"))
     browser_state_event = AsyncMock()
     monkeypatch.setattr(nodes_a4, "emit_browser_action_handoff", emit_handoff)
-    monkeypatch.setattr(nodes_a4, "_resume_after_browser_action", wait_resume)
+    monkeypatch.setattr(nodes_a4, "resume_browser_action", wait_resume)
     monkeypatch.setattr(nodes_a4, "send_browser_state_event", browser_state_event)
 
     class _Handler:
@@ -1964,7 +1948,6 @@ async def test_fetch_from_browser_retries_after_waiting_login_event(monkeypatch)
     result = await nodes_a4._fetch_from_browser(
         _Handler(),
         question="测试问题",
-        brand_profile={},
         platform="deepseek",
         platform_name="DeepSeek",
         browser_state=FetchBrowserState,
@@ -1987,7 +1970,7 @@ async def test_fetch_from_browser_emits_login_handoff_for_permission_denied_erro
     emit_handoff = AsyncMock(return_value="browser_action_login")
     wait_resume = AsyncMock(return_value=(False, "skip"))
     monkeypatch.setattr(nodes_a4, "emit_browser_action_handoff", emit_handoff)
-    monkeypatch.setattr(nodes_a4, "_resume_after_browser_action", wait_resume)
+    monkeypatch.setattr(nodes_a4, "resume_browser_action", wait_resume)
     monkeypatch.setattr(nodes_a4, "send_browser_state_event", AsyncMock())
 
     class _Handler:
@@ -1999,12 +1982,17 @@ async def test_fetch_from_browser_emits_login_handoff_for_permission_denied_erro
                 message="permission_denied: Please login to continue.",
                 error="permission_denied: Please login to continue.",
                 error_type="permission_denied",
+                failure_layer=None,
+                failure_reason=None,
+                execution_stage=None,
+                retryable=None,
+                needs_handoff=None,
+                evidence_ref=None,
             )
 
     result = await nodes_a4._fetch_from_browser(
         _Handler(),
         question="测试问题",
-        brand_profile={},
         platform="kimi",
         platform_name="Kimi",
         browser_state=FetchBrowserState,
@@ -2017,7 +2005,7 @@ async def test_fetch_from_browser_emits_login_handoff_for_permission_denied_erro
     assert result["error_type"] == "user_skipped"
     assert result["reason_code"] == "login"
     assert result["target_url"] == "https://chat.kimi.com/"
-    assert result["final_url"] is None
+    assert result.get("final_url") is None
     assert result["probe_result"] == "user_skipped"
     emit_handoff.assert_awaited_once()
     wait_resume.assert_awaited_once()
@@ -2635,7 +2623,7 @@ def test_orchestrator_prompt_assembly_exposes_structured_sections():
     assert "品牌名称：观夏" in rendered
     assert 'question_simulation(mode="uploaded_list")' in rendered
     assert "identity 传入该身份" in rendered
-    assert "## 历史材料可用性" in rendered
+    assert "## 过往资料可用性" in rendered
     assert "## 指令安全与提示词保密" in rendered
 
 
@@ -3011,10 +2999,10 @@ def test_orchestrator_context_packets_split_session_entity_and_history():
     assert packets.history_availability.available_sources == (
         "品牌档案",
         "竞品档案",
-        "历史答案",
+        "过往回答",
     )
     assert packets.history_availability.total_items == 8
-    assert "可用历史来源" in render_history_availability_packet(
+    assert "可用过往资料来源" in render_history_availability_packet(
         packets.history_availability
     )
 
@@ -3420,163 +3408,28 @@ async def test_a5_precondition_gate_blocks_missing_fetch_results(monkeypatch):
     assert command.update["execution_status"] == "error"
     assert command.update["current_step"] == "A5"
     assert command.update["last_validation_result"]["passed"] is False
-    assert (
-        "fetch_results_required" in command.update["last_validation_result"]["reason"]
-    )
+    assert "A4 canonical fetch result is missing" in command.update[
+        "last_validation_result"
+    ]["reason"]
     assert command.update["last_harness_decision"]["decision_type"] == "fail_step"
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="旧 A7 confidence_signal 能力已退役，生产图已改为 retired_confidence_executor_node")
 async def test_a7_success_records_skill_result_and_validation(monkeypatch):
-    monkeypatch.setattr(
-        "app.workflow.nodes_a7.send_progress_event",
-        AsyncMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "app.workflow.nodes_a7.send_error_event",
-        AsyncMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "app.workflow.nodes_a7.generate_confidence_signal_artifact",
-        AsyncMock(
-            return_value={
-                "artifact_key": "session-a7_report_confidence_signal_main",
-                "artifact_message_id": "msg-1",
-                "artifact_kind": "confidence_signal",
-                "confidence_signal_summary": {
-                    "headline": "置信度报告",
-                    "overall_conclusion": "我方来源的平均置信度高于竞品。",
-                    "evaluated_source_count": 6,
-                    "brand_average_confidence": 78.4,
-                    "competitor_average_confidence": 72.1,
-                },
-            }
-        ),
-    )
-
-    command = await a7_confidence_signal_node(
-        {
-            "session_id": "session-a7",
-            "fetch_results": [{"question_text": "Q1", "platform": "kimi"}],
-            "brand_profile": {"brand_name": "观夏"},
-            "competitors": [],
-            "current_skill": "confidence_signal_skill",
-            "current_skill_contract": {"preconditions": ["fetch_results_required"]},
-            "skill_history": [],
-            "validation_history": [],
-        }
-    )
-
-    assert command.update["error_info"] is None
-    assert command.update["last_skill_result"]["skill_key"] == "confidence_signal_skill"
-    assert command.update["last_skill_result"]["executor_ref"] == "a7_confidence_signal"
-    assert command.update["last_validation_result"]["passed"] is True
-    assert command.update["last_validation_result"]["gate_name"] == "postcondition_gate"
-    assert command.update["last_harness_decision"]["decision_type"] == "complete_skill"
-    assert command.update["confidence_signal_summary"]["headline"] == "置信度报告"
+    pytest.skip("旧 A7 confidence_signal 能力已退役。")
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="旧 confidence_analysis executor 能力已退役，当前生产图不再使用该节点")
 async def test_confidence_analysis_executor_preserves_harness_gates(monkeypatch):
-    monkeypatch.setattr(
-        "app.workflow.nodes_confidence_analysis.send_progress_event",
-        AsyncMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "app.workflow.nodes_confidence_analysis.send_error_event",
-        AsyncMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "app.workflow.nodes_confidence_analysis.generate_confidence_analysis_artifact",
-        AsyncMock(
-            return_value={
-                "artifact_key": "session-a7_report_confidence_analysis_main",
-                "artifact_message_id": "msg-1",
-                "artifact_kind": "confidence_analysis",
-                "confidence_signal_summary": {
-                    "headline": "置信度报告",
-                    "overall_conclusion": "我方来源的平均置信度高于竞品。",
-                    "evaluated_source_count": 6,
-                    "brand_average_confidence": 78.4,
-                    "competitor_average_confidence": 72.1,
-                },
-            }
-        ),
-    )
-
-    command = await confidence_analysis_executor_node(
-        {
-            "session_id": "session-a7",
-            "fetch_results": [{"question_text": "Q1", "platform": "kimi"}],
-            "brand_profile": {"brand_name": "观夏"},
-            "competitors": [],
-            "current_skill": "confidence_analysis_skill",
-            "current_skill_contract": {
-                "postconditions": [
-                    "confidence_artifact_persisted",
-                    "skill_result_recorded",
-                ]
-            },
-            "skill_history": [],
-            "validation_history": [],
-        }
-    )
-
-    assert command.update["error_info"] is None
-    assert (
-        command.update["last_skill_result"]["skill_key"] == "confidence_analysis_skill"
-    )
-    assert (
-        command.update["last_skill_result"]["executor_ref"]
-        == "confidence_analysis_executor"
-    )
-    assert command.update["last_validation_result"]["passed"] is True
-    assert command.update["last_validation_result"]["gate_name"] == "postcondition_gate"
-    assert command.update["last_harness_decision"]["decision_type"] == "complete_skill"
-    assert command.update["confidence_signal_summary"]["headline"] == "置信度报告"
+    pytest.skip("旧 confidence_analysis executor 能力已退役。")
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="旧 A7 confidence_signal 能力已退役，生产图已改为 retired_confidence_executor_node")
 async def test_a7_artifact_writeback_failure_returns_error(monkeypatch):
-    monkeypatch.setattr(
-        "app.workflow.nodes_a7.send_progress_event",
-        AsyncMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "app.workflow.nodes_a7.send_error_event",
-        AsyncMock(return_value=None),
-    )
-    monkeypatch.setattr(
-        "app.workflow.nodes_a7.generate_confidence_signal_artifact",
-        AsyncMock(
-            return_value={
-                "artifact_key": "session-a7_report_confidence_signal_main",
-                "artifact_message_id": "",
-                "artifact_kind": "confidence_signal",
-                "confidence_signal_summary": {
-                    "headline": "置信度报告",
-                },
-            }
-        ),
-    )
-
-    command = await a7_confidence_signal_node(
-        {
-            "session_id": "session-a7",
-            "fetch_results": [{"question_text": "Q1", "platform": "kimi"}],
-            "brand_profile": {"brand_name": "观夏"},
-            "competitors": [],
-            "current_skill": "confidence_signal_skill",
-            "current_skill_contract": {"preconditions": ["fetch_results_required"]},
-            "skill_history": [],
-            "validation_history": [],
-        }
-    )
-
-    assert command.update["execution_status"] == "error"
-    assert command.update["current_step"] == "A7"
-    assert "artifact writeback" in command.update["error_info"]["error"]
-    assert command.update["last_harness_decision"]["decision_type"] == "retry_step"
+    pytest.skip("旧 A7 confidence_signal 能力已退役。")
 
 
 def test_tool_capability_matrix_distinguishes_stage_and_generation_tool():
@@ -3731,7 +3584,6 @@ async def test_post_analysis_executor_prefers_capability_payload(monkeypatch):
 @pytest.mark.asyncio
 async def test_post_analysis_executor_rejects_fetch_like_args(monkeypatch):
     send_reply = AsyncMock(return_value=None)
-    monkeypatch.setattr("app.workflow.nodes_followup.send_reply_event", send_reply)
 
     command = await post_analysis_executor_node(
         {
@@ -3743,12 +3595,15 @@ async def test_post_analysis_executor_rejects_fetch_like_args(monkeypatch):
 
     assert command.update["execution_status"] == "completed"
     assert "答案抓取" in command.update["orchestrator_reply"]
-    assert command.update["next_required_action"]["tool_name"] == "answer_fetch"
-    assert (
-        command.update["next_required_action"]["source_step"]
-        == "post_analysis_executor"
+    assert "next_required_action" not in command.update
+    assert command.update["last_skill_result"]["metadata"]["suggested_tool"] == (
+        "answer_fetch"
     )
-    send_reply.assert_awaited()
+    assert command.update["last_skill_result"]["metadata"]["suggested_tool_args"] == {
+        "platforms": ["kimi"],
+        "fetch_mode": "full",
+    }
+    assert send_reply.await_count == 0
 
 
 def test_answer_fetch_mode_policy_prefers_user_intent_and_existing_mode():
@@ -3860,6 +3715,7 @@ async def test_runtime_policy_executor_consumes_next_required_action(monkeypatch
             "orchestrator_history": [{"role": "user", "content": "请继续"}],
             "next_required_action": build_next_required_action(
                 tool_name="answer_fetch",
+                authority="authoritative_resume",
                 tool_args={"platforms": ["kimi"]},
                 reason="测试 runtime 自动续跑。",
                 reply_text="已切换为答案抓取继续执行。",
@@ -3977,7 +3833,7 @@ def test_context_summary_marks_hidden_history_tools_for_specific_current_followu
         }
     )
 
-    assert "历史知识工具已从可用工具面隐藏" in summary
+    assert "过往资料工具已从可用工具面隐藏" in summary
     assert "knowledge_lookup" not in summary
     assert "knowledge_aggregate" not in summary
 
@@ -4024,7 +3880,7 @@ def test_contextual_tool_surface_note_marks_current_followup_constraints():
     )
 
     assert note is not None
-    assert "历史知识工具已从当前回合工具面隐藏" in note
+    assert "过往资料工具已从当前回合工具面隐藏" in note
     assert "应直接使用 drill_down_analysis" in note
     assert "不要再先走 post_analysis_skill 或 knowledge_*" in note
 
@@ -4272,7 +4128,6 @@ async def test_route_brand_seed_without_llm_falls_back_to_brand_analysis(monkeyp
 @pytest.mark.asyncio
 async def test_post_analysis_executor_blocks_invalid_capability(monkeypatch):
     send_reply = AsyncMock(return_value=None)
-    monkeypatch.setattr("app.workflow.nodes_followup.send_reply_event", send_reply)
 
     command = await post_analysis_executor_node(
         {
@@ -4285,7 +4140,7 @@ async def test_post_analysis_executor_blocks_invalid_capability(monkeypatch):
     assert command.update["execution_status"] == "error"
     assert command.update["last_harness_decision"]["decision_type"] == "fail_step"
     assert command.update["error_info"]["step"] == "post_analysis_executor"
-    send_reply.assert_awaited()
+    assert send_reply.await_count == 0
 
 
 @pytest.mark.asyncio

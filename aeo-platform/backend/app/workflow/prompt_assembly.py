@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 
@@ -224,22 +224,34 @@ class PromptAssembly:
             ],
         }
 
-    def render(self) -> str:
+    def _render_group_names(
+        self,
+        group_order: tuple[str, ...],
+        section_overrides: dict[str, tuple[PromptSection, ...]] | None = None,
+    ) -> str:
         grouped_rendered: dict[str, list[str]] = {}
-        for group_name in _GROUP_ORDER:
-            sections = tuple(getattr(self, group_name))
+        for group_name in group_order:
+            sections = tuple(
+                (section_overrides or {}).get(group_name, getattr(self, group_name))
+            )
             grouped_rendered[group_name] = _render_group_with_budget(
                 sections,
                 budget=_GROUP_BUDGETS[group_name],
             )
 
         ordered_parts: list[str] = []
-        for group_name in _GROUP_ORDER:
+        for group_name in group_order:
             ordered_parts.extend(grouped_rendered[group_name])
 
         total_length = _group_total_length(ordered_parts)
         if total_length > _SOFT_PROMPT_LIMIT:
-            for group_name in ("runtime_reminder_sections", "runtime_context_sections", "skill_sections"):
+            for group_name in (
+                "runtime_reminder_sections",
+                "runtime_context_sections",
+                "skill_sections",
+            ):
+                if group_name not in grouped_rendered:
+                    continue
                 current_parts = grouped_rendered[group_name]
                 if not current_parts:
                     continue
@@ -253,7 +265,7 @@ class PromptAssembly:
                     budget=target_budget,
                 )
                 ordered_parts = []
-                for ordered_group in _GROUP_ORDER:
+                for ordered_group in group_order:
                     ordered_parts.extend(grouped_rendered[ordered_group])
                 total_length = _group_total_length(ordered_parts)
 
@@ -275,3 +287,55 @@ class PromptAssembly:
             ordered_parts = hard_clamped
 
         return _SECTION_SEPARATOR.join(part for part in ordered_parts if part).strip()
+
+    def _static_skill_sections(self) -> tuple[PromptSection, ...]:
+        static_sections: list[PromptSection] = []
+        for section in self.skill_sections:
+            metadata = section.metadata or {}
+            if metadata.get("static_prompt") is False:
+                continue
+            static_body = metadata.get("static_body")
+            if static_body is not None:
+                static_sections.append(replace(section, body=str(static_body)))
+                continue
+            static_sections.append(section)
+        return tuple(static_sections)
+
+    def _runtime_skill_overlay_sections(self) -> tuple[PromptSection, ...]:
+        runtime_sections: list[PromptSection] = []
+        for section in self.skill_sections:
+            metadata = section.metadata or {}
+            runtime_body = metadata.get("runtime_body")
+            if runtime_body is not None:
+                body = str(runtime_body or "").strip()
+                if body:
+                    runtime_sections.append(replace(section, body=body))
+                continue
+            if metadata.get("static_prompt") is False:
+                runtime_sections.append(section)
+        return tuple(runtime_sections)
+
+    def render_static_system_prompt(self) -> str:
+        """Render cache-friendly policy and skill sections for the system message."""
+
+        return self._render_group_names(
+            ("base_policy_sections", "skill_sections"),
+            section_overrides={"skill_sections": self._static_skill_sections()},
+        )
+
+    def render_runtime_reminder_message(self) -> str:
+        """Render dynamic per-turn context that can be appended as a reminder."""
+
+        runtime_context_sections = (
+            *self._runtime_skill_overlay_sections(),
+            *self.runtime_context_sections,
+        )
+        return self._render_group_names(
+            ("runtime_context_sections", "runtime_reminder_sections"),
+            section_overrides={
+                "runtime_context_sections": runtime_context_sections,
+            },
+        )
+
+    def render(self) -> str:
+        return self._render_group_names(_GROUP_ORDER)

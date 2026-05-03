@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     ORCHESTRATOR_LLM_PROVIDER: str = "deepseek"
     ORCHESTRATOR_MODEL_NAME: str = "deepseek-v4-pro"
     ORCHESTRATOR_THINKING_ENABLED: bool = True
+    ORCHESTRATOR_RUNTIME_REMINDER_MESSAGE_ENABLED: bool = False
     LONG_TEXT_LLM_PROVIDER: str = "deepseek"
     LONG_TEXT_MODEL_NAME: str = "deepseek-v4-pro"
     LONG_TEXT_THINKING_ENABLED: bool = True

@@ -7,6 +7,7 @@ to dynamically decide which Agent to invoke, replacing the hardcoded pipeline.
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from textwrap import dedent
 from time import perf_counter
@@ -16,6 +17,7 @@ from typing import Any
 from langgraph.graph import END
 from langgraph.types import Command
 
+from app.config import get_settings
 from app.workflow.state import AgentState
 from app.core.database import AsyncSessionLocal
 from app.core.llm.task_routing import get_orchestrator_llm_model
@@ -59,6 +61,7 @@ from app.workflow.orchestrator_instruction_defense import (
     detect_instruction_injection,
     render_instruction_defense_reminder,
 )
+from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
 from app.workflow.prompt_assembly import PromptAssembly, PromptSection
 from app.workflow.runtime_policy_executor import (
     build_next_required_action,
@@ -83,6 +86,16 @@ from app.workflow.confirmation import (
 from app.workflow.nodes_streaming import async_wrap_sync_gen
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class OrchestratorPromptBundle:
+    """Rendered prompt parts for one orchestrator LLM call."""
+
+    system_prompt: str
+    runtime_reminder_message: str
+    runtime_reminder_enabled: bool
+
 
 SKILLIZED_TOOL_NAMES = {
     "data_analytics",
@@ -2005,6 +2018,17 @@ def _build_public_skill_index(state: AgentState) -> str:
     return "\n".join([*note_lines, *lines])
 
 
+def _build_static_public_skill_index() -> str:
+    lines: list[str] = []
+    for definition in build_builtin_skill_tool_definitions():
+        name = str(definition.get("name") or "")
+        description = _compact_text(definition.get("description"), 64)
+        lines.append(f"- {name}: {description}")
+        if len(lines) >= 6:
+            break
+    return "\n".join(lines)
+
+
 def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
     hidden_tool_names = _get_contextual_hidden_tool_names(state)
     preferred_followup_tool = _infer_current_session_followup_tool(state)
@@ -2102,6 +2126,8 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
     context_summary = _compact_text(_build_context_summary(state), 500)
     knowledge_hint = _build_knowledge_planning_hint(state)
     contextual_tool_surface_note = _build_contextual_tool_surface_note(state)
+    dynamic_public_skill_index = _build_public_skill_index(state)
+    static_public_skill_index = _build_static_public_skill_index()
     instruction_defense = (
         render_instruction_defense_reminder(
             build_instruction_defense_context(state, context_packets.recent_evidence)
@@ -2119,6 +2145,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
         priority: int,
         drop_policy: str = "compress",
         budget_cost: int = 0,
+        metadata: dict[str, Any] | None = None,
     ) -> PromptSection:
         return PromptSection(
             key=key,
@@ -2128,6 +2155,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
             priority=priority,
             drop_policy=drop_policy,
             budget_cost=budget_cost,
+            metadata=metadata or {},
         )
 
     base_policy_sections = (
@@ -2262,6 +2290,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                     priority=0,
                     drop_policy="keep",
                     body=contextual_tool_surface_note,
+                    metadata={"static_prompt": False},
                 ),
             )
             if contextual_tool_surface_note
@@ -2273,7 +2302,11 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
             group="skill_sections",
             priority=1,
             drop_policy="compress",
-            body=_build_public_skill_index(state),
+            body=dynamic_public_skill_index,
+            metadata={
+                "static_body": static_public_skill_index,
+                "runtime_body": dynamic_public_skill_index,
+            },
         ),
     )
 
@@ -2365,10 +2398,51 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
     )
 
 
+def _runtime_reminder_message_enabled() -> bool:
+    return bool(
+        getattr(get_settings(), "ORCHESTRATOR_RUNTIME_REMINDER_MESSAGE_ENABLED", False)
+    )
+
+
+def _wrap_runtime_reminder_message(message: str) -> str:
+    body = str(message or "").strip()
+    if not body:
+        return ""
+    return f"<本轮系统提醒>\n{body}\n</本轮系统提醒>"
+
+
+def _build_orchestrator_prompt_bundle_from_assembly(
+    assembly: PromptAssembly,
+) -> OrchestratorPromptBundle:
+    """Build cache-friendly prompt parts while preserving the legacy default."""
+
+    runtime_enabled = _runtime_reminder_message_enabled()
+    if not runtime_enabled:
+        return OrchestratorPromptBundle(
+            system_prompt=assembly.render(),
+            runtime_reminder_message="",
+            runtime_reminder_enabled=False,
+        )
+
+    return OrchestratorPromptBundle(
+        system_prompt=assembly.render_static_system_prompt(),
+        runtime_reminder_message=_wrap_runtime_reminder_message(
+            assembly.render_runtime_reminder_message()
+        ),
+        runtime_reminder_enabled=True,
+    )
+
+
+def build_orchestrator_prompt_bundle(state: AgentState) -> OrchestratorPromptBundle:
+    return _build_orchestrator_prompt_bundle_from_assembly(
+        build_orchestrator_prompt_assembly(state)
+    )
+
+
 def build_orchestrator_system_prompt(state: AgentState) -> str:
     """Build dynamic system prompt based on current state."""
 
-    return build_orchestrator_prompt_assembly(state).render()
+    return build_orchestrator_prompt_bundle(state).system_prompt
 
 
 def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
@@ -3202,7 +3276,24 @@ def _build_orchestrator_assistant_message(
     return assistant_msg
 
 
-def build_orchestrator_messages(state: AgentState) -> list[dict[str, Any]]:
+def _inject_runtime_reminder_message(
+    messages: list[dict[str, Any]],
+    runtime_reminder_message: str | None,
+) -> list[dict[str, Any]]:
+    reminder = str(runtime_reminder_message or "").strip()
+    if not reminder:
+        return messages
+
+    reminder_message = {"role": "user", "content": reminder}
+    if messages and messages[-1].get("role") == "user":
+        return [*messages[:-1], reminder_message, messages[-1]]
+    return [*messages, reminder_message]
+
+
+def build_orchestrator_messages(
+    state: AgentState,
+    runtime_reminder_message: str | None = None,
+) -> list[dict[str, Any]]:
     """Build message history for the orchestrator LLM call.
 
     If the last message in history is an assistant message with tool_calls
@@ -3219,7 +3310,10 @@ def build_orchestrator_messages(state: AgentState) -> list[dict[str, Any]]:
             context_parts.append(f"（行业：{industry}）")
         if website:
             context_parts.append(f"（官网：{website}）")
-        return [{"role": "user", "content": "".join(context_parts)}]
+        return _inject_runtime_reminder_message(
+            [{"role": "user", "content": "".join(context_parts)}],
+            runtime_reminder_message,
+        )
 
     # Limit history to last 20 messages to prevent context growth
     MAX_HISTORY = 20
@@ -3254,7 +3348,7 @@ def build_orchestrator_messages(state: AgentState) -> list[dict[str, Any]]:
             f"(tool_call_id={tc_id}): {summary[:80]}..."
         )
 
-    return messages
+    return _inject_runtime_reminder_message(messages, runtime_reminder_message)
 
 
 async def _hydrate_knowledge_manifest(state: AgentState) -> dict[str, Any] | None:
@@ -4031,8 +4125,14 @@ async def orchestrator_node(state: AgentState) -> Command:
     llm_state = _sanitize_runtime_policy_state(working_state)
 
     # Build orchestrator call
-    system_prompt = build_orchestrator_system_prompt(llm_state)
-    messages = build_orchestrator_messages(llm_state)
+    prompt_assembly = build_orchestrator_prompt_assembly(llm_state)
+    prompt_bundle = _build_orchestrator_prompt_bundle_from_assembly(prompt_assembly)
+    system_prompt = prompt_bundle.system_prompt
+    runtime_reminder_source = prompt_assembly.render_runtime_reminder_message()
+    messages = build_orchestrator_messages(
+        llm_state,
+        runtime_reminder_message=prompt_bundle.runtime_reminder_message,
+    )
     tools = await build_agent_tools(llm_state)
 
     # Stream LLM response
@@ -4168,7 +4268,10 @@ async def orchestrator_node(state: AgentState) -> Command:
         )
 
         if last_usage:
-            from app.services.llm_usage_service import record_llm_usage_async
+            from app.services.llm_usage_service import (
+                record_llm_usage_async,
+                resolve_llm_model_identity,
+            )
 
             await record_llm_usage_async(
                 session_id=session_id,
@@ -4183,6 +4286,16 @@ async def orchestrator_node(state: AgentState) -> Command:
                     "streaming": True,
                     "message_count": len(messages) + 1,
                     "tool_count": len(tools),
+                    "static_prompt_hash": fingerprint_text(
+                        prompt_assembly.render_static_system_prompt()
+                    ),
+                    "tool_surface_hash": fingerprint_tools(tools),
+                    "system_prompt_length": len(system_prompt),
+                    "runtime_context_size": len(runtime_reminder_source),
+                    "model_identity": resolve_llm_model_identity(model),
+                    "runtime_reminder_enabled": (
+                        prompt_bundle.runtime_reminder_enabled
+                    ),
                 },
             )
 

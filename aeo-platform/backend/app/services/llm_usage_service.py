@@ -51,6 +51,11 @@ def _resolve_model_metadata(model: BaseLLMModel) -> tuple[str, str]:
     return provider, str(model_name)
 
 
+def resolve_llm_model_identity(model: BaseLLMModel) -> str:
+    provider, model_name = _resolve_model_metadata(model)
+    return f"{provider}:{model_name}"
+
+
 def _resolve_pricing(
     provider: str,
     model_name: str,
