@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
@@ -39,8 +40,15 @@ from app.services.aio_session_manager import (
 from app.services.task_service import TaskService
 from app.services.local_runtime_registry import LocalRuntimeRegistry
 from app.services.skill_contracts import build_skill_contract
-from app.services.skill_package_service import skill_package_service
-from app.services.skill_registry_service import build_builtin_skill_tool_definitions
+from app.services.skill_package_service import (
+    SkillPackageManifest,
+    skill_package_service,
+)
+from app.services.skill_registry_service import (
+    BUILTIN_SKILL_SPECS,
+    build_builtin_skill_tool_definitions,
+    build_skill_tool_definition,
+)
 from app.services.tool_capability_matrix import (
     get_tool_capability,
     validate_tool_capability_access,
@@ -3237,7 +3245,17 @@ def test_pending_decision_and_active_skill_packets_render_structured_context():
         },
         "current_skill": "analysis_report_skill",
         "current_skill_family": "analysis_report_skill",
+        "current_skill_package_key": "analysis-report",
         "current_skill_package_name": "完整分析报告",
+        "current_skill_package_description": "按报告结构组织证据、指标和建议。",
+        "current_skill_prompt_overlay": "本轮优先输出高风险场景和证据缺口。",
+        "current_skill_profiles": [
+            {
+                "skill_key": "profile_high_risk",
+                "display_name": "高风险优先",
+                "description": "优先解释风险和失败原因。",
+            }
+        ],
         "current_skill_contract": {
             "skill_key": "analysis_report_skill",
             "family_skill_key": "analysis_report_skill",
@@ -3263,7 +3281,44 @@ def test_pending_decision_and_active_skill_packets_render_structured_context():
     assert active_skill_packet.skill_key == "analysis_report_skill"
     assert active_skill_packet.executor_ref == "a5_data_analytics"
     assert "当前技能：analysis_report_skill" in active_skill_rendered
+    assert "技能包：完整分析报告(analysis-report)" in active_skill_rendered
+    assert "技能包提示：按报告结构组织证据、指标和建议。" in active_skill_rendered
+    assert "当前策略补充：本轮优先输出高风险场景和证据缺口。" in active_skill_rendered
+    assert "高风险优先(profile_high_risk)" in active_skill_rendered
     assert "允许工具" in active_skill_rendered
+
+
+def test_stable_skill_tool_description_ignores_overlay_and_package_hint(monkeypatch):
+    monkeypatch.setattr(
+        get_settings(),
+        "STABLE_SKILL_TOOL_DESCRIPTION_ENABLED",
+        True,
+    )
+    spec = next(
+        item for item in BUILTIN_SKILL_SPECS if item.skill_key == "analysis_report_skill"
+    )
+    changed_overlay = replace(spec, prompt_overlay="只输出管理层摘要。")
+    changed_package = SkillPackageManifest(
+        package_key="analysis-report-alt",
+        family_skill_key="analysis_report_skill",
+        display_name="替代报告包",
+        description="动态包提示不应进入工具说明。",
+        skill_md_path="D:/tmp/SKILL.md",
+        body="# 替代报告包\n动态执行策略",
+    )
+
+    base_definition = build_skill_tool_definition(spec, package=None)
+    changed_definition = build_skill_tool_definition(
+        changed_overlay,
+        package=changed_package,
+    )
+
+    assert fingerprint_tools([base_definition]) == fingerprint_tools(
+        [changed_definition]
+    )
+    assert "只输出管理层摘要" not in changed_definition["description"]
+    assert "动态包提示" not in changed_definition["description"]
+    assert base_definition["parameters"] == changed_definition["parameters"]
 
 
 def test_orchestrator_prompt_assembly_adds_instruction_security_for_disclosure_request():

@@ -41,9 +41,11 @@ class SkillInvocationPlan:
     family_skill_key: str
     package_key: str | None
     package_display_name: str | None
+    package_description: str | None
     package_path: str | None
     package_body: str | None
     prompt_overlay: str | None
+    profiles: tuple[dict[str, str], ...]
     executor_ref: str
     merged_tool_args: dict[str, Any]
     skill_contract: SkillContract
@@ -77,6 +79,22 @@ class SkillInvocationService:
         if not node_name:
             return None
 
+        family_skill_key = str(
+            resolved_skill.get("family_skill_key") or resolved_skill["skill_key"]
+        )
+        profiles = await self.registry.list_enabled_profiles_for_template(
+            family_skill_key,
+            scope_context=scope_context,
+        )
+        profile_summaries = tuple(
+            {
+                "skill_key": str(profile.skill_key),
+                "display_name": str(profile.display_name),
+                "description": str(profile.description or ""),
+                "prompt_overlay": str(profile.prompt_overlay or ""),
+            }
+            for profile in profiles
+        )
         merged_tool_args = dict(resolved_skill.get("default_params") or {})
         if alias:
             merged_tool_args.update(alias.get("extra_args") or {})
@@ -84,9 +102,7 @@ class SkillInvocationService:
         display_name = str(resolved_skill["display_name"])
         skill_contract = build_skill_contract(
             skill_key=str(resolved_skill["skill_key"]),
-            family_skill_key=str(
-                resolved_skill.get("family_skill_key") or resolved_skill["skill_key"]
-            ),
+            family_skill_key=family_skill_key,
             display_name=display_name,
             executor_ref=str(resolved_skill["executor_ref"]),
             prerequisites=list(resolved_skill.get("prerequisites") or []),
@@ -102,14 +118,14 @@ class SkillInvocationService:
             display_name=display_name,
             node_name=node_name,
             skill_key=str(resolved_skill["skill_key"]),
-            family_skill_key=str(
-                resolved_skill.get("family_skill_key") or resolved_skill["skill_key"]
-            ),
+            family_skill_key=family_skill_key,
             package_key=resolved_skill.get("package_key"),
             package_display_name=resolved_skill.get("package_display_name"),
+            package_description=resolved_skill.get("package_description"),
             package_path=resolved_skill.get("package_path"),
             package_body=resolved_skill.get("package_body"),
             prompt_overlay=resolved_skill.get("prompt_overlay"),
+            profiles=profile_summaries,
             executor_ref=str(resolved_skill["executor_ref"]),
             merged_tool_args=merged_tool_args,
             skill_contract=skill_contract,

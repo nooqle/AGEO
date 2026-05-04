@@ -4443,6 +4443,13 @@ async def orchestrator_node(state: AgentState) -> Command:
                         prompt_bundle.runtime_reminder_enabled
                     ),
                     "stable_tool_surface_enabled": _stable_tool_surface_enabled(),
+                    "stable_skill_tool_description_enabled": bool(
+                        getattr(
+                            get_settings(),
+                            "STABLE_SKILL_TOOL_DESCRIPTION_ENABLED",
+                            False,
+                        )
+                    ),
                 },
             )
 
@@ -4930,9 +4937,11 @@ async def _handle_tool_call(
     skill_family_key = None
     selected_skill_package_key = None
     selected_skill_package_name = None
+    selected_skill_package_description = None
     selected_skill_package_path = None
     selected_skill_package_context = None
     selected_skill_prompt_overlay = None
+    selected_skill_profiles = None
     selected_skill_contract = None
     selected_skill_prompt_sections = None
     selected_tool_capability = None
@@ -4945,9 +4954,11 @@ async def _handle_tool_call(
         display_name = resolved_skill.display_name
         selected_skill_package_key = resolved_skill.package_key
         selected_skill_package_name = resolved_skill.package_display_name
+        selected_skill_package_description = resolved_skill.package_description
         selected_skill_package_path = resolved_skill.package_path
         selected_skill_package_context = resolved_skill.package_body
         selected_skill_prompt_overlay = resolved_skill.prompt_overlay
+        selected_skill_profiles = list(resolved_skill.profiles)
         selected_skill_contract = resolved_skill.skill_contract.to_state_payload()
         selected_skill_prompt_sections = selected_skill_contract.get("prompt_sections")
         node_name = resolved_skill.node_name
@@ -5517,9 +5528,11 @@ async def _handle_tool_call(
                 "current_skill_family": skill_family_key,
                 "current_skill_package_key": selected_skill_package_key,
                 "current_skill_package_name": selected_skill_package_name,
+                "current_skill_package_description": selected_skill_package_description,
                 "current_skill_package_path": selected_skill_package_path,
                 "current_skill_package_context": selected_skill_package_context,
                 "current_skill_prompt_overlay": selected_skill_prompt_overlay,
+                "current_skill_profiles": selected_skill_profiles,
                 "current_skill_contract": selected_skill_contract,
                 "current_skill_prompt_sections": selected_skill_prompt_sections,
                 "current_tool_capability": selected_tool_capability,

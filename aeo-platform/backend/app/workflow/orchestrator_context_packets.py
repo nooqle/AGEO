@@ -246,6 +246,11 @@ class ActiveSkillPacket:
     family_skill_key: str | None
     display_name: str | None
     executor_ref: str | None
+    package_key: str | None
+    package_name: str | None
+    package_description: str | None
+    prompt_overlay: str | None
+    profiles: tuple[str, ...]
     intent_scope: str | None
     preconditions: tuple[str, ...]
     allowed_tools: tuple[str, ...]
@@ -1114,6 +1119,31 @@ def build_active_skill_packet(state: dict[str, Any]) -> ActiveSkillPacket:
         or None
     )
     executor_ref = str(contract.get("executor_ref") or "").strip() or None
+    package_key = str(state.get("current_skill_package_key") or "").strip() or None
+    package_name = str(state.get("current_skill_package_name") or "").strip() or None
+    package_description = (
+        str(state.get("current_skill_package_description") or "").strip() or None
+    )
+    prompt_overlay = (
+        str(state.get("current_skill_prompt_overlay") or "").strip() or None
+    )
+    profiles: list[str] = []
+    for profile in state.get("current_skill_profiles") or []:
+        if not isinstance(profile, dict):
+            continue
+        profile_key = str(profile.get("skill_key") or "").strip()
+        profile_name = str(profile.get("display_name") or "").strip()
+        profile_description = str(profile.get("description") or "").strip()
+        if not profile_key and not profile_name:
+            continue
+        label = (
+            f"{profile_name}({profile_key})"
+            if profile_name and profile_key
+            else profile_name or profile_key
+        )
+        if profile_description:
+            label = f"{label}: {profile_description}"
+        profiles.append(label)
     intent_scope = str(contract.get("intent_scope") or "").strip() or None
     preconditions = tuple(
         str(item) for item in (contract.get("preconditions") or []) if str(item).strip()
@@ -1136,6 +1166,11 @@ def build_active_skill_packet(state: dict[str, Any]) -> ActiveSkillPacket:
         family_skill_key=family_skill_key,
         display_name=display_name,
         executor_ref=executor_ref,
+        package_key=package_key,
+        package_name=package_name,
+        package_description=package_description,
+        prompt_overlay=prompt_overlay,
+        profiles=tuple(profiles),
         intent_scope=intent_scope,
         preconditions=preconditions,
         allowed_tools=allowed_tools,
@@ -1254,6 +1289,17 @@ def render_active_skill_packet(packet: ActiveSkillPacket) -> str:
         lines.append(f"- 展示名称：{packet.display_name}")
     if packet.executor_ref:
         lines.append(f"- 执行器：{packet.executor_ref}")
+    if packet.package_name:
+        package_label = packet.package_name
+        if packet.package_key:
+            package_label = f"{package_label}({packet.package_key})"
+        lines.append(f"- 技能包：{package_label}")
+    if packet.package_description:
+        lines.append(f"- 技能包提示：{packet.package_description}")
+    if packet.prompt_overlay:
+        lines.append(f"- 当前策略补充：{packet.prompt_overlay}")
+    if packet.profiles:
+        lines.append(f"- 可用技能 Profile：{'；'.join(packet.profiles)}")
     if packet.intent_scope:
         lines.append(f"- 意图范围：{packet.intent_scope}")
     if packet.preconditions:
