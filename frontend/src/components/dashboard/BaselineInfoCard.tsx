@@ -78,9 +78,9 @@ export function BaselineInfoCard({
     >
       <div
         className="mt-0.5 p-1.5 rounded-lg"
-        style={{ background: 'color-mix(in srgb, var(--color-primary) 12%, transparent)' }}
+        style={{ background: 'color-mix(in srgb, var(--brand-primary) 12%, transparent)' }}
       >
-        <RiDatabase2Line className="w-4 h-4" style={{ color: 'var(--color-primary)' }} />
+        <RiDatabase2Line className="w-4 h-4" style={{ color: 'var(--brand-primary)' }} />
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between">

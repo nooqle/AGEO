@@ -17,9 +17,8 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
     <header
       className="sticky top-0 z-30 flex h-14 items-center justify-between border-b px-5 lg:px-7"
       style={{
-        backgroundColor: 'color-mix(in srgb, var(--bg-primary) 88%, #efe7dc 12%)',
+        backgroundColor: 'var(--bg-primary)',
         borderBottomColor: 'var(--border-subtle)',
-        backdropFilter: 'blur(18px)',
       }}
     >
       <HomeBrandLink />
@@ -27,7 +26,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
       <div className="flex items-center gap-2">
         <button
           onClick={onNewAnalysis ?? (() => router.push('/dashboard'))}
-          className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] font-medium transition-opacity hover:opacity-90"
+          className="flex min-h-10 items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12px] font-medium transition-opacity hover:opacity-90"
           style={{
             background: 'var(--brand-primary)',
             color: 'var(--brand-contrast)',
@@ -41,7 +40,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
         <NotificationBell align="right" />
         <button
           onClick={() => router.push('/settings')}
-          className="rounded-full p-2 transition-colors"
+          className="h-10 w-10 rounded-lg p-2 transition-colors"
           style={{ color: 'var(--text-tertiary)' }}
           onMouseEnter={(e) => {
             e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';

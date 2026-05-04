@@ -248,7 +248,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
       actions={
         <Link
           href="/control-plane/customers"
-          className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-semibold"
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold"
           style={{
             borderColor: palette.borderStrong,
             background: palette.panel,
@@ -305,7 +305,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
           </div>
 
           <div
-            className="inline-flex rounded-2xl border p-1"
+            className="inline-flex rounded-xl border p-1"
             style={{ borderColor: palette.border, background: palette.panel }}
           >
             <TabButton
@@ -366,7 +366,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                     <input
                       value={orgNameDraft}
                       onChange={(event) => setOrgNameDraft(event.target.value)}
-                      className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                      className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
                       style={{
                         background: palette.panel,
                         borderColor: palette.borderStrong,
@@ -384,7 +384,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                     <select
                       value={orgStatusDraft}
                       onChange={(event) => setOrgStatusDraft(event.target.value)}
-                      className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                      className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
                       style={{
                         background: palette.panel,
                         borderColor: palette.borderStrong,
@@ -425,7 +425,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                   return (
                     <div
                       key={user.id}
-                      className="rounded-2xl border px-4 py-4"
+                      className="rounded-xl border px-4 py-4"
                       style={{ borderColor: palette.border, background: palette.panelMuted }}
                     >
                       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_220px_180px_auto]">
@@ -438,7 +438,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                             }))
                           }
                           placeholder="邮箱"
-                          className="h-11 rounded-2xl border px-3 text-sm outline-none"
+                          className="h-11 rounded-lg border px-3 text-sm outline-none"
                           style={{
                             background: palette.panel,
                             borderColor: palette.borderStrong,
@@ -454,7 +454,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                             }))
                           }
                           placeholder="手机号"
-                          className="h-11 rounded-2xl border px-3 text-sm outline-none"
+                          className="h-11 rounded-lg border px-3 text-sm outline-none"
                           style={{
                             background: palette.panel,
                             borderColor: palette.borderStrong,
@@ -470,7 +470,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                             }))
                           }
                           placeholder="职位"
-                          className="h-11 rounded-2xl border px-3 text-sm outline-none"
+                          className="h-11 rounded-lg border px-3 text-sm outline-none"
                           style={{
                             background: palette.panel,
                             borderColor: palette.borderStrong,
@@ -485,7 +485,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                               [user.id]: { ...draft, status: event.target.value },
                             }))
                           }
-                          className="h-11 rounded-2xl border px-3 text-sm outline-none"
+                          className="h-11 rounded-lg border px-3 text-sm outline-none"
                           style={{
                             background: palette.panel,
                             borderColor: palette.borderStrong,
@@ -583,7 +583,7 @@ function EntityList({
   if (entities.length === 0) {
     return (
       <div
-        className="rounded-2xl border border-dashed px-4 py-6 text-sm"
+        className="rounded-xl border border-dashed px-4 py-6 text-sm"
         style={{ borderColor: palette.borderStrong, color: palette.muted }}
       >
         {emptyText}
@@ -596,7 +596,7 @@ function EntityList({
       {entities.map((entity) => (
         <div
           key={entity.id}
-          className="rounded-2xl border px-4 py-4"
+          className="rounded-xl border px-4 py-4"
           style={{ borderColor: palette.border, background: palette.panelMuted }}
         >
           <div className="flex items-center justify-between gap-4">
@@ -641,7 +641,7 @@ function TaskTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
+      <table className="min-w-[980px] text-left text-sm">
         <thead>
           <tr style={{ color: palette.subtle }}>
             <th className="pb-3 pr-4 font-semibold">品牌</th>

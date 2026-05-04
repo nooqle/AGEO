@@ -52,7 +52,7 @@ export function KPICard({ title, value, subtitle, trend, sparklineData = [], too
   return (
     <Container
       {...(isInteractive ? { type: 'button', onClick } : {})}
-      className={`rounded-2xl p-4 text-left ${isInteractive ? 'transition-transform hover:-translate-y-0.5 cursor-pointer' : ''}`}
+      className={`rounded-[16px] p-4 text-left ${isInteractive ? 'transition-transform hover:-translate-y-0.5 cursor-pointer' : ''}`}
       style={{
         background: 'linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0))',
         border: '1px solid var(--border-subtle)',
@@ -115,7 +115,7 @@ export function KPICard({ title, value, subtitle, trend, sparklineData = [], too
           )}
         </div>
         {sparklineData.length >= 2 ? (
-          <div className="text-[var(--color-primary)]">
+          <div className="text-[var(--brand-primary)]">
             <Sparkline data={sparklineData} />
           </div>
         ) : null}
@@ -124,7 +124,7 @@ export function KPICard({ title, value, subtitle, trend, sparklineData = [], too
         {subtitle}
       </div>
       {actionLabel && (
-        <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--color-primary)' }}>
+        <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--brand-primary)' }}>
           {actionLabel}
           <RiArrowRightLine className="w-3 h-3" />
         </div>

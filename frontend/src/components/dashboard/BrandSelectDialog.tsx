@@ -171,8 +171,8 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
                           className="text-left p-4 rounded-xl cursor-pointer transition-all relative"
                           style={{
                             background: 'var(--bg-tertiary)',
-                            border: isSelected ? '1px solid var(--color-primary)' : '1px solid var(--border-subtle)',
-                            boxShadow: isSelected ? '0 0 0 1px color-mix(in srgb, var(--color-primary) 28%, transparent)' : 'none',
+                            border: isSelected ? '1px solid var(--brand-primary)' : '1px solid var(--border-subtle)',
+                            boxShadow: isSelected ? '0 0 0 1px color-mix(in srgb, var(--brand-primary) 28%, transparent)' : 'none',
                           }}
                           onClick={() => setSelectedId(isSelected ? null : entity.id)}
                           whileHover={{ scale: 1.02 }}
@@ -182,9 +182,9 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
                           {isSelected && (
                             <div
                               className="absolute top-2 right-2 w-5 h-5 rounded-full flex items-center justify-center"
-                              style={{ background: 'var(--color-primary)' }}
+                              style={{ background: 'var(--brand-primary)' }}
                             >
-                              <RiCheckLine className="w-3 h-3 text-white" />
+                              <RiCheckLine className="w-3 h-3 text-[var(--brand-contrast)]" />
                             </div>
                           )}
 

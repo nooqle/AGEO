@@ -31,7 +31,7 @@ export function NotificationBell({ align = 'right', className }: NotificationBel
         ref={buttonRef}
         data-notification-bell
         onClick={togglePanel}
-        className="p-2 rounded-lg transition-colors relative"
+        className="relative h-10 w-10 rounded-lg p-2 transition-colors"
         style={{
           color: hasUnread ? 'var(--text-secondary)' : 'var(--text-tertiary)',
         }}
@@ -57,7 +57,7 @@ export function NotificationBell({ align = 'right', className }: NotificationBel
             className="notification-badge absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold leading-none px-1"
             style={{
               backgroundColor: 'var(--error)',
-              color: '#FFFFFF',
+              color: 'var(--brand-contrast)',
             }}
           >
             {displayCount}

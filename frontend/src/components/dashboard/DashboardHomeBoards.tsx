@@ -60,7 +60,7 @@ function SectionBlock({
   children: ReactNode;
 }) {
   return (
-    <section className={`rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] ${compact ? 'px-4 py-4' : 'px-5 py-5'}`}>
+    <section className={`rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] ${compact ? 'px-4 py-4' : 'px-5 py-5'}`}>
       <div className="text-[17px] font-semibold text-[var(--text-primary)]">{title}</div>
       <div className={compact ? 'mt-3' : 'mt-4'}>{children}</div>
     </section>
@@ -87,7 +87,7 @@ function MetricStrip({
       {metrics.slice(0, 4).map((metric) => (
         <div
           key={metric.id}
-          className="rounded-[20px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-4"
+          className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-4"
         >
           <div className="flex items-start justify-between gap-3">
             <div className="text-[13px] text-[var(--text-tertiary)]">{metric.label}</div>
@@ -456,7 +456,7 @@ function MentionRanking({ rows }: { rows: DashboardMentionRankingRow[] }) {
             <div
               key={`${row.rank}-${row.brand}`}
               className={`grid grid-cols-[42px_minmax(0,1fr)_84px_72px] items-center gap-3 rounded-[16px] px-3 py-3 text-[14px] ${
-                row.is_current_brand ? 'bg-[var(--color-primary)]/10 text-[var(--text-primary)]' : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
+                row.is_current_brand ? 'bg-[var(--brand-bg)] text-[var(--text-primary)]' : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
               }`}
             >
               <div className="font-semibold text-[var(--text-primary)]">#{row.rank}</div>
@@ -485,7 +485,7 @@ function SourceTypeList({ items }: { items: DashboardCitationSourceType[] }) {
             <span className="font-medium text-[var(--text-primary)]">{formatPercent(item.share)}</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-[var(--bg-tertiary)]">
-            <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: percentWidth(item.share) }} />
+            <div className="h-full rounded-full bg-[var(--brand-primary)]" style={{ width: percentWidth(item.share) }} />
           </div>
         </li>
       ))}
@@ -574,7 +574,7 @@ function MonitoringIssueBanner({
   const sourceLabel = issue.endpoint_labels.join('、') || 'AI 来源待确认';
   return (
     <div
-      className="rounded-[20px] border px-5 py-4"
+            className="rounded-[16px] border px-5 py-4"
       style={{
         background: 'var(--status-error-bg)',
         borderColor: 'color-mix(in srgb, var(--evidence-risk) 22%, var(--border-subtle) 78%)',
@@ -599,14 +599,14 @@ function MonitoringIssueBanner({
           <button
             type="button"
             onClick={() => onOpenChat?.(issue)}
-            className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 text-[13px] font-medium text-[var(--text-primary)]"
+            className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 text-[13px] font-medium text-[var(--text-primary)]"
           >
             AI 对话处理
           </button>
           <button
             type="button"
             onClick={() => onRetry?.(issue)}
-            className="rounded-full bg-[var(--brand-primary)] px-4 py-2 text-[13px] font-medium text-white"
+            className="rounded-lg bg-[var(--brand-primary)] px-4 py-2 text-[13px] font-medium text-[var(--brand-contrast)]"
           >
             重新触发快速复测
           </button>
@@ -630,7 +630,7 @@ export function DashboardHomeBoards({
   const wordCloud = home.word_cloud || { positive: [], negative: [] };
 
   return (
-    <section className="dashboard-shell rounded-[30px] px-6 py-6">
+    <section className="dashboard-shell rounded-[18px] px-6 py-6">
       <DashboardSectionHeader
         title="周期监测结果"
         action={latestReport?.created_at ? (
@@ -643,7 +643,7 @@ export function DashboardHomeBoards({
         ) : undefined}
       />
 
-      <div className="space-y-4 rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-5 py-5">
+      <div className="space-y-4 rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-5 py-5">
         <MonitoringIssueBanner
           issue={home.recent_issue}
           onOpenChat={onOpenIssueChat}
@@ -660,7 +660,7 @@ export function DashboardHomeBoards({
                 {latestReport?.title || '暂无最新报告'}
               </h2>
               {latestReport?.badge_label ? (
-                <span className="inline-flex items-center rounded-full bg-[var(--bg-tertiary)] px-2.5 py-1 text-[12px] font-medium text-[var(--color-primary)]">
+                  <span className="inline-flex items-center rounded-full bg-[var(--bg-tertiary)] px-2.5 py-1 text-[12px] font-medium text-[var(--brand-primary)]">
                   {latestReport.badge_label}
                 </span>
               ) : null}
@@ -674,7 +674,7 @@ export function DashboardHomeBoards({
               onClick={onOpenLatestReport}
               disabled={isOpeningLatestReport}
               aria-busy={isOpeningLatestReport}
-              className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 text-[13px] font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] disabled:cursor-wait disabled:opacity-70"
+              className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 text-[13px] font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)] disabled:cursor-wait disabled:opacity-70"
             >
               {isOpeningLatestReport ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" /> : null}
               {isOpeningLatestReport ? '打开中' : latestReport.action_label || '打开报告'}

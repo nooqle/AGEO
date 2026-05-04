@@ -121,7 +121,7 @@ function FieldLabel({
 function DashboardBrandOverviewLoading() {
   return (
     <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-      <div className="dashboard-inner-panel rounded-[24px] px-5 py-5">
+      <div className="dashboard-inner-panel rounded-[16px] px-5 py-5">
         <Skeleton width={112} height={16} animation="wave" />
         <div className="mt-4 flex items-start gap-4">
           <Skeleton variant="rounded" width={56} height={56} animation="wave" className="rounded-[18px]" />
@@ -143,7 +143,7 @@ function DashboardBrandOverviewLoading() {
         </div>
       </div>
 
-      <div className="dashboard-inner-panel rounded-[24px] px-5 py-5">
+      <div className="dashboard-inner-panel rounded-[16px] px-5 py-5">
         <Skeleton width={96} height={16} animation="wave" />
         <div className="mt-5 space-y-3">
           <Skeleton height={96} animation="wave" className="rounded-[20px]" />
@@ -175,7 +175,7 @@ export function DashboardBrandOverview({ entity, archive, isLoading = false }: D
 
   return (
     <section
-      className="dashboard-shell rounded-[30px] px-6 py-6"
+      className="dashboard-shell rounded-[18px] px-6 py-6"
     >
       <DashboardSectionHeader
         title="品牌档案与竞品分类"
@@ -183,7 +183,7 @@ export function DashboardBrandOverview({ entity, archive, isLoading = false }: D
           <button
             type="button"
             onClick={() => setIsExpanded((current) => !current)}
-            className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] font-medium transition-colors"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-1.5 text-[13px] font-medium transition-colors"
             style={{
               borderColor: 'var(--border-subtle)',
               color: 'var(--text-secondary)',
@@ -198,7 +198,7 @@ export function DashboardBrandOverview({ entity, archive, isLoading = false }: D
 
       {!isExpanded ? (
         <div
-          className="dashboard-inner-panel rounded-[22px] px-4 py-4 text-[14px] leading-7"
+          className="dashboard-inner-panel rounded-[16px] px-4 py-4 text-[14px] leading-7"
           style={{ color: 'var(--text-secondary)' }}
           >
             {isLoading
@@ -210,7 +210,7 @@ export function DashboardBrandOverview({ entity, archive, isLoading = false }: D
       ) : (
         <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
           <div
-            className="dashboard-inner-panel rounded-[24px] px-5 py-5"
+            className="dashboard-inner-panel rounded-[16px] px-5 py-5"
           >
             <TitleWithIcon icon={RiBookmark3Line}>品牌档案</TitleWithIcon>
 
@@ -308,7 +308,7 @@ export function DashboardBrandOverview({ entity, archive, isLoading = false }: D
           </div>
 
           <div
-            className="dashboard-inner-panel rounded-[24px] px-5 py-5"
+            className="dashboard-inner-panel rounded-[16px] px-5 py-5"
           >
             <TitleWithIcon icon={RiLeafLine}>竞品分类</TitleWithIcon>
 

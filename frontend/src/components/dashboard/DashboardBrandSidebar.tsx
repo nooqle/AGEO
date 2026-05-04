@@ -28,7 +28,7 @@ export function DashboardBrandSidebar({
   const [manageOpen, setManageOpen] = useState(false);
 
   return (
-    <aside className="dashboard-shell sticky top-4 h-fit rounded-[22px] px-4 py-4">
+    <aside className="dashboard-shell sticky top-4 h-fit rounded-[18px] px-4 py-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
@@ -39,7 +39,7 @@ export function DashboardBrandSidebar({
         <button
           type="button"
           onClick={() => setManageOpen(true)}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
           style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}
           aria-label="管理品牌"
           title="管理品牌"
@@ -94,5 +94,68 @@ export function DashboardBrandSidebar({
 
       <BrandManageDialog open={manageOpen} onClose={() => setManageOpen(false)} />
     </aside>
+  );
+}
+
+export function DashboardMobileBrandSwitcher({
+  entities,
+  selectedBrandId,
+  onSelectBrand,
+  onAddBrand,
+}: DashboardBrandSidebarProps) {
+  const [manageOpen, setManageOpen] = useState(false);
+  const selectedBrand = entities.find((entity) => entity.id === selectedBrandId) || entities[0];
+  const selectedName = cleanText(selectedBrand?.name, '未命名品牌');
+  const selectedDomain = cleanText(selectedBrand?.domain, '未设置官网');
+
+  return (
+    <section className="dashboard-shell rounded-[16px] px-4 py-3 xl:hidden">
+      <div className="grid grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-3">
+        <BrandAvatar name={selectedName} domain={selectedBrand?.domain} size={40} />
+        <label className="min-w-0">
+          <span className="block text-[11px] font-medium tracking-[0.12em] text-[var(--text-tertiary)]">
+            当前品牌
+          </span>
+          <select
+            value={selectedBrand?.id || ''}
+            onChange={(event) => onSelectBrand(event.target.value)}
+            className="mt-1 h-10 w-full rounded-lg border bg-[var(--bg-secondary)] px-3 text-[14px] font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--brand-primary)]"
+            style={{ borderColor: 'var(--border-subtle)' }}
+            aria-label="切换当前品牌"
+          >
+            {entities.map((entity) => (
+              <option key={entity.id} value={entity.id}>
+                {cleanText(entity.name, '未命名品牌')}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 block truncate text-[12px] text-[var(--text-tertiary)]">
+            {selectedDomain}
+          </span>
+        </label>
+        <button
+          type="button"
+          onClick={() => setManageOpen(true)}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
+          style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}
+          aria-label="管理品牌"
+          title="管理品牌"
+        >
+          <RiSettings3Line className="h-4 w-4" />
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={onAddBrand}
+        className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-dashed text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
+        style={{ background: 'color-mix(in srgb, var(--bg-secondary) 76%, var(--bg-tertiary) 24%)' }}
+      >
+        <RiAddLine className="h-4 w-4" />
+        新建品牌
+      </button>
+
+      <BrandManageDialog open={manageOpen} onClose={() => setManageOpen(false)} />
+    </section>
   );
 }

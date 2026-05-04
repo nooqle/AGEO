@@ -234,8 +234,8 @@ function EntityFormDialogInner({
                 onClick={() => setVisibilityScope('personal')}
                 className="rounded-xl border px-4 py-3 text-left transition-colors"
                 style={{
-                  borderColor: visibilityScope === 'personal' ? 'var(--color-primary)' : 'var(--border-subtle)',
-                  backgroundColor: visibilityScope === 'personal' ? 'color-mix(in srgb, var(--color-primary) 10%, var(--bg-primary) 90%)' : 'var(--bg-primary)',
+                  borderColor: visibilityScope === 'personal' ? 'var(--brand-primary)' : 'var(--border-subtle)',
+                  backgroundColor: visibilityScope === 'personal' ? 'color-mix(in srgb, var(--brand-primary) 10%, var(--bg-primary) 90%)' : 'var(--bg-primary)',
                 }}
               >
                 <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
@@ -255,8 +255,8 @@ function EntityFormDialogInner({
                 disabled={!allowOrganizationScope}
                 className="rounded-xl border px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                 style={{
-                  borderColor: visibilityScope === 'organization' ? 'var(--color-primary)' : 'var(--border-subtle)',
-                  backgroundColor: visibilityScope === 'organization' ? 'color-mix(in srgb, var(--color-primary) 10%, var(--bg-primary) 90%)' : 'var(--bg-primary)',
+                  borderColor: visibilityScope === 'organization' ? 'var(--brand-primary)' : 'var(--border-subtle)',
+                  backgroundColor: visibilityScope === 'organization' ? 'color-mix(in srgb, var(--brand-primary) 10%, var(--bg-primary) 90%)' : 'var(--bg-primary)',
                 }}
               >
                 <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
@@ -296,7 +296,7 @@ function EntityFormDialogInner({
             <button
               type="submit"
               disabled={isSubmitting || !name.trim() || !domain.trim() || !industry.trim()}
-              className="btn-primary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+              className="btn-primary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-[var(--brand-contrast)] text-sm font-medium rounded-lg transition-colors"
             >
               {isSubmitting ? (isEdit ? '更新中...' : '创建中...') : isEdit ? '更新品牌' : '创建品牌'}
             </button>

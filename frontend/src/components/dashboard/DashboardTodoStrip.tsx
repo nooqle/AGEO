@@ -37,7 +37,7 @@ export function DashboardTodoStrip({ item, onAction }: DashboardTodoStripProps) 
       <button
         type="button"
         onClick={() => onAction?.(item)}
-        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[11px] border bg-[var(--bg-secondary)] px-3 text-[13px] font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
+        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border bg-[var(--bg-secondary)] px-3 text-[13px] font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
         style={{ borderColor: 'color-mix(in srgb, var(--status-warning) 20%, var(--border-subtle) 80%)' }}
       >
         {item.action_label || '处理'}

@@ -93,7 +93,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
           <Dialog.Overlay className={modalScrimClassName('z-50')} />
           <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
             <motion.div
-              className="flex h-[min(88vh,980px)] w-[min(94vw,1320px)] flex-col overflow-hidden rounded-[30px] border"
+              className="flex h-[min(88vh,980px)] w-[min(94vw,1320px)] flex-col overflow-hidden rounded-[18px] border"
               style={{
                 background:
                   'linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 96%, #edf1ee 4%), var(--bg-secondary))',
@@ -114,7 +114,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                 </div>
                 <Dialog.Close asChild>
                   <button
-                    className="flex h-11 w-11 items-center justify-center rounded-full border transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--bg-tertiary)]"
+                    className="flex h-11 w-11 items-center justify-center rounded-lg border transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--bg-tertiary)]"
                     style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
                     aria-label="关闭品牌管理"
                   >
@@ -126,7 +126,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
               <div className="border-b px-7 py-4" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
                   <div
-                    className="flex flex-1 items-center gap-3 rounded-[18px] border px-4 py-3"
+                    className="flex flex-1 items-center gap-3 rounded-lg border px-4 py-3"
                     style={{
                       background: 'color-mix(in srgb, var(--bg-elevated) 96%, #eef1ee 4%)',
                       borderColor: 'var(--border-subtle)',
@@ -144,11 +144,11 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                   </div>
 
                   <button
-                    className="flex items-center justify-center gap-2 rounded-[18px] px-4 py-3 text-[14px] font-medium transition-colors"
+                    className="flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-3 text-[14px] font-medium transition-colors"
                     style={{
-                      background: 'color-mix(in srgb, var(--color-primary) 12%, var(--bg-elevated) 88%)',
-                      color: 'color-mix(in srgb, var(--color-primary) 72%, var(--text-primary) 28%)',
-                      border: '1px solid color-mix(in srgb, var(--color-primary) 18%, var(--border-subtle) 82%)',
+                      background: 'color-mix(in srgb, var(--brand-primary) 12%, var(--bg-elevated) 88%)',
+                      color: 'color-mix(in srgb, var(--brand-primary) 72%, var(--text-primary) 28%)',
+                      border: '1px solid color-mix(in srgb, var(--brand-primary) 18%, var(--border-subtle) 82%)',
                     }}
                     onClick={openAdd}
                   >
@@ -160,7 +160,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
 
               <div className="min-h-0 flex-1 overflow-y-auto px-7 py-6">
                 {filtered.length === 0 ? (
-                  <div className="rounded-[22px] border border-dashed px-6 py-12 text-center text-[14px] text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="rounded-[16px] border border-dashed px-6 py-12 text-center text-[14px] text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }}>
                     {search ? '未找到匹配的品牌。' : '当前还没有品牌，点击右上角新建品牌即可开始分析。'}
                   </div>
                 ) : (
@@ -169,7 +169,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                       {filtered.map((entity) => (
                         <motion.article
                           key={entity.id}
-                          className="rounded-[24px] border px-5 py-5"
+                          className="rounded-[16px] border px-5 py-5"
                           style={{
                             background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 98%, #eef1ee 2%), var(--bg-secondary))',
                             borderColor: 'color-mix(in srgb, var(--border-subtle) 92%, #c9d0c9 8%)',
@@ -197,7 +197,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                           <div className="mt-4 border-t pt-3" style={{ borderColor: 'var(--border-subtle)' }}>
                             <div className="flex items-center gap-2">
                               <button
-                                className="flex h-10 w-10 items-center justify-center rounded-[14px] border transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--bg-secondary)]"
+                                className="flex h-10 w-10 items-center justify-center rounded-lg border transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--bg-secondary)]"
                                 style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
                                 onClick={() => openEdit(entity)}
                                 title="编辑品牌"
@@ -205,7 +205,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                                 <RiEditLine className="h-4.5 w-4.5" />
                               </button>
                               <button
-                                className="flex h-10 w-10 items-center justify-center rounded-[14px] border transition-colors hover:bg-[var(--bg-secondary)]"
+                                className="flex h-10 w-10 items-center justify-center rounded-lg border transition-colors hover:bg-[var(--bg-secondary)]"
                                 style={{ borderColor: 'color-mix(in srgb, var(--border-subtle) 80%, #df8e84 20%)', color: 'var(--status-error)' }}
                                 onClick={() => handleDelete(entity.id)}
                                 title="删除品牌"

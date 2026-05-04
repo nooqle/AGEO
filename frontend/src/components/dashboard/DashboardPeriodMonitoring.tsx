@@ -204,7 +204,7 @@ export function DashboardPeriodMonitoring({
 
   if (isLoading && !home) {
     return (
-      <section className="dashboard-shell rounded-[24px] px-5 py-5">
+      <section className="dashboard-shell rounded-[18px] px-5 py-5">
         <div className="h-8 w-32 rounded-lg animate-shimmer" />
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 4 }).map((_, index) => (
@@ -216,7 +216,7 @@ export function DashboardPeriodMonitoring({
   }
 
   return (
-    <section className="dashboard-shell rounded-[24px] px-5 py-5">
+    <section className="dashboard-shell rounded-[18px] px-5 py-5">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <h2 className="text-[24px] font-semibold text-[var(--text-primary)]">周期监测</h2>

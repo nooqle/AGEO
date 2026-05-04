@@ -37,7 +37,7 @@ export function HeroSection({
   if (totalBrands === 0) {
     return (
       <motion.section
-        className="dashboard-shell rounded-[26px] px-7 py-8"
+        className="dashboard-shell rounded-[18px] px-7 py-8"
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.32 }}
@@ -77,7 +77,7 @@ export function HeroSection({
 
   return (
     <motion.section
-      className="dashboard-shell relative overflow-hidden rounded-[24px] px-6 py-6"
+      className="dashboard-shell relative overflow-hidden rounded-[18px] px-6 py-6"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.28 }}
@@ -94,13 +94,13 @@ export function HeroSection({
       </span>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)] xl:items-end">
-        <div className="grid min-w-0 grid-cols-[52px_minmax(0,1fr)] items-center gap-4 pr-24">
+        <div className="grid min-w-0 grid-cols-[52px_minmax(0,1fr)] items-center gap-4 pr-0 sm:pr-24">
           <BrandAvatar name={brandName} domain={selectedBrandDomain} size={52} className="flex-shrink-0" />
           <div className="min-w-0">
             <div className="text-[11px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
               当前品牌
             </div>
-            <h1 className="mt-1 truncate text-[30px] font-semibold leading-tight text-[var(--text-primary)]">
+            <h1 className="mt-1 break-words text-[26px] font-semibold leading-tight text-[var(--text-primary)] sm:text-[30px]">
               {brandName}
             </h1>
             <p className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">

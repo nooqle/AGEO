@@ -137,7 +137,7 @@ function ControlPlaneCostsContent() {
         <div className="flex items-center gap-2">
           <Link
             href="/control-plane"
-            className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-semibold"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold"
             style={{
               borderColor: palette.borderStrong,
               background: palette.panel,
@@ -148,7 +148,7 @@ function ControlPlaneCostsContent() {
             返回工作台
           </Link>
           <div
-            className="inline-flex rounded-2xl border p-1"
+            className="inline-flex rounded-xl border p-1"
             style={{ borderColor: palette.border, background: palette.panel }}
           >
             {[7, 30, 90].map((option) => (
@@ -180,7 +180,7 @@ function ControlPlaneCostsContent() {
     >
       {currentUser?.role !== 'internal_admin' && !loading ? (
         <div
-          className="rounded-2xl border px-4 py-6 text-sm"
+          className="rounded-xl border px-4 py-6 text-sm"
           style={{
             borderColor: palette.border,
             color: palette.muted,
@@ -233,7 +233,7 @@ function ControlPlaneCostsContent() {
                 <select
                   value={organizationFilter}
                   onChange={(event) => setOrganizationFilter(event.target.value)}
-                  className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                  className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
                   style={{
                     background: palette.panel,
                     borderColor: palette.borderStrong,
@@ -257,7 +257,7 @@ function ControlPlaneCostsContent() {
                   关键词
                 </div>
                 <div
-                  className="flex h-11 items-center gap-2 rounded-2xl border px-3"
+                  className="flex h-11 items-center gap-2 rounded-lg border px-3"
                   style={{
                     borderColor: palette.borderStrong,
                     background: palette.panel,
@@ -326,7 +326,7 @@ function CostBreakdownTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
+      <table className="min-w-[760px] text-left text-sm">
         <thead>
           <tr style={{ color: palette.subtle }}>
             {columns === 'customer-brand' ? (
@@ -430,7 +430,7 @@ function RecentCallsTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
+      <table className="min-w-[1080px] text-left text-sm">
         <thead>
           <tr style={{ color: palette.subtle }}>
             <th className="pb-3 pr-4 font-semibold">客户</th>

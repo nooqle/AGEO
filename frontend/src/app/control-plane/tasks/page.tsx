@@ -138,7 +138,7 @@ function ControlPlaneTasksContent() {
         <div className="flex items-center gap-2">
           <Link
             href="/control-plane"
-            className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-semibold"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold"
             style={{
               borderColor: palette.borderStrong,
               background: palette.panel,
@@ -162,7 +162,7 @@ function ControlPlaneTasksContent() {
     >
       {currentUser?.role !== 'internal_admin' && !loading ? (
         <div
-          className="rounded-2xl border px-4 py-6 text-sm"
+          className="rounded-xl border px-4 py-6 text-sm"
           style={{ borderColor: palette.border, color: palette.muted, background: palette.panel }}
         >
           当前账号没有内部运营权限，无法访问任务运营。
@@ -198,7 +198,7 @@ function ControlPlaneTasksContent() {
                 <select
                   value={days}
                   onChange={(event) => setDays(Number(event.target.value))}
-                  className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                  className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
                   style={{ background: palette.panel, borderColor: palette.borderStrong, color: palette.text }}
                 >
                   <option value={7}>最近 7 天</option>
@@ -214,7 +214,7 @@ function ControlPlaneTasksContent() {
                 <select
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value)}
-                  className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                  className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
                   style={{ background: palette.panel, borderColor: palette.borderStrong, color: palette.text }}
                 >
                   {STATUS_OPTIONS.map((option) => (
@@ -232,7 +232,7 @@ function ControlPlaneTasksContent() {
                 <select
                   value={organizationFilter}
                   onChange={(event) => setOrganizationFilter(event.target.value)}
-                  className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                  className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
                   style={{ background: palette.panel, borderColor: palette.borderStrong, color: palette.text }}
                 >
                   <option value="all">全部组织</option>
@@ -249,7 +249,7 @@ function ControlPlaneTasksContent() {
                   关键词
                 </div>
                 <div
-                  className="flex h-11 items-center gap-2 rounded-2xl border px-3"
+                  className="flex h-11 items-center gap-2 rounded-lg border px-3"
                   style={{
                     background: palette.panel,
                     borderColor: palette.borderStrong,
@@ -273,7 +273,7 @@ function ControlPlaneTasksContent() {
             title="任务列表"
           >
             <div className="overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
+                <table className="min-w-[1080px] text-left text-sm">
                 <thead>
                   <tr style={{ color: palette.subtle }}>
                     <th className="pb-3 pr-4 font-semibold">客户</th>

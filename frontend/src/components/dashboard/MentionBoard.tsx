@@ -25,8 +25,8 @@ export function MentionBoard({ data, onClick }: MentionBoardProps) {
     >
       <div className="relative flex h-full flex-col">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'color-mix(in srgb, var(--color-primary) 15%, var(--bg-elevated) 85%)' }}>
-            <RiChatQuoteLine className="h-5 w-5" style={{ color: 'var(--color-primary)' }} />
+          <div className="flex h-10 w-10 items-center justify-center rounded-[14px]" style={{ background: 'color-mix(in srgb, var(--brand-primary) 15%, var(--bg-elevated) 85%)' }}>
+            <RiChatQuoteLine className="h-5 w-5" style={{ color: 'var(--brand-primary)' }} />
           </div>
           <div className="min-w-0">
             <div className="text-[20px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">提及率</div>
@@ -39,7 +39,7 @@ export function MentionBoard({ data, onClick }: MentionBoardProps) {
           <div className="pb-1 text-[13px] leading-6 text-[var(--text-secondary)]">涉及问题 {mentionedQuestionCount} 个</div>
         </div>
 
-        <DashboardBoardTrendStrip trend={data.trend} accentColor="var(--color-primary)" />
+        <DashboardBoardTrendStrip trend={data.trend} accentColor="var(--brand-primary)" />
 
         <div className="mt-5 grid grid-cols-3 gap-3">
           {(['positive', 'neutral', 'negative'] as const).map((key) => (

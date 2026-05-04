@@ -39,7 +39,7 @@ export function SummaryPill({
   const paletteTone = tones[tone];
   return (
     <div
-      className="rounded-2xl border px-4 py-4"
+      className="rounded-xl border px-4 py-4"
       style={{
         borderColor: 'var(--border-subtle)',
         background: paletteTone.bg,
@@ -95,7 +95,7 @@ export function ReviewQueuePanel({
     >
       {applications.length === 0 ? (
         <div
-          className="rounded-2xl border border-dashed px-4 py-6 text-sm"
+          className="rounded-xl border border-dashed px-4 py-6 text-sm"
           style={{ borderColor: palette.borderStrong, color: palette.muted }}
         >
           当前没有待发放的邀请码申请。
@@ -105,7 +105,7 @@ export function ReviewQueuePanel({
           {(compact ? applications.slice(0, 3) : applications).map((application) => (
             <div
               key={application.id}
-              className="rounded-2xl border px-4 py-4"
+              className="rounded-xl border px-4 py-4"
               style={{
                 borderColor: palette.border,
                 background: palette.panelMuted,
@@ -154,7 +154,7 @@ export function ReviewQueuePanel({
                     onChange={(event) =>
                       onSelectionChange(application.id, event.target.value)
                     }
-                    className="h-11 w-full rounded-2xl border px-3 text-sm outline-none"
+                    className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
                     style={{
                       background: palette.panel,
                       borderColor: palette.borderStrong,
@@ -226,7 +226,7 @@ export function CustomerTablePanel({
       actions={
         actionSlot ?? (
           <div
-            className="flex h-11 items-center gap-2 rounded-2xl border px-3"
+            className="flex h-11 items-center gap-2 rounded-lg border px-3"
             style={{ borderColor: palette.borderStrong, background: palette.panel }}
           >
             <RiSearch2Line className="h-4 w-4" style={{ color: palette.subtle }} />
@@ -242,7 +242,7 @@ export function CustomerTablePanel({
       }
     >
       <div className="overflow-x-auto">
-        <table className="min-w-full text-left text-sm">
+        <table className="min-w-[920px] text-left text-sm">
           <thead>
             <tr style={{ color: palette.subtle }}>
               <th className="pb-3 pr-4 font-semibold">客户名称</th>
@@ -309,7 +309,7 @@ export function CustomerTablePanel({
                   <td className="py-4">
                     <Link
                       href={`/control-plane/customers/${customer.organization_id}`}
-                      className="inline-flex items-center gap-1 rounded-full px-3 py-2 text-sm font-semibold"
+                      className="inline-flex min-h-10 items-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold"
                       style={{
                         background: palette.accentSoft,
                         color: palette.accent,

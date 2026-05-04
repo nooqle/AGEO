@@ -214,7 +214,7 @@ function ControlPlaneWorkbench() {
                   <Link
                     key={href}
                     href={href}
-                    className="block rounded-2xl border px-4 py-3 text-sm font-medium"
+                    className="block rounded-lg border px-4 py-3 text-sm font-medium"
                     style={{
                       borderColor: palette.border,
                       background: palette.panelMuted,

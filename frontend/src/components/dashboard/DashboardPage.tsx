@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { DashboardBrandSidebar } from './DashboardBrandSidebar';
+import {
+  DashboardBrandSidebar,
+  DashboardMobileBrandSwitcher,
+} from './DashboardBrandSidebar';
 import { DashboardPeriodMonitoring } from './DashboardPeriodMonitoring';
 import { DashboardTodoStrip } from './DashboardTodoStrip';
 import { MonitoringTab } from './MonitoringTab';
@@ -376,14 +379,24 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     <div className="dashboard-page-bg relative flex flex-1 flex-col overflow-auto">
       <div className="relative mx-auto w-full max-w-[1920px] px-5 py-4 lg:px-7 lg:py-5 2xl:px-10">
         {hasData && !isMonitoringMode ? (
-          <div className="grid gap-5 xl:grid-cols-[248px_minmax(0,1fr)]">
-            <DashboardBrandSidebar
+          <div className="space-y-4 xl:space-y-0">
+            <DashboardMobileBrandSwitcher
               entities={entities}
               selectedBrandId={selectedBrandId}
               onSelectBrand={setSelectedBrandId}
               onAddBrand={onNewAnalysis}
             />
-            {mainContent}
+            <div className="grid gap-5 xl:grid-cols-[248px_minmax(0,1fr)]">
+              <div className="hidden xl:block">
+                <DashboardBrandSidebar
+                  entities={entities}
+                  selectedBrandId={selectedBrandId}
+                  onSelectBrand={setSelectedBrandId}
+                  onAddBrand={onNewAnalysis}
+                />
+              </div>
+              {mainContent}
+            </div>
           </div>
         ) : (
           mainContent
@@ -392,7 +405,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
         {hasData && isMonitoringMode && selectedBrand ? (
           <div className="mt-4 space-y-5">
             <section
-              className="rounded-[24px] border bg-[var(--bg-tertiary)] px-6 py-5"
+              className="rounded-[18px] border bg-[var(--bg-tertiary)] px-6 py-5"
               style={{ borderColor: 'var(--border-subtle)' }}
             >
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -407,7 +420,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
                 <button
                   type="button"
                   onClick={() => router.push('/dashboard')}
-                  className="rounded-full border px-4 py-2 text-[13px] font-medium"
+                  className="min-h-10 rounded-lg border px-4 py-2 text-[13px] font-medium"
                   style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
                 >
                   返回首页看板

@@ -100,7 +100,7 @@ function ControlPlaneCustomersContent() {
         <div className="flex items-center gap-2">
           <Link
             href="/control-plane"
-            className="inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-semibold"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold"
             style={{
               borderColor: palette.borderStrong,
               background: palette.panel,
@@ -111,7 +111,7 @@ function ControlPlaneCustomersContent() {
             返回工作台
           </Link>
           <div
-            className="inline-flex rounded-2xl border p-1"
+            className="inline-flex rounded-xl border p-1"
             style={{ borderColor: palette.border, background: palette.panel }}
           >
             {[7, 30].map((option) => (
@@ -142,7 +142,7 @@ function ControlPlaneCustomersContent() {
       }
     >
       {currentUser?.role !== 'internal_admin' && !loading ? (
-        <div className="rounded-2xl border px-4 py-6 text-sm" style={{ borderColor: palette.border, color: palette.muted, background: palette.panel }}>
+        <div className="rounded-xl border px-4 py-6 text-sm" style={{ borderColor: palette.border, color: palette.muted, background: palette.panel }}>
           当前账号没有内部运营权限，无法访问客户组织列表。
         </div>
       ) : (

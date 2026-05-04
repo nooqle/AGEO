@@ -60,7 +60,7 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
 
   return (
     <motion.div
-      className="relative w-full min-w-0 overflow-hidden rounded-[22px] border px-3.5 py-3 text-left transition-all duration-200"
+      className="relative w-full min-w-0 overflow-hidden rounded-[16px] border px-3.5 py-3 text-left transition-all duration-200"
       style={{
         background: isDark
           ? (isSelected
@@ -85,7 +85,7 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
           tabIndex={0}
           aria-pressed={isSelected}
           aria-label={`${displayName} ${isSelected ? '当前查看' : '切换查看'}`}
-          className="min-w-0 rounded-[16px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+          className="min-w-0 rounded-[14px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)]/40"
           onClick={onClick}
           onKeyDown={handleCardKeyDown}
         >
@@ -177,13 +177,13 @@ export function BrandCard({ entity, isSelected, onClick, onAnalyze, onMonitor, i
                       : 'color-mix(in srgb, var(--brand-primary) 14%, var(--bg-elevated) 86%)')
                   : (isSelected
                       ? 'var(--brand-primary)'
-                      : 'color-mix(in srgb, var(--color-primary) 6%, var(--bg-elevated) 94%)'),
+                      : 'color-mix(in srgb, var(--brand-primary) 6%, var(--bg-elevated) 94%)'),
                 color: isDark
                   ? (isSelected ? selectedActionText : 'var(--brand-text)')
-                  : (isSelected ? selectedActionText : 'color-mix(in srgb, var(--color-primary) 62%, var(--text-primary) 38%)'),
+                  : (isSelected ? selectedActionText : 'color-mix(in srgb, var(--brand-primary) 62%, var(--text-primary) 38%)'),
                 border: isDark
                   ? (isSelected ? '1px solid color-mix(in srgb, var(--brand-primary) 40%, rgba(255,255,255,0.16) 60%)' : '1px solid color-mix(in srgb, var(--brand-primary) 34%, var(--border-subtle) 66%)')
-                  : (isSelected ? '1px solid var(--brand-primary)' : '1px solid color-mix(in srgb, var(--color-primary) 16%, var(--border-subtle) 84%)'),
+                  : (isSelected ? '1px solid var(--brand-primary)' : '1px solid color-mix(in srgb, var(--brand-primary) 16%, var(--border-subtle) 84%)'),
                 boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.04)' : 'none',
               }}
               onClick={(event) => {
@@ -233,7 +233,7 @@ export function AddBrandCard({ onClick }: AddBrandCardProps) {
   return (
     <motion.button
       type="button"
-      className="flex h-[164px] w-full min-w-0 flex-col items-start justify-between rounded-[22px] border border-dashed px-3.5 py-3 text-left transition-all duration-200"
+      className="flex h-[164px] w-full min-w-0 flex-col items-start justify-between rounded-[16px] border border-dashed px-3.5 py-3 text-left transition-all duration-200"
       style={{
         background: isDark
           ? 'linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018))'
@@ -247,7 +247,7 @@ export function AddBrandCard({ onClick }: AddBrandCardProps) {
       transition={{ duration: 0.18 }}
     >
       <div
-        className="flex h-10 w-10 items-center justify-center rounded-2xl"
+        className="flex h-10 w-10 items-center justify-center rounded-xl"
         style={{ background: 'var(--bg-secondary)' }}
       >
         <RiAddLine className="h-5 w-5" style={{ color: 'var(--text-secondary)' }} />

@@ -31,8 +31,8 @@ const ICONS: Record<DashboardBoardId, typeof RiChatQuoteLine> = {
 
 const ICON_STYLES: Record<DashboardBoardId, { bg: string; color: string }> = {
   mention: {
-    bg: 'color-mix(in srgb, var(--color-primary) 14%, var(--bg-elevated) 86%)',
-    color: 'var(--color-primary)',
+    bg: 'color-mix(in srgb, var(--brand-primary) 14%, var(--bg-elevated) 86%)',
+    color: 'var(--brand-primary)',
   },
   source: {
     bg: 'color-mix(in srgb, #d6a05c 16%, var(--bg-elevated) 84%)',

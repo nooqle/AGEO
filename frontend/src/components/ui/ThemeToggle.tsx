@@ -12,13 +12,13 @@ export function ThemeToggle() {
       aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
       title={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
       style={{
-        width: '32px',
-        height: '32px',
+        width: '40px',
+        height: '40px',
         borderRadius: '8px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: theme === 'light' ? '#D97706' : 'var(--text-secondary)',
+        color: theme === 'light' ? 'var(--status-warning)' : 'var(--text-secondary)',
         backgroundColor: 'transparent',
         border: '1px solid var(--border-subtle)',
         cursor: 'pointer',
