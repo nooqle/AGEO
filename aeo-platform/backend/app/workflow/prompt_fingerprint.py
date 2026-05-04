@@ -28,4 +28,3 @@ def fingerprint_tools(tools: list[dict[str, Any]]) -> str:
     """Return a short stable fingerprint for an LLM tool surface."""
 
     return fingerprint_text(_stable_json(tools or []))
-

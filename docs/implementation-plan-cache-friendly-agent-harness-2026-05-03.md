@@ -1,8 +1,8 @@
 # AGEO 提示词复用友好型 Harness 开发规划（2026-05-03）
 
-> 状态：Draft  
-> 关联设计文档：`docs/design-cache-friendly-agent-harness-2026-05-03.md`  
-> 目标：把 5 项设计拆成可开发、可验收、可灰度的阶段计划。  
+> 状态：Draft
+> 关联设计文档：`docs/design-cache-friendly-agent-harness-2026-05-03.md`
+> 目标：把 5 项设计拆成可开发、可验收、可灰度的阶段计划。
 > 基本原则：先观测，再改行为；先 orchestrator，再扩展到其他执行器；每个 Phase 都必须能单独回滚。
 
 ---
@@ -53,7 +53,7 @@ Phase 6：控制面展示与轻量告警
 Phase 7：灰度、回归、上线关闭
 ```
 
-推荐顺序不能颠倒。  
+推荐顺序不能颠倒。
 尤其不能先大改工具清单，再补观测。否则问题出现时无法判断原因。
 
 ---
@@ -135,7 +135,7 @@ pytest aeo-platform\backend\tests\test_llm_task_routing.py -q
 
 #### 前端
 
-这一期前端可以不改。  
+这一期前端可以不改。
 如果要做最小展示，只在控制面成本页展示最近调用的复用率和模型。
 
 ### 5.3 涉及文件
@@ -176,7 +176,7 @@ python scripts\validate_change.py
 
 ### 5.7 回滚方式
 
-只停止写入新增 metadata。  
+只停止写入新增 metadata。
 不影响业务流程。
 
 ---
@@ -257,7 +257,7 @@ python scripts\validate_change.py
 
 ### 6.8 回滚方式
 
-关闭 `ORCHESTRATOR_RUNTIME_REMINDER_MESSAGE_ENABLED`。  
+关闭 `ORCHESTRATOR_RUNTIME_REMINDER_MESSAGE_ENABLED`。
 回到旧的 system prompt 组装方式。
 
 ---
@@ -340,7 +340,7 @@ python scripts\validate_change.py
 
 ### 7.7 回滚方式
 
-关闭 `ORCHESTRATOR_STABLE_TOOL_SURFACE_ENABLED`。  
+关闭 `ORCHESTRATOR_STABLE_TOOL_SURFACE_ENABLED`。
 继续使用旧的工具隐藏策略。
 
 ---
@@ -403,7 +403,7 @@ python scripts\validate_change.py
 
 ### 8.7 回滚方式
 
-关闭 `STABLE_SKILL_TOOL_DESCRIPTION_ENABLED`。  
+关闭 `STABLE_SKILL_TOOL_DESCRIPTION_ENABLED`。
 恢复旧的工具 description 拼接方式。
 
 ---
@@ -443,7 +443,7 @@ python scripts\validate_change.py
 
 需要评估是否新增字段。
 
-推荐先用已有 state/metadata 做最小实现。  
+推荐先用已有 state/metadata 做最小实现。
 如果控制面需要强查询，再新增迁移字段。
 
 可能字段：
@@ -485,7 +485,7 @@ python scripts\validate_change.py
 
 ### 9.8 回滚方式
 
-关闭 `ORCHESTRATOR_MODEL_LOCK_ENABLED`。  
+关闭 `ORCHESTRATOR_MODEL_LOCK_ENABLED`。
 如果已加数据库字段，字段保留但不参与运行逻辑。
 
 ---
@@ -569,7 +569,7 @@ npm run build
 
 ### 10.7 回滚方式
 
-后端继续保留 metadata。  
+后端继续保留 metadata。
 前端隐藏提示词复用模块即可。
 
 ---
@@ -724,7 +724,7 @@ npm run build
 
 这三期做完，就已经能显著改善“成本解释”和“系统稳定性”。
 
-Phase 4 和 Phase 5 是规模化前的必要收口。  
+Phase 4 和 Phase 5 是规模化前的必要收口。
 Phase 6 和 Phase 7 是上线运营闭环。
 
 ---

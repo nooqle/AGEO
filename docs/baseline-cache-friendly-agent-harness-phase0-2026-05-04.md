@@ -1,7 +1,7 @@
 # AGEO 提示词复用友好型 Harness Phase 0 基线记录（2026-05-04）
 
-> 状态：Baseline  
-> 分支：`codex/prompt-cache-harness-design`  
+> 状态：Baseline
+> 分支：`codex/prompt-cache-harness-design`
 > 目的：在 Phase 1-2 改动前记录当前 orchestrator 的提示词、工具面、观测和回归入口。
 
 ---
@@ -147,4 +147,3 @@ python scripts\validate_change.py
 3. 不记录 system prompt 原文
 4. 不改 A1/A3/A4/A5/A7 业务逻辑
 5. 保留 `PromptAssembly.render()` 兼容旧路径
-
