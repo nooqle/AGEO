@@ -32,6 +32,7 @@ from app.services.skill_invocation_service import (
     SkillInvocationService,
 )
 from app.services.tool_capability_matrix import (
+    ToolAvailabilityConstraint,
     get_tool_capability,
     validate_tool_capability_access,
 )
@@ -672,7 +673,10 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
 
 async def build_agent_tools(state: AgentState | None = None) -> list[dict[str, Any]]:
     """Build LLM tools format from static tools + dynamic public skills."""
-    hidden_tool_names = _get_contextual_hidden_tool_names(state)
+    if _stable_tool_surface_enabled():
+        hidden_tool_names = set()
+    else:
+        hidden_tool_names = _get_contextual_hidden_tool_names(state)
     base_tools = [
         agent
         for agent in AGENT_REGISTRY
@@ -1527,6 +1531,12 @@ def _has_authoritative_history_refresh_result(state: AgentState) -> bool:
     )
 
 
+def _stable_tool_surface_enabled() -> bool:
+    return bool(
+        getattr(get_settings(), "ORCHESTRATOR_STABLE_TOOL_SURFACE_ENABLED", False)
+    )
+
+
 def _get_contextual_hidden_tool_names(state: AgentState | None) -> set[str]:
     if not state:
         return set()
@@ -1542,6 +1552,110 @@ def _get_contextual_hidden_tool_names(state: AgentState | None) -> set[str]:
         if preferred_followup_tool[0] == "drill_down_analysis":
             hidden.update(_SPECIFIC_DRILL_DOWN_HIDDEN_TOOL_NAMES)
     return hidden
+
+
+def _format_tool_args_for_suggestion(tool_args: dict[str, Any]) -> str:
+    if not tool_args:
+        return ""
+    args = ", ".join(
+        f"{key}={value!r}"
+        for key, value in tool_args.items()
+        if value is not None and value != ""
+    )
+    return f"({args})" if args else ""
+
+
+def validate_tool_available_in_current_state(
+    tool_name: str | None,
+    state: AgentState | None,
+) -> ToolAvailabilityConstraint:
+    """Validate whether a stable-surface tool call is allowed this turn."""
+
+    normalized_name = str(tool_name or "").strip()
+    if not normalized_name or not state:
+        return ToolAvailabilityConstraint(tool_name=normalized_name, blocked=False)
+
+    hidden_tool_names = _get_contextual_hidden_tool_names(state)
+    if normalized_name not in hidden_tool_names:
+        return ToolAvailabilityConstraint(tool_name=normalized_name, blocked=False)
+
+    if normalized_name == "ask_user" and state.get("headless_mode"):
+        a4_observation = state.get("a4_completion_observation") or {}
+        if bool(a4_observation.get("artifact_write_validated", False)):
+            report_type = (
+                "panorama"
+                if str(state.get("analysis_mode") or "").strip().lower()
+                == "baseline"
+                else "scenario"
+            )
+            return ToolAvailabilityConstraint(
+                tool_name=normalized_name,
+                blocked=True,
+                reason=(
+                    "当前任务是 headless 定时任务，不能等待用户确认；"
+                    "ask_user 不能在本轮执行。"
+                ),
+                suggested_next_actions=(
+                    f"改为调用 analysis_report_skill(report_type='{report_type}') 继续生成报告",
+                    "如果缺少继续条件，直接返回可恢复错误并记录原因",
+                ),
+            )
+        return ToolAvailabilityConstraint(
+            tool_name=normalized_name,
+            blocked=True,
+            reason=(
+                "当前任务是 headless 定时任务，不能等待用户确认；"
+                "ask_user 不能在本轮执行。"
+            ),
+            suggested_next_actions=(
+                "选择一个确定性的下一步工具继续执行",
+                "如果没有确定性下一步，结束任务并写入可恢复错误",
+            ),
+        )
+
+    preferred_followup_tool = _infer_current_session_followup_tool(state)
+    if preferred_followup_tool is not None:
+        preferred_name, preferred_args = preferred_followup_tool
+        suggestion = (
+            f"改为调用 {preferred_name}"
+            f"{_format_tool_args_for_suggestion(preferred_args)}"
+        )
+        return ToolAvailabilityConstraint(
+            tool_name=normalized_name,
+            blocked=True,
+            reason=(
+                "当前用户问题属于本次结果追问，应优先使用本次结果上下文，"
+                "不要切到过往资料工具或泛化后续分析工具。"
+            ),
+            suggested_next_actions=(
+                suggestion,
+                "也可以直接基于当前抓取结果向用户解释，不再调用工具",
+            ),
+        )
+
+    if normalized_name in _KNOWLEDGE_TOOL_NAMES and _session_was_recalled(state):
+        return ToolAvailabilityConstraint(
+            tool_name=normalized_name,
+            blocked=True,
+            reason=(
+                "当前会话已从历史资料唤起，相关过往资料已经作为上下文加载，"
+                "本轮不要重复调用 knowledge_* 工具。"
+            ),
+            suggested_next_actions=(
+                "直接基于已加载的历史上下文回答用户",
+                "如需新增实时数据，改为调用 brand_analysis 或 answer_fetch",
+            ),
+        )
+
+    return ToolAvailabilityConstraint(
+        tool_name=normalized_name,
+        blocked=True,
+        reason="该工具当前不满足本轮上下文前置条件。",
+        suggested_next_actions=(
+            "改用当前回合提示中推荐的可用工具",
+            "向用户说明缺少的前置条件并给出下一步选择",
+        ),
+    )
 
 
 def _infer_knowledge_fallback_tool(
@@ -1886,7 +2000,13 @@ def _build_context_summary(state: AgentState) -> str:
                 unavailable_tools.append("knowledge_compare (当前尚无过往资料可对比)")
 
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
-        parts.append("- 当前问题属于本次结果追问，过往资料工具已从可用工具面隐藏")
+        if _stable_tool_surface_enabled():
+            parts.append(
+                "- 当前问题属于本次结果追问，过往资料工具保留在工具清单中，"
+                "但本轮会由工具门禁拦截"
+            )
+        else:
+            parts.append("- 当前问题属于本次结果追问，过往资料工具已从可用工具面隐藏")
 
     if not parts:
         summary = "\n当前会话数据: 尚无分析数据。"
@@ -1987,25 +2107,38 @@ def _build_orchestrator_entity_context(state: AgentState) -> str:
 
 def _build_public_skill_index(state: AgentState) -> str:
     hidden_tool_names = _get_contextual_hidden_tool_names(state)
+    stable_tool_surface = _stable_tool_surface_enabled()
     preferred_followup_tool = _infer_current_session_followup_tool(state)
     lines: list[str] = []
     note_lines: list[str] = []
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
-        note_lines.append(
-            "- 当前问题属于本次结果追问，过往资料工具已从本轮公共技能面隐藏。"
-        )
+        if stable_tool_surface:
+            note_lines.append(
+                "- 当前问题属于本次结果追问，过往资料工具仍在工具清单中，"
+                "但本轮不应调用，误调用会被工具门禁拦截。"
+            )
+        else:
+            note_lines.append(
+                "- 当前问题属于本次结果追问，过往资料工具已从本轮公共技能面隐藏。"
+            )
     if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
         note_lines.append(
             "- 当前回合已收敛到 drill_down_analysis，不再暴露泛化的后续分析入口。"
         )
     if note_lines:
-        note_lines.append("- 以下仅列出当前回合真实可调用的公共技能。")
+        if stable_tool_surface:
+            note_lines.append("- 以下标注当前回合推荐使用的公共技能。")
+        else:
+            note_lines.append("- 以下仅列出当前回合真实可调用的公共技能。")
     for definition in build_builtin_skill_tool_definitions():
         name = str(definition.get("name") or "")
-        if name in hidden_tool_names:
+        if name in hidden_tool_names and not stable_tool_surface:
             continue
         description = _compact_text(definition.get("description"), 56)
-        availability = "当前可用"
+        if name in hidden_tool_names and stable_tool_surface:
+            availability = "本轮受工具门禁限制"
+        else:
+            availability = "当前可用"
         if name == "post_analysis_skill" and not state.get("fetch_results"):
             availability = "需已有抓取结果或报告"
         elif name == "analysis_report_skill" and not state.get("fetch_results"):
@@ -2031,14 +2164,27 @@ def _build_static_public_skill_index() -> str:
 
 def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
     hidden_tool_names = _get_contextual_hidden_tool_names(state)
+    stable_tool_surface = _stable_tool_surface_enabled()
     preferred_followup_tool = _infer_current_session_followup_tool(state)
     lines: list[str] = []
 
     if state.get("headless_mode"):
-        lines.append("- 当前任务是 headless 定时任务，不能等待用户确认；不要调用 ask_user。")
+        if stable_tool_surface:
+            lines.append(
+                "- 当前任务是 headless 定时任务，不能等待用户确认；"
+                "ask_user 如被误调用会被工具门禁拦截。"
+            )
+        else:
+            lines.append("- 当前任务是 headless 定时任务，不能等待用户确认；不要调用 ask_user。")
 
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
-        lines.append("- 当前问题属于本次结果追问，过往资料工具已从当前回合工具面隐藏。")
+        if stable_tool_surface:
+            lines.append(
+                "- 当前问题属于本次结果追问，过往资料工具仍在工具清单中，"
+                "但本轮不要调用；误调用会被工具门禁拦截。"
+            )
+        else:
+            lines.append("- 当前问题属于本次结果追问，过往资料工具已从当前回合工具面隐藏。")
 
     if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
         focus_args = preferred_followup_tool[1] or {}
@@ -4296,6 +4442,7 @@ async def orchestrator_node(state: AgentState) -> Command:
                     "runtime_reminder_enabled": (
                         prompt_bundle.runtime_reminder_enabled
                     ),
+                    "stable_tool_surface_enabled": _stable_tool_surface_enabled(),
                 },
             )
 
@@ -4525,6 +4672,50 @@ async def orchestrator_node(state: AgentState) -> Command:
         )
 
 
+def _build_tool_gate_block_command(
+    *,
+    state: AgentState,
+    tool_call,
+    reply_text: str,
+    new_history: list[dict[str, Any]],
+    current_retry_counts: dict[str, Any],
+    constraint: ToolAvailabilityConstraint,
+) -> Command:
+    result_payload = constraint.to_blocked_result()
+    new_history.append(
+        {
+            "role": "tool",
+            "content": json.dumps(result_payload, ensure_ascii=False),
+            "tool_call_id": tool_call.id or "call_1",
+            "name": constraint.tool_name,
+        }
+    )
+    return Command(
+        goto="orchestrator",
+        update={
+            "orchestrator_reply": reply_text,
+            "orchestrator_history": new_history,
+            "agent_retry_counts": current_retry_counts,
+            "last_validation_result": {
+                "gate_name": "tool_availability_gate",
+                "passed": False,
+                "tool_name": constraint.tool_name,
+                "reason": constraint.reason,
+                "suggested_next_actions": list(constraint.suggested_next_actions),
+            },
+            "last_harness_decision": {
+                "decision_type": "capability_blocked",
+                "recoverable": True,
+                "tool_name": constraint.tool_name,
+                "reason": constraint.reason,
+                "suggested_next_actions": list(constraint.suggested_next_actions),
+                "source_step": "orchestrator_tool_availability_gate",
+                "headless_mode": bool(state.get("headless_mode")),
+            },
+        },
+    )
+
+
 async def _handle_tool_call(
     state: AgentState,
     session_id: str,
@@ -4539,6 +4730,23 @@ async def _handle_tool_call(
     current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
 
     logger.info(f"[Orchestrator] Tool call: {tool_name}, args: {tool_args}")
+
+    if _stable_tool_surface_enabled():
+        constraint = validate_tool_available_in_current_state(tool_name, state)
+        if constraint.blocked:
+            logger.warning(
+                "[Orchestrator] Tool availability gate blocked %s: %s",
+                tool_name,
+                constraint.reason,
+            )
+            return _build_tool_gate_block_command(
+                state=state,
+                tool_call=tool_call,
+                reply_text=reply_text,
+                new_history=new_history,
+                current_retry_counts=current_retry_counts,
+                constraint=constraint,
+            )
 
     if tool_name == "ask_user":
         # Layer 4: inline confirmation (simple or guided)

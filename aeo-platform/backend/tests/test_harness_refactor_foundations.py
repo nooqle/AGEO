@@ -14,6 +14,7 @@ from langgraph.types import Command
 
 from app.api.v1 import aio as aio_api
 from app.api.v1.aio import _ensure_takeover_bundle_is_active
+from app.config import get_settings
 from app.core.fetchers.browser import aio_client as aio_client_module
 from app.core.fetchers.browser.aio_client import (
     AioBackendError,
@@ -91,8 +92,10 @@ from app.workflow.orchestrator_node import (
     _route_brand_seed_without_llm,
     build_agent_tools,
     build_orchestrator_prompt_assembly,
+    validate_tool_available_in_current_state,
 )
 from app.workflow.prompt_assembly import PromptAssembly, PromptSection
+from app.workflow.prompt_fingerprint import fingerprint_tools
 from app.workflow.runtime_policy_executor import (
     build_alternative_action_catalog,
     build_next_required_action,
@@ -3806,6 +3809,135 @@ async def test_build_agent_tools_hides_history_tools_for_specific_current_follow
     assert "knowledge_export" not in names
     assert "compare_snapshots" not in names
     assert "post_analysis_skill" not in names
+
+
+@pytest.mark.asyncio
+async def test_stable_tool_surface_keeps_tools_across_context_constraints(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        get_settings(),
+        "ORCHESTRATOR_STABLE_TOOL_SURFACE_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.SkillRegistryService.get_tool_definitions",
+        AsyncMock(return_value=build_builtin_skill_tool_definitions()),
+    )
+    base_state = {
+        "user_id": "user_1",
+        "entity_id": "entity_1",
+        "orchestrator_history": [{"role": "user", "content": "继续分析"}],
+        "fetch_results": [
+            {
+                "question_id": "q1",
+                "question_text": "测试问题",
+                "platform_results": [{"platform": "doubao", "success": True}],
+            }
+        ],
+    }
+    constrained_state = {
+        **base_state,
+        "headless_mode": True,
+        "session_recalled": True,
+        "orchestrator_history": [
+            {"role": "user", "content": "豆包这次表现怎么样？"}
+        ],
+    }
+
+    base_tools = await build_agent_tools(base_state)
+    constrained_tools = await build_agent_tools(constrained_state)
+    constrained_names = [item["function"]["name"] for item in constrained_tools]
+
+    assert fingerprint_tools(base_tools) == fingerprint_tools(constrained_tools)
+    assert "ask_user" in constrained_names
+    assert "knowledge_lookup" in constrained_names
+    assert "knowledge_aggregate" in constrained_names
+    assert "knowledge_compare" in constrained_names
+    assert "knowledge_export" in constrained_names
+    assert "post_analysis_skill" in constrained_names
+
+
+def test_tool_availability_gate_blocks_headless_ask_user():
+    constraint = validate_tool_available_in_current_state(
+        "ask_user",
+        {
+            "headless_mode": True,
+            "analysis_mode": "baseline",
+            "a4_completion_observation": {"artifact_write_validated": True},
+        },
+    )
+
+    assert constraint.blocked is True
+    assert "headless" in constraint.reason
+    assert any(
+        "analysis_report_skill" in action
+        for action in constraint.suggested_next_actions
+    )
+
+
+def test_tool_availability_gate_blocks_history_tools_for_current_followup():
+    constraint = validate_tool_available_in_current_state(
+        "knowledge_lookup",
+        {
+            "orchestrator_history": [
+                {"role": "user", "content": "豆包这次表现怎么样？"}
+            ],
+            "fetch_results": [
+                {
+                    "question_id": "q1",
+                    "question_text": "测试问题",
+                    "platform_results": [{"platform": "doubao", "success": True}],
+                }
+            ],
+        },
+    )
+
+    assert constraint.blocked is True
+    assert "本次结果追问" in constraint.reason
+    assert any(
+        "drill_down_analysis" in action
+        for action in constraint.suggested_next_actions
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_call_returns_structured_blocked_result_when_stable_surface_on(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        get_settings(),
+        "ORCHESTRATOR_STABLE_TOOL_SURFACE_ENABLED",
+        True,
+    )
+
+    command = await _handle_tool_call(
+        state={
+            "session_id": "session-headless-gate",
+            "headless_mode": True,
+            "analysis_mode": "baseline",
+            "a4_completion_observation": {"artifact_write_validated": True},
+            "agent_retry_counts": {},
+        },
+        session_id="session-headless-gate",
+        tool_call=SimpleNamespace(
+            name="ask_user",
+            arguments={"message": "请选择", "options": []},
+            id="call_ask_user",
+        ),
+        reply_text="需要确认。",
+        new_history=[],
+    )
+
+    assert command.goto == "orchestrator"
+    payload = json.loads(command.update["orchestrator_history"][-1]["content"])
+    assert payload["type"] == "capability_blocked"
+    assert payload["blocked"] is True
+    assert payload["reason"]
+    assert payload["suggested_next_actions"]
+    assert command.update["last_validation_result"]["gate_name"] == (
+        "tool_availability_gate"
+    )
 
 
 def test_context_summary_marks_hidden_history_tools_for_specific_current_followup():

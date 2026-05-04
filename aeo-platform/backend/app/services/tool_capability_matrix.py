@@ -32,6 +32,27 @@ class ToolCapability:
         }
 
 
+@dataclass(frozen=True)
+class ToolAvailabilityConstraint:
+    """Current-state availability result for a tool call."""
+
+    tool_name: str
+    blocked: bool
+    reason: str = ""
+    suggested_next_actions: tuple[str, ...] = ()
+    source: str = "contextual_tool_gate"
+
+    def to_blocked_result(self) -> dict[str, Any]:
+        return {
+            "type": "capability_blocked",
+            "tool_name": self.tool_name,
+            "blocked": self.blocked,
+            "reason": self.reason,
+            "suggested_next_actions": list(self.suggested_next_actions),
+            "source": self.source,
+        }
+
+
 _TOOL_CAPABILITY_MATRIX: dict[str, ToolCapability] = {
     "brand_analysis": ToolCapability(
         tool_name="brand_analysis",
