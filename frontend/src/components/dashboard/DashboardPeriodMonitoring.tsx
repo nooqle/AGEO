@@ -1,19 +1,35 @@
 'use client';
 
+import { useCallback, useMemo, useState } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+
+import { api } from '@/services/api';
 import type {
   DashboardHomeData,
   DashboardMonitorMode,
   DashboardPeriodMetricSummary,
   DashboardPlatformDiagnosisRow,
 } from '@/types/dashboard';
+import type { MonitoringQuestionSet } from '@/types/monitoring';
 
 interface DashboardPeriodMonitoringProps {
   home?: DashboardHomeData | null;
+  selectedBrandId?: string | null;
   selectedMonitorMode: DashboardMonitorMode;
+  selectedDateRange: DashboardPeriodRange;
   selectedBrandName?: string;
   onMonitorModeChange?: (mode: DashboardMonitorMode) => void;
+  onDateRangeChange?: (range: DashboardPeriodRange) => void;
   isLoading?: boolean;
 }
+
+type DashboardPeriodRange = '30' | '14' | '7';
+
+const PERIOD_OPTIONS: Array<{ value: DashboardPeriodRange; label: string }> = [
+  { value: '30', label: '近 30 天' },
+  { value: '14', label: '近 14 天' },
+  { value: '7', label: '近 7 天' },
+];
 
 const DEFAULT_SOURCES = [
   { id: 'doubao_api', label: '豆包API', mark: '豆' },
@@ -76,6 +92,118 @@ function currentBrandRank(home: DashboardHomeData | null | undefined, brandName?
     ranking.find((row) => row.is_current_brand) ||
     ranking.find((row) => brandName && row.brand === brandName);
   return current?.rank ?? null;
+}
+
+function buildFallbackQuestions(home: DashboardHomeData | null | undefined) {
+  return (home?.latest_report?.question_preview || []).map((question, index) => ({
+    id: `preview-${index}`,
+    text: question,
+    meta: home?.latest_report?.question_set_label || '最新报告预览',
+  }));
+}
+
+function buildMonitoredQuestions(
+  questionSets: MonitoringQuestionSet[],
+  fallbackHome: DashboardHomeData | null | undefined,
+) {
+  const seen = new Set<string>();
+  const rows: Array<{ id: string; text: string; meta: string }> = [];
+
+  for (const questionSet of questionSets) {
+    for (const question of questionSet.questions || []) {
+      const text = question.question_text?.trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      rows.push({
+        id: question.question_id || `${questionSet.id}-${rows.length}`,
+        text,
+        meta: [questionSet.title, question.scene || question.intent || question.stage]
+          .filter(Boolean)
+          .join(' · '),
+      });
+    }
+  }
+
+  return rows.length ? rows : buildFallbackQuestions(fallbackHome);
+}
+
+function QuestionListDialog({
+  open,
+  onOpenChange,
+  title,
+  questions,
+  isLoading,
+  error,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  questions: Array<{ id: string; text: string; meta: string }>;
+  isLoading: boolean;
+  error: string | null;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/20" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[78vh] w-[min(720px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)]">
+          <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] px-5 py-4">
+            <div>
+              <Dialog.Title className="text-[18px] font-semibold text-[var(--text-primary)]">
+                监测问题列表
+              </Dialog.Title>
+              <Dialog.Description className="mt-1 text-[13px] text-[var(--text-tertiary)]">
+                {title}
+              </Dialog.Description>
+            </div>
+            <Dialog.Close className="min-h-8 rounded-lg border border-[var(--border-subtle)] px-3 text-[13px] text-[var(--text-secondary)]">
+              关闭
+            </Dialog.Close>
+          </div>
+          <div className="max-h-[58vh] overflow-auto px-5 py-4">
+            {isLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 5 }).map((_, index) => (
+                  <div key={index} className="h-14 rounded-[12px] animate-shimmer" />
+                ))}
+              </div>
+            ) : error ? (
+              <div className="rounded-[12px] border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-4 py-3 text-[13px] text-[var(--text-secondary)]">
+                {error}
+              </div>
+            ) : questions.length ? (
+              <ol className="space-y-2">
+                {questions.map((question, index) => (
+                  <li
+                    key={question.id}
+                    className="grid grid-cols-[40px_minmax(0,1fr)] gap-3 rounded-[12px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-3"
+                  >
+                    <span className="text-[13px] font-semibold text-[var(--brand-primary)]">
+                      #{index + 1}
+                    </span>
+                    <span>
+                      <span className="block text-[14px] leading-6 text-[var(--text-primary)]">
+                        {question.text}
+                      </span>
+                      {question.meta ? (
+                        <span className="mt-1 block text-[12px] text-[var(--text-tertiary)]">
+                          {question.meta}
+                        </span>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <div className="rounded-[12px] border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-4 py-3 text-[13px] text-[var(--text-secondary)]">
+                当前监测计划还没有返回可展示的问题列表。
+              </div>
+            )}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
 }
 
 function PlatformCard({ row }: { row: DashboardPlatformDiagnosisRow | { platform: string; answer_count?: number; brand_mention_count?: number; positive_count?: number; negative_count?: number } }) {
@@ -176,11 +304,29 @@ function RankingPanel({
 
 export function DashboardPeriodMonitoring({
   home,
+  selectedBrandId,
   selectedMonitorMode,
+  selectedDateRange,
   selectedBrandName,
   onMonitorModeChange,
+  onDateRangeChange,
   isLoading = false,
 }: DashboardPeriodMonitoringProps) {
+  const [isQuestionDialogOpen, setIsQuestionDialogOpen] = useState(false);
+  const [questionSets, setQuestionSets] = useState<MonitoringQuestionSet[]>([]);
+  const [isQuestionListLoading, setIsQuestionListLoading] = useState(false);
+  const [questionListError, setQuestionListError] = useState<string | null>(null);
+  const planQuestionSetIds = home?.monitoring_plan?.question_set_ids || [];
+  const planQuestionSetKey = planQuestionSetIds.join('|');
+  const activeQuestionSets = useMemo(() => {
+    if (!planQuestionSetKey) return questionSets;
+    const allowedIds = new Set(planQuestionSetKey.split('|').filter(Boolean));
+    return questionSets.filter((questionSet) => allowedIds.has(questionSet.id));
+  }, [planQuestionSetKey, questionSets]);
+  const monitoredQuestions = useMemo(
+    () => buildMonitoredQuestions(activeQuestionSets, home),
+    [activeQuestionSets, home],
+  );
   const periodDataCount = home?.period_summary?.data_point_count ?? 0;
   const mention = metricByKey(home, 'mention_rate');
   const citation = metricByKey(home, 'content_citation_rate') || metricByKey(home, 'official_conversion_rate');
@@ -201,6 +347,44 @@ export function DashboardPeriodMonitoring({
         positive_count: 0,
         negative_count: 0,
       }));
+
+  const loadQuestionSets = useCallback(async () => {
+    if (!selectedBrandId) {
+      setQuestionSets([]);
+      setQuestionListError(null);
+      return;
+    }
+
+    setIsQuestionListLoading(true);
+    setQuestionListError(null);
+    try {
+      const result = await api.listMonitoringQuestionSets({
+        entityId: selectedBrandId,
+        monitorMode: selectedMonitorMode,
+        limit: 20,
+      });
+      setQuestionSets(result.question_sets || []);
+    } catch (error) {
+      setQuestionSets([]);
+      setQuestionListError(error instanceof Error ? error.message : '问题列表加载失败，请稍后重试。');
+    } finally {
+      setIsQuestionListLoading(false);
+    }
+  }, [selectedBrandId, selectedMonitorMode]);
+
+  const handleQuestionDialogOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && selectedBrandId) {
+        setIsQuestionListLoading(true);
+        setQuestionListError(null);
+      }
+      setIsQuestionDialogOpen(open);
+      if (open) {
+        void loadQuestionSets();
+      }
+    },
+    [loadQuestionSets, selectedBrandId],
+  );
 
   if (isLoading && !home) {
     return (
@@ -255,24 +439,39 @@ export function DashboardPeriodMonitoring({
               );
             })}
           </div>
-          <select
-            className="h-10 rounded-[12px] border bg-[var(--bg-secondary)] px-3 text-[13px] text-[var(--text-secondary)]"
+          <button
+            type="button"
+            onClick={() => handleQuestionDialogOpenChange(true)}
+            className="h-10 rounded-[12px] border bg-[var(--bg-secondary)] px-3 text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--brand-primary)]"
             style={{ borderColor: 'var(--border-subtle)' }}
             aria-label="问题范围"
           >
-            <option>全部问题</option>
-            {home?.monitoring_plan?.question_set_label ? (
-              <option>{home.monitoring_plan.question_set_label}</option>
-            ) : null}
-          </select>
-          <div
-            className="inline-flex h-10 items-center rounded-[12px] border bg-[var(--bg-secondary)] px-3 text-[13px] text-[var(--text-secondary)]"
+            问题列表
+          </button>
+          <select
+            value={selectedDateRange}
+            onChange={(event) => onDateRangeChange?.(event.target.value as DashboardPeriodRange)}
+            className="h-10 rounded-[12px] border bg-[var(--bg-secondary)] px-3 text-[13px] text-[var(--text-secondary)]"
             style={{ borderColor: 'var(--border-subtle)' }}
+            aria-label="统计周期"
           >
-            {formatDateRange(home)}
-          </div>
+            {PERIOD_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
+
+      <QuestionListDialog
+        open={isQuestionDialogOpen}
+        onOpenChange={handleQuestionDialogOpenChange}
+        title={`${home?.monitoring_plan?.question_set_label || home?.latest_report?.question_set_label || '当前监测问题'} · ${home?.monitoring_plan?.question_count || monitoredQuestions.length || 0} 个问题`}
+        questions={monitoredQuestions}
+        isLoading={isQuestionListLoading}
+        error={questionListError}
+      />
 
       <div className="mt-5 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
         <section className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-4">

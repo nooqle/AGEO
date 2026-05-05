@@ -862,6 +862,135 @@ class AnalyticsService:
             "metrics": [],
         }
 
+    def _dashboard_period_rollup_from_snapshots(
+        self,
+        snapshots: list[AnalysisSnapshot],
+    ) -> dict[str, Any]:
+        platform_rows: dict[str, dict[str, Any]] = {}
+        negative_topics_by_platform: dict[str, dict[str, int]] = defaultdict(dict)
+        brand_counts: dict[str, int] = defaultdict(int)
+        current_brand = ""
+        answer_count = 0
+
+        for snapshot in snapshots:
+            payload = self._snapshot_to_report_payload(snapshot) or {}
+            input_bundle = payload.get("input_bundle")
+            input_bundle = input_bundle if isinstance(input_bundle, dict) else {}
+            meta = input_bundle.get("meta")
+            meta = meta if isinstance(meta, dict) else {}
+            brand_master = input_bundle.get("brand_master")
+            brand_master = brand_master if isinstance(brand_master, dict) else {}
+            if not current_brand:
+                current_brand = str(
+                    brand_master.get("monitor_brand")
+                    or meta.get("brand_name")
+                    or payload.get("brand_name")
+                    or ""
+                ).strip()
+
+            answers = input_bundle.get("answers")
+            if not isinstance(answers, list):
+                continue
+
+            for answer in answers:
+                if not isinstance(answer, dict) or answer.get("status") != "ok":
+                    continue
+                platform = str(answer.get("platform") or "").strip()
+                if not platform:
+                    continue
+                answer_count += 1
+                fetch_method = self._answer_fetch_method(answer)
+                source_label = self._ai_source_label(platform, fetch_method)
+                source_key = f"{platform.lower()}:{fetch_method or 'unknown'}"
+                row = platform_rows.setdefault(
+                    source_key,
+                    {
+                        "platform": source_label,
+                        "platformId": platform.lower(),
+                        "fetchMethod": fetch_method or None,
+                        "status": "unknown",
+                        "answerCount": 0,
+                        "brandMentionCount": 0,
+                        "positiveCount": 0,
+                        "negativeCount": 0,
+                    },
+                )
+                row["answerCount"] += 1
+
+                raw_mentioned_brands = answer.get("mentioned_brands")
+                mentioned_brands = (
+                    raw_mentioned_brands if isinstance(raw_mentioned_brands, list) else []
+                )
+                answer_brands = {
+                    str(brand).strip()
+                    for brand in mentioned_brands
+                    if str(brand).strip()
+                }
+                if answer.get("mentioned_monitor_brand") and current_brand:
+                    answer_brands.add(current_brand)
+                for brand in answer_brands:
+                    brand_counts[brand] += 1
+
+                if answer.get("mentioned_monitor_brand"):
+                    row["brandMentionCount"] += 1
+                    sentiment = str(answer.get("sentiment") or "neutral")
+                    if sentiment == "positive":
+                        row["positiveCount"] += 1
+                    elif sentiment == "negative":
+                        row["negativeCount"] += 1
+                    raw_negative_topics = answer.get("negative_topics")
+                    negative_topics = (
+                        raw_negative_topics if isinstance(raw_negative_topics, list) else []
+                    )
+                    for topic in negative_topics:
+                        topic_key = str(topic or "").strip()
+                        if not topic_key:
+                            continue
+                        topics = negative_topics_by_platform.setdefault(source_key, {})
+                        topics[topic_key] = topics.get(topic_key, 0) + 1
+
+        for source_key, row in platform_rows.items():
+            if row["negativeCount"] > row["positiveCount"] and row["negativeCount"] > 0:
+                row["status"] = "risk"
+            elif row["brandMentionCount"] > 0:
+                row["status"] = "good"
+            elif row["answerCount"] > 0:
+                row["status"] = "watch"
+            topics = negative_topics_by_platform.get(source_key, {})
+            if topics:
+                row["mainConcern"] = self._negative_topic_label(
+                    sorted(topics.items(), key=lambda item: (-item[1], item[0]))[0][0]
+                )
+
+        platform_diagnosis = sorted(
+            platform_rows.values(),
+            key=lambda row: (
+                row["status"] == "risk",
+                row["brandMentionCount"],
+                row["answerCount"],
+                row["platform"],
+            ),
+            reverse=True,
+        )
+        mention_ranking = [
+            {
+                "rank": index + 1,
+                "brand": brand,
+                "mentionRate": round(count / answer_count, 4) if answer_count else None,
+                "mentionCount": count,
+                "isCurrentBrand": bool(current_brand and brand == current_brand),
+            }
+            for index, (brand, count) in enumerate(
+                sorted(brand_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+            )
+        ]
+
+        return {
+            "platformDiagnosis": platform_diagnosis,
+            "mentionRanking": mention_ranking,
+            "periodAnswerCount": answer_count,
+        }
+
     def _augment_home_with_period_context(
         self,
         home: dict[str, Any],
@@ -869,11 +998,19 @@ class AnalyticsService:
         monitoring_plan: dict[str, Any] | None,
         period_summary: dict[str, Any],
         recent_issue: dict[str, Any] | None,
+        period_rollup: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         home["monitoringPlan"] = monitoring_plan
         home["periodSummary"] = period_summary
         home["dataPointCount"] = int(period_summary.get("data_point_count") or 0)
         home["recentIssue"] = recent_issue
+        period_rollup = period_rollup if isinstance(period_rollup, dict) else {}
+        if "platformDiagnosis" in period_rollup:
+            home["platformDiagnosis"] = period_rollup["platformDiagnosis"]
+        if "mentionRanking" in period_rollup:
+            home["mentionRanking"] = period_rollup["mentionRanking"]
+        if "periodAnswerCount" in period_rollup:
+            home["periodAnswerCount"] = period_rollup["periodAnswerCount"]
         home["todoItems"] = self._build_dashboard_todo_items(
             home,
             monitoring_plan=monitoring_plan,
@@ -3454,6 +3591,7 @@ class AnalyticsService:
             period_snapshots,
             date_range_days=date_range_days,
         )
+        period_rollup = self._dashboard_period_rollup_from_snapshots(period_snapshots)
         latest_period_snapshot = period_snapshots[-1] if period_snapshots else None
         current = (
             self._snapshot_to_report_payload(latest_period_snapshot)
@@ -3524,6 +3662,7 @@ class AnalyticsService:
                 monitoring_plan=monitoring_plan,
                 period_summary=period_summary,
                 recent_issue=recent_issue,
+                period_rollup=period_rollup,
             )
 
         projection_home = self._build_dashboard_home_from_projection(current)
@@ -3533,6 +3672,7 @@ class AnalyticsService:
                 monitoring_plan=monitoring_plan,
                 period_summary=period_summary,
                 recent_issue=recent_issue,
+                period_rollup=period_rollup,
             )
 
         payload = self._extract_v2_payload(current)
@@ -4110,4 +4250,5 @@ class AnalyticsService:
             monitoring_plan=monitoring_plan,
             period_summary=period_summary,
             recent_issue=recent_issue,
+            period_rollup=period_rollup,
         )

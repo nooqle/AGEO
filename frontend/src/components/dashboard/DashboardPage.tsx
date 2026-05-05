@@ -117,6 +117,8 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     setSelectedBrandId,
     homeMonitorMode: selectedMonitorMode,
     setHomeMonitorMode,
+    dateRange,
+    setDateRange,
     home,
     isHomeLoading,
     homeError,
@@ -134,7 +136,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     if (selectedBrandId && !isMonitoringMode) {
       void fetchHome();
     }
-  }, [fetchHome, isMonitoringMode, selectedBrandId, selectedMonitorMode]);
+  }, [dateRange, fetchHome, isMonitoringMode, selectedBrandId, selectedMonitorMode]);
 
   useEffect(() => {
     if (entities.length === 0) {
@@ -335,9 +337,12 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           <DashboardTodoStrip item={visibleTodoItem} onAction={handleTodoAction} />
           <DashboardPeriodMonitoring
             home={home}
+            selectedBrandId={selectedBrandId}
             selectedMonitorMode={selectedMonitorMode}
+            selectedDateRange={dateRange}
             selectedBrandName={selectedBrandName}
             onMonitorModeChange={handleMonitorModeChange}
+            onDateRangeChange={setDateRange}
             isLoading={isHomeLoading}
           />
         </>

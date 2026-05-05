@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { DashboardData, DashboardHomeData, DashboardMonitorMode } from '@/types/dashboard';
 import { api } from '@/services/api';
 
-type DashboardDateRange = 'week' | 'month' | 'quarter';
+type DashboardDateRange = '7' | '14' | '30';
 
 function buildCacheKey(
   selectedBrandId: string | null,
@@ -59,7 +59,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   error: null,
   homeError: null,
   selectedBrandId: null,
-  dateRange: 'month',
+  dateRange: '30',
   homeMonitorMode: 'panorama',
   cache: {},
   homeCache: {},
@@ -290,7 +290,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       isLoading: false,
       error: null,
       selectedBrandId: null,
-      dateRange: 'month',
+      dateRange: '30',
       homeMonitorMode: 'panorama',
       cache: {},
       activeRequestId: 0,
