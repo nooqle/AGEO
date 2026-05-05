@@ -52,6 +52,31 @@ BRAND_STATUS_LABELS = {
     "monitor_plus_others": "品牌与竞品同台",
 }
 
+REPORT_MODE_LABELS = {
+    REPORT_MODE_NO_SIGNAL: "品牌未进入",
+    REPORT_MODE_WEAK_SIGNAL: "弱信号观察",
+    REPORT_MODE_BRAND_ENTRY: "品牌已进入",
+    REPORT_MODE_FULL_LANDSCAPE: "完整全景诊断",
+}
+
+JOURNEY_STAGE_LABELS = {
+    "awareness": "认知/趋势心智",
+    "understanding": "理解/知识查询",
+    "supplier_evaluation": "供应商/选项评估",
+    "purchase_evaluation": "购买/选型决策",
+    "value_validation": "价值验证",
+    "fit_evaluation": "适配评估",
+    "risk_validation": "风险验证",
+    "trust_validation": "信任验证",
+    "scenario_solution": "场景解决方案",
+}
+
+BUSINESS_VALUE_LABELS = {
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+}
+
 BLOCKED_NO_SIGNAL_SECTIONS = [
     "sentiment_risk",
     "official_conversion",
@@ -163,6 +188,21 @@ def _platform_label(platform: Any) -> str:
 def _brand_status_label(status: Any) -> str:
     text = str(status or "").strip()
     return BRAND_STATUS_LABELS.get(text, text or "需复核")
+
+
+def _report_mode_label(mode: Any) -> str:
+    text = str(mode or "").strip()
+    return REPORT_MODE_LABELS.get(text, text or "需复核")
+
+
+def _journey_stage_label(stage: Any) -> str:
+    text = str(stage or "").strip()
+    return JOURNEY_STAGE_LABELS.get(text, text or "需复核")
+
+
+def _business_value_label(value: Any) -> str:
+    text = str(value or "").strip()
+    return BUSINESS_VALUE_LABELS.get(text, text or "需复核")
 
 
 def _is_generic_label(value: Any) -> bool:
@@ -776,9 +816,23 @@ def _source_identity_from_a4(item: dict[str, Any]) -> tuple[str, str]:
 
 def _source_action_from_a4_label(label: str, *, is_official: bool) -> str:
     if label == "未知":
-        return "来源识别未返回有效分类，保留为未知来源。"
+        return "当前没有足够站点特征完成分类，建议人工复核域名归属。"
     if is_official:
         return "优先优化官网可引用内容和结构化入口。"
+    if label == "电商平台":
+        return "补齐商品详情页、店铺问答和规格对比中的品牌卖点。"
+    if label == "消费社区/导购平台":
+        return "补充评测、清单和真实使用体验中的品牌事实与对比口径。"
+    if label in {"内容社区/种草平台", "短视频/内容平台"}:
+        return "维护适合内容平台传播的场景卖点、使用体验和风险澄清。"
+    if label in {"微信公众号内容", "内容资讯平台"}:
+        return "补充可被引用的科普解释、选购建议和权威结论。"
+    if label == "问答社区":
+        return "沉淀问答式解释，覆盖典型疑问、适用边界和对比证据。"
+    if label == "百科/知识库":
+        return "校准基础事实、品牌实体信息和权威定义。"
+    if label == "学术/医学":
+        return "将专业证据转写为适合 AI 引用的安全边界和结论摘要。"
     return f"围绕“{label}”来源维护站点画像与内容治理。"
 
 
@@ -836,9 +890,7 @@ def build_source_intelligence(
                 "brand_control_score": control,
                 "ai_citation_frequency": count,
                 "citation_share": _safe_rate(count, total_citations),
-                "risk_level": (
-                    "low" if control > 0 else "medium"
-                ),
+                "risk_level": ("low" if control > 0 else "medium"),
                 "recommended_action": action,
                 "sample_titles": [_clip(title, 56) for title in titles[:3] if title],
             }
@@ -873,9 +925,23 @@ def build_source_intelligence(
 
 def _source_type_diagnosis(label: str) -> str:
     if label == "未知":
-        return "来源识别未返回有效分类，保留为未知。"
+        return "当前没有足够站点特征完成分类，需要人工复核域名归属。"
     if label == "品牌官网":
         return "品牌可控来源，应优先做结构化内容和可引用结论优化。"
+    if label == "电商平台":
+        return "AI 答案正在引用交易与商品详情入口，会影响购买转化和规格认知。"
+    if label == "消费社区/导购平台":
+        return "AI 答案依赖消费决策社区，说明真实体验、榜单和导购内容会影响品牌解释权。"
+    if label in {"内容社区/种草平台", "短视频/内容平台"}:
+        return "AI 答案引用内容平台，说明场景体验和口碑内容会影响用户第一印象。"
+    if label in {"微信公众号内容", "内容资讯平台"}:
+        return "AI 答案引用内容资讯来源，说明科普文章和媒体解释会影响决策理解。"
+    if label == "问答社区":
+        return "AI 答案引用问答社区，说明用户疑问和对比讨论正在影响答案组织。"
+    if label == "百科/知识库":
+        return "AI 答案引用百科知识库，说明基础事实和实体定义会影响品牌认知。"
+    if label == "学术/医学":
+        return "AI 答案引用学术或医学来源，说明安全、功效和证据边界是关键解释依据。"
     return f"该类型来自引用来源识别结果，用于观察 AI 答案对“{label}”来源的依赖。"
 
 
@@ -1436,7 +1502,7 @@ def build_diagnosis_markdown_appendix(
     if scenario_items:
         for item in scenario_items:
             lines.append(
-                f"- **{item.get('decision_scenario')}**：决策阶段 {item.get('journey_stage')}，业务价值 {item.get('business_value')}，品牌状态 {item.get('brand_status')}。"
+                f"- **{item.get('decision_scenario')}**：决策阶段 {_journey_stage_label(item.get('journey_stage'))}，业务价值 {_business_value_label(item.get('business_value'))}，品牌状态 {_brand_status_label(item.get('brand_status'))}。"
             )
     else:
         lines.append("- 当前问题样本不足以形成稳定场景地图。")
@@ -2379,9 +2445,10 @@ def build_structured_report(
         lines.extend(
             [
                 "### 1. 数据状态",
-                f"- 问题/答案：本轮覆盖 {operations_diagnosis['data_status']['total_questions']} 个问题、{operations_diagnosis['data_status']['successful_answers']} 条有效答案；品牌提及 {operations_diagnosis['data_status']['brand_presence_count']} 条；报告模式：{mode}。",
+                f"- 问题/答案：本轮覆盖 {operations_diagnosis['data_status']['total_questions']} 个问题、{operations_diagnosis['data_status']['successful_answers']} 条有效答案；品牌提及 {operations_diagnosis['data_status']['brand_presence_count']} 条；报告模式：{_report_mode_label(mode)}。",
                 f"- 进入拆解：品牌可见度 {_format_rate(brand_entry.get('brand_visibility'))}；只提品牌 {_format_rate(brand_entry.get('monitor_only_rate'))}；品牌与竞品同台 {_format_rate(brand_entry.get('monitor_plus_others_rate'))}；无品牌率 {_format_rate(brand_entry.get('no_brand_rate'))}；竞品挤压率 {_format_rate(brand_entry.get('competitor_pressure'))}。",
                 f"- 排名/官网：品牌提及排名 {rank_text}；提及品牌答案 {official_funnel.get('monitor_brand_answer_count', 0)} 条，品牌相关链接答案 {official_funnel.get('brand_related_link_answer_count', 0)} 条，官网链接答案 {official_funnel.get('official_link_answer_count', 0)} 条；官网引用转化率 {_format_rate(official_conversion)}。",
+                "- 读数说明：如果某项指标显示 0.0%，表示本轮样本没有观测到该类信号，不等于长期没有；需要结合样本标题和原始答案复核原因。",
                 "",
                 "### 2. 品牌进入能力",
                 *_render_conclusion_lines(
@@ -2407,7 +2474,7 @@ def build_structured_report(
                 )
                 competitors = "、".join(item.get("competitors_present", []) or [])
                 lines.append(
-                    f"- **{item.get('decision_scenario')}**：问题 {item.get('question_count')} 个，进入率 {_format_rate(item.get('brand_entry_rate'))}，无品牌率 {_format_rate(item.get('no_brand_rate'))}，竞品单独进入 {item.get('competitor_only_count')} 个；决策阶段 {item.get('journey_stage')}，业务价值 {item.get('business_value')}。"
+                    f"- **{item.get('decision_scenario')}**：问题 {item.get('question_count')} 个，进入率 {_format_rate(item.get('brand_entry_rate'))}，无品牌率 {_format_rate(item.get('no_brand_rate'))}，竞品单独进入 {item.get('competitor_only_count')} 个；决策阶段 {_journey_stage_label(item.get('journey_stage'))}，业务价值 {_business_value_label(item.get('business_value'))}。"
                 )
                 if reps:
                     lines.append(f"  - 代表问题：{reps}")
@@ -2614,7 +2681,7 @@ def build_structured_report(
             for item in missing_samples[:5]:
                 competitors = "、".join(item.get("competitors_present", []) or [])
                 lines.append(
-                    f"  - **{item.get('decision_scenario')}**：{item.get('brand_status')}；竞品：{competitors or '未集中'}；问题：{item.get('question_text')}"
+                    f"  - **{item.get('decision_scenario')}**：{_brand_status_label(item.get('brand_status'))}；竞品：{competitors or '未集中'}；问题：{item.get('question_text')}"
                 )
         unknown_sources = sample_appendix.get("unknown_sources", []) or []
         if unknown_sources:
@@ -2634,7 +2701,10 @@ def build_structured_report(
                     f"  - {item.get('site_display') or item.get('domain')}：{item.get('source_type_label')}，出现 {item.get('ai_citation_frequency')} 次；{samples or '暂无标题样本'}"
                 )
 
-    markdown = "\n".join(lines).strip()
+    markdown = sanitize_report_markdown(
+        "\n".join(lines).strip(),
+        risk_concern_analysis=risk_concern_analysis,
+    )
     report_sections = [
         {
             "section_name": "executive_summary",
@@ -2670,6 +2740,16 @@ def sanitize_report_markdown(
 ) -> str:
     sanitized = str(markdown or "")
     sanitized = sanitized.replace("N/A", "暂无足够数据支撑")
+    for code, label in REPORT_MODE_LABELS.items():
+        sanitized = sanitized.replace(f"报告模式：{code}", f"报告模式：{label}")
+        sanitized = sanitized.replace(f"报告模式: {code}", f"报告模式：{label}")
+    for code, label in JOURNEY_STAGE_LABELS.items():
+        sanitized = sanitized.replace(f"决策阶段 {code}", f"决策阶段 {label}")
+    for code, label in BUSINESS_VALUE_LABELS.items():
+        sanitized = sanitized.replace(f"业务价值 {code}", f"业务价值 {label}")
+    for code, label in BRAND_STATUS_LABELS.items():
+        sanitized = sanitized.replace(f"品牌状态 {code}", f"品牌状态 {label}")
+        sanitized = sanitized.replace(f"：{code}；", f"：{label}；")
     narrative = (
         risk_concern_analysis.get("summary", {}).get("narrative")
         if isinstance(risk_concern_analysis.get("summary"), dict)
@@ -2892,6 +2972,22 @@ def repair_report_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     repair_markdown(
         {
             "N/A": "暂无足够数据支撑",
+            "报告模式：NO_SIGNAL": "报告模式：品牌未进入",
+            "报告模式：WEAK_SIGNAL": "报告模式：弱信号观察",
+            "报告模式：BRAND_ENTRY": "报告模式：品牌已进入",
+            "报告模式：FULL_LANDSCAPE": "报告模式：完整全景诊断",
+            "决策阶段 awareness": "决策阶段 认知/趋势心智",
+            "决策阶段 understanding": "决策阶段 理解/知识查询",
+            "决策阶段 supplier_evaluation": "决策阶段 供应商/选项评估",
+            "决策阶段 purchase_evaluation": "决策阶段 购买/选型决策",
+            "决策阶段 value_validation": "决策阶段 价值验证",
+            "决策阶段 fit_evaluation": "决策阶段 适配评估",
+            "决策阶段 risk_validation": "决策阶段 风险验证",
+            "决策阶段 trust_validation": "决策阶段 信任验证",
+            "决策阶段 scenario_solution": "决策阶段 场景解决方案",
+            "业务价值 high": "业务价值 高",
+            "业务价值 medium": "业务价值 中",
+            "业务价值 low": "业务价值 低",
             "品牌负向提及率": "决策顾虑观察",
             "官网承接不足": "当前尚不能判断官网承接",
             "品牌负面比例不高": risk_narrative,

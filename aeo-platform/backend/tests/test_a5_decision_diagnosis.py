@@ -517,10 +517,7 @@ def test_source_intelligence_uses_a4_url_skill_fields_without_reclassifying():
 
     assert by_domain["pcauto.com.cn"]["source_type_label"] == "汽车垂直媒体"
     assert by_domain["pcauto.com.cn"]["site_name"] == "太平洋汽车"
-    assert (
-        by_domain["pcauto.com.cn"]["site_display"]
-        == "太平洋汽车（pcauto.com.cn）"
-    )
+    assert by_domain["pcauto.com.cn"]["site_display"] == "太平洋汽车（pcauto.com.cn）"
     assert by_domain["abc123x.example"]["source_type"] == "unknown"
     assert by_domain["abc123x.example"]["source_type_label"] == "未知"
     assert "规则库" not in by_domain["abc123x.example"]["recommended_action"]
@@ -840,6 +837,26 @@ def test_weak_signal_report_does_not_use_strong_claim_language():
     assert "稳定口碑" not in markdown
     assert "明确平台偏好" not in markdown
     assert "长期趋势" not in markdown
+
+
+def test_structured_report_localizes_internal_codes_for_readers():
+    report = _structured_report_for_mode(REPORT_MODE_WEAK_SIGNAL)
+    markdown = report["report_markdown"]
+
+    assert "报告模式：弱信号观察" in markdown
+    assert "决策阶段 供应商/选项评估" in markdown
+    assert "业务价值 高" in markdown
+    assert "如果某项指标显示 0.0%" in markdown
+    for raw_text in (
+        "报告模式：WEAK_SIGNAL",
+        "决策阶段 supplier_evaluation",
+        "决策阶段 purchase_evaluation",
+        "决策阶段 awareness",
+        "业务价值 medium",
+        "业务价值 high",
+        "品牌状态 competitor_only",
+    ):
+        assert raw_text not in markdown
 
 
 def test_repair_report_artifact_fixes_repairable_copy_only():
