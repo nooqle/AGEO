@@ -79,6 +79,10 @@ function latestReportRef(report?: DashboardLatestReport): string {
   );
 }
 
+function isRealMonitoringPlanId(planId: string | null | undefined): planId is string {
+  return Boolean(planId && !planId.startsWith('schedule:'));
+}
+
 function reportTodoStorageKey(brandId: string, reportRef: string): string {
   return `specta.dashboard.report.viewed.${brandId}.${reportRef}`;
 }
@@ -233,7 +237,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           `${home.monitoring_plan.question_count} 个问题 · ${home.monitoring_plan.endpoint_labels.length} 个 AI 来源`,
         );
       }
-      if (home?.monitoring_plan?.id) {
+      if (isRealMonitoringPlanId(home?.monitoring_plan?.id)) {
         params.set('monitoring_plan_id', home.monitoring_plan.id);
       }
       if (home?.monitoring_plan?.question_set_ids?.length) {

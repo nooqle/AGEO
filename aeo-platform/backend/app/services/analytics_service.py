@@ -26,6 +26,7 @@ from app.models.monitoring_plan import (
     MonitoringRunStatus,
     MonitoringQuestionSet,
 )
+from app.models.monitoring_schedule import MonitoringSchedule, ScheduleStatus
 from app.models.snapshot import AnalysisSnapshot, SnapshotStatus
 from app.models.session import Session
 from app.models.user import User
@@ -1067,15 +1068,8 @@ class AnalyticsService:
         )
         monitor_mode = self._normalize_dashboard_monitor_mode(monitor_mode) or "panorama"
 
-        plan_status = str((monitoring_plan or {}).get("status") or "").strip().lower()
-        question_count = int((monitoring_plan or {}).get("question_count") or 0)
-        endpoint_ids = (monitoring_plan or {}).get("endpoint_ids") or []
-        has_complete_plan = bool(
+        has_complete_plan = self._dashboard_monitoring_plan_is_complete(
             monitoring_plan
-            and plan_status == "active"
-            and question_count > 0
-            and isinstance(endpoint_ids, list)
-            and len(endpoint_ids) > 0
         )
         data_point_count = int(period_summary.get("data_point_count") or 0)
 
@@ -3553,17 +3547,160 @@ class AnalyticsService:
             return None
         try:
             service = MonitoringPlanService(self.db)
+            normalized_mode = (
+                self._normalize_dashboard_monitor_mode(monitor_mode) or "panorama"
+            )
             plan = await service.get_entity_plan(
                 user_id=self.viewer.id,
                 entity_id=brand_uuid,
-                monitor_mode=monitor_mode or "panorama",
+                monitor_mode=normalized_mode,
             )
-            if plan is None:
-                return None
-            return await service.plan_to_dict(plan)
+            plan_summary = (
+                await service.plan_to_dict(plan) if plan is not None else None
+            )
+            active_schedule = await self._get_dashboard_active_schedule(
+                brand_uuid=brand_uuid,
+                monitor_mode=normalized_mode,
+            )
+            schedule_summary = self._dashboard_monitoring_plan_from_schedule(
+                active_schedule,
+                fallback_plan=plan_summary,
+            )
+            if self._dashboard_monitoring_plan_is_complete(schedule_summary):
+                return schedule_summary
+            return plan_summary
         except Exception as exc:
             logger.warning("[Dashboard] Failed to load monitoring plan: %s", exc)
             return None
+
+    async def _get_dashboard_active_schedule(
+        self,
+        *,
+        brand_uuid: UUID,
+        monitor_mode: str,
+    ) -> MonitoringSchedule | None:
+        if self.viewer is None:
+            return None
+        result = await self.db.execute(
+            select(MonitoringSchedule)
+            .where(
+                AccessScopeService.schedule_visibility_filter(self.viewer),
+                MonitoringSchedule.entity_id == brand_uuid,
+                MonitoringSchedule.monitor_mode == monitor_mode,
+                MonitoringSchedule.status == ScheduleStatus.ACTIVE,
+            )
+            .order_by(desc(MonitoringSchedule.updated_at))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    def _dashboard_monitoring_plan_is_complete(
+        monitoring_plan: dict[str, Any] | None,
+    ) -> bool:
+        if not monitoring_plan:
+            return False
+        plan_status = str(monitoring_plan.get("status") or "").strip().lower()
+        question_count = int(monitoring_plan.get("question_count") or 0)
+        endpoint_ids = monitoring_plan.get("endpoint_ids") or []
+        return bool(
+            plan_status == "active"
+            and question_count > 0
+            and isinstance(endpoint_ids, list)
+            and len(endpoint_ids) > 0
+        )
+
+    @staticmethod
+    def _dashboard_endpoint_ids_from_schedule(
+        schedule: MonitoringSchedule,
+    ) -> list[str]:
+        endpoint_ids = [
+            str(item).strip()
+            for item in schedule.endpoint_ids or []
+            if str(item).strip() in ENDPOINT_REGISTRY
+        ]
+        if endpoint_ids:
+            return endpoint_ids
+
+        platform_endpoint_map = {
+            "doubao": "doubao_api",
+            "yuanbao": "yuanbao_api",
+            "hunyuan": "yuanbao_api",
+            "kimi": "kimi_api",
+            "deepseek": "deepseek_browser",
+        }
+        normalized: list[str] = []
+        for raw_platform in schedule.platforms or []:
+            platform = str(raw_platform or "").strip().lower()
+            endpoint_id = platform_endpoint_map.get(platform)
+            if endpoint_id and endpoint_id not in normalized:
+                normalized.append(endpoint_id)
+        return normalized
+
+    def _dashboard_monitoring_plan_from_schedule(
+        self,
+        schedule: MonitoringSchedule | None,
+        *,
+        fallback_plan: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if schedule is None:
+            return None
+        baseline = (
+            schedule.baseline_data
+            if isinstance(schedule.baseline_data, dict)
+            else {}
+        )
+        questions = baseline.get("questions")
+        question_count = len(questions) if isinstance(questions, list) else 0
+        if question_count <= 0:
+            question_count = int((fallback_plan or {}).get("question_count") or 0)
+        endpoint_ids = self._dashboard_endpoint_ids_from_schedule(schedule)
+        question_set_ids = [
+            str(item)
+            for item in (
+                schedule.question_set_ids
+                or (fallback_plan or {}).get("question_set_ids")
+                or []
+            )
+            if str(item).strip()
+        ]
+        monitor_mode = (
+            self._normalize_dashboard_monitor_mode(schedule.monitor_mode)
+            or self._normalize_dashboard_monitor_mode(
+                (fallback_plan or {}).get("monitor_mode")
+            )
+            or "panorama"
+        )
+        default_question_set_label = (
+            "用户场景问题集" if monitor_mode == "scenario" else "品牌全景问题集"
+        )
+        plan_id = (
+            str(schedule.monitoring_plan_id) if schedule.monitoring_plan_id else ""
+        )
+        return {
+            "id": plan_id or f"schedule:{schedule.id}",
+            "user_id": str(schedule.user_id),
+            "entity_id": str(schedule.entity_id),
+            "monitor_mode": monitor_mode,
+            "status": "active",
+            "title": (fallback_plan or {}).get("title") or "自动监测计划",
+            "question_set_ids": question_set_ids,
+            "question_set_label": (fallback_plan or {}).get("question_set_label")
+            or default_question_set_label,
+            "question_count": question_count,
+            "endpoint_ids": endpoint_ids,
+            "endpoint_labels": MonitoringPlanService.endpoint_ids_to_labels(
+                endpoint_ids
+            ),
+            "run_policy": schedule.run_policy or "quick",
+            "frequency": schedule.frequency.value if schedule.frequency else "weekly",
+            "preferred_hour": schedule.preferred_hour,
+            "timezone": schedule.timezone,
+            "schedule_id": str(schedule.id),
+            "schedule_status": schedule.status.value if schedule.status else "active",
+            "created_at": schedule.created_at.isoformat(),
+            "updated_at": schedule.updated_at.isoformat(),
+        }
 
     async def get_dashboard_home_v2(
         self,
