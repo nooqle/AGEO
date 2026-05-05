@@ -70,7 +70,22 @@ def _coerce_progress(value: Any, *, default: float | None = None) -> float | Non
     return max(0.0, min(1.0, progress))
 
 
+def _a4_completed_without_user_decision(state: dict[str, Any]) -> bool:
+    if str(state.get("current_step") or "").strip() != "A4":
+        return False
+    observation = state.get("a4_completion_observation")
+    if not isinstance(observation, dict):
+        return False
+    return bool(
+        observation.get("artifact_write_validated")
+        and not observation.get("requires_user_decision")
+        and (state.get("a4_canonical_result") or state.get("fetch_results"))
+    )
+
+
 def state_requires_user_input(state: dict[str, Any]) -> bool:
+    if _a4_completed_without_user_decision(state):
+        return False
     return bool(
         state.get("awaiting_user")
         or state.get("pending_confirmation")

@@ -78,6 +78,10 @@ class ControlPlaneTaskSummary(BaseModel):
     status: str
     llm_total_tokens: int
     llm_estimated_cost: float
+    llm_estimated_cost_cache_aware: float = 0.0
+    currency: str = "CNY"
+    llm_cached_prompt_tokens: int = 0
+    llm_billable_prompt_tokens: int = 0
     llm_total_latency_ms: int
     updated_at: datetime
 
@@ -111,11 +115,29 @@ class ControlPlaneObservabilitySummary(BaseModel):
     total_cost: float
     total_cost_cache_aware: float
     estimated_savings: float
+    currency: str = "CNY"
     total_latency_ms: int
     avg_latency_ms: float
     unique_models: int
+    diagnostic_sample_count: int = 0
+    low_cache_call_count: int = 0
+    low_cache_call_ratio: float = 0.0
+    static_prompt_variant_count: int = 0
+    tool_surface_variant_count: int = 0
+    model_identity_variant_count: int = 0
+    avg_runtime_context_size: int = 0
+    max_runtime_context_size: int = 0
     first_call_at: datetime | None = None
     last_call_at: datetime | None = None
+
+
+class ControlPlaneReuseDiagnostic(BaseModel):
+    severity: str
+    code: str
+    title: str
+    message: str
+    affected_count: int = 0
+    ratio: float | None = None
 
 
 class ControlPlaneCostBreakdown(BaseModel):
@@ -129,11 +151,14 @@ class ControlPlaneCostBreakdown(BaseModel):
     call_count: int
     total_tokens: int
     prompt_tokens: int
+    completion_tokens: int = 0
     cached_prompt_tokens: int
+    billable_prompt_tokens: int = 0
     cache_hit_ratio: float
     total_cost: float
     total_cost_cache_aware: float
     estimated_savings: float
+    currency: str = "CNY"
     total_latency_ms: int
     avg_latency_ms: float
 
@@ -159,11 +184,21 @@ class ControlPlaneRecentCall(BaseModel):
     estimated_cost: float
     estimated_cost_cache_aware: float
     estimated_savings: float
+    currency: str = "CNY"
+    static_prompt_hash: str | None = None
+    tool_surface_hash: str | None = None
+    model_identity: str | None = None
+    runtime_context_size: int | None = None
+    runtime_reminder_enabled: bool | None = None
+    stable_tool_surface_enabled: bool | None = None
+    stable_skill_tool_description_enabled: bool | None = None
+    reuse_diagnosis: str | None = None
     created_at: datetime | None = None
 
 
 class ControlPlaneObservabilitySnapshot(BaseModel):
     summary: ControlPlaneObservabilitySummary
+    reuse_diagnostics: list[ControlPlaneReuseDiagnostic] = []
     by_customer_brand: list[ControlPlaneCostBreakdown]
     by_model: list[ControlPlaneCostBreakdown]
     by_step: list[ControlPlaneCostBreakdown]

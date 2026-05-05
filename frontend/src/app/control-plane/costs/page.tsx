@@ -16,6 +16,7 @@ import {
   ControlPlaneStatCard,
   controlPlanePalette,
 } from '@/components/control-plane/ControlPlaneShell';
+import { formatControlPlaneCost } from '@/components/control-plane/ControlPlaneDataPanels';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { api } from '@/services/api';
@@ -25,18 +26,29 @@ import type {
   ControlPlaneCustomerSummary,
   ControlPlaneObservabilitySnapshot,
   ControlPlaneRecentCall,
+  ControlPlaneReuseDiagnostic,
 } from '@/types/controlPlane';
 import { formatDateTime } from '@/lib/utils';
 
 const palette = controlPlanePalette();
 
-function formatCost(value: number) {
-  return `¥${value.toFixed(value >= 1 ? 2 : 4)}`;
+function formatCost(value: number, currency = 'CNY') {
+  return formatControlPlaneCost(value, currency);
 }
 
 function formatPercent(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '0%';
   return `${(value * 100).toFixed(value >= 0.1 ? 1 : 2)}%`;
+}
+
+function formatHash(value: string | null) {
+  if (!value) return '--';
+  return value.length > 8 ? value.slice(0, 8) : value;
+}
+
+function formatSize(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  return value.toLocaleString();
 }
 
 export default function ControlPlaneCostsPage() {
@@ -127,7 +139,7 @@ function ControlPlaneCostsContent() {
   return (
     <ControlPlaneShell
       title="成本观测"
-      description="查看客户、品牌、模型、步骤和最近调用。"
+      description="查看客户、品牌、模型、步骤和最近调用，区分输入、输出、缓存命中和估算费用。"
       breadcrumbs={[
         { label: '设置', href: '/settings' },
         { label: '运营工作台', href: '/control-plane' },
@@ -191,20 +203,50 @@ function ControlPlaneCostsContent() {
         </div>
       ) : (
         <div className="space-y-6">
-          <div className="grid gap-4 xl:grid-cols-3">
+          <div className="grid gap-4 xl:grid-cols-4">
             <ControlPlaneStatCard
-              label="总成本"
+              label="估算成本"
               value={
-                snapshot ? formatCost(snapshot.summary.total_cost_cache_aware) : '--'
+                snapshot
+                  ? formatCost(
+                      snapshot.summary.total_cost_cache_aware,
+                      snapshot.summary.currency
+                    )
+                  : '--'
               }
               hint={
-                snapshot ? `原始 ${formatCost(snapshot.summary.total_cost)}` : '等待数据'
+                snapshot
+                  ? `未计缓存 ${formatCost(
+                      snapshot.summary.total_cost,
+                      snapshot.summary.currency
+                    )}`
+                  : '等待数据'
               }
             />
             <ControlPlaneStatCard
-              label="模型调用"
-              value={snapshot ? snapshot.summary.call_count.toLocaleString() : '--'}
-              hint={`最近 ${days} 天`}
+              label="缓存节省"
+              value={
+                snapshot
+                  ? formatCost(
+                      snapshot.summary.estimated_savings,
+                      snapshot.summary.currency
+                    )
+                  : '--'
+              }
+              hint={
+                snapshot
+                  ? `命中 ${formatPercent(snapshot.summary.cache_hit_ratio)}`
+                  : '等待数据'
+              }
+            />
+            <ControlPlaneStatCard
+              label="Token 用量"
+              value={snapshot ? snapshot.summary.total_tokens.toLocaleString() : '--'}
+              hint={
+                snapshot
+                  ? `输入 ${snapshot.summary.prompt_tokens.toLocaleString()} / 输出 ${snapshot.summary.completion_tokens.toLocaleString()}`
+                  : `最近 ${days} 天`
+              }
             />
             <ControlPlaneStatCard
               label="平均时延"
@@ -215,11 +257,15 @@ function ControlPlaneCostsContent() {
               }
               hint={
                 snapshot
-                  ? `缓存命中 ${formatPercent(snapshot.summary.cache_hit_ratio)}`
+                  ? `调用 ${snapshot.summary.call_count.toLocaleString()} 次`
                   : '等待数据'
               }
             />
           </div>
+
+          <ControlPlanePanel title="提示词复用诊断">
+            <PromptReuseDiagnostics snapshot={snapshot} loading={loading} />
+          </ControlPlanePanel>
 
           <ControlPlanePanel title="筛选条件">
             <div className="grid gap-4 xl:grid-cols-[280px_minmax(320px,1fr)]">
@@ -349,6 +395,8 @@ function CostBreakdownTable({
             ) : null}
             <th className="pb-3 pr-4 font-semibold">调用</th>
             <th className="pb-3 pr-4 font-semibold">Token</th>
+            <th className="pb-3 pr-4 font-semibold">输入 / 输出</th>
+            <th className="pb-3 pr-4 font-semibold">缓存</th>
             <th className="pb-3 pr-4 font-semibold">费用</th>
             <th className="pb-3 font-semibold">平均时延</th>
           </tr>
@@ -356,13 +404,13 @@ function CostBreakdownTable({
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={6} className="py-8 text-center" style={{ color: palette.muted }}>
+              <td colSpan={8} className="py-8 text-center" style={{ color: palette.muted }}>
                 正在加载明细...
               </td>
             </tr>
           ) : rows.length === 0 ? (
             <tr>
-              <td colSpan={6} className="py-8 text-center" style={{ color: palette.muted }}>
+              <td colSpan={8} className="py-8 text-center" style={{ color: palette.muted }}>
                 当前窗口内没有明细记录。
               </td>
             </tr>
@@ -405,9 +453,24 @@ function CostBreakdownTable({
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {row.total_tokens.toLocaleString()}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    计费输入 {row.billable_prompt_tokens.toLocaleString()}
+                  </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {formatCost(row.total_cost_cache_aware)}
+                  {row.prompt_tokens.toLocaleString()} / {row.completion_tokens.toLocaleString()}
+                </td>
+                <td className="py-4 pr-4" style={{ color: palette.muted }}>
+                  {formatPercent(row.cache_hit_ratio)}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    命中 {row.cached_prompt_tokens.toLocaleString()}
+                  </div>
+                </td>
+                <td className="py-4 pr-4" style={{ color: palette.muted }}>
+                  {formatCost(row.total_cost_cache_aware, row.currency)}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    省 {formatCost(row.estimated_savings, row.currency)}
+                  </div>
                 </td>
                 <td className="py-4" style={{ color: palette.muted }}>
                   {Math.round(row.avg_latency_ms).toLocaleString()} ms
@@ -417,6 +480,116 @@ function CostBreakdownTable({
           )}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function PromptReuseDiagnostics({
+  snapshot,
+  loading,
+}: {
+  snapshot: ControlPlaneObservabilitySnapshot | null;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="py-6 text-sm" style={{ color: palette.muted }}>
+        正在加载提示词复用诊断...
+      </div>
+    );
+  }
+  if (!snapshot) {
+    return (
+      <div className="py-6 text-sm" style={{ color: palette.muted }}>
+        当前窗口内没有可诊断的调用。
+      </div>
+    );
+  }
+  const summary = snapshot.summary;
+  if (summary.diagnostic_sample_count === 0) {
+    return (
+      <div className="py-6 text-sm" style={{ color: palette.muted }}>
+        当前窗口内没有可诊断的调用。
+      </div>
+    );
+  }
+  const metrics = [
+    {
+      label: '诊断样本',
+      value: summary.diagnostic_sample_count.toLocaleString(),
+      hint: `低复用 ${summary.low_cache_call_count.toLocaleString()} 次`,
+    },
+    {
+      label: '低复用比例',
+      value: formatPercent(summary.low_cache_call_ratio),
+      hint: `阈值 ${formatPercent(0.2)}`,
+    },
+    {
+      label: '固定提示词版本',
+      value: summary.static_prompt_variant_count.toLocaleString(),
+      hint: '同一版本内越少越稳定',
+    },
+    {
+      label: '工具清单版本',
+      value: summary.tool_surface_variant_count.toLocaleString(),
+      hint: '工具面变化会影响复用',
+    },
+    {
+      label: '平均动态上下文',
+      value: formatSize(summary.avg_runtime_context_size),
+      hint: `最大 ${formatSize(summary.max_runtime_context_size)}`,
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 md:grid-cols-5">
+        {metrics.map((metric) => (
+          <div
+            key={metric.label}
+            className="border-l pl-3"
+            style={{ borderColor: palette.borderStrong }}
+          >
+            <div className="text-xs font-semibold" style={{ color: palette.subtle }}>
+              {metric.label}
+            </div>
+            <div className="mt-1 text-xl font-semibold" style={{ color: palette.text }}>
+              {metric.value}
+            </div>
+            <div className="mt-1 text-xs" style={{ color: palette.muted }}>
+              {metric.hint}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="divide-y" style={{ borderColor: palette.border }}>
+        {snapshot.reuse_diagnostics.map((item) => (
+          <ReuseDiagnosticRow key={item.code} item={item} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReuseDiagnosticRow({ item }: { item: ControlPlaneReuseDiagnostic }) {
+  const tone =
+    item.severity === 'critical'
+      ? 'var(--status-error)'
+      : item.severity === 'warning'
+        ? 'var(--status-warning)'
+        : palette.accent;
+  return (
+    <div className="grid gap-3 py-4 md:grid-cols-[180px_minmax(0,1fr)_120px]">
+      <div className="text-sm font-semibold" style={{ color: tone }}>
+        {item.title}
+      </div>
+      <div className="text-sm" style={{ color: palette.muted }}>
+        {item.message}
+      </div>
+      <div className="text-sm md:text-right" style={{ color: palette.subtle }}>
+        {item.affected_count > 0 ? `${item.affected_count.toLocaleString()} 次` : '无异常'}
+        {typeof item.ratio === 'number' ? ` / ${formatPercent(item.ratio)}` : ''}
+      </div>
     </div>
   );
 }
@@ -440,19 +613,20 @@ function RecentCallsTable({
             <th className="pb-3 pr-4 font-semibold">Token</th>
             <th className="pb-3 pr-4 font-semibold">费用</th>
             <th className="pb-3 pr-4 font-semibold">缓存命中</th>
+            <th className="pb-3 pr-4 font-semibold">诊断</th>
             <th className="pb-3 font-semibold">时间</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={8} className="py-8 text-center" style={{ color: palette.muted }}>
+              <td colSpan={9} className="py-8 text-center" style={{ color: palette.muted }}>
                 正在加载最近调用...
               </td>
             </tr>
           ) : rows.length === 0 ? (
             <tr>
-              <td colSpan={8} className="py-8 text-center" style={{ color: palette.muted }}>
+              <td colSpan={9} className="py-8 text-center" style={{ color: palette.muted }}>
                 当前窗口内没有调用明细。
               </td>
             </tr>
@@ -476,18 +650,39 @@ function RecentCallsTable({
                 <td className="py-4 pr-4">{row.brand_name}</td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {row.provider} / {row.model_name}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    {row.model_identity || `${row.provider}:${row.model_name}`}
+                  </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {row.step_name || row.step || '--'}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    prompt {formatHash(row.static_prompt_hash)} / tool {formatHash(row.tool_surface_hash)}
+                  </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {row.total_tokens.toLocaleString()}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    输入 {row.prompt_tokens.toLocaleString()} / 输出 {row.completion_tokens.toLocaleString()}
+                  </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {formatCost(row.estimated_cost_cache_aware)}
+                  {formatCost(row.estimated_cost_cache_aware, row.currency)}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    省 {formatCost(row.estimated_savings, row.currency)}
+                  </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {formatPercent(row.cache_hit_ratio)}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    命中 {row.cached_prompt_tokens.toLocaleString()} / 未命中 {row.billable_prompt_tokens.toLocaleString()}
+                  </div>
+                </td>
+                <td className="py-4 pr-4" style={{ color: palette.muted }}>
+                  {row.reuse_diagnosis || '正常'}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    动态 {row.runtime_context_size === null ? '--' : row.runtime_context_size.toLocaleString()}
+                  </div>
                 </td>
                 <td className="py-4" style={{ color: palette.muted }}>
                   {row.created_at ? formatDateTime(row.created_at) : '--'}

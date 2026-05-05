@@ -138,6 +138,54 @@ def test_build_transition_from_state_promotes_a4_artifact_waiting_progress() -> 
     assert transition.progress == 1.0
 
 
+def test_build_transition_from_state_ignores_stale_a3_confirmation_after_a4() -> None:
+    transition = build_transition_from_state(
+        {
+            "task_id": str(uuid4()),
+            "run_id": str(uuid4()),
+            "current_step": "A4",
+            "execution_status": "running",
+            "progress": 0.6,
+            "progress_message": "答案抓取完成，正在准备生成分析报告。",
+            "awaiting_user": True,
+            "pending_confirmation": {"type": "question_set_confirmation"},
+            "a4_completion_observation": {
+                "artifact_write_validated": True,
+                "requires_user_decision": False,
+            },
+            "a4_canonical_result": {"fetch_results": []},
+            "fetch_results": [{"question_id": "q1", "platform_results": []}],
+        }
+    )
+
+    assert transition is not None
+    assert transition.status == "running"
+    assert transition.progress == 0.6
+
+
+def test_build_transition_from_state_keeps_real_a4_user_decision_wait() -> None:
+    transition = build_transition_from_state(
+        {
+            "task_id": str(uuid4()),
+            "run_id": str(uuid4()),
+            "current_step": "A4",
+            "execution_status": "running",
+            "progress": 0.6,
+            "awaiting_user": True,
+            "pending_confirmation": {"type": "step_confirmation"},
+            "a4_completion_observation": {
+                "artifact_write_validated": True,
+                "requires_user_decision": True,
+            },
+            "fetch_results": [{"question_id": "q1", "platform_results": []}],
+        }
+    )
+
+    assert transition is not None
+    assert transition.status == "waiting_input"
+    assert transition.progress == 1.0
+
+
 def test_build_transition_from_state_uses_a7_completion_message() -> None:
     transition = build_transition_from_state(
         {
@@ -155,6 +203,27 @@ def test_build_transition_from_state_uses_a7_completion_message() -> None:
     assert transition.status == "completed"
     assert transition.stage == "A7"
     assert transition.message == "官网 AI 友好度已完成"
+
+
+def test_build_transition_from_state_completes_a5_report_with_clean_message() -> None:
+    transition = build_transition_from_state(
+        {
+            "task_id": str(uuid4()),
+            "run_id": str(uuid4()),
+            "current_step": "A5",
+            "current_skill": "analysis_report_skill",
+            "execution_status": "completed",
+            "progress": 1.0,
+            "progress_message": "等待开始...",
+            "report": {"report_kind": "panorama"},
+        }
+    )
+
+    assert transition is not None
+    assert transition.status == "completed"
+    assert transition.stage == "A5"
+    assert transition.progress == 1.0
+    assert transition.message == "分析完成"
 
 
 def test_task_stage_code_coerces_orchestrator_to_db_safe_code() -> None:

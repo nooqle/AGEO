@@ -155,6 +155,14 @@ async def init_db():
     """
     async with engine.begin() as conn:
         existing_tables = await conn.run_sync(_list_user_tables)
+        if settings.is_postgres and "alembic_version" in existing_tables:
+            logger.info(
+                "[DB] Existing PostgreSQL schema has alembic_version; "
+                "skipping ORM create_all bootstrap. Run Alembic migrations "
+                "for schema changes."
+            )
+            return
+
         await conn.run_sync(Base.metadata.create_all)
         if settings.is_postgres and not existing_tables:
             head_revision = _get_current_alembic_head()

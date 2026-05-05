@@ -33,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.api.deps import get_user_from_token
+from app.core.asyncio_utils import wait_for_task_without_cancelling
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, init_db
 from app.core.websocket_server import (
@@ -401,6 +402,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     # Track running agent task so we don't block the WS receive loop
     agent_task: asyncio.Task | None = None
 
+    async def _wait_for_agent_before_confirmation(task: asyncio.Task) -> bool:
+        """Wait for the current turn without cancelling it on timeout."""
+
+        completed = await wait_for_task_without_cancelling(task, timeout=60)
+        if not completed:
+            logger.warning(
+                "[WebSocket] Agent task did not complete in 60s; "
+                "leaving it running and ignoring stale confirmation"
+            )
+        return completed
+
     def _on_agent_done(task: asyncio.Task):
         """Log errors from background agent task and notify frontend."""
         nonlocal agent_task
@@ -475,20 +487,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     logger.info(
                         "[WebSocket] Agent task still running, waiting for completion before handling confirmation..."
                     )
-                    try:
-                        await asyncio.wait_for(_running, timeout=60)
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "[WebSocket] Agent task did not complete in 60s, ignoring confirmation"
-                        )
-                        await manager.emit_to_websocket(
-                            websocket,
-                            "error",
-                            {
-                                "message": "当前任务未能及时完成，请稍后重试",
-                                "recoverable": True,
-                            },
-                        )
+                    completed = await _wait_for_agent_before_confirmation(_running)
+                    if not completed:
                         continue
                 agent_task = asyncio.create_task(
                     handle_confirmation(websocket, session_id, data)

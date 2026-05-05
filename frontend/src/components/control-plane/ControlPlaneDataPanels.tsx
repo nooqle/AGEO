@@ -17,8 +17,12 @@ import { formatRelativeTime } from '@/lib/utils';
 
 const palette = controlPlanePalette();
 
-export function formatControlPlaneCost(value: number) {
-  return `¥${value.toFixed(2)}`;
+export function formatControlPlaneCost(value: number, currency = 'CNY') {
+  const normalizedCurrency = currency.toUpperCase();
+  const symbol =
+    normalizedCurrency === 'USD' ? '$' : normalizedCurrency === 'CNY' ? '¥' : '';
+  const suffix = symbol ? '' : ` ${normalizedCurrency}`;
+  return `${symbol}${value.toFixed(value >= 1 ? 2 : 4)}${suffix}`;
 }
 
 export function SummaryPill({

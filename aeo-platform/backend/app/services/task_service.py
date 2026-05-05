@@ -352,6 +352,13 @@ class TaskService:
         task = result.scalar_one_or_none()
         if task is None:
             return
+        if task.status in _TERMINAL_TASK_STATUSES:
+            logger.info(
+                "[TaskService] Skip progress update for terminal task %s (%s)",
+                task_id,
+                task.status.value,
+            )
+            return
 
         task.current_stage = _coerce_task_stage_code(stage)
         task.progress = progress

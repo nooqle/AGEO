@@ -16,6 +16,7 @@ import {
   ControlPlaneStatCard,
   controlPlanePalette,
 } from '@/components/control-plane/ControlPlaneShell';
+import { formatControlPlaneCost } from '@/components/control-plane/ControlPlaneDataPanels';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { api } from '@/services/api';
@@ -37,8 +38,8 @@ const STATUS_OPTIONS = [
   { label: '已取消', value: 'cancelled' },
 ] as const;
 
-function formatCost(value: number) {
-  return `¥${value.toFixed(2)}`;
+function formatCost(value: number, currency = 'CNY') {
+  return formatControlPlaneCost(value, currency);
 }
 
 export default function ControlPlaneTasksPage() {
@@ -116,7 +117,7 @@ function ControlPlaneTasksContent() {
     return filteredTasks.reduce(
       (acc, task) => {
         acc.tokens += task.llm_total_tokens;
-        acc.cost += task.llm_estimated_cost;
+        acc.cost += task.llm_estimated_cost_cache_aware;
         acc.latency += task.llm_total_latency_ms;
         if (task.status === 'running' || task.status === 'pending') acc.active += 1;
         return acc;
@@ -340,7 +341,13 @@ function ControlPlaneTasksContent() {
                           {task.llm_total_tokens.toLocaleString()}
                         </td>
                         <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                          {formatCost(task.llm_estimated_cost)}
+                          {formatCost(
+                            task.llm_estimated_cost_cache_aware,
+                            task.currency
+                          )}
+                          <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                            缓存 {task.llm_cached_prompt_tokens.toLocaleString()} / 计费输入 {task.llm_billable_prompt_tokens.toLocaleString()}
+                          </div>
                         </td>
                         <td className="py-4 pr-4" style={{ color: palette.muted }}>
                           {task.llm_total_latency_ms.toLocaleString()} ms

@@ -283,11 +283,13 @@ class AgentState(TypedDict):
         str | None
     )  # Resolved package key for current skill family
     current_skill_package_name: str | None  # Human-readable package name
+    current_skill_package_description: str | None  # Short package runtime hint
     current_skill_package_path: str | None  # Filesystem path to SKILL.md
     current_skill_package_context: str | None  # Loaded package guidance body
     current_skill_prompt_overlay: (
         str | None
     )  # Optional prompt overlay resolved from selected profile
+    current_skill_profiles: list | None  # Available profile summaries for this skill family
     current_skill_contract: dict | None  # Structured public skill contract payload
     current_skill_prompt_sections: (
         list | None

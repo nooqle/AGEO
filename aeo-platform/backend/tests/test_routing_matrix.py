@@ -12,11 +12,13 @@ Requires a running backend server (port 8001) with valid LLM API keys.
 
 Usage:
     python -m pytest tests/test_routing_matrix.py -v -s --timeout=600
+    $env:RUN_FULL_ROUTING_MATRIX="1"; python -m pytest tests/test_routing_matrix.py -v -s
 """
 
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -37,13 +39,35 @@ WS_CONNECT_TIMEOUT = 10
 WS_PIPELINE_TIMEOUT = 900  # 15 min for full pipeline (A4 browser is slow)
 WS_FOLLOWUP_TIMEOUT = 120  # 2 min for follow-up operations
 
+DEFAULT_CONFIRMATION_PREFERENCE_IDS = (
+    "panorama_fast",
+    "panorama",
+    "brand_panorama",
+    "fast",
+    "run_analysis_report",
+    "persona_first",
+)
+
+RUN_FULL_ROUTING_MATRIX = os.getenv("RUN_FULL_ROUTING_MATRIX") == "1"
+
+STEP_ALIASES = {
+    "brand_analysis": "A1",
+    "persona_generation": "A2",
+    "question_simulation": "A3",
+    "answer_fetch": "A4",
+    "analysis_report_skill": "A5",
+    "data_analytics": "A5",
+}
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async def create_session(entity_id: str | None = None) -> str:
     async with httpx.AsyncClient() as client:
         body = {"entity_id": entity_id} if entity_id else {}
-        resp = await client.post(f"{BASE_URL}/api/v1/sessions", headers=HEADERS, json=body)
+        resp = await client.post(
+            f"{BASE_URL}/api/v1/sessions", headers=HEADERS, json=body
+        )
         resp.raise_for_status()
         data = resp.json()
         return data.get("id") or data.get("session_id")
@@ -55,15 +79,73 @@ async def ws_connect(session_id: str):
 
 
 async def send_msg(ws, content: str, brand_name: str = ""):
-    msg = {"event": "user_message", "data": {"content": content, "brand_name": brand_name or content}}
+    msg = {
+        "event": "user_message",
+        "data": {"content": content, "brand_name": brand_name or content},
+    }
     await ws.send(json.dumps(msg))
     logger.info(f"→ Sent: {content[:60]}")
 
 
-async def send_confirmation(ws, selection: str):
-    msg = {"event": "confirmation", "data": {"selection": selection, "message": selection}}
+async def send_confirmation(
+    ws,
+    selection: str | dict[str, Any],
+    *,
+    option_id: str = "",
+    request_id: str = "",
+    message: str = "",
+):
+    msg = {
+        "event": "confirmation",
+        "data": {
+            "selection": selection,
+            "option_id": option_id,
+            "request_id": request_id,
+            "message": message,
+        },
+    }
     await ws.send(json.dumps(msg))
-    logger.info(f"→ Confirmed: {selection}")
+    logger.info(f"→ Confirmed: {message or selection}")
+
+
+def choose_confirmation_option(
+    confirmation_event: dict[str, Any],
+    preferred_ids: tuple[str, ...] = DEFAULT_CONFIRMATION_PREFERENCE_IDS,
+) -> dict[str, Any]:
+    data = confirmation_event.get("data") or {}
+    options = list(data.get("options") or [])
+    for preferred_id in preferred_ids:
+        for option in options:
+            if option.get("id") == preferred_id:
+                return option
+    for option in options:
+        label_and_description = (
+            str(option.get("label") or "") + str(option.get("description") or "")
+        )
+        if not any(
+            keyword in label_and_description
+            for keyword in ("停止", "取消", "放弃", "终止")
+        ):
+            return option
+    raise AssertionError(f"No selectable confirmation option: {options}")
+
+
+async def send_confirmation_option(
+    ws,
+    confirmation_event: dict[str, Any],
+    preferred_ids: tuple[str, ...] = DEFAULT_CONFIRMATION_PREFERENCE_IDS,
+):
+    data = confirmation_event.get("data") or {}
+    option = choose_confirmation_option(confirmation_event, preferred_ids)
+    option_id = str(option.get("id") or "")
+    label = str(option.get("label") or option_id)
+    await send_confirmation(
+        ws,
+        {"optionId": option_id, "label": label},
+        option_id=option_id,
+        request_id=str(data.get("request_id") or ""),
+        message=label,
+    )
 
 
 async def collect_until(
@@ -74,7 +156,8 @@ async def collect_until(
 ) -> list[dict]:
     events: list[dict] = []
     start = time.time()
-    while len(events) < max_events:
+    semantic_event_count = 0
+    while semantic_event_count < max_events:
         remaining = timeout - (time.time() - start)
         if remaining <= 0:
             break
@@ -83,7 +166,8 @@ async def collect_until(
             msg = json.loads(raw)
             event_type = msg.get("event") or msg.get("type", "unknown")
             events.append(msg)
-            if event_type not in ("pong", "heartbeat"):
+            if event_type not in ("pong", "heartbeat", "thought_delta"):
+                semantic_event_count += 1
                 data_preview = str(msg.get("data", ""))[:80]
                 logger.info(f"  [{event_type}] {data_preview}")
             if event_type in stop_events:
@@ -103,6 +187,43 @@ def has_event(events: list[dict], event_type: str) -> bool:
     return len(find_events(events, event_type)) > 0
 
 
+def has_non_empty_reply(events: list[dict]) -> bool:
+    return any(
+        bool((event.get("data") or {}).get("content"))
+        for event in find_events(events, "reply_delta")
+    )
+
+
+async def collect_until_terminal_with_confirmations(
+    ws,
+    *,
+    timeout: float = WS_PIPELINE_TIMEOUT,
+    preferred_ids: tuple[str, ...] = DEFAULT_CONFIRMATION_PREFERENCE_IDS,
+    max_confirmations: int = 4,
+) -> list[dict]:
+    all_events: list[dict] = []
+    start = time.time()
+    confirmations_sent = 0
+    while time.time() - start < timeout:
+        remaining = timeout - (time.time() - start)
+        events = await collect_until(
+            ws,
+            stop_events=["execution_complete", "inline_confirmation", "error"],
+            timeout=remaining,
+        )
+        all_events.extend(events)
+        if has_event(events, "execution_complete") or has_event(events, "error"):
+            break
+        confirmations = find_events(events, "inline_confirmation")
+        if not confirmations:
+            break
+        if confirmations_sent >= max_confirmations:
+            raise AssertionError("Too many confirmation prompts during routing matrix")
+        await send_confirmation_option(ws, confirmations[-1], preferred_ids)
+        confirmations_sent += 1
+    return all_events
+
+
 def get_action_log_steps(events: list[dict]) -> list[str]:
     """Extract unique step names from action_log events."""
     steps = set()
@@ -117,56 +238,87 @@ def get_action_log_steps(events: list[dict]) -> list[str]:
 def get_progress_steps(events: list[dict]) -> list[str]:
     """Extract unique step names from progress events."""
     steps = set()
-    for e in find_events(events, "progress"):
+    progress_events = [
+        *find_events(events, "progress"),
+        *find_events(events, "execution_progress"),
+        *find_events(events, "stage_result"),
+    ]
+    for e in progress_events:
         data = e.get("data", {})
-        step = data.get("step", "")
+        step = data.get("step") or data.get("stage") or ""
         if step:
-            steps.add(step)
+            steps.add(STEP_ALIASES.get(step, step))
     return sorted(steps)
 
 
 # ─── Test: Full Pipeline Routing ──────────────────────────────────────────────
 
 class TestFullPipelineRouting:
-    """Verify A1→A2→A3→A4→A5 routing in a single session."""
+    """Verify the fast panorama route in a single session."""
 
     @pytest.mark.asyncio
     async def test_pipeline_covers_all_agents(self):
-        """Message 1: Start brand analysis. Verify all 5 agents are invoked."""
+        """Message 1: Start brand analysis and verify current handoff contract."""
         session_id = await create_session()
         ws = await ws_connect(session_id)
 
         try:
             await send_msg(ws, "帮我分析安利纽崔莱", "安利纽崔莱")
 
-            # Full pipeline can take up to 15 min (A4 browser fetch)
-            events = await collect_until(
-                ws,
-                stop_events=["execution_complete", "error"],
-                timeout=WS_PIPELINE_TIMEOUT,
-            )
-
-            # Verify pipeline completion
-            assert has_event(events, "execution_complete"), "Pipeline did not complete"
-            assert not has_event(events, "error"), "Pipeline had errors"
-
-            # Verify all 5 agent steps were executed
-            progress_steps = get_progress_steps(events)
-            for expected_step in ["A1", "A2", "A3", "A4", "A5"]:
-                assert expected_step in progress_steps, (
-                    f"Agent {expected_step} was not executed. Steps seen: {progress_steps}"
+            if RUN_FULL_ROUTING_MATRIX:
+                events = await collect_until_terminal_with_confirmations(
+                    ws,
+                    timeout=WS_PIPELINE_TIMEOUT,
                 )
 
-            # Verify stage_result events were emitted
-            stage_results = find_events(events, "stage_result")
-            assert len(stage_results) >= 3, (
-                f"Expected at least 3 stage_results (A1+A2+A3), got {len(stage_results)}"
+                assert has_event(events, "execution_complete"), (
+                    "Pipeline did not complete"
+                )
+                assert not has_event(events, "error"), "Pipeline had errors"
+
+                progress_steps = get_progress_steps(events)
+                for expected_step in ["A1", "A3", "A4", "A5"]:
+                    assert expected_step in progress_steps, (
+                        f"Agent {expected_step} was not executed. "
+                        f"Steps seen: {progress_steps}"
+                    )
+
+                stage_results = find_events(events, "stage_result")
+                assert len(stage_results) >= 3, (
+                    "Expected at least 3 stage_results (A1+A3+A4/A5), "
+                    f"got {len(stage_results)}"
+                )
+
+                assert has_event(events, "output_ready"), (
+                    "No output_ready event (report not generated)"
+                )
+
+                logger.info("✓ Fast panorama routing: A1→A3→A4→A5 PASS")
+                return
+
+            events = await collect_until(
+                ws,
+                stop_events=["inline_confirmation", "error"],
+                timeout=240,
+            )
+            assert not has_event(events, "error"), "Pipeline had errors"
+            assert has_event(events, "inline_confirmation"), (
+                "A1 did not hand off to user confirmation"
             )
 
-            # Verify output_ready for final report
-            assert has_event(events, "output_ready"), "No output_ready event (report not generated)"
+            progress_steps = get_progress_steps(events)
+            assert "A1" in progress_steps, f"A1 was not executed: {progress_steps}"
 
-            logger.info("✓ Full pipeline routing: A1→A2→A3→A4→A5 PASS")
+            confirmation = find_events(events, "inline_confirmation")[-1]
+            option_ids = {
+                option.get("id")
+                for option in (confirmation.get("data") or {}).get("options") or []
+            }
+            assert option_ids.intersection(
+                {"panorama_fast", "panorama_full", "panorama", "brand_panorama"}
+            )
+            assert option_ids.intersection({"persona_first", "scenario"})
+            logger.info("✓ A1 confirmation handoff routing PASS")
 
         finally:
             await ws.close()
@@ -180,14 +332,16 @@ class TestFollowUpRouting:
     @pytest.fixture(autouse=True)
     async def setup_pipeline(self):
         """Run full pipeline once, then run follow-up tests."""
+        if not RUN_FULL_ROUTING_MATRIX:
+            pytest.skip("Set RUN_FULL_ROUTING_MATRIX=1 to run full follow-up E2E")
+
         self.session_id = await create_session()
         self.ws = await ws_connect(self.session_id)
 
         # Run full pipeline first
         await send_msg(self.ws, "帮我分析安利纽崔莱", "安利纽崔莱")
-        self.pipeline_events = await collect_until(
+        self.pipeline_events = await collect_until_terminal_with_confirmations(
             self.ws,
-            stop_events=["execution_complete", "error"],
             timeout=WS_PIPELINE_TIMEOUT,
         )
 
@@ -242,9 +396,8 @@ class TestFollowUpRouting:
         """Message 4: Scoped rerun requests should route to answer_fetch→A4→(A5)."""
         await send_msg(self.ws, "请重新抓取 Kimi 平台的数据")
 
-        events = await collect_until(
+        events = await collect_until_terminal_with_confirmations(
             self.ws,
-            stop_events=["execution_complete", "error"],
             timeout=WS_PIPELINE_TIMEOUT,
         )
 
@@ -280,18 +433,23 @@ class TestCasualChatRouting:
 
             events = await collect_until(
                 ws,
-                stop_events=["execution_complete", "inline_confirmation"],
-                timeout=60,
+                stop_events=["reply_delta", "execution_complete", "inline_confirmation"],
+                timeout=120,
             )
 
             # Should get reply but no agent progress events
-            reply_events = find_events(events, "reply_delta")
-            assert len(reply_events) > 0, "No reply to casual chat"
+            assert has_non_empty_reply(events), "No reply to casual chat"
 
-            progress_events = find_events(events, "progress")
+            progress_events = [
+                *find_events(events, "progress"),
+                *find_events(events, "execution_progress"),
+            ]
             agent_steps = set()
             for e in progress_events:
-                step = e.get("data", {}).get("step", "")
+                raw_step = e.get("data", {}).get("step") or e.get("data", {}).get(
+                    "stage", ""
+                )
+                step = STEP_ALIASES.get(raw_step, raw_step)
                 if step in ("A1", "A2", "A3", "A4", "A5"):
                     agent_steps.add(step)
 
@@ -315,7 +473,7 @@ class TestMultiMessageSession:
     async def test_routing_matrix_10_messages(self):
         """
         Full routing matrix:
-        Msg 1: Brand analysis (A1→A2→A3→A4→A5)
+        Msg 1: Brand analysis (fast panorama: A1→A3→A4→A5)
         Msg 2: Casual question
         Msg 3: Drill-down on platform
         Msg 4: Drill-down on competitor
@@ -326,6 +484,9 @@ class TestMultiMessageSession:
         Msg 9: General optimization question
         Msg 10: Another brand analysis
         """
+        if not RUN_FULL_ROUTING_MATRIX:
+            pytest.skip("Set RUN_FULL_ROUTING_MATRIX=1 to run full routing matrix")
+
         session_id = await create_session()
         ws = await ws_connect(session_id)
         results: dict[str, str] = {}
@@ -334,12 +495,15 @@ class TestMultiMessageSession:
             # ─── Msg 1: Full pipeline ─────────────────────────
             logger.info("═══ Msg 1: Full pipeline analysis ═══")
             await send_msg(ws, "帮我分析安利纽崔莱", "安利纽崔莱")
-            events = await collect_until(ws, ["execution_complete", "error"], WS_PIPELINE_TIMEOUT)
+            events = await collect_until_terminal_with_confirmations(
+                ws,
+                timeout=WS_PIPELINE_TIMEOUT,
+            )
 
             if has_event(events, "execution_complete"):
                 steps = get_progress_steps(events)
-                covered = sum(1 for s in ["A1", "A2", "A3", "A4", "A5"] if s in steps)
-                results["msg1_pipeline"] = f"PASS ({covered}/5 agents)"
+                covered = sum(1 for s in ["A1", "A3", "A4", "A5"] if s in steps)
+                results["msg1_pipeline"] = f"PASS ({covered}/4 agents)"
             else:
                 results["msg1_pipeline"] = "FAIL (no execution_complete)"
                 pytest.skip("Pipeline failed, cannot continue matrix")
@@ -347,8 +511,12 @@ class TestMultiMessageSession:
             # ─── Msg 2: Casual chat ───────────────────────────
             logger.info("═══ Msg 2: Casual chat ═══")
             await send_msg(ws, "这个品牌的市场份额大概是多少？")
-            events = await collect_until(ws, ["execution_complete", "inline_confirmation"], 60)
-            has_reply = has_event(events, "reply_delta")
+            events = await collect_until(
+                ws,
+                ["reply_delta", "execution_complete", "inline_confirmation"],
+                120,
+            )
+            has_reply = has_non_empty_reply(events)
             results["msg2_casual"] = "PASS" if has_reply else "FAIL"
 
             # ─── Msg 3: Drill-down (platform) ─────────────────
@@ -375,7 +543,10 @@ class TestMultiMessageSession:
             # ─── Msg 6: Scoped rerun via answer_fetch ────────
             logger.info("═══ Msg 6: Scoped rerun via answer_fetch ═══")
             await send_msg(ws, "重新抓取 Kimi 平台的数据")
-            events = await collect_until(ws, ["execution_complete", "error"], WS_PIPELINE_TIMEOUT)
+            events = await collect_until_terminal_with_confirmations(
+                ws,
+                timeout=WS_PIPELINE_TIMEOUT,
+            )
             steps = get_progress_steps(events)
             has_a4 = "A4" in steps
             has_a5 = "A5" in steps
@@ -384,8 +555,12 @@ class TestMultiMessageSession:
             # ─── Msg 7: Casual follow-up ──────────────────────
             logger.info("═══ Msg 7: Casual follow-up ═══")
             await send_msg(ws, "你觉得我应该优先改进什么？")
-            events = await collect_until(ws, ["execution_complete", "inline_confirmation"], 60)
-            has_reply = has_event(events, "reply_delta")
+            events = await collect_until(
+                ws,
+                ["reply_delta", "execution_complete", "inline_confirmation"],
+                120,
+            )
+            has_reply = has_non_empty_reply(events)
             results["msg7_casual"] = "PASS" if has_reply else "FAIL"
 
             # ─── Msg 8: Drill-down (sentiment) ────────────────
@@ -398,18 +573,25 @@ class TestMultiMessageSession:
             # ─── Msg 9: General optimization ──────────────────
             logger.info("═══ Msg 9: Optimization advice ═══")
             await send_msg(ws, "给我一个具体的AEO优化方案")
-            events = await collect_until(ws, ["execution_complete", "inline_confirmation"], 60)
-            has_reply = has_event(events, "reply_delta")
+            events = await collect_until(
+                ws,
+                ["reply_delta", "execution_complete", "inline_confirmation"],
+                120,
+            )
+            has_reply = has_non_empty_reply(events)
             results["msg9_optimization"] = "PASS" if has_reply else "FAIL"
 
             # ─── Msg 10: New brand analysis ───────────────────
             logger.info("═══ Msg 10: New brand analysis ═══")
             await send_msg(ws, "现在帮我分析一下华为手机", "华为手机")
-            events = await collect_until(ws, ["execution_complete", "error"], WS_PIPELINE_TIMEOUT)
+            events = await collect_until_terminal_with_confirmations(
+                ws,
+                timeout=WS_PIPELINE_TIMEOUT,
+            )
             if has_event(events, "execution_complete"):
                 steps = get_progress_steps(events)
-                covered = sum(1 for s in ["A1", "A2", "A3", "A4", "A5"] if s in steps)
-                results["msg10_new_pipeline"] = f"PASS ({covered}/5 agents)"
+                covered = sum(1 for s in ["A1", "A3", "A4", "A5"] if s in steps)
+                results["msg10_new_pipeline"] = f"PASS ({covered}/4 agents)"
             else:
                 results["msg10_new_pipeline"] = "FAIL"
 

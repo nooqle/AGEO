@@ -35,6 +35,7 @@ from app.tools.question_generation import (
 from app.workflow.brand_state import build_effective_brand_profile
 
 from app.core.constants import PlatformConstants, WorkflowConstants
+from app.workflow.runtime_policy_executor import build_next_required_action
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,28 @@ def _monitor_mode_from_a3_mode(a3_mode: str | None) -> str:
     return "scenario" if str(a3_mode or "").strip().lower() == "persona" else "panorama"
 
 
+def _selected_fetch_mode_from_state(state: AgentState) -> str | None:
+    fetch_mode = str(state.get("fetch_mode") or "").strip().lower()
+    if fetch_mode in {"fast", "full"}:
+        return fetch_mode
+
+    user_decisions = state.get("user_decisions") or {}
+    if not isinstance(user_decisions, dict):
+        return None
+
+    decision_mode = str(user_decisions.get("fetch_mode") or "").strip().lower()
+    if decision_mode in {"fast", "full"}:
+        return decision_mode
+
+    if (
+        user_decisions.get("fetch_mode_confirmed") is True
+        and user_decisions.get("fetch_mode_pending") is not True
+    ):
+        return "fast"
+
+    return None
+
+
 async def _persist_draft_question_set(
     state: AgentState,
     *,
@@ -136,6 +159,33 @@ async def _question_set_confirmation_update(
     question_count: int,
 ) -> dict:
     """Build the independent A3 question set confirmation checkpoint."""
+    selected_fetch_mode = _selected_fetch_mode_from_state(state)
+    if selected_fetch_mode:
+        mode_label = "快速采集" if selected_fetch_mode == "fast" else "完整采集"
+        return {
+            "awaiting_user": False,
+            "execution_status": "running",
+            "pending_confirmation": None,
+            "pending_question_set_confirmation": None,
+            "fetch_mode": selected_fetch_mode,
+            "progress_message": (
+                f"问题集已生成，按已选择的{mode_label}继续抓取答案。"
+            ),
+            "next_required_action": build_next_required_action(
+                tool_name="answer_fetch",
+                authority="authoritative_resume",
+                tool_args={"fetch_mode": selected_fetch_mode},
+                reason="A3 已完成，且用户此前已确认采集模式，继续执行 A4。",
+                source_step="question_set_confirmation",
+                metadata={
+                    "question_set_id": question_set_id,
+                    "monitor_mode": monitor_mode,
+                    "question_count": question_count,
+                    "preselected_fetch_mode": selected_fetch_mode,
+                },
+            ),
+        }
+
     if not question_set_id or state.get("headless_mode") or state.get("monitoring_schedule_id"):
         return {}
 

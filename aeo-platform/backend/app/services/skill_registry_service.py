@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import get_settings
 from app.models.skill import (
     BuiltinSkillSpec,
     SkillAssignment,
@@ -336,15 +337,33 @@ def _with_package_hint(
     return f"{description} 运行时会按需加载 Package：{package.display_name}。{package.tool_hint}"
 
 
+def _stable_skill_tool_description_enabled() -> bool:
+    return bool(getattr(get_settings(), "STABLE_SKILL_TOOL_DESCRIPTION_ENABLED", False))
+
+
+def _build_skill_tool_description(
+    skill: SkillDefinition | BuiltinSkillSpec,
+    package: SkillPackageManifest | None,
+    *,
+    static_suffix: str = "",
+) -> str:
+    description = str(skill.description or "").strip()
+    if not _stable_skill_tool_description_enabled():
+        description = _with_package_hint(description, package)
+        if skill.prompt_overlay:
+            description = f"{description} 当前策略补充：{skill.prompt_overlay}"
+    if static_suffix:
+        description = f"{description} {static_suffix.strip()}"
+    return description
+
+
 def _build_analysis_report_tool(
     skill: SkillDefinition | BuiltinSkillSpec,
     *,
     profiles: list[SkillDefinition] | None = None,
     package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
-    description = _with_package_hint(skill.description, package)
-    if skill.prompt_overlay:
-        description = f"{description} 当前策略补充：{skill.prompt_overlay}"
+    description = _build_skill_tool_description(skill, package)
     properties: dict[str, Any] = {
         "report_focus": {
             "type": "string",
@@ -372,9 +391,7 @@ def _build_table_intake_tool(
     profiles: list[SkillDefinition] | None = None,
     package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
-    description = _with_package_hint(skill.description, package)
-    if skill.prompt_overlay:
-        description = f"{description} 当前策略补充：{skill.prompt_overlay}"
+    description = _build_skill_tool_description(skill, package)
     return {
         "name": skill.skill_key,
         "description": description,
@@ -391,9 +408,7 @@ def _build_confidence_tool(
     profiles: list[SkillDefinition] | None = None,
     package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
-    description = _with_package_hint(skill.description, package)
-    if skill.prompt_overlay:
-        description = f"{description} 当前策略补充：{skill.prompt_overlay}"
+    description = _build_skill_tool_description(skill, package)
     properties: dict[str, Any] = {
         "source_mode": {
             "type": "string",
@@ -426,9 +441,7 @@ def _build_post_analysis_tool(
     profiles: list[SkillDefinition] | None = None,
     package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
-    description = _with_package_hint(skill.description, package)
-    if skill.prompt_overlay:
-        description = f"{description} 当前策略补充：{skill.prompt_overlay}"
+    description = _build_skill_tool_description(skill, package)
     properties: dict[str, Any] = {
         "analysis_mode": {
             "type": "string",
@@ -464,12 +477,13 @@ def _build_site_confidence_tool(
     profiles: list[SkillDefinition] | None = None,
     package: SkillPackageManifest | None = None,
 ) -> dict[str, Any]:
-    description = _with_package_hint(skill.description, package)
-    if skill.prompt_overlay:
-        description = f"{description} 当前策略补充：{skill.prompt_overlay}"
-    description = (
-        f"{description} 只允许针对当前监测品牌自己的官网。"
-        "如果当前品牌官网未绑定，或用户给出的域名不属于当前品牌官网，不能直接执行。"
+    description = _build_skill_tool_description(
+        skill,
+        package,
+        static_suffix=(
+            "只允许针对当前监测品牌自己的官网。"
+            "如果当前品牌官网未绑定，或用户给出的域名不属于当前品牌官网，不能直接执行。"
+        ),
     )
     return {
         "name": skill.skill_key,

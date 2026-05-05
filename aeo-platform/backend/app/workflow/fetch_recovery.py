@@ -24,6 +24,15 @@ _BROWSER_FETCH_KEYWORDS = (
     "完整重抓",
 )
 
+_FAST_FETCH_KEYWORDS = (
+    "fast",
+    "quick",
+    "快速",
+    "快采",
+    "快速采集",
+    "快速监测",
+)
+
 
 def normalize_fetch_mode(value: Any) -> str | None:
     candidate = str(value or "").strip().lower()
@@ -297,3 +306,20 @@ def prefers_browser_fetch_mode(text: str) -> bool:
     if not lowered:
         return False
     return any(keyword in lowered for keyword in _BROWSER_FETCH_KEYWORDS)
+
+
+def prefers_fast_fetch_mode(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    return any(keyword in lowered for keyword in _FAST_FETCH_KEYWORDS)
+
+
+def resolve_explicit_fetch_mode_from_text(text: str) -> str | None:
+    """Resolve an explicit user-selected fetch mode from natural language."""
+
+    if prefers_browser_fetch_mode(text):
+        return "full"
+    if prefers_fast_fetch_mode(text):
+        return "fast"
+    return None
