@@ -14,6 +14,7 @@ import { AlertCard } from '../notifications/AlertCard';
 import { EmptyState } from '@/components/ui/empty-state';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
+import { writeDashboardChatHandoff } from '@/lib/dashboardChatHandoff';
 import type { MonitoringRun, MonitoringTrendGroupBy, UpdateScheduleInput } from '@/types/monitoring';
 
 const STALE_RUN_CUTOFF_MS = Date.now() - 2 * 60 * 60 * 1000;
@@ -22,6 +23,14 @@ interface MonitoringTabProps {
   entityId: string | null;
   brandName?: string;
   contextCopy?: string;
+  autoEditSchedule?: boolean;
+}
+
+function buildChatUrlWithHandoff(sessionId: string, params: URLSearchParams): string {
+  if (writeDashboardChatHandoff(sessionId, Object.fromEntries(params.entries()))) {
+    return `/chat/${sessionId}`;
+  }
+  return `/chat/${sessionId}?${params.toString()}`;
 }
 
 function MonitoringIssueCard({
@@ -93,7 +102,12 @@ function MonitoringIssueCard({
   );
 }
 
-export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTabProps) {
+export function MonitoringTab({
+  entityId,
+  brandName,
+  contextCopy,
+  autoEditSchedule = false,
+}: MonitoringTabProps) {
   const router = useRouter();
   const { selectedBrandId, homeMonitorMode } = useDashboardStore();
   const [trendGroupBy, setTrendGroupBy] = useState<MonitoringTrendGroupBy>('overall');
@@ -221,7 +235,7 @@ export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTa
         `${brandName ? `请基于「${brandName}」` : '请'}继续完善${homeMonitorMode === 'scenario' ? '用户场景监测' : '全景监测'}计划。`,
       );
       params.set('autosend', '1');
-      router.push(`/chat/${session.id}?${params.toString()}`);
+      router.push(buildChatUrlWithHandoff(session.id, params));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '打开 AI 对话失败，请稍后重试。');
     }
@@ -250,7 +264,7 @@ export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTa
         `${brandName ? `请基于「${brandName}」` : '请'}处理这次自动监测异常：${issue.error_stage || 'monitoring_run'}，${issue.error_message || '请读取监测运行记录后说明原因。'}`,
       );
       params.set('autosend', '1');
-      router.push(`/chat/${session.id}?${params.toString()}`);
+      router.push(buildChatUrlWithHandoff(session.id, params));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '打开 AI 对话失败，请稍后重试。');
     }
@@ -399,6 +413,7 @@ export function MonitoringTab({ entityId, brandName, contextCopy }: MonitoringTa
         onResume={handleResume}
         onUpdate={handleUpdate}
         onDelete={handleDelete}
+        autoEdit={autoEditSchedule}
       />
 
       {planCard}

@@ -1,28 +1,36 @@
-"""Monitoring schedule creation node for LangGraph workflow.
+"""Monitoring schedule management node for LangGraph workflow.
 
-Handles the create_monitoring_schedule tool call from the orchestrator.
-Creates a MonitoringSchedule and returns a confirmation to the orchestrator.
+Handles chat-triggered monitoring schedule operations. The node keeps the
+legacy create_monitoring_schedule path working, while also supporting the new
+monitoring-plan workflow where an existing plan/schedule should be queried or
+updated instead of forcing users to delete and recreate it manually.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 from uuid import UUID
 
+from langgraph.types import Command
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from langgraph.types import Command
 
 from app.core.database import AsyncSessionLocal
-from app.models.monitoring_schedule import ScheduleFrequency
+from app.models.monitoring_plan import MonitoringPlanStatus
+from app.models.monitoring_schedule import (
+    MonitoringSchedule,
+    ScheduleFrequency,
+    ScheduleStatus,
+)
 from app.models.session import Session
+from app.services.monitoring_plan_service import MonitoringPlanService
 from app.services.monitoring_service import MonitoringService
-from app.workflow.events import send_reply_event, send_action_log_event
+from app.workflow.events import send_action_log_event, send_reply_event
 from app.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
 
-# Frequency labels for user-facing messages
 FREQ_LABELS = {
     "daily": "每天",
     "weekly": "每周",
@@ -30,127 +38,291 @@ FREQ_LABELS = {
     "monthly": "每月",
 }
 
+STATUS_LABELS = {
+    "active": "运行中",
+    "paused": "已暂停",
+    "error": "异常",
+    "completed": "已完成",
+}
+
+MONITOR_MODE_LABELS = {
+    "panorama": "全景监测",
+    "scenario": "用户场景监测",
+}
+
 PLATFORM_LABELS = {
     "doubao": "豆包",
+    "yuanbao": "元宝",
     "hunyuan": "元宝",
     "kimi": "Kimi",
     "deepseek": "DeepSeek",
+    "doubao_api": "豆包API",
+    "yuanbao_api": "元宝API",
+    "kimi_api": "Kimi API",
+    "deepseek_browser": "DeepSeek",
+}
+
+ACTION_ALIASES = {
+    "read": "get",
+    "show": "get",
+    "query": "get",
+    "view": "get",
+    "create": "upsert",
+    "set": "upsert",
+    "save": "upsert",
+    "enable": "upsert",
+    "adjust": "upsert",
+    "modify": "update",
+    "change": "update",
+    "edit": "update",
+    "disable": "pause",
+    "stop": "pause",
+    "restart": "resume",
+}
+
+SUPPORTED_ACTIONS = {"get", "upsert", "update", "pause", "resume", "delete"}
+
+MONITOR_MODE_ALIASES = {
+    "panorama": "panorama",
+    "panorama_monitoring": "panorama",
+    "baseline": "panorama",
+    "baseline_monitoring": "panorama",
+    "scenario": "scenario",
+    "scenario_monitoring": "scenario",
+    "persona": "scenario",
+    "persona_monitoring": "scenario",
 }
 
 
 async def create_monitoring_node(state: AgentState) -> Command:
-    """Create a monitoring schedule via chat command.
+    """Manage a monitoring schedule via chat command."""
 
-    Reads tool_call_args from the orchestrator and creates a schedule
-    using MonitoringService. Returns to orchestrator with the result.
-    """
     session_id = state["session_id"]
-    entity_id = state.get("entity_id")
+    tool_args = dict(state.get("tool_call_args") or {})
+    dashboard_context = _dashboard_context(state)
+    if not dashboard_context.get("question_set_ids"):
+        dashboard_context["question_set_ids"] = _first_value(
+            tool_args.get("question_set_ids"),
+            state.get("question_set_ids"),
+        )
+    if not dashboard_context.get("endpoint_ids"):
+        dashboard_context["endpoint_ids"] = _first_value(
+            tool_args.get("endpoint_ids"),
+            state.get("endpoint_ids"),
+        )
+    entity_id = _first_text(
+        tool_args.get("entity_id"),
+        dashboard_context.get("entity_id"),
+        state.get("entity_id"),
+    )
 
     if not entity_id:
         msg = (
-            "需要先完成至少一次品牌分析才能创建监测计划。"
+            "需要先完成至少一次品牌分析，才能设置周期监测。"
             "请先告诉我您要分析的品牌名称。"
         )
         await send_reply_event(session_id, msg, is_delta=False)
-        return Command(
-            update={
-                "orchestrator_reply": msg,
-            },
-        )
+        return Command(update={"orchestrator_reply": msg})
 
-    tool_args = state.get("tool_call_args") or {}
-    frequency_str = tool_args.get("frequency", "weekly")
-    preferred_hour = tool_args.get("preferred_hour", 11)
-    alert_threshold = tool_args.get("alert_threshold", 10.0)
+    entity_uuid = _parse_uuid(entity_id)
+    if entity_uuid is None:
+        msg = "当前品牌实体信息无效，请回到 Dashboard 重新进入该品牌后再试。"
+        await send_reply_event(session_id, msg, is_delta=False)
+        return Command(update={"orchestrator_reply": msg})
 
-    try:
-        frequency = ScheduleFrequency(frequency_str)
-    except ValueError:
-        frequency = ScheduleFrequency.WEEKLY
-
-    # Validate preferred_hour range
-    if not isinstance(preferred_hour, int) or not 0 <= preferred_hour <= 23:
-        preferred_hour = 11
-
-    brand_name = state.get("brand_name", "该品牌")
+    action = _normalize_action(tool_args.get("action"))
+    monitor_mode = _resolve_monitor_mode(state, tool_args, dashboard_context)
+    brand_name = _first_text(
+        tool_args.get("brand_name"),
+        dashboard_context.get("brand"),
+        state.get("brand_name"),
+        "该品牌",
+    )
+    frequency = _normalize_frequency(tool_args.get("frequency"))
+    preferred_hour = _normalize_preferred_hour(tool_args.get("preferred_hour"))
+    alert_threshold = _normalize_alert_threshold(
+        _first_value(tool_args.get("alert_threshold"), tool_args.get("alert_threshold_bwvs"))
+    )
+    timezone_str = _first_text(tool_args.get("timezone"), "Asia/Shanghai")
 
     await send_action_log_event(
         session_id,
         "monitoring",
-        f"正在创建{FREQ_LABELS.get(frequency_str, frequency_str)}监测计划...",
+        _build_action_log_message(action, frequency, preferred_hour),
         step="create_monitoring",
         is_complete=False,
     )
 
     try:
         async with AsyncSessionLocal() as db:
-            service = MonitoringService(db)
-
-            # Resolve user_id: look up from session in DB
             user_id = await _resolve_user_id(db, session_id)
             if user_id is None:
                 msg = "无法确定当前用户，请重新登录后重试。"
                 await send_reply_event(session_id, msg, is_delta=False)
                 return Command(update={"orchestrator_reply": msg})
 
-            schedule = await service.create_schedule(
-                user_id=user_id,
-                entity_id=UUID(entity_id),
-                frequency=frequency,
-                preferred_hour=preferred_hour,
-                alert_threshold_bwvs=alert_threshold,
+            monitoring_service = MonitoringService(db)
+            plan_service = MonitoringPlanService(db)
+
+            plan_id = _parse_uuid(
+                _first_text(
+                    tool_args.get("monitoring_plan_id"),
+                    dashboard_context.get("monitoring_plan_id"),
+                    state.get("monitoring_plan_id"),
+                    state.get("latest_monitoring_plan_id"),
+                )
+            )
+            plan = (
+                await plan_service.get_plan(plan_id, user_id=user_id)
+                if plan_id is not None
+                else await plan_service.get_entity_plan(
+                    user_id=user_id,
+                    entity_id=entity_uuid,
+                    monitor_mode=monitor_mode,
+                )
             )
 
-        freq_label = FREQ_LABELS.get(frequency_str, frequency_str)
-        next_run_str = (
-            schedule.next_run_at.strftime("%Y-%m-%d %H:%M")
-            if schedule.next_run_at
-            else "待计算"
-        )
+            schedule = await _find_schedule(
+                monitoring_service,
+                user_id=user_id,
+                entity_id=entity_uuid,
+                monitor_mode=monitor_mode,
+                schedule_id=_parse_uuid(tool_args.get("schedule_id")),
+                monitoring_plan_id=plan.id if plan is not None else plan_id,
+            )
 
-        msg = (
-            f"监测计划已创建。我将{freq_label}自动分析 {brand_name} 的品牌可见度。\n"
-            f"- 执行频率：{freq_label}\n"
-            f"- 下次执行：{next_run_str} (UTC)\n"
-            f"- 告警阈值：当提及率、官网引用率或高风险场景变化超过 {alert_threshold} 时通知您\n"
-            f"- 监测平台：{', '.join(PLATFORM_LABELS.get(p, p) for p in (schedule.platforms or ['doubao', 'hunyuan']))}\n\n"
-            f"您可以随时说\"暂停监测\"或\"停止监测\"来管理监测计划。"
+            if action == "get":
+                msg = await _build_current_plan_reply(
+                    brand_name=brand_name,
+                    monitor_mode=monitor_mode,
+                    plan_service=plan_service,
+                    plan=plan,
+                    schedule=schedule,
+                )
+                return Command(update=_build_state_update(msg, plan=plan, schedule=schedule))
+
+            if action in {"pause", "resume", "delete"} and plan is None and schedule is None:
+                msg = f"当前没有找到 {brand_name} 的{MONITOR_MODE_LABELS[monitor_mode]}。"
+                return Command(update={"orchestrator_reply": msg})
+
+            if action == "pause":
+                plan, schedule = await _pause_existing_monitoring(
+                    plan_service,
+                    monitoring_service,
+                    user_id=user_id,
+                    plan=plan,
+                    schedule=schedule,
+                )
+                if plan is not None:
+                    schedule = await _find_schedule(
+                        monitoring_service,
+                        user_id=user_id,
+                        entity_id=entity_uuid,
+                        monitor_mode=monitor_mode,
+                        monitoring_plan_id=plan.id,
+                    )
+                msg = _build_schedule_reply(
+                    prefix="监测计划已暂停。",
+                    brand_name=brand_name,
+                    monitor_mode=monitor_mode,
+                    plan=plan,
+                    schedule=schedule,
+                )
+                return Command(update=_build_state_update(msg, plan=plan, schedule=schedule))
+
+            if action == "resume":
+                plan, schedule = await _resume_existing_monitoring(
+                    plan_service,
+                    monitoring_service,
+                    user_id=user_id,
+                    plan=plan,
+                    schedule=schedule,
+                )
+                if plan is not None:
+                    schedule = await _find_schedule(
+                        monitoring_service,
+                        user_id=user_id,
+                        entity_id=entity_uuid,
+                        monitor_mode=monitor_mode,
+                        monitoring_plan_id=plan.id,
+                    )
+                msg = _build_schedule_reply(
+                    prefix="监测计划已恢复。",
+                    brand_name=brand_name,
+                    monitor_mode=monitor_mode,
+                    plan=plan,
+                    schedule=schedule,
+                )
+                return Command(update=_build_state_update(msg, plan=plan, schedule=schedule))
+
+            if action == "delete":
+                deleted = await _delete_existing_schedule(monitoring_service, schedule=schedule)
+                if plan is not None:
+                    plan = await plan_service.update_plan(
+                        plan_id=plan.id,
+                        user_id=user_id,
+                        status=MonitoringPlanStatus.ARCHIVED.value,
+                    )
+                msg = "监测计划已删除。" if deleted else "当前没有找到可删除的监测计划。"
+                return Command(update=_build_state_update(msg, plan=plan, schedule=None))
+
+            if action == "update" and plan is None and schedule is None:
+                msg = (
+                    f"当前没有找到 {brand_name} 的{MONITOR_MODE_LABELS[monitor_mode]}。"
+                    "如果要新建，请告诉我监测频率、执行时间和告警阈值。"
+                )
+                return Command(update={"orchestrator_reply": msg})
+
+            plan, schedule = await _upsert_monitoring(
+                plan_service,
+                monitoring_service,
+                user_id=user_id,
+                entity_id=entity_uuid,
+                monitor_mode=monitor_mode,
+                dashboard_context=dashboard_context,
+                plan=plan,
+                schedule=schedule,
+                frequency=frequency,
+                preferred_hour=preferred_hour,
+                timezone_str=timezone_str,
+                alert_threshold=alert_threshold,
+            )
+
+        prefix = "监测计划已更新。" if schedule is not None else "监测计划已设置。"
+        msg = _build_schedule_reply(
+            prefix=prefix,
+            brand_name=brand_name,
+            monitor_mode=monitor_mode,
+            plan=plan,
+            schedule=schedule,
         )
 
         await send_action_log_event(
             session_id,
             "monitoring",
-            "监测计划创建成功",
+            "监测计划设置完成",
             step="create_monitoring",
             is_complete=True,
         )
 
         logger.info(
-            "[CreateMonitoring] Schedule created for entity %s (freq=%s)",
+            "[MonitoringNode] Managed schedule for entity %s (action=%s, mode=%s)",
             entity_id,
-            frequency_str,
+            action,
+            monitor_mode,
         )
 
-        return Command(
-            update={
-                "orchestrator_reply": msg,
-            },
-        )
+        return Command(update=_build_state_update(msg, plan=plan, schedule=schedule))
 
     except ValueError as e:
-        error_msg = f"创建监测计划失败：{str(e)}"
+        error_msg = f"监测计划处理失败：{str(e)}"
         await send_reply_event(session_id, error_msg, is_delta=False)
-        logger.warning("[CreateMonitoring] Validation error: %s", e)
-        return Command(
-            update={
-                "orchestrator_reply": error_msg,
-            },
-        )
+        logger.warning("[MonitoringNode] Validation error: %s", e)
+        return Command(update={"orchestrator_reply": error_msg})
     except Exception as e:
-        error_msg = f"创建监测计划时出现错误：{str(e)}"
+        error_msg = f"处理监测计划时出现错误：{str(e)}"
         await send_reply_event(session_id, error_msg, is_delta=False)
-        logger.error("[CreateMonitoring] Error: %s", e, exc_info=True)
+        logger.error("[MonitoringNode] Error: %s", e, exc_info=True)
         return Command(
             update={
                 "orchestrator_reply": error_msg,
@@ -158,16 +330,437 @@ async def create_monitoring_node(state: AgentState) -> Command:
                     "step": "create_monitoring",
                     "error": str(e),
                 },
-            },
+            }
         )
 
 
-async def _resolve_user_id(db: AsyncSession, session_id: str) -> UUID | None:
-    """Resolve user_id from the session record.
+def _dashboard_context(state: AgentState) -> dict[str, Any]:
+    value = state.get("dashboard_context")
+    return dict(value) if isinstance(value, dict) else {}
 
-    For headless sessions (sentinel session_id), this will return None
-    since there is no real session. But headless runs don't use this node.
-    """
+
+def _first_value(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
+def _first_text(*values: Any) -> str | None:
+    value = _first_value(*values)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _parse_uuid(value: Any) -> UUID | None:
+    text = _first_text(value)
+    if not text:
+        return None
+    try:
+        return UUID(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_action(value: Any) -> str:
+    raw = str(value or "upsert").strip().lower()
+    action = ACTION_ALIASES.get(raw, raw)
+    return action if action in SUPPORTED_ACTIONS else "upsert"
+
+
+def _normalize_frequency(value: Any) -> ScheduleFrequency | None:
+    text = _first_text(value)
+    if not text:
+        return None
+    try:
+        return ScheduleFrequency(text)
+    except ValueError:
+        return None
+
+
+def _normalize_preferred_hour(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        hour = int(value)
+    except (TypeError, ValueError):
+        return None
+    return hour if 0 <= hour <= 23 else None
+
+
+def _normalize_alert_threshold(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        return None
+    return threshold if 0 < threshold <= 100 else None
+
+
+def _resolve_monitor_mode(
+    state: AgentState,
+    tool_args: dict[str, Any],
+    dashboard_context: dict[str, Any],
+) -> str:
+    raw = _first_text(
+        tool_args.get("monitor_mode"),
+        dashboard_context.get("monitor_mode"),
+        (state.get("monitoring_plan") or {}).get("monitor_mode")
+        if isinstance(state.get("monitoring_plan"), dict)
+        else None,
+        "panorama",
+    )
+    return MONITOR_MODE_ALIASES.get(str(raw or "").strip().lower(), "panorama")
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = value.split(",")
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        return []
+    result: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _endpoint_ids_to_platforms(endpoint_ids: list[str]) -> list[str] | None:
+    platforms = MonitoringPlanService.endpoint_ids_to_platforms(endpoint_ids)
+    return platforms or None
+
+
+async def _find_schedule(
+    service: MonitoringService,
+    *,
+    user_id: UUID,
+    entity_id: UUID,
+    monitor_mode: str,
+    schedule_id: UUID | None = None,
+    monitoring_plan_id: UUID | None = None,
+) -> MonitoringSchedule | None:
+    if schedule_id is not None:
+        schedule = await service.get_schedule(schedule_id)
+        if schedule is not None and schedule.user_id == user_id:
+            return schedule
+
+    schedules, _ = await service.list_schedules(
+        user_id,
+        entity_id=entity_id,
+        monitor_mode=monitor_mode,
+        limit=20,
+    )
+    if monitoring_plan_id is not None:
+        for schedule in schedules:
+            if schedule.monitoring_plan_id == monitoring_plan_id:
+                return schedule
+
+    active = [item for item in schedules if item.status == ScheduleStatus.ACTIVE]
+    paused = [item for item in schedules if item.status == ScheduleStatus.PAUSED]
+    return (active or paused or schedules or [None])[0]
+
+
+async def _build_current_plan_reply(
+    *,
+    brand_name: str,
+    monitor_mode: str,
+    plan_service: MonitoringPlanService,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+) -> str:
+    if plan is None and schedule is None:
+        return f"当前没有找到 {brand_name} 的{MONITOR_MODE_LABELS[monitor_mode]}。"
+
+    if plan is not None:
+        plan_payload = await plan_service.plan_to_dict(plan)
+        plan_line = (
+            f"- 分析计划：{plan_payload.get('question_count', 0)} 个问题 · "
+            f"{'、'.join(plan_payload.get('endpoint_labels') or []) or 'AI 来源待确认'} · "
+            f"{_plan_status_label(plan_payload.get('status'))}"
+        )
+    else:
+        plan_line = "- 分析计划：当前为旧版 schedule，未绑定新监测计划。"
+
+    return _build_schedule_reply(
+        prefix="这是当前监测计划：",
+        brand_name=brand_name,
+        monitor_mode=monitor_mode,
+        plan=plan,
+        schedule=schedule,
+        extra_lines=[plan_line],
+    )
+
+
+async def _pause_existing_monitoring(
+    plan_service: MonitoringPlanService,
+    monitoring_service: MonitoringService,
+    *,
+    user_id: UUID,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+) -> tuple[Any | None, MonitoringSchedule | None]:
+    if plan is not None:
+        plan = await plan_service.pause_plan(plan_id=plan.id, user_id=user_id)
+    elif schedule is not None and schedule.status == ScheduleStatus.ACTIVE:
+        schedule = await monitoring_service.pause_schedule(schedule.id)
+    return plan, schedule
+
+
+async def _resume_existing_monitoring(
+    plan_service: MonitoringPlanService,
+    monitoring_service: MonitoringService,
+    *,
+    user_id: UUID,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+) -> tuple[Any | None, MonitoringSchedule | None]:
+    if plan is not None:
+        plan = await plan_service.update_plan(
+            plan_id=plan.id,
+            user_id=user_id,
+            status=MonitoringPlanStatus.ACTIVE.value,
+        )
+    elif schedule is not None and schedule.status in {ScheduleStatus.PAUSED, ScheduleStatus.ERROR}:
+        schedule = await monitoring_service.resume_schedule(schedule.id)
+    return plan, schedule
+
+
+async def _delete_existing_schedule(
+    monitoring_service: MonitoringService,
+    *,
+    schedule: MonitoringSchedule | None,
+) -> bool:
+    if schedule is None:
+        return False
+    return await monitoring_service.delete_schedule(schedule.id)
+
+
+async def _upsert_monitoring(
+    plan_service: MonitoringPlanService,
+    monitoring_service: MonitoringService,
+    *,
+    user_id: UUID,
+    entity_id: UUID,
+    monitor_mode: str,
+    dashboard_context: dict[str, Any],
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+    frequency: ScheduleFrequency | None,
+    preferred_hour: int | None,
+    timezone_str: str,
+    alert_threshold: float | None,
+) -> tuple[Any | None, MonitoringSchedule | None]:
+    question_set_ids = [
+        parsed
+        for parsed in (
+            _parse_uuid(item)
+            for item in _normalize_string_list(dashboard_context.get("question_set_ids"))
+        )
+        if parsed is not None
+    ]
+    endpoint_ids = _normalize_string_list(dashboard_context.get("endpoint_ids"))
+
+    if plan is not None:
+        plan = await plan_service.update_plan(
+            plan_id=plan.id,
+            user_id=user_id,
+            status=MonitoringPlanStatus.ACTIVE.value,
+            frequency=(frequency.value if frequency is not None else None),
+            preferred_hour=preferred_hour,
+            timezone_str=timezone_str,
+        )
+        schedule = await _find_schedule(
+            monitoring_service,
+            user_id=user_id,
+            entity_id=entity_id,
+            monitor_mode=monitor_mode,
+            monitoring_plan_id=plan.id,
+        )
+        if alert_threshold is not None and schedule is not None:
+            schedule = await monitoring_service.update_schedule(
+                schedule.id,
+                alert_threshold_bwvs=alert_threshold,
+            )
+        return plan, schedule
+
+    if schedule is not None:
+        update_kwargs: dict[str, Any] = {"status": ScheduleStatus.ACTIVE}
+        if frequency is not None:
+            update_kwargs["frequency"] = frequency
+        if preferred_hour is not None:
+            update_kwargs["preferred_hour"] = preferred_hour
+        if timezone_str:
+            update_kwargs["timezone"] = timezone_str
+        if alert_threshold is not None:
+            update_kwargs["alert_threshold_bwvs"] = alert_threshold
+        if endpoint_ids:
+            update_kwargs["endpoint_ids"] = endpoint_ids
+            update_kwargs["platforms"] = _endpoint_ids_to_platforms(endpoint_ids)
+        schedule = await monitoring_service.update_schedule(schedule.id, **update_kwargs)
+        return None, schedule
+
+    if question_set_ids:
+        plan = await plan_service.create_plan(
+            user_id=user_id,
+            entity_id=entity_id,
+            monitor_mode=monitor_mode,
+            question_set_ids=question_set_ids,
+            endpoint_ids=endpoint_ids or None,
+            run_policy="quick",
+            status=MonitoringPlanStatus.ACTIVE.value,
+            frequency=(frequency.value if frequency is not None else "weekly"),
+            preferred_hour=preferred_hour if preferred_hour is not None else 11,
+            timezone_str=timezone_str,
+        )
+        schedule = await _find_schedule(
+            monitoring_service,
+            user_id=user_id,
+            entity_id=entity_id,
+            monitor_mode=monitor_mode,
+            monitoring_plan_id=plan.id,
+        )
+        if alert_threshold is not None and schedule is not None:
+            schedule = await monitoring_service.update_schedule(
+                schedule.id,
+                alert_threshold_bwvs=alert_threshold,
+            )
+        return plan, schedule
+
+    schedule = await monitoring_service.create_schedule(
+        user_id=user_id,
+        entity_id=entity_id,
+        frequency=frequency or ScheduleFrequency.WEEKLY,
+        preferred_hour=preferred_hour if preferred_hour is not None else 11,
+        timezone_str=timezone_str,
+        alert_threshold_bwvs=alert_threshold if alert_threshold is not None else 10.0,
+        status=ScheduleStatus.ACTIVE,
+        monitor_mode=monitor_mode,
+        endpoint_ids=endpoint_ids or None,
+        platforms=_endpoint_ids_to_platforms(endpoint_ids) if endpoint_ids else None,
+        run_policy="quick",
+    )
+    return None, schedule
+
+
+def _build_action_log_message(
+    action: str,
+    frequency: ScheduleFrequency | None,
+    preferred_hour: int | None,
+) -> str:
+    if action == "get":
+        return "正在查询当前监测计划..."
+    if action == "pause":
+        return "正在暂停监测计划..."
+    if action == "resume":
+        return "正在恢复监测计划..."
+    if action == "delete":
+        return "正在删除监测计划..."
+    pieces = ["正在设置监测计划"]
+    if frequency is not None:
+        pieces.append(FREQ_LABELS.get(frequency.value, frequency.value))
+    if preferred_hour is not None:
+        pieces.append(f"{preferred_hour:02d}:00")
+    return " · ".join(pieces) + "..."
+
+
+def _build_schedule_reply(
+    *,
+    prefix: str,
+    brand_name: str,
+    monitor_mode: str,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+    extra_lines: list[str] | None = None,
+) -> str:
+    lines = [
+        prefix,
+        f"- 品牌：{brand_name}",
+        f"- 监测类型：{MONITOR_MODE_LABELS[monitor_mode]}",
+    ]
+    if extra_lines:
+        lines.extend(extra_lines)
+    if schedule is None:
+        lines.append("- 运行设置：当前还没有生成可执行的周期任务。")
+        lines.append("可以在 Dashboard 的持续监测页继续补齐问题集、AI 来源和执行时间。")
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            f"- 状态：{_schedule_status_label(schedule.status)}",
+            f"- 执行频率：{FREQ_LABELS.get(schedule.frequency.value, schedule.frequency.value)}",
+            f"- 执行时间：{schedule.timezone} {schedule.preferred_hour:02d}:00",
+            f"- 下次执行：{_format_next_run(schedule)}",
+            f"- 告警阈值：{schedule.alert_threshold_bwvs:g}",
+            f"- AI 来源：{_format_platforms(schedule)}",
+        ]
+    )
+    if plan is not None:
+        lines.append("- 已绑定新版监测计划，可在 Dashboard 的持续监测页继续调整。")
+    else:
+        lines.append("- 当前为旧版周期任务，可在 Dashboard 的持续监测页继续调整。")
+    return "\n".join(lines)
+
+
+def _build_state_update(
+    reply: str,
+    *,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+) -> dict[str, Any]:
+    update: dict[str, Any] = {"orchestrator_reply": reply}
+    if schedule is not None:
+        update["monitoring_schedule_id"] = str(schedule.id)
+        update["question_set_ids"] = schedule.question_set_ids or None
+        update["endpoint_ids"] = schedule.endpoint_ids or None
+        update["run_policy"] = schedule.run_policy
+    if plan is not None:
+        update["monitoring_plan_id"] = str(plan.id)
+        update["latest_monitoring_plan_id"] = str(plan.id)
+    return update
+
+
+def _schedule_status_label(status: ScheduleStatus | str | None) -> str:
+    value = status.value if isinstance(status, ScheduleStatus) else str(status or "")
+    return STATUS_LABELS.get(value, value or "未知")
+
+
+def _plan_status_label(status: Any) -> str:
+    value = str(status or "")
+    return {
+        "active": "已启用",
+        "paused": "已暂停",
+        "draft": "草稿",
+        "archived": "已归档",
+    }.get(value, value or "未知")
+
+
+def _format_next_run(schedule: MonitoringSchedule) -> str:
+    if schedule.next_run_at is None:
+        return "未安排"
+    return schedule.next_run_at.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_platforms(schedule: MonitoringSchedule) -> str:
+    values = schedule.endpoint_ids or schedule.platforms or []
+    if not values:
+        return "按默认来源"
+    return "、".join(PLATFORM_LABELS.get(str(item), str(item)) for item in values)
+
+
+async def _resolve_user_id(db: AsyncSession, session_id: str) -> UUID | None:
+    """Resolve user_id from the session record."""
+
     try:
         session_uuid = UUID(session_id)
     except ValueError:
@@ -179,4 +772,3 @@ async def _resolve_user_id(db: AsyncSession, session_id: str) -> UUID | None:
     if session is not None:
         return session.user_id
     return None
-

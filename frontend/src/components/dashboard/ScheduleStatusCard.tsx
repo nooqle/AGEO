@@ -50,6 +50,7 @@ interface ScheduleStatusCardProps {
   onResume: (scheduleId: string) => void;
   onUpdate: (scheduleId: string, data: UpdateScheduleInput) => void;
   onDelete: (scheduleId: string) => void;
+  autoEdit?: boolean;
 }
 
 export function ScheduleStatusCard({
@@ -58,8 +59,9 @@ export function ScheduleStatusCard({
   onResume,
   onUpdate,
   onDelete,
+  autoEdit = false,
 }: ScheduleStatusCardProps) {
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditing, setIsEditing] = useState(autoEdit);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [editForm, setEditForm] = useState<UpdateScheduleInput>({
     frequency: schedule.frequency,
