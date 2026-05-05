@@ -16,6 +16,7 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { uniqueAiSourceDisplayNames } from '@/lib/aiSourceDisplay';
+import { writeDashboardChatHandoff } from '@/lib/dashboardChatHandoff';
 import type {
   DashboardHomeData,
   DashboardLatestReport,
@@ -92,53 +93,23 @@ function markReportTodoViewed(brandId: string | null, reportRef: string | null |
   window.localStorage.setItem(reportTodoStorageKey(brandId, reportRef), '1');
 }
 
-function buildDashboardCommandDraft({
-  input,
-  brandName,
-  home,
-  aiSourceLabels,
-  selectedMonitorMode,
-  hasMonitoringContext,
-}: {
-  input: string;
-  brandName: string;
-  home?: DashboardHomeData | null;
-  aiSourceLabels: string[];
-  selectedMonitorMode: DashboardMonitorMode;
-  hasMonitoringContext: boolean;
-}): string {
+function buildDashboardVisibleDraft(input: string): string {
   const trimmedInput = input.trim();
-  const monitorModeLabel = MONITOR_MODE_LABELS[selectedMonitorMode];
-  const latestReport = home?.latest_report;
-  const monitoringPlan = home?.monitoring_plan;
+  return trimmedInput || '请解释当前 Dashboard 的主要变化，并告诉我下一步应该处理什么。';
+}
 
-  if (!hasMonitoringContext) {
-    const requirement = trimmedInput ? `补充要求：${trimmedInput}。` : '';
-    return `我想为「${brandName}」建立或补齐「${monitorModeLabel}」计划。${requirement}请先按现有流程确认品牌信息，再生成该分析模式的问题集给我确认。`;
+function buildChatUrlWithHandoff(sessionId: string, params: URLSearchParams): string {
+  if (writeDashboardChatHandoff(sessionId, Object.fromEntries(params.entries()))) {
+    return `/chat/${sessionId}`;
   }
-
-  const contextParts = [
-    `品牌：${brandName}`,
-    `分析视图：${monitorModeLabel}`,
-    latestReport?.question_set_label || monitoringPlan?.question_set_label
-      ? `问题集：${latestReport?.question_set_label || monitoringPlan?.question_set_label}`
-      : null,
-    latestReport?.sample_summary
-      ? `样本：${latestReport.sample_summary}`
-      : monitoringPlan
-        ? `计划：${monitoringPlan.question_count} 个问题`
-        : null,
-    aiSourceLabels.length ? `AI来源：${aiSourceLabels.join('、')}` : null,
-  ].filter((item): item is string => Boolean(item));
-
-  const question = trimmedInput || '请解释当前 Dashboard 的主要变化，并告诉我下一步应该处理什么。';
-  return `基于 Dashboard 当前上下文（${contextParts.join('；')}），请回答：${question}`;
+  return `/chat/${sessionId}?${params.toString()}`;
 }
 
 export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMonitoringMode = searchParams.get('tab') === 'monitoring';
+  const shouldEditMonitoringSchedule = searchParams.get('edit_schedule') === '1';
   const [isOpeningDashboardChat, setIsOpeningDashboardChat] = useState(false);
   const [viewedReportVersion, setViewedReportVersion] = useState(0);
   const {
@@ -272,16 +243,9 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       if (aiSourceLabels.length) {
         params.set('ai_sources', aiSourceLabels.join('、'));
       }
-      params.set('draft', buildDashboardCommandDraft({
-        input,
-        brandName: selectedBrand.name,
-        home,
-        aiSourceLabels,
-        selectedMonitorMode,
-        hasMonitoringContext: hasSelectedMonitorModeContext,
-      }));
+      params.set('draft', buildDashboardVisibleDraft(input));
       params.set('autosend', '1');
-      router.push(`/chat/${session.id}?${params.toString()}`);
+      router.push(buildChatUrlWithHandoff(session.id, params));
     } catch (error) {
       setIsOpeningDashboardChat(false);
       toast.error(error instanceof Error ? error.message : '打开 AI 对话失败，请稍后重试。');
@@ -310,11 +274,17 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       handleOpenLatestReport();
       return;
     }
-    const prompt =
-      item.kind === 'monitoring_plan_incomplete'
-        ? '请帮我开启周期监测并完成分析计划设置。'
-        : '请帮我完成品牌基本信息与问题生成。';
-    void handleDashboardCommand(prompt);
+    if (item.kind === 'monitoring_plan_incomplete') {
+      const params = new URLSearchParams();
+      params.set('tab', 'monitoring');
+      params.set('edit_schedule', '1');
+      if (item.monitor_mode) {
+        setHomeMonitorMode(item.monitor_mode);
+      }
+      router.push(`/dashboard?${params.toString()}`);
+      return;
+    }
+    void handleDashboardCommand('请帮我完成品牌基本信息与问题生成。');
   };
 
   const mainContent = (
@@ -427,7 +397,11 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
                 </button>
               </div>
             </section>
-            <MonitoringTab entityId={selectedBrandId} brandName={selectedBrandName} />
+            <MonitoringTab
+              entityId={selectedBrandId}
+              brandName={selectedBrandName}
+              autoEditSchedule={shouldEditMonitoringSchedule}
+            />
           </div>
         ) : null}
       </div>

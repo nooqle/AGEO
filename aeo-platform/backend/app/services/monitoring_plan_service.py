@@ -1020,8 +1020,15 @@ class MonitoringPlanService:
                 baseline_data=baseline_data,
             )
         else:
+            try:
+                frequency = ScheduleFrequency(plan.frequency)
+            except ValueError:
+                frequency = ScheduleFrequency.WEEKLY
             await monitoring_service.update_schedule(
                 schedule.id,
+                frequency=frequency,
+                preferred_hour=plan.preferred_hour,
+                timezone=plan.timezone,
                 platforms=platforms,
                 status=(
                     ScheduleStatus.ACTIVE

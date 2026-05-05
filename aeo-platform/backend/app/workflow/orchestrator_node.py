@@ -535,39 +535,65 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
     },
     # --- Monitoring tools (Cycle 4) ---
     {
-        "name": "create_monitoring_schedule",
+        "name": "manage_monitoring_schedule",
         "description": (
-            "为指定品牌创建定时自动分析计划。"
-            "例如：'每周监控小米'、'帮我设置华为的月度监测'。"
+            "查询、创建、启用、更新、暂停或删除当前品牌的周期监测计划。"
+            "例如：'查看当前监测计划'、'每周监控小米'、'调整为每月 11 点'、'暂停周期监测'。"
             "前置条件：当前会话中必须有 entity_id（品牌至少已分析过一次）。"
             "如果没有 entity_id，不要调用此工具，提示用户先运行完整分析。"
-            "创建成功后会自动按照设定频率运行分析流程。"
-            "【重要】不要直接调用此工具。你必须先用自然语言向用户详细说明定期监测的含义和可配置参数，然后调用 ask_user 让用户确认。"
-            "说明内容必须包括：1) 定期监测的作用——系统会按设定频率自动重新运行品牌分析流程，生成最新报告并与历史数据对比；"
+            "当用户要求调整已有计划时，必须用 action=update 或 upsert，不能回答'只能创建、无法修改'。"
+            "当用户只想查看当前配置时，使用 action=get。"
+            "当用户已明确给出频率、时间或告警阈值时，可以直接调用工具更新。"
+            "当用户只是泛泛说'开启周期监测'且尚未给出配置时，先用自然语言说明周期监测的含义和可配置参数，再调用 ask_user 让用户确认。"
+            "说明内容包括：1) 周期监测会按设定频率自动重新运行品牌分析流程，生成最新报告并与历史数据对比；"
             "2) 可配置参数及默认值——监测频率（每天/每周/双周/每月，推荐每周）、执行时间（默认上午11:00）、"
             "告警阈值（当品牌提及率、官网引用率或高风险场景数量出现明显变化时通知用户，默认 10）；"
-            "3) 推荐配置——给出针对该品牌的推荐配置及理由。"
-            "示例消息：'定期监测可以帮助您持续跟踪品牌在 AI 平台中的表现变化。我建议为「小米」设置以下监测计划：\n\n"
-            "- **监测频率**：每周（适合快速变化的科技行业）\n"
-            "- **执行时间**：每周一上午 11:00\n"
-            "- **告警阈值**：当品牌提及率、官网引用率或高风险场景变化超过设定阈值时通知您\n\n"
-            "如果这个方案可以，请点击确认；或者告诉我您想调整哪些参数。'"
+            "3) 基于 Dashboard 上下文中的品牌、问题集、AI 来源给出推荐配置。"
+            "注意：当前调度字段支持频率和小时，不支持固定'每月第几日'；不要承诺每月 1 日这种后台尚未支持的精确日期。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["get", "upsert", "update", "pause", "resume", "delete"],
+                    "description": "要执行的操作。已有计划调整用 update 或 upsert；查看用 get；新建或启用用 upsert。",
+                },
                 "frequency": {
                     "type": "string",
                     "enum": ["daily", "weekly", "biweekly", "monthly"],
-                    "description": "监测频率，默认 weekly",
+                    "description": "监测频率。用户未指定时不要臆造；新建默认 weekly。",
                 },
                 "preferred_hour": {
                     "type": "integer",
-                    "description": "每天的执行时间（0-23，用户所在时区），默认 11",
+                    "description": "每天的执行小时（0-23，Asia/Shanghai），用户说上午11点则传 11。",
                 },
                 "alert_threshold": {
                     "type": "number",
                     "description": "监测变化告警阈值（用于提及率、官网引用率、高风险场景等变化提醒），默认 10.0",
+                },
+                "monitor_mode": {
+                    "type": "string",
+                    "enum": ["panorama", "scenario", "panorama_monitoring", "scenario_monitoring"],
+                    "description": "监测视图。Dashboard 上下文已有时优先沿用。",
+                },
+                "monitoring_plan_id": {
+                    "type": "string",
+                    "description": "已有新版监测计划 ID。Dashboard 上下文已有时可传入。",
+                },
+                "schedule_id": {
+                    "type": "string",
+                    "description": "已有周期任务 ID。只有明确知道时才传。",
+                },
+                "question_set_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "要绑定的问题集 ID。Dashboard 或当前流程已有时可传入。",
+                },
+                "endpoint_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "要绑定的 AI 来源 ID，例如 doubao_api、yuanbao_api、kimi_api、deepseek_browser。",
                 },
             },
         },
@@ -1958,9 +1984,9 @@ def _build_context_summary(state: AgentState) -> str:
 
     if state.get("entity_id"):
         parts.append(f"- 品牌实体ID: {state['entity_id']} (已有过往快照)")
-        available_tools.append("create_monitoring_schedule (可创建定时监测计划)")
+        available_tools.append("manage_monitoring_schedule (可查询、创建或调整周期监测计划)")
     else:
-        unavailable_tools.append("create_monitoring_schedule (尚无品牌实体)")
+        unavailable_tools.append("manage_monitoring_schedule (尚无品牌实体)")
 
     if manifest:
         available_sources = manifest.get("available_sources", {})
@@ -2972,9 +2998,9 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         if summary:
             return summary
 
-    if tool_name == "create_monitoring_schedule":
+    if tool_name in {"manage_monitoring_schedule", "create_monitoring_schedule"}:
         reply = state.get("orchestrator_reply", "")
-        return f"监测计划创建已完成。{reply[:200]}"
+        return f"监测计划处理已完成。{reply[:200]}"
 
     return f"工具 {tool_name} 执行完成。"
 
@@ -3578,6 +3604,7 @@ TOOL_TO_NODE: dict[str, str] = {
     "drill_down_analysis": "drill_down",
     "compare_snapshots": "compare_snapshots",
     # Monitoring tools (Cycle 4)
+    "manage_monitoring_schedule": "create_monitoring",
     "create_monitoring_schedule": "create_monitoring",
 }
 
@@ -3601,6 +3628,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "drill_down_analysis": "深入分析",
     "compare_snapshots": "快照对比",
     # Monitoring tools (Cycle 4)
+    "manage_monitoring_schedule": "管理监测计划",
     "create_monitoring_schedule": "创建监测计划",
 }
 

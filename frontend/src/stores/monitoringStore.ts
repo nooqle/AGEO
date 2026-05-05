@@ -166,7 +166,7 @@ const initialState = {
   error: null,
 };
 
-export const useMonitoringStore = create<MonitoringState>((set) => ({
+export const useMonitoringStore = create<MonitoringState>((set, get) => ({
   ...initialState,
 
   // =========================================================================
@@ -187,7 +187,12 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
   pauseSchedule: async (scheduleId: string) => {
     try {
       const updated = await api.pauseSchedule(scheduleId);
-      set({ schedule: updated });
+      const currentPlan = get().plan;
+      let plan = currentPlan;
+      if (currentPlan?.id && currentPlan.id === updated.monitoring_plan_id) {
+        plan = await api.pauseMonitoringPlan(currentPlan.id).catch(() => currentPlan);
+      }
+      set({ schedule: updated, plan });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : '暂停监测失败' });
     }
@@ -196,7 +201,12 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
   resumeSchedule: async (scheduleId: string) => {
     try {
       const updated = await api.resumeSchedule(scheduleId);
-      set({ schedule: updated });
+      const currentPlan = get().plan;
+      let plan = currentPlan;
+      if (currentPlan?.id && currentPlan.id === updated.monitoring_plan_id) {
+        plan = await api.activateMonitoringPlan(currentPlan.id).catch(() => currentPlan);
+      }
+      set({ schedule: updated, plan });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : '恢复监测失败' });
     }
@@ -205,7 +215,17 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
   updateSchedule: async (scheduleId: string, data: UpdateScheduleInput) => {
     try {
       const updated = await api.updateSchedule(scheduleId, data);
-      set({ schedule: updated });
+      const currentPlan = get().plan;
+      const planUpdate: Parameters<typeof api.updateMonitoringPlan>[1] = {};
+      if (data.frequency !== undefined) planUpdate.frequency = data.frequency;
+      if (data.preferred_hour !== undefined) planUpdate.preferred_hour = data.preferred_hour;
+      if (data.timezone !== undefined) planUpdate.timezone = data.timezone;
+      if (data.status === 'active' || data.status === 'paused') planUpdate.status = data.status;
+      let plan = currentPlan;
+      if (currentPlan?.id === updated.monitoring_plan_id && Object.keys(planUpdate).length > 0) {
+        plan = await api.updateMonitoringPlan(currentPlan.id, planUpdate).catch(() => currentPlan);
+      }
+      set({ schedule: updated, plan });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : '更新监测设置失败' });
     }
@@ -213,8 +233,13 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
 
   deleteSchedule: async (scheduleId: string) => {
     try {
+      const currentPlan = get().plan;
+      const currentSchedule = get().schedule;
       await api.deleteSchedule(scheduleId);
-      set({ schedule: null });
+      if (currentPlan?.id && currentPlan.id === currentSchedule?.monitoring_plan_id) {
+        await api.updateMonitoringPlan(currentPlan.id, { status: 'archived' }).catch(() => null);
+      }
+      set({ schedule: null, plan: null });
       return true;
     } catch (err) {
       set({ error: err instanceof Error ? err.message : '删除监测失败' });

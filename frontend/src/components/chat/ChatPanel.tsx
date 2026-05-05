@@ -38,6 +38,12 @@ import {
 } from '@/adapters/chatMessage';
 import { normalizeCanvasData } from '@/hooks/websocket/canvas';
 import { resolveCanonicalArtifactIdFromOutput } from '@/lib/artifactIdentity';
+import {
+  consumeDashboardChatHandoff,
+  isDashboardChatHandoffAutosend,
+  readDashboardChatHandoffValue,
+  type DashboardChatHandoffPayload,
+} from '@/lib/dashboardChatHandoff';
 
 
 interface ChatPanelProps {
@@ -50,6 +56,20 @@ const INITIAL_HISTORY_MESSAGE_LIMIT = 30;
 const HISTORY_BACKFILL_BATCH_SIZE = 50;
 const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
 type ArtifactCategory = 'baseline' | 'panorama' | 'scenario';
+const DASHBOARD_AUTO_START_QUERY_KEYS = [
+  'brand',
+  'draft',
+  'autosend',
+  'entry_source',
+  'monitor_mode',
+  'question_set_label',
+  'sample_summary',
+  'ai_sources',
+  'entity_id',
+  'monitoring_plan_id',
+  'question_set_ids',
+  'endpoint_ids',
+];
 
 const BROWSER_MESSAGE_KEYWORDS: Record<
   BrowserState['platform'],
@@ -556,22 +576,32 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const initialArtifactId = searchParams.get('artifact_id');
   const initialOutputId = searchParams.get('output_id');
   const prefersCompactArtifactList = Boolean(initialArtifactId && initialOutputId);
-  const autoStartBrand = initialArtifactId ? null : searchParams.get('brand');
-  const autoStartDraft = initialArtifactId ? null : searchParams.get('draft');
-  const shouldAutoSendDraft = !initialArtifactId && searchParams.get('autosend') === '1';
+  const [dashboardHandoff, setDashboardHandoff] = useState<DashboardChatHandoffPayload | null>(null);
+  const hasAutoStartQueryParams = useMemo(
+    () => !initialArtifactId && DASHBOARD_AUTO_START_QUERY_KEYS.some((key) => searchParams.has(key)),
+    [initialArtifactId, searchParams],
+  );
+  const readAutoStartParam = useCallback((key: string): string | null => {
+    return readDashboardChatHandoffValue(dashboardHandoff, key) || searchParams.get(key)?.trim() || null;
+  }, [dashboardHandoff, searchParams]);
+  const autoStartBrand = initialArtifactId ? null : readAutoStartParam('brand');
+  const autoStartDraft = initialArtifactId ? null : readAutoStartParam('draft');
+  const shouldAutoSendDraft =
+    !initialArtifactId &&
+    (isDashboardChatHandoffAutosend(dashboardHandoff) || searchParams.get('autosend') === '1');
   const dashboardAutoContext = useMemo<ContextTag[]>(() => {
     if (initialArtifactId) return [];
 
-    const entrySource = searchParams.get('entry_source')?.trim();
-    const monitorMode = searchParams.get('monitor_mode')?.trim();
-    const questionSetLabel = searchParams.get('question_set_label')?.trim();
-    const sampleSummary = searchParams.get('sample_summary')?.trim();
-    const aiSources = searchParams.get('ai_sources')?.trim();
-    const entityId = searchParams.get('entity_id')?.trim();
-    const brand = searchParams.get('brand')?.trim();
-    const monitoringPlanId = searchParams.get('monitoring_plan_id')?.trim();
-    const questionSetIds = searchParams.get('question_set_ids')?.trim();
-    const endpointIds = searchParams.get('endpoint_ids')?.trim();
+    const entrySource = readAutoStartParam('entry_source');
+    const monitorMode = readAutoStartParam('monitor_mode');
+    const questionSetLabel = readAutoStartParam('question_set_label');
+    const sampleSummary = readAutoStartParam('sample_summary');
+    const aiSources = readAutoStartParam('ai_sources');
+    const entityId = readAutoStartParam('entity_id');
+    const brand = readAutoStartParam('brand');
+    const monitoringPlanId = readAutoStartParam('monitoring_plan_id');
+    const questionSetIds = readAutoStartParam('question_set_ids');
+    const endpointIds = readAutoStartParam('endpoint_ids');
     const tags: ContextTag[] = [];
 
     if (entrySource || monitorMode) {
@@ -624,11 +654,24 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
 
     return tags;
-  }, [initialArtifactId, searchParams]);
+  }, [initialArtifactId, readAutoStartParam]);
+  const stripAutoStartQueryParams = useCallback(() => {
+    if (hasAutoStartQueryParams) {
+      router.replace(`/chat/${sessionId}`, { scroll: false });
+    }
+  }, [hasAutoStartQueryParams, router, sessionId]);
   const autoSentRef = useRef(false);
   const [isAutoStartingPrompt, setIsAutoStartingPrompt] = useState(Boolean(autoStartBrand || autoStartDraft));
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
   const replayAnimatingRef = useRef(false);
+
+  useEffect(() => {
+    if (initialArtifactId) {
+      setDashboardHandoff(null);
+      return;
+    }
+    setDashboardHandoff(consumeDashboardChatHandoff(sessionId));
+  }, [initialArtifactId, sessionId]);
 
   const {
     messages,
@@ -2159,7 +2202,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         setInputValue(draft);
       }
       if (autoSentRef.current || draft) {
-        router.replace(`/chat/${sessionId}`);
+        stripAutoStartQueryParams();
       }
       return;
     }
@@ -2167,7 +2210,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     if (draft && !shouldAutoSendDraft && messages.length === 0) {
       setInputValue(draft);
       setIsAutoStartingPrompt(false);
-      router.replace(`/chat/${sessionId}`);
+      stripAutoStartQueryParams();
       return;
     }
 
@@ -2178,22 +2221,29 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         if (!autoSentRef.current) {
           setIsAutoStartingPrompt(false);
           setInputValue(autoMessage);
-          router.replace(`/chat/${sessionId}`);
+          stripAutoStartQueryParams();
           toast.error('自动启动分析失败，请点击发送后重试');
         }
       }, 5000);
       return () => clearTimeout(fallbackTimer);
     }
 
+    if (isAgentExecuting) {
+      setInputValue(autoMessage);
+      setIsAutoStartingPrompt(false);
+      stripAutoStartQueryParams();
+      return;
+    }
+
     autoSentRef.current = true;
     const timer = setTimeout(() => {
+      stripAutoStartQueryParams();
       handleSendMessage(
         autoMessage,
         undefined,
         dashboardAutoContext.length > 0 ? dashboardAutoContext : undefined,
       );
       setIsAutoStartingPrompt(false);
-      router.replace(`/chat/${sessionId}`);
     }, 500);
 
     return () => clearTimeout(timer);
@@ -2205,9 +2255,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     messages.length,
     isConnected,
     isLoadingHistory,
+    isAgentExecuting,
     handleSendMessage,
-    router,
-    sessionId,
+    stripAutoStartQueryParams,
   ]);
 
   // Handle stopping execution
