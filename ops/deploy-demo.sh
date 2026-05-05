@@ -170,6 +170,48 @@ acquire_lock() {
   flock -n 9 || fail "Another deployment is already running"
 }
 
+prune_deploy_workspace() {
+  local current_target=""
+  local previous_target=""
+  local release=""
+  local resolved=""
+
+  log "Pruning deploy workspace before build"
+  df -h "$APP_ROOT" >&2 || true
+
+  if [[ -f "$REPO_DIR/config.lock" ]]; then
+    log "Removing stale git config lock"
+    rm -f "$REPO_DIR/config.lock"
+  fi
+
+  if [[ -d "$NPM_CACHE_DIR/_cacache/tmp" ]]; then
+    log "Cleaning npm cache temp files"
+    find "$NPM_CACHE_DIR/_cacache/tmp" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + || true
+  fi
+
+  if [[ -d "$RELEASES_DIR" ]]; then
+    current_target="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+    previous_target="$(readlink -f "$PREVIOUS_LINK" 2>/dev/null || true)"
+
+    while IFS= read -r release; do
+      [[ -n "$release" && -d "$release" ]] || continue
+      resolved="$(readlink -f "$release" 2>/dev/null || true)"
+      [[ -n "$resolved" ]] || continue
+      if [[ "$resolved" == "$current_target" || "$resolved" == "$previous_target" ]]; then
+        continue
+      fi
+      if [[ "$resolved" != "$RELEASES_DIR/"* ]]; then
+        log "Skipping release outside releases root: $resolved"
+        continue
+      fi
+      log "Removing old release: $(basename "$resolved")"
+      rm -rf "$resolved"
+    done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -print)
+  fi
+
+  df -h "$APP_ROOT" >&2 || true
+}
+
 bootstrap_shared_env() {
   if [[ ! -f "$BACKEND_ENV" && -f "$LEGACY_ROOT/aeo-platform/backend/.env.local" ]]; then
     log "Bootstrapping backend .env.local from legacy deployment"
@@ -477,6 +519,7 @@ deploy() {
 
   ensure_base_dirs
   acquire_lock
+  prune_deploy_workspace
 
   if [[ "$ROLLBACK" -eq 1 ]]; then
     rollback_to_previous
