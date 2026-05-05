@@ -186,7 +186,7 @@ prune_deploy_workspace() {
 
   if [[ -d "$NPM_CACHE_DIR/_cacache/tmp" ]]; then
     log "Cleaning npm cache temp files"
-    find "$NPM_CACHE_DIR/_cacache/tmp" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + || true
+    sudo find "$NPM_CACHE_DIR/_cacache/tmp" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + || true
   fi
 
   if [[ -d "$RELEASES_DIR" ]]; then
@@ -205,7 +205,7 @@ prune_deploy_workspace() {
         continue
       fi
       log "Removing old release: $(basename "$resolved")"
-      rm -rf "$resolved"
+      sudo rm -rf "$resolved"
     done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -print)
   fi
 
