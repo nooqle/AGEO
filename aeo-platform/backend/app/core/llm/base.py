@@ -47,6 +47,7 @@ class LLMUsage:
     completion_tokens: int | None = None
     total_tokens: int | None = None
     cached_prompt_tokens: int | None = None
+    cache_miss_prompt_tokens: int | None = None
     reasoning_tokens: int | None = None
     image_tokens: int | None = None
     video_tokens: int | None = None
@@ -59,6 +60,7 @@ class LLMUsage:
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
             "cached_prompt_tokens": self.cached_prompt_tokens,
+            "cache_miss_prompt_tokens": self.cache_miss_prompt_tokens,
             "reasoning_tokens": self.reasoning_tokens,
             "image_tokens": self.image_tokens,
             "video_tokens": self.video_tokens,
@@ -160,6 +162,8 @@ class BaseLLMModel(ABC):
                     "completion_tokens",
                     "total_tokens",
                     "prompt_tokens_details",
+                    "prompt_cache_hit_tokens",
+                    "prompt_cache_miss_tokens",
                     "reasoning_tokens",
                     "image_tokens",
                     "video_tokens",
@@ -186,17 +190,32 @@ class BaseLLMModel(ABC):
                 }
 
         cached_prompt_tokens = None
+        cache_miss_prompt_tokens = None
         if isinstance(prompt_tokens_details, dict):
             cached_prompt_tokens = prompt_tokens_details.get("cached_tokens")
+
+        if data.get("prompt_cache_hit_tokens") is not None:
+            cached_prompt_tokens = data.get("prompt_cache_hit_tokens")
+        if data.get("prompt_cache_miss_tokens") is not None:
+            cache_miss_prompt_tokens = data.get("prompt_cache_miss_tokens")
+
+        prompt_tokens = data.get("prompt_tokens")
+        if prompt_tokens is None and (
+            cached_prompt_tokens is not None or cache_miss_prompt_tokens is not None
+        ):
+            prompt_tokens = int(cached_prompt_tokens or 0) + int(
+                cache_miss_prompt_tokens or 0
+            )
 
         normalized_raw = dict(data)
         normalized_raw["prompt_tokens_details"] = prompt_tokens_details
 
         return LLMUsage(
-            prompt_tokens=data.get("prompt_tokens"),
+            prompt_tokens=prompt_tokens,
             completion_tokens=data.get("completion_tokens"),
             total_tokens=data.get("total_tokens"),
             cached_prompt_tokens=cached_prompt_tokens,
+            cache_miss_prompt_tokens=cache_miss_prompt_tokens,
             reasoning_tokens=data.get("reasoning_tokens"),
             image_tokens=data.get("image_tokens"),
             video_tokens=data.get("video_tokens"),

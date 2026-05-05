@@ -4006,6 +4006,32 @@ async def _route_history_answer_export_completion_without_llm(
     )
 
 
+def _is_completed_analysis_report_state(state: AgentState) -> bool:
+    """Return True when A5 has produced a final report for this run."""
+
+    if str(state.get("execution_status") or "").lower() != "completed":
+        return False
+    if state.get("awaiting_user") or state.get("pending_confirmation"):
+        return False
+
+    current_step = str(state.get("current_step") or "").strip()
+    current_skill = str(state.get("current_skill") or "").strip()
+    next_action = str(state.get("next_action") or "").strip()
+    is_report_context = (
+        current_step == "A5"
+        or current_skill in {"analysis_report_skill", "data_analytics"}
+        or next_action in {"a5_analytics", "data_analytics"}
+    )
+    if not is_report_context:
+        return False
+
+    return bool(
+        state.get("report")
+        or state.get("baseline_report")
+        or (state.get("metrics") and state.get("fetch_results"))
+    )
+
+
 async def _route_agent_error_without_llm(
     state: AgentState,
     session_id: str,
@@ -4187,6 +4213,27 @@ async def orchestrator_node(state: AgentState) -> Command:
                 session_id,
                 f"已完成：{display_name}",
             )
+
+    if _is_completed_analysis_report_state(state):
+        logger.info(
+            "[Orchestrator] Final analysis report completed; ending run for session %s",
+            session_id,
+        )
+        from app.workflow.events import send_execution_complete
+
+        await send_execution_complete(session_id, "分析完成")
+        return Command(
+            goto=END,
+            update={
+                "execution_status": "completed",
+                "awaiting_user": False,
+                "pending_confirmation": None,
+                "pending_question_set_confirmation": None,
+                "next_required_action": None,
+                "progress": 1.0,
+                "progress_message": "分析完成",
+            },
+        )
 
     if has_agent_error:
         logger.warning(
@@ -5238,9 +5285,13 @@ async def _handle_tool_call(
         # Store user_decisions for a3 mode
         if effective_tool_name == "question_simulation":
             user_decisions = dict(state.get("user_decisions", {}))
-            # Reset fetch_mode guard flags when re-running A3
-            user_decisions.pop("fetch_mode_confirmed", None)
-            user_decisions.pop("fetch_mode_pending", None)
+            selected_fetch_mode = str(state.get("fetch_mode") or "").strip().lower()
+            # Reset fetch-mode guard flags only for a fresh A3 run. When the user
+            # picked panorama_fast/panorama_full, A3 must preserve that intent so
+            # it can continue directly to A4 after generating questions.
+            if selected_fetch_mode not in {"fast", "full"}:
+                user_decisions.pop("fetch_mode_confirmed", None)
+                user_decisions.pop("fetch_mode_pending", None)
             mode = tool_args.get("mode", "")
 
             if mode == "uploaded_list":

@@ -22,6 +22,38 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class UsagePricingSnapshot:
+    """Pricing inputs used to estimate one LLM call."""
+
+    provider: str
+    model_name: str
+    pricing_model: str
+    input_cache_miss_price_per_mtokens: float
+    input_cache_hit_price_per_mtokens: float
+    output_price_per_mtokens: float
+    pricing_currency: str
+    reporting_currency: str
+    source: str
+    source_url: str | None = None
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "model_name": self.model_name,
+            "pricing_model": self.pricing_model,
+            "input_cache_miss_price_per_mtokens": (
+                self.input_cache_miss_price_per_mtokens
+            ),
+            "input_cache_hit_price_per_mtokens": self.input_cache_hit_price_per_mtokens,
+            "output_price_per_mtokens": self.output_price_per_mtokens,
+            "pricing_currency": self.pricing_currency,
+            "reporting_currency": self.reporting_currency,
+            "source": self.source,
+            "source_url": self.source_url,
+        }
+
+
+@dataclass(frozen=True)
 class UsageCostBreakdown:
     """Normalized token counters and estimated costs for one LLM call."""
 
@@ -33,6 +65,8 @@ class UsageCostBreakdown:
     estimated_cost: float
     estimated_cost_cache_aware: float
     estimated_cost_savings: float
+    currency: str
+    pricing_snapshot: UsagePricingSnapshot | None
 
 
 def _safe_uuid(value: str | None) -> UUID | None:
@@ -60,10 +94,13 @@ def _resolve_pricing(
     provider: str,
     model_name: str,
     prompt_tokens: int,
-) -> tuple[float | None, float | None, float | None]:
+) -> UsagePricingSnapshot | None:
     """Resolve standard and cache-hit pricing for a provider/model pair."""
     settings = get_settings()
     model_key = model_name.lower()
+    reporting_currency = str(
+        getattr(settings, "LLM_COST_REPORTING_CURRENCY", "CNY") or "CNY"
+    ).upper()
     long_context_threshold = max(
         int(getattr(settings, "GLM5_LONG_CONTEXT_THRESHOLD_TOKENS", 32000) or 32000),
         1,
@@ -73,6 +110,11 @@ def _resolve_pricing(
     input_price = None
     output_price = None
     cache_hit_factor = 1.0
+    cached_input_price = None
+    pricing_model = model_name
+    pricing_currency = reporting_currency
+    source = "configured_provider_pricing"
+    source_url = None
 
     if provider == "glm5model" or provider == "glm5":
         if model_key.startswith("glm-5-turbo"):
@@ -101,12 +143,57 @@ def _resolve_pricing(
         cache_hit_factor = float(
             getattr(settings, "MINIMAX_CACHE_HIT_PRICE_FACTOR", 1.0) or 1.0
         )
+    elif provider == "deepseekmodel" or provider == "deepseek":
+        pricing_currency = str(
+            getattr(settings, "DEEPSEEK_PRICE_CURRENCY", "USD") or "USD"
+        ).upper()
+        source = "deepseek_zh_cn_official_pricing_2026_05_04"
+        source_url = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
+
+        pro_names = {
+            str(getattr(settings, "DEEPSEEK_PRO_MODEL_NAME", "") or "").lower(),
+            "deepseek-v4-pro",
+        }
+        flash_names = {
+            str(getattr(settings, "DEEPSEEK_FLASH_MODEL_NAME", "") or "").lower(),
+            "deepseek-v4-flash",
+            "deepseek-chat",
+            "deepseek-reasoner",
+        }
+        if model_key in pro_names:
+            pricing_model = "deepseek-v4-pro"
+            input_price = settings.DEEPSEEK_PRO_PRICE_INPUT_CACHE_MISS_PER_MTOKENS
+            cached_input_price = settings.DEEPSEEK_PRO_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
+            output_price = settings.DEEPSEEK_PRO_PRICE_OUTPUT_PER_MTOKENS
+        elif model_key in flash_names or model_key.startswith("deepseek"):
+            pricing_model = "deepseek-v4-flash"
+            input_price = settings.DEEPSEEK_FLASH_PRICE_INPUT_CACHE_MISS_PER_MTOKENS
+            cached_input_price = (
+                settings.DEEPSEEK_FLASH_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
+            )
+            output_price = settings.DEEPSEEK_FLASH_PRICE_OUTPUT_PER_MTOKENS
 
     if input_price is None or output_price is None:
-        return None, None, None
+        return None
 
-    cached_input_price = input_price * max(cache_hit_factor, 0.0)
-    return input_price, output_price, cached_input_price
+    if cached_input_price is None:
+        cached_input_price = input_price * max(cache_hit_factor, 0.0)
+
+    if pricing_currency != reporting_currency:
+        return None
+
+    return UsagePricingSnapshot(
+        provider=provider,
+        model_name=model_name,
+        pricing_model=pricing_model,
+        input_cache_miss_price_per_mtokens=float(input_price),
+        input_cache_hit_price_per_mtokens=float(cached_input_price),
+        output_price_per_mtokens=float(output_price),
+        pricing_currency=pricing_currency,
+        reporting_currency=reporting_currency,
+        source=source,
+        source_url=source_url,
+    )
 
 
 def estimate_usage_costs(
@@ -115,8 +202,13 @@ def estimate_usage_costs(
     prompt_tokens: int,
     completion_tokens: int,
     cached_prompt_tokens: int = 0,
+    cache_miss_prompt_tokens: int | None = None,
 ) -> UsageCostBreakdown:
     """Estimate both legacy and cache-aware costs for one usage event."""
+    settings = get_settings()
+    reporting_currency = str(
+        getattr(settings, "LLM_COST_REPORTING_CURRENCY", "CNY") or "CNY"
+    ).upper()
     normalized_prompt_tokens = max(int(prompt_tokens or 0), 0)
     normalized_completion_tokens = max(int(completion_tokens or 0), 0)
     normalized_total_tokens = normalized_prompt_tokens + normalized_completion_tokens
@@ -124,14 +216,22 @@ def estimate_usage_costs(
         max(int(cached_prompt_tokens or 0), 0),
         normalized_prompt_tokens,
     )
-    billable_prompt_tokens = normalized_prompt_tokens - normalized_cached_prompt_tokens
+    if cache_miss_prompt_tokens is None:
+        billable_prompt_tokens = (
+            normalized_prompt_tokens - normalized_cached_prompt_tokens
+        )
+    else:
+        billable_prompt_tokens = min(
+            max(int(cache_miss_prompt_tokens or 0), 0),
+            normalized_prompt_tokens,
+        )
 
-    input_price, output_price, cached_input_price = _resolve_pricing(
+    pricing_snapshot = _resolve_pricing(
         provider=provider,
         model_name=model_name,
         prompt_tokens=normalized_prompt_tokens,
     )
-    if input_price is None or output_price is None or cached_input_price is None:
+    if pricing_snapshot is None:
         return UsageCostBreakdown(
             prompt_tokens=normalized_prompt_tokens,
             completion_tokens=normalized_completion_tokens,
@@ -141,17 +241,24 @@ def estimate_usage_costs(
             estimated_cost=0.0,
             estimated_cost_cache_aware=0.0,
             estimated_cost_savings=0.0,
+            currency=reporting_currency,
+            pricing_snapshot=None,
         )
 
     estimated_cost = round(
-        (normalized_prompt_tokens / 1_000_000.0) * input_price
-        + (normalized_completion_tokens / 1_000_000.0) * output_price,
+        (normalized_prompt_tokens / 1_000_000.0)
+        * pricing_snapshot.input_cache_miss_price_per_mtokens
+        + (normalized_completion_tokens / 1_000_000.0)
+        * pricing_snapshot.output_price_per_mtokens,
         6,
     )
     estimated_cost_cache_aware = round(
-        (billable_prompt_tokens / 1_000_000.0) * input_price
-        + (normalized_cached_prompt_tokens / 1_000_000.0) * cached_input_price
-        + (normalized_completion_tokens / 1_000_000.0) * output_price,
+        (billable_prompt_tokens / 1_000_000.0)
+        * pricing_snapshot.input_cache_miss_price_per_mtokens
+        + (normalized_cached_prompt_tokens / 1_000_000.0)
+        * pricing_snapshot.input_cache_hit_price_per_mtokens
+        + (normalized_completion_tokens / 1_000_000.0)
+        * pricing_snapshot.output_price_per_mtokens,
         6,
     )
     estimated_cost_savings = round(
@@ -168,6 +275,8 @@ def estimate_usage_costs(
         estimated_cost=estimated_cost,
         estimated_cost_cache_aware=estimated_cost_cache_aware,
         estimated_cost_savings=estimated_cost_savings,
+        currency=pricing_snapshot.reporting_currency,
+        pricing_snapshot=pricing_snapshot,
     )
 
 
@@ -240,6 +349,7 @@ class LLMUsageService:
             prompt_tokens=int(usage.prompt_tokens or 0),
             completion_tokens=int(usage.completion_tokens or 0),
             cached_prompt_tokens=int(usage.cached_prompt_tokens or 0),
+            cache_miss_prompt_tokens=usage.cache_miss_prompt_tokens,
         )
         prompt_tokens = cost_breakdown.prompt_tokens
         completion_tokens = cost_breakdown.completion_tokens
@@ -262,6 +372,18 @@ class LLMUsageService:
                 "prompt_tokens_details",
                 usage.prompt_tokens_details,
             )
+        if usage.cache_miss_prompt_tokens is not None:
+            normalized_extra_metadata.setdefault(
+                "prompt_cache_miss_tokens",
+                usage.cache_miss_prompt_tokens,
+            )
+        if cost_breakdown.pricing_snapshot is not None:
+            normalized_extra_metadata.setdefault(
+                "pricing",
+                cost_breakdown.pricing_snapshot.to_metadata(),
+            )
+        else:
+            normalized_extra_metadata.setdefault("pricing_status", "unknown")
         if usage.raw:
             normalized_extra_metadata.setdefault("provider_usage", usage.raw)
 
@@ -283,6 +405,7 @@ class LLMUsageService:
                 latency_ms=normalized_latency_ms,
                 estimated_cost=estimated_cost,
                 estimated_cost_cache_aware=estimated_cost_cache_aware,
+                currency=cost_breakdown.currency,
                 extra_metadata=normalized_extra_metadata or None,
             )
             self.db.add(record)

@@ -135,6 +135,60 @@ async def test_api_retry_fetch_converts_kimi_429_to_structured_failure(
     assert "请求过于频繁" in result["error"]
 
 
+def test_kimi_429_retry_wait_uses_configured_cooldown(monkeypatch) -> None:
+    monkeypatch.setattr(nodes_a4.settings, "A4_KIMI_API_429_COOLDOWN_SECONDS", 20.0)
+
+    assert nodes_a4._provider_429_retry_wait("kimi", "rate_limit", 7.0) == 20.0
+    assert nodes_a4._provider_429_retry_wait("doubao", "rate_limit", 7.0) == 7.0
+
+
+async def test_api_retry_fetch_recovers_after_kimi_429_cooldown(monkeypatch) -> None:
+    monkeypatch.setattr(nodes_a4.settings, "A4_KIMI_API_MAX_RETRIES", 1)
+    monkeypatch.setattr(nodes_a4.settings, "A4_KIMI_API_429_COOLDOWN_SECONDS", 20.0)
+    sleeps: list[float] = []
+
+    async def _sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(nodes_a4.asyncio, "sleep", _sleep)
+    calls = 0
+
+    async def _eventually_successful_fetch() -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            request = httpx.Request(
+                "POST",
+                "https://api.moonshot.cn/v1/chat/completions",
+            )
+            response = httpx.Response(
+                429,
+                request=request,
+                json={
+                    "error": {
+                        "type": "rate_limit_reached_error",
+                        "message": "try again after 7 seconds",
+                    }
+                },
+            )
+            raise httpx.HTTPStatusError(
+                "Client error '429 Too Many Requests'",
+                request=request,
+                response=response,
+            )
+        return {"success": True, "platform": "kimi"}
+
+    result = await nodes_a4._retry_fetch(
+        _eventually_successful_fetch,
+        platform="kimi",
+        method="api",
+    )
+
+    assert result["success"] is True
+    assert calls == 2
+    assert sleeps == [20.0]
+
+
 def test_supplemental_preserve_keeps_non_target_question_pairs() -> None:
     preserved = nodes_a4._derive_preserved_fetch_results(
         current_questions=[

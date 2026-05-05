@@ -1132,13 +1132,42 @@ async def _persist_task_progress(
     message: str,
     context: str,
 ) -> None:
-    """Keep A4 live progress out of durable task state.
+    """Persist A4 live progress for control-plane observability."""
 
-    Official task state is persisted by TaskRuntimeStateWriter after the
-    orchestrator interprets the node result.
-    """
+    if not task_id:
+        return
 
-    return None
+    try:
+        from uuid import UUID
+
+        from app.core.database import AsyncSessionLocal
+        from app.models.task import TaskStatus
+        from app.services.task_service import TaskService
+
+        task_uuid = UUID(str(task_id))
+        safe_progress = max(0.0, min(1.0, float(progress)))
+        async with AsyncSessionLocal() as db:
+            task_service = TaskService(db)
+            task = await task_service.get_task(task_uuid)
+            if task is None or task.status in {
+                TaskStatus.COMPLETED,
+                TaskStatus.FAILED,
+                TaskStatus.CANCELLED,
+            }:
+                return
+            await task_service.update_progress(
+                task_uuid,
+                stage=stage,
+                progress=safe_progress,
+                message=message[:255],
+            )
+    except Exception as exc:
+        logger.warning(
+            "[A4] Failed to persist task progress task=%s context=%s: %s",
+            task_id,
+            context,
+            exc,
+        )
 
 
 async def _tracked_api_fetch(
@@ -1368,6 +1397,30 @@ def _engine_overload_retry_budget(platform: str) -> tuple[int, float]:
     )
 
 
+def _provider_429_retry_wait(
+    platform: str,
+    error_type: str,
+    suggested_wait: float | None,
+) -> float:
+    """Return the actual wait used before retrying a provider-side 429."""
+
+    wait = _coerce_non_negative_float(
+        suggested_wait,
+        WorkflowConstants.DEFAULT_429_RETRY_SECONDS,
+    )
+    if platform == "kimi" and error_type in {
+        "rate_limit",
+        "engine_overloaded",
+        "unknown",
+    }:
+        cooldown = _coerce_non_negative_float(
+            getattr(settings, "A4_KIMI_API_429_COOLDOWN_SECONDS", 20.0),
+            20.0,
+        )
+        wait = max(wait, cooldown)
+    return wait
+
+
 def _parse_429_error(response: httpx.Response) -> tuple[str, float | None]:
     """Parse 429 response body to extract error type and retry hint.
 
@@ -1502,6 +1555,11 @@ async def _retry_fetch(
                     or (header_val or None)
                     or WorkflowConstants.DEFAULT_429_RETRY_SECONDS
                 )
+                retry_wait = _provider_429_retry_wait(
+                    platform,
+                    error_type,
+                    retry_after,
+                )
                 last_result = _build_api_rate_limit_failure(
                     platform=platform,
                     method=method,
@@ -1531,6 +1589,7 @@ async def _retry_fetch(
                         + overload_retries * 5.0
                         + random.uniform(0, 3)
                     )
+                    wait = _provider_429_retry_wait(platform, error_type, wait)
                     logger.warning(
                         "[A4] %s 429 (engine_overloaded), waiting %.1fs (overload retry %d/%d)",
                         platform,
@@ -1567,9 +1626,9 @@ async def _retry_fetch(
                         "[A4] %s 429 (%s), waiting %.0fs before retry",
                         platform,
                         error_type,
-                        retry_after,
+                        retry_wait,
                     )
-                    await asyncio.sleep(retry_after)
+                    await asyncio.sleep(retry_wait)
                     attempt += 1
                     continue
 
@@ -3296,6 +3355,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
             except Exception as te:
                 logger.warning("[A4] TaskService milestone failed: %s", te)
 
+        completion_progress_message = (
+            "答案抓取完成，等待确认是否补采失败项或继续生成报告。"
+            if bool(observation.get("requires_user_decision"))
+            else "答案抓取完成，正在准备生成分析报告。"
+        )
         update_dict: dict[str, Any] = {
             "a4_canonical_result": canonical_result,
             "a4_completion_observation": observation,
@@ -3303,6 +3367,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
             "fetch_results": canonical_result["fetch_results"],
             "current_step": "A4",
             "progress": 0.6,
+            "progress_message": completion_progress_message,
+            "awaiting_user": False,
+            "pending_confirmation": None,
+            "pending_question_set_confirmation": None,
+            "execution_status": "running",
         }
         # Clear platform_filter after use; scoped reruns should deterministically
         # reuse the official canonical result instead of stale transient filters.
@@ -3345,7 +3414,29 @@ async def a4_fetch_node(state: AgentState) -> Command:
         update_dict.update(skill_update)
         update_dict.update(merge_validation_update)
         update_dict.update(artifact_validation_update)
-        if bool(state.get("headless_mode")) and artifact_validation.passed:
+        should_continue_to_report = artifact_validation.passed and not bool(
+            observation.get("requires_user_decision")
+        )
+        if bool(observation.get("requires_user_decision")):
+            update_dict["next_required_action"] = build_next_required_action(
+                tool_name="ask_user",
+                authority="authoritative_resume",
+                reason="A4 已完成但存在失败项，需要用户确认补采或继续生成报告。",
+                tool_args={
+                    "message": (
+                        "答案抓取已完成，但仍有部分平台或问题抓取失败。"
+                        "请选择是继续补采失败项，还是先用当前成功结果生成报告。"
+                    ),
+                    "options": list(observation.get("followup_options") or []),
+                },
+                source_step="a4_answer_fetch",
+                metadata={
+                    "artifact_write_validated": True,
+                    "requires_user_decision": True,
+                    "failure_count": int(observation.get("failure_count") or 0),
+                },
+            )
+        elif should_continue_to_report:
             report_type = (
                 "panorama"
                 if str(state.get("analysis_mode") or "").strip().lower() == "baseline"
@@ -3354,13 +3445,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
             update_dict["next_required_action"] = build_next_required_action(
                 tool_name="analysis_report_skill",
                 authority="authoritative_resume",
-                reason="Headless scheduled monitoring continues directly to A5 after A4 completion.",
+                reason="A4 已完成并成功写回结果，继续执行 A5 生成分析报告。",
                 tool_args={"report_type": report_type},
                 source_step="a4_answer_fetch",
                 metadata={
-                    "headless_mode": True,
-                    "scheduled_continuation": True,
+                    "headless_mode": bool(state.get("headless_mode")),
                     "artifact_write_validated": True,
+                    "requires_user_decision": False,
                 },
             )
         update_dict.update(

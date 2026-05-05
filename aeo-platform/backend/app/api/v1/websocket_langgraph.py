@@ -56,6 +56,7 @@ from app.workflow.confirmation import (
 from app.workflow.fetch_recovery import (
     extract_base_fetch_results_from_state,
     extract_latest_fetch_recovery_plan_from_state,
+    resolve_explicit_fetch_mode_from_text,
     resolve_supplemental_fetch_mode,
 )
 from app.workflow.brand_state import seed_effective_brand_profile
@@ -188,6 +189,24 @@ def _build_waiting_input_message(state_values: dict[str, Any]) -> str:
     if isinstance(progress_message, str) and progress_message.strip():
         return _sanitize_user_visible_runtime_text(progress_message)
     return "等待用户输入..."
+
+
+def _apply_explicit_fetch_mode_from_user_input(
+    state_update: dict[str, Any],
+    user_input: str,
+) -> None:
+    """Persist explicit fast/full fetch intent so A3 does not ask again."""
+
+    fetch_mode = resolve_explicit_fetch_mode_from_text(user_input)
+    if fetch_mode not in {"fast", "full"}:
+        return
+
+    user_decisions = dict(state_update.get("user_decisions") or {})
+    user_decisions["fetch_mode"] = fetch_mode
+    user_decisions["fetch_mode_pending"] = False
+    user_decisions["fetch_mode_confirmed"] = True
+    state_update["user_decisions"] = user_decisions
+    state_update["fetch_mode"] = fetch_mode
 
 
 async def _get_workflow_state(workflow: Any, config: dict[str, Any]) -> Any:
@@ -1786,6 +1805,7 @@ async def handle_user_message_langgraph(
                     or state_values.get("dashboard_context"),
                     "session_recalled": session_was_recalled,
                 }
+                _apply_explicit_fetch_mode_from_user_input(update_state, content)
                 if _should_seed_follow_up_brand_profile(state_values):
                     seed_effective_brand_profile(
                         update_state,
@@ -1906,6 +1926,7 @@ async def handle_user_message_langgraph(
                             c.get("label", "") for c in profile_contexts
                         ]
                         restored["user_decisions"] = user_decisions
+                    _apply_explicit_fetch_mode_from_user_input(restored, content)
                     if attachments:
                         restored["pending_table_intake"] = {
                             "attachments": attachments,
@@ -2073,6 +2094,7 @@ async def handle_user_message_langgraph(
                 "headless_mode": False,
                 "agent_retry_counts": {},
             }
+            _apply_explicit_fetch_mode_from_user_input(initial_state, content)
 
             # Stream workflow execution
             await _bind_current_local_execution(

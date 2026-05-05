@@ -424,12 +424,30 @@ def resolve_confirmation_selection(
             decisions["fetch_mode_pending"] = False
             decisions["fetch_mode_confirmed"] = True
             state_updates["fetch_mode"] = "fast"
+            if state_values.get("questions") or state_values.get("simulated_questions"):
+                state_updates["next_required_action"] = build_next_required_action(
+                    tool_name="answer_fetch",
+                    authority="user_confirmation",
+                    tool_args={"fetch_mode": "fast"},
+                    reason="用户已选择快速采集，继续执行答案抓取。",
+                    reply_text="好的，我会使用快速采集继续抓取答案。",
+                    source_step="confirmation",
+                )
             logger.info("[LangGraph] Inline confirmation: fast fetch mode")
         elif opt_id == "full":
             resolved_user_content = "用户选择完整采集"
             decisions["fetch_mode_pending"] = False
             decisions["fetch_mode_confirmed"] = True
             state_updates["fetch_mode"] = "full"
+            if state_values.get("questions") or state_values.get("simulated_questions"):
+                state_updates["next_required_action"] = build_next_required_action(
+                    tool_name="answer_fetch",
+                    authority="user_confirmation",
+                    tool_args={"fetch_mode": "full"},
+                    reason="用户已选择完整采集，继续执行答案抓取。",
+                    reply_text="好的，我会使用完整采集继续抓取答案。",
+                    source_step="confirmation",
+                )
             logger.info("[LangGraph] Inline confirmation: full fetch mode")
         elif opt_id == "regenerate":
             resolved_user_content = "用户选择重新生成问题"

@@ -171,14 +171,15 @@ class Settings(BaseSettings):
     # pacing remains controlled by PlatformConstants.PLATFORM_REQUEST_DELAYS.
     A4_DOUBAO_API_DELAY_SECONDS: float = 3.0
     A4_HUNYUAN_API_DELAY_SECONDS: float = 1.0
-    A4_KIMI_API_DELAY_SECONDS: float = 3.0
+    A4_KIMI_API_DELAY_SECONDS: float = 8.0
     A4_DOUBAO_API_CONCURRENCY: int = 1
     A4_HUNYUAN_API_CONCURRENCY: int = 1
     A4_KIMI_API_CONCURRENCY: int = 1
     A4_DOUBAO_API_MAX_RETRIES: int = 2
     A4_HUNYUAN_API_MAX_RETRIES: int = 2
-    A4_KIMI_API_MAX_RETRIES: int = 1
-    A4_KIMI_API_TIMEOUT_SECONDS: float = 45.0
+    A4_KIMI_API_MAX_RETRIES: int = 2
+    A4_KIMI_API_TIMEOUT_SECONDS: float = 90.0
+    A4_KIMI_API_429_COOLDOWN_SECONDS: float = 20.0
 
     # LLM Orchestration Mode (v2)
     USE_LLM_ORCHESTRATION: bool = False

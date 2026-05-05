@@ -4,13 +4,13 @@ from app.workflow.confirmation import (
 )
 
 
-def _resolve_option(option_id: str):
+def _resolve_option(option_id: str, state_values: dict | None = None):
     return resolve_confirmation_selection(
         selection={"optionId": option_id, "label": option_id},
         option_id=option_id,
         user_content=option_id,
         user_decisions={},
-        state_values={"session_id": "session-confirmation"},
+        state_values=state_values or {"session_id": "session-confirmation"},
     )
 
 
@@ -56,6 +56,22 @@ def test_generic_panorama_confirmation_sets_deterministic_route():
     assert resolution.state_updates["next_required_action"]["tool_name"] == (
         "question_simulation"
     )
+
+
+def test_fetch_mode_confirmation_continues_to_answer_fetch_when_questions_exist():
+    resolution = _resolve_option(
+        "fast",
+        {
+            "session_id": "session-confirmation",
+            "questions": [{"id": "q1", "text": "测试问题"}],
+        },
+    )
+
+    assert resolution.user_decisions["fetch_mode_confirmed"] is True
+    assert resolution.state_updates["fetch_mode"] == "fast"
+    action = resolution.state_updates["next_required_action"]
+    assert action["tool_name"] == "answer_fetch"
+    assert action["tool_args"] == {"fetch_mode": "fast"}
 
 
 def test_generic_scenario_confirmation_routes_to_persona_generation():

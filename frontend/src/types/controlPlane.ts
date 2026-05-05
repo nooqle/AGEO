@@ -24,6 +24,10 @@ export interface ControlPlaneTaskSummary {
   status: string;
   llm_total_tokens: number;
   llm_estimated_cost: number;
+  llm_estimated_cost_cache_aware: number;
+  currency: string;
+  llm_cached_prompt_tokens: number;
+  llm_billable_prompt_tokens: number;
   llm_total_latency_ms: number;
   updated_at: string;
 }
@@ -66,11 +70,29 @@ export interface ControlPlaneObservabilitySummary {
   total_cost: number;
   total_cost_cache_aware: number;
   estimated_savings: number;
+  currency: string;
   total_latency_ms: number;
   avg_latency_ms: number;
   unique_models: number;
+  diagnostic_sample_count: number;
+  low_cache_call_count: number;
+  low_cache_call_ratio: number;
+  static_prompt_variant_count: number;
+  tool_surface_variant_count: number;
+  model_identity_variant_count: number;
+  avg_runtime_context_size: number;
+  max_runtime_context_size: number;
   first_call_at: string | null;
   last_call_at: string | null;
+}
+
+export interface ControlPlaneReuseDiagnostic {
+  severity: string;
+  code: string;
+  title: string;
+  message: string;
+  affected_count: number;
+  ratio: number | null;
 }
 
 export interface ControlPlaneCostBreakdown {
@@ -84,11 +106,14 @@ export interface ControlPlaneCostBreakdown {
   call_count: number;
   total_tokens: number;
   prompt_tokens: number;
+  completion_tokens: number;
   cached_prompt_tokens: number;
+  billable_prompt_tokens: number;
   cache_hit_ratio: number;
   total_cost: number;
   total_cost_cache_aware: number;
   estimated_savings: number;
+  currency: string;
   total_latency_ms: number;
   avg_latency_ms: number;
 }
@@ -114,11 +139,21 @@ export interface ControlPlaneRecentCall {
   estimated_cost: number;
   estimated_cost_cache_aware: number;
   estimated_savings: number;
+  currency: string;
+  static_prompt_hash: string | null;
+  tool_surface_hash: string | null;
+  model_identity: string | null;
+  runtime_context_size: number | null;
+  runtime_reminder_enabled: boolean | null;
+  stable_tool_surface_enabled: boolean | null;
+  stable_skill_tool_description_enabled: boolean | null;
+  reuse_diagnosis: string | null;
   created_at: string | null;
 }
 
 export interface ControlPlaneObservabilitySnapshot {
   summary: ControlPlaneObservabilitySummary;
+  reuse_diagnostics: ControlPlaneReuseDiagnostic[];
   by_customer_brand: ControlPlaneCostBreakdown[];
   by_model: ControlPlaneCostBreakdown[];
   by_step: ControlPlaneCostBreakdown[];

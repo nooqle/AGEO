@@ -408,63 +408,61 @@ python scripts\validate_change.py
 
 ---
 
-## 9. Phase 5：同一任务锁定 orchestrator 模型
+## 9. Phase 5：模型使用与切换观测
 
 ### 9.1 目标
 
-避免同一个长任务里 orchestrator 悄悄换模型。
+2026-05-04 修订：不实施“同一任务强制锁定模型”。
+
+原因：
+
+1. 当前主线已经有 A1 / A4 / skill 等分层模型路由设计
+2. 部分节点需要更快或更适合结构化输出的模型
+3. 强制锁定可能破坏已有性能和能力分工
+
+本阶段目标改为：
+
+> 不阻止系统按设计选择模型，但要记录每次用了哪个模型、为什么贵、是否出现异常切换。
 
 人话解释：
 
-> 一个项目会开到底，尽量不要中途换主持人；真要换，也要记录为什么换。
+> 不强行规定谁来主持，但每次谁在主持、花了多少钱、是否换过人，都要看得见。
 
 ### 9.2 开发内容
 
-1. 在 task run 或 session state 中记录：
+1. 在 usage metadata 或观测摘要中记录：
    - `orchestrator_provider`
    - `orchestrator_model`
-   - `orchestrator_model_locked`
-   - `model_fallback_reason`
-2. `get_orchestrator_llm_model()` 支持读取 locked model
+   - `model_identity`
+   - `model_fallback_reason`（如果发生）
+2. 不改 `get_orchestrator_llm_model()` 的选择策略
 3. fallback 发生时写入 usage metadata
-4. 控制面后续可展示模型切换次数
-5. 加 feature flag：
-   - `ORCHESTRATOR_MODEL_LOCK_ENABLED`
+4. 控制面展示模型维度成本、缓存命中和延迟
+5. 控制面后续可展示模型切换次数
 
 ### 9.3 涉及文件
 
 1. `aeo-platform/backend/app/core/llm/task_routing.py`
 2. `aeo-platform/backend/app/workflow/orchestrator_node.py`
-3. `aeo-platform/backend/app/models/task_run.py`
-4. `aeo-platform/backend/app/services/llm_usage_service.py`
+3. `aeo-platform/backend/app/services/llm_usage_service.py`
 5. `aeo-platform/backend/tests/test_llm_task_routing.py`
 
 ### 9.4 数据库迁移
 
-需要评估是否新增字段。
+不新增字段。
 
-推荐先用已有 state/metadata 做最小实现。
-如果控制面需要强查询，再新增迁移字段。
-
-可能字段：
-
-```text
-task_runs.orchestrator_provider
-task_runs.orchestrator_model_name
-task_runs.orchestrator_model_locked
-task_runs.orchestrator_model_fallback_count
-```
+先使用 `LLMUsageRecord.extra_metadata` 和现有 Control-plane 聚合。
 
 ### 9.5 Milestone
 
-**M5：同一 task run 的 orchestrator 模型选择可追踪、可解释。**
+**M5：模型使用可追踪、可解释，不破坏既有分层路由。**
 
 ### 9.6 验收标准
 
-1. 同一 task run 默认复用已锁定模型
+1. 每次调用能看到 provider / model / model_identity
 2. fallback 发生时有原因记录
-3. fallback 不影响 A1、fast structured 等任务级模型路由
-4. 关闭 flag 后回到旧路由策略
+3. 不影响 A1、A4、fast structured 等任务级模型路由
+4. 控制面能按模型拆分成本、延迟和缓存命中
 
 ### 9.7 测试计划
 

@@ -16,6 +16,7 @@ from app.schemas.account_admin import (
     ControlPlaneObservabilitySnapshot,
     ControlPlaneObservabilitySummary,
     ControlPlaneRecentCall,
+    ControlPlaneReuseDiagnostic,
     ControlPlaneTaskSummary,
     OrganizationResponse,
 )
@@ -80,6 +81,7 @@ async def list_control_plane_tasks(
         organization_id=organization_id,
         limit=limit,
     )
+    currency = service._reporting_currency()
     return [
         ControlPlaneTaskSummary(
             task_id=task.id,
@@ -105,6 +107,10 @@ async def list_control_plane_tasks(
             status=task.status.value,
             llm_total_tokens=task.llm_total_tokens,
             llm_estimated_cost=task.llm_estimated_cost,
+            llm_estimated_cost_cache_aware=task.llm_estimated_cost_cache_aware,
+            currency=currency,
+            llm_cached_prompt_tokens=task.llm_cached_prompt_tokens,
+            llm_billable_prompt_tokens=task.llm_billable_prompt_tokens,
             llm_total_latency_ms=task.llm_total_latency_ms,
             updated_at=task.updated_at,
         )
@@ -131,6 +137,10 @@ async def get_control_plane_observability(
     )
     return ControlPlaneObservabilitySnapshot(
         summary=ControlPlaneObservabilitySummary.model_validate(payload["summary"]),
+        reuse_diagnostics=[
+            ControlPlaneReuseDiagnostic.model_validate(item)
+            for item in payload["reuse_diagnostics"]
+        ],
         by_customer_brand=[
             ControlPlaneCostBreakdown.model_validate(item)
             for item in payload["by_customer_brand"]
@@ -173,6 +183,7 @@ async def get_customer_detail(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
+    currency = service._reporting_currency()
 
     return ControlPlaneCustomerDetail(
         organization=_serialize_org(payload["organization"]),
@@ -223,6 +234,10 @@ async def get_customer_detail(
                 status=task.status.value,
                 llm_total_tokens=task.llm_total_tokens,
                 llm_estimated_cost=task.llm_estimated_cost,
+                llm_estimated_cost_cache_aware=task.llm_estimated_cost_cache_aware,
+                currency=currency,
+                llm_cached_prompt_tokens=task.llm_cached_prompt_tokens,
+                llm_billable_prompt_tokens=task.llm_billable_prompt_tokens,
                 llm_total_latency_ms=task.llm_total_latency_ms,
                 updated_at=task.updated_at,
             )
