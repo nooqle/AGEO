@@ -3614,9 +3614,72 @@ def test_question_generation_tool_identity_override_is_opt_in():
 
     assert "身份视角覆盖" not in default_system
     assert "指定身份视角" not in default_user
-    assert "身份视角覆盖" in identity_system
-    assert "采购经理" in identity_system
+    assert identity_system == default_system
+    assert "身份视角覆盖" not in identity_system
     assert "采购经理" in identity_user
+
+
+@pytest.mark.asyncio
+async def test_streaming_usage_records_prompt_fingerprints(monkeypatch):
+    from app.core.llm import LLMResponse, LLMUsage
+    from app.workflow import nodes_streaming
+    from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
+    import app.services.llm_usage_service as usage_service
+
+    async def fake_stream_llm_with_tpaor(**kwargs):
+        yield LLMResponse(
+            content="ok",
+            usage=LLMUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        )
+
+    recorded = {}
+
+    async def fake_record_llm_usage_async(**kwargs):
+        recorded.update(kwargs)
+
+    class FakeModel:
+        pass
+
+    messages = [
+        {"role": "system", "content": "固定规则"},
+        {"role": "user", "content": "动态品牌上下文"},
+    ]
+    tools = [{"type": "function", "function": {"name": "demo_tool"}}]
+    monkeypatch.setattr(
+        nodes_streaming,
+        "stream_llm_with_tpaor",
+        fake_stream_llm_with_tpaor,
+    )
+    monkeypatch.setattr(
+        usage_service,
+        "record_llm_usage_async",
+        fake_record_llm_usage_async,
+    )
+    monkeypatch.setattr(
+        usage_service,
+        "resolve_llm_model_identity",
+        lambda model: "deepseek:deepseek-v4-pro",
+    )
+
+    await nodes_streaming.call_llm_streaming(
+        session_id="session-1",
+        model=FakeModel(),
+        messages=messages,
+        step="question_simulation",
+        step_name="问题模拟生成",
+        tools=tools,
+        extra_metadata={"custom": "value"},
+    )
+
+    metadata = recorded["extra_metadata"]
+    assert metadata["static_prompt_hash"] == fingerprint_text("固定规则")
+    assert metadata["tool_surface_hash"] == fingerprint_tools(tools)
+    assert metadata["system_prompt_length"] == len("固定规则")
+    assert metadata["runtime_context_size"] == len("动态品牌上下文")
+    assert metadata["model_identity"] == "deepseek:deepseek-v4-pro"
+    assert metadata["message_count"] == 2
+    assert metadata["tool_count"] == 1
+    assert metadata["custom"] == "value"
 
 
 @pytest.mark.asyncio
@@ -4353,7 +4416,7 @@ async def test_legacy_question_simulation_tool_supports_identity_override():
     )
 
     assert payload["mode"] == "baseline_dynamic"
-    assert "品牌经理" in payload["system_prompt"]
+    assert "品牌经理" not in payload["system_prompt"]
     assert "品牌经理" in payload["user_content"]
 
 

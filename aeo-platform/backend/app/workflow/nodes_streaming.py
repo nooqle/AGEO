@@ -8,8 +8,9 @@ import logging
 from time import perf_counter
 from typing import Any, AsyncGenerator, Callable, Generator
 
-from app.workflow.events import send_tpaor_event, send_progress_event, send_thought_event
 from app.core.llm import BaseLLMModel, LLMResponse
+from app.workflow.events import send_tpaor_event, send_progress_event, send_thought_event
+from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
 
 _SENTINEL = object()
 _STREAM_IDLE_TIMEOUT_SECONDS = 120
@@ -232,6 +233,7 @@ async def call_llm_streaming(
     progress_end: float = 1.0,
     tools: list[dict[str, Any]] | None = None,
     max_tokens: int | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> LLMResponse:
     """Call LLM with streaming and return final response.
 
@@ -290,6 +292,37 @@ async def call_llm_streaming(
 
     if last_usage:
         from app.services.llm_usage_service import record_llm_usage_async
+        from app.services.llm_usage_service import resolve_llm_model_identity
+
+        system_prompt = next(
+            (
+                str(message.get("content") or "")
+                for message in messages
+                if message.get("role") == "system"
+            ),
+            "",
+        )
+        runtime_context_size = sum(
+            len(str(message.get("content") or ""))
+            for message in messages
+            if message.get("role") != "system"
+        )
+        usage_metadata = {
+            "streaming": True,
+            "message_count": len(messages),
+            "tool_count": len(tools or []),
+            "tool_surface_hash": fingerprint_tools(tools or []),
+            "runtime_context_size": runtime_context_size,
+            "model_identity": resolve_llm_model_identity(model),
+        }
+        if system_prompt:
+            usage_metadata.update(
+                {
+                    "static_prompt_hash": fingerprint_text(system_prompt),
+                    "system_prompt_length": len(system_prompt),
+                }
+            )
+        usage_metadata.update(extra_metadata or {})
 
         await record_llm_usage_async(
             session_id=session_id,
@@ -300,11 +333,7 @@ async def call_llm_streaming(
             model=model,
             usage=last_usage,
             latency_ms=response.latency_ms,
-            extra_metadata={
-                "streaming": True,
-                "message_count": len(messages),
-                "tool_count": len(tools or []),
-            },
+            extra_metadata=usage_metadata,
         )
 
     return response

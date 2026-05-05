@@ -171,7 +171,6 @@ def build_question_generation_messages(
             _build_baseline_user_content(brand_profile, competitors or []),
         )
     if normalized_identity:
-        system_prompt = _append_identity_override(system_prompt, normalized_identity)
         user_content = _append_identity_context(user_content, normalized_identity)
     return system_prompt, user_content
 
@@ -179,22 +178,6 @@ def build_question_generation_messages(
 def _normalize_identity_override(identity: str | None) -> str | None:
     text = str(identity or "").strip()
     return text or None
-
-
-def _append_identity_override(system_prompt: str, identity: str) -> str:
-    return (
-        system_prompt
-        + "\n\n"
-        + dedent(
-            f"""
-            ## 身份视角覆盖（最高优先级）
-            - 本次不要默认按普通消费者视角生成问题。
-            - 请明确代入“{identity}”的身份/角色来提问。
-            - 问题要体现该身份在真实工作中的职责、关注点、判断标准和约束。
-            - 如果该身份与普通消费者口吻冲突，以“{identity}”视角为准。
-            """
-        ).strip()
-    )
 
 
 def _append_identity_context(user_content: str, identity: str) -> str:

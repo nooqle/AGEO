@@ -278,12 +278,14 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     }
     if (item.kind === 'monitoring_plan_incomplete') {
       const params = new URLSearchParams();
-      params.set('tab', 'monitoring');
-      params.set('edit_schedule', '1');
+      params.set('section', 'monitoring');
+      if (selectedBrand?.id) {
+        params.set('entity_id', selectedBrand.id);
+      }
       if (item.monitor_mode) {
         setHomeMonitorMode(item.monitor_mode);
       }
-      router.push(`/dashboard?${params.toString()}`);
+      router.push(`/settings?${params.toString()}`);
       return;
     }
     void handleDashboardCommand('请帮我完成品牌基本信息与问题生成。');
