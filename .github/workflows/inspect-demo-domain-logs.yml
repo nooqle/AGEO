@@ -1,0 +1,313 @@
+name: Inspect Demo Domain Logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      since_minutes:
+        description: "Look back this many minutes, clamped to 10-1440."
+        required: false
+        default: "720"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-demo-domain-logs
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: Inspect demo domain diagnostics
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    env:
+      DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+      SINCE_MINUTES: ${{ github.event.inputs.since_minutes || '720' }}
+
+    steps:
+      - name: Validate SSH configuration
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${DEMO_SSH_HOST:?Missing DEMO_SSH_HOST secret}"
+          : "${DEMO_SSH_USER:?Missing DEMO_SSH_USER secret}"
+          : "${DEMO_SSH_KEY:?Missing DEMO_SSH_KEY secret}"
+          : "${DEMO_SSH_PORT:?Missing DEMO_SSH_PORT secret or default}"
+
+      - name: Read demo domain diagnostics
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_demo_domain_inspect_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(
+            -i "$key_path"
+            -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+
+          case "${SINCE_MINUTES}" in
+            ''|*[!0-9]*) SINCE_MINUTES=720 ;;
+          esac
+          if (( SINCE_MINUTES < 10 )); then SINCE_MINUTES=10; fi
+          if (( SINCE_MINUTES > 1440 )); then SINCE_MINUTES=1440; fi
+
+          remote_script=$(cat <<'SCRIPT'
+          set -euo pipefail
+          minutes="$1"
+          since="${minutes} minutes ago"
+
+          redact() {
+            sed -E \
+              -e 's/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/[REDACTED_SK]/g' \
+              -e 's/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g' \
+              -e 's/([A-Z0-9_]*(KEY|SECRET|TOKEN)[A-Z0-9_]*=).*/\1[REDACTED]/g'
+          }
+
+          print_env_status() {
+            local env_file="$1"
+            local name="$2"
+            if [ ! -f "$env_file" ]; then
+              echo "$name=env_file_missing"
+              return
+            fi
+            if grep -Eq "^${name}=" "$env_file"; then
+              if [[ "$name" == *KEY* || "$name" == *SECRET* || "$name" == *TOKEN* ]]; then
+                echo "$name=present"
+              else
+                local value
+                value="$(grep -E "^${name}=" "$env_file" | tail -n 1 | cut -d= -f2- | sed -E 's/^"|"$//g')"
+                echo "$name=${value:-<empty>}"
+              fi
+            else
+              echo "$name=missing"
+            fi
+          }
+
+          echo "== host =="
+          hostname
+          date -Is
+          echo
+
+          echo "== release =="
+          current="$(readlink -f /srv/ageo-deploy/current || true)"
+          echo "current=${current:-missing}"
+          if [ -n "${current:-}" ] && [ -f "$current/.release-sha" ]; then
+            echo "sha=$(cat "$current/.release-sha")"
+          fi
+          if [ -n "${current:-}" ] && [ -f "$current/.release-created-at" ]; then
+            echo "release_created_at=$(cat "$current/.release-created-at")"
+          fi
+          echo
+
+          echo "== service status =="
+          systemctl is-active ageo-backend.service || true
+          systemctl is-active ageo-frontend.service || true
+          echo
+
+          echo "== url intelligence configuration =="
+          env_file=/srv/ageo-deploy/shared/backend/.env.local
+          print_env_status "$env_file" URL_INTELLIGENCE_LLM_PROVIDER
+          print_env_status "$env_file" URL_INTELLIGENCE_MODEL_NAME
+          print_env_status "$env_file" URL_INTELLIGENCE_TIMEOUT_SECONDS
+          print_env_status "$env_file" DEEPSEEK_API_KEY
+          print_env_status "$env_file" GLM5_API_KEY
+          print_env_status "$env_file" MINIMAX_API_KEY
+          echo
+
+          echo "== backend domain intelligence journal lines =="
+          sudo journalctl -u ageo-backend.service --since "$since" --no-pager -o short-iso |
+            grep -Ei 'url_intelligence|domain intelligence|domain_intelligence|citation domain|citation_domain|resolve_citation|source_type|site_category|jd\.com|jingfen|smzdm|taobao|invalid json|json parse|domain analysis failed|falling back to GLM5|DeepSeek API key|GLM5 API key' |
+            redact |
+            tail -n 700 || true
+          echo
+
+          echo "== backend A4/error journal lines =="
+          sudo journalctl -u ageo-backend.service --since "$since" --no-pager -o short-iso |
+            grep -Ei 'A4|answer_fetch|fetch result|fetch_results|citation|429|timeout|timed out|exception|traceback|error|failed|kimi|moonshot|deepseek|glm5|doubao|yuanbao' |
+            redact |
+            tail -n 500 || true
+          echo
+
+          echo "== recent task/output domain snippets =="
+          if [ -n "${current:-}" ] && [ -x "$current/aeo-platform/backend/.venv/bin/python" ]; then
+            cd "$current/aeo-platform/backend"
+            "$current/aeo-platform/backend/.venv/bin/python" - "$minutes" <<'PY'
+          import asyncio
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          minutes = int(sys.argv[1])
+
+
+          def load_env(path: Path) -> None:
+              if not path.exists():
+                  return
+              for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  key = key.strip()
+                  value = value.strip().strip('"').strip("'")
+                  if key and key not in os.environ:
+                      os.environ[key] = value
+
+
+          def clean(text: object, limit: int = 1200) -> str:
+              value = str(text or "")
+              value = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED_SK]", value)
+              value = re.sub(r"Bearer [A-Za-z0-9._-]+", "Bearer [REDACTED]", value)
+              value = value.replace("\n", " ")
+              value = re.sub(r"\s+", " ", value).strip()
+              if len(value) > limit:
+                  return value[:limit] + "..."
+              return value
+
+
+          def snippets(text: object) -> list[str]:
+              value = str(text or "")
+              lower = value.lower()
+              keys = [
+                  "jingfen.jd.com",
+                  "jd.com",
+                  "post.smzdm.com",
+                  "smzdm.com",
+                  "url_intelligence",
+                  "source_type",
+                  "site_category",
+                  "缺乏特征",
+                  "未知",
+              ]
+              out: list[str] = []
+              for key in keys:
+                  idx = lower.find(key.lower())
+                  if idx < 0:
+                      continue
+                  start = max(0, idx - 450)
+                  end = min(len(value), idx + 900)
+                  out.append(clean(value[start:end]))
+                  if len(out) >= 3:
+                      break
+              return out
+
+
+          async def main() -> None:
+              load_env(Path(".env.local"))
+              from sqlalchemy import text
+              from app.core.database import AsyncSessionLocal
+
+              async with AsyncSessionLocal() as db:
+                  task_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select
+                                id::text as id,
+                                brand_name,
+                                status::text as status,
+                                current_stage,
+                                updated_at,
+                                left(coalesce(stage_results_cache::text, ''), 240000) as payload
+                              from analysis_tasks
+                              where updated_at >= now() - make_interval(mins => :minutes)
+                                and (
+                                  lower(coalesce(stage_results_cache::text, '')) like '%jd.com%'
+                                  or lower(coalesce(stage_results_cache::text, '')) like '%smzdm%'
+                                  or lower(coalesce(stage_results_cache::text, '')) like '%url_intelligence%'
+                                  or lower(coalesce(stage_results_cache::text, '')) like '%source_type%'
+                                  or lower(coalesce(stage_results_cache::text, '')) like '%site_category%'
+                                )
+                              order by updated_at desc
+                              limit 8
+                              """
+                          ),
+                          {"minutes": minutes},
+                      )
+                  ).mappings().all()
+                  print(f"-- analysis_tasks matched: {len(task_rows)}")
+                  for row in task_rows:
+                      print(
+                          "task",
+                          row["id"],
+                          clean(row["brand_name"], 80),
+                          row["status"],
+                          row["current_stage"],
+                          row["updated_at"],
+                      )
+                      for item in snippets(row["payload"]):
+                          print("  snippet:", item)
+
+                  message_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select
+                                id::text as id,
+                                session_id::text as session_id,
+                                output_type,
+                                created_at,
+                                left(coalesce(output_data, ''), 240000) as payload
+                              from messages
+                              where created_at >= now() - make_interval(mins => :minutes)
+                                and output_data is not null
+                                and (
+                                  lower(output_data) like '%jd.com%'
+                                  or lower(output_data) like '%smzdm%'
+                                  or lower(output_data) like '%url_intelligence%'
+                                  or lower(output_data) like '%source_type%'
+                                  or lower(output_data) like '%site_category%'
+                                )
+                              order by created_at desc
+                              limit 8
+                              """
+                          ),
+                          {"minutes": minutes},
+                      )
+                  ).mappings().all()
+                  print(f"-- output messages matched: {len(message_rows)}")
+                  for row in message_rows:
+                      print(
+                          "message",
+                          row["id"],
+                          "session",
+                          row["session_id"],
+                          "type",
+                          clean(row["output_type"], 80),
+                          row["created_at"],
+                      )
+                      for item in snippets(row["payload"]):
+                          print("  snippet:", item)
+
+
+          asyncio.run(main())
+          PY
+          else
+            echo "backend python runtime not found"
+          fi
+          SCRIPT
+          )
+
+          ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+            "bash -s -- $(printf '%q' "$SINCE_MINUTES")" <<< "$remote_script"
