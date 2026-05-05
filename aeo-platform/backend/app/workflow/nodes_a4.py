@@ -18,7 +18,7 @@ import random
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Iterator
 
 import httpx
 from langgraph.types import Command
@@ -78,6 +78,14 @@ logger = logging.getLogger(__name__)
 class CitationIntelligenceTarget:
     url: str
     canonical_domain: str
+
+
+@dataclass(frozen=True)
+class CitationIntelligenceContext:
+    fetch_result: dict[str, Any]
+    platform_result: dict[str, Any]
+    citation: dict[str, Any]
+
 
 # File-based logging — survives uvicorn --reload
 # Also capture handler-level logs (browser handlers, parsers, etc.)
@@ -424,6 +432,26 @@ def _collect_citation_intelligence_targets(
 
     targets: list[CitationIntelligenceTarget] = []
     seen_urls: set[str] = set()
+    for context in _iter_citation_intelligence_contexts(fetch_results):
+        citation = context.citation
+        url = str(citation.get("url") or "").strip()
+        raw_domain = str(citation.get("domain") or "").strip()
+        domain = normalize_domain(raw_domain or extract_domain(url) or url)
+        if not url or not domain or url in seen_urls:
+            continue
+        targets.append(
+            CitationIntelligenceTarget(
+                url=url,
+                canonical_domain=domain,
+            )
+        )
+        seen_urls.add(url)
+    return targets
+
+
+def _iter_citation_intelligence_contexts(
+    fetch_results: list[dict[str, Any]],
+) -> Iterator[CitationIntelligenceContext]:
     for fetch_result in fetch_results:
         for platform_result in fetch_result.get("platform_results", []) or []:
             if not isinstance(platform_result, dict):
@@ -431,19 +459,22 @@ def _collect_citation_intelligence_targets(
             for citation in platform_result.get("citations", []) or []:
                 if not isinstance(citation, dict):
                     continue
-                url = str(citation.get("url") or "").strip()
-                raw_domain = str(citation.get("domain") or "").strip()
-                domain = normalize_domain(raw_domain or extract_domain(url) or url)
-                if not url or not domain or url in seen_urls:
-                    continue
-                targets.append(
-                    CitationIntelligenceTarget(
-                        url=url,
-                        canonical_domain=domain,
-                    )
+                yield CitationIntelligenceContext(
+                    fetch_result=fetch_result,
+                    platform_result=platform_result,
+                    citation=citation,
                 )
-                seen_urls.add(url)
-    return targets
+        for packet in fetch_result.get("aio_platform_packets", []) or []:
+            if not isinstance(packet, dict):
+                continue
+            for citation in packet.get("citations", []) or []:
+                if not isinstance(citation, dict):
+                    continue
+                yield CitationIntelligenceContext(
+                    fetch_result=fetch_result,
+                    platform_result=packet,
+                    citation=citation,
+                )
 
 
 async def _build_domain_intelligence_lookup(
@@ -474,7 +505,9 @@ def _citation_information_updated_at(
     fetch_result: dict[str, Any],
     fallback: str,
 ) -> tuple[str, str]:
-    metadata = citation.get("metadata") if isinstance(citation.get("metadata"), dict) else {}
+    metadata = (
+        citation.get("metadata") if isinstance(citation.get("metadata"), dict) else {}
+    )
     candidates = (
         ("citation", citation.get("information_updated_at")),
         ("citation", citation.get("updated_at")),
@@ -520,44 +553,45 @@ async def _enrich_fetch_result_citation_domains(
 
     async with AsyncSessionLocal() as db:
         domain_memory = DomainMemoryService(db)
+        resolution_cache: dict[tuple[str, str], Any] = {}
         for fetch_result in fetch_results:
             question_text = str(fetch_result.get("question_text") or "")
-            for platform_result in fetch_result.get("platform_results", []) or []:
-                if not isinstance(platform_result, dict):
-                    continue
+            for context in _iter_citation_intelligence_contexts([fetch_result]):
+                platform_result = context.platform_result
+                citation = context.citation
                 platform = str(platform_result.get("platform") or "")
-                for citation in platform_result.get("citations", []) or []:
-                    if not isinstance(citation, dict):
-                        continue
-                    url = str(citation.get("url") or "").strip()
-                    raw_domain = str(citation.get("domain") or "").strip()
-                    if not raw_domain:
-                        raw_domain = extract_domain(url)
-                    canonical_domain = normalize_domain(raw_domain or url)
-                    title = str(citation.get("title") or "").strip()
-                    snippet = str(
-                        citation.get("snippet")
-                        or citation.get("summary")
-                        or question_text
-                        or ""
-                    ).strip()
-                    site_name = str(
-                        citation.get("site_name")
-                        or citation.get("source")
-                        or citation.get("site_display_name")
-                        or ""
-                    ).strip()
-                    url_intelligence = domain_intelligence_lookup.get(
-                        canonical_domain or ""
+                url = str(citation.get("url") or "").strip()
+                raw_domain = str(citation.get("domain") or "").strip()
+                if not raw_domain:
+                    raw_domain = extract_domain(url)
+                canonical_domain = normalize_domain(raw_domain or url)
+                title = str(citation.get("title") or "").strip()
+                snippet = str(
+                    citation.get("snippet")
+                    or citation.get("summary")
+                    or question_text
+                    or ""
+                ).strip()
+                site_name = str(
+                    citation.get("site_name")
+                    or citation.get("source")
+                    or citation.get("site_display_name")
+                    or ""
+                ).strip()
+                url_intelligence = domain_intelligence_lookup.get(
+                    canonical_domain or ""
+                )
+                information_updated_at, information_updated_at_source = (
+                    _citation_information_updated_at(
+                        citation=citation,
+                        platform_result=platform_result,
+                        fetch_result=fetch_result,
+                        fallback=enrichment_timestamp,
                     )
-                    information_updated_at, information_updated_at_source = (
-                        _citation_information_updated_at(
-                            citation=citation,
-                            platform_result=platform_result,
-                            fetch_result=fetch_result,
-                            fallback=enrichment_timestamp,
-                        )
-                    )
+                )
+                resolution_key = (canonical_domain or raw_domain or "", url)
+                resolution = resolution_cache.get(resolution_key)
+                if resolution is None:
                     resolution = await domain_memory.resolve_citation_domain_fast(
                         url=url,
                         raw_domain=raw_domain,
@@ -570,62 +604,63 @@ async def _enrich_fetch_result_citation_domains(
                         platform=platform,
                         url_intelligence=url_intelligence,
                     )
-                    resolution_payload = {
-                        "canonical_domain": resolution.canonical_domain,
-                        "display_name": resolution.display_name,
-                        "owner_name": resolution.owner_name,
-                        "source_type": resolution.source_type,
+                    resolution_cache[resolution_key] = resolution
+                resolution_payload = {
+                    "canonical_domain": resolution.canonical_domain,
+                    "display_name": resolution.display_name,
+                    "owner_name": resolution.owner_name,
+                    "source_type": resolution.source_type,
+                    "site_category": resolution.site_category,
+                    "relation_type": resolution.relation_type,
+                    "confidence": resolution.confidence,
+                    "status": resolution.status,
+                    "resolved_by": resolution.resolved_by,
+                }
+                metadata = dict(citation.get("metadata") or {})
+                raw_site_name = citation.get("site_name")
+                if raw_site_name:
+                    metadata.setdefault("raw_site_name", raw_site_name)
+                metadata.update(
+                    {
+                        "site_display_name": resolution.display_name,
                         "site_category": resolution.site_category,
-                        "relation_type": resolution.relation_type,
-                        "confidence": resolution.confidence,
-                        "status": resolution.status,
-                        "resolved_by": resolution.resolved_by,
+                        "source_type": resolution.source_type,
+                        "canonical_domain": resolution.canonical_domain,
+                        "domain_relation_type": resolution.relation_type,
+                        "domain_resolution_confidence": resolution.confidence,
+                        "domain_resolution_status": resolution.status,
+                        "domain_resolved_by": resolution.resolved_by,
+                        "is_official": resolution.is_official,
+                        "domain_resolution": resolution_payload,
+                        "url_intelligence": resolution.url_intelligence,
+                        "information_updated_at": information_updated_at,
+                        "information_updated_at_source": (
+                            information_updated_at_source
+                        ),
                     }
-                    metadata = dict(citation.get("metadata") or {})
-                    raw_site_name = citation.get("site_name")
-                    if raw_site_name:
-                        metadata.setdefault("raw_site_name", raw_site_name)
-                    metadata.update(
-                        {
-                            "site_display_name": resolution.display_name,
-                            "site_category": resolution.site_category,
-                            "source_type": resolution.source_type,
-                            "canonical_domain": resolution.canonical_domain,
-                            "domain_relation_type": resolution.relation_type,
-                            "domain_resolution_confidence": resolution.confidence,
-                            "domain_resolution_status": resolution.status,
-                            "domain_resolved_by": resolution.resolved_by,
-                            "is_official": resolution.is_official,
-                            "domain_resolution": resolution_payload,
-                            "url_intelligence": resolution.url_intelligence,
-                            "information_updated_at": information_updated_at,
-                            "information_updated_at_source": (
-                                information_updated_at_source
-                            ),
-                        }
-                    )
-                    citation.update(
-                        {
-                            "metadata": metadata,
-                            "site_name": resolution.display_name,
-                            "site_display_name": resolution.display_name,
-                            "site_category": resolution.site_category,
-                            "source_type": resolution.source_type,
-                            "canonical_domain": resolution.canonical_domain,
-                            "domain_relation_type": resolution.relation_type,
-                            "domain_resolution_confidence": resolution.confidence,
-                            "domain_resolution_status": resolution.status,
-                            "domain_resolved_by": resolution.resolved_by,
-                            "url_intelligence": resolution.url_intelligence,
-                            "information_updated_at": information_updated_at,
-                            "information_updated_at_source": (
-                                information_updated_at_source
-                            ),
-                            "is_official": bool(
-                                citation.get("is_official") or resolution.is_official
-                            ),
-                        }
-                    )
+                )
+                citation.update(
+                    {
+                        "metadata": metadata,
+                        "site_name": resolution.display_name,
+                        "site_display_name": resolution.display_name,
+                        "site_category": resolution.site_category,
+                        "source_type": resolution.source_type,
+                        "canonical_domain": resolution.canonical_domain,
+                        "domain_relation_type": resolution.relation_type,
+                        "domain_resolution_confidence": resolution.confidence,
+                        "domain_resolution_status": resolution.status,
+                        "domain_resolved_by": resolution.resolved_by,
+                        "url_intelligence": resolution.url_intelligence,
+                        "information_updated_at": information_updated_at,
+                        "information_updated_at_source": (
+                            information_updated_at_source
+                        ),
+                        "is_official": bool(
+                            citation.get("is_official") or resolution.is_official
+                        ),
+                    }
+                )
         await db.commit()
 
 

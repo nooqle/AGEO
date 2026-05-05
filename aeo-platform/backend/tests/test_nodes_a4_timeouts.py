@@ -6,7 +6,9 @@ from app.core.constants import PlatformConstants
 from app.workflow import nodes_a4
 
 
-def test_browser_pipeline_timeout_uses_deepseek_override_for_multi_question_runs() -> None:
+def test_browser_pipeline_timeout_uses_deepseek_override_for_multi_question_runs() -> (
+    None
+):
     timeout = nodes_a4._get_browser_pipeline_timeout("deepseek", 14)
 
     assert timeout == float(
@@ -41,7 +43,9 @@ def test_browser_action_wait_timeout_preserves_single_question_budget() -> None:
     assert timeout == int(nodes_a4._BROWSER_ACTION_WAIT_TIMEOUT_SECONDS)
 
 
-def test_deepseek_runtime_page_failure_stops_platform_without_tripping_breaker() -> None:
+def test_deepseek_runtime_page_failure_stops_platform_without_tripping_breaker() -> (
+    None
+):
     result = {
         "success": False,
         "error_type": "page_runtime_retry_or_risk_control",
@@ -76,7 +80,9 @@ class _FakeAioHandler:
 
 
 async def test_browser_fetch_timeout_also_applies_to_aio_handlers() -> None:
-    async def _slow_fetch(handler, question, profile, platform, platform_name, browser_state):
+    async def _slow_fetch(
+        handler, question, profile, platform, platform_name, browser_state
+    ):
         await asyncio.sleep(0.05)
         return {"success": True}
 
@@ -248,3 +254,44 @@ def test_supplemental_preserve_keeps_non_target_question_pairs() -> None:
         if item["question_id"] == "q1"
         for packet in item["aio_platform_packets"]
     ] == ["deepseek"]
+
+
+def test_domain_intelligence_contexts_cover_legacy_and_aio_citations() -> None:
+    legacy_citation = {
+        "title": "口腔清洁护理产品 - 京东",
+        "url": "https://jingfen.jd.com/detail/example.html",
+    }
+    aio_citation = {
+        "title": "post.smzdm.com",
+        "url": "https://post.smzdm.com/talk/p/example/",
+    }
+    fetch_results = [
+        {
+            "question_id": "q1",
+            "question_text": "Q1",
+            "platform_results": [
+                {
+                    "platform": "yuanbao",
+                    "citations": [legacy_citation],
+                }
+            ],
+            "aio_platform_packets": [
+                {
+                    "platform": "deepseek",
+                    "citations": [aio_citation],
+                }
+            ],
+        }
+    ]
+
+    contexts = list(nodes_a4._iter_citation_intelligence_contexts(fetch_results))
+    targets = nodes_a4._collect_citation_intelligence_targets(fetch_results)
+
+    assert [context.citation for context in contexts] == [
+        legacy_citation,
+        aio_citation,
+    ]
+    assert [target.canonical_domain for target in targets] == [
+        "jingfen.jd.com",
+        "post.smzdm.com",
+    ]
