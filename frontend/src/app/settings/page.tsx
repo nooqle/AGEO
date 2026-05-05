@@ -32,14 +32,14 @@ import {
 } from '@/types/monitoring';
 
 const SETTINGS_STORAGE_KEY = 'specta-settings-v1';
-const DEFAULT_MONITORING_PLATFORMS = ['doubao', 'yuanbao', 'kimi'] as const;
+const DEFAULT_MONITORING_PLATFORMS = ['doubao', 'yuanbao', 'kimi', 'deepseek'] as const;
 const FREQUENCY_OPTIONS: ScheduleFrequency[] = ['daily', 'weekly', 'biweekly', 'monthly'];
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => index);
 const PLATFORM_OPTIONS = [
   { key: 'doubao', label: '豆包', description: '使用豆包 API 自动抓取', disabled: false },
   { key: 'yuanbao', label: '元宝', description: '使用元宝 API 自动抓取', disabled: false },
   { key: 'kimi', label: 'Kimi', description: '使用 Kimi API 自动抓取', disabled: false },
-  { key: 'deepseek', label: 'DeepSeek', description: '暂不支持自动抓取', disabled: true },
+  { key: 'deepseek', label: 'DeepSeek', description: '使用 DeepSeek 网页版自动抓取', disabled: false },
 ] as const;
 
 interface LocalSettings {
@@ -741,7 +741,7 @@ function SettingsPageContent() {
                     </div>
 
                     <div>
-                      <FieldLabel label="监测平台" hint="DeepSeek 暂不支持自动抓取。" />
+                      <FieldLabel label="监测平台" hint="豆包、元宝、Kimi 使用 API 自动抓取；DeepSeek 使用网页版自动抓取。" />
                       <div className="grid gap-3 md:grid-cols-2">
                         {PLATFORM_OPTIONS.map((option) => (
                           <PillOption
