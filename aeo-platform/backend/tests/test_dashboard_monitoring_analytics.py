@@ -243,6 +243,109 @@ async def test_dashboard_home_todo_accepts_active_settings_schedule(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_home_todo_active_schedule_survives_stale_plan(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user, entity = await _seed_user_entity(session)
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=["How is Specta mentioned?"],
+        )
+        plan = await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status="draft",
+        )
+        plan.question_set_ids = [str(uuid.uuid4())]
+        session.add(
+            _snapshot(
+                entity.id,
+                mode="panorama",
+                mention_rate=0.6,
+                created_at=datetime.now(timezone.utc),
+                with_report=True,
+            )
+        )
+        await session.commit()
+        schedule = await MonitoringService(session).create_schedule(
+            user_id=user.id,
+            entity_id=entity.id,
+            preferred_hour=11,
+            platforms=["doubao", "yuanbao", "kimi", "deepseek"],
+            monitor_mode="panorama",
+        )
+
+        payload = await AnalyticsService(session, viewer=user).get_dashboard_home_v2(
+            str(entity.id),
+            monitor_mode="panorama",
+            date_range="month",
+        )
+
+        assert all(
+            item["kind"] != "monitoring_plan_incomplete"
+            for item in payload["todoItems"]
+        )
+        assert payload["monitoringPlan"]["status"] == "active"
+        assert payload["monitoringPlan"]["schedule_id"] == str(schedule.id)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_home_todo_requires_schedule_baseline_questions(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user, entity = await _seed_user_entity(session)
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=["How is Specta mentioned?"],
+        )
+        await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status="draft",
+        )
+        session.add(
+            _snapshot(
+                entity.id,
+                mode="panorama",
+                mention_rate=0.6,
+                created_at=datetime.now(timezone.utc),
+                with_report=True,
+            )
+        )
+        await session.commit()
+        schedule = await MonitoringService(session).create_schedule(
+            user_id=user.id,
+            entity_id=entity.id,
+            preferred_hour=11,
+            platforms=["doubao", "yuanbao", "kimi", "deepseek"],
+            monitor_mode="panorama",
+        )
+        schedule.baseline_data = None
+        await session.commit()
+
+        payload = await AnalyticsService(session, viewer=user).get_dashboard_home_v2(
+            str(entity.id),
+            monitor_mode="panorama",
+            date_range="month",
+        )
+
+        assert payload["todoItems"][0]["kind"] == "monitoring_plan_incomplete"
+        assert payload["monitoringPlan"]["status"] == "draft"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_home_todo_surfaces_unread_latest_report_for_active_plan(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:

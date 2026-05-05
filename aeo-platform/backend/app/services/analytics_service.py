@@ -3550,18 +3550,25 @@ class AnalyticsService:
             normalized_mode = (
                 self._normalize_dashboard_monitor_mode(monitor_mode) or "panorama"
             )
-            plan = await service.get_entity_plan(
-                user_id=self.viewer.id,
-                entity_id=brand_uuid,
-                monitor_mode=normalized_mode,
-            )
-            plan_summary = (
-                await service.plan_to_dict(plan) if plan is not None else None
-            )
             active_schedule = await self._get_dashboard_active_schedule(
                 brand_uuid=brand_uuid,
                 monitor_mode=normalized_mode,
             )
+            plan_summary = None
+            try:
+                plan = await service.get_entity_plan(
+                    user_id=self.viewer.id,
+                    entity_id=brand_uuid,
+                    monitor_mode=normalized_mode,
+                )
+                plan_summary = (
+                    await service.plan_to_dict(plan) if plan is not None else None
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Dashboard] Failed to load monitoring plan detail: %s",
+                    exc,
+                )
             schedule_summary = self._dashboard_monitoring_plan_from_schedule(
                 active_schedule,
                 fallback_plan=plan_summary,
@@ -3652,8 +3659,6 @@ class AnalyticsService:
         )
         questions = baseline.get("questions")
         question_count = len(questions) if isinstance(questions, list) else 0
-        if question_count <= 0:
-            question_count = int((fallback_plan or {}).get("question_count") or 0)
         endpoint_ids = self._dashboard_endpoint_ids_from_schedule(schedule)
         question_set_ids = [
             str(item)
