@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     A1_LLM_PROVIDER: str = "glm5"
     A1_MODEL_NAME: str = "glm-5"
     A1_THINKING_ENABLED: bool = True
+    A3_LLM_PROVIDER: str = "deepseek"
+    A3_MODEL_NAME: str = "deepseek-v4-pro"
+    A3_THINKING_ENABLED: bool = False
     FAST_STRUCTURED_LLM_PROVIDER: str | None = None
     FAST_STRUCTURED_MODEL_NAME: str | None = None
     FAST_STRUCTURED_THINKING_ENABLED: bool = False

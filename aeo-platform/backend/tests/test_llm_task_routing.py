@@ -92,6 +92,34 @@ def test_a1_routes_to_glm5(monkeypatch):
     ]
 
 
+def test_a3_routes_to_deepseek_pro_without_thinking(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        task_routing,
+        "get_settings",
+        lambda: SimpleNamespace(
+            A3_LLM_PROVIDER="deepseek",
+            A3_MODEL_NAME="deepseek-v4-pro",
+            A3_THINKING_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(
+        task_routing,
+        "get_llm_model",
+        lambda **kwargs: calls.append(kwargs) or object(),
+    )
+
+    task_routing.get_a3_llm_model()
+
+    assert calls == [
+        {
+            "provider": "deepseek",
+            "model_name": "deepseek-v4-pro",
+            "thinking_enabled": False,
+        }
+    ]
+
+
 def test_fast_structured_disables_thinking_even_for_deepseek(monkeypatch):
     calls = []
     monkeypatch.setattr(

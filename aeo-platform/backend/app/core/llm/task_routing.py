@@ -66,6 +66,23 @@ def get_a1_llm_model() -> BaseLLMModel:
     )
 
 
+def get_a3_llm_model() -> BaseLLMModel:
+    """Model for A3 question generation. Isolated from A1 and A2 routing."""
+
+    return _get_task_model(
+        task_name="a3_question_generation",
+        provider_attr="A3_LLM_PROVIDER",
+        model_attr="A3_MODEL_NAME",
+        thinking_attr="A3_THINKING_ENABLED",
+        default_provider="deepseek",
+        default_model="deepseek-v4-pro",
+        default_thinking=False,
+        fallback_provider="glm5",
+        fallback_model="glm-5",
+        fallback_thinking=False,
+    )
+
+
 def get_fast_structured_llm_model() -> BaseLLMModel:
     """Model for short JSON/structured generation where thinking is harmful."""
 

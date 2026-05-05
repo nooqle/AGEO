@@ -4380,7 +4380,7 @@ async def test_a3_baseline_mode_persists_identity_generation_context(monkeypatch
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
-        "app.workflow.nodes_a3._get_fast_model",
+        "app.workflow.nodes_a3._get_a3_model",
         lambda: "test-model",
     )
     monkeypatch.setattr(

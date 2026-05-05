@@ -21,7 +21,8 @@ from app.workflow.events import (
     send_confirmation_request,
 )
 from app.workflow.nodes_streaming import call_llm_streaming
-from app.workflow.nodes import _get_fast_model
+from app.core.llm import BaseLLMModel
+from app.core.llm.task_routing import get_a3_llm_model
 from app.core.utils import extract_json_from_content
 from app.tools.question_generation import (
     QuestionGenerationTool,
@@ -43,6 +44,12 @@ logger = logging.getLogger(__name__)
 _PLATFORMS = PlatformConstants.SUPPORTED_PLATFORMS
 # Hard limit on total questions
 _MAX_QUESTIONS = WorkflowConstants.MAX_QUESTIONS
+
+
+def _get_a3_model() -> BaseLLMModel:
+    """Return the dedicated A3 model without inheriting A1/A2/global routing."""
+
+    return get_a3_llm_model()
 
 
 def _clear_question_import_state(state: AgentState) -> dict:
@@ -487,7 +494,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             identity=identity,
         )
 
-        model = _get_fast_model()
+        model = _get_a3_model()
         response = await call_llm_streaming(
             session_id=session_id,
             model=model,
@@ -750,7 +757,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             identity=identity,
         )
 
-        model = _get_fast_model()
+        model = _get_a3_model()
         response = await call_llm_streaming(
             session_id=session_id,
             model=model,
@@ -1039,7 +1046,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             identity=identity,
         )
 
-        model = _get_fast_model()
+        model = _get_a3_model()
         response = await call_llm_streaming(
             session_id=session_id,
             model=model,
