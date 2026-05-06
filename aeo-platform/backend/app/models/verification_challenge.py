@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
 from sqlalchemy import DateTime, Enum, Integer, String
@@ -26,6 +26,10 @@ class VerificationPurpose(str, PyEnum):
 
 def _enum_values(enum_cls: type[PyEnum]) -> list[str]:
     return [item.value for item in enum_cls]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class VerificationChallenge(Base):
@@ -65,12 +69,12 @@ class VerificationChallenge(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=_utc_now,
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=_utc_now,
+        onupdate=_utc_now,
         nullable=False,
     )
