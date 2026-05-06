@@ -412,6 +412,8 @@ async def _generate_drill_down(
         system_prompt += (
             "\n7. 如果用户问的是负向/正向提及，优先解释具体是哪几个问题、哪个平台、证据原句是什么。"
             "\n8. 不要泛泛而谈，要直接指出负向提及的具体内容。"
+            "\n9. 负向定义：损害品牌声誉、产品硬伤、合规失败或客观负面事件；正向定义：技术优势、权威认证、市场成功或积极社会影响；中性定义：只做机制说明、参数罗列或背景介绍。"
+            "\n10. 0% 只能写成“本轮样本未观察到”，不能扩展成长期没有；没有有效分母时写“暂无足够数据支撑”。"
         )
     system_prompt = apply_skill_prompt_context(state, system_prompt)
 
@@ -450,6 +452,7 @@ async def _generate_drill_down(
             progress_start=0.0,
             progress_end=1.0,
             max_tokens=4096,
+            temperature=0.1 if focus_dimension == "sentiment" else None,
         )
         return response.content if hasattr(response, "content") else str(response)
     except Exception as e:

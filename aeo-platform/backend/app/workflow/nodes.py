@@ -22,11 +22,18 @@ from app.workflow.events import (
 from app.workflow.nodes_streaming import call_llm_streaming
 from app.workflow.summaries import generate_a1_summary
 from app.core.llm import BaseLLMModel
-from app.core.llm.task_routing import get_a1_llm_model, get_fast_structured_llm_model
+from app.core.llm.task_routing import get_a1_llm_model, get_a2_llm_model
 from app.core.utils import (
     extract_json_from_content,
     load_prompt_template,
     render_prompt,
+)
+from app.tools.persona_generation import (
+    PersonaGenerationTool,
+    build_persona_pipeline_data,
+    build_persona_retry_messages,
+    normalize_persona_payload,
+    validate_persona_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,13 +49,10 @@ def get_llm_model_compat() -> BaseLLMModel:
     return get_a1_llm_model()
 
 
-def _get_fast_model() -> BaseLLMModel:
-    """Get LLM model with thinking/reasoning disabled for structured output tasks.
+def _get_a2_model() -> BaseLLMModel:
+    """Get A2 persona generation model from the canonical routing profile."""
 
-    For tasks that only need JSON output (A2 personas, A3 questions), deep
-    reasoning adds 30-60s of latency with no quality benefit.
-    """
-    return get_fast_structured_llm_model()
+    return get_a2_llm_model()
 
 
 def parse_llm_response(response) -> dict | None:
@@ -706,16 +710,17 @@ async def a2_persona_node(state: AgentState) -> Command:
     )
 
     try:
-        # A2 outputs structured JSON — disable thinking/reasoning for speed.
-        # Thinking adds ~30-60s of reasoning tokens before actual JSON output.
-        model = _get_fast_model()
-        user_content = _build_a2_user_content(brand_profile, competitors)
+        model = _get_a2_model()
+        system_prompt, user_content = PersonaGenerationTool(
+            brand_profile,
+            competitors,
+        )
 
         # --- Attempt 1: standard simplified prompt ---
         data = await _a2_call_and_parse(
             session_id=session_id,
             model=model,
-            system_prompt=_get_a2_system_prompt(),
+            system_prompt=system_prompt,
             user_content=user_content,
             progress_start=0.3,
             progress_end=0.7,
@@ -733,11 +738,15 @@ async def a2_persona_node(state: AgentState) -> Command:
                 message="首次生成失败，正在重试...",
                 status="running",
             )
+            retry_system_prompt, retry_user_content = build_persona_retry_messages(
+                brand_profile,
+                competitors,
+            )
             data = await _a2_call_and_parse(
                 session_id=session_id,
                 model=model,
-                system_prompt=_get_a2_retry_prompt(),
-                user_content=user_content,
+                system_prompt=retry_system_prompt,
+                user_content=retry_user_content,
                 progress_start=0.7,
                 progress_end=0.9,
                 attempt=2,
@@ -796,10 +805,10 @@ async def a2_persona_node(state: AgentState) -> Command:
 
         # Build pipeline data (3-column: profile → scenario → intent)
         try:
-            pipeline_data = _build_pipeline_data(personas)
+            pipeline_data = build_persona_pipeline_data(personas)
         except Exception as e:
             logger.warning("[A2] Failed to build pipeline data: %s", e)
-            pipeline_data = _build_pipeline_data([])
+            pipeline_data = build_persona_pipeline_data([])
 
         # Send pipeline artifact with selection capability (A2 deliverable)
         from app.workflow.events import save_and_send_artifact
@@ -952,272 +961,22 @@ async def _a2_call_and_parse(
             logger.warning(f"[A2] Attempt {attempt}: JSON parse returned None")
             return None
 
-        # Validate: must have user_personas or userPersonas
-        has_personas = (
-            "user_personas" in data or "userPersonas" in data
-        )
-        if not has_personas:
+        data = normalize_persona_payload(data)
+
+        if not validate_persona_payload(data):
             logger.warning(
                 f"[A2] Attempt {attempt}: Missing user_personas key. "
                 f"Available keys: {list(data.keys())}"
             )
             return None
 
-        logger.info(f"[A2] Attempt {attempt}: Successfully parsed {len(data.get('user_personas', data.get('userPersonas', [])))} personas")
+        logger.info(
+            "[A2] Attempt %s: Successfully parsed %s personas",
+            attempt,
+            len(data.get("user_personas", [])),
+        )
         return data
 
     except Exception as e:
         logger.warning(f"[A2] Attempt {attempt}: Exception during LLM call: {e}")
         return None
-
-
-def _get_a2_system_prompt() -> str:
-    """Get simplified A2 system prompt.
-
-    Key change: JSON Schema reduced from 6 nested blocks / 30+ fields per persona
-    to ~8-10 flat fields per persona. Includes persona_priority and usage_scenarios
-    for downstream touchpoint tree building.
-    """
-    return """你是一个资深的消费者洞察专家。根据品牌档案信息，生成 4 个差异化的用户画像。
-
-## 输出格式
-请严格按照以下 JSON 格式输出（不要添加任何额外字段）：
-
-{
-  "brand_summary": {
-    "brand_name": "品牌名",
-    "core_value": "品牌核心价值（一句话）",
-    "category": "主要品类"
-  },
-  "user_personas": [
-    {
-      "name": "画像昵称（如：精致妈妈、职场新贵）",
-      "description": "一句话概括该人群（30字以内）",
-      "demographics": {
-        "age_range": "25-35",
-        "gender": "女性为主",
-        "city_tier": "一二线城市",
-        "income": "月入1.5-3万",
-        "occupation": "互联网/金融从业者"
-      },
-      "psychographics": {
-        "lifestyle": "注重品质生活，追求效率与美感",
-        "values": "品质优先，愿意为好产品付溢价",
-        "pain_points": ["选择困难", "信息过载", "品质参差不齐"]
-      },
-      "priority": "核心人群/增长人群/机会人群",
-      "key_questions": ["这类用户可能在 AI 平台中问的问题1", "问题2", "问题3"],
-      "usage_scenarios": [
-        {
-          "scenario_name": "场景名",
-          "scenario_description": "该人群触发品牌需求的具体情境（30-50字）",
-          "brand_interaction_intents": ["用户在此场景下与品牌互动的意图1（如：了解产品、比较方案、寻求建议、尝鲜体验、复购囤货）", "意图2"],
-          "relevant_competitors": ["此场景下用户可能对比的竞品1", "竞品2"]
-        }
-      ]
-    }
-  ],
-  "marketing_scenarios": [
-    "场景1描述（包含人群、时间、地点、触发需求的情境，50-80字）",
-    "场景2描述",
-    "场景3描述"
-  ]
-}
-
-## 画像要求
-- 生成 4 个画像，覆盖：核心人群（2个）、增长人群（1个）、机会人群（1个）
-- description 字段为一句话概括（30字以内），详细人口统计放在 demographics 中
-- demographics 必须包含 age_range, gender, city_tier, income, occupation
-- psychographics 必须包含 lifestyle, values, pain_points（数组）
-- 每个画像的 key_questions 要贴合真实用户在 AI 平台中的提问习惯
-- 每个画像的 priority 必须是 "核心人群"、"增长人群"、"机会人群" 之一
-- 每个画像包含 2-3 个 usage_scenarios
-- 每个 usage_scenario 必须包含 brand_interaction_intents（2-3个，描述用户与品牌/产品互动的意图，如咨询、比较、试用、购买、复购）和 relevant_competitors（1-3个）
-- marketing_scenarios 生成 4-6 个场景
-
-⚠️ 重要：直接以 { 开头输出 JSON，不要有任何解释或 Markdown 标记。"""
-
-
-def _get_a2_retry_prompt() -> str:
-    """Even simpler A2 prompt for retry attempt."""
-    return """根据品牌信息，生成 4 个用户画像。直接输出以下 JSON 格式，不要有其他文字：
-
-{
-  "user_personas": [
-    {"name": "画像名称", "description": "一句话概括（30字以内）", "demographics": {"age_range": "25-35", "gender": "女性为主", "city_tier": "一二线", "income": "月入1-2万", "occupation": "职业"}, "psychographics": {"lifestyle": "生活方式", "values": "价值观", "pain_points": ["痛点1"]}, "priority": "核心人群", "key_questions": ["问题1", "问题2"], "usage_scenarios": [{"scenario_name": "场景名", "scenario_description": "场景描述", "brand_interaction_intents": ["了解产品"], "relevant_competitors": ["竞品1"]}]},
-    {"name": "画像名称", "description": "一句话概括", "demographics": {"age_range": "30-45", "gender": "男性为主", "city_tier": "一二线", "income": "月入2-5万", "occupation": "职业"}, "psychographics": {"lifestyle": "生活方式", "values": "价值观", "pain_points": ["痛点1"]}, "priority": "核心人群", "key_questions": ["问题1", "问题2"], "usage_scenarios": [{"scenario_name": "场景名", "scenario_description": "场景描述", "brand_interaction_intents": ["比较方案"], "relevant_competitors": ["竞品1"]}]},
-    {"name": "画像名称", "description": "一句话概括", "demographics": {"age_range": "20-30", "gender": "不限", "city_tier": "二三线", "income": "月入0.5-1万", "occupation": "职业"}, "psychographics": {"lifestyle": "生活方式", "values": "价值观", "pain_points": ["痛点1"]}, "priority": "增长人群", "key_questions": ["问题1", "问题2"], "usage_scenarios": [{"scenario_name": "场景名", "scenario_description": "场景描述", "brand_interaction_intents": ["尝鲜体验"], "relevant_competitors": ["竞品1"]}]},
-    {"name": "画像名称", "description": "一句话概括", "demographics": {"age_range": "35-50", "gender": "不限", "city_tier": "各线", "income": "月入1-3万", "occupation": "职业"}, "psychographics": {"lifestyle": "生活方式", "values": "价值观", "pain_points": ["痛点1"]}, "priority": "机会人群", "key_questions": ["问题1", "问题2"], "usage_scenarios": [{"scenario_name": "场景名", "scenario_description": "场景描述", "brand_interaction_intents": ["寻求建议"], "relevant_competitors": ["竞品1"]}]}
-  ],
-  "marketing_scenarios": ["场景1", "场景2", "场景3"]
-}"""
-
-
-def _build_pipeline_data(personas: list[dict]) -> dict:
-    """Build 3-column pipeline data from A2 persona output for touchpoint map visualization.
-
-    Columns: User Profile -> Usage Scenario -> Brand Interaction Intent
-
-    Returns a dict with ``columns`` (list of 3 column dicts) and ``edges``
-    (list of source->target links).  Returns an empty structure if *personas*
-    is empty or not a list.
-    """
-    _empty: dict = {
-        "columns": [
-            {"key": "profile", "label": "用户画像", "color": "purple", "nodes": []},
-            {"key": "scenario", "label": "使用场景", "color": "blue", "nodes": []},
-            {"key": "intent", "label": "互动意图", "color": "orange", "nodes": []},
-        ],
-        "edges": [],
-    }
-    if not personas or not isinstance(personas, list):
-        logger.warning("[Pipeline] _build_pipeline_data called with empty/invalid personas")
-        return _empty
-
-    profiles = []
-    scenarios = []
-    intents = []
-    edges = []
-    intent_dedup: dict[str, str] = {}  # text -> id
-    scenario_dedup: dict[str, str] = {}  # name -> id
-
-    for pi, p in enumerate(personas):
-        if not isinstance(p, dict):
-            continue
-        p_name = p.get("persona_name", p.get("name", f"画像{pi+1}"))
-        p_id = f"profile_{pi}"
-
-        pain_points = []
-        psycho = p.get("psychographics", {})
-        if isinstance(psycho, dict):
-            pain_points = psycho.get("pain_points", [])
-            if isinstance(pain_points, str):
-                pain_points = [pain_points]
-            elif not isinstance(pain_points, list):
-                pain_points = []
-
-        values_text = psycho.get("values", "") if isinstance(psycho, dict) else ""
-        occupation = ""
-        demo = p.get("demographics", {})
-        if isinstance(demo, dict):
-            occupation = demo.get("occupation", "")
-
-        profiles.append({
-            "id": p_id,
-            "label": p_name,
-            "subtitle": p.get("persona_description", p.get("description", "")),
-            "tags": {
-                "痛点": pain_points[:3] if pain_points else [],
-                "核心诉求": values_text,
-                "职业": occupation,
-            },
-            "priority": p.get("persona_priority", p.get("priority", "")),
-        })
-
-        usage_scenarios = p.get("usage_scenarios") or []
-        if isinstance(usage_scenarios, dict):
-            usage_scenarios = [usage_scenarios]
-        elif not isinstance(usage_scenarios, list):
-            usage_scenarios = []
-
-        for si, s in enumerate(usage_scenarios):
-            if not isinstance(s, dict):
-                continue
-            s_name = s.get("scenario_name", f"场景{si+1}")
-            s_desc = s.get("scenario_description", "")
-
-            # Dedup scenarios by name across personas
-            if s_name in scenario_dedup:
-                s_id = scenario_dedup[s_name]
-            else:
-                s_id = f"scenario_{len(scenario_dedup)}"
-                scenario_dedup[s_name] = s_id
-                scenarios.append({
-                    "id": s_id,
-                    "label": s_name,
-                    "tags": {
-                        "任务目标": s_desc,
-                    },
-                })
-
-            edges.append({"source": p_id, "target": s_id})
-
-            # Use new field name with fallback
-            interaction_intents = s.get("brand_interaction_intents", s.get("likely_search_intents", []))
-            if isinstance(interaction_intents, str):
-                interaction_intents = [interaction_intents]
-            elif not isinstance(interaction_intents, list):
-                interaction_intents = []
-
-            for intent_text in interaction_intents:
-                if not intent_text:
-                    continue
-                if intent_text not in intent_dedup:
-                    i_id = f"intent_{len(intent_dedup)}"
-                    intent_dedup[intent_text] = i_id
-                    intents.append({
-                        "id": i_id,
-                        "label": intent_text,
-                    })
-                edges.append({"source": s_id, "target": intent_dedup[intent_text]})
-
-    return {
-        "columns": [
-            {"key": "profile", "label": "用户画像", "color": "purple", "nodes": profiles},
-            {"key": "scenario", "label": "使用场景", "color": "blue", "nodes": scenarios},
-            {"key": "intent", "label": "互动意图", "color": "orange", "nodes": intents},
-        ],
-        "edges": edges,
-    }
-
-
-def _coerce_text_list(value) -> list[str]:
-    if isinstance(value, list):
-        return [str(item) for item in value if item]
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
-    return []
-
-
-def _coerce_competitor_list(competitors) -> list[dict]:
-    if not isinstance(competitors, list):
-        return []
-
-    normalized: list[dict] = []
-    for comp in competitors:
-        if not isinstance(comp, dict):
-            continue
-        normalized.append(comp)
-    return normalized
-
-
-def _build_a2_user_content(brand_profile: dict, competitors: list) -> str:
-    """Build user content for A2."""
-    if not isinstance(brand_profile, dict):
-        brand_profile = {}
-
-    competitors = _coerce_competitor_list(competitors)
-    core_products = _coerce_text_list(brand_profile.get("core_products"))
-    competitor_names = _coerce_text_list(
-        [c.get("name", "") for c in competitors[:5]]
-    )
-
-    content = f"""请基于以下品牌档案信息，生成 4 组【用户画像 + 使用场景 + 营销痛点】：
-
-## 品牌档案
-- 品牌中文名：{brand_profile.get('brand_name', '')}
-- 品牌英文名：{brand_profile.get('brand_name_en', '')}
-- 成立年份：{brand_profile.get('founded_year', '')}
-- 核心领域：{brand_profile.get('industry', '')}
-- 核心产品：{', '.join(core_products)}
-- 品牌理念：{brand_profile.get('brand_positioning', '')}
-- 品牌描述：{brand_profile.get('description', '')}
-- 目标市场：{brand_profile.get('target_audience', '')}
-- 价格定位：{brand_profile.get('price_positioning', '')}
-
-## 竞争环境参考
-- 主要竞品：{', '.join(competitor_names)}
-- 市场竞争格局：{len(competitors)} 个主要竞品
-"""
-    return content
-

@@ -19,9 +19,12 @@ _KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
     "panorama_fast": "品牌全景分析（快速模式）",
     "panorama_full": "品牌全景分析（完整模式）",
     "panorama": "品牌全景分析",
+    "continue_panorama": "品牌全景分析",
     "scenario": "场景细化分析",
+    "scenario_first": "场景细化分析",
     "website": "官网 AI 友好度评估",
     "ask": "直接提问",
+    "ask_questions": "直接提问",
     "persona_first": "先做用户画像分析",
     "custom_questions": "我自定义问题",
     "view_questions": "先查看问题内容",
@@ -40,6 +43,12 @@ _KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
     "decline_question_set_enable": "暂不启用",
 }
 
+_CONFIRMATION_ID_ALIASES: dict[str, str] = {
+    "continue_panorama": "panorama",
+    "scenario_first": "persona_first",
+    "ask_questions": "ask",
+}
+
 TABLE_IMPORT_QUESTION_LIST_ARTIFACT_KIND = "table_import_question_list"
 
 
@@ -56,7 +65,14 @@ def resolve_known_confirmation_label(option_id: str | None) -> str | None:
     normalized = str(option_id or "").strip()
     if not normalized:
         return None
-    return _KNOWN_CONFIRMATION_LABELS.get(normalized)
+    return _KNOWN_CONFIRMATION_LABELS.get(normalized) or _KNOWN_CONFIRMATION_LABELS.get(
+        _CONFIRMATION_ID_ALIASES.get(normalized, normalized)
+    )
+
+
+def canonicalize_confirmation_id(option_id: str | None) -> str:
+    normalized = str(option_id or "").strip()
+    return _CONFIRMATION_ID_ALIASES.get(normalized, normalized)
 
 
 def _build_uploaded_question_items(result: dict[str, Any]) -> list[dict[str, str]]:
@@ -333,7 +349,8 @@ def resolve_confirmation_selection(
         decisions["a3_mode"] = "brand"
         logger.info("[LangGraph] User skipped persona selection, using brand mode")
     elif isinstance(selection, dict) and selection.get("optionId"):
-        opt_id = str(selection["optionId"])
+        raw_opt_id = str(selection["optionId"])
+        opt_id = canonicalize_confirmation_id(raw_opt_id)
         if opt_id == "persona_focused":
             clear_question_import_state()
             resolved_user_content = "按我选中的画像开始出题吧。"

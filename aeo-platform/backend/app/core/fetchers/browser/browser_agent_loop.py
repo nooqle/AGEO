@@ -280,9 +280,19 @@ def _get_browser_agent_llm_semaphore() -> asyncio.Semaphore:
 
 def _get_browser_agent_llm_model() -> Any:
     settings = get_settings()
-    browser_api_key = str(
-        getattr(settings, "BROWSER_AGENT_LLM_API_KEY", "") or ""
-    ).strip() or str(getattr(settings, "GLM5_API_KEY", "") or "").strip()
+    multimodal_provider = str(
+        getattr(settings, "MULTIMODAL_LLM_PROVIDER", "glm5") or "glm5"
+    ).lower()
+    if multimodal_provider != "glm5":
+        logger.warning(
+            "[BrowserAgentLoop] multimodal provider %s is configured, but browser "
+            "agent currently requires GLM5-compatible multimodal input.",
+            multimodal_provider,
+        )
+    browser_api_key = (
+        str(getattr(settings, "BROWSER_AGENT_LLM_API_KEY", "") or "").strip()
+        or str(getattr(settings, "GLM5_API_KEY", "") or "").strip()
+    )
     return GLM5Model(
         GLM5Config(
             api_key=browser_api_key or None,
@@ -296,6 +306,11 @@ def _get_browser_agent_llm_model() -> Any:
             ),
             model_name=str(
                 getattr(settings, "BROWSER_AGENT_LLM_MODEL_NAME", None)
+                or (
+                    getattr(settings, "MULTIMODAL_MODEL_NAME", None)
+                    if multimodal_provider == "glm5"
+                    else None
+                )
                 or getattr(settings, "GLM5_MODEL_NAME", "glm-5")
                 or "glm-5"
             ),

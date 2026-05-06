@@ -3573,6 +3573,12 @@ def test_question_generation_tool_preserves_persona_and_baseline_contracts():
     assert "绝对禁止在问题中直接提及目标品牌名称" in baseline_system
     assert "直接提及目标品牌的问题不超过总数的 10%" not in baseline_user
     assert "品牌直接问题" not in baseline_system
+    assert "品牌直接问题：用户已经知道目标品牌" in persona_system
+    assert "画像痛点场景：从用户身份" in persona_system
+    assert "品类选购对比：围绕品类" in persona_system
+    assert "品类需求咨询：用户还在理解需求" in baseline_system
+    assert "反例" in baseline_system
+    assert "品牌互撕式问题" in baseline_system
 
 
 def test_validate_baseline_questions_rejects_direct_brand_mentions():

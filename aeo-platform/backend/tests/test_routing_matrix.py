@@ -43,10 +43,22 @@ DEFAULT_CONFIRMATION_PREFERENCE_IDS = (
     "panorama_fast",
     "panorama",
     "brand_panorama",
+    "continue_panorama",
     "fast",
     "run_analysis_report",
     "persona_first",
+    "scenario_first",
 )
+
+PANORAMA_CONFIRMATION_IDS = {
+    "panorama_fast",
+    "panorama_full",
+    "panorama",
+    "brand_panorama",
+    "continue_panorama",
+}
+
+SCENARIO_CONFIRMATION_IDS = {"persona_first", "scenario", "scenario_first"}
 
 RUN_FULL_ROUTING_MATRIX = os.getenv("RUN_FULL_ROUTING_MATRIX") == "1"
 
@@ -314,10 +326,8 @@ class TestFullPipelineRouting:
                 option.get("id")
                 for option in (confirmation.get("data") or {}).get("options") or []
             }
-            assert option_ids.intersection(
-                {"panorama_fast", "panorama_full", "panorama", "brand_panorama"}
-            )
-            assert option_ids.intersection({"persona_first", "scenario"})
+            assert option_ids.intersection(PANORAMA_CONFIRMATION_IDS)
+            assert option_ids.intersection(SCENARIO_CONFIRMATION_IDS)
             logger.info("✓ A1 confirmation handoff routing PASS")
 
         finally:

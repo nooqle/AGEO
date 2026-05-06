@@ -2377,6 +2377,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 """
                 A1 完成后的流程（最高优先级）：
                 - A1 完成后，优先先汇报结果；如果用户还没有明确下一步，再用 ask_user 帮助其做选择，而不是默认直接调用 persona_generation 或 question_simulation。
+                - A1 后调用 ask_user 时，选项 id 必须使用固定值：panorama 或 panorama_fast 或 panorama_full（品牌全景分析）、persona_first（先做用户画像/场景细化）、ask（直接提问）。不要自创 continue_panorama、scenario_first、ask_questions 这类新 id。
                 - 尚无品牌全景分析时，默认优先按 question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="panorama") 推进，但仍要尊重用户当前意图。
                 - 已有品牌全景分析时，用户可进入引用置信度评估、场景细化、重跑品牌全景分析或直接提问。
 

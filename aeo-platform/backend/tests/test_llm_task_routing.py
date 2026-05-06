@@ -14,9 +14,9 @@ def test_orchestrator_routes_to_deepseek_pro_thinking(monkeypatch):
         task_routing,
         "get_settings",
         lambda: SimpleNamespace(
-            ORCHESTRATOR_LLM_PROVIDER="deepseek",
-            ORCHESTRATOR_MODEL_NAME="deepseek-v4-pro",
-            ORCHESTRATOR_THINKING_ENABLED=True,
+            TEXT_REASONING_LLM_PROVIDER="deepseek",
+            TEXT_REASONING_MODEL_NAME="deepseek-v4-pro",
+            TEXT_REASONING_THINKING_ENABLED=True,
         ),
     )
     monkeypatch.setattr(
@@ -42,9 +42,9 @@ def test_long_text_routes_to_deepseek_pro_thinking(monkeypatch):
         task_routing,
         "get_settings",
         lambda: SimpleNamespace(
-            LONG_TEXT_LLM_PROVIDER="deepseek",
-            LONG_TEXT_MODEL_NAME="deepseek-v4-pro",
-            LONG_TEXT_THINKING_ENABLED=True,
+            TEXT_REASONING_LLM_PROVIDER="deepseek",
+            TEXT_REASONING_MODEL_NAME="deepseek-v4-pro",
+            TEXT_REASONING_THINKING_ENABLED=True,
         ),
     )
     monkeypatch.setattr(
@@ -70,9 +70,9 @@ def test_a1_routes_to_glm5(monkeypatch):
         task_routing,
         "get_settings",
         lambda: SimpleNamespace(
-            A1_LLM_PROVIDER="glm5",
-            A1_MODEL_NAME="glm-5",
-            A1_THINKING_ENABLED=True,
+            MULTIMODAL_LLM_PROVIDER="glm5",
+            MULTIMODAL_MODEL_NAME="glm-5",
+            MULTIMODAL_THINKING_ENABLED=True,
         ),
     )
     monkeypatch.setattr(
@@ -92,15 +92,43 @@ def test_a1_routes_to_glm5(monkeypatch):
     ]
 
 
-def test_a3_routes_to_deepseek_pro_without_thinking(monkeypatch):
+def test_a2_routes_to_text_reasoning_profile(monkeypatch):
     calls = []
     monkeypatch.setattr(
         task_routing,
         "get_settings",
         lambda: SimpleNamespace(
-            A3_LLM_PROVIDER="deepseek",
-            A3_MODEL_NAME="deepseek-v4-pro",
-            A3_THINKING_ENABLED=False,
+            TEXT_REASONING_LLM_PROVIDER="deepseek",
+            TEXT_REASONING_MODEL_NAME="deepseek-v4-pro",
+            TEXT_REASONING_THINKING_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(
+        task_routing,
+        "get_llm_model",
+        lambda **kwargs: calls.append(kwargs) or object(),
+    )
+
+    task_routing.get_a2_llm_model()
+
+    assert calls == [
+        {
+            "provider": "deepseek",
+            "model_name": "deepseek-v4-pro",
+            "thinking_enabled": True,
+        }
+    ]
+
+
+def test_a3_routes_to_text_reasoning_profile(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        task_routing,
+        "get_settings",
+        lambda: SimpleNamespace(
+            TEXT_REASONING_LLM_PROVIDER="deepseek",
+            TEXT_REASONING_MODEL_NAME="deepseek-v4-pro",
+            TEXT_REASONING_THINKING_ENABLED=True,
         ),
     )
     monkeypatch.setattr(
@@ -115,20 +143,20 @@ def test_a3_routes_to_deepseek_pro_without_thinking(monkeypatch):
         {
             "provider": "deepseek",
             "model_name": "deepseek-v4-pro",
-            "thinking_enabled": False,
+            "thinking_enabled": True,
         }
     ]
 
 
-def test_fast_structured_disables_thinking_even_for_deepseek(monkeypatch):
+def test_fast_structured_routes_to_text_light_profile(monkeypatch):
     calls = []
     monkeypatch.setattr(
         task_routing,
         "get_settings",
         lambda: SimpleNamespace(
-            FAST_STRUCTURED_LLM_PROVIDER="deepseek",
-            FAST_STRUCTURED_MODEL_NAME="deepseek-v4-pro",
-            FAST_STRUCTURED_THINKING_ENABLED=False,
+            TEXT_LIGHT_LLM_PROVIDER="deepseek",
+            TEXT_LIGHT_MODEL_NAME="deepseek-v4-flash",
+            TEXT_LIGHT_THINKING_ENABLED=False,
         ),
     )
     monkeypatch.setattr(
@@ -142,7 +170,7 @@ def test_fast_structured_disables_thinking_even_for_deepseek(monkeypatch):
     assert calls == [
         {
             "provider": "deepseek",
-            "model_name": "deepseek-v4-pro",
+            "model_name": "deepseek-v4-flash",
             "thinking_enabled": False,
         }
     ]

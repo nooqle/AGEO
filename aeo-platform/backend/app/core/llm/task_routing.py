@@ -1,7 +1,8 @@
-"""Task-level LLM routing.
+"""Profile-based LLM routing.
 
 The global LLM provider remains a fallback. Runtime-sensitive tasks route
-explicitly so changing one skill does not accidentally move A1/A4/AIO.
+explicitly through three canonical model profiles so changing one skill does
+not accidentally move A1/A4/AIO.
 """
 
 from __future__ import annotations
@@ -18,96 +19,85 @@ logger = logging.getLogger(__name__)
 def get_orchestrator_llm_model() -> BaseLLMModel:
     """Model for orchestration and complex planning."""
 
-    return _get_task_model(
-        task_name="orchestrator",
-        provider_attr="ORCHESTRATOR_LLM_PROVIDER",
-        model_attr="ORCHESTRATOR_MODEL_NAME",
-        thinking_attr="ORCHESTRATOR_THINKING_ENABLED",
-        default_provider="deepseek",
-        default_model="deepseek-v4-pro",
-        default_thinking=True,
-        fallback_provider="glm5",
-        fallback_model="glm-5",
-        fallback_thinking=True,
-    )
+    return get_text_reasoning_llm_model(task_name="orchestrator")
 
 
 def get_long_text_llm_model() -> BaseLLMModel:
     """Model for long-form analysis, summaries, and report explanations."""
 
-    return _get_task_model(
-        task_name="long_text",
-        provider_attr="LONG_TEXT_LLM_PROVIDER",
-        model_attr="LONG_TEXT_MODEL_NAME",
-        thinking_attr="LONG_TEXT_THINKING_ENABLED",
-        default_provider="deepseek",
-        default_model="deepseek-v4-pro",
-        default_thinking=True,
-        fallback_provider="glm5",
-        fallback_model="glm-5",
-        fallback_thinking=True,
-    )
+    return get_text_reasoning_llm_model(task_name="long_text")
 
 
 def get_a1_llm_model() -> BaseLLMModel:
     """Model for A1 brand discovery. Kept on GLM-5 for search behavior."""
 
-    return _get_task_model(
-        task_name="a1_brand_discovery",
-        provider_attr="A1_LLM_PROVIDER",
-        model_attr="A1_MODEL_NAME",
-        thinking_attr="A1_THINKING_ENABLED",
-        default_provider="glm5",
-        default_model="glm-5",
-        default_thinking=True,
-        fallback_provider="glm5",
-        fallback_model="glm-5",
-        fallback_thinking=True,
-    )
+    return get_multimodal_llm_model(task_name="a1_brand_discovery")
+
+
+def get_a2_llm_model() -> BaseLLMModel:
+    """Model for A2 persona generation."""
+
+    return get_text_reasoning_llm_model(task_name="a2_persona_generation")
 
 
 def get_a3_llm_model() -> BaseLLMModel:
     """Model for A3 question generation. Isolated from A1 and A2 routing."""
 
-    return _get_task_model(
-        task_name="a3_question_generation",
-        provider_attr="A3_LLM_PROVIDER",
-        model_attr="A3_MODEL_NAME",
-        thinking_attr="A3_THINKING_ENABLED",
-        default_provider="deepseek",
-        default_model="deepseek-v4-pro",
-        default_thinking=False,
-        fallback_provider="glm5",
-        fallback_model="glm-5",
-        fallback_thinking=False,
-    )
+    return get_text_reasoning_llm_model(task_name="a3_question_generation")
 
 
 def get_fast_structured_llm_model() -> BaseLLMModel:
     """Model for short JSON/structured generation where thinking is harmful."""
 
-    settings = get_settings()
-    provider = _settings_str(settings, "FAST_STRUCTURED_LLM_PROVIDER", "").lower()
-    model_name = _settings_optional_str(settings, "FAST_STRUCTURED_MODEL_NAME")
-    if not provider:
-        provider = _settings_str(settings, "LLM_PROVIDER", "glm5").lower()
-    if not model_name:
-        model_name = _default_model_for_provider(provider, settings)
+    return get_text_light_llm_model(task_name="fast_structured")
 
-    return _get_model_with_fallback(
-        task_name="fast_structured",
-        provider=provider,
-        model_name=model_name,
-        thinking_enabled=bool(
-            getattr(settings, "FAST_STRUCTURED_THINKING_ENABLED", False)
-        ),
-        fallback_provider="glm5",
-        fallback_model="glm-5",
-        fallback_thinking=False,
+
+def get_text_reasoning_llm_model(*, task_name: str = "text_reasoning") -> BaseLLMModel:
+    """Canonical text reasoning model profile, currently DeepSeek v4 Pro."""
+
+    return _get_profile_model(
+        task_name=task_name,
+        provider_attr="TEXT_REASONING_LLM_PROVIDER",
+        model_attr="TEXT_REASONING_MODEL_NAME",
+        thinking_attr="TEXT_REASONING_THINKING_ENABLED",
+        default_provider="deepseek",
+        default_model="deepseek-v4-pro",
+        default_thinking=True,
+        fallback_profile="multimodal",
     )
 
 
-def _get_task_model(
+def get_text_light_llm_model(*, task_name: str = "text_light") -> BaseLLMModel:
+    """Canonical light text model profile, currently DeepSeek v4 Flash."""
+
+    return _get_profile_model(
+        task_name=task_name,
+        provider_attr="TEXT_LIGHT_LLM_PROVIDER",
+        model_attr="TEXT_LIGHT_MODEL_NAME",
+        thinking_attr="TEXT_LIGHT_THINKING_ENABLED",
+        default_provider="deepseek",
+        default_model="deepseek-v4-flash",
+        default_thinking=False,
+        fallback_profile="multimodal",
+    )
+
+
+def get_multimodal_llm_model(*, task_name: str = "multimodal") -> BaseLLMModel:
+    """Canonical multimodal model profile, currently GLM-5."""
+
+    return _get_profile_model(
+        task_name=task_name,
+        provider_attr="MULTIMODAL_LLM_PROVIDER",
+        model_attr="MULTIMODAL_MODEL_NAME",
+        thinking_attr="MULTIMODAL_THINKING_ENABLED",
+        default_provider="glm5",
+        default_model="glm-5",
+        default_thinking=True,
+        fallback_profile=None,
+    )
+
+
+def _get_profile_model(
     *,
     task_name: str,
     provider_attr: str,
@@ -116,14 +106,16 @@ def _get_task_model(
     default_provider: str,
     default_model: str,
     default_thinking: bool,
-    fallback_provider: str,
-    fallback_model: str,
-    fallback_thinking: bool,
+    fallback_profile: str | None,
 ) -> BaseLLMModel:
     settings = get_settings()
     provider = _settings_str(settings, provider_attr, default_provider).lower()
     model_name = _settings_str(settings, model_attr, default_model)
     thinking_enabled = bool(getattr(settings, thinking_attr, default_thinking))
+    fallback_provider, fallback_model, fallback_thinking = _fallback_profile_values(
+        settings,
+        fallback_profile,
+    )
     return _get_model_with_fallback(
         task_name=task_name,
         provider=provider,
@@ -172,25 +164,14 @@ def _settings_str(settings: Any, attr: str, default: str) -> str:
     return str(getattr(settings, attr, default) or default).strip()
 
 
-def _settings_optional_str(settings: Any, attr: str) -> str | None:
-    value = getattr(settings, attr, None)
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _default_model_for_provider(provider: str, settings: Any) -> str | None:
-    provider = provider.lower()
-    if provider == "deepseek":
-        return str(getattr(settings, "DEEPSEEK_PRO_MODEL_NAME", "") or "").strip() or (
-            "deepseek-v4-pro"
-        )
-    if provider == "glm5":
-        return str(getattr(settings, "GLM5_MODEL_NAME", "") or "").strip() or "glm-5"
-    if provider == "minimax":
+def _fallback_profile_values(
+    settings: Any,
+    fallback_profile: str | None,
+) -> tuple[str, str | None, bool]:
+    if fallback_profile == "multimodal":
         return (
-            str(getattr(settings, "MINIMAX_MODEL_NAME", "") or "").strip()
-            or "MiniMax-M2.1"
+            _settings_str(settings, "MULTIMODAL_LLM_PROVIDER", "glm5").lower(),
+            _settings_str(settings, "MULTIMODAL_MODEL_NAME", "glm-5"),
+            bool(getattr(settings, "MULTIMODAL_THINKING_ENABLED", True)),
         )
-    return None
+    return ("glm5", "glm-5", True)

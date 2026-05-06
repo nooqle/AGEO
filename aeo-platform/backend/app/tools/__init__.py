@@ -10,12 +10,14 @@ from app.tools.a2_marketing_persona import MarketingPersonaTool
 from app.tools.a3_question_simulation import QuestionSimulationTool
 from app.tools.a4_fetch_agent import FetchAgentTool
 from app.tools.a5_data_analytics import DataAnalyticsTool
+from app.tools.persona_generation import PersonaGenerationTool
 from app.tools.question_generation import QuestionGenerationTool
 
 __all__ = [
     # New class-based Tools (A1-A5)
     "BrandCompetitionTool",
     "MarketingPersonaTool",
+    "PersonaGenerationTool",
     "QuestionSimulationTool",
     "QuestionGenerationTool",
     "FetchAgentTool",

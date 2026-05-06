@@ -1,26 +1,27 @@
-"""A2 Tool - Marketing Persona Generation.
+"""Compatibility layer for A2 persona-generation primitives.
 
-Pure function implementation for generating marketing personas.
+`persona_generation` remains a workflow stage in `nodes.py`.
+Pure prompt-building and normalization logic lives in `persona_generation.py`.
 """
 
 from typing import Any
+
+from app.tools.persona_generation import build_persona_generation_messages
 
 
 async def generate_marketing_personas(
     brand_profile: dict, competitors: list
 ) -> dict[str, Any]:
-    """Generate marketing personas based on brand profile.
+    """Backward-compatible async wrapper for legacy A2 tool callers."""
 
-    Args:
-        brand_profile: Brand profile data from A1
-        competitors: Competitors list from A1
-
-    Returns:
-        Dictionary containing marketing_personas data
-    """
-    # This is implemented in nodes.py for now
-    # Keeping this file for backward compatibility
-    raise NotImplementedError("A2 is implemented directly in workflow nodes")
+    system_prompt, user_content = build_persona_generation_messages(
+        brand_profile,
+        competitors,
+    )
+    return {
+        "system_prompt": system_prompt,
+        "user_content": user_content,
+    }
 
 
 # Backward compatibility

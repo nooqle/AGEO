@@ -123,7 +123,19 @@ class Settings(BaseSettings):
     DEEPSEEK_PRO_PRICE_INPUT_CACHE_MISS_PER_MTOKENS: float = 3.0
     DEEPSEEK_PRO_PRICE_OUTPUT_PER_MTOKENS: float = 6.0
 
-    # Task-level LLM routing
+    # Canonical model profiles
+    TEXT_REASONING_LLM_PROVIDER: str = "deepseek"
+    TEXT_REASONING_MODEL_NAME: str = "deepseek-v4-pro"
+    TEXT_REASONING_THINKING_ENABLED: bool = True
+    TEXT_LIGHT_LLM_PROVIDER: str = "deepseek"
+    TEXT_LIGHT_MODEL_NAME: str = "deepseek-v4-flash"
+    TEXT_LIGHT_THINKING_ENABLED: bool = False
+    MULTIMODAL_LLM_PROVIDER: str = "glm5"
+    MULTIMODAL_MODEL_NAME: str = "glm-5"
+    MULTIMODAL_THINKING_ENABLED: bool = True
+
+    # Legacy task-level LLM routing fields retained for old env compatibility.
+    # Runtime task routing now maps tasks to the canonical model profiles above.
     ORCHESTRATOR_LLM_PROVIDER: str = "deepseek"
     ORCHESTRATOR_MODEL_NAME: str = "deepseek-v4-pro"
     ORCHESTRATOR_THINKING_ENABLED: bool = True

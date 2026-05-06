@@ -9,7 +9,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.core.domain_normalization import normalize_domain
-from app.core.llm import get_llm_model
+from app.core.llm.task_routing import get_text_light_llm_model
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +85,7 @@ class URLIntelligenceSkill:
                 min(6000, max(token_budget * 2, token_budget + 1000)),
             ],
             timeout_seconds=float(
-                getattr(settings, "URL_INTELLIGENCE_TIMEOUT_SECONDS", 45.0)
-                or 45.0
+                getattr(settings, "URL_INTELLIGENCE_TIMEOUT_SECONDS", 45.0) or 45.0
             ),
         )
         parsed: dict[str, DomainIntelligenceResult] = {}
@@ -101,29 +100,7 @@ class URLIntelligenceSkill:
 
 
 def _get_url_intelligence_model() -> Any:
-    settings = get_settings()
-    provider = str(
-        getattr(settings, "URL_INTELLIGENCE_LLM_PROVIDER", "deepseek") or "deepseek"
-    ).lower()
-    model_name = str(
-        getattr(settings, "URL_INTELLIGENCE_MODEL_NAME", "deepseek-v4-flash")
-        or "deepseek-v4-flash"
-    )
-    try:
-        return get_llm_model(
-            provider=provider,
-            model_name=model_name,
-            thinking_enabled=False,
-        )
-    except Exception as exc:
-        logger.warning(
-            "[%s] failed to initialize %s/%s; falling back to GLM5: %s",
-            SKILL_KEY,
-            provider,
-            model_name,
-            exc,
-        )
-        return get_llm_model(provider="glm5", thinking_enabled=False)
+    return get_text_light_llm_model(task_name=SKILL_KEY)
 
 
 async def _call_and_parse_domain_mapping(
@@ -240,6 +217,19 @@ _SYSTEM_PROMPT = """# Role: Domain Intelligence Analyst (网站情报分析专�
 2. 优先识别已知互联网实体，例如媒体、社交平台、电商、政府、高校、品牌官网、医疗健康站点。
 3. 只输出 site_name 和 category 两个识别值，不要输出解释、置信度或长描述。
 4. 输出对象的 key 必须是输入 domain 原文。
+
+## 分类定义
+- 电商平台：综合电商、平台店铺、导购跳转、联盟返利、平台精选页。
+- 消费社区：用户评测、导购内容、消费经验、折扣爆料、社区帖子。
+- 内容平台：公众号、短视频、资讯、图文内容分发平台。
+
+## 示例
+- jd.com -> ["京东", "电商平台"]
+- jingfen.jd.com -> ["京东", "电商平台"]
+- smzdm.com -> ["什么值得买", "消费社区"]
+- post.smzdm.com -> ["什么值得买", "消费社区"]
+- mp.weixin.qq.com -> ["微信公众号", "内容平台"]
+- uland.taobao.com -> ["淘宝", "电商平台"]
 
 ## Output Format
 请严格返回 JSON object，不可包含其他解释性文字：

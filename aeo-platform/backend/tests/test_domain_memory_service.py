@@ -7,6 +7,7 @@ import pytest
 from app.core.domain_normalization import normalize_domain
 from app.services.domain_memory_service import DomainMemoryService
 from app.services.url_intelligence_skill import URLIntelligenceSkill
+from app.services.url_intelligence_skill import _SYSTEM_PROMPT as URL_SYSTEM_PROMPT
 
 
 class _ScalarResult:
@@ -154,14 +155,12 @@ async def test_url_intelligence_skill_calls_llm_and_returns_compact_mapping(
     monkeypatch.setattr(
         "app.services.url_intelligence_skill.get_settings",
         lambda: SimpleNamespace(
-            URL_INTELLIGENCE_LLM_PROVIDER="deepseek",
-            URL_INTELLIGENCE_MODEL_NAME="deepseek-v4-flash",
             URL_INTELLIGENCE_TIMEOUT_SECONDS=45.0,
         ),
     )
     calls = []
     monkeypatch.setattr(
-        "app.services.url_intelligence_skill.get_llm_model",
+        "app.services.url_intelligence_skill.get_text_light_llm_model",
         lambda **kwargs: calls.append(kwargs) or _FakeModel(),
     )
 
@@ -169,13 +168,14 @@ async def test_url_intelligence_skill_calls_llm_and_returns_compact_mapping(
 
     assert result["health.baidu.com"].site_name == "百度健康"
     assert result["health.baidu.com"].category == "健康医疗/垂直内容"
-    assert calls == [
-        {
-            "provider": "deepseek",
-            "model_name": "deepseek-v4-flash",
-            "thinking_enabled": False,
-        }
-    ]
+    assert calls == [{"task_name": "url_intelligence_skill"}]
+
+
+def test_url_intelligence_prompt_contains_common_domain_examples():
+    assert 'jd.com -> ["京东", "电商平台"]' in URL_SYSTEM_PROMPT
+    assert 'post.smzdm.com -> ["什么值得买", "消费社区"]' in URL_SYSTEM_PROMPT
+    assert 'mp.weixin.qq.com -> ["微信公众号", "内容平台"]' in URL_SYSTEM_PROMPT
+    assert 'uland.taobao.com -> ["淘宝", "电商平台"]' in URL_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio
@@ -198,13 +198,11 @@ async def test_url_intelligence_skill_retries_once_on_empty_json(monkeypatch):
     monkeypatch.setattr(
         "app.services.url_intelligence_skill.get_settings",
         lambda: SimpleNamespace(
-            URL_INTELLIGENCE_LLM_PROVIDER="deepseek",
-            URL_INTELLIGENCE_MODEL_NAME="deepseek-v4-flash",
             URL_INTELLIGENCE_TIMEOUT_SECONDS=45.0,
         ),
     )
     monkeypatch.setattr(
-        "app.services.url_intelligence_skill.get_llm_model",
+        "app.services.url_intelligence_skill.get_text_light_llm_model",
         lambda **_kwargs: fake_model,
     )
 

@@ -98,7 +98,10 @@ def maybe_run_backend_checks(repo_root: Path, changed: list[Path]) -> list[tuple
     backend_py = [
         path.relative_to(repo_root)
         for path in changed
-        if path.suffix == ".py" and "aeo-platform\\backend" in str(path)
+        if path.exists()
+        and path.is_file()
+        and path.suffix == ".py"
+        and "aeo-platform\\backend" in str(path)
     ]
     if not backend_py:
         return []
@@ -115,7 +118,10 @@ def maybe_run_backend_checks(repo_root: Path, changed: list[Path]) -> list[tuple
 
 def maybe_run_frontend_checks(repo_root: Path, changed: list[Path]) -> list[tuple[str, subprocess.CompletedProcess[str]]]:
     frontend_changed = any(
-        "frontend\\" in str(path) and path.suffix.lower() in {".ts", ".tsx", ".js", ".jsx"}
+        path.exists()
+        and path.is_file()
+        and "frontend\\" in str(path)
+        and path.suffix.lower() in {".ts", ".tsx", ".js", ".jsx"}
         for path in changed
     )
     if not frontend_changed:

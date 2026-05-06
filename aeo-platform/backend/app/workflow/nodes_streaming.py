@@ -98,6 +98,7 @@ async def stream_llm_with_tpaor(
     progress_end: float = 1.0,
     tools: list[dict[str, Any]] | None = None,
     max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> AsyncGenerator[LLMResponse, None]:
     """Stream LLM output with real-time TPAOR events.
 
@@ -147,6 +148,8 @@ async def stream_llm_with_tpaor(
         stream_kwargs["tools"] = tools
     if max_tokens is not None:
         stream_kwargs["max_tokens"] = max_tokens
+    if temperature is not None:
+        stream_kwargs["temperature"] = temperature
 
     # Stream the LLM output (in thread to avoid blocking event loop)
     async for chunk in async_wrap_sync_gen(
@@ -233,6 +236,7 @@ async def call_llm_streaming(
     progress_end: float = 1.0,
     tools: list[dict[str, Any]] | None = None,
     max_tokens: int | None = None,
+    temperature: float | None = None,
     extra_metadata: dict[str, Any] | None = None,
 ) -> LLMResponse:
     """Call LLM with streaming and return final response.
@@ -269,6 +273,7 @@ async def call_llm_streaming(
         progress_end=progress_end,
         tools=tools,
         max_tokens=max_tokens,
+        temperature=temperature,
     ):
         if chunk.content:
             full_content += chunk.content

@@ -125,8 +125,8 @@ jobs:
 
           echo "== url intelligence configuration =="
           env_file=/srv/ageo-deploy/shared/backend/.env.local
-          print_env_status "$env_file" URL_INTELLIGENCE_LLM_PROVIDER
-          print_env_status "$env_file" URL_INTELLIGENCE_MODEL_NAME
+          print_env_status "$env_file" TEXT_LIGHT_LLM_PROVIDER
+          print_env_status "$env_file" TEXT_LIGHT_MODEL_NAME
           print_env_status "$env_file" URL_INTELLIGENCE_TIMEOUT_SECONDS
           print_env_status "$env_file" DEEPSEEK_API_KEY
           print_env_status "$env_file" GLM5_API_KEY
