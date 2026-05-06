@@ -12,6 +12,7 @@ from typing import Any
 FAILURE_LAYERS = {"client", "adapter", "executor", "orchestrator"}
 FAILURE_REASONS = {
     "navigation_failed",
+    "browser_context_closed",
     "submission_not_confirmed",
     "network_intercept_empty",
     "dom_extraction_empty",
@@ -29,6 +30,9 @@ FAILURE_REASONS = {
 }
 
 _FAILURE_REASON_ALIASES = {
+    "target_closed": "browser_context_closed",
+    "page_closed": "browser_context_closed",
+    "context_closed": "browser_context_closed",
     "verify": "verify_required",
     "captcha": "verify_required",
     "needs_verify": "verify_required",
@@ -45,6 +49,7 @@ _FAILURE_REASON_ALIASES = {
 
 _FAILURE_LAYER_BY_REASON = {
     "navigation_failed": "client",
+    "browser_context_closed": "client",
     "submission_not_confirmed": "executor",
     "network_intercept_empty": "executor",
     "dom_extraction_empty": "adapter",
@@ -60,6 +65,22 @@ _FAILURE_LAYER_BY_REASON = {
     "rate_limit": "executor",
     "resume_gate_failed": "executor",
 }
+
+_BROWSER_CONTEXT_CLOSED_MARKERS = (
+    "target page, context or browser has been closed",
+    "target page has been closed",
+    "context has been closed",
+    "browser has been closed",
+    "page has been closed",
+    "target closed",
+)
+
+
+def is_browser_context_closed_error(error: BaseException | str | None) -> bool:
+    message = str(error or "").strip().lower()
+    if not message:
+        return False
+    return any(marker in message for marker in _BROWSER_CONTEXT_CLOSED_MARKERS)
 
 
 def normalize_failure_reason(reason: str | None) -> str:

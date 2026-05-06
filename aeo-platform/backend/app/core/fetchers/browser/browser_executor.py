@@ -12,7 +12,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from app.core.fetchers.browser.failure_observability import build_failure_contract
+from app.core.fetchers.browser.failure_observability import (
+    build_failure_contract,
+    is_browser_context_closed_error,
+)
 from app.schemas.fetch import BrowserEvent, BrowserState, FetchResult, SearchReference
 from app.workflow.browser_action_contract import wait_for_browser_action_resume
 
@@ -204,12 +207,17 @@ async def execute_post_submit_capture_flow(
             str(tag).capitalize(),
             exc,
         )
+        context_closed = is_browser_context_closed_error(exc)
+        failure_reason = "browser_context_closed" if context_closed else "parser_error"
+        error_type = "browser_context_closed" if context_closed else "fetch_loop_error"
+        failure_layer = "client" if context_closed else "executor"
+        retryable = context_closed
         evidence_ref = None
         capture_evidence = getattr(handler, "_capture_failure_evidence", None)
         if callable(capture_evidence):
             try:
                 evidence_ref = await capture_evidence(
-                    failure_reason="parser_error",
+                    failure_reason=failure_reason,
                     execution_stage="fetch_loop",
                     extra_metadata={
                         "exception_type": exc.__class__.__name__,
@@ -226,18 +234,23 @@ async def execute_post_submit_capture_flow(
             if callable(getattr(handler, "_platform_display_name", None))
             else "当前平台"
         )
+        message = (
+            f"{display_name}浏览器页面已关闭，正在重建页面后重试。"
+            if context_closed
+            else f"{display_name}抓取流程异常中断，请稍后重试。"
+        )
         events.append(
             handler._create_event(
                 BrowserState.ERROR,
-                f"{display_name}抓取流程异常中断，请稍后重试。",
+                message,
                 progress=0,
-                error_type="fetch_loop_error",
+                error_type=error_type,
                 **build_failure_contract(
-                    failure_reason="parser_error",
+                    failure_reason=failure_reason,
                     execution_stage="fetch_loop",
-                    retryable=False,
+                    retryable=retryable,
                     needs_handoff=False,
-                    failure_layer="executor",
+                    failure_layer=failure_layer,
                     evidence_ref=evidence_ref,
                 ),
             )
@@ -915,6 +928,30 @@ async def handle_browser_failure(
             },
             skipped_by_user=failure_error_type == "user_skipped",
         )
+
+    if error_type == "browser_context_closed" and not is_retry:
+        if session_id:
+            await send_browser_state(
+                session_id=session_id,
+                platform=platform,
+                state="waiting_response",
+                message=f"{platform_name} 浏览器页面已关闭，正在重建页面后重试",
+                progress=0.45,
+                requires_action=False,
+            )
+
+        client = getattr(handler, "client", None)
+        close_client = getattr(client, "close", None)
+        if callable(close_client):
+            try:
+                await close_client()
+            except Exception as exc:
+                logger.debug(
+                    "[%s] Browser client close before context-closed retry failed: %s",
+                    platform,
+                    exc,
+                )
+        return await retry_fetch()
 
     if error_type == "rate_limit" and not is_retry and platform == "doubao":
         rate_limit_recovery = await attempt_rate_limit_recovery(

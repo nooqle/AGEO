@@ -17,7 +17,10 @@ from app.core.fetchers.browser.browser_executor import (
     BrowserAnswerExecutionPlan,
     execute_post_submit_capture_flow,
 )
-from app.core.fetchers.browser.failure_observability import build_failure_contract
+from app.core.fetchers.browser.failure_observability import (
+    build_failure_contract,
+    is_browser_context_closed_error,
+)
 from app.core.fetchers.browser.parsers.base import BaseResponseParser
 from app.core.fetchers.browser.parsers.sse import DeepSeekSSEParser
 from app.schemas.fetch import (
@@ -215,52 +218,15 @@ class DeepSeekHandler(BaseBrowserHandler):
                     question,
                     baseline_probe,
                 )
-            elif self.client.page is not None:
-                try:
-                    editor = self.client.page.locator(self._sel("input")).last
-                    if await editor.count() > 0:
-                        await editor.click()
-                        await asyncio.sleep(0.2)
-                        await editor.fill(question)
-                        await asyncio.sleep(0.2)
-                        await editor.press("Enter")
-                        submitted = await self._submission_looks_started(
-                            baseline_probe, question
-                        )
-                        logger.info(
-                            "[DeepSeek] Question submitted via locator Enter (confirmed=%s)",
-                            submitted,
-                        )
-                except Exception as e:
-                    logger.debug("[DeepSeek] Direct locator submit failed: %s", e)
 
-            if not submitted and not using_gui_actions:
-                snapshot = await self.client.snapshot(interactive_only=True)
-                textarea_ref = self._find_textarea_ref(snapshot)
-                if textarea_ref:
-                    await self.client.fill(textarea_ref, question)
-                    await asyncio.sleep(0.3)
-                    await self.client.press("Enter")
-                    submitted = await self._submission_looks_started(
-                        baseline_probe, question
-                    )
+            if not submitted:
+                if using_gui_actions:
                     logger.info(
-                        "[DeepSeek] Question submitted via snapshot ref %s (confirmed=%s)",
-                        textarea_ref,
-                        submitted,
+                        "[DeepSeek] AIO GUI submission not confirmed; trying CDP DOM fallback"
                     )
-
-            if (
-                not submitted
-                and not using_gui_actions
-                and await self._click_send_button_near_input()
-            ):
-                submitted = await self._submission_looks_started(
-                    baseline_probe, question
-                )
-                logger.info(
-                    "[DeepSeek] Question submitted via send-button fallback (confirmed=%s)",
-                    submitted,
+                submitted = await self._submit_question_via_cdp_dom(
+                    question,
+                    baseline_probe,
                 )
 
             if not submitted:
@@ -319,6 +285,31 @@ class DeepSeekHandler(BaseBrowserHandler):
             yield self._create_event(BrowserState.COMPLETED, "抓取完成", progress=1.0, data=fetch_result)
 
         except Exception as e:
+            if is_browser_context_closed_error(e):
+                evidence_ref = await self._capture_failure_evidence(
+                    failure_reason="browser_context_closed",
+                    execution_stage="fetch_loop",
+                    extra_metadata={
+                        "exception_type": e.__class__.__name__,
+                        "exception_message": str(e),
+                        **self._interaction_metadata(),
+                    },
+                )
+                yield self._create_event(
+                    BrowserState.ERROR,
+                    "DeepSeek 浏览器页面已关闭，正在重建页面后重试。",
+                    progress=0,
+                    error_type="browser_context_closed",
+                    **build_failure_contract(
+                        failure_reason="browser_context_closed",
+                        execution_stage="fetch_loop",
+                        retryable=True,
+                        needs_handoff=False,
+                        failure_layer="client",
+                        evidence_ref=evidence_ref,
+                    ),
+                )
+                return
             yield self._create_event(BrowserState.ERROR, f"抓取失败: {str(e)}", progress=0)
 
     # ------------------------------------------------------------------ DeepSeek-specific
@@ -531,6 +522,58 @@ class DeepSeekHandler(BaseBrowserHandler):
             }}"""
         )
         return bool(clicked)
+
+    async def _submit_question_via_cdp_dom(
+        self,
+        question: str,
+        baseline_probe: dict[str, Any],
+    ) -> bool:
+        submitted = False
+        if self.client.page is not None:
+            try:
+                editor = self.client.page.locator(self._sel("input")).last
+                if await editor.count() > 0:
+                    await editor.click()
+                    await asyncio.sleep(0.2)
+                    await editor.fill(question)
+                    await asyncio.sleep(0.2)
+                    await editor.press("Enter")
+                    submitted = await self._submission_looks_started(
+                        baseline_probe, question
+                    )
+                    logger.info(
+                        "[DeepSeek] Question submitted via locator Enter (confirmed=%s)",
+                        submitted,
+                    )
+            except Exception as e:
+                logger.debug("[DeepSeek] Direct locator submit failed: %s", e)
+
+        if not submitted:
+            snapshot = await self.client.snapshot(interactive_only=True)
+            textarea_ref = self._find_textarea_ref(snapshot)
+            if textarea_ref:
+                await self.client.fill(textarea_ref, question)
+                await asyncio.sleep(0.3)
+                await self.client.press("Enter")
+                submitted = await self._submission_looks_started(
+                    baseline_probe, question
+                )
+                logger.info(
+                    "[DeepSeek] Question submitted via snapshot ref %s (confirmed=%s)",
+                    textarea_ref,
+                    submitted,
+                )
+
+        if not submitted and await self._click_send_button_near_input():
+            submitted = await self._submission_looks_started(
+                baseline_probe, question
+            )
+            logger.info(
+                "[DeepSeek] Question submitted via send-button fallback (confirmed=%s)",
+                submitted,
+            )
+
+        return submitted
 
     async def _execute_aio_gui_action(self, action_payload: dict[str, Any]) -> bool:
         try:

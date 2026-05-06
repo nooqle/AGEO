@@ -8,7 +8,7 @@ import pytest
 from app.core.config import settings
 from app.core.fetchers.browser import deepseek_handler as deepseek_module
 from app.core.fetchers.browser.deepseek_handler import DeepSeekHandler
-from app.schemas.fetch import SearchReference
+from app.schemas.fetch import FetchMethod, FetchResult, Platform, SearchReference
 
 
 def test_deepseek_aio_defaults_to_gui_actions_for_remote_sessions():
@@ -121,6 +121,58 @@ async def test_deepseek_submit_uses_gui_send_button_fallback(monkeypatch):
     assert actions[1] == {"action_type": "CLICK", "x": 640, "y": 880}
     assert actions[-1] == {"action_type": "CLICK", "x": 720, "y": 880}
     assert handler._submission_looks_started.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_deepseek_fetch_falls_back_to_cdp_dom_after_gui_not_confirmed(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "DEEPSEEK_AIO_INTERACTION_MODE", "gui_actions")
+    monkeypatch.setattr(deepseek_module.asyncio, "sleep", AsyncMock())
+
+    page = SimpleNamespace(url="https://chat.deepseek.com/")
+    handler = DeepSeekHandler(
+        client=SimpleNamespace(
+            page=page,
+            aio_session_id="aio-session-1",
+        )
+    )
+    handler._reuse_existing_aio_surface = AsyncMock(return_value=True)
+    handler._run_browser_agent_preflight = AsyncMock(return_value=([], False))
+    handler._ensure_web_search_on_via_aio_gui_actions = AsyncMock()
+    handler._get_intercept_config = lambda: None
+    handler._get_response_parser = lambda: None
+    handler._capture_submission_probe = AsyncMock(
+        return_value={"message_count": 0, "answer_count": 0}
+    )
+    handler._submit_question_via_aio_gui_actions = AsyncMock(return_value=False)
+    handler._submit_question_via_cdp_dom = AsyncMock(return_value=True)
+    capture_flow = AsyncMock(
+        return_value=(
+            FetchResult(
+                id="fetch-1",
+                question_id="question-1",
+                question_text="test question",
+                platform=Platform.DEEPSEEK,
+                fetch_method=FetchMethod.BROWSER,
+                status="success",
+                answer_text="ok",
+            ),
+            [],
+        )
+    )
+    monkeypatch.setattr(
+        deepseek_module,
+        "execute_post_submit_capture_flow",
+        capture_flow,
+    )
+
+    events = [event async for event in handler.fetch("test question")]
+
+    handler._submit_question_via_aio_gui_actions.assert_awaited_once()
+    handler._submit_question_via_cdp_dom.assert_awaited_once()
+    assert capture_flow.await_count == 1
+    assert events[-1].state.value == "completed"
 
 
 @pytest.mark.asyncio

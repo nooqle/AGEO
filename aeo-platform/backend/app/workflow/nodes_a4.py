@@ -28,6 +28,7 @@ from app.core.constants import PlatformConstants, WorkflowConstants
 from app.core.fetchers.browser.failure_observability import (
     BrowserFailureEvidenceService,
     build_failure_contract,
+    is_browser_context_closed_error,
 )
 from app.core.fetchers.browser.browser_executor import (
     PendingBrowserAction,
@@ -1757,9 +1758,13 @@ async def _browser_fetch_with_timeout(
     except Exception as e:
         logger.warning("[A4] Browser %s failed: %s", platform, e)
         await _cleanup_browser_client()
+        context_closed = is_browser_context_closed_error(e)
+        failure_reason = "browser_context_closed" if context_closed else "parser_error"
+        error_type = "browser_context_closed" if context_closed else "parser_error"
+        failure_layer = "client" if context_closed else "executor"
         evidence_ref = await _capture_browser_failure_evidence(
             handler=handler,
-            failure_reason="parser_error",
+            failure_reason=failure_reason,
             execution_stage="executor_failure",
             question_id=question_id,
             question_text=question_text,
@@ -1770,13 +1775,13 @@ async def _browser_fetch_with_timeout(
             platform=platform,
             platform_name=platform_name,
             error=str(e),
-            error_type="parser_error",
+            error_type=error_type,
             duration=0.0,
-            failure_reason="parser_error",
+            failure_reason=failure_reason,
             execution_stage="executor_failure",
-            retryable=False,
+            retryable=context_closed,
             needs_handoff=False,
-            failure_layer="executor",
+            failure_layer=failure_layer,
             evidence_ref=evidence_ref,
         )
 
