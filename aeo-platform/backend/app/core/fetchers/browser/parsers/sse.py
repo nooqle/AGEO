@@ -291,15 +291,20 @@ class DoubaoSSEParser(BaseResponseParser):
         normalized_error_msg = str(error_msg or "").lower()
         error_info = f"{event_type}: code={error_code} msg={error_msg}"
 
-        # Browser-side verify challenges must take precedence over generic
-        # rate-limit text, otherwise the frontend never prompts the user.
+        is_rate_limited = (
+            "rate limit" in normalized_error_msg
+            or "rate_limit" in normalized_error_msg
+            or error_code == 710022004
+        )
+        if is_rate_limited and not verify_scene:
+            return error_info, "rate_limit"
         if (
             err_type_field == "verify"
             or "verify" in normalized_error_msg
             or bool(verify_scene)
         ):
             return error_info, "verify"
-        if "rate limit" in normalized_error_msg or "rate_limit" in normalized_error_msg or error_code == 710022004:
+        if is_rate_limited:
             return error_info, "rate_limit"
         return error_info, "server_error"
 

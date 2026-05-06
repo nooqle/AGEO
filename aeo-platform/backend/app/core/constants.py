@@ -99,7 +99,7 @@ class PlatformConstants:
         "doubao": 90,
         "yuanbao": 90,
         "hunyuan": 90,
-        "kimi": 90,
+        "kimi": 130,
         "deepseek": 90,
     }
 

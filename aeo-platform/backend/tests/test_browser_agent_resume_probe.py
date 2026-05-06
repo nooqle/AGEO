@@ -208,6 +208,34 @@ async def test_empty_answer_preserves_takeover_open_failure_event(monkeypatch):
     assert events == [failure_event]
 
 
+async def test_platform_busy_answer_text_is_rate_limit_failure(monkeypatch):
+    handler = _DummyHandler(client=SimpleNamespace(page=None))
+
+    async def _fake_capture_failure_evidence(**_kwargs):
+        return {"evidence_id": "busy"}
+
+    monkeypatch.setattr(
+        handler,
+        "_capture_failure_evidence",
+        _fake_capture_failure_evidence,
+    )
+
+    events, handled = await handler._handle_browser_agent_empty_answer(
+        "System is currently busy. Please try again later. Capacity is busy. Please wait or upgrade",
+        progress=0.9,
+        fallback_url=handler.URL,
+    )
+
+    assert handled is True
+    assert len(events) == 1
+    event = events[0]
+    assert event.error_type == "rate_limit"
+    assert event.failure_reason == "rate_limit"
+    assert event.failure_layer == "adapter"
+    assert event.execution_stage == "extract_answer"
+    assert event.retryable is True
+
+
 def test_kimi_resume_probe_context_uses_platform_specific_note():
     handler = KimiHandler(client=SimpleNamespace(page=None))
 

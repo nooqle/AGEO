@@ -528,6 +528,17 @@ class TestDoubaoSSEParser:
         result = self.parser.validate(result)
         assert not result.parse_ok
 
+    def test_rate_limited_error_is_not_misclassified_as_verify(self):
+        body = (
+            "id: 1\n"
+            "event: STREAM_ERROR\n"
+            f"data: {json.dumps({'error_code': 710022004, 'error_message': 'rate limited', 'type': 'verify'})}\n\n"
+        )
+        result = self.parser.parse(body)
+
+        assert result.error_type == "rate_limit"
+        assert "710022004" in result.error
+
     def test_skips_loading_blocks(self):
         """Loading blocks (type 10101) should be ignored."""
         body = (

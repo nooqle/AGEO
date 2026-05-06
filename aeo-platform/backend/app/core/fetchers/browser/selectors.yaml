@@ -15,7 +15,8 @@ kimi:
     url_pattern: "kimi\\.gateway\\.chat.*ChatService/Chat"
     method: "POST"
     content_type_contains: "connect+json"
-    timeout: 65
+    timeout: 115
+    continue_on_invalid_parse: true
 
   # --- CSS 选择器 ---
   input: ".chat-input-editor, [class*='chat-input'], [contenteditable='true']"

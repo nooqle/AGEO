@@ -26,6 +26,7 @@ class InterceptConfig:
     method: str = "POST"
     content_type_contains: str = ""  # e.g. "event-stream"
     timeout: float = 60.0
+    continue_on_invalid_parse: bool = False
 
 
 class BaseResponseParser(ABC):

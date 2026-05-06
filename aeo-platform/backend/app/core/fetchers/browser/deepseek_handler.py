@@ -101,9 +101,8 @@ class DeepSeekHandler(BaseBrowserHandler):
         return aliases.get(raw_mode, raw_mode or "cdp_dom")
 
     def _should_use_aio_gui_actions(self) -> bool:
-        return (
-            self._resolve_interaction_mode() == "gui_actions"
-            and bool(getattr(self.client, "aio_session_id", None))
+        return self._resolve_interaction_mode() == "gui_actions" and bool(
+            getattr(self.client, "aio_session_id", None)
         )
 
     def _interaction_metadata(self) -> dict[str, Any]:
@@ -141,10 +140,14 @@ class DeepSeekHandler(BaseBrowserHandler):
         self._refresh_selectors()
         try:
             # Step 1: Initializing
-            yield self._create_event(BrowserState.INITIALIZING, "初始化浏览器...", progress=0.1)
+            yield self._create_event(
+                BrowserState.INITIALIZING, "初始化浏览器...", progress=0.1
+            )
 
             # Step 2: Navigate or start new chat
-            yield self._create_event(BrowserState.NAVIGATING, f"正在访问 {self.URL}...", progress=0.2)
+            yield self._create_event(
+                BrowserState.NAVIGATING, f"正在访问 {self.URL}...", progress=0.2
+            )
             page = self.client.page
             fast_path_ok = False
             if page is not None and "chat.deepseek.com" in (page.url or ""):
@@ -160,10 +163,17 @@ class DeepSeekHandler(BaseBrowserHandler):
                             if page.url != old_url:
                                 break
                         fast_path_ok = True
-                        logger.info("[DeepSeek] Fast path: clicked %s (url_changed=%s)", new_chat_text, page.url != old_url)
+                        logger.info(
+                            "[DeepSeek] Fast path: clicked %s (url_changed=%s)",
+                            new_chat_text,
+                            page.url != old_url,
+                        )
                 except Exception as e:
-                    logger.debug("[DeepSeek] %s click failed (%s), falling back to navigate",
-                                 self._sel("new_chat_text"), e)
+                    logger.debug(
+                        "[DeepSeek] %s click failed (%s), falling back to navigate",
+                        self._sel("new_chat_text"),
+                        e,
+                    )
 
             if not fast_path_ok and await self._reuse_existing_aio_surface(self.URL):
                 fast_path_ok = True
@@ -192,7 +202,9 @@ class DeepSeekHandler(BaseBrowserHandler):
                 return
 
             # Step 3: Ensure web search is ON
-            yield self._create_event(BrowserState.ENABLING_SEARCH, "确认联网搜索已开启...", progress=0.5)
+            yield self._create_event(
+                BrowserState.ENABLING_SEARCH, "确认联网搜索已开启...", progress=0.5
+            )
             if self.client.page is not None:
                 if self._should_use_aio_gui_actions():
                     await self._ensure_web_search_on_via_aio_gui_actions()
@@ -200,7 +212,9 @@ class DeepSeekHandler(BaseBrowserHandler):
                     await self._ensure_web_search_on()
 
             # Step 5: Start network interception (before submit)
-            yield self._create_event(BrowserState.SUBMITTING, f"提交问题: {question[:30]}...", progress=0.6)
+            yield self._create_event(
+                BrowserState.SUBMITTING, f"提交问题: {question[:30]}...", progress=0.6
+            )
             intercept_config = self._get_intercept_config()
             parser = self._get_response_parser()
             intercept_task = None
@@ -261,7 +275,9 @@ class DeepSeekHandler(BaseBrowserHandler):
                 )
                 return
 
-            yield self._create_event(BrowserState.WAITING_RESPONSE, "等待 AI 回复...", progress=0.7)
+            yield self._create_event(
+                BrowserState.WAITING_RESPONSE, "等待 AI 回复...", progress=0.7
+            )
             fetch_result, events = await execute_post_submit_capture_flow(
                 self,
                 BrowserAnswerExecutionPlan(
@@ -282,7 +298,9 @@ class DeepSeekHandler(BaseBrowserHandler):
             if fetch_result is None:
                 return
 
-            yield self._create_event(BrowserState.COMPLETED, "抓取完成", progress=1.0, data=fetch_result)
+            yield self._create_event(
+                BrowserState.COMPLETED, "抓取完成", progress=1.0, data=fetch_result
+            )
 
         except Exception as e:
             if is_browser_context_closed_error(e):
@@ -310,7 +328,9 @@ class DeepSeekHandler(BaseBrowserHandler):
                     ),
                 )
                 return
-            yield self._create_event(BrowserState.ERROR, f"抓取失败: {str(e)}", progress=0)
+            yield self._create_event(
+                BrowserState.ERROR, f"抓取失败: {str(e)}", progress=0
+            )
 
     # ------------------------------------------------------------------ DeepSeek-specific
 
@@ -370,7 +390,9 @@ class DeepSeekHandler(BaseBrowserHandler):
             )
         ], True
 
-    async def _capture_submission_probe(self, question: str | None = None) -> dict[str, Any]:
+    async def _capture_submission_probe(
+        self, question: str | None = None
+    ) -> dict[str, Any]:
         if self.client.page is None:
             return {"message_count": 0, "answer_count": 0, "input_len": 0}
         input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
@@ -565,9 +587,7 @@ class DeepSeekHandler(BaseBrowserHandler):
                 )
 
         if not submitted and await self._click_send_button_near_input():
-            submitted = await self._submission_looks_started(
-                baseline_probe, question
-            )
+            submitted = await self._submission_looks_started(baseline_probe, question)
             logger.info(
                 "[DeepSeek] Question submitted via send-button fallback (confirmed=%s)",
                 submitted,
@@ -604,6 +624,7 @@ class DeepSeekHandler(BaseBrowserHandler):
         except (KeyError, TypeError, ValueError):
             return False
 
+        await self._bring_aio_page_to_front()
         moved = await self._execute_aio_gui_action(
             {"action_type": "MOVE_TO", "x": x, "y": y}
         )
@@ -611,6 +632,18 @@ class DeepSeekHandler(BaseBrowserHandler):
             {"action_type": "CLICK", "x": x, "y": y}
         )
         return moved and clicked
+
+    async def _bring_aio_page_to_front(self) -> None:
+        bring_to_front = getattr(self.client, "bring_to_front", None)
+        if not callable(bring_to_front):
+            return
+        try:
+            await bring_to_front()
+        except Exception as exc:
+            logger.debug(
+                "[DeepSeek] bring_to_front before AIO GUI action failed: %s", exc
+            )
+        await asyncio.sleep(0.1)
 
     async def _deepseek_input_rect_for_gui_actions(self) -> dict[str, Any] | None:
         if self.client.page is None:
@@ -751,14 +784,17 @@ class DeepSeekHandler(BaseBrowserHandler):
             logger.warning("[DeepSeek] AIO GUI submit failed: input rect unavailable")
             return False
 
+        await self._bring_aio_page_to_front()
         if not await self._aio_gui_click_rect(rect):
             return False
         await asyncio.sleep(0.2)
 
+        await self._bring_aio_page_to_front()
         await self._execute_aio_gui_action(
             {"action_type": "HOTKEY", "keys": ["ctrl", "a"]}
         )
         await asyncio.sleep(0.1)
+        await self._bring_aio_page_to_front()
         typed = await self._execute_aio_gui_action(
             {
                 "action_type": "TYPING",
@@ -770,6 +806,7 @@ class DeepSeekHandler(BaseBrowserHandler):
             return False
         await asyncio.sleep(0.2)
 
+        await self._bring_aio_page_to_front()
         pressed = await self._execute_aio_gui_action(
             {"action_type": "PRESS", "key": "Enter"}
         )
@@ -878,6 +915,7 @@ class DeepSeekHandler(BaseBrowserHandler):
                 return
 
             rect = button.get("rect")
+            await self._bring_aio_page_to_front()
             if isinstance(rect, dict) and await self._aio_gui_click_rect(rect):
                 logger.info("[DeepSeek] Enabled web search via AIO GUI actions")
                 await asyncio.sleep(0.5)
@@ -896,7 +934,8 @@ class DeepSeekHandler(BaseBrowserHandler):
         try:
             input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
             # Playwright page.evaluate() — runs JS in browser context
-            info = await self.client.page.evaluate(f"""() => {{
+            info = await self.client.page.evaluate(
+                f"""() => {{
                 const INTERACTIVE = 'button, [role="button"], [role="switch"], [aria-pressed], [aria-checked]';
                 const textarea = document.querySelector({input_sel});
                 let toolbarEls = null;
@@ -931,22 +970,32 @@ class DeepSeekHandler(BaseBrowserHandler):
                     toolbarContainerCls,
                     allToggles,
                 }};
-            }}""")
+            }}"""
+            )
 
             toolbar = info.get("toolbarBtns") or []
             all_toggles = info.get("allToggles") or []
-            logger.info("[DeepSeek] Toolbar buttons (%d): %s | All toggles (%d): %s",
-                        len(toolbar), toolbar, len(all_toggles), all_toggles)
+            logger.info(
+                "[DeepSeek] Toolbar buttons (%d): %s | All toggles (%d): %s",
+                len(toolbar),
+                toolbar,
+                len(all_toggles),
+                all_toggles,
+            )
 
             if not toolbar:
                 if not all_toggles:
-                    logger.warning("[DeepSeek] No toolbar or toggle elements found near textarea")
+                    logger.warning(
+                        "[DeepSeek] No toolbar or toggle elements found near textarea"
+                    )
                 await self._try_text_based_search_toggle()
                 return
 
             search_idx = self._find_web_search_index(toolbar)
             if search_idx is None:
-                logger.warning("[DeepSeek] Could not identify WebSearch toggle in toolbar")
+                logger.warning(
+                    "[DeepSeek] Could not identify WebSearch toggle in toolbar"
+                )
                 await self._try_text_based_search_toggle()
                 return
 
@@ -955,18 +1004,29 @@ class DeepSeekHandler(BaseBrowserHandler):
             cls = btn.get("cls", "")
 
             if pressed == "true":
-                logger.info("[DeepSeek] Web search already ON (toolbar[%d], pressed=true)", search_idx)
+                logger.info(
+                    "[DeepSeek] Web search already ON (toolbar[%d], pressed=true)",
+                    search_idx,
+                )
                 return
             if pressed == "false":
                 await self._click_toolbar_button(search_idx)
-                logger.info("[DeepSeek] Enabled web search toolbar[%d] (pressed false→true)", search_idx)
+                logger.info(
+                    "[DeepSeek] Enabled web search toolbar[%d] (pressed false→true)",
+                    search_idx,
+                )
                 return
 
             if "--selected" in cls:
-                logger.info("[DeepSeek] Web search already ON (toolbar[%d], --selected)", search_idx)
+                logger.info(
+                    "[DeepSeek] Web search already ON (toolbar[%d], --selected)",
+                    search_idx,
+                )
             else:
                 await self._click_toolbar_button(search_idx)
-                logger.info("[DeepSeek] Enabled web search toolbar[%d] (was OFF)", search_idx)
+                logger.info(
+                    "[DeepSeek] Enabled web search toolbar[%d] (was OFF)", search_idx
+                )
 
         except Exception as e:
             logger.warning("[DeepSeek] _ensure_web_search_on failed: %s", e)
@@ -984,9 +1044,7 @@ class DeepSeekHandler(BaseBrowserHandler):
                 "如果仍停留在 sign_in/login 页面、手机号/验证码表单、二维码登录或安全验证页面，则不要放行。"
             )
         if stage == "wait_gate":
-            return (
-                f"{note} DeepSeek 可能在提交后转入登录页或验证页；如果 URL 或页面文案显示 sign_in/login/验证码，应及时识别为 blocker。"
-            )
+            return f"{note} DeepSeek 可能在提交后转入登录页或验证页；如果 URL 或页面文案显示 sign_in/login/验证码，应及时识别为 blocker。"
         return note
 
     def _find_web_search_index(self, toolbar: list[dict]) -> int | None:
@@ -1023,7 +1081,8 @@ class DeepSeekHandler(BaseBrowserHandler):
         """Click a toolbar button by index (re-locating from textarea)."""
         input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
         # Playwright page.evaluate() — runs JS in browser context
-        await self.client.page.evaluate(f"""() => {{
+        await self.client.page.evaluate(
+            f"""() => {{
             const INTERACTIVE = 'button, [role="button"], [role="switch"], [aria-pressed], [aria-checked]';
             const textarea = document.querySelector({input_sel});
             let c = textarea && textarea.parentElement;
@@ -1036,7 +1095,8 @@ class DeepSeekHandler(BaseBrowserHandler):
                 c = c.parentElement;
             }}
             return 'not found';
-        }}""")
+        }}"""
+        )
         await asyncio.sleep(0.5)
 
     async def _try_text_based_search_toggle(self) -> None:
@@ -1050,9 +1110,14 @@ class DeepSeekHandler(BaseBrowserHandler):
                 if await locator.count() > 0:
                     await locator.click()
                     await asyncio.sleep(0.5)
-                    logger.info("[DeepSeek] Enabled web search via text-based fallback ('%s')", text)
+                    logger.info(
+                        "[DeepSeek] Enabled web search via text-based fallback ('%s')",
+                        text,
+                    )
                     return
-            logger.warning("[DeepSeek] Text-based search toggle fallback: no matching element found")
+            logger.warning(
+                "[DeepSeek] Text-based search toggle fallback: no matching element found"
+            )
         except Exception as e:
             logger.warning("[DeepSeek] Text-based search toggle fallback failed: %s", e)
 
@@ -1266,7 +1331,9 @@ class DeepSeekHandler(BaseBrowserHandler):
                 }
                 return JSON.stringify(refs);
             }
-            """.replace("__SCAN_LIMIT__", str(scan_limit))
+            """.replace(
+                "__SCAN_LIMIT__", str(scan_limit)
+            )
             result = await self.client.eval(script)
             data = json.loads(result.get("output", "[]") or "[]")
             refs: list[SearchReference] = []
@@ -1277,8 +1344,7 @@ class DeepSeekHandler(BaseBrowserHandler):
                 refs.append(
                     SearchReference(
                         index=len(refs) + 1,
-                        title=item.get("title")
-                        or self._title_from_reference_url(url),
+                        title=item.get("title") or self._title_from_reference_url(url),
                         url=url,
                         snippet=item.get("snippet"),
                         site_name=item.get("site_name"),
@@ -1302,7 +1368,8 @@ class DeepSeekHandler(BaseBrowserHandler):
         """
         try:
             answer_sel = json.dumps(self._sel("answer"), ensure_ascii=False)
-            result = await self.client.eval(f"""() => {{
+            result = await self.client.eval(
+                f"""() => {{
                 const messages = document.querySelectorAll({answer_sel});
                 const lastMsg = messages[messages.length - 1];
                 if (!lastMsg) return '[]';
@@ -1337,7 +1404,8 @@ class DeepSeekHandler(BaseBrowserHandler):
                     refs.push({{ index: refs.length + 1, title, url }});
                 }}
                 return JSON.stringify(refs);
-            }}""")
+            }}"""
+            )
             data = json.loads(result.get("output", "[]") or "[]")
             if not data:
                 return []

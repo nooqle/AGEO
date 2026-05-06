@@ -302,6 +302,17 @@ function buildHistoryCanvasStubFromMessage(
   } as CanvasContent;
 }
 
+function retargetHistoryCanvasStub(
+  stub: CanvasContent,
+  messageId: string,
+): CanvasContent {
+  return {
+    ...stub,
+    relatedMessageId: messageId,
+    linkedMessageId: messageId,
+  } as CanvasContent;
+}
+
 function mergeHistoryCanvasStubs(stubs: CanvasContent[]) {
   if (stubs.length === 0) {
     return;
@@ -344,6 +355,13 @@ function mergeHistoryCanvasStubs(stubs: CanvasContent[]) {
         nextContents.length === 0 && state.browserWorkspace ? 'browser' : state.activeSurface,
     };
   });
+}
+
+function mergeRelatedOutputIds(
+  existing: string[] | undefined,
+  incoming: string[],
+): string[] {
+  return Array.from(new Set([...(existing || []), ...incoming]));
 }
 
 function buildHydratedCanvasContents(outputs: Output[]): CanvasContent[] {
@@ -706,6 +724,64 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const suppressedMessageIds = getSupersededHistoryMessageIds(msgs);
     const hydratedMessages: ChatMessage[] = [];
     const historyCanvasStubs: CanvasContent[] = [];
+    const pendingOutputs: Array<{
+      cards: NonNullable<ChatMessage['outputCards']>;
+      canvasStub: CanvasContent | null;
+      standaloneMessage: ChatMessage;
+    }> = [];
+    let lastAgentMessageIndex = -1;
+
+    const attachPendingOutputsTo = (messageIndex: number) => {
+      const target = hydratedMessages[messageIndex];
+      if (!target || pendingOutputs.length === 0) {
+        return;
+      }
+
+      const existingCards = target.outputCards || [];
+      const existingKeys = new Set(
+        existingCards.flatMap((card) => [card.id, card.outputId].filter(Boolean) as string[]),
+      );
+      const nextCards = [...existingCards];
+      const nextRelatedOutputIds: string[] = [];
+
+      for (const pending of pendingOutputs) {
+        for (const card of pending.cards) {
+          const cardKeys = [card.id, card.outputId].filter(Boolean) as string[];
+          if (cardKeys.some((key) => existingKeys.has(key))) {
+            continue;
+          }
+          nextCards.push(card);
+          cardKeys.forEach((key) => existingKeys.add(key));
+          nextRelatedOutputIds.push(card.id);
+        }
+        if (pending.canvasStub) {
+          historyCanvasStubs.push(retargetHistoryCanvasStub(
+            pending.canvasStub,
+            target.id,
+          ));
+        }
+      }
+
+      target.outputCards = nextCards;
+      target.metadata = {
+        ...target.metadata,
+        relatedOutputIds: mergeRelatedOutputIds(
+          target.metadata.relatedOutputIds,
+          nextRelatedOutputIds,
+        ),
+      };
+      pendingOutputs.length = 0;
+    };
+
+    const flushPendingOutputsAsStandalone = () => {
+      for (const pending of pendingOutputs) {
+        hydratedMessages.push(pending.standaloneMessage);
+        if (pending.canvasStub) {
+          historyCanvasStubs.push(pending.canvasStub);
+        }
+      }
+      pendingOutputs.length = 0;
+    };
 
     for (let index = 0; index < msgs.length; index += 1) {
       const msg = msgs[index];
@@ -752,11 +828,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         addStageResult(sr);
       }
 
-      if (suppressedMessageIds.has(messageId)) {
-        continue;
-      }
-
-      hydratedMessages.push({
+      const chatMessage: ChatMessage = {
         id: messageId,
         type: role,
         content: sanitizePersistedMessageContent(
@@ -775,7 +847,42 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
         ),
         ...(outputCards ? { outputCards } : {}),
         ...(layers ? { layers } : {}),
-      });
+      };
+
+      if (msg.type === 'output' && outputCards && outputCards.length > 0) {
+        pendingOutputs.push({
+          cards: outputCards,
+          canvasStub,
+          standaloneMessage: chatMessage,
+        });
+        continue;
+      }
+
+      if (role === 'user' && pendingOutputs.length > 0) {
+        if (lastAgentMessageIndex >= 0) {
+          attachPendingOutputsTo(lastAgentMessageIndex);
+        } else {
+          flushPendingOutputsAsStandalone();
+        }
+      }
+
+      if (suppressedMessageIds.has(messageId)) {
+        continue;
+      }
+
+      hydratedMessages.push(chatMessage);
+      if (role === 'agent') {
+        lastAgentMessageIndex = hydratedMessages.length - 1;
+        attachPendingOutputsTo(lastAgentMessageIndex);
+      }
+    }
+
+    if (pendingOutputs.length > 0) {
+      if (lastAgentMessageIndex >= 0) {
+        attachPendingOutputsTo(lastAgentMessageIndex);
+      } else {
+        flushPendingOutputsAsStandalone();
+      }
     }
 
     if (hydratedMessages.length === 0) {

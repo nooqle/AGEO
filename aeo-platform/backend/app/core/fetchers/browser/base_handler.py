@@ -104,6 +104,7 @@ def _undo_double_utf8(text: str) -> str:
             out.extend(ch.encode("utf-8"))
     return bytes(out).decode("utf-8", errors="replace")
 
+
 logger = logging.getLogger(__name__)
 
 ReadyCheck = Callable[[int], Awaitable[bool]]
@@ -322,7 +323,8 @@ class BaseBrowserHandler(ABC):
 
         Phase 1: Try CSS selectors directly
         Phase 2: Expand reference panel, re-try selectors
-        Phase 3: Diagnostic logging
+        Phase 3: Generic visible external link fallback
+        Phase 4: Diagnostic logging
         """
         tag = self.PLATFORM_KEY.capitalize()
         refs: list[SearchReference] = []
@@ -362,7 +364,19 @@ class BaseBrowserHandler(ABC):
                 )
                 return refs
 
-        # Phase 3: Diagnostic
+        # Phase 3: Source cards sometimes render as generic links without the
+        # platform-specific class names above.  Restrict this fallback to
+        # visible external links near answer/source-like containers.
+        refs = await self._extract_visible_external_references_dom()
+        if refs:
+            logger.info(
+                "[%s] Extracted %d references via visible external link fallback",
+                tag,
+                len(refs),
+            )
+            return refs
+
+        # Phase 4: Diagnostic
         try:
             diag = await self.client.eval(
                 """() => {
@@ -385,6 +399,139 @@ class BaseBrowserHandler(ABC):
             logger.warning("[%s] No references found after trying all selectors", tag)
 
         return refs
+
+    async def _extract_visible_external_references_dom(self) -> list[SearchReference]:
+        """Fallback extractor for source cards rendered as plain links."""
+
+        tag = self.PLATFORM_KEY.capitalize()
+        try:
+            content_sel = self._sel("content") or self._sel("answer")
+            content_selectors = (
+                content_sel if isinstance(content_sel, list) else [content_sel]
+            )
+            platform_host = ""
+            try:
+                platform_host = (urlparse(self.URL).hostname or "").removeprefix("www.")
+            except Exception:
+                platform_host = ""
+            excluded_hosts = {host for host in [platform_host] if host}
+            if self.PLATFORM_KEY == "kimi":
+                excluded_hosts.update({"kimi.com", "moonshot.cn"})
+            elif self.PLATFORM_KEY == "doubao":
+                excluded_hosts.update({"doubao.com"})
+            elif self.PLATFORM_KEY == "yuanbao":
+                excluded_hosts.update({"yuanbao.tencent.com"})
+
+            result = await self.client.eval(
+                f"""() => {{
+                const contentSelectors = {json.dumps(content_selectors, ensure_ascii=False)};
+                const excludedHosts = {json.dumps(sorted(excluded_hosts), ensure_ascii=False)};
+                const sourceLikeSelector = [
+                  '[class*="source"]',
+                  '[class*="reference"]',
+                  '[class*="citation"]',
+                  '[class*="search"]',
+                  '[class*="result"]',
+                  '[class*="doc"]',
+                  '[data-testid*="source"]',
+                  '[data-testid*="reference"]'
+                ].join(',');
+                const isVisible = (el) => Boolean(
+                  el &&
+                  el.offsetParent !== null &&
+                  getComputedStyle(el).visibility !== 'hidden' &&
+                  getComputedStyle(el).display !== 'none'
+                );
+                const normalizeHost = (value) => {{
+                  try {{
+                    return new URL(value).hostname.replace(/^www\\./, '').toLowerCase();
+                  }} catch {{
+                    return '';
+                  }}
+                }};
+                const isPlatformHost = (host) => excludedHosts.some((blocked) =>
+                  host === blocked || host.endsWith('.' + blocked)
+                );
+                const isNoise = (text, href) => {{
+                  const haystack = `${{text || ''}} ${{href || ''}}`.toLowerCase();
+                  return /(login|signin|auth|privacy|terms|download|feedback|upgrade|app\\b|登录|注册|隐私|协议|下载|反馈|升级)/.test(haystack);
+                }};
+                const candidates = [];
+                const seen = new Set();
+                const addAnchor = (anchor, scope) => {{
+                  if (!isVisible(anchor)) return;
+                  const href = anchor.href || anchor.getAttribute('href') || '';
+                  if (!/^https?:\\/\\//i.test(href)) return;
+                  const host = normalizeHost(href);
+                  if (!host || isPlatformHost(host)) return;
+                  const sourceRoot = anchor.closest(sourceLikeSelector);
+                  const text = (
+                    anchor.getAttribute('title') ||
+                    anchor.textContent ||
+                    sourceRoot?.textContent ||
+                    ''
+                  ).trim().replace(/\\s+/g, ' ').slice(0, 200);
+                  if (isNoise(text, href)) return;
+                  const key = href.split('#')[0];
+                  if (seen.has(key)) return;
+                  seen.add(key);
+                  candidates.push({{
+                    title: text || host,
+                    url: href,
+                    site_name: host,
+                    scope,
+                  }});
+                }};
+
+                for (const selector of contentSelectors.filter(Boolean)) {{
+                  const nodes = Array.from(document.querySelectorAll(selector));
+                  const last = nodes[nodes.length - 1];
+                  if (!last) continue;
+                  last.querySelectorAll('a[href^="http"]').forEach((anchor) => addAnchor(anchor, 'answer'));
+                  const parent = last.closest('[class*="message"], [class*="chat"], [class*="dialogue"], [class*="segment"]');
+                  if (parent) {{
+                    parent.querySelectorAll(`${{sourceLikeSelector}} a[href^="http"]`).forEach((anchor) => addAnchor(anchor, 'near_answer'));
+                  }}
+                  if (candidates.length > 0) break;
+                }}
+
+                if (candidates.length === 0) {{
+                  document.querySelectorAll(`${{sourceLikeSelector}} a[href^="http"]`).forEach((anchor) => addAnchor(anchor, 'source_like'));
+                }}
+
+                return JSON.stringify(candidates.slice(0, 20));
+            }}"""
+            )
+            data = json.loads(result.get("output", "[]") or "[]")
+            refs: list[SearchReference] = []
+            seen_urls: set[str] = set()
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                refs.append(
+                    SearchReference(
+                        index=len(refs) + 1,
+                        title=str(
+                            item.get("title") or item.get("site_name") or url[:60]
+                        ),
+                        url=url,
+                        snippet=None,
+                        site_name=(
+                            str(item.get("site_name"))
+                            if item.get("site_name") is not None
+                            else None
+                        ),
+                        is_official=False,
+                    )
+                )
+            return refs
+        except Exception as e:
+            logger.debug("[%s] Visible external reference fallback failed: %s", tag, e)
+            return []
 
     # ------------------------------------------------------------------ polling helpers
 
@@ -832,7 +979,9 @@ class BaseBrowserHandler(ABC):
                 if not target_url:
                     return False
                 if self.client.page is not None:
-                    await self.client.page.goto(target_url, wait_until="domcontentloaded")
+                    await self.client.page.goto(
+                        target_url, wait_until="domcontentloaded"
+                    )
                     return True
                 result = await self.client.open(target_url, headed=self.headed)
                 return bool(result.get("success"))
@@ -1000,9 +1149,7 @@ class BaseBrowserHandler(ABC):
             result = await self.client.eval(self._content_check_js())
             if "error" in result:
                 error_message = str(result["error"])
-                logger.warning(
-                    "[%s] eval error at %ds: %s", tag, waited, error_message
-                )
+                logger.warning("[%s] eval error at %ds: %s", tag, waited, error_message)
                 if (
                     callable(sync_method)
                     and "target" in error_message.lower()
@@ -1119,7 +1266,9 @@ class BaseBrowserHandler(ABC):
             url=takeover_url,
         )
 
-    def _browser_agent_blocker_for_error_type(self, error_type: str | None) -> str | None:
+    def _browser_agent_blocker_for_error_type(
+        self, error_type: str | None
+    ) -> str | None:
         normalized = str(error_type or "").strip().lower()
         if normalized in {"auth_required", "login"}:
             return "login"
@@ -1220,6 +1369,7 @@ class BaseBrowserHandler(ABC):
             normalized_error_type,
             f"{self._platform_display_name()}返回错误: {parsed_error}",
         )
+        retryable = normalized_error_type == "rate_limit"
         evidence_ref = await self._capture_failure_evidence(
             failure_reason=normalized_error_type or "parser_error",
             execution_stage="parse_response",
@@ -1234,7 +1384,7 @@ class BaseBrowserHandler(ABC):
                 **build_failure_contract(
                     failure_reason=normalized_error_type or "parser_error",
                     execution_stage="parse_response",
-                    retryable=False,
+                    retryable=retryable,
                     needs_handoff=False,
                     failure_layer="adapter",
                     evidence_ref=evidence_ref,
@@ -1249,6 +1399,38 @@ class BaseBrowserHandler(ABC):
         progress: float,
         fallback_url: str | None = None,
     ) -> tuple[list[BrowserEvent], bool]:
+        answer_failure = self._classify_answer_text_failure(answer_text)
+        if answer_failure is not None:
+            logger.warning(
+                "[%s] Answer text matched platform failure marker (%s)",
+                self.PLATFORM_KEY.capitalize(),
+                answer_failure["failure_reason"],
+            )
+            evidence_ref = await self._capture_failure_evidence(
+                failure_reason=answer_failure["failure_reason"],
+                execution_stage="extract_answer",
+                extra_metadata={
+                    "answer_text_preview": str(answer_text or "")[:240],
+                    "answer_text_failure": answer_failure["error_type"],
+                },
+            )
+            return [
+                self._create_event(
+                    BrowserState.ERROR,
+                    answer_failure["message"],
+                    progress=0,
+                    error_type=answer_failure["error_type"],
+                    **build_failure_contract(
+                        failure_reason=answer_failure["failure_reason"],
+                        execution_stage="extract_answer",
+                        retryable=answer_failure["retryable"],
+                        needs_handoff=False,
+                        failure_layer="adapter",
+                        evidence_ref=evidence_ref,
+                    ),
+                )
+            ], True
+
         if answer_text and len(answer_text.strip()) >= 10:
             return [], False
 
@@ -1285,6 +1467,35 @@ class BaseBrowserHandler(ABC):
                 ),
             )
         ], True
+
+    def _classify_answer_text_failure(
+        self, answer_text: str | None
+    ) -> dict[str, Any] | None:
+        """Detect platform error banners that were extracted as answer text."""
+
+        normalized = " ".join(str(answer_text or "").strip().lower().split())
+        if not normalized or len(normalized) > 260:
+            return None
+
+        busy_markers = (
+            "system is currently busy",
+            "capacity is busy",
+            "please try again later",
+            "please wait or upgrade",
+            "系统繁忙",
+            "服务繁忙",
+            "容量繁忙",
+            "稍后再试",
+        )
+        if not any(marker in normalized for marker in busy_markers):
+            return None
+
+        return {
+            "error_type": "rate_limit",
+            "failure_reason": "rate_limit",
+            "retryable": True,
+            "message": f"{self._platform_display_name()}当前容量繁忙，请稍后重试。",
+        }
 
     async def _browser_agent_resume_probe_ready(
         self,
@@ -1614,8 +1825,20 @@ class BaseBrowserHandler(ABC):
         if current_url == "about:blank":
             return False
 
+        bring_to_front = getattr(self.client, "bring_to_front", None)
+        if callable(bring_to_front):
+            try:
+                await bring_to_front()
+            except Exception as e:
+                logger.debug(
+                    "[%s] bring_to_front failed during AIO surface reuse: %s",
+                    self.PLATFORM_KEY,
+                    e,
+                )
+            await asyncio.sleep(0.2)
+
         logger.info(
-            "[%s] Reusing existing AIO surface without reopening (current_url=%s target_host=%s)",
+            "[%s] Reusing existing AIO surface without reopening (current_url=%s target_host=%s, foreground_requested=True)",
             self.PLATFORM_KEY,
             current_url,
             target_host,
@@ -1807,7 +2030,9 @@ class BaseBrowserHandler(ABC):
                 timeout_error_message,
                 progress=0,
                 error_type=(
-                    "resume_gate_failed" if resolution == "completed" else "user_action_timeout"
+                    "resume_gate_failed"
+                    if resolution == "completed"
+                    else "user_action_timeout"
                 ),
             ),
         ], False
@@ -2098,6 +2323,9 @@ class BaseBrowserHandler(ABC):
             method=intercept.get("method", "POST"),
             content_type_contains=intercept.get("content_type_contains", ""),
             timeout=float(intercept.get("timeout", 60)),
+            continue_on_invalid_parse=bool(
+                intercept.get("continue_on_invalid_parse", False)
+            ),
         )
 
     def _get_response_parser(self) -> BaseResponseParser | None:
@@ -2153,9 +2381,9 @@ class BaseBrowserHandler(ABC):
             self._append_recent_diagnostic(
                 self._recent_request_failures,
                 {
-                    "url": str(_resolve_event_value(getattr(request, "url", None)) or "")[
-                        :300
-                    ],
+                    "url": str(
+                        _resolve_event_value(getattr(request, "url", None)) or ""
+                    )[:300],
                     "method": str(
                         _resolve_event_value(getattr(request, "method", None)) or ""
                     ),
@@ -2176,9 +2404,9 @@ class BaseBrowserHandler(ABC):
             location = _resolve_event_value(getattr(message, "location", None))
             console_entry: dict[str, Any] = {
                 "type": message_type,
-                "text": str(
-                    _resolve_event_value(getattr(message, "text", None)) or ""
-                )[:500],
+                "text": str(_resolve_event_value(getattr(message, "text", None)) or "")[
+                    :500
+                ],
             }
             if isinstance(location, dict):
                 console_entry["location"] = {
@@ -2263,6 +2491,18 @@ class BaseBrowserHandler(ABC):
 
                 parsed = parser.parse(body, url=response.url)
                 parsed = parser.validate(parsed)
+
+                if (
+                    config.continue_on_invalid_parse
+                    and not parsed.parse_ok
+                    and not parsed.error_type
+                ):
+                    logger.info(
+                        "[%s] Ignoring invalid intercepted response and waiting for the next one: %s",
+                        tag,
+                        parsed.error,
+                    )
+                    return
 
                 if not result_future.done():
                     result_future.set_result(parsed)

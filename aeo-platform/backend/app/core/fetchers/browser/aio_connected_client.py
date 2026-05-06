@@ -221,9 +221,8 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         if "Linux" in runtime_user_agent or "X11" in runtime_user_agent:
             return runtime_user_agent
 
-        chrome_version = (
-            self._browser_chrome_version()
-            or self._extract_chrome_version(runtime_user_agent)
+        chrome_version = self._browser_chrome_version() or self._extract_chrome_version(
+            runtime_user_agent
         )
         if not chrome_version:
             return None
@@ -514,8 +513,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                 if preferred is not None:
                     self.page = preferred
                     self._page_owned_by_client = False
+                    await self.bring_to_front()
                     logger.info(
-                        "[AIO Browser:%s] reusing existing page url=%s target_host=%s",
+                        "[AIO Browser:%s] reusing existing page url=%s target_host=%s foreground_requested=True",
                         self.session_name,
                         self.page.url,
                         target_host,
@@ -524,6 +524,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
 
                 self.page = await self.context.new_page()
                 self._page_owned_by_client = True
+                await self.bring_to_front()
                 logger.info(
                     "[AIO Browser:%s] created new page because no existing page matched target_host=%s",
                     self.session_name,
@@ -533,8 +534,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
 
             self.page = usable[0] if usable else existing_pages[0]
             self._page_owned_by_client = False
+            await self.bring_to_front()
             logger.info(
-                "[AIO Browser:%s] reusing existing page url=%s target_host=%s",
+                "[AIO Browser:%s] reusing existing page url=%s target_host=%s foreground_requested=True",
                 self.session_name,
                 self.page.url,
                 "<none>",
@@ -543,6 +545,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
 
         self.page = await self.context.new_page()
         self._page_owned_by_client = True
+        await self.bring_to_front()
         logger.info(
             "[AIO Browser:%s] created new page in remote context",
             self.session_name,
@@ -587,8 +590,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                     self.page = page
                     self._context_owned_by_client = False
                     self._page_owned_by_client = False
+                    await self.bring_to_front()
                     logger.info(
-                        "[AIO Browser:%s] synced to live target page url=%s",
+                        "[AIO Browser:%s] synced to live target page url=%s foreground_requested=True",
                         self.session_name,
                         page_url,
                     )
@@ -713,8 +717,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                     url,
                 )
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await self.bring_to_front()
                 logger.info(
-                    "[AIO Browser:%s] navigation complete current_url=%s",
+                    "[AIO Browser:%s] navigation complete current_url=%s foreground_requested=True",
                     self.session_name,
                     self.page.url,
                 )
