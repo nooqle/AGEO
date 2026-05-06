@@ -1438,7 +1438,7 @@ function HomePage() {
             <ApertureLogo compact />
             <span>Specta AI</span>
           </Link>
-          <p>看清品牌在 AI 答案中的表现，找到竞品优势、官网短板和下一步优化方向。</p>
+          <p>AI时代品牌助手</p>
         </div>
         <div className="footer-links">
           <a href="#capabilities">平台能力</a>
