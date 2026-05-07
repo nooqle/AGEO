@@ -202,16 +202,31 @@ def test_aio_browser_client_uses_user_auth_and_entity_run_scopes(monkeypatch):
 
 def test_aio_answer_fetch_tool_normalizes_public_and_legacy_platforms():
     assert normalize_public_platforms(
-        ["doubao", "hunyuan", "yuanbao", "元宝", "Kimi", "deep seek"]
+        [
+            "doubao",
+            "doubao_api",
+            "hunyuan",
+            "yuanbao",
+            "元宝",
+            "yuanbao_api",
+            "Kimi",
+            "kimi_api",
+            "deep seek",
+            "deepseek_browser",
+        ]
     ) == ("doubao", "yuanbao", "kimi", "deepseek")
     assert normalize_public_platforms("yuanbao") == ("yuanbao",)
+    assert normalize_public_platforms("deepseek_browser") == ("deepseek",)
     assert to_executor_platform_id("yuanbao") == "hunyuan"
+    assert to_executor_platform_id("deepseek_browser") == "deepseek"
     assert to_public_platform_id("hunyuan") == "yuanbao"
 
 
 def test_a4_platform_filter_treats_string_as_single_platform():
     assert nodes_a4._normalize_platform_filter("yuanbao") == ["hunyuan"]
     assert nodes_a4._normalize_platform_filter("deep seek") == ["deepseek"]
+    assert nodes_a4._normalize_platform_filter("deepseek_browser") == ["deepseek"]
+    assert nodes_a4._normalize_platform_filter("yuanbao_api") == ["hunyuan"]
 
 
 def test_aio_answer_fetch_tool_builds_contexts_and_execution_paths(monkeypatch):

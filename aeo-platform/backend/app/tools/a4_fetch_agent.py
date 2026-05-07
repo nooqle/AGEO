@@ -41,13 +41,23 @@ _PUBLIC_PLATFORM_DISPLAY_NAMES: dict[str, str] = {
 _PLATFORM_ALIASES: dict[str, AioPublicPlatform] = {
     "doubao": "doubao",
     "豆包": "doubao",
+    "doubao_api": "doubao",
+    "doubao_browser": "doubao",
     "yuanbao": "yuanbao",
     "hunyuan": "yuanbao",
     "元宝": "yuanbao",
+    "yuanbao_api": "yuanbao",
+    "yuanbao_browser": "yuanbao",
+    "hunyuan_api": "yuanbao",
+    "hunyuan_browser": "yuanbao",
     "kimi": "kimi",
+    "kimi_api": "kimi",
+    "kimi_browser": "kimi",
     "deepseek": "deepseek",
     "deep_seek": "deepseek",
     "deep seek": "deepseek",
+    "deepseek_browser": "deepseek",
+    "deepseek_web": "deepseek",
 }
 
 _PUBLIC_TO_EXECUTOR_PLATFORM: dict[AioPublicPlatform, AioExecutorPlatform] = {
