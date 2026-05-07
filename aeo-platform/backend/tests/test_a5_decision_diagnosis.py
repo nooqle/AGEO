@@ -364,6 +364,43 @@ def _weak_signal_fetch_results():
     ]
 
 
+def _scenario_full_landscape_fetch_results():
+    rows = []
+    for index in range(1, 11):
+        rows.append(
+            {
+                "question_id": f"scene{index}",
+                "question_text": f"高端护肤用户在抗老场景里怎么判断雅姿和其他品牌，第 {index} 题？",
+                "platform_results": [
+                    _platform_result(
+                        "doubao",
+                        f"雅姿适合关注抗老、肤感和预算平衡的用户，建议结合兰蔻、SK-II 做成分与价格对比。第 {index} 条。",
+                        [
+                            {
+                                "url": f"https://www.artistry.com.cn/guide/{index}",
+                                "title": f"雅姿抗老场景解释 {index}",
+                                "canonical_domain": "artistry.com.cn",
+                                "site_display_name": "雅姿官网",
+                                "site_category": "品牌官网",
+                                "source_type": "official",
+                                "is_official": True,
+                            }
+                        ],
+                    ),
+                    _platform_result(
+                        "kimi",
+                        f"雅姿可以作为高端护肤候选，重点看敏感肌耐受、功效证据和套装价格。第 {index} 条。",
+                    ),
+                    _platform_result(
+                        "deepseek",
+                        f"选择雅姿时应确认抗老诉求、使用频率和预算，并对比竞品的公开评价。第 {index} 条。",
+                    ),
+                ],
+            }
+        )
+    return rows
+
+
 def test_data_audit_routes_zero_brand_mentions_to_no_signal():
     audit = build_data_audit(_base_metric_bundle())
 
@@ -739,7 +776,8 @@ def test_canonical_artifact_remaps_high_negative_samples_to_risk_concerns():
     assert artifact["validator_result"]["pass"] is True
     assert "负面信息比例不高" not in artifact["report_markdown"]
     assert "不一定代表品牌口碑负面" in artifact["report_markdown"]
-    assert "来源证据权" in artifact["report_markdown"]
+    assert "引用来源分析" in artifact["report_markdown"]
+    assert "来源证据权" not in artifact["report_markdown"]
     assert "推荐动作" in artifact["report_markdown"]
 
 
@@ -938,6 +976,48 @@ def test_structured_report_localizes_internal_codes_for_readers():
         "品牌状态 competitor_only",
     ):
         assert raw_text not in markdown
+
+
+def test_scenario_full_landscape_artifact_keeps_scenario_report_title():
+    artifact = build_canonical_report_artifact(
+        session_id="session-a5-scenario-title",
+        entity_id=None,
+        analysis_mode="scenario",
+        brand_profile={
+            "brand_name": "雅姿",
+            "industry": "高端护肤",
+            "official_website": "https://www.artistry.com.cn",
+            "brand_keywords": ["Artistry"],
+        },
+        competitors=[
+            {"name": "兰蔻", "website": "https://www.lancome.com.cn"},
+            {"name": "SK-II", "website": "https://www.sk-ii.com.cn"},
+        ],
+        fetch_results=_scenario_full_landscape_fetch_results(),
+        simulated_questions=None,
+        base_metrics=None,
+    )
+
+    assert artifact["report_kind"] == "scenario"
+    assert artifact["report_mode"] == REPORT_MODE_FULL_LANDSCAPE
+    assert artifact["report_route"]["title"] == "用户场景分析报告"
+    assert artifact["title"] == "雅姿｜用户场景分析报告"
+    assert artifact["headline"] == "雅姿｜用户场景分析报告"
+    first_line = artifact["report_markdown"].splitlines()[0]
+    assert first_line == "# 雅姿｜用户场景分析报告"
+    assert "品牌 GEO 全景诊断报告" not in first_line
+    source_stats = artifact["source_intelligence"]["official_source_stats"]
+    assert source_stats["citation_count"] == 10
+    assert source_stats["distinct_url_count"] == 10
+    assert source_stats["answer_count"] == 10
+    assert source_stats["question_count"] == 10
+    markdown = artifact["report_markdown"]
+    assert "### 4. 引用来源分析" in markdown
+    assert "官网引用统计：官网链接被引用 10 次" in markdown
+    assert "https://www.artistry.com.cn/guide/1" in markdown
+    assert "平台：豆包" in markdown
+    assert "问题：「高端护肤用户在抗老场景里怎么判断雅姿和其他品牌" in markdown
+    assert "答案摘录：「雅姿适合关注抗老、肤感和预算平衡的用户" in markdown
 
 
 def test_repair_report_artifact_fixes_repairable_copy_only():
