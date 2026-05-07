@@ -256,7 +256,8 @@ For any visual change, validation must include:
   - frontend service is active
   - `http://127.0.0.1:8000/health` responds successfully
   - `http://127.0.0.1:3000` responds successfully
-  - `https://demo.imspecta.com` responds successfully
+  - `https://imspecta.com` responds successfully as the primary public domain
+  - `https://demo.imspecta.com` redirects to the primary public domain
 - For rollback, use `ops/deploy-demo.sh --rollback`; do not manually retarget symlinks unless the deploy script itself is broken.
 - If demo SSH shows intermittent `Error reading SSH protocol banner`, retry with backoff before changing credentials. This has been observed as a transient connection issue, not necessarily an auth failure.
 - Keep `.gitattributes` LF rules for deployment shell scripts/workflows; CRLF can break Ubuntu execution.

@@ -31,7 +31,7 @@ jobs:
 
     env:
       DEMO_REPO_URL: ${{ vars.DEMO_REPO_URL || 'git@github.com:nooqle/AGEO.git' }}
-      DEMO_EXTERNAL_URL: ${{ vars.DEMO_EXTERNAL_URL || 'https://demo.imspecta.com' }}
+      DEMO_EXTERNAL_URL: ${{ vars.DEMO_EXTERNAL_URL || 'https://imspecta.com' }}
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
       REQUESTED_REF: ${{ github.event.inputs.ref || github.sha }}
       ALLOW_MIGRATIONS: ${{ github.event.inputs.allow_migrations || 'false' }}

@@ -5,7 +5,8 @@ APP_ROOT="/srv/ageo-deploy"
 LEGACY_ROOT="/srv/ageo"
 REPO_URL="git@github.com:nooqle/AGEO.git"
 TARGET_REF=""
-EXTERNAL_URL="https://demo.imspecta.com"
+EXTERNAL_URL="https://imspecta.com"
+DOMAIN_REDIRECT_HOSTS="${DOMAIN_REDIRECT_HOSTS:-demo.imspecta.com www.imspecta.com}"
 BACKEND_SERVICE="ageo-backend.service"
 FRONTEND_SERVICE="ageo-frontend.service"
 DRY_RUN=0
@@ -111,6 +112,103 @@ sudo_write_file() {
   cat > "$tmp"
   sudo install -m 0644 "$tmp" "$target"
   rm -f "$tmp"
+}
+
+external_url_host() {
+  python3 - "$EXTERNAL_URL" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+value = sys.argv[1].strip()
+parsed = urlparse(value if "://" in value else f"https://{value}")
+host = parsed.netloc or parsed.path
+if not host:
+    raise SystemExit("external URL host is empty")
+print(host.split("@")[-1].split(":")[0])
+PY
+}
+
+sync_public_domain_env() {
+  log "Synchronizing public domain environment"
+  python3 - "$FRONTEND_ENV" "$BACKEND_ENV" "$EXTERNAL_URL" "$DOMAIN_REDIRECT_HOSTS" <<'PY'
+import json
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+frontend_env = Path(sys.argv[1])
+backend_env = Path(sys.argv[2])
+external_url = sys.argv[3].strip().rstrip("/")
+redirect_hosts = [host.strip() for host in sys.argv[4].split() if host.strip()]
+
+parsed = urlparse(external_url if "://" in external_url else f"https://{external_url}")
+scheme = parsed.scheme or "https"
+host = (parsed.netloc or parsed.path).split("@")[-1].split(":")[0]
+origin = f"{scheme}://{host}"
+api_url = f"{origin}/api/v1"
+ws_scheme = "wss" if scheme == "https" else "ws"
+ws_url = f"{ws_scheme}://{host}"
+
+
+def read_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def upsert(path: Path, key: str, value: str) -> None:
+    lines = read_lines(path)
+    prefix = f"{key}="
+    replaced = False
+    output: list[str] = []
+    for line in lines:
+        if line.startswith(prefix):
+            output.append(f"{key}={value}")
+            replaced = True
+        else:
+            output.append(line)
+    if not replaced:
+        output.append(f"{key}={value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+
+
+def current_env_value(path: Path, key: str) -> str:
+    prefix = f"{key}="
+    for line in read_lines(path):
+        if line.startswith(prefix):
+            return line[len(prefix):].strip().strip("'\"")
+    return ""
+
+
+def parse_origins(raw: str) -> list[str]:
+    raw = raw.strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        try:
+            value = json.loads(raw)
+            if isinstance(value, list):
+                return [str(item).strip() for item in value if str(item).strip()]
+        except json.JSONDecodeError:
+            pass
+    return [item.strip().strip("'\"") for item in raw.split(",") if item.strip()]
+
+
+upsert(frontend_env, "NEXT_PUBLIC_API_URL", api_url)
+upsert(frontend_env, "NEXT_PUBLIC_WS_URL", ws_url)
+
+origins = parse_origins(current_env_value(backend_env, "CORS_ORIGINS"))
+for item in [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    origin,
+    *(f"https://{host}" for host in redirect_hosts),
+]:
+    if item not in origins:
+        origins.append(item)
+upsert(backend_env, "CORS_ORIGINS", ",".join(origins))
+PY
 }
 
 backup_existing_units() {
@@ -419,6 +517,167 @@ EOF
   sudo systemctl enable "$BACKEND_SERVICE" "$FRONTEND_SERVICE" >/dev/null
 }
 
+certificate_dir_for_host() {
+  local host="$1"
+  local candidate
+  local cert_dir
+  local wildcard=""
+
+  if [[ "$host" == *.* ]]; then
+    wildcard="*.${host#*.}"
+  fi
+
+  if [[ -f "/etc/letsencrypt/live/$host/fullchain.pem" && -f "/etc/letsencrypt/live/$host/privkey.pem" ]]; then
+    printf '/etc/letsencrypt/live/%s\n' "$host"
+    return 0
+  fi
+
+  shopt -s nullglob
+  for candidate in /etc/letsencrypt/live/*/fullchain.pem; do
+    if sudo openssl x509 -in "$candidate" -noout -ext subjectAltName 2>/dev/null \
+      | grep -F "DNS:$host" >/dev/null; then
+      cert_dir="$(dirname "$candidate")"
+      printf '%s\n' "$cert_dir"
+      return 0
+    fi
+    if [[ -n "$wildcard" ]] && sudo openssl x509 -in "$candidate" -noout -ext subjectAltName 2>/dev/null \
+      | grep -F "DNS:$wildcard" >/dev/null; then
+      cert_dir="$(dirname "$candidate")"
+      printf '%s\n' "$cert_dir"
+      return 0
+    fi
+  done
+
+  fail "No Let's Encrypt certificate found for host: $host"
+}
+
+install_nginx_site() {
+  local primary_host
+  local primary_cert_dir
+  local redirect_host
+  local redirect_cert_dir
+  local tmp
+  local site_path="/etc/nginx/sites-available/00-ageo-domain.conf"
+  local enabled_path="/etc/nginx/sites-enabled/00-ageo-domain.conf"
+
+  require_command nginx
+  require_command openssl
+
+  primary_host="$(external_url_host)"
+  primary_cert_dir="$(certificate_dir_for_host "$primary_host")"
+  tmp="$(mktemp)"
+
+  {
+    cat <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $primary_host $DOMAIN_REDIRECT_HOSTS;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$primary_host\$request_uri;
+    }
+}
+
+EOF
+
+    for redirect_host in $DOMAIN_REDIRECT_HOSTS; do
+      if [[ "$redirect_host" == "$primary_host" ]]; then
+        continue
+      fi
+      redirect_cert_dir="$(certificate_dir_for_host "$redirect_host")"
+      cat <<EOF
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $redirect_host;
+
+    ssl_certificate $redirect_cert_dir/fullchain.pem;
+    ssl_certificate_key $redirect_cert_dir/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    return 301 https://$primary_host\$request_uri;
+}
+
+EOF
+    done
+
+    cat <<EOF
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $primary_host;
+
+    ssl_certificate $primary_cert_dir/fullchain.pem;
+    ssl_certificate_key $primary_cert_dir/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    client_max_body_size 50m;
+
+    location = /health {
+        proxy_pass http://127.0.0.1:8000/health;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /health/ {
+        proxy_pass http://127.0.0.1:8000/health/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /api/v1/ {
+        proxy_pass http://127.0.0.1:8000/api/v1/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8000/ws/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+  } > "$tmp"
+
+  log "Installing nginx site for $primary_host"
+  sudo install -m 0644 "$tmp" "$site_path"
+  rm -f "$tmp"
+  sudo ln -sfn "$site_path" "$enabled_path"
+  sudo nginx -t
+  sudo systemctl reload nginx || sudo systemctl restart nginx
+}
+
 switch_current() {
   local release_dir="$1"
   local old_current=""
@@ -460,6 +719,28 @@ wait_for_url() {
   return 1
 }
 
+wait_for_primary_external_url() {
+  local url="$1"
+  local max_attempts="${2:-15}"
+  local attempt
+  local response
+  local http_code
+  local redirect_url
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    response="$(curl -k -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 "$url" || true)"
+    http_code="${response%% *}"
+    redirect_url="${response#* }"
+    if [[ "$http_code" =~ ^2[0-9][0-9]$ && -z "$redirect_url" ]]; then
+      log "external primary domain is healthy"
+      return 0
+    fi
+    log "external primary domain not ready: status=$http_code redirect=$redirect_url"
+    sleep 2
+  done
+  return 1
+}
+
 dump_service_diagnostics() {
   local service
   for service in "$BACKEND_SERVICE" "$FRONTEND_SERVICE"; do
@@ -479,6 +760,7 @@ health_check() {
   wait_for_url "backend" "http://127.0.0.1:8000/health" "$backend_attempts" || status=1
   wait_for_url "frontend" "http://127.0.0.1:3000" 30 || status=1
   wait_for_url "external" "$EXTERNAL_URL" 15 || status=1
+  wait_for_primary_external_url "$EXTERNAL_URL" 15 || status=1
   return "$status"
 }
 
@@ -503,6 +785,7 @@ rollback_to_previous() {
   fi
 
   install_systemd_units
+  install_nginx_site
   restart_services
   health_check
   log "Rollback complete"
@@ -527,6 +810,7 @@ deploy() {
   fi
 
   bootstrap_shared_env
+  sync_public_domain_env
   prepare_repo
 
   local sha
@@ -551,6 +835,7 @@ deploy() {
     run_backend_migrations "$release_dir"
   fi
 
+  install_nginx_site
   service_backup_dir="$(backup_existing_units)"
   switch_current "$release_dir"
   install_systemd_units
