@@ -320,6 +320,50 @@ def _bcg_concern_fetch_results():
     ]
 
 
+def _weak_signal_fetch_results():
+    return [
+        {
+            "question_id": "s1",
+            "question_text": "想给家里老人买蛋白粉增强免疫力，怎么选？",
+            "platform_results": [
+                _platform_result(
+                    "doubao",
+                    "可以考虑安利纽崔莱蛋白粉，但要结合老人肠胃耐受、蛋白摄入量和医生建议判断。",
+                    [
+                        {
+                            "url": "https://www.nutrilite.com.cn/protein",
+                            "title": "纽崔莱蛋白粉介绍",
+                            "canonical_domain": "nutrilite.com.cn",
+                            "site_display_name": "纽崔莱官网",
+                            "site_category": "品牌官网",
+                            "source_type": "official",
+                            "is_official": True,
+                        }
+                    ],
+                ),
+                _platform_result(
+                    "kimi",
+                    "老人蛋白粉可以比较汤臣倍健、Swisse 等品牌，重点看蛋白来源和糖分。",
+                ),
+                _platform_result(
+                    "deepseek",
+                    "先看日常饮食是否已经足够，再判断是否需要额外补充蛋白粉。",
+                ),
+            ],
+        },
+        {
+            "question_id": "s2",
+            "question_text": "儿童维生素是否需要长期吃？",
+            "platform_results": [
+                _platform_result(
+                    "yuanbao",
+                    "儿童维生素不建议长期盲目补充，应先确认饮食、缺乏风险和医生建议。",
+                )
+            ],
+        },
+    ]
+
+
 def test_data_audit_routes_zero_brand_mentions_to_no_signal():
     audit = build_data_audit(_base_metric_bundle())
 
@@ -823,11 +867,9 @@ def test_structured_report_generation_covers_all_report_modes():
         assert len(report["report_sections"]) == 2
         assert report["operations_diagnosis"]["mode"] == mode
         for conclusion in report["diagnostic_conclusions"]:
-            assert {"fact", "interpretation", "boundary", "action"} <= set(conclusion)
+            assert {"fact", "detail"} <= set(conclusion)
             assert conclusion["fact"]
-            assert conclusion["interpretation"]
-            assert conclusion["boundary"]
-            assert conclusion["action"]
+            assert conclusion["detail"]
 
 
 def test_weak_signal_report_does_not_use_strong_claim_language():
@@ -837,6 +879,45 @@ def test_weak_signal_report_does_not_use_strong_claim_language():
     assert "稳定口碑" not in markdown
     assert "明确平台偏好" not in markdown
     assert "长期趋势" not in markdown
+    assert "当前仍不能写成稳定声誉结论" not in markdown
+
+
+def test_weak_signal_key_findings_use_evidence_detail_not_empty_claims():
+    artifact = build_canonical_report_artifact(
+        session_id="session-a5-weak-signal-detail",
+        entity_id=None,
+        analysis_mode="panorama",
+        brand_profile={
+            "brand_name": "安利纽崔莱",
+            "industry": "保健品",
+            "official_website": "https://www.nutrilite.com.cn",
+            "brand_keywords": ["纽崔莱", "Nutrilite"],
+        },
+        competitors=[
+            {"name": "汤臣倍健", "website": "https://www.by-health.com"},
+            {"name": "Swisse", "website": "https://www.swisse.com"},
+        ],
+        fetch_results=_weak_signal_fetch_results(),
+        simulated_questions=None,
+        base_metrics=None,
+    )
+
+    markdown = artifact["report_markdown"]
+    data_status = next(
+        item
+        for item in artifact["diagnostic_conclusions"]
+        if item.get("code") == "data_status"
+    )
+
+    assert artifact["report_mode"] == REPORT_MODE_WEAK_SIGNAL
+    assert "**详解**" in markdown
+    assert "**解释**" not in markdown
+    assert "**边界**" not in markdown
+    assert "**动作**" not in markdown
+    assert "按报告模式推进场景" not in markdown
+    assert "豆包" in data_status["detail"]
+    assert "想给家里老人买蛋白粉增强免疫力，怎么选？" in data_status["detail"]
+    assert "安利纽崔莱蛋白粉" in data_status["detail"]
 
 
 def test_structured_report_localizes_internal_codes_for_readers():
