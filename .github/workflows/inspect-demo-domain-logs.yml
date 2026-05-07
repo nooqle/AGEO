@@ -164,6 +164,58 @@ jobs:
           fi
           echo
 
+          echo "== nginx log files =="
+          sudo find /var/log/nginx -maxdepth 1 -type f \
+            -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\n' |
+            sort |
+            tail -n 20 || true
+          echo
+
+          echo "== nginx spike window 2026-05-07 23:30-23:59 summary =="
+          sudo zgrep -hE '\[07/May/2026:23:(3[0-9]|4[0-9]|5[0-9]):' /var/log/nginx/access.log* 2>/dev/null |
+            awk '
+              {
+                path=$7
+                bytes=$10+0
+                total_count++
+                total_bytes+=bytes
+                if (path ~ /^\/_next\//) {
+                  static_count++
+                  static_bytes+=bytes
+                } else if (path ~ /^\/api\/v1\//) {
+                  api_count++
+                  api_bytes+=bytes
+                } else if (path ~ /^\/dashboard/) {
+                  page_count++
+                  page_bytes+=bytes
+                }
+              }
+              END {
+                printf "total_requests=%d total_bytes=%d static_requests=%d static_bytes=%d api_requests=%d api_bytes=%d dashboard_requests=%d dashboard_bytes=%d\n",
+                  total_count, total_bytes, static_count, static_bytes, api_count, api_bytes, page_count, page_bytes
+              }
+            ' || true
+          echo
+
+          echo "== nginx spike window 2026-05-07 23:30-23:59 top paths =="
+          sudo zgrep -hE '\[07/May/2026:23:(3[0-9]|4[0-9]|5[0-9]):' /var/log/nginx/access.log* 2>/dev/null |
+            awk '
+              {
+                path=$7
+                sub(/\?.*/, "", path)
+                count[path]++
+                bytes[path]+=$10+0
+              }
+              END {
+                for (path in count) {
+                  printf "%12d %8d %s\n", bytes[path], count[path], path
+                }
+              }
+            ' |
+            sort -nr |
+            head -n 40 || true
+          echo
+
           echo "== frontend journal warnings/errors =="
           sudo journalctl -u ageo-frontend.service --since "$since" --no-pager -o short-iso |
             grep -Ei 'error|warn|failed|timeout|timed out|heap|memory|slow|ready|started' |
