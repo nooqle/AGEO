@@ -97,9 +97,9 @@ function markReportTodoViewed(brandId: string | null, reportRef: string | null |
   window.localStorage.setItem(reportTodoStorageKey(brandId, reportRef), '1');
 }
 
-function buildDashboardVisibleDraft(input: string): string {
+function buildDashboardVisibleDraft(input: string): string | null {
   const trimmedInput = input.trim();
-  return trimmedInput || '请解释当前 Dashboard 的主要变化，并告诉我下一步应该处理什么。';
+  return trimmedInput || null;
 }
 
 function buildChatUrlWithHandoff(sessionId: string, params: URLSearchParams): string {
@@ -216,6 +216,12 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     setIsOpeningDashboardChat(true);
     try {
       const session = await api.getOrCreateSessionByEntity(selectedBrand.id);
+      const draft = buildDashboardVisibleDraft(input);
+      if (!draft) {
+        router.push(`/chat/${session.id}`);
+        return;
+      }
+
       const params = new URLSearchParams();
       params.set('entity_id', selectedBrand.id);
       params.set('brand', selectedBrand.name);
@@ -249,7 +255,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       if (aiSourceLabels.length) {
         params.set('ai_sources', aiSourceLabels.join('、'));
       }
-      params.set('draft', buildDashboardVisibleDraft(input));
+      params.set('draft', draft);
       params.set('autosend', '1');
       router.push(buildChatUrlWithHandoff(session.id, params));
     } catch (error) {
