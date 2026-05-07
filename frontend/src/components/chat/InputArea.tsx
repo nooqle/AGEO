@@ -491,16 +491,9 @@ export function InputArea({
           {/* 提示文字 */}
           <div className="flex items-center justify-center gap-4 mt-2 text-xs">
             {!isExecuting ? (
-              <>
-                <span className="flex items-center gap-1" style={{ color: 'var(--text-tertiary)' }}>
-                  <kbd className="px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Enter</kbd>
-                  发送
-                </span>
-                <span className="flex items-center gap-1" style={{ color: 'var(--text-tertiary)' }}>
-                  <kbd className="px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Shift + Enter</kbd>
-                  换行
-                </span>
-              </>
+              <span className="text-center leading-5" style={{ color: 'var(--text-tertiary)' }}>
+                内容由大模型生成，不可避免会犯错，请甄别检查。
+              </span>
             ) : (
               <span className="flex items-center gap-2 truncate max-w-full" style={{ color: 'var(--warning)' }}>
                 <RiLoader4Line className="w-3 h-3 animate-spin flex-shrink-0" />
