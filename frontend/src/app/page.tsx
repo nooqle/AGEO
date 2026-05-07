@@ -8,6 +8,7 @@ import {
   RiSearchEyeLine,
   RiTimerFlashLine,
 } from '@remixicon/react';
+import { HomeAuthLink, HomeNavActions } from '@/components/home/HomeAuthActions';
 
 const screenshotAssets = {
   dashboard: '/landing/dashboard-real.png',
@@ -303,7 +304,7 @@ function BrandPortalSection() {
       </p>
       <div className="portal-actions">
         <Link href="/auth?mode=apply">申请体验</Link>
-        <Link href="/auth?mode=login">登录</Link>
+        <HomeAuthLink />
       </div>
       <div className="portal-prompt">
         <span>问 Specta</span>
@@ -465,6 +466,9 @@ function HomePage() {
           font-weight: 700;
         }
         .nav-actions a:first-child {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
           border: 1px solid rgba(241,238,230,.12);
           color: rgba(216,210,197,.58);
         }
@@ -473,6 +477,12 @@ function HomePage() {
           align-items: center;
           gap: 8px;
           background: var(--paper);
+          color: #080908;
+        }
+        .nav-actions a:last-child:hover,
+        .hero-actions a:first-child:hover,
+        .portal-actions a:first-child:hover {
+          background: color-mix(in srgb, var(--paper) 92%, var(--teal));
           color: #080908;
         }
         .hero-section {
@@ -706,6 +716,10 @@ function HomePage() {
           transform: translateY(-2px);
           border-color: rgba(241,238,230,.42);
           color: var(--paper);
+        }
+        .hero-actions a:first-child:hover,
+        .portal-actions a:first-child:hover {
+          color: #080908;
         }
         .section-shell,
         .product-reel-section,
@@ -1282,6 +1296,8 @@ function HomePage() {
             height: 42px;
           }
           .nav-actions a:first-child { display: none; }
+          .nav-actions a.home-auth-link--signed-in { display: inline-flex; }
+          .nav-actions a.home-auth-link--signed-in + a { display: none; }
           .nav-actions a:last-child {
             min-height: 44px;
             padding: 12px 18px;
@@ -1417,13 +1433,7 @@ function HomePage() {
           <a href="#product-reel">产品功能</a>
           <a href="#faq">Q&A</a>
         </nav>
-        <div className="nav-actions">
-          <Link href="/auth?mode=login">登录</Link>
-          <Link href="/auth?mode=apply">
-            申请体验
-            <RiArrowRightUpLine className="h-4 w-4" />
-          </Link>
-        </div>
+        <HomeNavActions />
       </header>
 
       <HeroSignal />
