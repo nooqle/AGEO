@@ -4610,7 +4610,7 @@ def build_canonical_report_artifact(
     report_sections = structured_report["report_sections"]
     title = f"{bundle.meta.brand_name}｜{report_route.get('title') or '品牌 AI 答案诊断报告'}"
     insight_candidates = [
-        item.get("action") or item.get("fact")
+        item.get("detail") or item.get("summary") or item.get("fact")
         for item in diagnostic_conclusions
         if isinstance(item, dict)
     ]

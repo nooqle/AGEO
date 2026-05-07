@@ -23,7 +23,7 @@ REPORT_MODE_BRAND_ENTRY = "BRAND_ENTRY"
 REPORT_MODE_FULL_LANDSCAPE = "FULL_LANDSCAPE"
 
 _A5_DIR = Path(__file__).resolve().parent
-_REQUIRED_CONCLUSION_FIELDS = ("fact", "interpretation", "boundary", "action")
+_REQUIRED_CONCLUSION_FIELDS = ("fact", "detail")
 
 PLATFORM_LABELS = {
     "deepseek": "DeepSeek",
@@ -183,6 +183,202 @@ def _text_or_pending(value: Any) -> str:
 def _platform_label(platform: Any) -> str:
     code = str(platform or "").strip()
     return PLATFORM_LABELS.get(code.lower(), code or "未知平台")
+
+
+def _join_detail_parts(parts: list[str]) -> str:
+    cleaned = [part.strip(" ；。") for part in parts if str(part or "").strip()]
+    if not cleaned:
+        return "暂无足够样本展开。"
+    return "；".join(cleaned) + "。"
+
+
+def _estimated_count_from_rate(value: Any, total: int) -> int | None:
+    if not isinstance(value, (int, float)) or total <= 0:
+        return None
+    return int(round(float(value) * total))
+
+
+def _brand_answer_samples(
+    metric_bundle: dict[str, Any], *, limit: int = 3
+) -> list[dict[str, Any]]:
+    sentiment_risk = (
+        metric_bundle.get("sentiment_risk")
+        if isinstance(metric_bundle.get("sentiment_risk"), dict)
+        else {}
+    )
+    samples: list[dict[str, Any]] = []
+    for item in sentiment_risk.get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if not (item.get("question_text") or item.get("answer_excerpt")):
+            continue
+        samples.append(item)
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def _format_answer_sample_detail(sample: dict[str, Any]) -> str:
+    question = _clip(sample.get("question_text"), 72)
+    platform = _platform_label(sample.get("platform"))
+    excerpt = _clip(sample.get("answer_excerpt"), 96)
+    parts = []
+    if question:
+        parts.append(f"问题「{question}」")
+    if platform:
+        parts.append(f"提及品牌的答案来自于{platform}")
+    if excerpt:
+        parts.append(f"相关答案是「{excerpt}」")
+    return "，".join(parts)
+
+
+def _brand_answer_detail(
+    metric_bundle: dict[str, Any],
+    *,
+    brand_presence_count: int,
+    successful_answers: int,
+) -> str:
+    samples = _brand_answer_samples(metric_bundle)
+    if samples:
+        sample_text = "；".join(
+            _format_answer_sample_detail(sample) for sample in samples
+        )
+        return f"品牌提及样本：{sample_text}。"
+    if brand_presence_count > 0:
+        return (
+            f"结构化指标记录到 {brand_presence_count} 条品牌提及；"
+            "当前样本字段未保留可展示的答案摘录。"
+        )
+    return f"本轮 {successful_answers} 条有效答案里没有监测品牌提及样本。"
+
+
+def _brand_entry_detail(
+    metric_bundle: dict[str, Any],
+    *,
+    brand_presence_count: int,
+    successful_answers: int,
+) -> str:
+    competitor_count = _estimated_count_from_rate(
+        metric_bundle.get("competitor_pressure"), successful_answers
+    )
+    no_brand_count = _estimated_count_from_rate(
+        metric_bundle.get("no_brand_rate"), successful_answers
+    )
+    monitor_only_count = _estimated_count_from_rate(
+        metric_bundle.get("monitor_only_rate"), successful_answers
+    )
+    co_presence_count = _estimated_count_from_rate(
+        metric_bundle.get("monitor_plus_others_rate"), successful_answers
+    )
+    parts = [f"品牌提及答案 {brand_presence_count} 条"]
+    if monitor_only_count is not None:
+        parts.append(f"只提监测品牌约 {monitor_only_count} 条")
+    if co_presence_count is not None:
+        parts.append(f"品牌与竞品同台约 {co_presence_count} 条")
+    if competitor_count is not None:
+        parts.append(f"只提竞品约 {competitor_count} 条")
+    if no_brand_count is not None:
+        parts.append(f"不提品牌约 {no_brand_count} 条")
+    return _join_detail_parts(parts)
+
+
+def _scenario_conclusion_detail(item: dict[str, Any], *, brand_name: str) -> str:
+    status = str(item.get("brand_status") or "")
+    competitors = "、".join(
+        str(value) for value in item.get("competitors_present", []) if value
+    )
+    parts = []
+    if item.get("question_text"):
+        parts.append(f"代表问题「{_clip(item.get('question_text'), 88)}」")
+    if competitors:
+        parts.append(f"答案中出现竞品：{competitors}")
+    if status == "competitor_only":
+        parts.append(f"{brand_name}未出现在该问题答案中")
+    elif status == "no_brand":
+        parts.append("该问题答案没有进入品牌推荐结构")
+    elif status == "target_with_competitors":
+        parts.append(f"{brand_name}与竞品同时出现")
+    elif status == "target_only":
+        parts.append(f"{brand_name}单独出现")
+    if item.get("content_gap"):
+        parts.append(f"可补充信息：{item.get('content_gap')}")
+    return _join_detail_parts(parts)
+
+
+def _source_conclusion_detail(
+    top_source: dict[str, Any], source_domains: list[dict[str, Any]]
+) -> str:
+    label = str(top_source.get("source_type_label") or "来源").strip()
+    parts = [
+        (
+            f"来源类型「{label}」出现 {top_source.get('ai_citation_frequency')} 次，"
+            f"占比 {_format_rate(top_source.get('citation_share'))}"
+        )
+    ]
+    matched_domains = [
+        item
+        for item in source_domains
+        if str(item.get("source_type_label") or "") == label
+    ][:2] or source_domains[:2]
+    domain_parts = []
+    for item in matched_domains:
+        site = item.get("site_display") or item.get("domain") or "未知来源"
+        titles = "；".join(
+            f"「{title}」" for title in item.get("sample_titles", [])[:2] if title
+        )
+        title_text = f"，样本标题：{titles}" if titles else ""
+        domain_parts.append(
+            f"{site}出现 {item.get('ai_citation_frequency')} 次{title_text}"
+        )
+    if domain_parts:
+        parts.append(f"代表来源：{'；'.join(domain_parts)}")
+    return _join_detail_parts(parts)
+
+
+def _risk_conclusion_detail(item: dict[str, Any]) -> str:
+    evidence = "；".join(
+        f"「{_clip(sample, 72)}」" for sample in item.get("evidence", [])[:2] if sample
+    )
+    platform_counts = item.get("platform_counts", {}) or {}
+    platforms = "、".join(
+        f"{_platform_label(platform)} {count} 次"
+        for platform, count in platform_counts.items()
+        if count
+    )
+    parts = [
+        f"{item.get('label')}出现 {item.get('count')} 次，占比 {_format_rate(item.get('share'))}"
+    ]
+    if platforms:
+        parts.append(f"平台分布：{platforms}")
+    if evidence:
+        parts.append(f"样本证据：{evidence}")
+    return _join_detail_parts(parts)
+
+
+def _action_conclusion_detail(action: dict[str, Any]) -> str:
+    metrics = "、".join(
+        str(value) for value in action.get("target_metric", []) if value
+    )
+    parts = []
+    if action.get("decision_scenario"):
+        parts.append(f"对应场景：{action.get('decision_scenario')}")
+    if action.get("recommended_asset"):
+        parts.append(f"推荐资产：{action.get('recommended_asset')}")
+    if metrics:
+        parts.append(f"观察指标：{metrics}")
+    if action.get("validation_plan"):
+        parts.append(f"复测方式：{action.get('validation_plan')}")
+    return _join_detail_parts(parts)
+
+
+def _legacy_conclusion_detail(item: dict[str, Any]) -> str:
+    return _join_detail_parts(
+        [
+            str(item.get("interpretation") or ""),
+            str(item.get("boundary") or ""),
+            str(item.get("action") or ""),
+        ]
+    )
 
 
 def _brand_status_label(status: Any) -> str:
@@ -1276,15 +1472,19 @@ def build_no_signal_report(
         "key_findings": [
             {
                 "fact": f"本轮有效答案 {successful_answers} 条，品牌提及样本为 0。",
-                "interpretation": "品牌尚未形成可诊断的 AI 答案进入信号。",
-                "boundary": "这不能说明品牌口碑负面，也不能判断官网承接弱。",
-                "action": "先围绕高价值决策场景补充可引用内容，并设计下一轮复测问题。",
+                "detail": _brand_answer_detail(
+                    metric_bundle,
+                    brand_presence_count=0,
+                    successful_answers=successful_answers,
+                ),
             },
             {
                 "fact": f"无品牌回答占比为 {_format_rate(no_brand_rate)}。",
-                "interpretation": "当前问题集更容易触发知识型回答，而不是品牌推荐型回答。",
-                "boundary": "无品牌不等同于品牌力弱，需要看问题是否本身适合触发品牌推荐。",
-                "action": "下一轮增加品牌比较、场景购买和风险验证问题。",
+                "detail": _brand_entry_detail(
+                    metric_bundle,
+                    brand_presence_count=0,
+                    successful_answers=successful_answers,
+                ),
             },
         ],
         "top_actions": action_recommendations[:3],
@@ -1304,9 +1504,7 @@ def build_no_signal_report(
         lines.extend(
             [
                 f"- **事实**：{finding['fact']}",
-                f"  **解释**：{finding['interpretation']}",
-                f"  **边界**：{finding['boundary']}",
-                f"  **动作**：{finding['action']}",
+                f"  **详解**：{finding['detail']}",
             ]
         )
     lines.extend(
@@ -1435,9 +1633,7 @@ def build_standard_report_wrappers(
         "key_findings": [
             {
                 "fact": finding,
-                "interpretation": "该事实影响品牌在 AI 答案中的进入和解释权。",
-                "boundary": "当前结论仅基于本轮样本，应通过固定问题集复测。",
-                "action": "按优先级推进内容资产和来源治理。",
+                "detail": "该条来自摘要建议，需回到对应场景、来源和风险样本复核。",
             }
             for finding in summary_data.get("suggestions", [])[:3]
             if isinstance(finding, str)
@@ -1586,6 +1782,11 @@ def build_diagnostic_conclusions(
         for item in source_intelligence.get("summary", []) or []
         if isinstance(item, dict)
     ]
+    source_domains = [
+        item
+        for item in source_intelligence.get("domains", []) or []
+        if isinstance(item, dict)
+    ]
     top_source = source_summary[0] if source_summary else {}
     risk_items = [
         item
@@ -1600,43 +1801,50 @@ def build_diagnostic_conclusions(
             {
                 "code": "brand_not_entered",
                 "fact": f"本轮有效答案 {successful_answers} 条，{brand_name}品牌提及样本为 0。",
-                "interpretation": "品牌尚未进入本轮 AI 答案，当前优先问题是进入候选答案。",
-                "boundary": "这不能说明品牌口碑负面，也不能判断官网承接弱。",
-                "action": "先围绕高价值决策场景建设可引用内容，并设计下一轮复测问题。",
+                "detail": _brand_answer_detail(
+                    metric_bundle,
+                    brand_presence_count=0,
+                    successful_answers=successful_answers,
+                ),
+                "summary": "品牌尚未进入本轮 AI 答案，当前优先问题是进入候选答案。",
             },
             {
                 "code": "question_trigger",
                 "fact": f"无品牌回答占比为 {_format_rate(no_brand_rate)}。",
-                "interpretation": "当前问题集更容易触发知识型回答，而不是品牌推荐型回答。",
-                "boundary": "无品牌不等同于品牌力弱，需要看问题是否适合触发品牌推荐。",
-                "action": "下一轮增加品牌比较、场景购买和风险验证问题。",
+                "detail": _brand_entry_detail(
+                    metric_bundle,
+                    brand_presence_count=0,
+                    successful_answers=successful_answers,
+                ),
+                "summary": "当前问题集更容易触发知识型回答，而不是品牌推荐型回答。",
             },
         ]
 
-    mode_interpretation = {
+    mode_summary = {
         REPORT_MODE_WEAK_SIGNAL: "品牌已经出现弱进入信号，但样本不足以支撑稳定结论。",
         REPORT_MODE_BRAND_ENTRY: "品牌已经进入部分答案，可以诊断进入场景、来源和顾虑。",
         REPORT_MODE_FULL_LANDSCAPE: "样本量达到完整诊断阈值，可以形成较完整的品牌决策诊断。",
     }.get(mode, "品牌已经进入本轮 AI 答案，可以进行结构化诊断。")
-    mode_boundary = (
-        "当前仍不能写成稳定声誉结论、平台偏向结论或跨周期趋势判断。"
-        if mode == REPORT_MODE_WEAK_SIGNAL
-        else "结论仍只代表本轮样本，需要通过固定问题集复测。"
-    )
     conclusions = [
         {
             "code": "data_status",
             "fact": f"本轮覆盖 {total_questions} 个问题、{successful_answers} 条有效答案，品牌提及 {brand_presence_count} 条。",
-            "interpretation": mode_interpretation,
-            "boundary": mode_boundary,
-            "action": "按报告模式推进场景、来源和风险顾虑诊断，不直接从原始答案补洞察。",
+            "detail": _brand_answer_detail(
+                metric_bundle,
+                brand_presence_count=brand_presence_count,
+                successful_answers=successful_answers,
+            ),
+            "summary": mode_summary,
         },
         {
             "code": "brand_entry",
             "fact": f"品牌可见度为 {_format_rate(brand_visibility)}，竞品挤压率为 {_format_rate(competitor_pressure)}。",
-            "interpretation": "品牌进入能力需要同时看可见度、竞品同台和无品牌回答结构。",
-            "boundary": "单轮可见度不能单独代表市场份额或长期品牌力。",
-            "action": "优先处理竞品同台和无品牌高发的高价值决策场景。",
+            "detail": _brand_entry_detail(
+                metric_bundle,
+                brand_presence_count=brand_presence_count,
+                successful_answers=successful_answers,
+            ),
+            "summary": "品牌进入能力需要同时看可见度、竞品同台和无品牌回答结构。",
         },
     ]
     if top_scenario:
@@ -1644,12 +1852,11 @@ def build_diagnostic_conclusions(
             {
                 "code": "scenario_map",
                 "fact": f"代表性场景为{top_scenario.get('decision_scenario')}，品牌状态为{_brand_status_label(top_scenario.get('brand_status'))}。",
-                "interpretation": str(
-                    top_scenario.get("diagnosis") or "该场景需要结合样本继续复核。"
+                "detail": _scenario_conclusion_detail(
+                    top_scenario, brand_name=brand_name
                 ),
-                "boundary": "场景诊断基于本轮问题集，不代表所有客户旅程。",
-                "action": str(
-                    top_scenario.get("recommended_asset") or "补充该场景的权威解释页。"
+                "summary": str(
+                    top_scenario.get("diagnosis") or "该场景需要结合样本继续复核。"
                 ),
             }
         )
@@ -1658,11 +1865,10 @@ def build_diagnostic_conclusions(
             {
                 "code": "source_evidence",
                 "fact": f"当前主要来源类型为{top_source.get('source_type_label')}，引用频次 {top_source.get('ai_citation_frequency')}。",
-                "interpretation": str(
+                "detail": _source_conclusion_detail(top_source, source_domains),
+                "summary": str(
                     top_source.get("diagnosis") or "来源结构影响 AI 对品牌的解释权。"
                 ),
-                "boundary": "来源频次不等于品牌可控程度，需要结合来源类型判断。",
-                "action": "优先提升品牌官网、官方文档和可引用内容在答案引用链中的占比。",
             }
         )
     if top_risk:
@@ -1670,12 +1876,11 @@ def build_diagnostic_conclusions(
             {
                 "code": "risk_concern",
                 "fact": f"主要决策顾虑集中在{top_risk.get('label')}，出现 {top_risk.get('count')} 次。",
-                "interpretation": str(
+                "detail": _risk_conclusion_detail(top_risk),
+                "summary": str(
                     risk_concern_analysis.get("summary", {}).get("narrative")
                     or "风险信号应按决策顾虑理解。"
                 ),
-                "boundary": "顾虑不一定等于品牌口碑负面，可能只是预算、交付或适配门槛。",
-                "action": f"建设{top_risk.get('label')}FAQ 和适配边界说明。",
             }
         )
     if top_action:
@@ -1683,24 +1888,31 @@ def build_diagnostic_conclusions(
             {
                 "code": "top_action",
                 "fact": str(top_action.get("fact") or "已有可执行行动建议。"),
-                "interpretation": str(
+                "detail": _action_conclusion_detail(top_action),
+                "summary": str(
                     top_action.get("business_problem")
                     or "该建议用于提升品牌进入和解释权。"
-                ),
-                "boundary": "建议效果需要通过固定问题集复测，不能只看单条答案变化。",
-                "action": str(
-                    top_action.get("recommended_asset") or "建设场景化内容资产。"
                 ),
             }
         )
     if isinstance(official_conversion, (int, float)):
+        official_funnel = (
+            metric_bundle.get("official_funnel")
+            if isinstance(metric_bundle.get("official_funnel"), dict)
+            else {}
+        )
         conclusions.append(
             {
                 "code": "official_conversion",
                 "fact": f"官网引用转化率为 {_format_rate(official_conversion)}。",
-                "interpretation": "官网和官方内容是否进入引用链会影响品牌可控解释权。",
-                "boundary": "官网引用转化率只能在有品牌提及样本时判断。",
-                "action": "把核心方法论、案例和 FAQ 做成可被 AI 引用的 HTML 内容。",
+                "detail": _join_detail_parts(
+                    [
+                        f"提及品牌答案 {official_funnel.get('monitor_brand_answer_count', 0)} 条",
+                        f"品牌相关链接答案 {official_funnel.get('brand_related_link_answer_count', 0)} 条",
+                        f"官网链接答案 {official_funnel.get('official_link_answer_count', 0)} 条",
+                    ]
+                ),
+                "summary": "官网和官方内容是否进入引用链会影响品牌可控解释权。",
             }
         )
     return conclusions
@@ -1709,12 +1921,13 @@ def build_diagnostic_conclusions(
 def _render_conclusion_lines(conclusions: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
     for item in conclusions:
+        detail = str(item.get("detail") or "").strip() or _legacy_conclusion_detail(
+            item
+        )
         lines.extend(
             [
                 f"- **事实**：{item.get('fact')}",
-                f"  **解释**：{item.get('interpretation')}",
-                f"  **边界**：{item.get('boundary')}",
-                f"  **动作**：{item.get('action')}",
+                f"  **详解**：{detail}",
             ]
         )
     return lines
@@ -2300,7 +2513,7 @@ def build_structured_report(
     executive_summary = {
         "section_title": "高管版摘要",
         "one_line_judgment": (
-            conclusions[0]["interpretation"]
+            conclusions[0].get("summary") or conclusions[0].get("fact")
             if conclusions
             else f"{brand_name}已完成本轮 AI 答案品牌诊断。"
         ),
