@@ -6,9 +6,10 @@ This is the standard Playwright pattern, not Python's built-in eval().
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, AsyncIterator
 from urllib.parse import urlparse, urlunparse
 
 from app.core.config import settings
@@ -28,6 +29,11 @@ from app.schemas.fetch import (
     BrowserState,
     Platform,
     SearchReference,
+)
+from app.services.aio_foreground_lease import (
+    AioForegroundLeaseTimeout,
+    aio_foreground_lease_manager,
+    build_aio_foreground_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,6 +122,33 @@ class DeepSeekHandler(BaseBrowserHandler):
                 getattr(self.client, "aio_session_id", None)
             ),
         }
+
+    def _aio_foreground_key(self) -> str:
+        key = getattr(self.client, "foreground_key", None)
+        if isinstance(key, str) and key:
+            return key
+        return build_aio_foreground_key(settings.AIO_BASE_URL)
+
+    @asynccontextmanager
+    async def _hold_aio_gui_foreground(
+        self,
+        action_name: str,
+    ) -> AsyncIterator[None]:
+        owner = (
+            f"{getattr(self.client, 'task_id', 'unknown')}:"
+            f"{self.PLATFORM_KEY}:{action_name}"
+        )
+        async with aio_foreground_lease_manager.hold(
+            key=self._aio_foreground_key(),
+            mode="gui_automation",
+            platform=self.PLATFORM_KEY,
+            owner=owner,
+            reason=action_name,
+            ttl_seconds=settings.AIO_FOREGROUND_GUI_LEASE_TTL_SECONDS,
+            timeout_seconds=settings.AIO_FOREGROUND_GUI_LEASE_WAIT_SECONDS,
+        ):
+            await self._bring_aio_page_to_front()
+            yield
 
     def _build_runtime_diagnostics_metadata(self) -> dict[str, Any]:
         metadata = super()._build_runtime_diagnostics_metadata()
@@ -779,6 +812,21 @@ class DeepSeekHandler(BaseBrowserHandler):
         question: str,
         baseline_probe: dict[str, Any],
     ) -> bool:
+        try:
+            async with self._hold_aio_gui_foreground("submit_question"):
+                return await self._submit_question_via_aio_gui_actions_locked(
+                    question,
+                    baseline_probe,
+                )
+        except AioForegroundLeaseTimeout as exc:
+            logger.warning("[DeepSeek] AIO GUI submit foreground blocked: %s", exc)
+            return False
+
+    async def _submit_question_via_aio_gui_actions_locked(
+        self,
+        question: str,
+        baseline_probe: dict[str, Any],
+    ) -> bool:
         rect = await self._deepseek_input_rect_for_gui_actions()
         if not rect:
             logger.warning("[DeepSeek] AIO GUI submit failed: input rect unavailable")
@@ -848,6 +896,13 @@ class DeepSeekHandler(BaseBrowserHandler):
     async def _ensure_web_search_on_via_aio_gui_actions(self) -> None:
         if self.client.page is None:
             return
+        try:
+            async with self._hold_aio_gui_foreground("enable_web_search"):
+                await self._ensure_web_search_on_via_aio_gui_actions_locked()
+        except AioForegroundLeaseTimeout as exc:
+            logger.warning("[DeepSeek] AIO GUI search foreground blocked: %s", exc)
+
+    async def _ensure_web_search_on_via_aio_gui_actions_locked(self) -> None:
         try:
             input_sel = json.dumps(self._sel("input"), ensure_ascii=False)
             info = await self.client.page.evaluate(

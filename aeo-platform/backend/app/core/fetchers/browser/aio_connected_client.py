@@ -14,6 +14,11 @@ from patchright.async_api import Browser, BrowserContext, async_playwright
 from app.core.config import settings
 from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
 from app.services.aio_runtime_contracts import AioPlatformRoots
+from app.services.aio_foreground_lease import (
+    AioForegroundLeaseTimeout,
+    aio_foreground_lease_manager,
+    build_aio_foreground_key,
+)
 from app.services.aio_session_manager import aio_session_manager
 
 logger = logging.getLogger(__name__)
@@ -52,6 +57,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         self.aio_session_id: str | None = None
         self.browser_info: dict[str, Any] = {}
         self.platform_roots: AioPlatformRoots | None = None
+        self.foreground_key: str | None = None
         self._page_owned_by_client = False
         self._context_owned_by_client = False
         self._storage_state_loaded_into_context = False
@@ -71,6 +77,25 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         if host.startswith("www."):
             return host[4:]
         return host
+
+    def _resolved_interaction_mode(self) -> str:
+        if self.platform != "deepseek":
+            return "cdp_dom"
+        raw_mode = str(settings.DEEPSEEK_AIO_INTERACTION_MODE or "").strip().lower()
+        aliases = {
+            "gui": "gui_actions",
+            "visual": "gui_actions",
+            "vnc": "gui_actions",
+            "cdp": "cdp_dom",
+            "dom": "cdp_dom",
+            "playwright": "cdp_dom",
+        }
+        return aliases.get(raw_mode, raw_mode or "cdp_dom")
+
+    def should_request_automation_foreground(self) -> bool:
+        """Return true only for automation that uses the visible GUI surface."""
+
+        return self._resolved_interaction_mode() == "gui_actions"
 
     async def _ensure_playwright(self):
         """Start Patchright for CDP attachment without installing local browsers."""
@@ -156,6 +181,10 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             platforms=[self.platform],
         )
         self.aio_session_id = session.session_id
+        self.foreground_key = build_aio_foreground_key(
+            session.base_url,
+            session.sandbox_ref,
+        )
         self.platform_roots = await aio_session_manager.ensure_platform_roots(
             session_id=session.session_id,
             task_id=self.task_id,
@@ -513,18 +542,21 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                 if preferred is not None:
                     self.page = preferred
                     self._page_owned_by_client = False
-                    await self.bring_to_front()
+                    foreground = await self.bring_to_front_for_automation(
+                        reason="reuse_page"
+                    )
                     logger.info(
-                        "[AIO Browser:%s] reusing existing page url=%s target_host=%s foreground_requested=True",
+                        "[AIO Browser:%s] reusing existing page url=%s target_host=%s automation_foreground=%s",
                         self.session_name,
                         self.page.url,
                         target_host,
+                        bool(foreground.get("success")),
                     )
                     return
 
                 self.page = await self.context.new_page()
                 self._page_owned_by_client = True
-                await self.bring_to_front()
+                await self.bring_to_front_for_automation(reason="new_page")
                 logger.info(
                     "[AIO Browser:%s] created new page because no existing page matched target_host=%s",
                     self.session_name,
@@ -534,18 +566,21 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
 
             self.page = usable[0] if usable else existing_pages[0]
             self._page_owned_by_client = False
-            await self.bring_to_front()
+            foreground = await self.bring_to_front_for_automation(
+                reason="reuse_any_page"
+            )
             logger.info(
-                "[AIO Browser:%s] reusing existing page url=%s target_host=%s foreground_requested=True",
+                "[AIO Browser:%s] reusing existing page url=%s target_host=%s automation_foreground=%s",
                 self.session_name,
                 self.page.url,
                 "<none>",
+                bool(foreground.get("success")),
             )
             return
 
         self.page = await self.context.new_page()
         self._page_owned_by_client = True
-        await self.bring_to_front()
+        await self.bring_to_front_for_automation(reason="created_page")
         logger.info(
             "[AIO Browser:%s] created new page in remote context",
             self.session_name,
@@ -590,11 +625,14 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                     self.page = page
                     self._context_owned_by_client = False
                     self._page_owned_by_client = False
-                    await self.bring_to_front()
+                    foreground = await self.bring_to_front_for_automation(
+                        reason="sync_live_page"
+                    )
                     logger.info(
-                        "[AIO Browser:%s] synced to live target page url=%s foreground_requested=True",
+                        "[AIO Browser:%s] synced to live target page url=%s automation_foreground=%s",
                         self.session_name,
                         page_url,
+                        bool(foreground.get("success")),
                     )
                     return True
         except Exception as exc:
@@ -717,11 +755,14 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                     url,
                 )
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                await self.bring_to_front()
+                foreground = await self.bring_to_front_for_automation(
+                    reason="open_complete"
+                )
                 logger.info(
-                    "[AIO Browser:%s] navigation complete current_url=%s foreground_requested=True",
+                    "[AIO Browser:%s] navigation complete current_url=%s automation_foreground=%s",
                     self.session_name,
                     self.page.url,
+                    bool(foreground.get("success")),
                 )
                 return {"success": True, "url": url}
             except Exception as e:
@@ -752,6 +793,48 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                 "[AIO Browser:%s] bring_to_front failed: %s", self.session_name, e
             )
             return {"error": str(e)}
+
+    async def bring_to_front_for_automation(
+        self,
+        *,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Focus only for automation paths that use GUI/VNC actions."""
+
+        if not self.should_request_automation_foreground():
+            logger.debug(
+                "[AIO Browser:%s] skip automation foreground platform=%s reason=%s",
+                self.session_name,
+                self.platform,
+                reason or "",
+            )
+            return {"skipped": True, "reason": "cdp_dom_platform"}
+
+        foreground_key = self.foreground_key or build_aio_foreground_key(
+            settings.AIO_BASE_URL
+        )
+        owner = f"{self.task_id}:{self.platform}:{reason or 'automation_foreground'}"
+        try:
+            async with aio_foreground_lease_manager.hold(
+                key=foreground_key,
+                mode="gui_automation",
+                platform=self.platform,
+                owner=owner,
+                reason=reason or "automation_foreground",
+                ttl_seconds=settings.AIO_FOREGROUND_GUI_LEASE_TTL_SECONDS,
+                timeout_seconds=settings.AIO_FOREGROUND_GUI_LEASE_WAIT_SECONDS,
+            ):
+                return await self.bring_to_front()
+        except AioForegroundLeaseTimeout as exc:
+            logger.warning(
+                "[AIO Browser:%s] automation foreground blocked platform=%s "
+                "reason=%s error=%s",
+                self.session_name,
+                self.platform,
+                reason or "",
+                exc,
+            )
+            return {"error": str(exc), "lease_timeout": True}
 
     async def close(self) -> dict[str, Any]:
         """Disconnect from remote browser and release the leased session holder."""

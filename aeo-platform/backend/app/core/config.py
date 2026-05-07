@@ -181,6 +181,11 @@ class Settings(BaseSettings):
     AIO_BROWSER_TIMEZONE_ID: str = "Asia/Shanghai"
     AIO_BROWSER_REUSE_DEFAULT_CONTEXT_PLATFORMS: str = "deepseek"
     DEEPSEEK_AIO_INTERACTION_MODE: str = "gui_actions"
+    AIO_FOREGROUND_LEASE_ENABLED: bool = True
+    AIO_FOREGROUND_GUI_LEASE_TTL_SECONDS: int = 30
+    AIO_FOREGROUND_GUI_LEASE_WAIT_SECONDS: float = 60.0
+    AIO_FOREGROUND_HUMAN_LEASE_TTL_SECONDS: int = 480
+    AIO_FOREGROUND_HUMAN_LEASE_WAIT_SECONDS: float = 15.0
 
     # A4 fast fetch tuning. These only affect API fetches; browser fetch
     # pacing remains controlled by PlatformConstants.PLATFORM_REQUEST_DELAYS.

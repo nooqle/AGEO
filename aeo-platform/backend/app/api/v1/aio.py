@@ -38,6 +38,11 @@ from app.services.aio_session_manager import (
     SpectaAioTakeover,
     aio_session_manager,
 )
+from app.services.aio_foreground_lease import (
+    AioForegroundLeaseTimeout,
+    aio_foreground_lease_manager,
+    build_aio_foreground_key,
+)
 from app.services.fetch_run_platform_state_service import (
     FetchRunPlatformStateService,
 )
@@ -368,6 +373,59 @@ async def _stabilize_takeover_browser_surface(
         _raise_from_aio_error(exc)
 
 
+async def _reserve_takeover_foreground(
+    *,
+    takeover: SpectaAioTakeover,
+    session: SpectaAioSession,
+    ttl_seconds: int,
+    reason: str,
+) -> None:
+    """Reserve the visible AIO browser surface for human takeover."""
+
+    try:
+        await aio_foreground_lease_manager.acquire(
+            key=build_aio_foreground_key(session.base_url, session.sandbox_ref),
+            mode="human_takeover",
+            platform=takeover.platform,
+            owner=takeover.takeover_id,
+            reason=reason,
+            ttl_seconds=ttl_seconds,
+            timeout_seconds=settings.AIO_FOREGROUND_HUMAN_LEASE_WAIT_SECONDS,
+        )
+    except AioForegroundLeaseTimeout as exc:
+        logger.warning(
+            "aio.foreground.reserve_timeout takeover_id=%s platform=%s reason=%s error=%s",
+            takeover.takeover_id,
+            takeover.platform,
+            reason,
+            exc,
+        )
+    except Exception as exc:
+        logger.warning(
+            "aio.foreground.reserve_failed takeover_id=%s platform=%s reason=%s error=%s",
+            takeover.takeover_id,
+            takeover.platform,
+            reason,
+            exc,
+        )
+
+
+async def _release_takeover_foreground(takeover: SpectaAioTakeover) -> None:
+    try:
+        session = await aio_session_manager.get_session(takeover.session_id)
+        await aio_foreground_lease_manager.release_owner(
+            key=build_aio_foreground_key(session.base_url, session.sandbox_ref),
+            owner=takeover.takeover_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "aio.foreground.release_failed takeover_id=%s platform=%s error=%s",
+            takeover.takeover_id,
+            takeover.platform,
+            exc,
+        )
+
+
 async def _get_takeover_and_session_for_user(
     *,
     takeover_id: str,
@@ -482,6 +540,13 @@ async def create_takeover(
         )
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    session = await aio_session_manager.get_session(takeover.session_id)
+    await _reserve_takeover_foreground(
+        takeover=takeover,
+        session=session,
+        ttl_seconds=settings.AIO_TAKEOVER_ISSUED_TTL_SECONDS,
+        reason="create_takeover",
+    )
     target_url = await _resolve_takeover_target_url(takeover)
     return {
         "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)
@@ -542,6 +607,12 @@ async def open_takeover(
             detail="当前接管未找到有效目标页面，请重新申请新的 takeover。",
         )
     session = await aio_session_manager.get_session(takeover.session_id)
+    await _reserve_takeover_foreground(
+        takeover=takeover,
+        session=session,
+        ttl_seconds=settings.AIO_TAKEOVER_ISSUED_TTL_SECONDS,
+        reason="open_takeover",
+    )
     await _stabilize_takeover_browser_surface(session=session, target_url=target_url)
     await aio_session_manager.refresh_browser_info(takeover.session_id)
     return {
@@ -1026,12 +1097,21 @@ async def heartbeat_takeover(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     if auto_resolved:
         await _settle_takeover_request(takeover, resolution="completed")
+        await _release_takeover_foreground(takeover)
         logger.info(
             "aio.takeover.auto_resolved takeover_id=%s request_id=%s user_id=%s frontend_id=%s",
             takeover_id,
             takeover.request_id,
             current_user.id,
             body.frontend_id,
+        )
+    else:
+        session = await aio_session_manager.get_session(takeover.session_id)
+        await _reserve_takeover_foreground(
+            takeover=takeover,
+            session=session,
+            ttl_seconds=settings.AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS,
+            reason="heartbeat_takeover",
         )
     target_url = await _resolve_takeover_target_url(takeover)
     return {
@@ -1059,6 +1139,7 @@ async def resolve_takeover(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     if takeover.state.value == "resolved":
         await _settle_takeover_request(takeover, resolution="completed")
+    await _release_takeover_foreground(takeover)
     target_url = await _resolve_takeover_target_url(takeover)
     return {
         "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)
@@ -1084,6 +1165,7 @@ async def cancel_takeover(
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     await _settle_takeover_request(takeover, resolution="skip")
+    await _release_takeover_foreground(takeover)
     target_url = await _resolve_takeover_target_url(takeover)
     return {
         "takeover": _serialize_takeover_with_target(takeover, target_url=target_url)

@@ -15,6 +15,11 @@ from typing import Any
 from uuid import UUID
 
 from app.core.config import settings
+from app.services.aio_foreground_lease import (
+    AioForegroundLeaseTimeout,
+    aio_foreground_lease_manager,
+    build_aio_foreground_key,
+)
 from app.workflow.browser_action_runtime import (
     clear_browser_action_request,
     get_browser_action_request,
@@ -253,6 +258,65 @@ async def ensure_aio_takeover_bundle(
         run_id=str(run_id) if run_id else None,
         action_type=action_type,
     )
+    try:
+        session = await aio_session_manager.get_session(aio_session_id)
+        foreground_key = build_aio_foreground_key(
+            session.base_url,
+            session.sandbox_ref,
+        )
+        await aio_foreground_lease_manager.acquire(
+            key=foreground_key,
+            mode="human_takeover",
+            platform=platform,
+            owner=takeover.takeover_id,
+            reason=action_type,
+            ttl_seconds=settings.AIO_TAKEOVER_ISSUED_TTL_SECONDS,
+            timeout_seconds=settings.AIO_FOREGROUND_HUMAN_LEASE_WAIT_SECONDS,
+        )
+    except AioForegroundLeaseTimeout as exc:
+        logger.warning(
+            "[BrowserActionContract] AIO takeover foreground reservation timed out "
+            "(platform=%s request_id=%s takeover_id=%s): %s",
+            platform,
+            request_id,
+            takeover.takeover_id,
+            exc,
+        )
+        try:
+            await aio_session_manager.expire_takeover(takeover.takeover_id)
+        except Exception as expire_exc:
+            logger.warning(
+                "[BrowserActionContract] Failed to expire takeover after "
+                "foreground reservation timeout "
+                "(platform=%s request_id=%s takeover_id=%s): %s",
+                platform,
+                request_id,
+                takeover.takeover_id,
+                expire_exc,
+            )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "[BrowserActionContract] AIO takeover foreground reservation failed "
+            "(platform=%s request_id=%s takeover_id=%s): %s",
+            platform,
+            request_id,
+            takeover.takeover_id,
+            exc,
+        )
+        try:
+            await aio_session_manager.expire_takeover(takeover.takeover_id)
+        except Exception as expire_exc:
+            logger.warning(
+                "[BrowserActionContract] Failed to expire takeover after "
+                "foreground reservation failure "
+                "(platform=%s request_id=%s takeover_id=%s): %s",
+                platform,
+                request_id,
+                takeover.takeover_id,
+                expire_exc,
+            )
+        return None
 
     bundle = {
         "takeover_id": takeover.takeover_id,
@@ -547,7 +611,12 @@ async def _expire_aio_takeover_for_request(request_id: str) -> None:
     try:
         from app.services.aio_session_manager import aio_session_manager
 
-        await aio_session_manager.expire_takeover(takeover_id)
+        takeover_record = await aio_session_manager.expire_takeover(takeover_id)
+        session = await aio_session_manager.get_session(takeover_record.session_id)
+        await aio_foreground_lease_manager.release_owner(
+            key=build_aio_foreground_key(session.base_url, session.sandbox_ref),
+            owner=takeover_id,
+        )
     except Exception as exc:
         logger.warning(
             "[BrowserActionContract] Failed to expire timed-out AIO takeover "

@@ -1825,10 +1825,32 @@ class BaseBrowserHandler(ABC):
         if current_url == "about:blank":
             return False
 
-        bring_to_front = getattr(self.client, "bring_to_front", None)
-        if callable(bring_to_front):
+        automation_bring_to_front = getattr(
+            self.client,
+            "bring_to_front_for_automation",
+            None,
+        )
+        raw_bring_to_front = getattr(self.client, "bring_to_front", None)
+        foreground_requested = False
+        if callable(automation_bring_to_front):
             try:
-                await bring_to_front()
+                result = await automation_bring_to_front(reason="surface_reuse")
+                foreground_requested = bool(
+                    isinstance(result, dict) and result.get("success")
+                )
+            except Exception as e:
+                logger.debug(
+                    "[%s] bring_to_front failed during AIO surface reuse: %s",
+                    self.PLATFORM_KEY,
+                    e,
+                )
+            await asyncio.sleep(0.2)
+        elif callable(raw_bring_to_front):
+            try:
+                result = await raw_bring_to_front()
+                foreground_requested = bool(
+                    isinstance(result, dict) and result.get("success")
+                )
             except Exception as e:
                 logger.debug(
                     "[%s] bring_to_front failed during AIO surface reuse: %s",
@@ -1838,10 +1860,11 @@ class BaseBrowserHandler(ABC):
             await asyncio.sleep(0.2)
 
         logger.info(
-            "[%s] Reusing existing AIO surface without reopening (current_url=%s target_host=%s, foreground_requested=True)",
+            "[%s] Reusing existing AIO surface without reopening (current_url=%s target_host=%s, automation_foreground=%s)",
             self.PLATFORM_KEY,
             current_url,
             target_host,
+            foreground_requested,
         )
         return True
 
