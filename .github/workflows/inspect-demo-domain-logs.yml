@@ -123,6 +123,53 @@ jobs:
           systemctl is-active ageo-frontend.service || true
           echo
 
+          echo "== resource snapshot =="
+          uptime || true
+          free -h || true
+          df -h / /srv/ageo-deploy || true
+          ps -eo pid,ppid,pcpu,pmem,comm,args --sort=-pcpu | head -n 18 || true
+          echo
+
+          echo "== local endpoint timings =="
+          dashboard_html="$(mktemp)"
+          curl -fsS --max-time 10 http://127.0.0.1:3000/dashboard -o "$dashboard_html" || true
+          static_paths="$(
+            grep -oE '/_next/static/(chunks|css)/[^"]+\.(js|css)' "$dashboard_html" |
+              sort -u |
+              head -n 16 || true
+          )"
+          {
+            echo http://127.0.0.1:3000/dashboard
+            if [ -n "$static_paths" ]; then
+              printf '%s\n' "$static_paths" | sed 's#^#http://127.0.0.1:3000#'
+            fi
+            echo http://127.0.0.1:8000/health
+            echo http://127.0.0.1:8000/api/v1/auth/me
+          } | while IFS= read -r url; do
+            [ -n "$url" ] || continue
+            curl -o /dev/null -sS --max-time 10 \
+              -w "status=%{http_code} ttfb=%{time_starttransfer} total=%{time_total} size=%{size_download} url=${url}\n" \
+              "$url" || true
+          done
+          rm -f "$dashboard_html" || true
+          echo
+
+          echo "== nginx recent slow/static lines =="
+          if [ -r /var/log/nginx/access.log ]; then
+            sudo tail -n 2000 /var/log/nginx/access.log |
+              grep -E 'GET /dashboard|GET /_next/|GET /api/v1| 499 | 500 | 502 | 503 | 504 ' |
+              tail -n 160 || true
+          else
+            echo "nginx access log not readable"
+          fi
+          echo
+
+          echo "== frontend journal warnings/errors =="
+          sudo journalctl -u ageo-frontend.service --since "$since" --no-pager -o short-iso |
+            grep -Ei 'error|warn|failed|timeout|timed out|heap|memory|slow|ready|started' |
+            tail -n 180 || true
+          echo
+
           echo "== url intelligence configuration =="
           env_file=/srv/ageo-deploy/shared/backend/.env.local
           print_env_status "$env_file" TEXT_LIGHT_LLM_PROVIDER

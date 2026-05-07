@@ -10,6 +10,7 @@ from app.api.v1 import (
     auth,
     control_plane,
     entities,
+    favicons,
     files,
     messages,
     monitoring,
@@ -32,6 +33,7 @@ api_router.include_router(auth.router)
 api_router.include_router(account_admin.router)
 api_router.include_router(analytics.router)
 api_router.include_router(entities.router)
+api_router.include_router(favicons.router)
 api_router.include_router(touchpoints.router)
 api_router.include_router(files.router)
 api_router.include_router(snapshots.router)

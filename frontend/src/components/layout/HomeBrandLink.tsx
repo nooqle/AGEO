@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useRouter } from 'next/navigation';
 import { RiCloseLine } from '@remixicon/react';
 import { ThemedLogo } from '@/components/ui/ThemedLogo';
 import { Button } from '@/components/ui/button';
@@ -23,11 +22,20 @@ export function HomeBrandLink({
   className,
   compact = false,
 }: HomeBrandLinkProps) {
-  const router = useRouter();
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleNavigate = () => {
-    router.push('/dashboard');
+    setConfirmOpen(false);
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
+    window.location.assign('/dashboard');
   };
 
   const handleClick = () => {

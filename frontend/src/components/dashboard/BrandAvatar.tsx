@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useTheme } from '@/hooks/useTheme';
+import { getApiBaseUrl } from '@/services/api';
 
 interface BrandAvatarProps {
   name: string;
@@ -29,40 +30,36 @@ function normalizeDomainHost(domain?: string): string | null {
   }
 }
 
-function buildFaviconSources(domain?: string): string[] {
+function buildFaviconUrl(domain?: string): string | null {
   const host = normalizeDomainHost(domain);
   if (!host) {
-    return [];
+    return null;
   }
-
-  return [
-    `https://${host}/favicon.ico`,
-    `https://www.${host}/favicon.ico`,
-    `https://icons.duckduckgo.com/ip3/${host}.ico`,
-  ];
+  return `${getApiBaseUrl()}/favicons?domain=${encodeURIComponent(host)}`;
 }
 
 export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAvatarProps) {
   const { theme } = useTheme();
-  const faviconSources = useMemo(() => buildFaviconSources(domain), [domain]);
-  const faviconKey = faviconSources.join('|');
-  const [faviconState, setFaviconState] = useState({
-    key: faviconKey,
-    sourceIndex: 0,
-  });
+  const faviconUrl = useMemo(() => buildFaviconUrl(domain), [domain]);
+  const [imageState, setImageState] = useState<{
+    url: string | null;
+    ready: boolean;
+    failed: boolean;
+  }>({ url: null, ready: false, failed: false });
   const initial = (name.trim().charAt(0) || '品').toUpperCase();
   const isLarge = size > 48;
   const borderRadius = isLarge ? '14px' : '12px';
   const fontSize = isLarge ? '1.5rem' : '1.125rem';
   const isDark = theme === 'dark';
   const fallbackTextColor = isDark ? 'var(--text-primary)' : 'var(--text-secondary)';
-  const sourceIndex = faviconState.key === faviconKey ? faviconState.sourceIndex : 0;
-  const faviconUrl = faviconSources[sourceIndex];
-  const showFavicon = Boolean(faviconUrl);
+  const imageStateMatches = imageState.url === faviconUrl;
+  const imageReady = imageStateMatches && imageState.ready;
+  const imageFailed = imageStateMatches && imageState.failed;
+  const showFavicon = Boolean(faviconUrl && !imageFailed);
 
   return (
     <div
-      className={`flex items-center justify-center overflow-hidden ${className}`}
+      className={`relative flex items-center justify-center overflow-hidden ${className}`}
       style={{
         width: size,
         height: size,
@@ -72,37 +69,31 @@ export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAv
         boxShadow: 'none',
       }}
     >
-      {showFavicon ? (
+      <span
+        className="font-bold"
+        style={{
+          fontSize,
+          color: fallbackTextColor,
+        }}
+      >
+        {initial}
+      </span>
+
+      {showFavicon && faviconUrl ? (
         <img
           src={faviconUrl}
           alt=""
-          className="h-[72%] w-[72%] object-contain"
-          loading="lazy"
+          className="absolute h-[72%] w-[72%] object-contain transition-opacity duration-150"
+          style={{ opacity: imageReady ? 1 : 0 }}
+          loading={size <= 48 ? 'eager' : 'lazy'}
+          decoding="async"
           referrerPolicy="no-referrer"
+          onLoad={() => setImageState({ url: faviconUrl, ready: true, failed: false })}
           onError={() => {
-            setFaviconState((current) => {
-              const currentIndex = current.key === faviconKey ? current.sourceIndex : 0;
-              return {
-                key: faviconKey,
-                sourceIndex:
-                  currentIndex + 1 < faviconSources.length
-                    ? currentIndex + 1
-                    : faviconSources.length,
-              };
-            });
+            setImageState({ url: faviconUrl, ready: false, failed: true });
           }}
         />
-      ) : (
-        <span
-          className="font-bold"
-          style={{
-            fontSize,
-            color: fallbackTextColor,
-          }}
-        >
-          {initial}
-        </span>
-      )}
+      ) : null}
     </div>
   );
 }
