@@ -162,6 +162,7 @@ class Settings(BaseSettings):
     URL_INTELLIGENCE_LLM_PROVIDER: str = "deepseek"
     URL_INTELLIGENCE_MODEL_NAME: str = "deepseek-v4-flash"
     URL_INTELLIGENCE_TIMEOUT_SECONDS: float = 45.0
+    URL_INTELLIGENCE_BATCH_SIZE: int = 60
 
     # MiniMax cost config (optional)
     MINIMAX_PRICE_INPUT_PER_MTOKENS: float | None = None

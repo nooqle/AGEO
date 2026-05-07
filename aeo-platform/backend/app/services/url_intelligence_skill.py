@@ -40,7 +40,7 @@ class URLIntelligenceSkill:
     """Analyze citation domains with a single compact LLM call."""
 
     def __init__(self, *, batch_size: int | None = None):
-        del batch_size
+        self.batch_size = batch_size
 
     async def analyze_domains(
         self,
@@ -50,16 +50,46 @@ class URLIntelligenceSkill:
         if not normalized_domains:
             return {}
 
-        try:
-            return await self._analyze_domains_once(normalized_domains)
-        except Exception as exc:
-            logger.warning(
-                "[%s] domain analysis failed; using unknown fallback for %d domains: %s",
+        batch_size = self._resolve_batch_size()
+        batches = list(_chunked(normalized_domains, batch_size))
+        if len(batches) > 1:
+            logger.info(
+                "[%s] analyzing %d domains in %d batches (batch_size=%d)",
                 SKILL_KEY,
                 len(normalized_domains),
-                exc,
+                len(batches),
+                batch_size,
             )
-            return {domain: _unknown_result(domain) for domain in normalized_domains}
+
+        parsed: dict[str, DomainIntelligenceResult] = {}
+        for index, batch in enumerate(batches, start=1):
+            try:
+                parsed.update(await self._analyze_domains_once(batch))
+            except Exception as exc:
+                logger.warning(
+                    (
+                        "[%s] domain batch analysis failed; using unknown fallback "
+                        "for %d/%d domains (batch %d/%d): %s"
+                    ),
+                    SKILL_KEY,
+                    len(batch),
+                    len(normalized_domains),
+                    index,
+                    len(batches),
+                    exc,
+                )
+                parsed.update({domain: _unknown_result(domain) for domain in batch})
+        return parsed
+
+    def _resolve_batch_size(self) -> int:
+        settings = get_settings()
+        raw_value = self.batch_size
+        if raw_value is None:
+            raw_value = getattr(settings, "URL_INTELLIGENCE_BATCH_SIZE", 60)
+        try:
+            return max(1, int(raw_value or 60))
+        except (TypeError, ValueError):
+            return 60
 
     async def analyze_urls(
         self,
@@ -159,6 +189,10 @@ def _dedupe_domains(domains: list[str]) -> list[str]:
         deduped.append(domain)
         seen.add(domain)
     return deduped
+
+
+def _chunked(items: list[str], size: int) -> list[list[str]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
 
 
 def _coerce_mapping_result(domain: str, value: Any) -> DomainIntelligenceResult:

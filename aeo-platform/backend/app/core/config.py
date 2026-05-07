@@ -127,6 +127,7 @@ class Settings(BaseSettings):
     URL_INTELLIGENCE_LLM_PROVIDER: str = "deepseek"
     URL_INTELLIGENCE_MODEL_NAME: str = "deepseek-v4-flash"
     URL_INTELLIGENCE_TIMEOUT_SECONDS: float = 45.0
+    URL_INTELLIGENCE_BATCH_SIZE: int = 60
 
     DOUBAO_API_KEY: str | None = None
     DOUBAO_MODEL: str = "doubao-seed-2-0-lite-260215"

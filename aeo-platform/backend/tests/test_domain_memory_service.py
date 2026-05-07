@@ -6,6 +6,7 @@ import pytest
 
 from app.core.domain_normalization import normalize_domain
 from app.services.domain_memory_service import DomainMemoryService
+from app.services.url_intelligence_skill import DomainIntelligenceResult
 from app.services.url_intelligence_skill import URLIntelligenceSkill
 from app.services.url_intelligence_skill import _SYSTEM_PROMPT as URL_SYSTEM_PROMPT
 
@@ -212,6 +213,52 @@ async def test_url_intelligence_skill_retries_once_on_empty_json(monkeypatch):
     assert result["example.com"].category == "SaaS"
     assert len(fake_model.max_tokens) == 2
     assert fake_model.max_tokens[1] > fake_model.max_tokens[0]
+
+
+@pytest.mark.asyncio
+async def test_url_intelligence_batches_domains_and_keeps_partial_success(
+    monkeypatch,
+):
+    calls = []
+
+    async def fake_analyze_once(self, domains):
+        calls.append(list(domains))
+        if "bad.example" in domains:
+            raise RuntimeError("simulated batch failure")
+        return {
+            domain: DomainIntelligenceResult(
+                domain=domain,
+                site_name=f"site:{domain}",
+                category="内容平台",
+            )
+            for domain in domains
+        }
+
+    monkeypatch.setattr(
+        URLIntelligenceSkill,
+        "_analyze_domains_once",
+        fake_analyze_once,
+    )
+
+    result = await URLIntelligenceSkill(batch_size=2).analyze_domains(
+        [
+            "a.example",
+            "b.example",
+            "bad.example",
+            "c.example",
+            "d.example",
+        ]
+    )
+
+    assert calls == [
+        ["a.example", "b.example"],
+        ["bad.example", "c.example"],
+        ["d.example"],
+    ]
+    assert result["a.example"].category == "内容平台"
+    assert result["d.example"].category == "内容平台"
+    assert result["bad.example"].category == "缺乏特征，无法识别"
+    assert result["c.example"].category == "缺乏特征，无法识别"
 
 
 @pytest.mark.asyncio
