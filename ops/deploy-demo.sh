@@ -207,7 +207,11 @@ for item in [
 ]:
     if item not in origins:
         origins.append(item)
-upsert(backend_env, "CORS_ORIGINS", ",".join(origins))
+upsert(
+    backend_env,
+    "CORS_ORIGINS",
+    json.dumps(origins, ensure_ascii=False, separators=(",", ":")),
+)
 PY
 }
 
