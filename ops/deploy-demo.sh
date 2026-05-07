@@ -517,10 +517,11 @@ EOF
   sudo systemctl enable "$BACKEND_SERVICE" "$FRONTEND_SERVICE" >/dev/null
 }
 
-certificate_dir_for_host() {
+certificate_pair_for_host() {
   local host="$1"
   local candidate
   local cert_dir
+  local nginx_pair
   local wildcard=""
 
   if [[ "$host" == *.* ]]; then
@@ -528,7 +529,7 @@ certificate_dir_for_host() {
   fi
 
   if [[ -f "/etc/letsencrypt/live/$host/fullchain.pem" && -f "/etc/letsencrypt/live/$host/privkey.pem" ]]; then
-    printf '/etc/letsencrypt/live/%s\n' "$host"
+    printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem\n' "$host" "$host"
     return 0
   fi
 
@@ -537,25 +538,70 @@ certificate_dir_for_host() {
     if sudo openssl x509 -in "$candidate" -noout -ext subjectAltName 2>/dev/null \
       | grep -F "DNS:$host" >/dev/null; then
       cert_dir="$(dirname "$candidate")"
-      printf '%s\n' "$cert_dir"
+      printf '%s/fullchain.pem|%s/privkey.pem\n' "$cert_dir" "$cert_dir"
       return 0
     fi
     if [[ -n "$wildcard" ]] && sudo openssl x509 -in "$candidate" -noout -ext subjectAltName 2>/dev/null \
       | grep -F "DNS:$wildcard" >/dev/null; then
       cert_dir="$(dirname "$candidate")"
-      printf '%s\n' "$cert_dir"
+      printf '%s/fullchain.pem|%s/privkey.pem\n' "$cert_dir" "$cert_dir"
       return 0
     fi
   done
 
-  fail "No Let's Encrypt certificate found for host: $host"
+  nginx_pair="$(
+    sudo nginx -T 2>/dev/null | python3 -c '
+import re
+import sys
+
+host = sys.argv[1]
+text = sys.stdin.read().splitlines()
+inside = False
+depth = 0
+block: list[str] = []
+
+for line in text:
+    stripped = line.strip()
+    if not inside and re.match(r"server\s*\{", stripped):
+        inside = True
+        depth = stripped.count("{") - stripped.count("}")
+        block = [line]
+        continue
+    if not inside:
+        continue
+    block.append(line)
+    depth += stripped.count("{") - stripped.count("}")
+    if depth > 0:
+        continue
+
+    joined = "\n".join(block)
+    inside = False
+    if not re.search(r"\bserver_name\b[^;]*\b" + re.escape(host) + r"\b", joined):
+        continue
+    cert = re.search(r"^\s*ssl_certificate\s+([^;]+);", joined, re.MULTILINE)
+    key = re.search(r"^\s*ssl_certificate_key\s+([^;]+);", joined, re.MULTILINE)
+    if cert and key:
+        print(f"{cert.group(1).strip()}|{key.group(1).strip()}")
+        raise SystemExit(0)
+    ' "$host"
+  )"
+  if [[ -n "$nginx_pair" ]]; then
+    printf '%s\n' "$nginx_pair"
+    return 0
+  fi
+
+  fail "No TLS certificate pair found for host: $host"
 }
 
 install_nginx_site() {
   local primary_host
-  local primary_cert_dir
+  local primary_cert_pair
+  local primary_cert
+  local primary_key
   local redirect_host
-  local redirect_cert_dir
+  local redirect_cert_pair
+  local redirect_cert
+  local redirect_key
   local tmp
   local site_path="/etc/nginx/sites-available/00-ageo-domain.conf"
   local enabled_path="/etc/nginx/sites-enabled/00-ageo-domain.conf"
@@ -564,7 +610,9 @@ install_nginx_site() {
   require_command openssl
 
   primary_host="$(external_url_host)"
-  primary_cert_dir="$(certificate_dir_for_host "$primary_host")"
+  primary_cert_pair="$(certificate_pair_for_host "$primary_host")"
+  primary_cert="${primary_cert_pair%%|*}"
+  primary_key="${primary_cert_pair#*|}"
   tmp="$(mktemp)"
 
   {
@@ -589,15 +637,17 @@ EOF
       if [[ "$redirect_host" == "$primary_host" ]]; then
         continue
       fi
-      redirect_cert_dir="$(certificate_dir_for_host "$redirect_host")"
+      redirect_cert_pair="$(certificate_pair_for_host "$redirect_host")"
+      redirect_cert="${redirect_cert_pair%%|*}"
+      redirect_key="${redirect_cert_pair#*|}"
       cat <<EOF
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name $redirect_host;
 
-    ssl_certificate $redirect_cert_dir/fullchain.pem;
-    ssl_certificate_key $redirect_cert_dir/privkey.pem;
+    ssl_certificate $redirect_cert;
+    ssl_certificate_key $redirect_key;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
 
@@ -613,8 +663,8 @@ server {
     listen [::]:443 ssl http2;
     server_name $primary_host;
 
-    ssl_certificate $primary_cert_dir/fullchain.pem;
-    ssl_certificate_key $primary_cert_dir/privkey.pem;
+    ssl_certificate $primary_cert;
+    ssl_certificate_key $primary_key;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
 
