@@ -1630,10 +1630,9 @@ def build_input_bundle(
                     )
                     or ""
                 ).strip()
-                if (
-                    _is_meaningful_site_category(site_category)
-                    and source_type.lower() in {"", "other"}
-                ):
+                if _is_meaningful_site_category(
+                    site_category
+                ) and source_type.lower() in {"", "other"}:
                     source_type = site_category
                 if not source_type:
                     source_type = (
@@ -1878,6 +1877,9 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
     ]
     brand_related_link_answer_count = 0
     official_link_answer_count = 0
+    official_platforms: set[str] = set()
+    official_question_ids: set[str] = set()
+    official_url_stats: dict[str, dict[str, Any]] = {}
     platform_citation_counter: dict[str, Counter[str]] = defaultdict(Counter)
     platform_brand_related_totals: Counter[str] = Counter()
     platform_ecosystem_counts: Counter[str] = Counter()
@@ -1920,6 +1922,35 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
             if citation.is_official:
                 official_links += 1
                 official_in_answer += 1
+                official_platforms.add(answer.platform)
+                official_question_ids.add(answer.question_id)
+                official_url_row = official_url_stats.setdefault(
+                    citation.url,
+                    {
+                        "url": citation.url,
+                        "title": citation.title,
+                        "domain": citation.domain,
+                        "site_name": citation.site_name,
+                        "citation_count": 0,
+                        "platforms": set(),
+                        "samples": [],
+                    },
+                )
+                official_url_row["citation_count"] += 1
+                official_url_row["platforms"].add(answer.platform)
+                if len(official_url_row["samples"]) < 3:
+                    official_url_row["samples"].append(
+                        {
+                            "platform": answer.platform,
+                            "question_id": answer.question_id,
+                            "question_text": _clean_report_text(
+                                answer.question_text, max_length=100
+                            ),
+                            "answer_excerpt": _clean_report_text(
+                                answer.answer_text or "", max_length=160
+                            ),
+                        }
+                    )
         if answer.mentioned_monitor_brand and brand_related_in_answer > 0:
             brand_related_link_answer_count += 1
         if answer.mentioned_monitor_brand and official_in_answer > 0:
@@ -2014,6 +2045,19 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
             }
         )
 
+    official_url_rows = sorted(
+        [
+            {
+                **row,
+                "platforms": sorted(str(platform) for platform in row["platforms"]),
+            }
+            for row in official_url_stats.values()
+        ],
+        key=lambda row: (
+            -int(row.get("citation_count") or 0),
+            str(row.get("url") or ""),
+        ),
+    )[:20]
     summary = {
         "brand_link_penetration": safe_ratio(brand_related_links, total_citations),
         "official_share": safe_ratio(official_links, brand_related_links),
@@ -2031,6 +2075,14 @@ def _build_citation_analyzer(bundle: InputBundle) -> dict[str, Any]:
         "total_citations": total_citations,
         "brand_related_links": brand_related_links,
         "official_links": official_links,
+        "official_source_stats": {
+            "citation_count": official_links,
+            "distinct_url_count": len(official_url_stats),
+            "answer_count": official_link_answer_count,
+            "question_count": len(official_question_ids),
+            "platforms": sorted(official_platforms),
+            "urls": official_url_rows,
+        },
     }
     return {"summary": summary, "answers": answer_rows}
 

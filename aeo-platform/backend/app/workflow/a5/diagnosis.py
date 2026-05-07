@@ -635,6 +635,8 @@ def build_report_route(
     report_kind: str,
 ) -> dict[str, Any]:
     mode = str(data_audit.get("report_mode") or REPORT_MODE_BRAND_ENTRY)
+    normalized_report_kind = str(report_kind or "").strip().lower()
+    is_scenario_report = normalized_report_kind in {"scenario", "persona"}
     mode_titles = {
         REPORT_MODE_NO_SIGNAL: "品牌 AI 答案未进入诊断报告",
         REPORT_MODE_WEAK_SIGNAL: "品牌 AI 答案弱信号观察报告",
@@ -655,7 +657,7 @@ def build_report_route(
             "数据状态",
             "品牌进入能力",
             "场景地图",
-            "来源证据权",
+            "引用来源分析",
             "风险顾虑",
             "行动建议",
             "复测计划",
@@ -665,7 +667,11 @@ def build_report_route(
     return {
         "report_mode": mode,
         "report_kind": report_kind,
-        "title": mode_titles.get(mode, mode_titles[REPORT_MODE_BRAND_ENTRY]),
+        "title": (
+            "用户场景分析报告"
+            if is_scenario_report
+            else mode_titles.get(mode, mode_titles[REPORT_MODE_BRAND_ENTRY])
+        ),
         "operations_sections": operations_sections,
         "blocked_sections": data_audit.get("blocked_sections", []),
         "allowed_sections": data_audit.get("allowed_sections", []),
@@ -1044,6 +1050,24 @@ def build_source_intelligence(
         else {}
     )
     top_domains = source_summary.get("top_domains", []) or []
+    official_source_stats = (
+        source_summary.get("official_source_stats")
+        if isinstance(source_summary.get("official_source_stats"), dict)
+        else {
+            "citation_count": _as_int(source_summary.get("official_links")),
+            "distinct_url_count": 0,
+            "answer_count": _as_int(
+                (source_summary.get("official_funnel") or {}).get(
+                    "official_link_answer_count"
+                )
+                if isinstance(source_summary.get("official_funnel"), dict)
+                else 0
+            ),
+            "question_count": 0,
+            "platforms": [],
+            "urls": [],
+        }
+    )
     total_citations = _as_int(source_summary.get("total_citations"))
     rows: list[dict[str, Any]] = []
     type_counter: Counter[str] = Counter()
@@ -1106,6 +1130,7 @@ def build_source_intelligence(
     ]
     return {
         "domains": rows,
+        "official_source_stats": official_source_stats,
         "summary": [
             {
                 "source_type_label": label,
@@ -1117,6 +1142,67 @@ def build_source_intelligence(
         ],
         "unknown_domains": unknown_domains,
     }
+
+
+def _render_official_source_lines(
+    source_intelligence: dict[str, Any], *, limit: int = 8
+) -> list[str]:
+    stats = (
+        source_intelligence.get("official_source_stats")
+        if isinstance(source_intelligence.get("official_source_stats"), dict)
+        else {}
+    )
+    urls = [
+        item
+        for item in stats.get("urls", []) or []
+        if isinstance(item, dict) and item.get("url")
+    ]
+    citation_count = _as_int(stats.get("citation_count"))
+    distinct_url_count = _as_int(stats.get("distinct_url_count")) or len(urls)
+    answer_count = _as_int(stats.get("answer_count"))
+    question_count = _as_int(stats.get("question_count"))
+    platforms = _unique_values(stats.get("platforms") or [])
+    if not platforms:
+        platforms = _unique_values(
+            platform for item in urls for platform in item.get("platforms", []) or []
+        )
+    platform_text = (
+        "、".join(_platform_label(platform) for platform in platforms[:6]) or "暂无"
+    )
+    lines = [
+        f"- 官网引用统计：官网链接被引用 {citation_count} 次，涉及 {distinct_url_count} 个官网链接，覆盖 {len(platforms)} 个平台、{question_count} 个问题；官网引用答案 {answer_count} 条。"
+    ]
+    if not urls:
+        if citation_count > 0:
+            lines.append(
+                "- 官网引用明细：本轮记录到官网引用，但缺少 URL 级样本，需要复核 A4 引用数据。"
+            )
+        else:
+            lines.append("- 官网引用明细：本轮没有检测到官网链接被引用。")
+        return lines
+
+    lines.append(f"- 官网引用平台：{platform_text}。")
+    lines.append("- 官网引用明细：")
+    for item in urls[:limit]:
+        samples = [
+            sample
+            for sample in item.get("samples", []) or []
+            if isinstance(sample, dict)
+        ]
+        sample = samples[0] if samples else {}
+        sample_question = _clip(sample.get("question_text"), 88) or "暂无问题样本"
+        answer_excerpt = _clip(sample.get("answer_excerpt"), 128) or "暂无答案摘录"
+        item_platforms = _unique_values(item.get("platforms") or [])
+        item_platform_text = (
+            "、".join(_platform_label(platform) for platform in item_platforms[:6])
+            or "未知平台"
+        )
+        title = _clip(item.get("title"), 48)
+        title_text = f"（{title}）" if title else ""
+        lines.append(
+            f"  - {item.get('url')}{title_text}：出现 {_as_int(item.get('citation_count'))} 次；平台：{item_platform_text}；问题：「{sample_question}」；答案摘录：「{answer_excerpt}」。"
+        )
+    return lines
 
 
 def _source_type_diagnosis(label: str) -> str:
@@ -1406,7 +1492,7 @@ def build_action_recommendations(
         recommendations.append(
             {
                 "priority": "P1",
-                "decision_scenario": "来源证据权",
+                "decision_scenario": "引用来源分析",
                 "fact": f"当前 AI 答案主要受{top_source}影响，官网证据权不足。",
                 "business_problem": "品牌露出没有稳定回到品牌可控内容。",
                 "recommended_asset": "官网结论页、官方白皮书 HTML 摘要和可引用 FAQ",
@@ -1703,7 +1789,7 @@ def build_diagnosis_markdown_appendix(
     else:
         lines.append("- 当前问题样本不足以形成稳定场景地图。")
 
-    lines.extend(["", "### 8.2 来源证据权"])
+    lines.extend(["", "### 8.2 引用来源分析"])
     if source_summary:
         lines.append("当前 AI 答案主要依赖以下来源类型：")
         for index, item in enumerate(source_summary, start=1):
@@ -1712,6 +1798,7 @@ def build_diagnosis_markdown_appendix(
             )
     else:
         lines.append("当前没有形成稳定来源类型结构。")
+    lines.extend(_render_official_source_lines(source_intelligence, limit=5))
     for item in source_domains:
         lines.append(
             f"- {item.get('domain')}：{item.get('source_type_label')}；推荐动作：{item.get('recommended_action')}"
@@ -2701,7 +2788,7 @@ def build_structured_report(
                     )
         else:
             lines.append("- 当前问题样本不足以形成稳定场景地图。")
-        lines.extend(["", "### 4. 来源证据权"])
+        lines.extend(["", "### 4. 引用来源分析"])
         source_type_summary = [
             item
             for item in source_intelligence.get("summary", []) or []
@@ -2713,6 +2800,7 @@ def build_structured_report(
                 lines.append(
                     f"  - {item.get('source_type_label')}：出现 {item.get('ai_citation_frequency')} 次，占比 {_format_rate(item.get('citation_share'))}；{item.get('diagnosis')}"
                 )
+        lines.extend(_render_official_source_lines(source_intelligence))
         if source_domains:
             lines.append("- 高频来源网站：")
             for item in source_domains[:8]:
