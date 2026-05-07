@@ -235,10 +235,73 @@ async def test_dashboard_home_todo_accepts_active_settings_schedule(tmp_path):
             item["kind"] != "monitoring_plan_incomplete"
             for item in payload["todoItems"]
         )
+        assert payload["hasActiveMonitoringSchedule"] is True
         assert payload["monitoringPlan"]["status"] == "active"
         assert payload["monitoringPlan"]["schedule_id"] == str(schedule.id)
         assert payload["monitoringPlan"]["question_count"] == 1
         assert "deepseek_browser" in payload["monitoringPlan"]["endpoint_ids"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_home_todo_accepts_active_schedule_from_other_mode(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user, entity = await _seed_user_entity(session)
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=["How is Specta mentioned?"],
+        )
+        await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status="draft",
+        )
+        now = datetime.now(timezone.utc)
+        session.add_all(
+            [
+                _snapshot(
+                    entity.id,
+                    mode="panorama",
+                    mention_rate=0.6,
+                    created_at=now - timedelta(minutes=5),
+                    with_report=True,
+                ),
+                _snapshot(
+                    entity.id,
+                    mode="scenario",
+                    mention_rate=0.3,
+                    created_at=now,
+                    with_report=True,
+                    session_id=uuid.uuid4(),
+                ),
+            ]
+        )
+        await session.commit()
+        await MonitoringService(session).create_schedule(
+            user_id=user.id,
+            entity_id=entity.id,
+            preferred_hour=11,
+            platforms=["doubao", "yuanbao", "kimi", "deepseek"],
+            monitor_mode="panorama",
+        )
+
+        payload = await AnalyticsService(session, viewer=user).get_dashboard_home_v2(
+            str(entity.id),
+            monitor_mode="scenario",
+            date_range="month",
+        )
+
+        assert all(
+            item["kind"] != "monitoring_plan_incomplete"
+            for item in payload["todoItems"]
+        )
+        assert payload["hasActiveMonitoringSchedule"] is True
     await engine.dispose()
 
 

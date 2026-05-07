@@ -541,6 +541,7 @@ export interface DashboardHomeData {
   };
   latest_report?: DashboardLatestReport;
   monitoring_plan?: DashboardMonitoringPlanSummary;
+  has_active_monitoring_schedule?: boolean;
   period_summary?: DashboardPeriodSummary;
   data_point_count?: number;
   recent_issue?: DashboardMonitoringIssue;

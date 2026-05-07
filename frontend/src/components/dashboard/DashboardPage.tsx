@@ -63,6 +63,7 @@ function resolveHomeMonitorMode(home?: DashboardHomeData | null): DashboardMonit
 }
 
 function resolveMonitoringStatusLabel(home?: DashboardHomeData | null): string {
+  if (home?.has_active_monitoring_schedule) return '正在监测';
   const status = home?.monitoring_plan?.status;
   if (status === 'active') return '正在监测';
   if (status === 'paused') return '暂停监测';
@@ -180,26 +181,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       return !isReportTodoViewed(selectedBrandId, item.ref_id || item.id);
     }) || null;
     if (backendItem) return backendItem;
-    if (
-      selectedBrand &&
-      !isHomeLoading &&
-      hasSelectedBrandAnalysis &&
-      resolveMonitoringStatusLabel(home) === '待监测'
-    ) {
-      return {
-        id: 'open_monitoring_plan',
-        kind: 'monitoring_plan_incomplete',
-        priority: 2,
-        title: '开启周期监测',
-        description: '当前品牌已有分析上下文，但还没有启用周期监测。开启后会按计划生成报告和趋势。',
-        action: 'setup_plan',
-        action_label: '开启监测',
-        monitor_mode: selectedMonitorMode,
-        monitoring_plan_id: home?.monitoring_plan?.id ?? null,
-        ref_id: null,
-        report_created_at: null,
-      } satisfies DashboardTodoItem;
-    }
     return null;
   })();
 

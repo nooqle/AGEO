@@ -70,6 +70,7 @@ function emptyHome(): DashboardHomeData {
       items: [],
     },
     monitoring_plan: undefined,
+    has_active_monitoring_schedule: false,
     period_summary: undefined,
     data_point_count: 0,
     recent_issue: undefined,
@@ -546,6 +547,9 @@ export function buildDashboardHomeData(value: unknown): DashboardHomeData | unde
     },
     latest_report: normalizeLatestReport(pick(row, 'latestReport', 'latest_report')),
     monitoring_plan: normalizeMonitoringPlan(pick(row, 'monitoringPlan', 'monitoring_plan')),
+    has_active_monitoring_schedule: Boolean(
+      pick(row, 'hasActiveMonitoringSchedule', 'has_active_monitoring_schedule'),
+    ),
     period_summary: normalizePeriodSummary(pick(row, 'periodSummary', 'period_summary')),
     data_point_count: toInteger(pick(row, 'dataPointCount', 'data_point_count')),
     recent_issue: normalizeMonitoringIssue(pick(row, 'recentIssue', 'recent_issue')),

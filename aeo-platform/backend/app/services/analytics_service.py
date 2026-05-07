@@ -997,11 +997,13 @@ class AnalyticsService:
         home: dict[str, Any],
         *,
         monitoring_plan: dict[str, Any] | None,
+        has_active_monitoring_schedule: bool = False,
         period_summary: dict[str, Any],
         recent_issue: dict[str, Any] | None,
         period_rollup: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         home["monitoringPlan"] = monitoring_plan
+        home["hasActiveMonitoringSchedule"] = bool(has_active_monitoring_schedule)
         home["periodSummary"] = period_summary
         home["dataPointCount"] = int(period_summary.get("data_point_count") or 0)
         home["recentIssue"] = recent_issue
@@ -1015,6 +1017,7 @@ class AnalyticsService:
         home["todoItems"] = self._build_dashboard_todo_items(
             home,
             monitoring_plan=monitoring_plan,
+            has_active_monitoring_schedule=has_active_monitoring_schedule,
             period_summary=period_summary,
         )
 
@@ -1040,6 +1043,7 @@ class AnalyticsService:
         home: dict[str, Any],
         *,
         monitoring_plan: dict[str, Any] | None,
+        has_active_monitoring_schedule: bool = False,
         period_summary: dict[str, Any],
     ) -> list[dict[str, Any]]:
         latest_report = home.get("latestReport")
@@ -1070,7 +1074,7 @@ class AnalyticsService:
 
         has_complete_plan = self._dashboard_monitoring_plan_is_complete(
             monitoring_plan
-        )
+        ) or has_active_monitoring_schedule
         data_point_count = int(period_summary.get("data_point_count") or 0)
 
         items: list[dict[str, Any]] = []
@@ -3580,26 +3584,70 @@ class AnalyticsService:
             logger.warning("[Dashboard] Failed to load monitoring plan: %s", exc)
             return None
 
+    async def _get_dashboard_active_schedules(
+        self,
+        *,
+        brand_uuid: UUID,
+        monitor_mode: str | None = None,
+    ) -> list[MonitoringSchedule]:
+        if self.viewer is None:
+            return []
+        conditions = [
+            AccessScopeService.schedule_visibility_filter(self.viewer),
+            MonitoringSchedule.entity_id == brand_uuid,
+            MonitoringSchedule.status == ScheduleStatus.ACTIVE,
+        ]
+        if monitor_mode:
+            conditions.append(MonitoringSchedule.monitor_mode == monitor_mode)
+        result = await self.db.execute(
+            select(MonitoringSchedule)
+            .where(*conditions)
+            .order_by(desc(MonitoringSchedule.updated_at))
+        )
+        return list(result.scalars().all())
+
     async def _get_dashboard_active_schedule(
         self,
         *,
         brand_uuid: UUID,
         monitor_mode: str,
     ) -> MonitoringSchedule | None:
-        if self.viewer is None:
-            return None
-        result = await self.db.execute(
-            select(MonitoringSchedule)
-            .where(
-                AccessScopeService.schedule_visibility_filter(self.viewer),
-                MonitoringSchedule.entity_id == brand_uuid,
-                MonitoringSchedule.monitor_mode == monitor_mode,
-                MonitoringSchedule.status == ScheduleStatus.ACTIVE,
-            )
-            .order_by(desc(MonitoringSchedule.updated_at))
-            .limit(1)
+        schedules = await self._get_dashboard_active_schedules(
+            brand_uuid=brand_uuid,
+            monitor_mode=monitor_mode,
         )
-        return result.scalar_one_or_none()
+        return schedules[0] if schedules else None
+
+    async def _dashboard_has_complete_active_schedule(
+        self,
+        *,
+        brand_id: str | None,
+    ) -> bool:
+        if not brand_id or self.viewer is None:
+            return False
+        try:
+            brand_uuid = UUID(brand_id)
+        except (ValueError, AttributeError):
+            return False
+        try:
+            schedules = await self._get_dashboard_active_schedules(
+                brand_uuid=brand_uuid,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Dashboard] Failed to load active monitoring schedules: %s",
+                exc,
+            )
+            return False
+        return any(
+            self._dashboard_monitoring_plan_is_complete(
+                self._dashboard_monitoring_plan_from_schedule(
+                    schedule,
+                    fallback_plan=None,
+                )
+            )
+            for schedule in schedules
+        )
 
     @staticmethod
     def _dashboard_monitoring_plan_is_complete(
@@ -3720,6 +3768,10 @@ class AnalyticsService:
             brand_id=brand_id,
             monitor_mode=normalized_monitor_mode,
         )
+        has_active_monitoring_schedule = (
+            self._dashboard_monitoring_plan_is_complete(monitoring_plan)
+            or await self._dashboard_has_complete_active_schedule(brand_id=brand_id)
+        )
         recent_issue = await self._get_recent_monitoring_issue(
             brand_id=brand_id,
             monitor_mode=normalized_monitor_mode,
@@ -3802,6 +3854,7 @@ class AnalyticsService:
                 },
                 },
                 monitoring_plan=monitoring_plan,
+                has_active_monitoring_schedule=has_active_monitoring_schedule,
                 period_summary=period_summary,
                 recent_issue=recent_issue,
                 period_rollup=period_rollup,
@@ -3812,6 +3865,7 @@ class AnalyticsService:
             return self._augment_home_with_period_context(
                 projection_home,
                 monitoring_plan=monitoring_plan,
+                has_active_monitoring_schedule=has_active_monitoring_schedule,
                 period_summary=period_summary,
                 recent_issue=recent_issue,
                 period_rollup=period_rollup,
@@ -4390,6 +4444,7 @@ class AnalyticsService:
         return self._augment_home_with_period_context(
             home_payload,
             monitoring_plan=monitoring_plan,
+            has_active_monitoring_schedule=has_active_monitoring_schedule,
             period_summary=period_summary,
             recent_issue=recent_issue,
             period_rollup=period_rollup,
