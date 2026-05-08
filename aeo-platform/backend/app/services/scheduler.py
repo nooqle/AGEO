@@ -740,20 +740,20 @@ async def _handle_pipeline_success(
                 )
         if snapshot_id is None:
             error_message = (
-                "Scheduled monitoring finished without an A5 snapshot."
+                "本次自动监测已结束，但没有生成可用于看板展示的报告。"
             )
             logger.error("[Scheduler] %s task=%s run=%s", error_message, task_id, run_id)
             await task_service.fail_task(
                 task_id,
                 error_message=error_message,
-                error_stage="sched_snap",
+                error_stage="analysis_report",
                 run_id=run_id,
             )
             await monitoring_service.record_run_failed(schedule_id)
             await MonitoringPlanService(db).record_run_failed(
                 task_id=task_id,
                 error_message=error_message,
-                error_stage="sched_snap",
+                error_stage="analysis_report",
             )
             return
 

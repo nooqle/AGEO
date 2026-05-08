@@ -1,91 +1,82 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import {
-  RiErrorWarningLine,
-} from '@remixicon/react';
 import { cn } from '@/lib/cn';
 import type { AnalysisTask } from '@/types/task';
-import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
+import {
+  getUserFacingStageLabel,
+  sanitizeUserFacingErrorMessage,
+} from '@/lib/workflowStageLabels';
 
 interface ReconnectionBannerProps {
   task: AnalysisTask;
-  /** Callback when user clicks "View Report" */
-  onViewReport?: () => void;
-  /** Callback when user clicks "Retry" on failed task */
-  onRetry?: () => void;
-  /** Callback when banner is dismissed */
-  onDismiss?: () => void;
   className?: string;
 }
 
 export function ReconnectionBanner({
   task,
-  onRetry,
-  onDismiss,
   className,
 }: ReconnectionBannerProps) {
-  const [isDismissed, setIsDismissed] = useState(false);
-
-  const handleDismiss = useCallback(() => {
-    setIsDismissed(true);
-    onDismiss?.();
-  }, [onDismiss]);
-
-  if (isDismissed) return null;
-
   if (task.status === 'completed') return null;
 
-  // Scenario C: Task FAILED while user was away
   if (task.status === 'failed') {
     const errorStageLabel = getUserFacingStageLabel(task.error_stage);
+    const isScheduledTask =
+      task.latest_run?.run_kind === 'scheduled' ||
+      task.latest_run?.trigger_source === 'scheduler' ||
+      task.error_stage === 'sched_snap';
+    const fallbackMessage = isScheduledTask
+      ? '本次自动监测已结束，但没有生成可用于看板展示的报告。'
+      : '本次分析没有生成可用于展示的结果。';
+    const detail = sanitizeUserFacingErrorMessage(task.error_message, fallbackMessage);
+    const title = isScheduledTask
+      ? `“${task.brand_name}”本次自动监测未完成`
+      : `“${task.brand_name}”本次分析未完成`;
+
     return (
       <div
-        role="alert"
-        aria-live="assertive"
-        aria-label={`品牌 ${task.brand_name} 分析失败${errorStageLabel ? `，失败环节 ${errorStageLabel}` : ''}，可重新分析或关闭`}
+        role="status"
+        aria-live="polite"
+        aria-label={title}
         className={cn(
-          'relative rounded-[10px] mx-4 my-2 p-3 animate-slide-up',
+          'mx-4 my-2 rounded-2xl border px-4 py-4 animate-slide-up',
           className
         )}
         style={{
-          background: 'rgba(239,68,68,0.06)',
-          border: '1px solid rgba(239,68,68,0.2)',
+          background: 'rgba(245, 158, 11, 0.08)',
+          borderColor: 'rgba(245, 158, 11, 0.18)',
         }}
       >
-        <div className="flex items-start gap-2">
-          <RiErrorWarningLine className="w-[18px] h-[18px] flex-shrink-0 mt-0.5" style={{ color: 'var(--error)' }} />
-          <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
-              &ldquo;{task.brand_name}&rdquo; 分析失败
-              {errorStageLabel && (
-                <span className="font-normal" style={{ color: 'var(--text-secondary)' }}>
-                  {' '}({errorStageLabel})
-                </span>
-              )}
-            </div>
-            {task.error_message && (
-              <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-                {task.error_message}
-              </div>
-            )}
-            <div className="flex items-center gap-2 mt-2">
-              <button
-                onClick={onRetry}
-                className="px-3.5 py-1.5 rounded-md text-xs font-medium text-white cursor-pointer transition-colors"
-                style={{ background: 'var(--brand-primary)' }}
-                aria-label={`重新分析 ${task.brand_name}`}
-              >
-                重新分析
-              </button>
-              <button
-                onClick={handleDismiss}
-                className="px-3.5 py-1.5 text-xs cursor-pointer transition-colors"
+        <div className="flex items-start gap-3">
+          <div
+            className="mt-1 h-2.5 w-2.5 rounded-full"
+            style={{ background: 'var(--warning)' }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                {title}
+              </p>
+              <span
+                className="rounded-full bg-[var(--bg-secondary)] px-2 py-0.5 text-[11px]"
                 style={{ color: 'var(--text-secondary)' }}
               >
-                关闭
-              </button>
+                需要处理
+              </span>
             </div>
+
+            {detail && (
+              <p className="mt-1 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+                {detail}
+              </p>
+            )}
+            {errorStageLabel && (
+              <p className="mt-1 text-xs leading-5" style={{ color: 'var(--text-tertiary)' }}>
+                处理环节：{errorStageLabel}
+              </p>
+            )}
+            <p className="mt-1 text-xs leading-5" style={{ color: 'var(--text-tertiary)' }}>
+              这是一条状态提示，不需要在这里确认。需要重新复测时，直接在下方输入你的要求。
+            </p>
           </div>
         </div>
       </div>

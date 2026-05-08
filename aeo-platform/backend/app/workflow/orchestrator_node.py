@@ -548,7 +548,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
             "说明内容包括：1) 周期监测会按设定频率自动重新运行品牌分析流程，生成最新报告并与历史数据对比；"
             "2) 可配置参数及默认值——监测频率（每天/每周/双周/每月，推荐每周）、执行时间（默认上午11:00）、"
             "告警阈值（当品牌提及率、官网引用率或高风险场景数量出现明显变化时通知用户，默认 10）；"
-            "3) 基于 Dashboard 上下文中的品牌、问题集、AI 来源给出推荐配置。"
+            "3) 基于看板上下文中的品牌、问题集、平台来源给出推荐配置。"
             "注意：当前调度字段支持频率和小时，不支持固定'每月第几日'；不要承诺每月 1 日这种后台尚未支持的精确日期。"
         ),
         "parameters": {
@@ -593,7 +593,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 "endpoint_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "要绑定的 AI 来源 ID，例如 doubao_api、yuanbao_api、kimi_api、deepseek_browser。",
+                    "description": "要绑定的平台来源 ID，例如 doubao_api、yuanbao_api、kimi_api、deepseek_browser。",
                 },
             },
         },

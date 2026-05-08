@@ -1799,7 +1799,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             const stageLabel = getUserFacingStageLabel(task.current_stage);
             setExecutionProgress({
               stage: task.current_stage,
-              stageName: stageLabel ?? task.current_stage,
+              stageName: stageLabel ?? '当前步骤',
               stageIndex: 0,
               totalStages: 5,
               progress: task.progress,
@@ -2513,21 +2513,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     handleSendMessage(suggestion.message);
   }, [clearFollowUpSuggestions, handleSendMessage]);
 
-  // Cycle 3: Handle reconnection banner actions
-  const handleViewReport = useCallback(async () => {
-    await hydrateArtifacts(false, { compact: true });
-    const { setOpen } = useCanvasStore.getState();
-    setOpen(true);
-    setReconnectionTask(null);
-  }, [hydrateArtifacts]);
-
-  const handleReconnectionRetry = useCallback(() => {
-    if (reconnectionTask) {
-      handleSendMessage(reconnectionTask.brand_name);
-      setReconnectionTask(null);
-    }
-  }, [reconnectionTask, handleSendMessage]);
-
   // Determine if we should show the empty state with example brands
   // Skip welcome screen when: loading history, has ?brand= param (auto-starting), or already executing
   const hasAutoStartParam = Boolean(autoStartBrand || autoStartDraft);
@@ -2693,9 +2678,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           {reconnectionTask && (
             <ReconnectionBanner
               task={reconnectionTask}
-              onViewReport={handleViewReport}
-              onRetry={handleReconnectionRetry}
-              onDismiss={() => setReconnectionTask(null)}
             />
           )}
 

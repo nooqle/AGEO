@@ -1085,9 +1085,9 @@ class AnalyticsService:
                     "kind": "analysis_setup_incomplete",
                     "priority": 1,
                     "title": "完成品牌基本信息与问题生成",
-                    "description": "当前品牌还没有完成基础分析流程。先通过 AI 对话补齐品牌信息，并生成问题集。",
+                    "description": "当前品牌还没有完成基础分析流程。先通过智能对话补齐品牌信息，并生成问题集。",
                     "action": "ai_conversation",
-                    "actionLabel": "AI 对话处理",
+                    "actionLabel": "对话处理",
                     "monitorMode": monitor_mode,
                 }
             )
@@ -1116,7 +1116,7 @@ class AnalyticsService:
                     "kind": "unread_latest_report",
                     "priority": 3,
                     "title": "查看新的分析报告",
-                    "description": "已有新的 A5 完整报告生成，建议先查看报告再继续处理后续分析。",
+                    "description": "已有新的完整报告生成，建议先查看报告再继续处理后续分析。",
                     "action": "latest_report",
                     "actionLabel": "查看报告",
                     "monitorMode": monitor_mode,
@@ -1182,7 +1182,7 @@ class AnalyticsService:
             "title": "自动监测运行失败" if issue_kind == "failed" else "自动监测可能卡住",
             "error_stage": selected.error_stage or "monitoring_run",
             "error_message": selected.error_message
-            or ("运行长时间未完成，请通过 AI 对话查看上下文。" if issue_kind == "stale" else ""),
+            or ("运行长时间未完成，请通过对话查看上下文。" if issue_kind == "stale" else ""),
             "monitor_mode": selected.monitor_mode,
             "monitoring_plan_id": str(selected.plan_id),
             "monitoring_run_id": str(selected.id),
@@ -1732,7 +1732,7 @@ class AnalyticsService:
             if question_count:
                 sample_parts.append(f"{question_count} 个问题")
             if platform_labels:
-                sample_parts.append(f"{len(platform_labels)} 个 AI 来源")
+                sample_parts.append(f"{len(platform_labels)} 个来源平台")
             if answers_for_scope:
                 sample_parts.append(f"{len(answers_for_scope)} 条有效回答")
 

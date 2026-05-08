@@ -47,10 +47,10 @@ export function HeroSection({
             品牌分析首页
           </div>
           <h1 className="mt-3 text-[clamp(1.65rem,2.3vw,2.2rem)] font-semibold leading-[1.12] text-[var(--text-primary)]">
-            先建立品牌，再通过 AI 对话完成基础信息和问题集。
+            先建立品牌，再通过智能对话完成基础信息和问题集。
           </h1>
           <p className="mt-4 text-[14px] leading-8 text-[var(--text-secondary)]">
-            确认后，Dashboard 会展示周期趋势、平台表现和最新报告。
+            确认后，看板会展示周期趋势、平台表现和最新报告。
           </p>
           <button
             type="button"
@@ -68,7 +68,7 @@ export function HeroSection({
   const brandName = selectedBrandName || '当前品牌';
   const helperText = hasMonitoringContext
     ? `${analysisLabel}已有上下文，可直接提问或继续调整问题集。`
-    : `${analysisLabel}尚未开始，需先通过 AI 对话完成问题集确认。`;
+    : `${analysisLabel}尚未开始，需先通过智能对话完成问题集确认。`;
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -128,7 +128,7 @@ export function HeroSection({
             ) : (
               <RiSendPlane2Line className="h-4 w-4" />
             )}
-            AI 对话
+            智能对话
           </button>
         </form>
       </div>

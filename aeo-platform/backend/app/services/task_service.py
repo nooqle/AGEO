@@ -70,6 +70,8 @@ _TASK_STAGE_ALIASES = {
     "analysis_report": "A5",
     "analysis_report_skill": "A5",
     "data_analytics": "A5",
+    "sched_snap": "A5",
+    "snapshot_missing": "A5",
     "site_confidence_assessment_skill": "A7",
     "site_confidence_assessment_executor": "A7",
 }

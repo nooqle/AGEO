@@ -155,10 +155,10 @@ class MonitoringPlanService:
                 item["display_name"] for item in ENDPOINT_REGISTRY.values()
             )
             raise ValueError(
-                f"不支持的 AI 来源：{'、'.join(invalid)}。支持范围：{supported}"
+                f"不支持的平台来源：{'、'.join(invalid)}。支持范围：{supported}"
             )
         if not normalized:
-            raise ValueError("至少需要选择一个 AI 来源。")
+            raise ValueError("至少需要选择一个平台来源。")
         return normalized
 
     @classmethod

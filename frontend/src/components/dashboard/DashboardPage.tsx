@@ -241,7 +241,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       } else if (home?.monitoring_plan) {
         params.set(
           'sample_summary',
-          `${home.monitoring_plan.question_count} 个问题 · ${home.monitoring_plan.endpoint_labels.length} 个 AI 来源`,
+          `${home.monitoring_plan.question_count} 个问题 · ${home.monitoring_plan.endpoint_labels.length} 个来源平台`,
         );
       }
       if (isRealMonitoringPlanId(home?.monitoring_plan?.id)) {
@@ -261,7 +261,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       router.push(buildChatUrlWithHandoff(session.id, params));
     } catch (error) {
       setIsOpeningDashboardChat(false);
-      toast.error(error instanceof Error ? error.message : '打开 AI 对话失败，请稍后重试。');
+      toast.error(error instanceof Error ? error.message : '打开对话失败，请稍后重试。');
     }
   };
 
