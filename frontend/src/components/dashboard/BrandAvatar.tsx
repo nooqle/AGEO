@@ -1,32 +1,51 @@
 'use client';
 
-import { useState } from 'react';
-import { RiBuilding2Line } from '@remixicon/react';
+import { useMemo, useState } from 'react';
+import { getApiBaseUrl } from '@/services/api';
 import { useTheme } from '@/hooks/useTheme';
 
 interface BrandAvatarProps {
   name: string;
   logoUrl?: string;
-  /**
-   * Kept for existing call sites. Do not derive brand identity from a site
-   * favicon: several sub-brands can share the same corporate domain.
-   */
   domain?: string;
   size?: number;
   className?: string;
 }
 
-export function BrandAvatar({ name, logoUrl, size = 40, className = '' }: BrandAvatarProps) {
+function normalizeDomainHost(domain?: string): string | null {
+  const raw = (domain || '').trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    return parsed.hostname.replace(/^www\./i, '');
+  } catch {
+    const cleaned = raw
+      .replace(/^https?:\/\//i, '')
+      .replace(/^www\./i, '')
+      .split('/')[0]
+      .trim();
+    return cleaned.includes('.') ? cleaned : null;
+  }
+}
+
+function buildCachedFaviconUrl(domain?: string): string | null {
+  const host = normalizeDomainHost(domain);
+  if (!host) return null;
+  return `${getApiBaseUrl()}/favicons?domain=${encodeURIComponent(host)}`;
+}
+
+export function BrandAvatar({ name, logoUrl, domain, size = 40, className = '' }: BrandAvatarProps) {
   const { theme } = useTheme();
-  const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
+  const cachedFaviconUrl = useMemo(() => buildCachedFaviconUrl(domain), [domain]);
   const cleanLogoUrl = logoUrl?.trim() || '';
+  const imageUrl = cleanLogoUrl || cachedFaviconUrl;
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
   const avatarLabel = name.trim() || '品牌';
   const isLarge = size > 48;
   const borderRadius = isLarge ? '14px' : '12px';
   const isDark = theme === 'dark';
-  const fallbackIconColor = isDark ? 'var(--text-primary)' : 'var(--text-secondary)';
-  const fallbackIconSize = isLarge ? 24 : size <= 38 ? 17 : 19;
-  const showLogo = Boolean(cleanLogoUrl && failedLogoUrl !== cleanLogoUrl);
+  const visibleImageUrl = imageUrl && failedImageUrl !== imageUrl ? imageUrl : null;
 
   return (
     <div
@@ -42,25 +61,17 @@ export function BrandAvatar({ name, logoUrl, size = 40, className = '' }: BrandA
         boxShadow: 'none',
       }}
     >
-      {showLogo ? (
+      {visibleImageUrl ? (
         <img
-          src={cleanLogoUrl}
+          src={visibleImageUrl}
           alt=""
           className="h-[72%] w-[72%] object-contain"
           loading={size <= 48 ? 'eager' : 'lazy'}
           decoding="async"
           referrerPolicy="no-referrer"
-          onError={() => setFailedLogoUrl(cleanLogoUrl)}
+          onError={() => setFailedImageUrl(visibleImageUrl)}
         />
-      ) : (
-        <RiBuilding2Line
-          aria-hidden="true"
-          size={fallbackIconSize}
-          style={{
-            color: fallbackIconColor,
-          }}
-        />
-      )}
+      ) : null}
     </div>
   );
 }
