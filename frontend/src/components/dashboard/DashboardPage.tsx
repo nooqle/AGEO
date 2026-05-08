@@ -260,8 +260,9 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       params.set('autosend', '1');
       router.push(buildChatUrlWithHandoff(session.id, params));
     } catch (error) {
-      setIsOpeningDashboardChat(false);
       toast.error(error instanceof Error ? error.message : '打开对话失败，请稍后重试。');
+    } finally {
+      setIsOpeningDashboardChat(false);
     }
   };
 
