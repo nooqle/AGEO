@@ -688,7 +688,7 @@ server {
         image/svg+xml;
 
     location /_next/static/ {
-        alias $DEPLOY_ROOT/current/frontend/.next/static/;
+        alias $CURRENT_LINK/frontend/.next/static/;
         expires 1y;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         try_files \$uri =404;
