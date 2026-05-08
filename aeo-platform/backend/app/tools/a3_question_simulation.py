@@ -5,7 +5,6 @@ Pure prompt-building and normalization logic now lives in `question_generation.p
 """
 
 from app.tools.question_generation import (
-    QuestionGenerationTool,
     build_question_generation_messages,
 )
 
@@ -16,6 +15,8 @@ async def simulate_questions(
     personas: list | None = None,
     mode: str = "brand",
     identity: str | None = None,
+    topic_keywords: list[str] | str | None = None,
+    topic_description: str | None = None,
 ) -> dict:
     """Backward-compatible async wrapper for legacy A3 tool callers."""
 
@@ -33,6 +34,8 @@ async def simulate_questions(
         selected_personas=personas or [],
         platforms=("kimi", "deepseek", "doubao", "hunyuan"),
         identity=identity,
+        topic_keywords=topic_keywords,
+        topic_description=topic_description,
     )
     return {
         "system_prompt": system_prompt,
@@ -40,5 +43,7 @@ async def simulate_questions(
         "mode": normalized_mode,
     }
 
+
 # Backward compatibility
+QuestionGenerationTool = build_question_generation_messages
 QuestionSimulationTool = simulate_questions

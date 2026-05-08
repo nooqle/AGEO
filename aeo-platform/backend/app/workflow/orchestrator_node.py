@@ -249,6 +249,19 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "可选身份视角覆盖。仅当用户明确要求“以某个身份/视角生成问题”时传入，例如“采购经理”“品牌经理”。未明确要求时不要传。",
                 },
+                "topic_keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "用户明确给出的主题/关键词，用于生成新的全景问题，例如“细胞”“抗衰”。仅当用户要求围绕关键词/主题生成问题时传入。",
+                },
+                "topic_description": {
+                    "type": "string",
+                    "description": "用户对主题全景问题的原始需求或补充说明。与 topic_keywords 一起使用，帮助 A3 生成更贴合的提示词。",
+                },
+                "question_only": {
+                    "type": "boolean",
+                    "description": "仅生成/更新问题集，不自动进入答案抓取或报告分析。用户明确说生成问题、重新生成问题、模拟问题集时应为 true。",
+                },
             },
         },
     },
@@ -574,7 +587,12 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 },
                 "monitor_mode": {
                     "type": "string",
-                    "enum": ["panorama", "scenario", "panorama_monitoring", "scenario_monitoring"],
+                    "enum": [
+                        "panorama",
+                        "scenario",
+                        "panorama_monitoring",
+                        "scenario_monitoring",
+                    ],
                     "description": "监测视图。Dashboard 上下文已有时优先沿用。",
                 },
                 "monitoring_plan_id": {
@@ -768,6 +786,30 @@ def _build_panorama_step_intro(
         return ""
 
     existing_text = str(reply_text or "")
+    latest_user_message = _get_latest_user_message(state)
+    question_only = bool(
+        tool_args.get("question_only")
+        or state.get("question_generation_only")
+        or _is_explicit_question_generation_only_request(latest_user_message)
+    )
+    if question_only:
+        if any(
+            marker in existing_text
+            for marker in ("只生成问题", "只生成问题列表", "不会抓取", "不抓取")
+        ):
+            return ""
+        topic_keywords = _normalize_tool_topic_keywords(tool_args.get("topic_keywords"))
+        topic_label = "、".join(topic_keywords)
+        brand_name = (
+            str((state.get("brand_profile") or {}).get("brand_name") or "").strip()
+            or str(state.get("brand_name") or "").strip()
+        )
+        focus_label = topic_label or brand_name or "当前主题"
+        return (
+            f"开始围绕「{focus_label}」生成全景问题列表。\n"
+            "本次只生成问题，不会抓取 AI 回答，也不会生成品牌全景分析报告。"
+        )
+
     if (
         "品牌全景分析" in existing_text
         and "第二步" in existing_text
@@ -838,13 +880,46 @@ def _contains_non_negated_keyword(text: str, keywords: list[str]) -> bool:
     return False
 
 
+def _contains_positive_continuation_marker(text: str, keywords: tuple[str, ...]) -> bool:
+    normalized = str(text or "")
+    negative_markers = (
+        "不要",
+        "别",
+        "不需要",
+        "无需",
+        "不是",
+        "不用",
+        "不必",
+        "暂不",
+        "先不",
+        "先别",
+        "禁止",
+    )
+    for keyword in keywords:
+        start = normalized.find(keyword)
+        while start >= 0:
+            prefix_window = normalized[max(0, start - 16) : start]
+            if not any(marker in prefix_window for marker in negative_markers):
+                return True
+            start = normalized.find(keyword, start + len(keyword))
+    return False
+
+
 def _is_precise_history_query(text: str) -> bool:
     normalized = str(text or "")
     if not _extract_exact_datetime_scope_text(normalized):
         return False
     if not any(
         keyword in normalized
-        for keyword in ("只查", "只查询", "只看", "这一轮", "这轮", "这一批", "这个时间点")
+        for keyword in (
+            "只查",
+            "只查询",
+            "只看",
+            "这一轮",
+            "这轮",
+            "这一批",
+            "这个时间点",
+        )
     ):
         return False
     return any(
@@ -1186,6 +1261,8 @@ def _infer_brand_seed_candidate(state: AgentState) -> str | None:
     )
     if not candidate or len(candidate) > 24:
         return None
+    if _looks_like_keyword_list(candidate):
+        return None
 
     lowered = candidate.lower()
     intent_keywords = (
@@ -1223,6 +1300,117 @@ def _infer_brand_seed_candidate(state: AgentState) -> str | None:
         return None
 
     return candidate
+
+
+def _looks_like_keyword_list(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    parts = [part.strip() for part in re.split(r"[,，、;；|/]+", text) if part.strip()]
+    return len(parts) >= 2
+
+
+def _normalize_tool_topic_keywords(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_values = re.split(r"[,，、;；|/\n\t]+", value)
+    elif isinstance(value, list):
+        raw_values = []
+        for item in value:
+            if item is None:
+                continue
+            raw_values.extend(re.split(r"[,，、;；|/\n\t]+", str(item)))
+    else:
+        raw_values = []
+
+    keywords: list[str] = []
+    for raw in raw_values:
+        keyword = " ".join(str(raw or "").strip().split())
+        if keyword and keyword not in keywords:
+            keywords.append(keyword)
+    return keywords[:12]
+
+
+def _is_explicit_question_generation_only_request(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+
+    has_question_object = any(
+        marker in normalized
+        for marker in (
+            "问题",
+            "question",
+            "questions",
+            "问题集",
+            "全景问题",
+            "用户关心的问题",
+        )
+    )
+    has_generation_action = any(
+        marker in normalized
+        for marker in (
+            "生成",
+            "重新生成",
+            "重生成",
+            "模拟",
+            "设计",
+            "整理",
+            "列出",
+            "产出",
+        )
+    )
+    if not (has_question_object and has_generation_action):
+        return False
+
+    continuation_markers = (
+        "抓取",
+        "采集",
+        "提问",
+        "报告",
+        "跑完整",
+        "全流程",
+        "全景分析",
+        "继续分析",
+        "做分析",
+        "分析报告",
+        "监测",
+    )
+    if _contains_positive_continuation_marker(normalized, continuation_markers):
+        return False
+
+    return True
+
+
+def _is_question_generation_only_state(state: AgentState) -> bool:
+    tool_args = state.get("tool_call_args") or {}
+    user_decisions = state.get("user_decisions") or {}
+    simulated_questions = state.get("simulated_questions") or {}
+    generation_context = (
+        simulated_questions.get("generation_context")
+        if isinstance(simulated_questions, dict)
+        else {}
+    ) or {}
+    return bool(
+        tool_args.get("question_only")
+        or state.get("question_generation_only")
+        or (
+            isinstance(user_decisions, dict)
+            and user_decisions.get("question_generation_only")
+        )
+        or (
+            isinstance(generation_context, dict)
+            and generation_context.get("question_only")
+        )
+    )
+
+
+def _is_completed_question_generation_only_state(state: AgentState) -> bool:
+    return (
+        _get_tool_name_from_node(state.get("next_action", "") or "")
+        == "question_simulation"
+        and _is_question_generation_only_state(state)
+        and bool(state.get("simulated_questions") or state.get("questions"))
+    )
 
 
 def _is_current_report_follow_up(state: AgentState) -> bool:
@@ -1610,8 +1798,7 @@ def validate_tool_available_in_current_state(
         if bool(a4_observation.get("artifact_write_validated", False)):
             report_type = (
                 "panorama"
-                if str(state.get("analysis_mode") or "").strip().lower()
-                == "baseline"
+                if str(state.get("analysis_mode") or "").strip().lower() == "baseline"
                 else "scenario"
             )
             return ToolAvailabilityConstraint(
@@ -1706,7 +1893,10 @@ def _infer_knowledge_fallback_tool(
     text = latest_user_message.lower()
     current_uploaded_table_query = (
         any(keyword in latest_user_message for keyword in ("上传", "导入", "附件"))
-        and any(keyword in latest_user_message for keyword in ("表格", "问题列表", "问题内容", "识别"))
+        and any(
+            keyword in latest_user_message
+            for keyword in ("表格", "问题列表", "问题内容", "识别")
+        )
         and (
             bool(state.get("table_intake_result"))
             or (
@@ -1784,7 +1974,9 @@ def _infer_knowledge_fallback_tool(
             "query": latest_user_message,
             "limit": 200,
         }
-        if any(keyword in latest_user_message for keyword in ("回答", "答案", "过往回答")):
+        if any(
+            keyword in latest_user_message for keyword in ("回答", "答案", "过往回答")
+        ):
             args["source_types"] = ["fetch_answer"]
         return ("knowledge_export", args)
 
@@ -1984,7 +2176,9 @@ def _build_context_summary(state: AgentState) -> str:
 
     if state.get("entity_id"):
         parts.append(f"- 品牌实体ID: {state['entity_id']} (已有过往快照)")
-        available_tools.append("manage_monitoring_schedule (可查询、创建或调整周期监测计划)")
+        available_tools.append(
+            "manage_monitoring_schedule (可查询、创建或调整周期监测计划)"
+        )
     else:
         unavailable_tools.append("manage_monitoring_schedule (尚无品牌实体)")
 
@@ -2065,7 +2259,9 @@ def _has_persona_prerequisites(state: AgentState) -> bool:
     )
 
 
-def _resolve_brand_name_for_dependency_rebuild(state: AgentState, tool_args: dict) -> str:
+def _resolve_brand_name_for_dependency_rebuild(
+    state: AgentState, tool_args: dict
+) -> str:
     brand_profile = state.get("brand_profile") or {}
     candidates = (
         tool_args.get("brand_name"),
@@ -2201,7 +2397,9 @@ def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
                 "ask_user 如被误调用会被工具门禁拦截。"
             )
         else:
-            lines.append("- 当前任务是 headless 定时任务，不能等待用户确认；不要调用 ask_user。")
+            lines.append(
+                "- 当前任务是 headless 定时任务，不能等待用户确认；不要调用 ask_user。"
+            )
 
     if hidden_tool_names & _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES:
         if stable_tool_surface:
@@ -2210,7 +2408,9 @@ def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
                 "但本轮不要调用；误调用会被工具门禁拦截。"
             )
         else:
-            lines.append("- 当前问题属于本次结果追问，过往资料工具已从当前回合工具面隐藏。")
+            lines.append(
+                "- 当前问题属于本次结果追问，过往资料工具已从当前回合工具面隐藏。"
+            )
 
     if preferred_followup_tool and preferred_followup_tool[0] == "drill_down_analysis":
         focus_args = preferred_followup_tool[1] or {}
@@ -2384,6 +2584,8 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 场景细化流程：
                 - 用户选择场景细化时：persona_generation -> 用户选择画像 -> question_simulation(mode="persona_focused") -> answer_fetch -> analysis_report_skill(report_type="scenario")。
                 - 如果用户明确要求“以某个身份 / 职业 / 角色生成问题”，仍调用 question_simulation，并通过 identity 传入该身份；若用户未明确要求，默认消费者视角，不要擅自加身份。
+                - 如果用户明确要求围绕关键词、主题或概念生成“全景问题 / 问题集 / 用户关心的问题”，调用 question_simulation(mode="baseline_dynamic", topic_keywords=[用户给出的关键词], topic_description=用户原始需求)。这类请求可以没有品牌档案，不要先强制调用 brand_analysis，也不要把关键词当成品牌名。
+                - 如果用户只要求“生成/重新生成/模拟问题”，question_simulation 必须传 question_only=true；完成 A3 后停止在问题列表，不自动调用 answer_fetch，也不自动生成报告。
 
                 其他固定路径：
                 - 用户说“重跑品牌全景分析”时：question_simulation(mode="baseline_dynamic") -> answer_fetch -> analysis_report_skill(report_type="panorama")。
@@ -2409,6 +2611,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 所有对用户可见的回复、计划、提示、说明和思考流都必须使用中文；不要输出英文草稿或英文推理片段。
                 - 在回复中说明打算做什么，然后调用对应工具。
                 - 不要一次调用多个工具，每轮只执行一个步骤。
+                - 如果用户只是闲聊，或当前意图不属于任何工具合同，直接使用你的大模型对话能力自然语言回复，不调用工具，也不要为了凑流程而调用 ask_user。
                 - 画像生成完成后，若用户尚未明确后续范围，优先 ask_user 引导其选画像；问题生成完成后，若用户尚未明确采集模式，优先 ask_user 请求确认；答案抓取完成后通常继续进入 analysis_report_skill，但如果最新 A4 observation 明确要求用户先做选择（例如补采后仍有失败项），必须先 ask_user，再决定是否进入 analysis_report_skill；分析报告完成后，若用户尚未明确下一步，再 ask_user 帮助其决定是否做引用置信度评估或继续后续分析。
                 - 如果用户请求不明确，用自然语言追问，不要调用 ask_user。
                 - 步骤完成后的回复应包含 1 个具体数据点或风险发现，不要只报“完成了”。
@@ -3142,7 +3345,10 @@ def _should_force_fetch_recovery_confirmation(state: AgentState) -> bool:
         return False
 
     aggregate_result = state.get("knowledge_aggregate_result") or {}
-    if not isinstance(aggregate_result, dict) or aggregate_result.get("status") != "hit":
+    if (
+        not isinstance(aggregate_result, dict)
+        or aggregate_result.get("status") != "hit"
+    ):
         return False
 
     fetch_status = aggregate_result.get("fetch_status_summary") or {}
@@ -3645,6 +3851,10 @@ WORKFLOW_STEPS = [
 
 def _build_workflow_steps(state: AgentState) -> list[dict[str, str]]:
     """Build workflow steps list with completion status from state."""
+    if _is_question_generation_only_state(state):
+        status = "completed" if state.get("simulated_questions") else "pending"
+        return [{"id": "A3", "label": "问题模拟生成", "status": status}]
+
     user_decisions = state.get("user_decisions", {})
     analysis_mode = state.get("analysis_mode", "persona")
     steps = []
@@ -4175,26 +4385,20 @@ async def orchestrator_node(state: AgentState) -> Command:
         completed_count = sum(1 for s in workflow_steps if s["status"] == "completed")
         skipped_count = sum(1 for s in workflow_steps if s["status"] == "skipped")
         total_count = len(workflow_steps)
-        is_standalone_skill_complete = (
-            exec_status == "completed"
-            and last_tool
-            in {
-                "site_confidence_assessment_skill",
-                "confidence_analysis_skill",
-                "post_analysis_skill",
-                "drill_down_analysis",
-                "compare_snapshots",
-            }
-        )
+        is_standalone_skill_complete = exec_status == "completed" and last_tool in {
+            "site_confidence_assessment_skill",
+            "confidence_analysis_skill",
+            "post_analysis_skill",
+            "drill_down_analysis",
+            "compare_snapshots",
+        }
         # In baseline mode, Phase 1 completion is not "all done" — Phase 2 may follow
         is_baseline_phase = state.get("analysis_mode") == "baseline"
         all_done = (
             completed_count + skipped_count
         ) == total_count and not is_baseline_phase
         completion_progress = (
-            1.0
-            if is_standalone_skill_complete
-            else completed_count / total_count
+            1.0 if is_standalone_skill_complete else completed_count / total_count
         )
         from app.workflow.events import send_progress_event
 
@@ -4261,6 +4465,27 @@ async def orchestrator_node(state: AgentState) -> Command:
                 "next_required_action": None,
                 "progress": 1.0,
                 "progress_message": "分析完成",
+            },
+        )
+
+    if _is_completed_question_generation_only_state(state):
+        logger.info(
+            "[Orchestrator] Question-only A3 completed; ending run for session %s",
+            session_id,
+        )
+        from app.workflow.events import send_execution_complete
+
+        await send_execution_complete(session_id, "问题生成完成")
+        return Command(
+            goto=END,
+            update={
+                "execution_status": "completed",
+                "awaiting_user": False,
+                "pending_confirmation": None,
+                "pending_question_set_confirmation": None,
+                "next_required_action": None,
+                "progress": 1.0,
+                "progress_message": "问题生成完成",
             },
         )
 
@@ -4390,7 +4615,9 @@ async def orchestrator_node(state: AgentState) -> Command:
                 "has_tool_call_id": bool(item.get("tool_call_id")),
                 "content_len": len(str(item.get("content") or "")),
             }
-            for item in ([{"role": "system", "content": system_prompt}, *messages][-12:])
+            for item in (
+                [{"role": "system", "content": system_prompt}, *messages][-12:]
+            )
         ],
     )
 
@@ -4603,6 +4830,7 @@ async def orchestrator_node(state: AgentState) -> Command:
         if (
             last_tool == "question_simulation"
             and state.get("simulated_questions")
+            and not _is_question_generation_only_state(llm_state)
             and not user_decisions.get("fetch_mode_confirmed", False)
             and not user_decisions.get("fetch_mode_pending", False)
             and selected_fetch_mode not in {"fast", "full"}
@@ -4620,8 +4848,9 @@ async def orchestrator_node(state: AgentState) -> Command:
                 current_retry_counts=current_retry_counts,
             )
 
-        if last_tool == "knowledge_aggregate" and _should_force_fetch_recovery_confirmation(
-            llm_state
+        if (
+            last_tool == "knowledge_aggregate"
+            and _should_force_fetch_recovery_confirmation(llm_state)
         ):
             logger.warning(
                 "[Orchestrator] No tool call after latest-run failure summary; forcing supplemental fetch confirmation."
@@ -4735,7 +4964,9 @@ async def orchestrator_node(state: AgentState) -> Command:
                     "has_tool_call_id": bool(item.get("tool_call_id")),
                     "content_len": len(str(item.get("content") or "")),
                 }
-                for item in ([{"role": "system", "content": system_prompt}, *messages][-12:])
+                for item in (
+                    [{"role": "system", "content": system_prompt}, *messages][-12:]
+                )
             ],
             exc_info=True,
         )
@@ -4876,7 +5107,9 @@ async def _handle_tool_call(
                             tool_args={
                                 "report_type": (
                                     "panorama"
-                                    if str(state.get("analysis_mode") or "").strip().lower()
+                                    if str(state.get("analysis_mode") or "")
+                                    .strip()
+                                    .lower()
                                     == "baseline"
                                     else "scenario"
                                 )
@@ -5042,7 +5275,9 @@ async def _handle_tool_call(
     else:
         node_name = TOOL_TO_NODE.get(tool_name)
 
-    if effective_tool_name == "persona_generation" and not _has_persona_prerequisites(state):
+    if effective_tool_name == "persona_generation" and not _has_persona_prerequisites(
+        state
+    ):
         brand_name = _resolve_brand_name_for_dependency_rebuild(state, tool_args)
         if brand_name:
             logger.warning(
@@ -5109,6 +5344,38 @@ async def _handle_tool_call(
             or effective_tool_name == "post_analysis_skill"
         ) and _is_bounded_history_answer_query_state(state)
         requested_question_mode = tool_args.get("mode", "")
+        if effective_tool_name == "question_simulation":
+            topic_keywords = _normalize_tool_topic_keywords(
+                tool_args.get("topic_keywords")
+            )
+            if topic_keywords:
+                tool_args = {**tool_args, "topic_keywords": topic_keywords}
+                if not str(tool_args.get("topic_description") or "").strip():
+                    latest_user_message = _get_latest_user_message(state).strip()
+                    if latest_user_message:
+                        tool_args["topic_description"] = latest_user_message
+                requested_question_mode = str(tool_args.get("mode") or "").strip()
+                if requested_question_mode in {"", "brand_panorama"}:
+                    tool_args["mode"] = "baseline_dynamic"
+                    requested_question_mode = "baseline_dynamic"
+            latest_user_message = _get_latest_user_message(state)
+            if tool_args.get("question_only") or _is_explicit_question_generation_only_request(
+                latest_user_message
+            ):
+                early_user_decisions = dict(state.get("user_decisions", {}) or {})
+                early_user_decisions["question_generation_only"] = True
+                tool_args = {**tool_args, "question_only": True}
+                progress_state: AgentState = {
+                    **state,
+                    "tool_call_args": tool_args,
+                    "question_generation_only": True,
+                    "user_decisions": early_user_decisions,
+                }
+            else:
+                progress_state = state
+        else:
+            progress_state = state
+
         if (
             effective_tool_name == "question_simulation"
             and state.get("user_decisions", {}).get("table_import_confirmed")
@@ -5218,7 +5485,7 @@ async def _handle_tool_call(
             "data_analytics": "A5",
             "confidence_analysis_skill": "A7",
         }
-        workflow_steps = _build_workflow_steps(state)
+        workflow_steps = _build_workflow_steps(progress_state)
         current_step_id = tool_to_step_id.get(effective_tool_name)
         if current_step_id is None and resolved_skill is not None:
             current_step_id = {
@@ -5246,7 +5513,7 @@ async def _handle_tool_call(
             effective_tool_name,
             tool_args,
             reply_text,
-            state,
+            progress_state,
         )
         if panorama_intro:
             await send_reply_event(
@@ -5315,6 +5582,23 @@ async def _handle_tool_call(
         if effective_tool_name == "question_simulation":
             user_decisions = dict(state.get("user_decisions", {}))
             selected_fetch_mode = str(state.get("fetch_mode") or "").strip().lower()
+            latest_user_message = _get_latest_user_message(state)
+            question_only = bool(
+                tool_args.get("question_only")
+                or _is_explicit_question_generation_only_request(latest_user_message)
+            )
+            if question_only:
+                tool_args = {**tool_args, "question_only": True}
+                user_decisions["question_generation_only"] = True
+                user_decisions.pop("fetch_mode_confirmed", None)
+                user_decisions.pop("fetch_mode_pending", None)
+                user_decisions.pop("fetch_mode", None)
+                selected_fetch_mode = ""
+                extra_updates["fetch_mode"] = None
+                extra_updates["question_generation_only"] = True
+            else:
+                user_decisions.pop("question_generation_only", None)
+                extra_updates["question_generation_only"] = False
             # Reset fetch-mode guard flags only for a fresh A3 run. When the user
             # picked panorama_fast/panorama_full, A3 must preserve that intent so
             # it can continue directly to A4 after generating questions.
@@ -5434,7 +5718,9 @@ async def _handle_tool_call(
                 )
             if tool_args.get("persona_id"):
                 selected_ids = list(user_decisions.get("selected_persona_ids") or [])
-                selected_names = list(user_decisions.get("selected_persona_names") or [])
+                selected_names = list(
+                    user_decisions.get("selected_persona_names") or []
+                )
                 persona_id = str(tool_args["persona_id"]).strip()
                 if not selected_ids and not selected_names and persona_id:
                     user_decisions["selected_persona_ids"] = [persona_id]

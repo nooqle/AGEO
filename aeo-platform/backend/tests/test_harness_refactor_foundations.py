@@ -91,6 +91,7 @@ from app.workflow.orchestrator_context_packets import (
 from app.workflow.orchestrator_node import (
     _build_contextual_tool_surface_note,
     _build_error_recovery_message,
+    _build_panorama_step_intro,
     _build_context_summary,
     _build_public_skill_index,
     _execute_runtime_policy_action,
@@ -843,6 +844,7 @@ async def test_resolve_takeover_releases_login_takeover_without_sync_resume_prob
         manager._sessions_by_id["aio_session_login"].session_state
         == AioSessionState.LEASED
     )
+
 
 @pytest.mark.asyncio
 async def test_resolve_takeover_does_not_revive_terminal_bundle(monkeypatch):
@@ -3310,7 +3312,9 @@ def test_stable_skill_tool_description_ignores_overlay_and_package_hint(monkeypa
         True,
     )
     spec = next(
-        item for item in BUILTIN_SKILL_SPECS if item.skill_key == "analysis_report_skill"
+        item
+        for item in BUILTIN_SKILL_SPECS
+        if item.skill_key == "analysis_report_skill"
     )
     changed_overlay = replace(spec, prompt_overlay="只输出管理层摘要。")
     changed_package = SkillPackageManifest(
@@ -3481,26 +3485,33 @@ async def test_a5_precondition_gate_blocks_missing_fetch_results(monkeypatch):
     assert command.update["execution_status"] == "error"
     assert command.update["current_step"] == "A5"
     assert command.update["last_validation_result"]["passed"] is False
-    assert "A4 canonical fetch result is missing" in command.update[
-        "last_validation_result"
-    ]["reason"]
+    assert (
+        "A4 canonical fetch result is missing"
+        in command.update["last_validation_result"]["reason"]
+    )
     assert command.update["last_harness_decision"]["decision_type"] == "fail_step"
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="旧 A7 confidence_signal 能力已退役，生产图已改为 retired_confidence_executor_node")
+@pytest.mark.skip(
+    reason="旧 A7 confidence_signal 能力已退役，生产图已改为 retired_confidence_executor_node"
+)
 async def test_a7_success_records_skill_result_and_validation(monkeypatch):
     pytest.skip("旧 A7 confidence_signal 能力已退役。")
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="旧 confidence_analysis executor 能力已退役，当前生产图不再使用该节点")
+@pytest.mark.skip(
+    reason="旧 confidence_analysis executor 能力已退役，当前生产图不再使用该节点"
+)
 async def test_confidence_analysis_executor_preserves_harness_gates(monkeypatch):
     pytest.skip("旧 confidence_analysis executor 能力已退役。")
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="旧 A7 confidence_signal 能力已退役，生产图已改为 retired_confidence_executor_node")
+@pytest.mark.skip(
+    reason="旧 A7 confidence_signal 能力已退役，生产图已改为 retired_confidence_executor_node"
+)
 async def test_a7_artifact_writeback_failure_returns_error(monkeypatch):
     pytest.skip("旧 A7 confidence_signal 能力已退役。")
 
@@ -3594,6 +3605,23 @@ def test_question_generation_tool_preserves_persona_and_baseline_contracts():
     assert "品类需求咨询：用户还在理解需求" in baseline_system
     assert "反例" in baseline_system
     assert "品牌互撕式问题" in baseline_system
+
+
+def test_question_generation_tool_supports_topic_keyword_panorama():
+    system_prompt, user_content = QuestionGenerationTool(
+        mode="baseline_dynamic",
+        brand_profile={},
+        competitors=[],
+        platforms=("kimi", "deepseek"),
+        topic_keywords=["细胞", "抗衰"],
+        topic_description="围绕细胞，抗衰这些关键词，模拟一套用户关心的问题",
+    )
+
+    assert "行业全景问题" in system_prompt
+    assert "主题关键词: 细胞、抗衰" in user_content
+    assert "围绕细胞，抗衰这些关键词" in user_content
+    assert "不要编造目标品牌" in user_content
+    assert "不要把关键词当作品牌名" in user_content
 
 
 def test_validate_baseline_questions_rejects_direct_brand_mentions():
@@ -3915,6 +3943,133 @@ async def test_answer_fetch_tool_call_does_not_emit_orchestrator_fallback(monkey
 
 
 @pytest.mark.asyncio
+async def test_question_simulation_topic_keywords_default_to_baseline_mode(monkeypatch):
+    send_progress = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_reply_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_plan_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_action_log_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.events.send_progress_event",
+        send_progress,
+    )
+
+    command = await _handle_tool_call(
+        state={
+            "session_id": "session-topic-route",
+            "orchestrator_history": [
+                {
+                    "role": "user",
+                    "content": "围绕细胞，抗衰这些关键词，模拟一套用户关心的问题",
+                }
+            ],
+            "user_decisions": {},
+        },
+        session_id="session-topic-route",
+        tool_call=SimpleNamespace(
+            name="question_simulation",
+            arguments={"topic_keywords": ["细胞，抗衰"]},
+            id="call_question_topic",
+        ),
+        reply_text="我先生成一套主题全景问题。",
+        new_history=[],
+    )
+
+    assert command.goto == "a3_question"
+    assert command.update["tool_call_args"]["mode"] == "baseline_dynamic"
+    assert command.update["tool_call_args"]["topic_keywords"] == ["细胞", "抗衰"]
+    assert command.update["tool_call_args"]["question_only"] is True
+    assert "围绕细胞，抗衰" in command.update["tool_call_args"]["topic_description"]
+    assert command.update["user_decisions"]["a3_mode"] == "baseline_dynamic"
+    assert command.update["user_decisions"]["question_generation_only"] is True
+    assert command.update["analysis_mode"] == "baseline"
+    progress_steps = send_progress.await_args.kwargs["steps"]
+    assert [step["id"] for step in progress_steps] == ["A3"]
+
+
+@pytest.mark.asyncio
+async def test_question_only_generation_clears_preselected_fetch_mode(monkeypatch):
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_reply_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_plan_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.orchestrator_node.send_action_log_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.events.send_progress_event",
+        AsyncMock(return_value=None),
+    )
+
+    command = await _handle_tool_call(
+        state={
+            "session_id": "session-question-only-fetch-clear",
+            "orchestrator_history": [
+                {"role": "user", "content": "围绕细胞和抗衰重新生成一套全景问题"}
+            ],
+            "fetch_mode": "full",
+            "user_decisions": {
+                "fetch_mode_confirmed": True,
+                "fetch_mode_pending": False,
+            },
+        },
+        session_id="session-question-only-fetch-clear",
+        tool_call=SimpleNamespace(
+            name="question_simulation",
+            arguments={"mode": "baseline_dynamic", "topic_keywords": ["细胞", "抗衰"]},
+            id="call_question_only_fetch_clear",
+        ),
+        reply_text="我先重新生成问题。",
+        new_history=[],
+    )
+
+    assert command.goto == "a3_question"
+    assert command.update["tool_call_args"]["question_only"] is True
+    assert command.update["fetch_mode"] is None
+    assert "fetch_mode_confirmed" not in command.update["user_decisions"]
+    assert "fetch_mode_pending" not in command.update["user_decisions"]
+    assert command.update["user_decisions"]["question_generation_only"] is True
+
+
+def test_question_only_panorama_intro_does_not_announce_fetch_or_report():
+    intro = _build_panorama_step_intro(
+        "question_simulation",
+        {
+            "mode": "baseline_dynamic",
+            "topic_keywords": ["增程式电动车", "家庭SUV", "智能驾驶"],
+        },
+        "",
+        {
+            "brand_name": "理想汽车",
+            "orchestrator_history": [
+                {
+                    "role": "user",
+                    "content": "围绕这些关键词生成全景问题，只生成问题列表，不要抓取回答",
+                }
+            ],
+        },
+    )
+
+    assert "只生成问题" in intro
+    assert "抓取 4 个 AI 平台" not in intro
+    assert "输出品牌全景分析报告" not in intro
+    assert "增程式电动车、家庭SUV、智能驾驶" in intro
+
+
+@pytest.mark.asyncio
 async def test_build_agent_tools_hides_history_tools_for_specific_current_followup(
     monkeypatch,
 ):
@@ -3979,9 +4134,7 @@ async def test_stable_tool_surface_keeps_tools_across_context_constraints(
         **base_state,
         "headless_mode": True,
         "session_recalled": True,
-        "orchestrator_history": [
-            {"role": "user", "content": "豆包这次表现怎么样？"}
-        ],
+        "orchestrator_history": [{"role": "user", "content": "豆包这次表现怎么样？"}],
     }
 
     base_tools = await build_agent_tools(base_state)
@@ -4035,8 +4188,7 @@ def test_tool_availability_gate_blocks_history_tools_for_current_followup():
     assert constraint.blocked is True
     assert "本次结果追问" in constraint.reason
     assert any(
-        "drill_down_analysis" in action
-        for action in constraint.suggested_next_actions
+        "drill_down_analysis" in action for action in constraint.suggested_next_actions
     )
 
 
@@ -4327,6 +4479,16 @@ def test_infer_brand_seed_candidate_rejects_explicit_analysis_intent():
     assert candidate is None
 
 
+def test_infer_brand_seed_candidate_rejects_keyword_lists():
+    candidate = _infer_brand_seed_candidate(
+        {
+            "orchestrator_history": [{"role": "user", "content": "细胞，抗衰"}],
+        }
+    )
+
+    assert candidate is None
+
+
 @pytest.mark.asyncio
 async def test_route_brand_seed_without_llm_prefers_history_lookup(monkeypatch):
     monkeypatch.setattr(
@@ -4442,6 +4604,20 @@ async def test_legacy_question_simulation_tool_supports_identity_override():
 
 
 @pytest.mark.asyncio
+async def test_legacy_question_simulation_tool_supports_topic_keywords():
+    payload = await simulate_questions(
+        {},
+        [],
+        mode="baseline_dynamic",
+        topic_keywords=["细胞", "抗衰"],
+        topic_description="生成新的全景问题",
+    )
+
+    assert payload["mode"] == "baseline_dynamic"
+    assert "主题关键词: 细胞、抗衰" in payload["user_content"]
+
+
+@pytest.mark.asyncio
 async def test_a3_baseline_mode_persists_identity_generation_context(monkeypatch):
     monkeypatch.setattr(
         "app.workflow.nodes_a3.send_progress_event",
@@ -4507,6 +4683,149 @@ async def test_a3_baseline_mode_persists_identity_generation_context(monkeypatch
     assert generated_payload["simulated_questions"][0]["core_question"].startswith(
         "作为采购经理"
     )
+
+
+@pytest.mark.asyncio
+async def test_a3_baseline_mode_generates_topic_panorama_without_brand(monkeypatch):
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_progress_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_tpaor_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_action_log_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_stage_result",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.save_and_send_artifact",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3._get_a3_model",
+        lambda: "test-model",
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.call_llm_streaming",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                content="""
+                {
+                  "questions": [
+                    {
+                      "question_id": "bl_001",
+                      "core_question": "普通人想了解细胞抗衰品牌和技术路线，最应该先分清哪些概念？",
+                      "category": "品类需求咨询",
+                      "user_intent": "理解基础概念",
+                      "decision_stage": "认知"
+                    }
+                  ]
+                }
+                """
+            )
+        ),
+    )
+
+    command = await _a3_baseline_dynamic_mode(
+        {
+            "session_id": "session-topic-a3",
+            "brand_profile": {},
+            "competitors": [],
+            "tool_call_args": {
+                "topic_keywords": ["细胞", "抗衰"],
+                "topic_description": "围绕细胞，抗衰生成全景问题",
+            },
+        }
+    )
+
+    generated_payload = command.update["simulated_questions"]
+
+    assert generated_payload["generation_mode"] == "baseline_dynamic"
+    assert generated_payload["generation_context"]["topic_keywords"] == [
+        "细胞",
+        "抗衰",
+    ]
+    assert generated_payload["generation_context"]["question_focus"] == "topic_panorama"
+    assert command.update["questions"][0]["text"].startswith("普通人想了解细胞抗衰品牌")
+
+
+@pytest.mark.asyncio
+async def test_a3_question_only_does_not_auto_continue_to_fetch(monkeypatch):
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_progress_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_tpaor_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_action_log_event",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_stage_result",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.save_and_send_artifact",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3._get_a3_model",
+        lambda: "test-model",
+    )
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.call_llm_streaming",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                content="""
+                {
+                  "questions": [
+                    {
+                      "question_id": "bl_001",
+                      "core_question": "抗衰相关产品应该怎么看细胞层面的证据？",
+                      "category": "品类需求咨询",
+                      "user_intent": "理解证据标准",
+                      "decision_stage": "认知"
+                    }
+                  ]
+                }
+                """
+            )
+        ),
+    )
+
+    command = await _a3_baseline_dynamic_mode(
+        {
+            "session_id": "session-question-only-a3",
+            "brand_profile": {},
+            "competitors": [],
+            "fetch_mode": "full",
+            "user_decisions": {
+                "fetch_mode_confirmed": True,
+                "question_generation_only": True,
+            },
+            "tool_call_args": {
+                "topic_keywords": ["细胞", "抗衰"],
+                "question_only": True,
+            },
+        }
+    )
+
+    generated_payload = command.update["simulated_questions"]
+
+    assert generated_payload["generation_context"]["question_only"] is True
+    assert command.update["execution_status"] == "completed"
+    assert command.update["next_required_action"] is None
+    assert command.update["pending_confirmation"] is None
+    assert "未自动进入答案抓取" in command.update["progress_message"]
 
 
 def test_a4_merge_validation_and_policy_decision():

@@ -49,7 +49,11 @@ def normalize_uploaded_question_payload(
     flattened_questions = []
 
     for offset, question in enumerate(questions, start=start_index):
-        question_id = question.get("id") or question.get("question_id") or f"upload_q_{offset:03d}"
+        question_id = (
+            question.get("id")
+            or question.get("question_id")
+            or f"upload_q_{offset:03d}"
+        )
         category = question.get("category") or "上传问题"
         core_question = question.get("text") or question.get("core_question") or ""
         if not core_question:
@@ -101,7 +105,9 @@ def merge_uploaded_questions(
     return merged_questions
 
 
-def extract_brand_name(brand_profile: dict, fallback_state: dict[str, Any] | None = None) -> str:
+def extract_brand_name(
+    brand_profile: dict, fallback_state: dict[str, Any] | None = None
+) -> str:
     brand_name = brand_profile.get("brand_name", "") or brand_profile.get("name", "")
     if not brand_name and fallback_state:
         brand_name = str(fallback_state.get("brand_name") or "")
@@ -135,14 +141,18 @@ def fix_persona_categories(
         question["category"] = _normalize_persona_category(question.get("category", ""))
 
     total = len(questions)
-    brand_count = sum(1 for question in questions if question["category"] == "品牌直接问题")
+    brand_count = sum(
+        1 for question in questions if question["category"] == "品牌直接问题"
+    )
     target_count = max(1, int(total * min_brand_ratio + 0.5))
 
     if brand_count < target_count:
         for question in questions:
             if brand_count >= target_count:
                 break
-            core = str(question.get("core_question", question.get("question", ""))).lower()
+            core = str(
+                question.get("core_question", question.get("question", ""))
+            ).lower()
             if brand_lower in core and question["category"] != "品牌直接问题":
                 question["category"] = "品牌直接问题"
                 brand_count += 1
@@ -158,8 +168,12 @@ def build_question_generation_messages(
     selected_personas: list | None = None,
     platforms: list[str] | tuple[str, ...],
     identity: str | None = None,
+    topic_keywords: list[str] | tuple[str, ...] | str | None = None,
+    topic_description: str | None = None,
 ) -> tuple[str, str]:
     normalized_identity = _normalize_identity_override(identity)
+    normalized_topic_keywords = normalize_topic_keywords(topic_keywords)
+    normalized_topic_description = _normalize_topic_description(topic_description)
     if mode == "persona_focused":
         system_prompt, user_content = (
             _build_persona_system_prompt(platforms),
@@ -168,15 +182,57 @@ def build_question_generation_messages(
     else:
         system_prompt, user_content = (
             _build_baseline_system_prompt(platforms),
-            _build_baseline_user_content(brand_profile, competitors or []),
+            _build_baseline_user_content(
+                brand_profile,
+                competitors or [],
+                topic_keywords=normalized_topic_keywords,
+                topic_description=normalized_topic_description,
+            ),
         )
     if normalized_identity:
         user_content = _append_identity_context(user_content, normalized_identity)
     return system_prompt, user_content
 
 
+def normalize_topic_keywords(
+    value: list[str] | tuple[str, ...] | str | None,
+) -> list[str]:
+    """Normalize user-supplied topic keywords for topic-driven panorama questions."""
+
+    raw_items: list[str] = []
+    if isinstance(value, str):
+        raw_items = re_split_keywords(value)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            if isinstance(item, str):
+                raw_items.extend(re_split_keywords(item))
+            elif item is not None:
+                raw_items.extend(re_split_keywords(str(item)))
+
+    keywords: list[str] = []
+    for item in raw_items:
+        keyword = " ".join(str(item or "").strip().split())
+        if keyword and keyword not in keywords:
+            keywords.append(keyword)
+    return keywords[:12]
+
+
+def re_split_keywords(value: str) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    for separator in ("，", "、", ";", "；", "|", "\n", "\t"):
+        text = text.replace(separator, ",")
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
 def _normalize_identity_override(identity: str | None) -> str | None:
     text = str(identity or "").strip()
+    return text or None
+
+
+def _normalize_topic_description(topic_description: str | None) -> str | None:
+    text = str(topic_description or "").strip()
     return text or None
 
 
@@ -405,6 +461,9 @@ def _build_baseline_system_prompt(platforms: list[str] | tuple[str, ...]) -> str
 def _build_baseline_user_content(
     brand_profile: dict,
     competitors: list,
+    *,
+    topic_keywords: list[str] | None = None,
+    topic_description: str | None = None,
 ) -> str:
     brand_name = brand_profile.get("brand_name", "") or brand_profile.get("name", "")
     industry = brand_profile.get("industry", "")
@@ -417,11 +476,54 @@ def _build_baseline_user_content(
         for competitor in competitors:
             if isinstance(competitor, dict):
                 competitor_names.append(
-                    competitor.get("name", competitor.get("brand_name", str(competitor)))
+                    competitor.get(
+                        "name", competitor.get("brand_name", str(competitor))
+                    )
                 )
             else:
                 competitor_names.append(str(competitor))
         competitor_text = ", ".join(competitor_names)
+
+    topic_keywords = topic_keywords or []
+    if topic_keywords:
+        keyword_text = "、".join(topic_keywords)
+        topic_line = (
+            f"- 用户原始需求: {topic_description}\n" if topic_description else ""
+        )
+        brand_constraint = (
+            f"- 【强制约束】任何问题都不要直接出现「{brand_name}」这个品牌名\n"
+            if brand_name
+            else "- 未提供明确目标品牌时，不要编造目标品牌，不要把关键词当作品牌名\n"
+        )
+        industry_constraint = (
+            f"- 已知行业: {industry}\n"
+            if industry
+            else "- 可以基于关键词推断相关品类/行业，但不要编造具体品牌事实\n"
+        )
+        product_constraint = (
+            f"- 覆盖核心产品线: {products}\n"
+            if products
+            else "- 覆盖关键词自然延展出的核心需求、技术路线、风险顾虑、使用场景和选购标准\n"
+        )
+        return f"""请围绕用户给出的主题关键词生成新的全景问题。
+
+## 主题输入
+- 主题关键词: {keyword_text}
+{topic_line}{industry_constraint}- 已知品牌名称: {brand_name or "无明确品牌"}
+- 品牌描述: {description or "无"}
+- 核心产品: {products or "无"}
+
+## 竞品列表
+{competitor_text}
+
+## 要求
+- 生成 10-15 个主题/行业全景问题
+- 所有问题必须严格围绕「{keyword_text}」及其自然延展的用户决策场景
+{brand_constraint}- 问题要覆盖用户真实关心的功效、原理、安全性、适用人群、预算、效果验证、风险顾虑和趋势判断
+{product_constraint}- 问题要口语化，像真实用户会搜索的
+- 竞品名称最多只作为行业背景提示，避免把多个品牌直接写成“谁更好、谁更强、谁更值得买”的比较题
+
+请直接输出 JSON，不要有其他文字。"""
 
     return f"""请为以下品牌生成行业全景问题。
 
@@ -449,18 +551,20 @@ def _build_baseline_user_content(
 def validate_baseline_questions(questions: list[dict], brand_name: str) -> None:
     if not questions:
         return
+    normalized_brand_name = str(brand_name or "").strip()
+    if not normalized_brand_name:
+        return
 
     total = len(questions)
     brand_direct_count = sum(
         1
         for question in questions
-        if brand_name.lower() in str(question.get("core_question", "")).lower()
+        if normalized_brand_name.lower()
+        in str(question.get("core_question", "")).lower()
         or question.get("category", "") == "品牌直接问题"
     )
     if brand_direct_count > 0:
-        raise ValueError(
-            f"基线问题出现目标品牌直问: {brand_direct_count}/{total}"
-        )
+        raise ValueError(f"基线问题出现目标品牌直问: {brand_direct_count}/{total}")
 
 
 def _normalize_brand_term(term: str) -> str:
@@ -514,9 +618,7 @@ def sanitize_panorama_questions(
     filtered_questions: list[dict] = []
     for question in questions:
         question_text = str(
-            question.get("core_question")
-            or question.get("question")
-            or ""
+            question.get("core_question") or question.get("question") or ""
         )
         category = str(question.get("category") or "")
         mentions = _find_panorama_brand_mentions(question_text, brand_terms)

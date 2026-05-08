@@ -29,6 +29,7 @@ from app.tools.question_generation import (
     extract_brand_name as generate_brand_name,
     fix_persona_categories as normalize_persona_questions,
     merge_uploaded_questions as merge_uploaded_question_payload,
+    normalize_topic_keywords,
     normalize_uploaded_question_payload as normalize_uploaded_questions,
     sanitize_panorama_questions as sanitize_generated_panorama_questions,
     validate_baseline_questions as validate_generated_baseline_questions,
@@ -81,11 +82,69 @@ def _get_identity_override(state: AgentState) -> str | None:
     return identity or None
 
 
-def _build_generation_context(identity: str | None) -> dict[str, str | None]:
+def _get_topic_focus(state: AgentState) -> dict[str, object]:
+    tool_args = state.get("tool_call_args") or {}
+    keywords = normalize_topic_keywords(tool_args.get("topic_keywords"))
+    description = str(tool_args.get("topic_description") or "").strip()
     return {
+        "topic_keywords": keywords,
+        "topic_description": description or None,
+    }
+
+
+def _format_topic_label(topic_focus: dict[str, object] | None) -> str:
+    keywords = list((topic_focus or {}).get("topic_keywords") or [])
+    if not keywords:
+        return ""
+    return "、".join(str(keyword) for keyword in keywords[:4])
+
+
+def _is_question_generation_only(state: AgentState) -> bool:
+    tool_args = state.get("tool_call_args") or {}
+    user_decisions = state.get("user_decisions") or {}
+    simulated_questions = state.get("simulated_questions") or {}
+    generation_context = (
+        simulated_questions.get("generation_context")
+        if isinstance(simulated_questions, dict)
+        else {}
+    ) or {}
+    return bool(
+        tool_args.get("question_only")
+        or state.get("question_generation_only")
+        or (
+            isinstance(user_decisions, dict)
+            and user_decisions.get("question_generation_only")
+        )
+        or (
+            isinstance(generation_context, dict)
+            and generation_context.get("question_only")
+        )
+    )
+
+
+def _build_generation_context(
+    identity: str | None,
+    topic_focus: dict[str, object] | None = None,
+    *,
+    question_only: bool = False,
+) -> dict[str, object | None]:
+    context: dict[str, object | None] = {
         "identity": identity,
         "perspective_source": "user_explicit" if identity else "default_consumer",
     }
+    keywords = list((topic_focus or {}).get("topic_keywords") or [])
+    if keywords:
+        context.update(
+            {
+                "topic_keywords": keywords,
+                "topic_description": (topic_focus or {}).get("topic_description"),
+                "focus_source": "user_keywords",
+                "question_focus": "topic_panorama",
+            }
+        )
+    if question_only:
+        context["question_only"] = True
+    return context
 
 
 def _identity_suffix(identity: str | None) -> str:
@@ -166,6 +225,18 @@ async def _question_set_confirmation_update(
     question_count: int,
 ) -> dict:
     """Build the independent A3 question set confirmation checkpoint."""
+    if _is_question_generation_only(state):
+        return {
+            "awaiting_user": False,
+            "execution_status": "completed",
+            "pending_confirmation": None,
+            "pending_question_set_confirmation": None,
+            "next_required_action": None,
+            "progress_message": (
+                f"问题集已生成，共 {question_count} 个问题，未自动进入答案抓取。"
+            ),
+        }
+
     selected_fetch_mode = _selected_fetch_mode_from_state(state)
     if selected_fetch_mode:
         mode_label = "快速采集" if selected_fetch_mode == "fast" else "完整采集"
@@ -175,9 +246,7 @@ async def _question_set_confirmation_update(
             "pending_confirmation": None,
             "pending_question_set_confirmation": None,
             "fetch_mode": selected_fetch_mode,
-            "progress_message": (
-                f"问题集已生成，按已选择的{mode_label}继续抓取答案。"
-            ),
+            "progress_message": (f"问题集已生成，按已选择的{mode_label}继续抓取答案。"),
             "next_required_action": build_next_required_action(
                 tool_name="answer_fetch",
                 authority="authoritative_resume",
@@ -193,7 +262,11 @@ async def _question_set_confirmation_update(
             ),
         }
 
-    if not question_set_id or state.get("headless_mode") or state.get("monitoring_schedule_id"):
+    if (
+        not question_set_id
+        or state.get("headless_mode")
+        or state.get("monitoring_schedule_id")
+    ):
         return {}
 
     session_id = state.get("session_id")
@@ -459,18 +532,26 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
     competitors = state.get("competitors") or []
     brand_name = _extract_brand_name(brand_profile, state)
     identity = _get_identity_override(state)
+    question_only = _is_question_generation_only(state)
 
     # Defensive check: refuse to generate if industry is unknown
     industry = brand_profile.get("industry", "")
     if not industry or not industry.strip():
         industry = state.get("industry_hint", "")
     if not industry or not industry.strip():
-        logger.error("[A3] brand_profile.industry is empty, cannot generate relevant questions")
-        return Command(update={
-            "error_info": {"step": "A3", "error": "品牌行业信息缺失，无法生成相关问题。请先完成品牌分析(A1)。"},
-            "current_step": "A3",
-            "simulated_questions": None,
-        })
+        logger.error(
+            "[A3] brand_profile.industry is empty, cannot generate relevant questions"
+        )
+        return Command(
+            update={
+                "error_info": {
+                    "step": "A3",
+                    "error": "品牌行业信息缺失，无法生成相关问题。请先完成品牌分析(A1)。",
+                },
+                "current_step": "A3",
+                "simulated_questions": None,
+            }
+        )
 
     await send_progress_event(
         session_id=session_id,
@@ -481,7 +562,8 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
     )
 
     await send_tpaor_event(
-        session_id, "thought",
+        session_id,
+        "thought",
         f"正在为「{brand_name}」整理品牌全景问题{_identity_suffix(identity)}，覆盖品牌认知、产品特性、使用场景与后续抓取方向...",
     )
 
@@ -553,14 +635,16 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             }
             simulated_questions.append(question_obj)
 
-            flattened_questions.append({
-                "id": q_id,
-                "text": core_question,
-                "category": q.get("category", "品牌全景"),
-                "intent": q.get("user_intent", ""),
-                "stage": q.get("decision_stage", ""),
-                "platform": platform,
-            })
+            flattened_questions.append(
+                {
+                    "id": q_id,
+                    "text": core_question,
+                    "category": q.get("category", "品牌全景"),
+                    "intent": q.get("user_intent", ""),
+                    "stage": q.get("decision_stage", ""),
+                    "platform": platform,
+                }
+            )
 
         question_count = len(simulated_questions)
 
@@ -576,13 +660,20 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
         detailed_response = f"已为「{brand_name}」完成品牌全景问题整理，共 {question_count} 个问题，详见右侧问题列表。"
 
         await send_action_log_event(
-            session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
+            session_id,
+            "agent_summary",
+            detailed_response,
+            step="question_simulation",
+            is_complete=True,
         )
 
         generated_payload = {
             "simulated_questions": simulated_questions,
             "generation_mode": "brand_panorama",
-            "generation_context": _build_generation_context(identity),
+            "generation_context": _build_generation_context(
+                identity,
+                question_only=question_only,
+            ),
         }
 
         await save_and_send_artifact(
@@ -596,14 +687,20 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             },
         )
 
-        categories = list(set(q.get("category", "") for q in simulated_questions if q.get("category")))
+        categories = list(
+            set(q.get("category", "") for q in simulated_questions if q.get("category"))
+        )
         stage_result_data = {
             "count": question_count,
             "categories": categories,
-            "examples": [q.get("core_question", "")[:50] for q in simulated_questions[:3]],
+            "examples": [
+                q.get("core_question", "")[:50] for q in simulated_questions[:3]
+            ],
         }
         await send_stage_result(
-            session_id, "A3", "问题生成",
+            session_id,
+            "A3",
+            "问题生成",
             result_type="questions",
             data=stage_result_data,
         )
@@ -614,14 +711,18 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
+
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
-                    await task_svc.append_stage_result(_UUID(task_id), {
-                        "stage": "A3",
-                        "result_type": "questions",
-                        "data": stage_result_data,
-                        "stage_name": "问题生成",
-                    })
+                    await task_svc.append_stage_result(
+                        _UUID(task_id),
+                        {
+                            "stage": "A3",
+                            "result_type": "questions",
+                            "data": stage_result_data,
+                            "stage_name": "问题生成",
+                        },
+                    )
             except Exception as e:
                 logger.warning("[A3] Failed to persist stage_result: %s", e)
         latest_question_set_id = await _persist_draft_question_set(
@@ -691,12 +792,15 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
     session_id = state["session_id"]
     brand_profile = build_effective_brand_profile(state)
     identity = _get_identity_override(state)
+    question_only = _is_question_generation_only(state)
     brand_name = brand_profile.get("brand_name", "") or brand_profile.get("name", "")
     if not brand_name:
         brand_name = state.get("brand_name", "")
     if not brand_name:
         brand_name = "品牌"
-        logger.warning(f"[A3] brand_name is empty, falling back to '品牌'. brand_profile keys: {list(brand_profile.keys())}")
+        logger.warning(
+            f"[A3] brand_name is empty, falling back to '品牌'. brand_profile keys: {list(brand_profile.keys())}"
+        )
     user_decisions = state.get("user_decisions", {})
     selected_ids = user_decisions.get("selected_persona_ids", [])
     selected_names = user_decisions.get("selected_persona_names", [])
@@ -743,7 +847,8 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
     )
 
     await send_tpaor_event(
-        session_id, "thought",
+        session_id,
+        "thought",
         f"正在基于 {len(selected_personas)} 个选中画像生成针对性问题{_identity_suffix(identity)}...",
     )
 
@@ -821,20 +926,21 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             }
             simulated_questions.append(question_obj)
 
-            flattened_questions.append({
-                "id": q_id,
-                "text": core_question,
-                "category": category,
-                "intent": q.get("user_intent", ""),
-                "stage": q.get("decision_stage", ""),
-                "platform": platform,
-                "source_persona": q.get("source_persona", ""),
-            })
+            flattened_questions.append(
+                {
+                    "id": q_id,
+                    "text": core_question,
+                    "category": category,
+                    "intent": q.get("user_intent", ""),
+                    "stage": q.get("decision_stage", ""),
+                    "platform": platform,
+                    "source_persona": q.get("source_persona", ""),
+                }
+            )
 
         question_count = len(simulated_questions)
         persona_names = [
-            p.get("persona_name", p.get("name", ""))
-            for p in selected_personas
+            p.get("persona_name", p.get("name", "")) for p in selected_personas
         ]
 
         await send_progress_event(
@@ -849,13 +955,20 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
         detailed_response = f"已基于「{', '.join(persona_names)}」生成 {question_count} 个聚焦问题，详见右侧问题列表。"
 
         await send_action_log_event(
-            session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
+            session_id,
+            "agent_summary",
+            detailed_response,
+            step="question_simulation",
+            is_complete=True,
         )
 
         generated_payload = {
             "simulated_questions": simulated_questions,
             "generation_mode": "persona_focused",
-            "generation_context": _build_generation_context(identity),
+            "generation_context": _build_generation_context(
+                identity,
+                question_only=question_only,
+            ),
         }
 
         await save_and_send_artifact(
@@ -871,14 +984,20 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
         )
 
         # Stage result: 让用户在等待期间看到问题生成阶段性产出 (persona mode)
-        p_categories = list(set(q.get("category", "") for q in simulated_questions if q.get("category")))
+        p_categories = list(
+            set(q.get("category", "") for q in simulated_questions if q.get("category"))
+        )
         p_stage_result_data = {
             "count": question_count,
             "categories": p_categories,
-            "examples": [q.get("core_question", "")[:50] for q in simulated_questions[:3]],
+            "examples": [
+                q.get("core_question", "")[:50] for q in simulated_questions[:3]
+            ],
         }
         await send_stage_result(
-            session_id, "A3", "问题生成",
+            session_id,
+            "A3",
+            "问题生成",
             result_type="questions",
             data=p_stage_result_data,
         )
@@ -890,14 +1009,18 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
+
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
-                    await task_svc.append_stage_result(_UUID(task_id), {
-                        "stage": "A3",
-                        "result_type": "questions",
-                        "data": p_stage_result_data,
-                        "stage_name": "问题生成",
-                    })
+                    await task_svc.append_stage_result(
+                        _UUID(task_id),
+                        {
+                            "stage": "A3",
+                            "result_type": "questions",
+                            "data": p_stage_result_data,
+                            "stage_name": "问题生成",
+                        },
+                    )
             except Exception as e:
                 logger.warning("[A3] Failed to persist stage_result: %s", e)
         latest_question_set_id = await _persist_draft_question_set(
@@ -965,6 +1088,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
 # Shared Helpers
 # ============================================================================
 
+
 def _fix_persona_categories(
     questions: list[dict],
     brand_name: str,
@@ -977,6 +1101,7 @@ def _fix_persona_categories(
         min_brand_ratio=min_brand_ratio,
     )
     from collections import Counter
+
     dist = Counter(q["category"] for q in questions)
     logger.info(
         f"[A3] Persona category distribution (total={len(questions)}): "
@@ -1003,37 +1128,66 @@ def _extract_brand_name(brand_profile: dict, state: AgentState) -> str:
     return brand_name
 
 
+def _get_explicit_brand_name(brand_profile: dict, state: AgentState) -> str:
+    brand_name = (
+        str(brand_profile.get("brand_name") or brand_profile.get("name") or "").strip()
+        or str(state.get("brand_name") or "").strip()
+    )
+    return "" if brand_name == "品牌" else brand_name
+
+
 async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
     """A3 baseline dynamic mode: LLM generates industry panorama questions."""
     session_id = state["session_id"]
     brand_profile = build_effective_brand_profile(state)
     competitors = state.get("competitors") or []
-    brand_name = _extract_brand_name(brand_profile, state)
+    explicit_brand_name = _get_explicit_brand_name(brand_profile, state)
+    topic_focus = _get_topic_focus(state)
+    topic_label = _format_topic_label(topic_focus)
+    brand_name = explicit_brand_name or topic_label or "主题"
     identity = _get_identity_override(state)
+    question_only = _is_question_generation_only(state)
 
     # Defensive check: refuse to generate if industry is unknown
     industry = brand_profile.get("industry", "")
     if not industry or not industry.strip():
         industry = state.get("industry_hint", "")
-    if not industry or not industry.strip():
-        logger.error("[A3] brand_profile.industry is empty, cannot generate relevant questions")
-        return Command(update={
-            "error_info": {"step": "A3", "error": "品牌行业信息缺失，无法生成相关问题。请先完成品牌分析(A1)。"},
-            "current_step": "A3",
-            "simulated_questions": None,
-        })
+    topic_keywords = list(topic_focus.get("topic_keywords") or [])
+    if (not industry or not industry.strip()) and not topic_keywords:
+        logger.error(
+            "[A3] brand_profile.industry is empty, cannot generate relevant questions"
+        )
+        return Command(
+            update={
+                "error_info": {
+                    "step": "A3",
+                    "error": "品牌行业信息缺失，无法生成相关问题。请先完成品牌分析(A1)。",
+                },
+                "current_step": "A3",
+                "simulated_questions": None,
+            }
+        )
 
     await send_progress_event(
         session_id=session_id,
         step="question_simulation",
         step_name="问题模拟生成",
         progress=0.45,
-        message=f"品牌全景分析：正在生成行业全景问题{_identity_suffix(identity)}",
+        message=(
+            f"正在围绕「{topic_label}」生成全景问题{_identity_suffix(identity)}"
+            if topic_label
+            else f"品牌全景分析：正在生成行业全景问题{_identity_suffix(identity)}"
+        ),
     )
 
     await send_tpaor_event(
-        session_id, "thought",
-        f"正在为「{brand_name}」整理行业全景问题{_identity_suffix(identity)}，覆盖品类需求、场景选购、产品比较与后续抓取方向...",
+        session_id,
+        "thought",
+        (
+            f"正在围绕「{topic_label}」整理全景问题{_identity_suffix(identity)}，覆盖用户需求、场景选购、风险顾虑与趋势判断..."
+            if topic_label
+            else f"正在为「{brand_name}」整理行业全景问题{_identity_suffix(identity)}，覆盖品类需求、场景选购、产品比较与后续抓取方向..."
+        ),
     )
 
     try:
@@ -1044,6 +1198,8 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             competitors=competitors,
             platforms=_PLATFORMS,
             identity=identity,
+            topic_keywords=topic_focus.get("topic_keywords"),
+            topic_description=topic_focus.get("topic_description"),
         )
 
         model = _get_a3_model()
@@ -1074,19 +1230,22 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
 
         raw_questions = data["questions"]
         if not isinstance(raw_questions, list) or not raw_questions:
-            logger.warning("[A3] Empty questions from baseline LLM, falling back to brand mode")
+            logger.warning(
+                "[A3] Empty questions from baseline LLM, falling back to brand mode"
+            )
             return await _a3_brand_panorama_mode(state)
 
         # Enforce hard limit
         raw_questions = raw_questions[:_MAX_QUESTIONS]
         raw_questions = sanitize_generated_panorama_questions(
             raw_questions,
-            brand_name,
+            explicit_brand_name,
             competitors,
         )
 
         # Validate brand question ratio
-        validate_generated_baseline_questions(raw_questions, brand_name)
+        if explicit_brand_name:
+            validate_generated_baseline_questions(raw_questions, explicit_brand_name)
 
         # Build simulated_questions and flattened_questions
         simulated_questions = []
@@ -1113,14 +1272,16 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             }
             simulated_questions.append(question_obj)
 
-            flattened_questions.append({
-                "id": q_id,
-                "text": core_question,
-                "category": q.get("category", "行业全景"),
-                "intent": q.get("user_intent", ""),
-                "stage": q.get("decision_stage", ""),
-                "platform": platform,
-            })
+            flattened_questions.append(
+                {
+                    "id": q_id,
+                    "text": core_question,
+                    "category": q.get("category", "行业全景"),
+                    "intent": q.get("user_intent", ""),
+                    "stage": q.get("decision_stage", ""),
+                    "platform": platform,
+                }
+            )
 
         question_count = len(simulated_questions)
 
@@ -1129,48 +1290,67 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             step="question_simulation",
             step_name="问题模拟生成",
             progress=1.0,
-            message=f"品牌全景分析：已生成 {question_count} 个行业全景问题",
+            message=(
+                f"已围绕「{topic_label}」生成 {question_count} 个全景问题"
+                if topic_label
+                else f"品牌全景分析：已生成 {question_count} 个行业全景问题"
+            ),
             status="completed",
         )
 
         detailed_response = (
-            f"已为「{brand_name}」生成 {question_count} 个行业全景问题，"
-            f"详见右侧问题列表。"
+            f"已围绕「{topic_label}」生成 {question_count} 个全景问题，详见右侧问题列表。"
+            if topic_label
+            else f"已为「{brand_name}」生成 {question_count} 个行业全景问题，详见右侧问题列表。"
         )
 
         await send_action_log_event(
-            session_id, "agent_summary", detailed_response, step="question_simulation", is_complete=True
+            session_id,
+            "agent_summary",
+            detailed_response,
+            step="question_simulation",
+            is_complete=True,
         )
 
         # Save and send artifact to Canvas
         generated_payload = {
             "simulated_questions": simulated_questions,
             "generation_mode": "baseline_dynamic",
-            "generation_context": _build_generation_context(identity),
+            "generation_context": _build_generation_context(
+                identity,
+                topic_focus,
+                question_only=question_only,
+            ),
         }
 
         await save_and_send_artifact(
             session_id=session_id,
             output_type="questionList",
-            title="品牌全景问题列表",
+            title="主题全景问题列表" if topic_label else "品牌全景问题列表",
             data={
                 "simulatedQuestions": generated_payload,
                 "questions": flattened_questions,
-                "generationMode": "品牌全景分析（行业全景问题）",
+                "generationMode": (
+                    "主题全景问题" if topic_label else "品牌全景分析（行业全景问题）"
+                ),
             },
         )
 
         # Stage result
-        categories = list(set(
-            q.get("category", "") for q in simulated_questions if q.get("category")
-        ))
+        categories = list(
+            set(q.get("category", "") for q in simulated_questions if q.get("category"))
+        )
         stage_result_data = {
             "count": question_count,
             "categories": categories,
-            "examples": [q.get("core_question", "")[:50] for q in simulated_questions[:3]],
+            "examples": [
+                q.get("core_question", "")[:50] for q in simulated_questions[:3]
+            ],
         }
         await send_stage_result(
-            session_id, "A3", "问题生成",
+            session_id,
+            "A3",
+            "问题生成",
             result_type="questions",
             data=stage_result_data,
         )
@@ -1182,20 +1362,24 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
                 from uuid import UUID as _UUID
+
                 async with AsyncSessionLocal() as db:
                     task_svc = TaskService(db)
-                    await task_svc.append_stage_result(_UUID(task_id), {
-                        "stage": "A3",
-                        "result_type": "questions",
-                        "data": stage_result_data,
-                        "stage_name": "问题生成",
-                    })
+                    await task_svc.append_stage_result(
+                        _UUID(task_id),
+                        {
+                            "stage": "A3",
+                            "result_type": "questions",
+                            "data": stage_result_data,
+                            "stage_name": "问题生成",
+                        },
+                    )
             except Exception as e:
                 logger.warning("[A3] Failed to persist stage_result: %s", e)
         latest_question_set_id = await _persist_draft_question_set(
             state,
             flattened_questions=flattened_questions,
-            title="品牌全景问题集",
+            title=f"{topic_label}全景问题集" if topic_label else "品牌全景问题集",
             monitor_mode="panorama",
         )
         confirmation_update = await _question_set_confirmation_update(
@@ -1211,7 +1395,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
                 "brand_profile": brand_profile,
                 "simulated_questions": generated_payload,
                 "baseline_questions": flattened_questions,  # Baseline channel (long-term)
-                "questions": flattened_questions,            # Standard channel (A4 reads this)
+                "questions": flattened_questions,  # Standard channel (A4 reads this)
                 "latest_question_set_id": latest_question_set_id,
                 "question_set_ids": (
                     [latest_question_set_id] if latest_question_set_id else []
@@ -1253,4 +1437,3 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
                     "simulated_questions": None,
                 },
             )
-
