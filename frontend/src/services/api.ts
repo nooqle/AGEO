@@ -74,6 +74,10 @@ export function getApiBaseUrl(): string {
 type RequestOptions = Pick<RequestInit, 'signal'>;
 
 class ApiService {
+  private outputDetailCache = new Map<string, { expiresAt: number; promise: Promise<Output> }>();
+
+  private readonly outputDetailCacheTtlMs = 10 * 60 * 1000;
+
   private handleUnauthorized() {
     redirectToLoginForExpiredAuth();
   }
@@ -431,13 +435,36 @@ class ApiService {
   // Output management
   async getOutputs(sessionId: string, options?: { compact?: boolean }) {
     const params = new URLSearchParams();
-    if (options?.compact) params.set('compact', 'true');
+    params.set('compact', String(options?.compact ?? true));
     const query = params.toString();
     return this.request<Output[]>(`/sessions/${sessionId}/outputs${query ? `?${query}` : ''}`);
   }
 
   async getOutput(sessionId: string, outputId: string) {
-    return this.request<Output>(`/sessions/${sessionId}/outputs/${outputId}`);
+    const cacheKey = `${sessionId}:${outputId}`;
+    const now = Date.now();
+    const cached = this.outputDetailCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.promise;
+    }
+    this.outputDetailCache.delete(cacheKey);
+
+    const promise = this.request<Output>(`/sessions/${sessionId}/outputs/${outputId}`)
+      .catch((error) => {
+        this.outputDetailCache.delete(cacheKey);
+        throw error;
+      });
+    this.outputDetailCache.set(cacheKey, {
+      expiresAt: now + this.outputDetailCacheTtlMs,
+      promise,
+    });
+    if (this.outputDetailCache.size > 24) {
+      const oldestKey = this.outputDetailCache.keys().next().value;
+      if (oldestKey) {
+        this.outputDetailCache.delete(oldestKey);
+      }
+    }
+    return promise;
   }
 
   async exportOutput(sessionId: string, outputId: string, format: 'pdf' | 'excel') {

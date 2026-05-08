@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   DashboardBrandSidebar,
@@ -8,7 +9,6 @@ import {
 } from './DashboardBrandSidebar';
 import { DashboardPeriodMonitoring } from './DashboardPeriodMonitoring';
 import { DashboardTodoStrip } from './DashboardTodoStrip';
-import { MonitoringTab } from './MonitoringTab';
 import { HeroSection } from './HeroSection';
 import { useDashboardStore } from '@/stores/dashboardStore';
 import { useEntityStore } from '@/stores/entityStore';
@@ -27,6 +27,26 @@ import type {
 interface DashboardPageProps {
   onNewAnalysis?: () => void;
 }
+
+const MonitoringTab = dynamic(
+  () => import('./MonitoringTab').then((module) => module.MonitoringTab),
+  {
+    ssr: false,
+    loading: () => (
+      <section
+        className="rounded-[18px] border bg-[var(--bg-tertiary)] px-5 py-5"
+        style={{ borderColor: 'var(--border-subtle)' }}
+      >
+        <div className="h-7 w-36 rounded-lg animate-shimmer" />
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} className="h-28 rounded-[16px] animate-shimmer" />
+          ))}
+        </div>
+      </section>
+    ),
+  },
+);
 
 const MONITOR_MODE_LABELS: Record<DashboardMonitorMode, string> = {
   panorama: '全景分析',

@@ -15,11 +15,16 @@ router = APIRouter(prefix="/sessions/{session_id}/outputs", tags=["outputs"])
 @router.get("")
 async def get_outputs(
     session_id: UUID,
-    compact: bool = False,
+    compact: bool = True,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Get all outputs."""
+    """Get session outputs.
+
+    Output lists default to compact summaries so chat and dashboard reloads do
+    not repeatedly transfer full report artifacts. Use compact=false only for
+    legacy clients that explicitly need full output payloads in the list.
+    """
     session_service = SessionService(db)
     session = await session_service.get_session(session_id, current_user)
     if not session:
