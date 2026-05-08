@@ -63,7 +63,7 @@ export function SiteConfidenceReportContent({
 
       {markdown ? (
         <section
-          className="rounded-[22px] border bg-[var(--bg-tertiary)] px-6 py-6 md:px-8 md:py-8"
+          className="rounded-[22px] border bg-[var(--bg-report)] px-6 py-6 md:px-8 md:py-8"
           style={{ borderColor: 'var(--border-subtle)' }}
         >
           <div className="report-markdown text-[17px] leading-9 text-[var(--text-primary)]">

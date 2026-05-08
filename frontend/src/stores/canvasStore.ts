@@ -306,7 +306,7 @@ export const useCanvasStore = create<CanvasState>((set) => ({
       newContents[existingIndex] = {
         ...existing,
         ...content,
-        createdAt: existing.createdAt,
+        createdAt: content.createdAt ?? new Date(),
         outputSequence: content.outputSequence ?? existing.outputSequence,
         versions: updatedVersions,
         currentVersionIndex: -1, // -1 = show latest
