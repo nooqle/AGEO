@@ -56,7 +56,6 @@ jobs:
           DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
           DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
           DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
-          FOCUS_DOUBAO_TAB: ${{ github.event.inputs.focus_doubao_tab || 'false' }}
         run: |
           set -euo pipefail
           install -d -m 700 ~/.ssh
@@ -429,6 +428,7 @@ jobs:
           DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
           DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
           DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          FOCUS_DOUBAO_TAB: ${{ github.event.inputs.focus_doubao_tab || 'false' }}
         run: |
           set -euo pipefail
           install -d -m 700 ~/.ssh
