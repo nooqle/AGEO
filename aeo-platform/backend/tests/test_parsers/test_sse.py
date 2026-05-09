@@ -528,11 +528,36 @@ class TestDoubaoSSEParser:
         result = self.parser.validate(result)
         assert not result.parse_ok
 
-    def test_rate_limited_error_is_not_misclassified_as_verify(self):
+    def test_rate_limited_verify_decision_requires_human_takeover(self):
+        payload = {
+            "error_code": 710022004,
+            "error_message": "rate limited",
+            "extra": {
+                "decision": json.dumps(
+                    {
+                        "code": "10000",
+                        "type": "verify",
+                        "region": "cn",
+                        "subtype": "semantic_reasoning",
+                    }
+                )
+            },
+        }
         body = (
             "id: 1\n"
             "event: STREAM_ERROR\n"
-            f"data: {json.dumps({'error_code': 710022004, 'error_message': 'rate limited', 'type': 'verify'})}\n\n"
+            f"data: {json.dumps(payload)}\n\n"
+        )
+        result = self.parser.parse(body)
+
+        assert result.error_type == "verify"
+        assert "710022004" in result.error
+
+    def test_plain_rate_limited_error_stays_rate_limit(self):
+        body = (
+            "id: 1\n"
+            "event: STREAM_ERROR\n"
+            f"data: {json.dumps({'error_code': 710022004, 'error_message': 'rate limited'})}\n\n"
         )
         result = self.parser.parse(body)
 

@@ -296,8 +296,6 @@ class DoubaoSSEParser(BaseResponseParser):
             or "rate_limit" in normalized_error_msg
             or error_code == 710022004
         )
-        if is_rate_limited and not verify_scene:
-            return error_info, "rate_limit"
         if (
             err_type_field == "verify"
             or "verify" in normalized_error_msg
