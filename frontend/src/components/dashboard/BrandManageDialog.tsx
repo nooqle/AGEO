@@ -50,7 +50,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
       } else {
         const created = await api.createEntity(data);
         addEntity(created);
-        toast.success('品牌已创建，正在打开 AI 对话');
+        toast.success('品牌已创建，正在打开对话');
         setFormOpen(false);
         setEditEntity(null);
         const session = await api.getOrCreateSessionByEntity(created.id);
@@ -68,7 +68,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
         ? error.message
         : editEntity
           ? '品牌更新失败'
-          : '品牌创建或打开 AI 对话失败';
+          : '品牌创建或打开对话失败';
       toast.error(message);
       throw error;
     }

@@ -49,7 +49,7 @@ function DashboardContent({ currentUser }: { currentUser: AuthUser }) {
         brandName: createdBrandName,
       }));
     } catch {
-      toast.error(`「${createdBrandName}」创建或打开 AI 对话失败，请稍后重试。`);
+      toast.error(`「${createdBrandName}」创建或打开对话失败，请稍后重试。`);
     }
   };
 

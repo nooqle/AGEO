@@ -16,6 +16,10 @@ import type {
   DashboardSourceStructure,
 } from '@/types/dashboard';
 import { DashboardSectionHeader } from './DashboardSectionHeader';
+import {
+  getUserFacingStageLabel,
+  sanitizeUserFacingErrorMessage,
+} from '@/lib/workflowStageLabels';
 
 interface DashboardHomeBoardsProps {
   home: DashboardHomeData;
@@ -345,7 +349,7 @@ const PLATFORM_STATUS_LABEL: Record<DashboardPlatformDiagnosisRow['status'], str
 
 function PlatformDiagnosis({ rows }: { rows: DashboardPlatformDiagnosisRow[] }) {
   return (
-    <SectionBlock title="AI 来源诊断">
+    <SectionBlock title="平台来源诊断">
       {rows.length === 0 ? (
         <EmptyInline />
       ) : (
@@ -353,7 +357,7 @@ function PlatformDiagnosis({ rows }: { rows: DashboardPlatformDiagnosisRow[] }) 
           <table className="w-full min-w-[680px] border-separate border-spacing-0 text-left">
             <thead>
               <tr className="text-[12px] text-[var(--text-tertiary)]">
-                <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">AI 来源</th>
+                <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">平台来源</th>
                 <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">状态</th>
                 <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">回答</th>
                 <th className="border-b border-[var(--border-subtle)] px-3 py-3 font-medium">提及</th>
@@ -434,7 +438,7 @@ function AdvantageCards({ advantages }: { advantages: DashboardHomeAdvantageCard
                 <span className="rounded-full px-2.5 py-1 text-[12px] font-medium text-[var(--success)]" style={{ backgroundColor: 'var(--status-success-bg)' }}>优势</span>
               </div>
               <div className="mt-3 flex flex-wrap gap-2 text-[13px] text-[var(--text-secondary)]">
-                {advantage.platform_count ? <span>{advantage.platform_count} 个 AI 来源</span> : null}
+                {advantage.platform_count ? <span>{advantage.platform_count} 个来源平台</span> : null}
                 {advantage.evidence ? <span>{advantage.evidence}</span> : null}
               </div>
             </div>
@@ -571,10 +575,15 @@ function MonitoringIssueBanner({
   onRetry?: (issue: DashboardMonitoringIssue) => void;
 }) {
   if (!issue) return null;
-  const sourceLabel = issue.endpoint_labels.join('、') || 'AI 来源待确认';
+  const sourceLabel = issue.endpoint_labels.join('、') || '平台来源待确认';
+  const stageLabel = getUserFacingStageLabel(issue.error_stage) || '自动监测';
+  const errorMessage = sanitizeUserFacingErrorMessage(
+    issue.error_message,
+    '本次自动监测没有生成可用于看板展示的报告。'
+  );
   return (
     <div
-            className="rounded-[16px] border px-5 py-4"
+      className="rounded-[16px] border px-5 py-4"
       style={{
         background: 'var(--status-error-bg)',
         borderColor: 'color-mix(in srgb, var(--evidence-risk) 22%, var(--border-subtle) 78%)',
@@ -587,11 +596,11 @@ function MonitoringIssueBanner({
             {issue.title}
           </div>
           <p className="mt-2 text-[13px] leading-6 text-[var(--text-secondary)]">
-            阶段：{issue.error_stage || 'monitoring_run'} · {issue.question_count} 个问题 · {sourceLabel}
+            处理环节：{stageLabel} · {issue.question_count} 个问题 · {sourceLabel}
           </p>
-          {issue.error_message && (
+          {errorMessage && (
             <p className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">
-              {issue.error_message}
+              {errorMessage}
             </p>
           )}
         </div>
@@ -601,7 +610,7 @@ function MonitoringIssueBanner({
             onClick={() => onOpenChat?.(issue)}
             className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 text-[13px] font-medium text-[var(--text-primary)]"
           >
-            AI 对话处理
+            对话处理
           </button>
           <button
             type="button"

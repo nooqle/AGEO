@@ -54,7 +54,7 @@ export function TaskNotificationPoller({
         if (task.status === 'failed') {
           const errorStageLabel = getUserFacingStageLabel(task.error_stage);
           toast.error(
-            `「${task.brand_name}」分析失败${errorStageLabel ? ` (${errorStageLabel})` : ''}`,
+            `「${task.brand_name}」分析未完成${errorStageLabel ? `，处理环节：${errorStageLabel}` : ''}`,
           );
         }
       }

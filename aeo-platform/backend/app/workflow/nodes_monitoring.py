@@ -486,7 +486,7 @@ async def _build_current_plan_reply(
         plan_payload = await plan_service.plan_to_dict(plan)
         plan_line = (
             f"- 分析计划：{plan_payload.get('question_count', 0)} 个问题 · "
-            f"{'、'.join(plan_payload.get('endpoint_labels') or []) or 'AI 来源待确认'} · "
+            f"{'、'.join(plan_payload.get('endpoint_labels') or []) or '平台来源待确认'} · "
             f"{_plan_status_label(plan_payload.get('status'))}"
         )
     else:
@@ -692,7 +692,7 @@ def _build_schedule_reply(
         lines.extend(extra_lines)
     if schedule is None:
         lines.append("- 运行设置：当前还没有生成可执行的周期任务。")
-        lines.append("可以在 Dashboard 的持续监测页继续补齐问题集、AI 来源和执行时间。")
+        lines.append("可以在看板的持续监测页继续补齐问题集、平台来源和执行时间。")
         return "\n".join(lines)
 
     lines.extend(
@@ -702,13 +702,13 @@ def _build_schedule_reply(
             f"- 执行时间：{schedule.timezone} {schedule.preferred_hour:02d}:00",
             f"- 下次执行：{_format_next_run(schedule)}",
             f"- 告警阈值：{schedule.alert_threshold_bwvs:g}",
-            f"- AI 来源：{_format_platforms(schedule)}",
+            f"- 平台来源：{_format_platforms(schedule)}",
         ]
     )
     if plan is not None:
-        lines.append("- 已绑定新版监测计划，可在 Dashboard 的持续监测页继续调整。")
+        lines.append("- 已绑定新版监测计划，可在看板的持续监测页继续调整。")
     else:
-        lines.append("- 当前为旧版周期任务，可在 Dashboard 的持续监测页继续调整。")
+        lines.append("- 当前为旧版周期任务，可在看板的持续监测页继续调整。")
     return "\n".join(lines)
 
 

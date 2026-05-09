@@ -502,7 +502,7 @@ def _build_site_confidence_tool(
                 },
                 "max_pages": {
                     "type": "integer",
-                    "description": "可选，限制本轮最多评估的页面数。默认扫描首页及最多 7 个核心页面。",
+                    "description": "可选，限制本轮最多评估的页面数。默认最多评估 20 个优先页面，最高 50 个。",
                 },
             },
             "required": ["root_url"],

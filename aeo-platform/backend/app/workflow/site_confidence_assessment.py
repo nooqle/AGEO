@@ -22,16 +22,23 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from app.services.aice_evaluation_service import AICECallContext, AICEEvaluationService
+from app.services.aice_prompt_contract import (
+    AICE_MODEL_PROFILE,
+    AICE_WEB_EVALUATION_MODE,
+    AICE_WEB_PROMPT_VERSION,
+)
 from app.services.page_feature_service import fetch_page_features
 
 
 DEFAULT_SCAN_MODE = "standard"
-DEFAULT_MAX_PAGES = 50
+DEFAULT_MAX_PAGES = 20
 HARD_MAX_SCAN_PAGES = 50
 HTTP_TIMEOUT_SECONDS = 8.0
 INTERNAL_LINK_LIMIT = 48
 SITEMAP_URL_LIMIT = 24
 PAGE_FETCH_CONCURRENCY = 6
+SUPPLEMENTAL_DETAIL_SEED_LIMIT = 6
 SITE_USER_AGENT = (
     "Mozilla/5.0 (compatible; SpectaSiteConfidence/1.0; +https://specta.ai/)"
 )
@@ -63,10 +70,23 @@ _PAGE_TYPE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "platform",
             "service",
             "services",
+            "l6",
+            "l7",
+            "l8",
+            "l9",
+            "mega",
+            "one",
             "产品",
             "功能",
             "平台",
             "服务",
+            "车型",
+            "配置",
+            "参数",
+            "看车",
+            "理想l",
+            "理想mega",
+            "理想one",
         ),
     ),
     (
@@ -194,9 +214,15 @@ _EXCLUDED_PATH_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "cookies",
             "legal",
             "gdpr",
+            "license",
+            "permit",
+            "icp",
             "隐私",
             "条款",
             "协议",
+            "备案",
+            "许可证",
+            "经营许可证",
         ),
     ),
     ("career", ("career", "careers", "job", "jobs", "hiring", "招聘", "岗位")),
@@ -228,6 +254,11 @@ _PAGE_TYPE_BUDGETS: dict[str, int] = {
     "blog": 1,
     "news": 1,
     "generic": 2,
+}
+
+_SUPPLEMENTAL_DETAIL_LIMITS: dict[str, int] = {
+    "news": 2,
+    "product": 2,
 }
 
 
@@ -308,7 +339,7 @@ def _is_supported_html_path(url: str) -> bool:
     path = urlparse(url).path.lower()
     return not bool(
         re.search(
-            r"\.(pdf|zip|rar|7z|png|jpg|jpeg|gif|svg|webp|mp4|mp3|doc|docx|xls|xlsx|ppt|pptx)$",
+            r"\.(pdf|zip|rar|7z|png|jpg|jpeg|gif|svg|webp|ico|css|js|mp4|mp3|doc|docx|xls|xlsx|ppt|pptx)$",
             path,
         )
     )
@@ -319,6 +350,8 @@ def _normalize_internal_url(
 ) -> str | None:
     absolute = urljoin(base_url, candidate or "").strip()
     if not absolute:
+        return None
+    if any(marker in absolute for marker in ("<", ">", "\n", "\r", "\t", " ")):
         return None
 
     parsed = urlparse(absolute)
@@ -506,6 +539,154 @@ async def _fetch_sitemap_urls(root_url: str, root_domain: str) -> list[str]:
         if len(deduped) >= SITEMAP_URL_LIMIT:
             break
     return deduped
+
+
+def _looks_like_news_detail(url: str, label: str = "") -> bool:
+    segments = _path_segments(url)
+    if not segments:
+        return False
+    joined = " ".join(segments + [label.lower()])
+    if not any(marker in segments for marker in ("news", "press", "media")):
+        return False
+    if any(marker in joined for marker in ("list", "index", "category", "tag")):
+        return False
+    return _path_depth(url) >= 2 and bool(re.search(r"\d", url))
+
+
+def _looks_like_product_detail(
+    url: str,
+    label: str,
+    seed: DiscoveredPage,
+) -> bool:
+    segments = _path_segments(url)
+    if not segments:
+        return False
+    joined = " ".join(segments + [label.lower()])
+    product_markers = (
+        "product",
+        "products",
+        "l6",
+        "l7",
+        "l8",
+        "l9",
+        "mega",
+        "one",
+        "理想l",
+        "理想mega",
+        "理想one",
+        "车型",
+        "配置",
+        "参数",
+        "看车",
+    )
+    if segments[:2] == ["vis", "pic"]:
+        return True
+    if seed.page_type != "product":
+        return False
+    seed_segments = _path_segments(seed.url)
+    if (
+        seed_segments
+        and segments[0] == seed_segments[0]
+        and _path_depth(url) > seed.depth
+    ):
+        return True
+    return any(marker in joined for marker in product_markers)
+
+
+def _classify_supplemental_detail_candidate(
+    url: str,
+    label: str,
+    seed: DiscoveredPage,
+) -> str | None:
+    if _path_depth(url) > 4:
+        return None
+    if _looks_like_news_detail(url, label):
+        return "news"
+    if _looks_like_product_detail(url, label, seed):
+        return "product"
+    return None
+
+
+def _supplemental_detail_seeds(
+    candidates: list[DiscoveredPage],
+) -> list[DiscoveredPage]:
+    seen: set[str] = set()
+    seeds: list[DiscoveredPage] = []
+    for page in sorted(
+        candidates,
+        key=lambda item: (
+            0 if item.page_type == "news" else 1 if item.page_type == "product" else 2,
+            -_page_priority(item.url, item.label, item.source_hint),
+            item.depth,
+            item.url,
+        ),
+    ):
+        if page.page_type not in {"news", "product"}:
+            continue
+        signature = _url_signature(page.url)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        seeds.append(page)
+        if len(seeds) >= SUPPLEMENTAL_DETAIL_SEED_LIMIT:
+            break
+    return seeds
+
+
+async def _discover_supplemental_detail_pages(
+    candidates: list[DiscoveredPage],
+    *,
+    root_domain: str,
+) -> list[DiscoveredPage]:
+    seeds = _supplemental_detail_seeds(candidates)
+    if not seeds:
+        return []
+
+    seen_signatures = {_url_signature(page.url) for page in candidates}
+    added_counts: Counter[str] = Counter()
+    supplemental_pages: list[DiscoveredPage] = []
+
+    for seed in seeds:
+        if all(
+            added_counts[page_type] >= limit
+            for page_type, limit in _SUPPLEMENTAL_DETAIL_LIMITS.items()
+        ):
+            break
+        payload = await _fetch_html(seed.url)
+        html = str(payload.get("html") or "")
+        if not html:
+            continue
+        for url, label in _extract_internal_links(
+            html,
+            base_url=seed.url,
+            root_domain=root_domain,
+        ):
+            signature = _url_signature(url)
+            if signature in seen_signatures:
+                continue
+            page_type = _classify_supplemental_detail_candidate(url, label, seed)
+            if not page_type:
+                continue
+            if added_counts[page_type] >= _SUPPLEMENTAL_DETAIL_LIMITS[page_type]:
+                continue
+            if _classify_exclusion(url, label):
+                continue
+
+            seen_signatures.add(signature)
+            added_counts[page_type] += 1
+            supplemental_pages.append(
+                DiscoveredPage(
+                    url=url,
+                    page_type=page_type,
+                    source_hint=f"{page_type}_detail_link",
+                    label=_collapse_text(label)[:120]
+                    or urlparse(url).path.strip("/")
+                    or "详情页",
+                    depth=_path_depth(url),
+                )
+            )
+
+    return supplemental_pages
 
 
 def _parse_robots_policy(robots_text: str) -> dict[str, Any]:
@@ -711,6 +892,7 @@ def _select_pages(
     type_counts: Counter[str] = Counter()
 
     for page in eligible_pages:
+        signature = _url_signature(page.url)
         page_budget = _PAGE_TYPE_BUDGETS.get(
             page.page_type, _PAGE_TYPE_BUDGETS["generic"]
         )
@@ -789,6 +971,13 @@ async def discover_site_pages(
                 depth=_path_depth(url),
             )
         )
+
+    candidates.extend(
+        await _discover_supplemental_detail_pages(
+            candidates,
+            root_domain=final_root_domain,
+        )
+    )
 
     normalized_max_pages = _normalize_scan_page_limit(max_pages)
     selected_pages, selected_type_counts, excluded_reason_counts, eligible_page_count = _select_pages(
@@ -985,9 +1174,180 @@ def _build_gate_scores(
     }
 
 
-def _page_confidence_summary(
-    page: DiscoveredPage, features: dict[str, Any]
+def _build_aice_page_facts(
+    page: DiscoveredPage,
+    features: dict[str, Any],
 ) -> dict[str, Any]:
+    return {
+        "url": page.url,
+        "final_url": features.get("final_url") or page.url,
+        "page_type": page.page_type,
+        "page_label": page.label,
+        "source_hint": page.source_hint,
+        "depth": page.depth,
+        "http_status": features.get("http_status"),
+        "content_type": features.get("content_type"),
+        "crawl_readable": bool(features.get("crawl_readable")),
+        "fetch_failure_reason": str(features.get("fetch_failure_reason") or ""),
+        "title": features.get("fetched_title") or page.label,
+        "meta_description": features.get("meta_description") or "",
+        "has_h1": bool(features.get("has_h1")),
+        "h1_texts": list(features.get("h1_texts") or []),
+        "h1_count": int(features.get("h1_count") or 0),
+        "h2_texts": list(features.get("h2_texts") or []),
+        "h2_count": int(features.get("h2_count") or 0),
+        "has_main": bool(features.get("has_main")),
+        "has_article": bool(features.get("has_article")),
+        "body_text_length": int(features.get("body_text_length") or 0),
+        "body_text_excerpt": features.get("body_text_excerpt") or "",
+        "script_count": int(features.get("script_count") or 0),
+        "has_noscript": bool(features.get("has_noscript")),
+        "schema_types": list(features.get("schema_types") or []),
+        "published_at": features.get("published_at") or "",
+    }
+
+
+def _aice_dimensions_to_compat(
+    aice_evaluation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    dimensions: list[dict[str, Any]] = []
+    for dimension in aice_evaluation.get("dimension_scores") or []:
+        code = str(dimension.get("code") or "")
+        max_score = max(float(dimension.get("max_score") or 1), 1)
+        raw_score = round(float(dimension.get("score") or 0.0), 1)
+        normalized_score = round(raw_score / max_score * 10, 1)
+        recommendation = dimension.get("recommendation") or {}
+        dimensions.append(
+            {
+                "id": code,
+                "label": _aice_dimension_label(code),
+                "score": normalized_score,
+                "raw_score": raw_score,
+                "max_score": int(max_score),
+                "assessment": str(dimension.get("reason") or "").strip(),
+                "evidence": list(dimension.get("evidence") or []),
+                "recommendation": recommendation,
+            }
+        )
+    return dimensions
+
+
+def _aice_gate_scores(aice_evaluation: dict[str, Any]) -> dict[str, Any]:
+    dimensions = {
+        str(item.get("code") or ""): item
+        for item in aice_evaluation.get("dimension_scores") or []
+    }
+    c6 = float((dimensions.get("C6") or {}).get("score") or 0.0)
+    c9a = float((dimensions.get("C9a") or {}).get("score") or 0.0)
+    c9b = float((dimensions.get("C9b") or {}).get("score") or 0.0)
+    failed_gates: list[str] = []
+    if c6 <= 0:
+        failed_gates.append("c6")
+    if c9a < 5:
+        failed_gates.append("c9a")
+    if c9b < 5:
+        failed_gates.append("c9b")
+    return {
+        "c6": c6,
+        "c9a": c9a,
+        "c9b": c9b,
+        "gate_pass": c6 > 0 and c9a >= 5 and c9b >= 5,
+        "failed_gates": failed_gates,
+    }
+
+
+def _aice_page_findings(aice_evaluation: dict[str, Any]) -> list[str]:
+    findings = [
+        _humanize_report_text(str(item).strip())
+        for item in list(aice_evaluation.get("key_findings") or [])
+        if str(item).strip()
+    ]
+    if findings:
+        return findings[:3]
+    low_dimensions = sorted(
+        aice_evaluation.get("dimension_scores") or [],
+        key=lambda item: float(item.get("score") or 0.0)
+        / max(float(item.get("max_score") or 1), 1),
+    )
+    return [
+        _humanize_report_text(str(item.get("reason") or "").strip())
+        for item in low_dimensions[:3]
+        if str(item.get("reason") or "").strip()
+    ][:3]
+
+
+def _aice_page_recommendations(aice_evaluation: dict[str, Any]) -> list[str]:
+    recommendations = [
+        _humanize_report_text(str(item).strip())
+        for item in list(aice_evaluation.get("recommendations") or [])
+        if str(item).strip()
+    ]
+    if recommendations:
+        return recommendations[:3]
+    items: list[str] = []
+    for dimension in sorted(
+        aice_evaluation.get("dimension_scores") or [],
+        key=lambda item: float(item.get("score") or 0.0)
+        / max(float(item.get("max_score") or 1), 1),
+    ):
+        recommendation = dimension.get("recommendation") or {}
+        action = str(recommendation.get("action") or "").strip()
+        if action:
+            items.append(_humanize_report_text(action))
+        if len(items) >= 3:
+            break
+    return items
+
+
+def _page_confidence_summary(
+    page: DiscoveredPage,
+    features: dict[str, Any],
+    aice_evaluation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if aice_evaluation is not None:
+        score = round(float(aice_evaluation.get("overall_score") or 0.0), 1)
+        if score >= 78:
+            page_status = "strong"
+        elif score >= 60:
+            page_status = "watch"
+        else:
+            page_status = "risk"
+        schema_types = list(features.get("schema_types") or [])
+        return {
+            "url": page.url,
+            "page_type": page.page_type,
+            "page_label": page.label,
+            "depth": page.depth,
+            "source_hint": page.source_hint,
+            "http_status": features.get("http_status"),
+            "crawl_readable": bool(features.get("crawl_readable")),
+            "fetch_failure_reason": str(
+                features.get("fetch_failure_reason") or ""
+            ).strip(),
+            "title": features.get("fetched_title") or page.label,
+            "meta_description": features.get("meta_description") or "",
+            "has_h1": bool(features.get("has_h1")),
+            "h1_texts": list(features.get("h1_texts") or []),
+            "h1_count": int(features.get("h1_count") or 0),
+            "h2_texts": list(features.get("h2_texts") or []),
+            "h2_count": int(features.get("h2_count") or 0),
+            "has_main": bool(features.get("has_main")),
+            "has_article": bool(features.get("has_article")),
+            "body_text_length": int(features.get("body_text_length") or 0),
+            "script_count": int(features.get("script_count") or 0),
+            "schema_types": schema_types,
+            "published_at": features.get("published_at"),
+            "dimension_scores": _aice_dimensions_to_compat(aice_evaluation),
+            "gate_scores": _aice_gate_scores(aice_evaluation),
+            "confidence_score": score,
+            "page_status": page_status,
+            "findings": _aice_page_findings(aice_evaluation),
+            "recommendations": _aice_page_recommendations(aice_evaluation),
+            "aice_evaluation": aice_evaluation,
+            "evaluation_mode": aice_evaluation.get("evaluation_mode")
+            or AICE_WEB_EVALUATION_MODE,
+        }
+
     score = 34.0
     findings: list[str] = []
     recommendations: list[str] = []
@@ -1036,7 +1396,7 @@ def _page_confidence_summary(
     else:
         findings.append("暂未发现 Schema.org 结构化数据。")
         recommendations.append(
-            "为核心页面补充 Organization、Product、FAQPage 等结构化标记。"
+            "为核心页面补充组织、产品、问答页等结构化标记。"
         )
 
     if features.get("published_at"):
@@ -1202,12 +1562,20 @@ def _build_actions(
     sitemap_present = bool(governance.get("sitemap_present"))
     robots_present = bool(governance.get("robots_present"))
 
-    if scan_quality_status != "healthy" or unreadable:
+    if unreadable:
         actions.append(
             {
                 "priority": "P0",
                 "title": "先修抓取失败页面",
                 "summary": "先把没有稳定抓回的核心页面修到默认抓取方式可用，否则后面的内容优化都落不到机器视野里。",
+            }
+        )
+    elif scan_quality_status != "healthy":
+        actions.append(
+            {
+                "priority": "P1",
+                "title": "补齐本轮样本覆盖",
+                "summary": "当前样本页数偏少，先补齐首页、产品页、帮助页、常见问答/文档页等关键页面后，再用完整样本判断整站优先级。",
             }
         )
     if missing_h1 or missing_schema:
@@ -1239,7 +1607,7 @@ def _build_actions(
             {
                 "priority": "P1",
                 "title": "补齐抓取治理",
-                "summary": "补上 sitemap、robots.txt，并避免对首页、产品页、FAQ/文档页等关键页面过度封锁，让机器先稳定发现再稳定理解。",
+                "summary": "补上 sitemap、robots.txt，并避免对首页、产品页、常见问答/文档页等关键页面过度封锁，让机器先稳定发现再稳定理解。",
             }
         )
     if not actions:
@@ -1247,7 +1615,7 @@ def _build_actions(
             {
                 "priority": "P1",
                 "title": "继续扩充高价值场景页",
-                "summary": "当前基础结构稳定，下一阶段应围绕 FAQ、产品对比和关键场景页补更强的可引用语料。",
+                "summary": "当前基础结构稳定，下一阶段应围绕常见问答、产品对比和关键场景页补更强的可引用语料。",
             }
         )
     return actions[:4]
@@ -1320,6 +1688,134 @@ def _build_dimension_summary(
     }
 
 
+def _build_aice_dimension_summary(
+    site_evaluation: dict[str, Any],
+    page_summaries: list[dict[str, Any]],
+    crawl_governance_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    gate_failures = Counter()
+    for page in page_summaries:
+        for gate in (page.get("gate_scores") or {}).get("failed_gates") or []:
+            gate_failures[str(gate)] += 1
+
+    dimensions: list[dict[str, Any]] = []
+    for dimension in site_evaluation.get("dimension_scores") or []:
+        code = str(dimension.get("code") or "")
+        max_score = max(float(dimension.get("max_score") or 1), 1)
+        raw_score = round(float(dimension.get("score") or 0.0), 1)
+        average_score = round(raw_score / max_score * 10, 1)
+        dimensions.append(
+            {
+                "id": code,
+                "label": _aice_dimension_label(code),
+                "average_score": average_score,
+                "raw_score": raw_score,
+                "max_score": int(max_score),
+                "risk_level": (
+                    "high"
+                    if average_score < 5
+                    else "watch" if average_score < 7.5 else "healthy"
+                ),
+                "assessment": str(dimension.get("reason") or "").strip(),
+                "evidence": list(dimension.get("evidence") or []),
+                "recommendation": dimension.get("recommendation") or {},
+            }
+        )
+
+    if crawl_governance_summary:
+        governance_score = round(float(crawl_governance_summary.get("score") or 0.0), 1)
+        dimensions.append(
+            {
+                "id": str(crawl_governance_summary.get("id") or "crawl_governance"),
+                "label": str(crawl_governance_summary.get("label") or "抓取治理"),
+                "average_score": governance_score,
+                "risk_level": (
+                    "high"
+                    if governance_score < 5
+                    else "watch" if governance_score < 7.5 else "healthy"
+                ),
+            }
+        )
+
+    dimensions.sort(key=lambda item: (item["average_score"], item["id"]))
+    return {
+        "dimensions": dimensions,
+        "top_risk_dimensions": dimensions[:3],
+        "gate_failure_summary": {
+            "c6": gate_failures.get("c6", 0),
+            "c9a": gate_failures.get("c9a", 0),
+            "c9b": gate_failures.get("c9b", 0),
+        },
+    }
+
+
+def _normalize_aice_site_actions(
+    site_evaluation: dict[str, Any],
+) -> list[dict[str, str]]:
+    actions: list[dict[str, str]] = []
+    for item in site_evaluation.get("prioritized_actions") or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        if not title and not summary:
+            continue
+        target_pages = item.get("target_pages") or []
+        dimensions = item.get("dimensions") or []
+        actions.append(
+            {
+                "priority": str(item.get("priority") or "P1").upper(),
+                "title": title or "处理官网低分项",
+                "summary": _humanize_report_text(summary or title),
+                "target_pages": "、".join(str(page) for page in target_pages),
+                "dimensions": "、".join(str(code) for code in dimensions),
+                "metric": str(item.get("metric") or "").strip(),
+            }
+        )
+    return actions[:4]
+
+
+def _build_validator_summary(
+    *,
+    page_summaries: list[dict[str, Any]],
+    site_evaluation: dict[str, Any],
+) -> dict[str, Any]:
+    page_metadata = [
+        page.get("aice_evaluation", {}).get("metadata") or {}
+        for page in page_summaries
+    ]
+    site_metadata = site_evaluation.get("metadata") or {}
+    repaired_count = sum(
+        1 for metadata in page_metadata if metadata.get("validator_repaired")
+    )
+    degraded_count = sum(1 for metadata in page_metadata if metadata.get("degraded"))
+    page_cache_hit_count = sum(1 for metadata in page_metadata if metadata.get("cache_hit"))
+    all_issues: list[str] = []
+    for metadata in [*page_metadata, site_metadata]:
+        for issue in list(metadata.get("validator_issues") or []):
+            public_issue = _public_validator_issue(str(issue))
+            if public_issue and public_issue not in all_issues:
+                all_issues.append(public_issue)
+    return {
+        "prompt_version": AICE_WEB_PROMPT_VERSION,
+        "static_prompt_hash": site_metadata.get("static_prompt_hash"),
+        "page_count": len(page_summaries),
+        "page_cache_hit_count": page_cache_hit_count,
+        "repaired_count": repaired_count
+        + (1 if site_metadata.get("validator_repaired") else 0),
+        "degraded_count": degraded_count + (1 if site_metadata.get("degraded") else 0),
+        "site_repaired": bool(site_metadata.get("validator_repaired")),
+        "site_degraded": bool(site_metadata.get("degraded")),
+        "issues": all_issues[:12],
+    }
+
+
+def _public_validator_issue(issue: str) -> str:
+    if "包含内部降级或后端实现文案" in issue:
+        return ""
+    return issue
+
+
 def _scan_quality_label(scan_quality_status: str) -> str:
     if scan_quality_status == "healthy":
         return "覆盖稳定"
@@ -1337,7 +1833,7 @@ def _page_role_label(page_type: str | None) -> str:
         "solution": "解决方案页",
         "pricing": "价格页",
         "docs": "文档页",
-        "faq": "FAQ 页",
+        "faq": "常见问答页",
         "about": "品牌介绍页",
         "news": "新闻页",
         "generic": "通用页",
@@ -1528,12 +2024,13 @@ def _select_score_drag_pages(
     overall_score: float,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
+    unique_pages = _dedupe_pages(page_summaries)
     below_average = [
         page
-        for page in page_summaries
+        for page in unique_pages
         if float(page.get("confidence_score") or 0.0) < overall_score
     ]
-    pool = below_average or page_summaries
+    pool = below_average or unique_pages
 
     def _priority_key(page: dict[str, Any]) -> tuple[float, int, int]:
         score = float(page.get("confidence_score") or 0.0)
@@ -1565,7 +2062,7 @@ def _summarize_score_drag_pages(
         limit=limit,
     )
     if not pages:
-        return "当前没有明显拖低平均分的页面。"
+        return "当前没有明显影响官网级评分的页面。"
     return "、".join(
         f"{_page_anchor_label(page)}（**{float(page.get('confidence_score') or 0):.1f} / 100**）"
         for page in pages
@@ -1590,7 +2087,7 @@ def _summarize_repeating_penalty_dimensions(
             entry = totals.setdefault(
                 dimension_id,
                 {
-                    "label": str(dimension.get("label") or dimension_id),
+                    "label": _aice_dimension_label(dimension_id),
                     "max_score": int(dimension.get("max_score") or 10),
                     "score_sum": 0.0,
                     "count": 0,
@@ -1616,11 +2113,16 @@ def _summarize_repeating_penalty_dimensions(
 
 def _aice_dimension_label(code: str) -> str:
     mapping = {
-        "C6": "C6: Coverage（覆盖度）",
-        "C9a": "C9a: Semantic Tagging（语义标签）",
-        "C9b": "C9b: Schema Usage（结构化数据）",
-        "C8": "C8: Timeliness（时效性）",
-        "C5": "C5: Clarity（结构清晰度）",
+        "C6": "C6 覆盖度",
+        "C9a": "C9a 语义标签",
+        "C9b": "C9b 结构化数据",
+        "C8": "C8 时效性",
+        "C1": "C1 品牌身份",
+        "C4": "C4 证据密度",
+        "C2": "C2 主题相关性",
+        "C3": "C3 可回答性",
+        "C5": "C5 结构清晰度",
+        "C7": "C7 官方可信度",
     }
     return mapping.get(code, code)
 
@@ -1645,10 +2147,35 @@ def _build_page_penalty_items(
                 "label": _aice_dimension_label(code),
                 "score": round(float(score), 1),
                 "max_score": max_score,
-                "reason": _humanize_report_text(reason),
+                "reason": _enrich_fact_sparse_text(
+                    code=code,
+                    text=reason,
+                    page_summaries=[page],
+                ),
                 "fix": _humanize_report_text(fix),
             }
         )
+
+    aice_evaluation = page.get("aice_evaluation") or {}
+    if aice_evaluation.get("dimension_scores"):
+        for dimension in sorted(
+            aice_evaluation.get("dimension_scores") or [],
+            key=lambda item: float(item.get("score") or 0.0)
+            / max(float(item.get("max_score") or 1), 1),
+        ):
+            recommendation = dimension.get("recommendation") or {}
+            _append_item(
+                str(dimension.get("code") or ""),
+                float(dimension.get("score") or 0.0),
+                int(dimension.get("max_score") or 10),
+                str(dimension.get("reason") or "").strip(),
+                str(recommendation.get("action") or "").strip()
+                or str(recommendation.get("title") or "").strip()
+                or _aice_default_dimension_fix(str(dimension.get("code") or "")),
+            )
+            if len(items) >= limit:
+                break
+        return items[:limit]
 
     crawl_readable = bool(page.get("crawl_readable"))
     has_h1 = bool(page.get("has_h1"))
@@ -1700,7 +2227,7 @@ def _build_page_penalty_items(
             5,
             10,
             "未发现 Schema.org 标记，页面 Schema 信息缺失，机器无法直接识别页面身份。",
-            "按页面职责补 Product、Organization、NewsArticle、FAQPage 等 Schema 标记。",
+            "按页面职责补产品、组织、新闻或问答页等结构化标记。",
         )
 
     evergreen_types = {"homepage", "about", "product", "solution", "pricing", "docs", "faq"}
@@ -1729,11 +2256,162 @@ def _build_page_penalty_items(
     return ranked[:limit]
 
 
+def _aice_default_dimension_fix(code: str) -> str:
+    mapping = {
+        "C6": "排查页面返回状态、重定向、超时和访问限制，确保默认抓取能拿到 200 正文。",
+        "C9a": "补唯一 H1、清晰 H2 层级和 main/article 主体语义区。",
+        "C9b": "按页面职责补网页、产品、问答页或新闻等结构化数据。",
+        "C8": "补发布时间或更新时间，并暴露在页面正文或结构化字段中。",
+        "C1": "在首屏、标题和 meta 中明确品牌主体、官网身份和页面职责。",
+        "C4": "补充可引用的参数、事实、常见问答、案例或官方说明块。",
+        "C2": "收拢正文主题，减少与页面职责无关的泛化表述。",
+        "C3": "补充常见问题答案、价格、配置、购买流程或限制说明。",
+        "C5": "整理标题层级和正文段落，让核心信息按主题分组。",
+        "C7": "补齐官方联系、公司、备案、法律信息和可信来源链接。",
+    }
+    return mapping.get(code, "补齐该评分项对应的页面事实、结构和可引用信息。")
+
+
+def _needs_fact_sparse_detail(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "事实稀疏",
+            "事实支撑不足",
+            "事实密度不足",
+            "证据稀疏",
+            "证据不足",
+        )
+    )
+
+
+def _dimension_from_page(page: dict[str, Any], code: str) -> dict[str, Any]:
+    for dimension in page.get("dimension_scores") or []:
+        dimension_id = str(dimension.get("id") or dimension.get("code") or "")
+        if dimension_id == code:
+            return dict(dimension)
+    for dimension in (page.get("aice_evaluation") or {}).get("dimension_scores") or []:
+        dimension_id = str(dimension.get("code") or dimension.get("id") or "")
+        if dimension_id == code:
+            return dict(dimension)
+    return {}
+
+
+def _fact_gap_bucket_for_page(page: dict[str, Any]) -> str:
+    page_type = str(page.get("page_type") or "")
+    label_text = f"{page.get('title') or ''} {page.get('page_label') or ''} {page.get('url') or ''}"
+    if "投资" in label_text or "ir." in label_text or "/ir" in label_text:
+        return "投资者关系页未稳定看到业绩摘要、公告时间、关键财务数字和来源链接"
+    if (
+        page_type in {"product", "pricing"}
+        or any(keyword in label_text for keyword in ("产品", "车型", "预约", "购买", "价格"))
+    ):
+        return "产品/转化页未稳定看到车型参数、价格权益、配置对比、购买流程或常见问答"
+    if page_type in {"docs", "faq"} or any(
+        keyword in label_text for keyword in ("帮助", "FAQ", "问答", "文档")
+    ):
+        return "帮助/问答页未稳定看到标准问答、操作步骤、适用范围和限制条件"
+    if page_type in {"news", "blog"} or any(
+        keyword in label_text for keyword in ("新闻", "媒体", "资讯", "动态")
+    ):
+        return "新闻/内容页未稳定看到时间、事件主体、引用数字、来源和摘要结论"
+    if page_type in {"homepage", "about", "solution"}:
+        return "首页/品牌/方案页未稳定看到公司事实、场景案例、数据指标和官方说明块"
+    return "页面未稳定看到可直接摘引的事实块、数字、示例或标准答案"
+
+
+def _summarize_fact_density_gaps(page_summaries: list[dict[str, Any]]) -> str:
+    pages = _dedupe_pages(page_summaries)
+    low_c4_pages: list[dict[str, Any]] = []
+    for page in pages:
+        dimension = _dimension_from_page(page, "C4")
+        if not dimension:
+            continue
+        max_score = max(float(dimension.get("max_score") or 10), 1)
+        score = float(dimension.get("raw_score") or dimension.get("score") or 0.0)
+        assessment = str(
+            dimension.get("assessment") or dimension.get("reason") or ""
+        ).strip()
+        if score / max_score < 0.65 or _needs_fact_sparse_detail(assessment):
+            low_c4_pages.append(page)
+
+    if not low_c4_pages:
+        low_c4_pages = [
+            page for page in pages if page.get("crawl_readable")
+        ][:5] or pages[:5]
+
+    bucket_pages: dict[str, list[dict[str, Any]]] = {}
+    for page in low_c4_pages:
+        bucket_pages.setdefault(_fact_gap_bucket_for_page(page), []).append(page)
+
+    parts: list[str] = []
+    for bucket, bucketed_pages in list(bucket_pages.items())[:3]:
+        parts.append(f"{bucket}（{_format_page_names(bucketed_pages, limit=2)}）")
+
+    missing_schema_count = sum(
+        1 for page in low_c4_pages if page.get("crawl_readable") and not page.get("schema_types")
+    )
+    missing_h2_count = sum(
+        1 for page in low_c4_pages if page.get("crawl_readable") and int(page.get("h2_count") or 0) <= 0
+    )
+    thin_body_count = sum(
+        1
+        for page in low_c4_pages
+        if page.get("crawl_readable")
+        and int(page.get("body_text_length") or 0) < MIN_BODY_TEXT_LENGTH
+    )
+    missing_time_count = sum(
+        1
+        for page in low_c4_pages
+        if page.get("crawl_readable")
+        and str(page.get("page_type") or "") in {"news", "blog"}
+        and not page.get("published_at")
+    )
+    signals: list[str] = []
+    if missing_schema_count:
+        signals.append(f"{missing_schema_count} 个页面没有结构化数据")
+    if missing_h2_count:
+        signals.append(f"{missing_h2_count} 个页面缺少清晰 H2 层级")
+    if thin_body_count:
+        signals.append(f"{thin_body_count} 个页面正文偏薄")
+    if missing_time_count:
+        signals.append(f"{missing_time_count} 个内容页缺少时间信息")
+    if signals:
+        parts.append("辅助信号是" + "、".join(signals))
+
+    return "；".join(parts) or "本轮没有稳定看到可直接摘引的参数、常见问答、案例、数字或官方说明块"
+
+
+def _enrich_fact_sparse_text(
+    *,
+    code: str,
+    text: str,
+    page_summaries: list[dict[str, Any]],
+) -> str:
+    normalized = _humanize_report_text(text)
+    if code != "C4" or not _needs_fact_sparse_detail(normalized):
+        return normalized
+    if "具体稀疏在" in normalized or "具体缺口" in normalized:
+        return normalized
+    detail = _summarize_fact_density_gaps(page_summaries)
+    if not detail:
+        return normalized
+    return f"{normalized.rstrip('。；')}；具体稀疏在：{detail}。"
+
+
 def _humanize_report_text(text: str | None) -> str:
     normalized = str(text or "").strip()
     replacements = (
+        ("Product Schema", "产品结构化数据"),
+        ("FAQPage Schema", "问答页结构化数据"),
+        ("FAQPage", "问答页"),
+        ("FAQ", "常见问答"),
+        ("crawl_readable=false", "页面默认抓取不可读"),
+        ("crawl_readable = false", "页面默认抓取不可读"),
+        ("Schema标记", "结构化标记"),
         ("Schema.org 标记", "结构化标记"),
         ("Schema.org", "结构化标记"),
+        ("Schema", "结构化数据"),
         ("默认 HTML", "页面源码"),
         ("默认机器路径", "默认抓取方式"),
         ("默认机器抓取路径", "默认抓取方式"),
@@ -1743,10 +2421,28 @@ def _humanize_report_text(text: str | None) -> str:
     cleanup_pairs = (
         ("未发现 结构化标记", "未发现结构化标记"),
         ("页面源码 中", "页面源码中"),
+        ("结构化标记标记", "结构化标记"),
+        ("结构化数据标记", "结构化标记"),
     )
     for source, target in cleanup_pairs:
         normalized = normalized.replace(source, target)
     return normalized
+
+
+def _escape_markdown_table_cell(value: str | None) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _split_action_summary(summary: str) -> tuple[str, str]:
+    text = _humanize_report_text(summary)
+    if not text:
+        return "", ""
+    for marker in ("。需", "，需", "；需", "。建议", "，建议", "；建议"):
+        if marker in text:
+            before, after = text.split(marker, 1)
+            verb = marker.lstrip("。；，")
+            return before.strip("。；， "), f"{verb}{after}".strip("。；， ")
+    return text, text
 
 
 def _select_priority_pages(
@@ -1815,6 +2511,21 @@ def _build_action_plan(
             "action": "先检查返回状态、重定向链、鉴权限制和默认抓取路径，保证这些页面能直接被稳定拿到。",
             "metric": "下次扫描时，抓取失败页面数下降，覆盖页面数和覆盖率保持稳定。",
         }
+    if title == "补齐本轮样本覆盖":
+        focus_pages = _select_score_drag_pages(
+            page_summaries,
+            overall_score=overall_score,
+            limit=5,
+        )
+        return {
+            "targets": _format_page_names(focus_pages),
+            "fact": (
+                f"当前本轮只纳入 {int(coverage_summary.get('evaluated_page_count') or 0)} 个页面，"
+                "样本还不足以稳定代表整站。"
+            ),
+            "action": "补齐首页、产品页、帮助页、常见问答/文档页和高价值场景页，让下一轮报告基于更完整的页面样本判断。",
+            "metric": "下次扫描时，纳入评估的关键页面数增加，且低分项能按页面类型归因。",
+        }
     if title == "先修页面结构和 Schema 标记":
         targets = _dedupe_pages(missing_h1 + missing_schema)
         focus_pages = _select_score_drag_pages(
@@ -1839,7 +2550,7 @@ def _build_action_plan(
         )
         return {
             "targets": _format_page_names(focus_pages),
-            "fact": f"当前有 {len(thin_body_pages)} 个页面正文偏薄，其中最直接影响平均分的是 {_format_page_names(focus_pages)}。",
+            "fact": f"当前有 {len(thin_body_pages)} 个页面正文偏薄，其中最直接影响官网级评分的是 {_format_page_names(focus_pages)}。",
             "action": "先补首页、产品页和低分专题页的正文信息，让关键卖点、说明和可引用文本直接出现在页面源码里。",
             "metric": "下次扫描时，正文信息和源码可读性分数抬升，页面的低分项不再集中在正文偏薄。",
         }
@@ -1871,17 +2582,21 @@ def _build_action_plan(
         else:
             fact = "当前站点没有 robots.txt，抓取治理信号还不完整。"
         return {
-            "targets": "首页、产品页、FAQ/文档页等关键入口页",
+            "targets": "首页、产品页、常见问答/文档页等关键入口页",
             "fact": fact,
-            "action": "补上 sitemap 与 robots.txt，并复核 robots.txt 是否对首页、产品页、FAQ/文档页等关键页面存在误伤或过度封锁。",
+            "action": "补上 sitemap 与 robots.txt，并复核 robots.txt 是否对首页、产品页、常见问答/文档页等关键页面存在误伤或过度封锁。",
             "metric": "下次扫描时，抓取治理维度评分抬升；关键页面不再被 robots.txt 封锁，且 sitemap 可以被稳定发现。",
         }
+    target_pages = str(action.get("target_pages") or "").strip()
+    summary = _humanize_report_text(str(action.get("summary") or "").strip())
+    fact, suggested_action = _split_action_summary(summary)
+    metric = _humanize_report_text(str(action.get("metric") or "").strip())
     return {
-        "targets": _format_page_names(_select_priority_pages(page_summaries)),
-        "fact": "当前核心页面已经能形成初步判断，但重点场景页还不够完整。",
-        "action": str(action.get("summary") or "").strip()
-        or "继续补齐高价值页面的内容表达。",
-        "metric": "下次扫描时，新增页面被纳入评估，且重点页面评分不下降。",
+        "targets": target_pages
+        or _format_page_names(_select_score_drag_pages(page_summaries, overall_score=overall_score, limit=5)),
+        "fact": fact or "该项是 AICE-Web 审核识别出的优先短板。",
+        "action": suggested_action or "按该建议补齐对应页面的结构、事实和可引用信息。",
+        "metric": metric or "下次扫描时，对应评分项抬升，且相关页面分数不再处于低位。",
     }
 
 
@@ -1931,7 +2646,7 @@ def _build_preview_description(
         limit=3,
     )
     if not pages_to_fix:
-        return "本轮没有发现明显拉低平均分的官网页面。"
+        return "本轮没有发现明显影响官网级评分的官网页面。"
     labels = "、".join(
         f"{_page_anchor_label(page)}（{float(page.get('confidence_score') or 0):.1f} / 100）"
         for page in pages_to_fix
@@ -1942,7 +2657,7 @@ def _build_preview_description(
         limit=3,
     ).replace("**", "")
     return (
-        f"显著拉低平均分的页面主要是：{labels}。"
+        f"显著影响官网级评分的页面主要是：{labels}。"
         f"这些页面反复出现的扣分项主要集中在 {repeated_penalties}。"
     )
 
@@ -2014,7 +2729,7 @@ def _build_report_markdown(
     if focus_page_summary:
         conclusion_text = (
             f"官网当前的 **AI 友好度为 {overall_score:.1f} / 100**。"
-            f" 官网已经能被抓到，也能形成初步判断；当前最值得先看的页面是 {focus_page_summary}，"
+            f"{executive_summary} 当前最值得先看的页面是 {focus_page_summary}，"
             f"这些页面反复出现的扣分项主要集中在 {repeated_penalties}。"
         )
     lines: list[str] = ["## 结论", ""]
@@ -2022,11 +2737,13 @@ def _build_report_markdown(
     lines.append("")
     lines.append("## 为什么会得到这个判断")
     lines.append("")
-    lines.append(f"**当前平均分：{overall_score:.1f} / 100**")
+    lines.append(f"**官网级评分：{overall_score:.1f} / 100**")
     lines.append("")
-    lines.append("*评分口径：站点总分 = 本轮纳入评估页面的单页分数平均值。*")
+    lines.append(
+        "*评分口径：官网级评分由 AICE-Web 审核综合本轮页面事实、页面级 9C 结果和硬性校验形成；不是简单把页面分机械平均。*"
+    )
     lines.append("")
-    lines.append("*分数说明：九个维度先在单页层面扣分，再统一换算到 100 分制。*")
+    lines.append("*分数说明：AICE 9C 先在单页层面评分，再统一换算到 100 分制；其中 C9 拆成 C9a 和 C9b 两项。*")
     lines.append("")
     if eligible_pages > page_budget:
         lines.append(
@@ -2038,13 +2755,13 @@ def _build_report_markdown(
         )
     if pages_to_fix:
         lines.append(
-            f"- 显著拉低平均分的页面：{_summarize_score_drag_pages(page_summaries, overall_score=overall_score, limit=4)}。"
+            f"- 显著影响官网级评分的页面：{_summarize_score_drag_pages(page_summaries, overall_score=overall_score, limit=4)}。"
         )
     lines.append(f"- 反复出现的扣分项：{repeated_penalties}。")
     for note in governance_notes:
         lines.append(f"- 抓取治理提醒：{note}")
     lines.append("")
-    lines.append("## 直接证据：显著拉低平均分的页面")
+    lines.append("## 直接证据：显著影响评分的页面")
     lines.append("")
     lines.append(
         "下面这些页面，是这次判断最直接的证据。每个页面都按“分数 -> 扣分项 -> 为什么扣分 -> 怎么补”的顺序展开。"
@@ -2061,7 +2778,7 @@ def _build_report_markdown(
         lines.append("")
         lines.append(f"- 页面分数：**{page_score:.1f} / 100**")
         if score_gap > 0:
-            lines.append(f"- 拉低平均分幅度：比站点平均分低 **{score_gap:.1f}** 分")
+            lines.append(f"- 与官网级评分差距：比官网级评分低 **{score_gap:.1f}** 分")
         if penalty_items:
             lines.append("- 主要扣分项：")
             for item in penalty_items:
@@ -2126,15 +2843,18 @@ def _build_report_markdown(
     lines.append("| 页面名称 | 页面类型 | AI友好度评分 | 页面链接 |")
     lines.append("| --- | --- | ---: | --- |")
     appendix_pages = sorted(
-        page_summaries,
+        _dedupe_pages(page_summaries),
         key=lambda page: (
             float(page.get("confidence_score") or 0.0),
             _page_anchor_label(page),
         ),
     )
     for page in appendix_pages:
+        page_name = _escape_markdown_table_cell(_page_anchor_label(page))
+        page_type = _escape_markdown_table_cell(_page_role_label(page.get("page_type")))
+        page_url = str(page.get("url") or "").replace(")", "%29").strip()
         lines.append(
-            f"| {_page_anchor_label(page)} | {_page_role_label(page.get('page_type'))} | **{float(page.get('confidence_score') or 0.0):.1f} / 100** | [查看页面]({page.get('url')}) |"
+            f"| {page_name} | {page_type} | **{float(page.get('confidence_score') or 0.0):.1f} / 100** | [查看页面]({page_url}) |"
         )
 
     return "\n".join(lines).strip()
@@ -2145,6 +2865,9 @@ async def build_site_confidence_report(
     root_url: str,
     scan_mode: str = DEFAULT_SCAN_MODE,
     max_pages: int = DEFAULT_MAX_PAGES,
+    session_id: str | None = None,
+    task_id: str | None = None,
+    brand_name: str | None = None,
 ) -> dict[str, Any]:
     normalized_root = _normalize_root_url(root_url)
     normalized_max_pages = _normalize_scan_page_limit(max_pages)
@@ -2157,19 +2880,28 @@ async def build_site_confidence_report(
         selected_pages=discovered_pages,
         discovery_summary=discovery_summary,
     )
-    semaphore = asyncio.Semaphore(PAGE_FETCH_CONCURRENCY)
-
-    async def _evaluate_page(page: DiscoveredPage) -> dict[str, Any]:
-        async with semaphore:
-            features = await fetch_page_features(page.url)
-        return _page_confidence_summary(page, features)
-
-    page_summaries = list(
-        await asyncio.gather(*(_evaluate_page(page) for page in discovered_pages))
+    root_domain = str(
+        discovery_summary.get("root_domain") or _extract_domain(normalized_root)
     )
+    resolved_root_url = str(discovery_summary.get("resolved_root_url") or normalized_root)
+    resolved_brand_name = (brand_name or root_domain or "当前监测品牌").strip()
+    aice_service = AICEEvaluationService()
+    aice_context = AICECallContext(session_id=session_id, task_id=task_id)
+    fetch_semaphore = asyncio.Semaphore(PAGE_FETCH_CONCURRENCY)
 
-    readable_count = sum(1 for page in page_summaries if page.get("crawl_readable"))
-    evaluated_count = len(page_summaries)
+    async def _fetch_page_input(page: DiscoveredPage) -> dict[str, Any]:
+        async with fetch_semaphore:
+            features = await fetch_page_features(page.url)
+        page_facts = _build_aice_page_facts(page, features)
+        return {"page": page, "features": features, "facts": page_facts}
+
+    page_inputs = list(
+        await asyncio.gather(*(_fetch_page_input(page) for page in discovered_pages))
+    )
+    page_facts = [dict(item["facts"]) for item in page_inputs]
+
+    readable_count = sum(1 for page in page_facts if page.get("crawl_readable"))
+    evaluated_count = len(page_facts)
     discovered_count = int(
         discovery_summary.get("discovered_url_count") or evaluated_count
     )
@@ -2181,17 +2913,6 @@ async def build_site_confidence_report(
         discovered_count=discovered_count,
         readable_count=readable_count,
     )
-
-    dashboard_score = (
-        round(
-            sum(float(page.get("confidence_score") or 0.0) for page in page_summaries)
-            / len(page_summaries),
-            1,
-        )
-        if page_summaries
-        else 0.0
-    )
-    overall_score = dashboard_score
 
     coverage_summary = {
         "discovered_url_count": discovered_count,
@@ -2212,27 +2933,63 @@ async def build_site_confidence_report(
             discovery_summary.get("excluded_reason_counts") or {}
         ),
     }
-    dimension_summary = _build_dimension_summary(
+
+    site_evaluation = await aice_service.evaluate_site(
+        brand_name=resolved_brand_name,
+        root_domain=root_domain,
+        root_url=resolved_root_url,
+        coverage_summary=coverage_summary,
+        scan_quality_status=scan_quality_status,
+        pages=page_facts,
+        context=aice_context,
+    )
+    page_evaluations_by_url = {
+        str(item.get("url") or ""): (item.get("aice_evaluation") or {})
+        for item in list(site_evaluation.get("pages") or [])
+        if isinstance(item, dict)
+    }
+    page_summaries = []
+    for item in page_inputs:
+        facts = item["facts"]
+        aice_evaluation = page_evaluations_by_url.get(str(facts.get("url") or ""))
+        if aice_evaluation is None:
+            aice_evaluation = page_evaluations_by_url.get(
+                str(facts.get("final_url") or "")
+            )
+        page_summaries.append(
+            _page_confidence_summary(
+                item["page"],
+                item["features"],
+                aice_evaluation if aice_evaluation else None,
+            )
+        )
+    overall_score = round(float(site_evaluation.get("overall_score") or 0.0), 1)
+    dashboard_score = overall_score
+    dimension_summary = _build_aice_dimension_summary(
+        site_evaluation,
         page_summaries,
         crawl_governance_summary=crawl_governance_summary,
     )
-    findings = _build_findings(
+    fallback_findings = _build_findings(
         page_summaries,
         scan_quality_status,
         crawl_governance_summary=crawl_governance_summary,
     )
-    actions = _build_actions(
+    findings = [
+        _humanize_report_text(str(item).strip())
+        for item in list(site_evaluation.get("key_findings") or [])
+        if str(item).strip()
+    ] or fallback_findings
+    fallback_actions = _build_actions(
         page_summaries,
         scan_quality_status,
         crawl_governance_summary=crawl_governance_summary,
     )
-    root_domain = str(
-        discovery_summary.get("root_domain") or _extract_domain(normalized_root)
-    )
+    actions = _normalize_aice_site_actions(site_evaluation) or fallback_actions
     headline = "官网 AI 友好度"
-    report_markdown = _build_report_markdown(
+    fallback_report_markdown = _build_report_markdown(
         headline=headline,
-        root_url=str(discovery_summary.get("resolved_root_url") or normalized_root),
+        root_url=resolved_root_url,
         root_domain=root_domain,
         overall_score=overall_score,
         scan_quality_status=scan_quality_status,
@@ -2243,25 +3000,43 @@ async def build_site_confidence_report(
         dimension_summary=dimension_summary,
         crawl_governance_summary=crawl_governance_summary,
     )
-    executive_summary = _build_executive_summary(
+    report_markdown = fallback_report_markdown
+    fallback_executive_summary = _build_executive_summary(
         overall_score=overall_score,
         scan_quality_status=scan_quality_status,
         findings=findings,
         actions=actions,
     )
-    preview_description = _build_preview_description(page_summaries=page_summaries)
+    executive_summary = str(site_evaluation.get("executive_summary") or "").strip()
+    if not executive_summary:
+        executive_summary = fallback_executive_summary
+    preview_description = str(site_evaluation.get("preview_description") or "").strip()
+    if not preview_description:
+        preview_description = _build_preview_description(page_summaries=page_summaries)
+    validator_summary = _build_validator_summary(
+        page_summaries=page_summaries,
+        site_evaluation=site_evaluation,
+    )
+    site_metadata = site_evaluation.get("metadata") or {}
 
     return {
         "report_kind": "site_confidence_report",
         "artifact_kind": "site_confidence_report",
+        "evaluation_mode": site_evaluation.get("evaluation_mode")
+        or AICE_WEB_EVALUATION_MODE,
+        "aice_prompt_version": AICE_WEB_PROMPT_VERSION,
+        "aice_model_profile": AICE_MODEL_PROFILE,
+        "aice_model_name": site_metadata.get("model_name"),
+        "aice_static_prompt_hash": site_metadata.get("static_prompt_hash")
+        or aice_service.static_prompt_hash,
+        "aice_site_evaluation": site_evaluation,
+        "validator_summary": validator_summary,
         "headline": headline,
-        "subtitle": "基于默认抓取方式的官网可读性评估。",
+        "subtitle": "AICE-Web 9C 官网 AI 友好度审核。",
         "description": preview_description,
         "preview_description": preview_description,
-        "brand_name": root_domain,
-        "site_root_url": str(
-            discovery_summary.get("resolved_root_url") or normalized_root
-        ),
+        "brand_name": resolved_brand_name,
+        "site_root_url": resolved_root_url,
         "root_domain": root_domain,
         "scan_mode": scan_mode,
         "max_pages_requested": max_pages,
@@ -2294,6 +3069,7 @@ async def generate_site_confidence_artifact(
     session_id: str,
     root_url: str,
     brand_name: str | None = None,
+    task_id: str | None = None,
     scan_mode: str = DEFAULT_SCAN_MODE,
     max_pages: int = DEFAULT_MAX_PAGES,
 ) -> dict[str, Any]:
@@ -2303,6 +3079,9 @@ async def generate_site_confidence_artifact(
         root_url=root_url,
         scan_mode=scan_mode,
         max_pages=max_pages,
+        session_id=session_id,
+        task_id=task_id,
+        brand_name=brand_name,
     )
     if brand_name:
         report_data["brand_name"] = brand_name

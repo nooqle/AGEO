@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useRouter } from 'next/navigation';
 import { RiCloseLine } from '@remixicon/react';
 import { ThemedLogo } from '@/components/ui/ThemedLogo';
 import { Button } from '@/components/ui/button';
@@ -23,11 +22,20 @@ export function HomeBrandLink({
   className,
   compact = false,
 }: HomeBrandLinkProps) {
-  const router = useRouter();
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleNavigate = () => {
-    router.push('/dashboard');
+    setConfirmOpen(false);
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
+    window.location.assign('/dashboard');
   };
 
   const handleClick = () => {
@@ -87,7 +95,7 @@ export function HomeBrandLink({
                       返回首页？
                     </div>
                     <div className="mt-2 text-[14px] leading-7 text-[var(--text-secondary)]">
-                      当前正在 Chat 分析流程中。现在返回首页，可能会打断你对当前任务的持续观察与操作。
+                      当前正在分析流程中。现在返回首页，可能会打断你对当前任务的持续观察与操作。
                     </div>
                     <div className="mt-2 text-[13px] leading-6 text-[var(--text-tertiary)]">
                       仅弹出这个确认框不会停止任何正在进行的任务；只有在你确认返回后才会离开当前页面。

@@ -593,7 +593,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const searchParams = useSearchParams();
   const initialArtifactId = searchParams.get('artifact_id');
   const initialOutputId = searchParams.get('output_id');
-  const prefersCompactArtifactList = Boolean(initialArtifactId && initialOutputId);
   const [dashboardHandoff, setDashboardHandoff] = useState<DashboardChatHandoffPayload | null>(null);
   const hasAutoStartQueryParams = useMemo(
     () => !initialArtifactId && DASHBOARD_AUTO_START_QUERY_KEYS.some((key) => searchParams.has(key)),
@@ -1139,7 +1138,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           options?.keepClosed && !useCanvasStore.getState().isOpen,
         );
         const outputs = await api.getOutputs(sessionId, {
-          compact: options?.compact ?? prefersCompactArtifactList,
+          compact: options?.compact ?? true,
         });
         const hydratedContents = buildHydratedCanvasContents(outputs || []);
         let nextContents: CanvasContent[] = hydratedContents;
@@ -1238,7 +1237,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     artifactsHydratingPromiseRef.current = promise;
     return await promise;
-  }, [initialArtifactId, initialOutputId, prefersCompactArtifactList, sessionId]);
+  }, [initialArtifactId, initialOutputId, sessionId]);
 
   useEffect(() => {
     if (initialArtifactId) {
@@ -1746,7 +1745,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const handler = async () => {
       try {
         artifactsHydratedRef.current = false;
-        await hydrateArtifacts(true, { keepClosed: true });
+        await hydrateArtifacts(true, { keepClosed: true, compact: true });
         if (cancelled) return;
         setReconnectionTask(null);
       } catch {
@@ -1779,7 +1778,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           if (cancelled) return;
           const latestTask = tasks[0] ?? null;
           if (latestTask && (latestTask.status === 'completed' || latestTask.status === 'failed')) {
-            const outputs = await api.getOutputs(sessionId);
+            const outputs = await api.getOutputs(sessionId, { compact: true });
             if (cancelled) return;
             const hasRecoverableOutputs = (outputs || []).length > 0;
             setActiveTask(hasRecoverableOutputs ? latestTask : null);
@@ -1800,7 +1799,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             const stageLabel = getUserFacingStageLabel(task.current_stage);
             setExecutionProgress({
               stage: task.current_stage,
-              stageName: stageLabel ?? task.current_stage,
+              stageName: stageLabel ?? '当前步骤',
               stageIndex: 0,
               totalStages: 5,
               progress: task.progress,
@@ -2514,21 +2513,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     handleSendMessage(suggestion.message);
   }, [clearFollowUpSuggestions, handleSendMessage]);
 
-  // Cycle 3: Handle reconnection banner actions
-  const handleViewReport = useCallback(async () => {
-    await hydrateArtifacts();
-    const { setOpen } = useCanvasStore.getState();
-    setOpen(true);
-    setReconnectionTask(null);
-  }, [hydrateArtifacts]);
-
-  const handleReconnectionRetry = useCallback(() => {
-    if (reconnectionTask) {
-      handleSendMessage(reconnectionTask.brand_name);
-      setReconnectionTask(null);
-    }
-  }, [reconnectionTask, handleSendMessage]);
-
   // Determine if we should show the empty state with example brands
   // Skip welcome screen when: loading history, has ?brand= param (auto-starting), or already executing
   const hasAutoStartParam = Boolean(autoStartBrand || autoStartDraft);
@@ -2694,9 +2678,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           {reconnectionTask && (
             <ReconnectionBanner
               task={reconnectionTask}
-              onViewReport={handleViewReport}
-              onRetry={handleReconnectionRetry}
-              onDismiss={() => setReconnectionTask(null)}
             />
           )}
 

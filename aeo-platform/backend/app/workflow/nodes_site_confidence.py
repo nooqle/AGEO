@@ -6,9 +6,13 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 from langgraph.types import Command
 
+from app.core.database import AsyncSessionLocal
+from app.models.task import TaskStatus
+from app.services.task_service import TaskService
 from app.workflow.events import (
     send_error_event,
     send_progress_event,
@@ -80,12 +84,93 @@ async def _update_task_progress_if_live(
     progress: float,
     message: str,
 ) -> None:
-    return None
+    if not task_id:
+        return
+    try:
+        task_uuid = UUID(str(task_id))
+    except (TypeError, ValueError):
+        return
+    async with AsyncSessionLocal() as db:
+        task_service = TaskService(db)
+        task = await task_service.get_task(task_uuid)
+        if task is None or task.status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }:
+            return
+        await task_service.update_progress(
+            task_uuid,
+            stage="A7",
+            progress=progress,
+            message=message,
+        )
+
+
+async def _complete_task_if_live(
+    task_id: str | None,
+    run_id: str | None,
+    *,
+    message: str,
+) -> None:
+    if not task_id:
+        return
+    try:
+        task_uuid = UUID(str(task_id))
+        run_uuid = UUID(str(run_id)) if run_id else None
+    except (TypeError, ValueError):
+        return
+    async with AsyncSessionLocal() as db:
+        task_service = TaskService(db)
+        task = await task_service.get_task(task_uuid)
+        if task is None or task.status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }:
+            return
+        await task_service.complete_task(
+            task_uuid,
+            run_id=run_uuid,
+            final_stage="A7",
+            progress_message=message,
+        )
+
+
+async def _fail_task_if_live(
+    task_id: str | None,
+    run_id: str | None,
+    *,
+    message: str,
+) -> None:
+    if not task_id:
+        return
+    try:
+        task_uuid = UUID(str(task_id))
+        run_uuid = UUID(str(run_id)) if run_id else None
+    except (TypeError, ValueError):
+        return
+    async with AsyncSessionLocal() as db:
+        task_service = TaskService(db)
+        task = await task_service.get_task(task_uuid)
+        if task is None or task.status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }:
+            return
+        await task_service.fail_task(
+            task_uuid,
+            run_id=run_uuid,
+            error_message=message,
+            error_stage="A7",
+        )
 
 
 async def site_confidence_assessment_executor_node(state: AgentState) -> Command:
     session_id = state["session_id"]
     task_id = state.get("task_id")
+    run_id = state.get("run_id")
     tool_args = dict(state.get("tool_call_args") or {})
     root_url = _extract_root_url(tool_args, state)
     brand_name = _resolve_monitored_brand_name(state)
@@ -253,6 +338,7 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
             session_id=session_id,
             root_url=root_url,
             brand_name=brand_name,
+            task_id=task_id,
             scan_mode=scan_mode,
             max_pages=max_pages,
         )
@@ -285,6 +371,11 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
         if not artifact_validation.passed:
             raise RuntimeError(artifact_validation.reason)
 
+        await _complete_task_if_live(
+            task_id,
+            run_id,
+            message="官网 AI 友好度已完成",
+        )
         await send_progress_event(
             session_id=session_id,
             step="A7",
@@ -303,6 +394,7 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
             summary="官网 AI 友好度报告已写入画布。",
             executor_ref="site_confidence_assessment_executor",
             metadata={
+                "task_id": task_id,
                 "root_url": root_url,
                 "root_domain": report_data.get("root_domain"),
                 "scan_mode": scan_mode,
@@ -364,6 +456,7 @@ async def site_confidence_assessment_executor_node(state: AgentState) -> Command
         )
     except Exception as exc:
         logger.exception("[SiteConfidence] Artifact generation failed: %s", exc)
+        await _fail_task_if_live(task_id, state.get("run_id"), message=str(exc))
         await send_error_event(session_id, "A7", str(exc), recoverable=True)
         return Command(
             update={

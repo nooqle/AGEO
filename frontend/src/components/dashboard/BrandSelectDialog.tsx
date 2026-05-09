@@ -77,7 +77,7 @@ export function BrandSelectDialog({ open, onClose }: BrandSelectDialogProps) {
         brandName: created.name || data.name,
       }));
     } catch {
-      toast.error('品牌创建或打开 AI 对话失败');
+      toast.error('品牌创建或打开对话失败');
     }
   };
 

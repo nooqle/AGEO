@@ -80,7 +80,7 @@ const API_DIMENSION_MAP: Record<DimensionKey, string> = {
 
 const GROUP_BY_OPTIONS: Array<{ key: MonitoringTrendGroupBy; label: string }> = [
   { key: 'overall', label: '总览' },
-  { key: 'endpoint', label: 'AI 来源' },
+  { key: 'endpoint', label: '平台来源' },
   { key: 'question_set', label: '问题集' },
 ];
 

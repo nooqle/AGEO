@@ -1,10 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { getApiBaseUrl } from '@/services/api';
 import { useTheme } from '@/hooks/useTheme';
 
 interface BrandAvatarProps {
   name: string;
+  logoUrl?: string;
   domain?: string;
   size?: number;
   className?: string;
@@ -12,9 +14,7 @@ interface BrandAvatarProps {
 
 function normalizeDomainHost(domain?: string): string | null {
   const raw = (domain || '').trim();
-  if (!raw) {
-    return null;
-  }
+  if (!raw) return null;
 
   try {
     const parsed = new URL(raw.includes('://') ? raw : `https://${raw}`);
@@ -29,40 +29,29 @@ function normalizeDomainHost(domain?: string): string | null {
   }
 }
 
-function buildFaviconSources(domain?: string): string[] {
+function buildCachedFaviconUrl(domain?: string): string | null {
   const host = normalizeDomainHost(domain);
-  if (!host) {
-    return [];
-  }
-
-  return [
-    `https://${host}/favicon.ico`,
-    `https://www.${host}/favicon.ico`,
-    `https://icons.duckduckgo.com/ip3/${host}.ico`,
-  ];
+  if (!host) return null;
+  return `${getApiBaseUrl()}/favicons?domain=${encodeURIComponent(host)}`;
 }
 
-export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAvatarProps) {
+export function BrandAvatar({ name, logoUrl, domain, size = 40, className = '' }: BrandAvatarProps) {
   const { theme } = useTheme();
-  const faviconSources = useMemo(() => buildFaviconSources(domain), [domain]);
-  const faviconKey = faviconSources.join('|');
-  const [faviconState, setFaviconState] = useState({
-    key: faviconKey,
-    sourceIndex: 0,
-  });
-  const initial = (name.trim().charAt(0) || '品').toUpperCase();
+  const cachedFaviconUrl = useMemo(() => buildCachedFaviconUrl(domain), [domain]);
+  const cleanLogoUrl = logoUrl?.trim() || '';
+  const imageUrl = cleanLogoUrl || cachedFaviconUrl;
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
+  const avatarLabel = name.trim() || '品牌';
   const isLarge = size > 48;
   const borderRadius = isLarge ? '14px' : '12px';
-  const fontSize = isLarge ? '1.5rem' : '1.125rem';
   const isDark = theme === 'dark';
-  const fallbackTextColor = isDark ? 'var(--text-primary)' : 'var(--text-secondary)';
-  const sourceIndex = faviconState.key === faviconKey ? faviconState.sourceIndex : 0;
-  const faviconUrl = faviconSources[sourceIndex];
-  const showFavicon = Boolean(faviconUrl);
+  const visibleImageUrl = imageUrl && failedImageUrl !== imageUrl ? imageUrl : null;
 
   return (
     <div
-      className={`flex items-center justify-center overflow-hidden ${className}`}
+      role="img"
+      aria-label={avatarLabel}
+      className={`relative flex items-center justify-center overflow-hidden ${className}`}
       style={{
         width: size,
         height: size,
@@ -72,37 +61,17 @@ export function BrandAvatar({ name, domain, size = 40, className = '' }: BrandAv
         boxShadow: 'none',
       }}
     >
-      {showFavicon ? (
+      {visibleImageUrl ? (
         <img
-          src={faviconUrl}
+          src={visibleImageUrl}
           alt=""
           className="h-[72%] w-[72%] object-contain"
-          loading="lazy"
+          loading={size <= 48 ? 'eager' : 'lazy'}
+          decoding="async"
           referrerPolicy="no-referrer"
-          onError={() => {
-            setFaviconState((current) => {
-              const currentIndex = current.key === faviconKey ? current.sourceIndex : 0;
-              return {
-                key: faviconKey,
-                sourceIndex:
-                  currentIndex + 1 < faviconSources.length
-                    ? currentIndex + 1
-                    : faviconSources.length,
-              };
-            });
-          }}
+          onError={() => setFailedImageUrl(visibleImageUrl)}
         />
-      ) : (
-        <span
-          className="font-bold"
-          style={{
-            fontSize,
-            color: fallbackTextColor,
-          }}
-        >
-          {initial}
-        </span>
-      )}
+      ) : null}
     </div>
   );
 }

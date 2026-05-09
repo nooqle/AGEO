@@ -1,6 +1,7 @@
 import type { CanvasContent, CanvasContentType, CanvasContentDataMap } from '@/types/canvas';
 import type { WebSocketEventData } from '@/types/websocket';
 import { buildRealtimeOutputCard } from '@/adapters/chatMessage';
+import { resolveCanonicalArtifactIdFromRealtime } from '@/lib/artifactIdentity';
 import { isRecord, normalizeCanvasData, normalizePreviewData } from './canvas';
 
 const VALID_OUTPUT_TYPES: CanvasContentType[] = ['report', 'chart', 'dataTable', 'pipeline', 'workflow', 'questionList', 'fetchResults'];
@@ -31,6 +32,12 @@ export function buildOutputReadyPayload(data: WebSocketEventData, currentAgentMe
     typeof data.artifact_id === 'string' && data.artifact_id
       ? data.artifact_id
       : outputId;
+  const canonicalArtifactId = resolveCanonicalArtifactIdFromRealtime({
+    outputType,
+    artifactId,
+    outputId,
+    payload: data.data,
+  });
   const outputData = normalizeCanvasData(outputType, data.data) as CanvasContentDataMap['report'];
   const preview = normalizePreviewData(isRecord(data.data) ? data.data : {});
   const createdAt =
@@ -52,7 +59,7 @@ export function buildOutputReadyPayload(data: WebSocketEventData, currentAgentMe
     outputId,
     targetMessageId: relatedMessageId || currentAgentMessageId,
     content: {
-      id: artifactId,
+      id: canonicalArtifactId,
       type: outputType,
       title: outputTitle,
       data: outputData,
@@ -67,6 +74,6 @@ export function buildOutputReadyPayload(data: WebSocketEventData, currentAgentMe
       category,
       scenarioLabel,
     } as CanvasContent,
-    card: buildRealtimeOutputCard(artifactId, outputId, outputType, outputTitle, preview),
+    card: buildRealtimeOutputCard(canonicalArtifactId, outputId, outputType, outputTitle, preview),
   };
 }

@@ -15,6 +15,10 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { writeDashboardChatHandoff } from '@/lib/dashboardChatHandoff';
+import {
+  getUserFacingStageLabel,
+  sanitizeUserFacingErrorMessage,
+} from '@/lib/workflowStageLabels';
 import type { MonitoringRun, MonitoringTrendGroupBy, UpdateScheduleInput } from '@/types/monitoring';
 
 const STALE_RUN_CUTOFF_MS = Date.now() - 2 * 60 * 60 * 1000;
@@ -45,7 +49,12 @@ function MonitoringIssueCard({
   isRetrying?: boolean;
 }) {
   const title = issue.status === 'failed' ? '自动监测运行失败' : '自动监测可能卡住';
-  const sourceLabel = issue.endpoint_labels?.join('、') || 'AI 来源待确认';
+  const sourceLabel = issue.endpoint_labels?.join('、') || '平台来源待确认';
+  const stageLabel = getUserFacingStageLabel(issue.error_stage) || '自动监测';
+  const errorMessage = sanitizeUserFacingErrorMessage(
+    issue.error_message,
+    '本次自动监测没有生成可用于看板展示的报告。'
+  );
   return (
     <div
       className="rounded-xl px-5 py-4"
@@ -63,11 +72,11 @@ function MonitoringIssueCard({
             {title}
           </h3>
           <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-            阶段：{issue.error_stage || 'monitoring_run'} · {issue.question_count} 个问题 · {sourceLabel}
+            处理环节：{stageLabel} · {issue.question_count} 个问题 · {sourceLabel}
           </p>
-          {issue.error_message && (
+          {errorMessage && (
             <p className="mt-1 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-              {issue.error_message}
+              {errorMessage}
             </p>
           )}
         </div>
@@ -82,7 +91,7 @@ function MonitoringIssueCard({
               color: 'var(--text-primary)',
             }}
           >
-            AI 对话处理
+            对话处理
           </button>
           <button
             type="button"
@@ -237,7 +246,7 @@ export function MonitoringTab({
       params.set('autosend', '1');
       router.push(buildChatUrlWithHandoff(session.id, params));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '打开 AI 对话失败，请稍后重试。');
+      toast.error(error instanceof Error ? error.message : '打开对话失败，请稍后重试。');
     }
   }, [activeEntityId, brandName, homeMonitorMode, plan, router]);
 
@@ -259,14 +268,19 @@ export function MonitoringTab({
       if (issue.error_message) params.set('error_message', issue.error_message);
       if (issue.endpoint_ids?.length) params.set('endpoint_ids', issue.endpoint_ids.join(','));
       if (issue.question_set_ids?.length) params.set('question_set_ids', issue.question_set_ids.join(','));
+      const stageLabel = getUserFacingStageLabel(issue.error_stage) || '自动监测';
+      const errorMessage = sanitizeUserFacingErrorMessage(
+        issue.error_message,
+        '请读取监测运行记录后说明原因。'
+      );
       params.set(
         'draft',
-        `${brandName ? `请基于「${brandName}」` : '请'}处理这次自动监测异常：${issue.error_stage || 'monitoring_run'}，${issue.error_message || '请读取监测运行记录后说明原因。'}`,
+        `${brandName ? `请基于「${brandName}」` : '请'}处理这次自动监测异常。处理环节：${stageLabel}。${errorMessage}`,
       );
       params.set('autosend', '1');
       router.push(buildChatUrlWithHandoff(session.id, params));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '打开 AI 对话失败，请稍后重试。');
+      toast.error(error instanceof Error ? error.message : '打开对话失败，请稍后重试。');
     }
   }, [activeEntityId, brandName, homeMonitorMode, router]);
 
@@ -304,13 +318,13 @@ export function MonitoringTab({
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>
-            Monitoring Plan
+            监测计划
           </div>
           <h3 className="mt-1 text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
             {plan.title || `${brandName || '当前品牌'} ${planModeLabel}`}
           </h3>
           <p className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-            {plan.question_count} 个问题 · {plan.endpoint_labels.join('、') || '待选择 AI 来源'} · {planStatusLabel}
+            {plan.question_count} 个问题 · {plan.endpoint_labels.join('、') || '待选择平台来源'} · {planStatusLabel}
           </p>
         </div>
         <button
@@ -349,9 +363,9 @@ export function MonitoringTab({
       <EmptyState
         icon={RiCalendar2Line}
         title={`尚未建立${planModeLabel}`}
-        description="需要先通过 AI 对话完成品牌信息、问题集和 AI 来源确认。确认后才能启用自动监测。"
+        description="需要先通过智能对话完成品牌信息、问题集和平台来源确认。确认后才能启用自动监测。"
         action={{
-          label: `AI 对话建立${planModeLabel}`,
+          label: `智能对话建立${planModeLabel}`,
           onClick: () => {
             void handleStartChat();
           },
@@ -375,9 +389,9 @@ export function MonitoringTab({
         <EmptyState
           icon={RiCalendar2Line}
           title="监测计划已建立，等待首次运行"
-          description={latestQuestionSet ? `最近问题集：${latestQuestionSet.title}` : '可以先触发一次快速复测，生成新的 A5 完整报告。'}
+          description={latestQuestionSet ? `最近问题集：${latestQuestionSet.title}` : '可以先触发一次快速复测，生成新的完整报告。'}
           action={{
-            label: 'AI 对话调整计划',
+            label: '智能对话调整计划',
             onClick: () => {
               void handleStartChat();
             },

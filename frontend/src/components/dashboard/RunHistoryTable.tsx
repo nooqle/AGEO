@@ -7,7 +7,10 @@ import {
   RiLoader4Line,
   RiTimeLine,
 } from '@remixicon/react';
-import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
+import {
+  getUserFacingStageLabel,
+  sanitizeUserFacingErrorMessage,
+} from '@/lib/workflowStageLabels';
 import type { RunHistoryEntry, RunStatus } from '@/types/monitoring';
 
 // =========================================================================
@@ -143,6 +146,10 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
               const statusConf = STATUS_CONFIG[entry.status];
               const StatusIcon = statusConf.Icon;
               const stageLabel = getUserFacingStageLabel(entry.current_stage);
+              const errorMessage = sanitizeUserFacingErrorMessage(
+                entry.error_message,
+                '本次执行没有生成可用于展示的结果。'
+              );
 
               return (
                 <tr
@@ -174,13 +181,13 @@ export function RunHistoryTable({ entries, isLoading }: RunHistoryTableProps) {
                       />
                       {statusConf.label}
                     </span>
-                    {entry.error_message && (
+                    {errorMessage && entry.status === 'failed' && (
                       <p
                         className="text-[11px] mt-0.5 truncate max-w-[200px]"
                         style={{ color: 'var(--text-muted)' }}
-                        title={entry.error_message}
+                        title={errorMessage}
                       >
-                        {entry.error_message}
+                        {errorMessage}
                       </p>
                     )}
                   </td>

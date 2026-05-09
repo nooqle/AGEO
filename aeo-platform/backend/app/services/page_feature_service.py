@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from html import unescape
 import json
@@ -14,6 +15,7 @@ import httpx
 PAGE_FEATURE_CACHE_TTL_SECONDS = 1800
 PAGE_FEATURE_FAILURE_TTL_SECONDS = 120
 PAGE_FEATURE_CACHE_MAX_ENTRIES = 512
+PAGE_FEATURE_TIMEOUT_SECONDS = 5.0
 
 _page_feature_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -141,12 +143,16 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
         "content_type": "",
         "fetch_failure_reason": "",
         "fetched_title": "",
+        "meta_description": "",
         "has_h1": False,
+        "h1_texts": [],
         "h1_count": 0,
+        "h2_texts": [],
         "h2_count": 0,
         "has_main": False,
         "has_article": False,
         "body_text_length": 0,
+        "body_text_excerpt": "",
         "script_count": 0,
         "has_noscript": False,
         "schema_types": [],
@@ -189,10 +195,13 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
         }
         async with httpx.AsyncClient(
             follow_redirects=True,
-            timeout=8.0,
+            timeout=PAGE_FEATURE_TIMEOUT_SECONDS,
             headers=headers,
         ) as client:
-            response = await client.get(url)
+            response = await asyncio.wait_for(
+                client.get(url),
+                timeout=PAGE_FEATURE_TIMEOUT_SECONDS,
+            )
         content_type = response.headers.get("content-type", "").lower()
         is_html_like = (
             "text/html" in content_type or "application/xhtml+xml" in content_type
@@ -214,7 +223,8 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
             return dict(result)
 
         html = response.text or ""
-        body_text_length = len(_strip_html(html))
+        body_text = _strip_html(html)
+        body_text_length = len(body_text)
         has_main = bool(re.search(r"<main\b", html, flags=re.IGNORECASE))
         has_article = bool(re.search(r"<article\b", html, flags=re.IGNORECASE))
         script_count = len(
@@ -237,12 +247,19 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
             "content_type": content_type,
             "fetch_failure_reason": "",
             "fetched_title": _extract_tag_text(html, "title"),
+            "meta_description": _extract_meta_content(
+                html,
+                ("description", "og:description", "twitter:description"),
+            ),
             "has_h1": len(h1_matches) > 0,
+            "h1_texts": [_strip_html(item) for item in h1_matches[:6]],
             "h1_count": len(h1_matches),
+            "h2_texts": [_strip_html(item) for item in h2_matches[:10]],
             "h2_count": len(h2_matches),
             "has_main": has_main,
             "has_article": has_article,
             "body_text_length": body_text_length,
+            "body_text_excerpt": body_text[:2400],
             "script_count": script_count,
             "has_noscript": bool(
                 re.search(r"<noscript\b", html, flags=re.IGNORECASE | re.DOTALL)
@@ -255,7 +272,7 @@ async def fetch_page_features(url: str) -> dict[str, Any]:
     except Exception as exc:
         failure_reason = (
             "request_timeout"
-            if isinstance(exc, httpx.TimeoutException)
+            if isinstance(exc, (httpx.TimeoutException, TimeoutError))
             else (
                 "too_many_redirects"
                 if isinstance(exc, httpx.TooManyRedirects)

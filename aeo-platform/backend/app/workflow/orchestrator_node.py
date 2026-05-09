@@ -561,7 +561,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
             "说明内容包括：1) 周期监测会按设定频率自动重新运行品牌分析流程，生成最新报告并与历史数据对比；"
             "2) 可配置参数及默认值——监测频率（每天/每周/双周/每月，推荐每周）、执行时间（默认上午11:00）、"
             "告警阈值（当品牌提及率、官网引用率或高风险场景数量出现明显变化时通知用户，默认 10）；"
-            "3) 基于 Dashboard 上下文中的品牌、问题集、AI 来源给出推荐配置。"
+            "3) 基于看板上下文中的品牌、问题集、平台来源给出推荐配置。"
             "注意：当前调度字段支持频率和小时，不支持固定'每月第几日'；不要承诺每月 1 日这种后台尚未支持的精确日期。"
         ),
         "parameters": {
@@ -611,7 +611,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                 "endpoint_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "要绑定的 AI 来源 ID，例如 doubao_api、yuanbao_api、kimi_api、deepseek_browser。",
+                    "description": "要绑定的平台来源 ID，例如 doubao_api、yuanbao_api、kimi_api、deepseek_browser。",
                 },
             },
         },
@@ -1238,6 +1238,94 @@ def _get_latest_user_message(state: AgentState) -> str:
         if item.get("role") == "user":
             return str(item.get("content") or "")
     return ""
+
+
+def _extract_site_confidence_root_url(state: AgentState) -> str | None:
+    latest_user_message = _get_latest_user_message(state)
+    match = re.search(r"https?://[^\s，。；;、）)]+", latest_user_message)
+    if match:
+        return match.group(0).strip(" \"'“”‘’")
+
+    candidates = [
+        state.get("official_website"),
+        (state.get("brand_profile") or {}).get("official_website"),
+        (state.get("brand_profile") or {}).get("website"),
+        (state.get("brand_profile") or {}).get("domain"),
+    ]
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if not value:
+            continue
+        if value.startswith(("http://", "https://")):
+            return value
+        return f"https://{value}"
+    return None
+
+
+def _is_site_confidence_request(state: AgentState) -> bool:
+    latest_user_message = _get_latest_user_message(state)
+    if not latest_user_message:
+        return False
+    normalized = re.sub(r"\s+", "", latest_user_message).lower()
+    site_markers = (
+        "官网",
+        "官方网站",
+        "officialwebsite",
+        "siteconfidence",
+        "aice",
+        "9c",
+    )
+    evaluation_markers = (
+        "ai友好",
+        "友好度",
+        "官网评估",
+        "评估官网",
+        "官网报告",
+        "审核",
+        "aice",
+        "9c",
+    )
+    return any(marker in normalized for marker in site_markers) and any(
+        marker in normalized for marker in evaluation_markers
+    )
+
+
+async def _route_site_confidence_request_without_llm(
+    state: AgentState,
+    session_id: str,
+) -> Command | None:
+    if not _is_site_confidence_request(state):
+        return None
+
+    tool_args: dict[str, Any] = {"scan_mode": "standard"}
+    root_url = _extract_site_confidence_root_url(state)
+    if root_url:
+        tool_args["root_url"] = root_url
+
+    tool_call = SimpleNamespace(
+        name="site_confidence_assessment_skill",
+        arguments=tool_args,
+        id=f"det_site_confidence_{int(datetime.now().timestamp() * 1000)}",
+    )
+    new_history = list(state.get("orchestrator_history") or [])
+    new_history.append(
+        _build_orchestrator_assistant_message(
+            reply_text="",
+            tool_call_result=tool_call,
+            raw_thinking_text="",
+        )
+    )
+    logger.info(
+        "[Orchestrator] Deterministically routing site confidence request: %s",
+        tool_args,
+    )
+    return await _handle_tool_call(
+        state,
+        session_id,
+        tool_call,
+        "",
+        new_history,
+    )
 
 
 def _infer_brand_seed_candidate(state: AgentState) -> str | None:
@@ -3209,6 +3297,63 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
     return f"工具 {tool_name} 执行完成。"
 
 
+async def _complete_standalone_skill_without_llm(
+    *,
+    state: AgentState,
+    session_id: str,
+    last_tool: str | None,
+) -> Command | None:
+    if last_tool != "site_confidence_assessment_skill":
+        return None
+    if str(state.get("execution_status") or "").lower() != "completed":
+        return None
+
+    site_confidence_reply = str(
+        state.get("site_confidence_report_message") or ""
+    ).strip()
+    if not site_confidence_reply:
+        return None
+
+    from app.workflow.events import send_execution_complete
+
+    reply_text = _build_agent_result_summary(state, last_tool).strip()
+    await send_reply_event(
+        session_id,
+        reply_text,
+        is_delta=True,
+        is_new_round=True,
+    )
+    await send_reply_event(session_id, "", is_complete=True)
+    await send_execution_complete(session_id, "官网 AI 友好度已完成")
+
+    new_history = list(state.get("orchestrator_history") or [])
+    if not (
+        new_history
+        and isinstance(new_history[-1], dict)
+        and new_history[-1].get("role") == "assistant"
+        and str(new_history[-1].get("content") or "").strip() == reply_text
+    ):
+        new_history.append({"role": "assistant", "content": reply_text})
+
+    logger.info(
+        "[Orchestrator] Completed site confidence skill without follow-up LLM for session %s",
+        session_id,
+    )
+    return Command(
+        goto=END,
+        update={
+            "execution_status": "completed",
+            "awaiting_user": False,
+            "pending_confirmation": None,
+            "pending_question_set_confirmation": None,
+            "next_required_action": None,
+            "orchestrator_reply": reply_text,
+            "site_confidence_report_message": reply_text,
+            "orchestrator_history": new_history,
+        },
+    )
+
+
 def _build_knowledge_export_completion_reply(result: dict[str, Any]) -> str:
     """Build a deterministic close-out reply for successful knowledge exports."""
 
@@ -4447,6 +4592,14 @@ async def orchestrator_node(state: AgentState) -> Command:
                 f"已完成：{display_name}",
             )
 
+    completed_standalone_command = await _complete_standalone_skill_without_llm(
+        state=state,
+        session_id=session_id,
+        last_tool=last_tool,
+    )
+    if completed_standalone_command is not None:
+        return completed_standalone_command
+
     if _is_completed_analysis_report_state(state):
         logger.info(
             "[Orchestrator] Final analysis report completed; ending run for session %s",
@@ -4564,6 +4717,13 @@ async def orchestrator_node(state: AgentState) -> Command:
     )
     if history_answer_command is not None:
         return history_answer_command
+
+    site_confidence_command = await _route_site_confidence_request_without_llm(
+        state=state,
+        session_id=session_id,
+    )
+    if site_confidence_command is not None:
+        return site_confidence_command
 
     working_state = state
     manifest = await _hydrate_knowledge_manifest(state)
@@ -5484,6 +5644,7 @@ async def _handle_tool_call(
             "analysis_report_skill": "A5",
             "data_analytics": "A5",
             "confidence_analysis_skill": "A7",
+            "site_confidence_assessment_skill": "A7",
         }
         workflow_steps = _build_workflow_steps(progress_state)
         current_step_id = tool_to_step_id.get(effective_tool_name)
@@ -5492,6 +5653,7 @@ async def _handle_tool_call(
                 "a5_data_analytics": "A5",
                 "confidence_analysis_executor": "A7",
                 "a7_confidence_signal": "A7",
+                "site_confidence_assessment_executor": "A7",
             }.get(resolved_skill.executor_ref)
         for s in workflow_steps:
             if s["id"] == current_step_id:
@@ -5538,6 +5700,7 @@ async def _handle_tool_call(
                 "analysis_report_skill": "正在整理场景、风险与优先动作建议，请稍候…",
                 "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
                 "confidence_analysis_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
+                "site_confidence_assessment_skill": "正在评估官网 AI 友好度，请稍候...",
                 "post_analysis_skill": "正在基于已有结果执行后续分析，请稍候...",
             }
             fallback_text = FALLBACK_TEXTS.get(effective_tool_name)
@@ -5548,6 +5711,9 @@ async def _handle_tool_call(
                         "confidence_analysis_skill"
                     ],
                     "a7_confidence_signal": FALLBACK_TEXTS["confidence_analysis_skill"],
+                    "site_confidence_assessment_executor": FALLBACK_TEXTS[
+                        "site_confidence_assessment_skill"
+                    ],
                     "post_analysis_executor": FALLBACK_TEXTS["post_analysis_skill"],
                 }.get(resolved_skill.executor_ref)
             fallback_text = fallback_text or f"正在执行：{display_name}，请稍候..."

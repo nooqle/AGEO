@@ -19,6 +19,10 @@ const STAGE_LABELS: Record<string, string> = {
   analysis_report: '报告生成',
   analysis_report_skill: '报告生成',
   a5: '报告生成',
+  monitoring_run: '自动监测',
+  scheduled_monitoring: '自动监测',
+  sched_snap: '报告生成',
+  snapshot_missing: '报告生成',
   site_confidence_assessment_skill: '官网 AI 友好度',
   site_confidence_assessment_executor: '官网 AI 友好度',
   site_confidence_assessment: '官网 AI 友好度',
@@ -40,6 +44,9 @@ function normalizeStageKey(stage: string): string {
 export function getUserFacingStageLabel(stage?: string | null): string | undefined {
   if (!stage) return undefined;
 
+  const trimmed = stage.trim();
+  if (!trimmed) return undefined;
+
   const normalized = normalizeStageKey(stage);
   if (STAGE_LABELS[normalized]) {
     return STAGE_LABELS[normalized];
@@ -55,7 +62,11 @@ export function getUserFacingStageLabel(stage?: string | null): string | undefin
     return STAGE_LABELS[`a${match[1]}`];
   }
 
-  return stage;
+  if (/^[a-z0-9_.:-]+$/i.test(trimmed) && /[a-z]/i.test(trimmed)) {
+    return undefined;
+  }
+
+  return trimmed;
 }
 
 export function sanitizeUserFacingWorkflowText(text?: string | null): string | undefined {
@@ -68,4 +79,28 @@ export function sanitizeUserFacingWorkflowText(text?: string | null): string | u
     .replace(/官网置信度评估/g, '官网 AI 友好度')
     .replace(/引用置信度评估/g, '来源引用分析')
     .replace(/table_intake_skill/g, '表格导入理解');
+}
+
+export function sanitizeUserFacingErrorMessage(
+  text?: string | null,
+  fallback = '本次任务没有生成可用于展示的结果。你可以在对话中说明要继续检查的内容。'
+): string | undefined {
+  if (!text) return fallback;
+
+  const normalized = (sanitizeUserFacingWorkflowText(text) ?? '').trim();
+  if (!normalized) return fallback;
+
+  if (/scheduled monitoring finished without an a5 snapshot/i.test(normalized)) {
+    return '本次自动监测已结束，但没有生成可用于看板展示的报告。';
+  }
+
+  if (/without an a5 snapshot|a5 snapshot|sched_snap/i.test(normalized)) {
+    return '本次任务已结束，但没有生成可用于看板展示的报告。';
+  }
+
+  if (/[A-Za-z]{3,}|[_`]/.test(normalized)) {
+    return fallback;
+  }
+
+  return normalized;
 }
