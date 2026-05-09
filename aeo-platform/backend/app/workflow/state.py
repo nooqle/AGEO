@@ -19,7 +19,7 @@ def _replace_optional_dict(_existing: dict | None, new: dict | None) -> dict | N
     return new
 
 
-def _last_value(existing: str, new: str) -> str:
+def _last_value(existing: str | None, new: str | None) -> str | None:
     """Reducer for simple string fields: last writer wins."""
     return new if new else existing
 
@@ -273,6 +273,8 @@ class AgentState(TypedDict):
     # =========================================================================
     orchestrator_history: list  # [{role, content, tool_calls, tool_results}]
     orchestrator_reply: str | None  # Latest natural language reply from orchestrator
+    site_confidence_report_message: Annotated[str | None, _last_value]
+    site_confidence_report_summary: Annotated[dict | None, _replace_optional_dict]
     next_action: str | None  # Next node decided by orchestrator
     awaiting_user: bool  # Whether waiting for user input
     tool_call_args: dict | None  # Arguments passed to Agent from tool call

@@ -746,10 +746,14 @@ def _reset_follow_up_runtime_state(state_values: dict[str, Any]) -> None:
     state_values["awaiting_user"] = False
     state_values["pending_confirmation"] = None
     state_values["error_info"] = None
+    state_values["current_step"] = "orchestrator"
     state_values["execution_status"] = "running"
+    state_values["progress"] = 0.0
+    state_values["progress_message"] = ""
     state_values["next_action"] = None
     state_values["orchestrator_reply"] = None
     state_values["site_confidence_report_message"] = None
+    state_values["site_confidence_report_summary"] = None
     state_values["tool_call_args"] = None
     state_values["tool_call_id"] = None
     state_values["current_skill"] = None
@@ -759,6 +763,7 @@ def _reset_follow_up_runtime_state(state_values: dict[str, Any]) -> None:
     state_values["current_skill_package_path"] = None
     state_values["current_skill_package_context"] = None
     state_values["current_skill_prompt_overlay"] = None
+    state_values["current_skill_profiles"] = None
     state_values["current_skill_contract"] = None
     state_values["current_skill_prompt_sections"] = None
     state_values["current_tool_capability"] = None
