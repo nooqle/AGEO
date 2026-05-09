@@ -13,6 +13,11 @@ on:
         required: false
         default: "false"
         type: string
+      focus_doubao_tab:
+        description: "Click the left-most Doubao browser tab before the AIO screenshot."
+        required: false
+        default: "false"
+        type: string
 
 permissions:
   contents: read
@@ -38,6 +43,7 @@ jobs:
           DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
           DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
           DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          FOCUS_DOUBAO_TAB: ${{ github.event.inputs.focus_doubao_tab || 'false' }}
         run: |
           set -euo pipefail
           : "${DEMO_SSH_HOST:?Missing DEMO_SSH_HOST secret}"
@@ -454,13 +460,14 @@ jobs:
           remote_script=$(cat <<'SCRIPT'
           set -euo pipefail
           remote_png="$1"
+          focus_doubao_tab="${2:-false}"
           current="$(readlink -f /srv/ageo-deploy/current || true)"
           if [ -z "${current:-}" ] || [ ! -x "$current/aeo-platform/backend/.venv/bin/python" ]; then
             echo "aio_browser_status=backend_runtime_missing"
             exit 0
           fi
           cd "$current/aeo-platform/backend"
-          "$current/aeo-platform/backend/.venv/bin/python" - "$remote_png" <<'PY'
+          "$current/aeo-platform/backend/.venv/bin/python" - "$remote_png" "$focus_doubao_tab" <<'PY'
           import asyncio
           import json
           import os
@@ -468,6 +475,7 @@ jobs:
           from pathlib import Path
 
           remote_png = Path(sys.argv[1])
+          focus_doubao_tab = str(sys.argv[2] if len(sys.argv) > 2 else "").lower() == "true"
 
           def load_env(path: Path) -> None:
               if not path.exists():
@@ -509,6 +517,21 @@ jobs:
                       "viewport": info.viewport,
                   }
                   print("aio_browser_info=" + json.dumps(safe_info, ensure_ascii=False, sort_keys=True))
+                  if focus_doubao_tab:
+                      action = await client.execute_browser_action(
+                          {"action_type": "CLICK", "x": 120, "y": 16}
+                      )
+                      print(
+                          "aio_focus_doubao_tab="
+                          + json.dumps(
+                              {
+                                  "status": action.status,
+                                  "action_performed": action.action_performed,
+                              },
+                              sort_keys=True,
+                          )
+                      )
+                      await asyncio.sleep(1.5)
                   screenshot = await client.take_browser_screenshot()
                   remote_png.write_bytes(screenshot.image_bytes)
                   safe_shot = {
@@ -530,7 +553,7 @@ jobs:
           )
 
           ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
-            "bash -s -- $(printf '%q' "$remote_png")" <<< "$remote_script" |
+            "bash -s -- $(printf '%q' "$remote_png") $(printf '%q' "$FOCUS_DOUBAO_TAB")" <<< "$remote_script" |
             tee aio-browser-status.txt
           scp "${scp_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:${remote_png}" aio-browser-snapshot.png || true
 
