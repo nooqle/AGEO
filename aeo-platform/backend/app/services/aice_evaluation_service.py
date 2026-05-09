@@ -233,25 +233,27 @@ class AICEEvaluationService:
 
         model_identity = self._model_identity(model)
         validator_issues: list[str] = []
-        payload = build_site_evaluation_payload(
-            brand_name=brand_name,
-            root_domain=root_domain,
-            root_url=root_url,
-            coverage_summary=coverage_summary,
-            scan_quality_status=scan_quality_status,
-            pages=prechecked_pages,
-            validator_issues=validator_issues,
-        )
-        try:
-            raw = await self._call_llm_json(
-                model=model,
-                payload=payload,
-                context=context,
-                evaluation_scope="site_with_pages",
-                cache_key=None,
-                max_tokens=SITE_AICE_MAX_TOKENS,
+        last_raw: dict[str, Any] | None = None
+        for attempt in range(1, 3):
+            payload = build_site_evaluation_payload(
+                brand_name=brand_name,
+                root_domain=root_domain,
+                root_url=root_url,
+                coverage_summary=coverage_summary,
+                scan_quality_status=scan_quality_status,
+                pages=prechecked_pages,
+                validator_issues=validator_issues,
             )
             try:
+                raw = await self._call_llm_json(
+                    model=model,
+                    payload=payload,
+                    context=context,
+                    evaluation_scope="site_with_pages",
+                    cache_key=None,
+                    max_tokens=SITE_AICE_MAX_TOKENS,
+                )
+                last_raw = raw
                 normalized = self._normalize_site_evaluation(
                     raw,
                     page_facts=page_facts,
@@ -263,7 +265,7 @@ class AICEEvaluationService:
                     model_identity=model_identity,
                     cache_key=None,
                     evaluation_scope="site_with_pages",
-                    attempts=1,
+                    attempts=attempt,
                     validator_issues=[],
                     repaired=False,
                     cache_hit=False,
@@ -271,12 +273,15 @@ class AICEEvaluationService:
                 return normalized
             except AICEValidationError as exc:
                 validator_issues = exc.issues
-                logger.warning(
-                    "[AICE-Web] site validation repaired without LLM retry: %s",
-                    exc,
-                )
+                logger.warning("[AICE-Web] site validation retry %s: %s", attempt, exc)
+            except Exception as exc:
+                validator_issues = [str(exc)]
+                logger.warning("[AICE-Web] site call retry %s failed: %s", attempt, exc)
+
+        if last_raw is not None:
+            try:
                 repaired = self._normalize_site_evaluation(
-                    raw,
+                    last_raw,
                     page_facts=page_facts,
                     repair=True,
                 )
@@ -286,15 +291,14 @@ class AICEEvaluationService:
                     model_identity=model_identity,
                     cache_key=None,
                     evaluation_scope="site_with_pages",
-                    attempts=1,
+                    attempts=2,
                     validator_issues=validator_issues,
                     repaired=True,
                     cache_hit=False,
                 )
                 return repaired
-        except Exception as exc:
-            validator_issues.append(str(exc))
-            logger.warning("[AICE-Web] site call failed: %s", exc)
+            except Exception as exc:
+                validator_issues.append(str(exc))
 
         return self._fallback_site_evaluation(
             brand_name=brand_name,

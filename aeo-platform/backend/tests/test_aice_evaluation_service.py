@@ -452,6 +452,51 @@ async def test_site_with_pages_accepts_compact_page_output(monkeypatch):
     assert page_result["dimension_scores"][0]["evidence"] == []
 
 
+@pytest.mark.asyncio
+async def test_site_validation_issue_retries_with_validator_feedback(monkeypatch):
+    facts = _page_facts()
+    bad_payload = json.loads(_site_response())
+    bad_payload["pages"] = {"url": facts["url"]}
+    compact_page = {
+        "url": facts["url"],
+        "overall_score": 80,
+        "dimension_scores": {
+            item["code"]: {
+                "score": item["score"],
+                "reason": item["reason"],
+            }
+            for item in _dimension_payload()
+        },
+    }
+    model = _FakeModel(
+        [
+            json.dumps(bad_payload, ensure_ascii=False),
+            _site_response(pages=[compact_page]),
+        ]
+    )
+    monkeypatch.setattr(
+        service_module,
+        "get_text_light_llm_model",
+        lambda *, task_name: model,
+    )
+
+    result = await AICEEvaluationService().evaluate_site(
+        brand_name="Brand",
+        root_domain="brand.example",
+        root_url="https://brand.example",
+        coverage_summary={"evaluated_page_count": 1},
+        scan_quality_status="healthy",
+        pages=[facts],
+    )
+
+    retry_payload = json.loads(model.requests[1]["messages"][1]["content"])
+    assert model.calls == 2
+    assert retry_payload["validator_issues"] == ["官网级 pages 必须是数组"]
+    assert result["metadata"]["attempts"] == 2
+    assert result["metadata"]["validator_repaired"] is False
+    assert result["pages"][0]["aice_evaluation"]["overall_score"] == 80
+
+
 def test_site_confidence_page_summary_keeps_compat_fields_from_aice():
     page = DiscoveredPage(
         url="https://brand.example/product",
