@@ -8,6 +8,11 @@ on:
         required: false
         default: "720"
         type: string
+      include_aio_browser:
+        description: "Also capture current AIO browser info and screenshot."
+        required: false
+        default: "false"
+        type: string
 
 permissions:
   contents: read
@@ -410,3 +415,131 @@ jobs:
 
           ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
             "bash -s -- $(printf '%q' "$SINCE_MINUTES")" <<< "$remote_script"
+
+      - name: Capture AIO browser diagnostic
+        if: ${{ github.event.inputs.include_aio_browser == 'true' }}
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_demo_aio_inspect_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(
+            -i "$key_path"
+            -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+          scp_options=(
+            -i "$key_path"
+            -P "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+
+          remote_png="/tmp/ageo-aio-browser-snapshot-${GITHUB_RUN_ID}.png"
+          remote_script=$(cat <<'SCRIPT'
+          set -euo pipefail
+          remote_png="$1"
+          current="$(readlink -f /srv/ageo-deploy/current || true)"
+          if [ -z "${current:-}" ] || [ ! -x "$current/aeo-platform/backend/.venv/bin/python" ]; then
+            echo "aio_browser_status=backend_runtime_missing"
+            exit 0
+          fi
+          cd "$current/aeo-platform/backend"
+          "$current/aeo-platform/backend/.venv/bin/python" - "$remote_png" <<'PY'
+          import asyncio
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          remote_png = Path(sys.argv[1])
+
+          def load_env(path: Path) -> None:
+              if not path.exists():
+                  return
+              for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  key = key.strip()
+                  value = value.strip().strip('"').strip("'")
+                  if key and key not in os.environ:
+                      os.environ[key] = value
+
+          async def main() -> None:
+              load_env(Path("/srv/ageo-deploy/shared/backend/.env.local"))
+              load_env(Path(".env.local"))
+              base_url = os.environ.get("AIO_BASE_URL", "").strip()
+              auth_token = os.environ.get("AIO_AUTH_TOKEN", "").strip()
+              if not base_url:
+                  print("aio_browser_status=aio_base_url_missing")
+                  return
+
+              from app.core.config import settings
+              from app.core.fetchers.browser.aio_client import AioSandboxClient
+
+              client = AioSandboxClient(
+                  base_url=base_url,
+                  auth_token=auth_token or settings.AIO_AUTH_TOKEN,
+                  timeout_seconds=float(os.environ.get("AIO_REQUEST_TIMEOUT_SECONDS") or settings.AIO_REQUEST_TIMEOUT_SECONDS),
+              )
+              try:
+                  info = await client.get_browser_info()
+                  safe_info = {
+                      "base_url_present": True,
+                      "cdp_url_present": bool(info.cdp_url),
+                      "vnc_url_present": bool(info.vnc_url),
+                      "user_agent": info.user_agent,
+                      "viewport": info.viewport,
+                  }
+                  print("aio_browser_info=" + json.dumps(safe_info, ensure_ascii=False, sort_keys=True))
+                  screenshot = await client.take_browser_screenshot()
+                  remote_png.write_bytes(screenshot.image_bytes)
+                  safe_shot = {
+                      "content_type": screenshot.content_type,
+                      "bytes": len(screenshot.image_bytes),
+                      "screen_width": screenshot.screen_width,
+                      "screen_height": screenshot.screen_height,
+                      "image_width": screenshot.image_width,
+                      "image_height": screenshot.image_height,
+                      "path": str(remote_png),
+                  }
+                  print("aio_browser_screenshot=" + json.dumps(safe_shot, sort_keys=True))
+              except Exception as exc:
+                  print("aio_browser_error=" + type(exc).__name__ + ": " + str(exc)[:500])
+
+          asyncio.run(main())
+          PY
+          SCRIPT
+          )
+
+          ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+            "bash -s -- $(printf '%q' "$remote_png")" <<< "$remote_script" |
+            tee aio-browser-status.txt
+          scp "${scp_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:${remote_png}" aio-browser-snapshot.png || true
+
+      - name: Upload AIO browser diagnostic
+        if: ${{ github.event.inputs.include_aio_browser == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aio-browser-diagnostic
+          path: |
+            aio-browser-status.txt
+            aio-browser-snapshot.png
+          if-no-files-found: warn
