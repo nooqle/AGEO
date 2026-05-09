@@ -231,6 +231,26 @@ async def test_markdown_wrapped_json_parses_and_page_cache_hits(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_prose_wrapped_json_object_parses(monkeypatch):
+    model = _FakeModel([f"下面是 JSON 结果：\n{_page_response()}\n以上为最终结果。"])
+    monkeypatch.setattr(
+        service_module,
+        "get_text_light_llm_model",
+        lambda *, task_name: model,
+    )
+
+    result = await AICEEvaluationService().evaluate_page(
+        brand_name="Brand",
+        root_domain="brand.example",
+        page_facts=_page_facts(),
+    )
+
+    assert model.calls == 1
+    assert result["evaluation_mode"] == "AICE-Web"
+    assert result["overall_score"] == 80
+
+
+@pytest.mark.asyncio
 async def test_page_hard_rule_violation_retries_then_repairs(monkeypatch):
     invalid = _page_response({"C9b": 9})
     model = _FakeModel([invalid, invalid])
@@ -379,7 +399,7 @@ async def test_site_with_pages_uses_one_llm_call_and_rule_precheck(monkeypatch):
 
     user_payload = json.loads(model.requests[0]["messages"][1]["content"])
     assert model.calls == 1
-    assert model.requests[0]["max_tokens"] == 7000
+    assert model.requests[0]["max_tokens"] == 80000
     assert user_payload["evaluation_scope"] == "site_with_pages"
     assert "backend_rule_precheck" in user_payload["pages"][0]
     assert result["pages"][0]["url"] == facts["url"]

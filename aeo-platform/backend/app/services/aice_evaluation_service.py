@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 PAGE_AICE_CACHE_TTL_SECONDS = 1800
 PAGE_AICE_CACHE_MAX_ENTRIES = 512
-SITE_AICE_MAX_TOKENS = 7000
+SITE_AICE_MAX_TOKENS = 80000
 
 _PUBLIC_REPORT_FORBIDDEN_PATTERNS: tuple[str, ...] = (
     "LLM不可用",
@@ -341,32 +341,109 @@ class AICEEvaluationService:
                 "aice_model_profile": AICE_MODEL_PROFILE,
             },
         )
-        parsed = self._parse_json_response(str(response.content or ""))
+        content = response.content
+        parsed = (
+            content
+            if isinstance(content, dict)
+            else self._parse_json_response(str(content or ""))
+        )
         if not isinstance(parsed, dict):
-            raise AICEValidationError(["LLM 输出不是可解析的 JSON object"])
+            raise AICEValidationError(
+                [
+                    "LLM 输出不是可解析的 JSON object"
+                    f" (finish_reason={response.finish_reason or 'unknown'},"
+                    f" chars={len(str(content or ''))})"
+                ]
+            )
         return parsed
 
     def _parse_json_response(self, content: str) -> dict[str, Any] | None:
         text = str(content or "").strip()
         if not text:
             return None
+
+        for candidate in self._json_response_candidates(text):
+            if not candidate:
+                continue
+            for payload in (candidate, repair_truncated_json(candidate)):
+                if not payload:
+                    continue
+                try:
+                    parsed = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    return parsed
+        return None
+
+    def _json_response_candidates(self, text: str) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add(value: str | None) -> None:
+            candidate = str(value or "").strip()
+            if not candidate or candidate in seen:
+                return
+            seen.add(candidate)
+            candidates.append(candidate)
+
+        add(text)
         if text.startswith("```"):
             lines = text.splitlines()
             if lines and lines[0].strip().startswith("```"):
                 lines = lines[1:]
             if lines and lines[-1].strip().startswith("```"):
                 lines = lines[:-1]
-            text = "\n".join(lines).strip()
-        for candidate in (text, repair_truncated_json(text)):
-            if not candidate:
-                continue
-            try:
-                parsed = json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
-        return None
+            add("\n".join(lines).strip())
+
+        for match in re.finditer(
+            r"```(?:json)?\s*(.*?)```",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            add(match.group(1))
+
+        for candidate in self._json_object_candidates(text):
+            add(candidate)
+            if len(candidates) >= 8:
+                break
+
+        return candidates
+
+    @staticmethod
+    def _json_object_candidates(text: str) -> list[str]:
+        candidates: list[str] = []
+        for start_match in re.finditer(r"\{", text):
+            start = start_match.start()
+            depth = 0
+            in_string = False
+            escape_next = False
+            for index in range(start, len(text)):
+                char = text[index]
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == "\\" and in_string:
+                    escape_next = True
+                    continue
+                if char == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if char == "{":
+                    depth += 1
+                    continue
+                if char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(text[start : index + 1])
+                        break
+            else:
+                candidates.append(text[start:])
+            if len(candidates) >= 4:
+                break
+        return candidates
 
     def _normalize_page_evaluation(
         self,
