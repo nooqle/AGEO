@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { RiCheckLine } from '@remixicon/react';
+import { RiCheckLine, RiExternalLinkLine } from '@remixicon/react';
 import { BrandCompetitionGraph } from '@/components/graph/BrandCompetitionGraph';
 
 import { cn } from '@/lib/cn';
@@ -11,6 +11,7 @@ import { useTheme } from '@/hooks/useTheme';
 import type {
   WorkflowBrandProfile,
   WorkflowCompetitor,
+  WorkflowEvidenceSource,
   WorkflowPersona,
   WorkflowCanvasContent,
   WorkflowSelectionData,
@@ -142,6 +143,56 @@ function BrandProfileCard({ profile }: { profile: WorkflowBrandProfile }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function EvidenceSourcesList({ sources }: { sources: WorkflowEvidenceSource[] }) {
+  if (sources.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <h4 className="text-sm font-medium text-[var(--text-primary)]">来源依据</h4>
+      <div className="space-y-2">
+        {sources.slice(0, 8).map((source, index) => {
+          const title = safeString(source.title || source.link || `来源 ${index + 1}`);
+          const meta = [source.media, source.publish_date, source.refer]
+            .map(safeString)
+            .filter(Boolean)
+            .join(' · ');
+
+          return (
+            <div
+              key={`${source.link || title}-${index}`}
+              className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  {source.link ? (
+                    <a
+                      href={source.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sm font-medium text-[var(--text-primary)] hover:text-[var(--brand-text)]"
+                    >
+                      <span className="truncate">{title}</span>
+                      <RiExternalLinkLine className="h-3.5 w-3.5 flex-shrink-0" />
+                    </a>
+                  ) : (
+                    <div className="text-sm font-medium text-[var(--text-primary)]">{title}</div>
+                  )}
+                  {meta && <div className="mt-0.5 text-xs text-[var(--text-tertiary)]">{meta}</div>}
+                </div>
+                {source.usage && (
+                  <span className="max-w-[12rem] rounded-full bg-[var(--bg-tertiary)] px-2 py-0.5 text-xs text-[var(--text-secondary)]">
+                    {safeString(source.usage)}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -510,6 +561,7 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
   // Support both camelCase and snake_case keys from backend
   const brandProfile = data?.brandProfile || data?.brand_profile;
   const competitors = data?.competitors || [];
+  const evidenceSources = data?.evidence_sources || [];
   const personas = useMemo(
     () => data?.personas || data?.user_personas || [],
     [data?.personas, data?.user_personas]
@@ -579,6 +631,10 @@ export const WorkflowContent = React.memo(function WorkflowContent({ content, sh
           )}
           <BrandProfileCard profile={brandProfile} />
         </div>
+      )}
+
+      {evidenceSources.length > 0 && (
+        <EvidenceSourcesList sources={evidenceSources} />
       )}
 
       {/* Brand Competition Graph */}

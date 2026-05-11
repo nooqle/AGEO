@@ -11,6 +11,65 @@ interface MarkdownContentProps {
 
 const REMARK_PLUGINS = [remarkGfm];
 
+function splitPipeCells(line: string): string[] {
+  return line
+    .split('|')
+    .map((cell) => cell.trim())
+    .filter(Boolean);
+}
+
+function normalizeLooseTableSegment(segment: string): string {
+  if (!segment.includes('|') || !segment.includes('---')) {
+    return segment;
+  }
+
+  return segment
+    .replace(/\|\|\s*(?=[^\n|]+?\|)/g, '|\n|')
+    .split('\n')
+    .flatMap((line) => {
+      if (/^\s*\|?\s*:?-{3,}/.test(line)) {
+        return [line];
+      }
+
+      const match = line.match(/\|?\s*:?-{3,}:?\s*(?:\||$)/);
+      if (!match || match.index == null) {
+        return [line];
+      }
+
+      let splitIndex = match.index;
+      if (splitIndex > 0 && line[splitIndex - 1] === '|') {
+        splitIndex -= 1;
+      }
+
+      const headerLine = line.slice(0, splitIndex + 1).trimEnd();
+      const separatorLine = line.slice(splitIndex).trimStart();
+      const headerCells = splitPipeCells(headerLine);
+      const separatorCellCount = splitPipeCells(separatorLine)
+        .filter((cell) => /^:?-{3,}:?$/.test(cell))
+        .length;
+
+      if (separatorCellCount > 0 && headerCells.length > separatorCellCount) {
+        const tableCells = headerCells.slice(-separatorCellCount);
+        const proseCells = headerCells.slice(0, -separatorCellCount);
+        return [
+          proseCells.join(' | '),
+          `| ${tableCells.join(' | ')} |`,
+          separatorLine,
+        ];
+      }
+
+      return [headerLine, separatorLine];
+    })
+    .join('\n');
+}
+
+function normalizeLooseMarkdownTables(markdown: string): string {
+  const parts = markdown.split(/(```[\s\S]*?```)/g);
+  return parts
+    .map((part) => (part.startsWith('```') ? part : normalizeLooseTableSegment(part)))
+    .join('');
+}
+
 const MARKDOWN_COMPONENTS = {
   h1: ({ children }: { children: React.ReactNode }) => (
     <h1 className="text-xl font-bold mt-5 mb-3 first:mt-0" style={{ color: 'var(--text-primary)' }}>
@@ -146,13 +205,18 @@ export const MarkdownContent = React.memo(function MarkdownContent({
   content,
   className = '',
 }: MarkdownContentProps) {
+  const normalizedContent = React.useMemo(
+    () => normalizeLooseMarkdownTables(content),
+    [content],
+  );
+
   return (
     <div className={`markdown-content ${className}`}>
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
         components={MARKDOWN_COMPONENTS}
       >
-        {content}
+        {normalizedContent}
       </ReactMarkdown>
     </div>
   );

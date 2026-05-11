@@ -14,6 +14,10 @@ from app.core.utils import (
     render_prompt,
 )
 from app.services.llm_usage_service import record_llm_usage_async
+from app.tools.a1_evidence import (
+    build_a1_web_search_tool,
+    normalize_evidence_sources,
+)
 
 
 async def analyze_brand_competition(
@@ -62,7 +66,8 @@ async def analyze_brand_competition(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
-        ]
+        ],
+        tools=[build_a1_web_search_tool()],
     )
     latency_ms = response.latency_ms or max(int((perf_counter() - started_at) * 1000), 0)
     await record_llm_usage_async(
@@ -98,6 +103,9 @@ async def analyze_brand_competition(
         "brand_profile": data["brand_profile"],
         "competitors": data["competitors"],
         "competitive_landscape": data.get("competitive_landscape", {}),
+        "evidence_sources": normalize_evidence_sources(
+            data.get("evidence_sources")
+        ),
     }
 
 
@@ -146,7 +154,17 @@ def _get_fallback_prompt() -> str:
     "market_overview": "市场整体概况",
     "competition_intensity": "高/中/低",
     "key_battlegrounds": ["竞争维度1", "竞争维度2"]
-  }
+  },
+  "evidence_sources": [
+    {
+      "title": "来源标题",
+      "link": "来源链接",
+      "media": "媒体/站点名称",
+      "publish_date": "发布日期",
+      "refer": "引用编号",
+      "usage": "用于核验官网/核心产品/竞品"
+    }
+  ]
 }
 
 ⚠️ 重要：直接以 { 开头输出 JSON，不要有任何解释或 Markdown 标记。"""

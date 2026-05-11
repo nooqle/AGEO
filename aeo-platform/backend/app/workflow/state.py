@@ -95,6 +95,9 @@ class AgentState(TypedDict):
     #   "key_battlegrounds": list[str]
     # }
 
+    a1_evidence_sources: list | None
+    # Structured search sources used to verify A1 brand profile and competitors.
+
     # =========================================================================
     # A2 Output: Marketing Personas (Full Structure)
     # =========================================================================

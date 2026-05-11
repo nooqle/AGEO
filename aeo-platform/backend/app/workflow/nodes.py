@@ -35,6 +35,10 @@ from app.tools.persona_generation import (
     normalize_persona_payload,
     validate_persona_payload,
 )
+from app.tools.a1_evidence import (
+    build_a1_web_search_tool,
+    normalize_evidence_sources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -268,12 +272,9 @@ async def a1_brand_node(state: AgentState) -> Command:
         )
 
         # Call LLM with streaming and TPAOR events
-        # GLM5 web_search: server-side search, no tool_calls returned
-        # MiniMax: ignores non-function tool types gracefully
-        GLM5_WEB_SEARCH_TOOL = {
-            "type": "web_search",
-            "web_search": {"enable": True, "search_engine": "search_std"},
-        }
+        # GLM5 web_search: server-side search, no tool_calls returned.
+        # MiniMax ignores non-function tool types gracefully.
+        a1_web_search_tool = build_a1_web_search_tool()
 
         model = get_llm_model_compat()
         response = await call_llm_streaming(
@@ -288,7 +289,7 @@ async def a1_brand_node(state: AgentState) -> Command:
             task_id=state.get("task_id"),
             progress_start=0.35,
             progress_end=0.8,
-            tools=[GLM5_WEB_SEARCH_TOOL],
+            tools=[a1_web_search_tool],
         )
 
         # Parse response
@@ -322,6 +323,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                 "brand_profile": brand_profile,
                 "competitors": competitors,
                 "competitive_landscape": competitive_landscape,
+                "evidence_sources": data.get("evidence_sources", []),
             }
 
         if "brand_profile" not in data:
@@ -334,6 +336,9 @@ async def a1_brand_node(state: AgentState) -> Command:
         # Step 1: Normalize field names (e.g., main_products → core_products)
         data["brand_profile"] = _normalize_a1_fields(data["brand_profile"])
         data["competitors"] = _normalize_competitors(data.get("competitors", []))
+        data["evidence_sources"] = normalize_evidence_sources(
+            data.get("evidence_sources")
+        )
 
         # Step 2: Validate output quality
         is_valid, issues = _validate_a1_output(
@@ -361,6 +366,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                     task_id=state.get("task_id"),
                     progress_start=0.8,
                     progress_end=0.95,
+                    tools=[a1_web_search_tool],
                 )
                 retry_data = parse_llm_response(retry_response)
                 if retry_data:
@@ -384,6 +390,11 @@ async def a1_brand_node(state: AgentState) -> Command:
                         data["competitors"] = retry_comps
                         if "competitive_landscape" in retry_data:
                             data["competitive_landscape"] = retry_data["competitive_landscape"]
+                        retry_sources = normalize_evidence_sources(
+                            retry_data.get("evidence_sources")
+                        )
+                        if retry_sources:
+                            data["evidence_sources"] = retry_sources
                         is_valid = True
                     else:
                         logger.warning(
@@ -431,6 +442,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                 "brand_profile": data["brand_profile"],
                 "competitors": data["competitors"],
                 "competitive_landscape": data.get("competitive_landscape"),
+                "evidence_sources": data.get("evidence_sources", []),
                 "currentStep": "A1",
                 "executionStatus": "completed",
                 "completedSteps": ["A1"],
@@ -513,6 +525,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                 "brand_profile": data["brand_profile"],
                 "competitors": data["competitors"],
                 "competitive_landscape": data.get("competitive_landscape"),
+                "a1_evidence_sources": data.get("evidence_sources", []),
                 "current_step": "A1",
                 "progress": 0.2,
                 "entity_id": resolved_entity_id,
@@ -579,7 +592,17 @@ def _get_a1_fallback_prompt() -> str:
     "market_overview": "市场整体概况",
     "competition_intensity": "高/中/低",
     "key_battlegrounds": ["竞争维度1", "竞争维度2"]
-  }
+  },
+  "evidence_sources": [
+    {
+      "title": "来源标题",
+      "link": "来源链接",
+      "media": "媒体/站点名称",
+      "publish_date": "发布日期",
+      "refer": "引用编号",
+      "usage": "用于核验官网/核心产品/竞品"
+    }
+  ]
 }
 
 ⚠️ 重要：直接以 { 开头输出 JSON，不要有任何解释或 Markdown 标记。"""

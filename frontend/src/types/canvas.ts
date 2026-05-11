@@ -872,6 +872,15 @@ export type WorkflowSelectionData = {
   description?: string;
 };
 
+export type WorkflowEvidenceSource = {
+  title?: string;
+  link?: string;
+  media?: string;
+  publish_date?: string;
+  refer?: string;
+  usage?: string;
+};
+
 export type WorkflowCanvasData = CanvasPreviewData & {
   currentStep?: string;
   executionStatus?: 'idle' | 'running' | 'paused' | 'completed' | 'error';
@@ -884,6 +893,7 @@ export type WorkflowCanvasData = CanvasPreviewData & {
     competition_intensity?: string;
     key_battlegrounds?: string[];
   };
+  evidence_sources?: WorkflowEvidenceSource[];
   personas?: WorkflowPersona[];
   user_personas?: WorkflowPersona[];
   brand_summary?: {
@@ -1192,5 +1202,4 @@ export type WorkflowCanvasContent = Extract<CanvasContent, { type: 'workflow' }>
 export type QuestionListCanvasContent = Extract<CanvasContent, { type: 'questionList' }>;
 export type FetchResultsCanvasContent = Extract<CanvasContent, { type: 'fetchResults' }>;
 export type BrowserCanvasContent = Extract<CanvasContent, { type: 'browser' }>;
-
 
