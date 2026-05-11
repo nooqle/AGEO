@@ -17,6 +17,7 @@ from app.services.llm_usage_service import record_llm_usage_async
 from app.tools.a1_evidence import (
     build_a1_web_search_tool,
     normalize_evidence_sources,
+    repair_a1_website_fields,
 )
 
 
@@ -69,7 +70,9 @@ async def analyze_brand_competition(
         ],
         tools=[build_a1_web_search_tool()],
     )
-    latency_ms = response.latency_ms or max(int((perf_counter() - started_at) * 1000), 0)
+    latency_ms = response.latency_ms or max(
+        int((perf_counter() - started_at) * 1000), 0
+    )
     await record_llm_usage_async(
         session_id=session_id,
         task_id=task_id,
@@ -99,13 +102,18 @@ async def analyze_brand_competition(
             "Response missing required fields: brand_profile or competitors"
         )
 
+    evidence_sources = normalize_evidence_sources(data.get("evidence_sources"))
+    brand_profile, competitors = await repair_a1_website_fields(
+        data["brand_profile"],
+        data["competitors"],
+        evidence_sources,
+    )
+
     return {
-        "brand_profile": data["brand_profile"],
-        "competitors": data["competitors"],
+        "brand_profile": brand_profile,
+        "competitors": competitors,
         "competitive_landscape": data.get("competitive_landscape", {}),
-        "evidence_sources": normalize_evidence_sources(
-            data.get("evidence_sources")
-        ),
+        "evidence_sources": evidence_sources,
     }
 
 

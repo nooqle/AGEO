@@ -38,6 +38,7 @@ from app.tools.persona_generation import (
 from app.tools.a1_evidence import (
     build_a1_web_search_tool,
     normalize_evidence_sources,
+    repair_a1_website_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -410,6 +411,12 @@ async def a1_brand_node(state: AgentState) -> Command:
         # Ensure brand_name is always populated
         if not data["brand_profile"].get("brand_name"):
             data["brand_profile"]["brand_name"] = brand_name
+
+        data["brand_profile"], data["competitors"] = await repair_a1_website_fields(
+            data["brand_profile"],
+            data["competitors"],
+            data.get("evidence_sources", []),
+        )
 
         # Send completion event
         await send_progress_event(
