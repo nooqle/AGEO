@@ -68,6 +68,13 @@ function getScoreBoxStyle(score: number, isDark: boolean) {
       };
 }
 
+function getWebsiteHref(website: string): string {
+  const trimmed = website.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('//')) return `https:${trimmed}`;
+  return `https://${trimmed}`;
+}
+
 const priorityColors: Record<string, string> = {
   '核心人群': '#EF4444',
   '重点人群': '#F59E0B',
@@ -229,7 +236,7 @@ function CompetitorTable({ competitors }: { competitors: WorkflowCompetitor[] })
                   )}
                   {c.website && /[.]/.test(c.website) ? (
                     <a
-                      href={c.website.startsWith('http') ? c.website : `https://www.${c.website}`}
+                      href={getWebsiteHref(c.website)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-[#A78BFA] hover:text-[#C4B5FD] underline decoration-[#A78BFA]/30 hover:decoration-[#C4B5FD]/50 text-xs truncate max-w-[140px]"
