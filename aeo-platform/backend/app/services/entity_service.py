@@ -10,14 +10,22 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4, UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entity import Entity, EntityStatus, EntityVisibilityScope
+from app.models.fetch_run_platform_state import FetchRunPlatformState
 from app.models.monitoring_alert import MonitoringAlert
+from app.models.monitoring_plan import (
+    MonitoringEvidenceRecord,
+    MonitoringPlan,
+    MonitoringQuestionSet,
+    MonitoringRun,
+)
 from app.models.monitoring_schedule import MonitoringSchedule
 from app.models.session import Session
 from app.models.snapshot import AnalysisSnapshot
+from app.models.task import AnalysisTask
 from app.models.user import User
 from app.services.access_scope_service import AccessScopeService
 
@@ -288,12 +296,38 @@ class EntityService:
                     delete(MonitoringAlert).where(MonitoringAlert.entity_id == uid)
                 )
                 await self.db.execute(
+                    delete(MonitoringEvidenceRecord).where(
+                        MonitoringEvidenceRecord.entity_id == uid
+                    )
+                )
+                await self.db.execute(
+                    delete(MonitoringRun).where(MonitoringRun.entity_id == uid)
+                )
+                await self.db.execute(
                     delete(MonitoringSchedule).where(
                         MonitoringSchedule.entity_id == uid
                     )
                 )
                 await self.db.execute(
+                    delete(MonitoringPlan).where(MonitoringPlan.entity_id == uid)
+                )
+                await self.db.execute(
+                    delete(MonitoringQuestionSet).where(
+                        MonitoringQuestionSet.entity_id == uid
+                    )
+                )
+                await self.db.execute(
                     delete(AnalysisSnapshot).where(AnalysisSnapshot.entity_id == uid)
+                )
+                await self.db.execute(
+                    update(FetchRunPlatformState)
+                    .where(FetchRunPlatformState.entity_id == uid)
+                    .values(entity_id=None)
+                )
+                await self.db.execute(
+                    update(AnalysisTask)
+                    .where(AnalysisTask.entity_id == uid)
+                    .values(entity_id=None)
                 )
                 # Delete sessions (messages cascade via ORM delete-orphan)
                 result = await self.db.execute(

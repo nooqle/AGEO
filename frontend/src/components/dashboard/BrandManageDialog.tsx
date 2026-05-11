@@ -36,8 +36,10 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
     try {
       await api.deleteEntity(id);
       removeEntity(id);
-    } catch {
-      // silent for now
+      toast.success('品牌已删除');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '品牌删除失败';
+      toast.error(message);
     }
   };
 
@@ -76,7 +78,6 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
 
   const openEdit = (entity: Entity) => {
     setEditEntity(entity);
-    onClose();
     setFormOpen(true);
   };
 

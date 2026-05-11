@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { RiCloseLine } from '@remixicon/react';
 import { AliasTagInput } from './AliasTagInput';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
@@ -25,9 +26,9 @@ export function EntityFormDialog({
   preventClose = false,
   onPreventClose,
 }: EntityFormDialogProps) {
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <EntityFormDialogInner
       key={entity?.id ?? 'new'}
       entity={entity}
@@ -36,7 +37,8 @@ export function EntityFormDialog({
       allowOrganizationScope={allowOrganizationScope}
       preventClose={preventClose}
       onPreventClose={onPreventClose}
-    />
+    />,
+    document.body,
   );
 }
 
@@ -108,7 +110,7 @@ function EntityFormDialogInner({
 
   return (
     <div
-      className={modalScrimClassName('z-50 flex items-center justify-center p-4')}
+      className={modalScrimClassName('z-[70] flex items-center justify-center p-4')}
       onClick={handleRequestClose}
     >
       <div
