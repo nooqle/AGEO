@@ -54,6 +54,7 @@ interface ChatPanelProps {
 
 const INITIAL_HISTORY_MESSAGE_LIMIT = 30;
 const HISTORY_BACKFILL_BATCH_SIZE = 50;
+const HISTORY_TOP_LOAD_THRESHOLD_PX = 120;
 const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
 type ArtifactCategory = 'baseline' | 'panorama' | 'scenario';
 const DASHBOARD_AUTO_START_QUERY_KEYS = [
@@ -577,6 +578,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const oldestLoadedMessageIdRef = useRef<string | null>(null);
   const loadedAllHistoryRef = useRef(false);
   const historyBackfillPromiseRef = useRef<Promise<boolean> | null>(null);
+  const routeMessagePositionedRef = useRef<string | null>(null);
   const artifactsHydratedRef = useRef(false);
   const artifactsHydratingPromiseRef = useRef<Promise<CanvasContent[]> | null>(null);
   const artifactUrlSyncReadyRef = useRef(false);
@@ -905,8 +907,38 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     mergeHistoryCanvasStubs(historyCanvasStubs);
   }, [addStageResult, sessionId]);
 
-  const loadOlderHistoryUntil = useCallback(async (targetMessageId: string) => {
-    if (!targetMessageId || loadedAllHistoryRef.current) {
+  const preservePrependedHistoryScroll = useCallback((
+    previousScrollHeight: number,
+    previousScrollTop: number,
+  ) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      const container = scrollRef.current;
+      if (!container) {
+        return;
+      }
+      container.scrollTop =
+        container.scrollHeight - previousScrollHeight + previousScrollTop;
+    });
+  }, []);
+
+  const waitForNextPaint = useCallback(async () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  }, []);
+
+  const loadOlderHistoryPage = useCallback(async (options?: {
+    preserveScroll?: boolean;
+  }) => {
+    if (loadedAllHistoryRef.current || !oldestLoadedMessageIdRef.current) {
       return false;
     }
     if (historyBackfillPromiseRef.current) {
@@ -914,26 +946,28 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
 
     const task = (async () => {
-      while (!loadedAllHistoryRef.current && oldestLoadedMessageIdRef.current) {
-        const batch = await api.getMessages(sessionId, {
-          limit: HISTORY_BACKFILL_BATCH_SIZE,
-          before: oldestLoadedMessageIdRef.current,
-        });
-        if (!batch || batch.length === 0) {
-          loadedAllHistoryRef.current = true;
-          return false;
-        }
+      const container = scrollRef.current;
+      const previousScrollHeight = container?.scrollHeight ?? 0;
+      const previousScrollTop = container?.scrollTop ?? 0;
 
-        hydratePersistedMessages(batch, true);
-        oldestLoadedMessageIdRef.current = batch[0]?.id || oldestLoadedMessageIdRef.current;
-        if (batch.length < HISTORY_BACKFILL_BATCH_SIZE) {
-          loadedAllHistoryRef.current = true;
-        }
-        if (batch.some((message) => message.id === targetMessageId)) {
-          return true;
-        }
+      const batch = await api.getMessages(sessionId, {
+        limit: HISTORY_BACKFILL_BATCH_SIZE,
+        before: oldestLoadedMessageIdRef.current || undefined,
+      });
+      if (!batch || batch.length === 0) {
+        loadedAllHistoryRef.current = true;
+        return false;
       }
-      return false;
+
+      hydratePersistedMessages(batch, true);
+      oldestLoadedMessageIdRef.current = batch[0]?.id || oldestLoadedMessageIdRef.current;
+      if (batch.length < HISTORY_BACKFILL_BATCH_SIZE) {
+        loadedAllHistoryRef.current = true;
+      }
+      if (options?.preserveScroll && container) {
+        preservePrependedHistoryScroll(previousScrollHeight, previousScrollTop);
+      }
+      return true;
     })()
       .finally(() => {
         historyBackfillPromiseRef.current = null;
@@ -941,7 +975,35 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     historyBackfillPromiseRef.current = task;
     return task;
-  }, [hydratePersistedMessages, sessionId]);
+  }, [hydratePersistedMessages, preservePrependedHistoryScroll, sessionId]);
+
+  const loadOlderHistoryUntil = useCallback(async (targetMessageId: string) => {
+    if (!targetMessageId || loadedAllHistoryRef.current) {
+      return false;
+    }
+
+    while (!loadedAllHistoryRef.current && oldestLoadedMessageIdRef.current) {
+      const loaded = await loadOlderHistoryPage();
+      if (!loaded) {
+        return false;
+      }
+
+      const messages = useConversationStore.getState().messages;
+      if (messages.some((message) => message.id === targetMessageId)) {
+        return true;
+      }
+
+      if (historyBackfillPromiseRef.current) {
+        await historyBackfillPromiseRef.current;
+      }
+
+      const latestMessages = useConversationStore.getState().messages;
+      if (latestMessages.some((message) => message.id === targetMessageId)) {
+        return true;
+      }
+    }
+    return false;
+  }, [loadOlderHistoryPage]);
 
   const setOptimisticExecutionProgress = useCallback((optionId: string) => {
     const optimisticProgressMap: Record<string, {
@@ -1023,6 +1085,20 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     autoScrollEnabledRef.current = distanceFromBottom < 80;
   }, []);
 
+  const handleHistoryScroll = useCallback(() => {
+    updateAutoScrollState();
+
+    const container = scrollRef.current;
+    if (!container || isLoadingHistory) {
+      return;
+    }
+    if (container.scrollTop > HISTORY_TOP_LOAD_THRESHOLD_PX) {
+      return;
+    }
+
+    void loadOlderHistoryPage({ preserveScroll: true });
+  }, [isLoadingHistory, loadOlderHistoryPage, updateAutoScrollState]);
+
   // Auto-scroll only when the user is still following the latest message.
   useEffect(() => {
     if (scrollRef.current && autoScrollEnabledRef.current) {
@@ -1033,29 +1109,34 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
   }, [messages, isAgentExecuting, stageResults, followUpSuggestions]);
 
+  const scrollToMessage = useCallback(async (messageId: string) => {
+    if (!messageId || !scrollRef.current) return;
+
+    let el = scrollRef.current.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+    if (!el) {
+      await loadOlderHistoryUntil(messageId);
+      await waitForNextPaint();
+      el = scrollRef.current?.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+    }
+    if (!el) {
+      return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('message-highlight');
+    setTimeout(() => el.classList.remove('message-highlight'), 3000);
+  }, [loadOlderHistoryUntil, waitForNextPaint]);
+
   // Listen for scroll-to-message events from Canvas (version jump-to-conversation)
   useEffect(() => {
     const handler = (e: Event) => {
       const { messageId } = (e as CustomEvent).detail;
-      if (!messageId || !scrollRef.current) return;
+      if (typeof messageId !== 'string' || !messageId) return;
 
-      void (async () => {
-        let el = scrollRef.current?.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
-        if (!el) {
-          await loadOlderHistoryUntil(messageId);
-          el = scrollRef.current?.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
-        }
-        if (!el) {
-          return;
-        }
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.add('message-highlight');
-        setTimeout(() => el.classList.remove('message-highlight'), 3000);
-      })();
+      void scrollToMessage(messageId);
     };
     window.addEventListener('scroll-to-message', handler);
     return () => window.removeEventListener('scroll-to-message', handler);
-  }, [loadOlderHistoryUntil]);
+  }, [scrollToMessage]);
 
   // Listen for recall-fill-input events from useWebSocket recall_complete handler
   useEffect(() => {
@@ -1075,7 +1156,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     let cancelled = false;
     const loadHistory = async () => {
       try {
-        const initialHistoryLimit = initialArtifactId ? 12 : INITIAL_HISTORY_MESSAGE_LIMIT;
+        const initialHistoryLimit = INITIAL_HISTORY_MESSAGE_LIMIT;
         const msgs = await api.getMessages(sessionId, { limit: initialHistoryLimit });
         if (cancelled) return;
         if (!msgs || msgs.length === 0) {
@@ -1095,7 +1176,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     // and key={sessionId} guarantees a fresh mount on every session change.
     loadHistory();
     return () => { cancelled = true; };
-  }, [initialArtifactId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const {
     browserWorkspace,
@@ -1436,6 +1517,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     initialRouteCompactHydrationRequestedRef.current = false;
     canonicalRouteArtifactKeysRef.current.clear();
     artifactDetailHydrationPromisesRef.current.clear();
+    routeMessagePositionedRef.current = null;
   }, [initialArtifactId, initialOutputId, sessionId]);
 
   useEffect(() => {
@@ -1531,6 +1613,40 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     initialArtifactId,
     initialOutputId,
     isCanvasOpen,
+  ]);
+
+  useEffect(() => {
+    if (!initialArtifactId || isLoadingHistory) {
+      return;
+    }
+
+    const routeTarget = contents.find(
+      (content) =>
+        content.id === initialArtifactId
+        || (initialOutputId ? content.sourceOutputId === initialOutputId : false),
+    );
+    const linkedMessageId = routeTarget?.linkedMessageId;
+    if (!linkedMessageId) {
+      return;
+    }
+
+    const positionKey = [
+      initialArtifactId,
+      initialOutputId || '',
+      linkedMessageId,
+    ].join(':');
+    if (routeMessagePositionedRef.current === positionKey) {
+      return;
+    }
+
+    routeMessagePositionedRef.current = positionKey;
+    void scrollToMessage(linkedMessageId);
+  }, [
+    contents,
+    initialArtifactId,
+    initialOutputId,
+    isLoadingHistory,
+    scrollToMessage,
   ]);
 
   useEffect(() => {
@@ -2671,7 +2787,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto scroll-smooth"
-        onScroll={updateAutoScrollState}
+        onScroll={handleHistoryScroll}
       >
         <div className="max-w-3xl mx-auto px-4 py-6">
           {/* Cycle 3: Reconnection banner */}
@@ -2821,4 +2937,3 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     </div>
   );
 }
-
