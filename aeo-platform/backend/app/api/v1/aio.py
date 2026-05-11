@@ -6,7 +6,7 @@ import asyncio
 import logging
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from datetime import datetime
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID
 
 import httpx
@@ -279,7 +279,20 @@ def _build_upstream_vnc_websocket_url(*, base_url: str, ticket: str | None) -> s
     return urlunparse((ws_scheme, parsed.netloc, "/websockify", "", query, ""))
 
 
-def _raise_from_aio_error(exc: AioBackendError) -> None:
+async def _create_aio_takeover_ticket(session: SpectaAioSession) -> str:
+    client = AioSandboxClient(
+        base_url=session.base_url,
+        auth_token=settings.AIO_AUTH_TOKEN,
+        timeout_seconds=settings.AIO_REQUEST_TIMEOUT_SECONDS,
+    )
+    try:
+        ticket = await client.create_ticket()
+    except AioBackendError as exc:
+        _raise_from_aio_error(exc)
+    return ticket.ticket
+
+
+def _raise_from_aio_error(exc: AioBackendError) -> NoReturn:
     status_code = exc.status_code or status.HTTP_503_SERVICE_UNAVAILABLE
     raise HTTPException(status_code=status_code, detail=exc.to_dict())
 
@@ -666,18 +679,10 @@ async def get_takeover_vnc_url(
     vnc_url = browser.vnc_url
     proxied_vnc_url: str | None = None
     if vnc_url:
-        client = AioSandboxClient(
-            base_url=session.base_url,
-            auth_token=settings.AIO_AUTH_TOKEN,
-            timeout_seconds=settings.AIO_REQUEST_TIMEOUT_SECONDS,
-        )
-        try:
-            ticket = await client.create_ticket()
-        except AioBackendError as exc:
-            _raise_from_aio_error(exc)
+        ticket = await _create_aio_takeover_ticket(session)
         proxied_vnc_url = _build_takeover_vnc_proxy_url(
             takeover_id=takeover.takeover_id,
-            ticket=ticket.ticket,
+            ticket=ticket,
         )
 
     return {
@@ -699,7 +704,7 @@ async def proxy_takeover_vnc_asset(
 
     noVNC runs inside an iframe and cannot attach Authorization headers, so this
     proxy is guarded by the unguessable takeover id plus the active takeover
-    state. The websocket still needs the short-lived upstream AIO ticket.
+    state. The websocket relay creates a fresh upstream AIO ticket per connect.
     """
 
     try:
@@ -755,11 +760,6 @@ async def proxy_takeover_vnc_asset(
 async def relay_takeover_vnc(websocket: WebSocket, takeover_id: str):
     """Proxy noVNC websocket traffic so the browser never reaches AIO directly."""
 
-    ticket = websocket.query_params.get("ticket")
-    if not ticket:
-        await websocket.close(code=1008, reason="Missing AIO ticket")
-        return
-
     try:
         takeover = await aio_session_manager.get_takeover(takeover_id)
         session = await aio_session_manager.get_session(takeover.session_id)
@@ -767,6 +767,12 @@ async def relay_takeover_vnc(websocket: WebSocket, takeover_id: str):
     except (KeyError, HTTPException) as exc:
         reason = str(getattr(exc, "detail", exc))
         await websocket.close(code=1008, reason=reason)
+        return
+
+    try:
+        ticket = await _create_aio_takeover_ticket(session)
+    except HTTPException as exc:
+        await websocket.close(code=1011, reason=str(exc.detail))
         return
 
     upstream_url = _build_upstream_vnc_websocket_url(
@@ -892,23 +898,15 @@ async def redirect_takeover_vnc(
             detail="当前 AIO runtime 未提供 VNC 能力",
         )
 
-    client = AioSandboxClient(
-        base_url=session.base_url,
-        auth_token=settings.AIO_AUTH_TOKEN,
-        timeout_seconds=settings.AIO_REQUEST_TIMEOUT_SECONDS,
-    )
-    try:
-        ticket = await client.create_ticket()
-    except AioBackendError as exc:
-        _raise_from_aio_error(exc)
+    ticket = await _create_aio_takeover_ticket(session)
 
     target_base = browser.vnc_url or f"{session.base_url}/vnc/vnc_lite.html"
     if target_base.endswith("/vnc/index.html"):
         target_base = target_base[: -len("/vnc/index.html")] + "/vnc/vnc_lite.html"
     parsed = urlparse(target_base)
     base_query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    base_query["ticket"] = ticket.ticket
-    base_query["path"] = f"websockify?ticket={ticket.ticket}"
+    base_query["ticket"] = ticket
+    base_query["path"] = f"websockify?ticket={ticket}"
     target_url = _decorate_novnc_url(
         urlunparse(parsed._replace(query=urlencode(base_query)))
     )
