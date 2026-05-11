@@ -38,6 +38,9 @@ _KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
     "run_answer_fetch": "先执行答案抓取",
     "run_supplemental_fetch": "补采上一轮失败项",
     "run_analysis_report": "重新生成分析报告",
+    "fast": "快速采集",
+    "full": "完整采集",
+    "regenerate": "重新生成问题",
     "confirm_question_set_enable_quick": "确认并启用快速监测",
     "append_question_set_questions": "继续补充问题",
     "decline_question_set_enable": "暂不启用",
@@ -441,6 +444,7 @@ def resolve_confirmation_selection(
             decisions["fetch_mode_pending"] = False
             decisions["fetch_mode_confirmed"] = True
             state_updates["fetch_mode"] = "fast"
+            state_updates["pending_question_set_confirmation"] = None
             if state_values.get("questions") or state_values.get("simulated_questions"):
                 state_updates["next_required_action"] = build_next_required_action(
                     tool_name="answer_fetch",
@@ -456,6 +460,7 @@ def resolve_confirmation_selection(
             decisions["fetch_mode_pending"] = False
             decisions["fetch_mode_confirmed"] = True
             state_updates["fetch_mode"] = "full"
+            state_updates["pending_question_set_confirmation"] = None
             if state_values.get("questions") or state_values.get("simulated_questions"):
                 state_updates["next_required_action"] = build_next_required_action(
                     tool_name="answer_fetch",
@@ -470,6 +475,7 @@ def resolve_confirmation_selection(
             resolved_user_content = "用户选择重新生成问题"
             decisions["fetch_mode_pending"] = False
             decisions["fetch_mode_confirmed"] = False
+            state_updates["pending_question_set_confirmation"] = None
             logger.info("[LangGraph] Inline confirmation: regenerate questions")
         elif opt_id == "table_import_question_list":
             resolved_user_content = "用户确认将表格作为 A3 问题列表导入"

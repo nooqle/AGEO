@@ -98,6 +98,28 @@ class GLM5Model(BaseLLMModel):
         self.config.validate()
         self.client = OpenAI(**self.config.to_openai_kwargs())
 
+    @staticmethod
+    def _apply_tools_to_request(
+        request_kwargs: dict[str, Any],
+        tools: list[dict[str, Any]] | None,
+        *,
+        stream: bool,
+    ) -> None:
+        if not tools:
+            return
+
+        supported_tools = [
+            tool for tool in tools if tool.get("type") in {"function", "web_search"}
+        ]
+        if not supported_tools:
+            return
+
+        request_kwargs["tools"] = supported_tools
+        if stream and any(tool.get("type") == "function" for tool in supported_tools):
+            extra = dict(request_kwargs.get("extra_body") or {})
+            extra["tool_stream"] = True
+            request_kwargs["extra_body"] = extra
+
     def _parse_reasoning_content(self, message: Any) -> list[ThinkingBlock]:
         """Parse reasoning_content (string) from GLM5 response."""
         if hasattr(message, "reasoning_content") and message.reasoning_content:
@@ -154,10 +176,7 @@ class GLM5Model(BaseLLMModel):
         thinking_enabled_override = kwargs.pop("thinking_enabled", None)
         request_kwargs = self.config.to_completion_kwargs()
         request_kwargs["messages"] = self._build_messages(messages)
-        if tools:
-            fn_tools = [t for t in tools if t.get("type") == "function"]
-            if fn_tools:
-                request_kwargs["tools"] = fn_tools
+        self._apply_tools_to_request(request_kwargs, tools, stream=False)
         self._apply_thinking_override(request_kwargs, thinking_enabled_override)
         request_kwargs.update(self._filter_kwargs(kwargs))
 
@@ -193,15 +212,7 @@ class GLM5Model(BaseLLMModel):
         request_kwargs["messages"] = self._build_messages(messages)
         request_kwargs["stream"] = True
         self._apply_thinking_override(request_kwargs, thinking_enabled_override)
-
-        # GLM5 needs tool_stream for streaming tool calls
-        if tools:
-            fn_tools = [t for t in tools if t.get("type") == "function"]
-            if fn_tools:
-                request_kwargs["tools"] = fn_tools
-                extra = request_kwargs.get("extra_body", {})
-                extra["tool_stream"] = True
-                request_kwargs["extra_body"] = extra
+        self._apply_tools_to_request(request_kwargs, tools, stream=True)
 
         request_kwargs.update(self._filter_kwargs(kwargs))
 

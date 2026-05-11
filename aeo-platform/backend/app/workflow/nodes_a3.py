@@ -155,6 +155,28 @@ def _monitor_mode_from_a3_mode(a3_mode: str | None) -> str:
     return "scenario" if str(a3_mode or "").strip().lower() == "persona" else "panorama"
 
 
+def build_a3_to_a4_confirmation_options() -> list[dict[str, str]]:
+    """Return the canonical A3 -> A4 user choices."""
+
+    return [
+        {
+            "id": "fast",
+            "label": "快速采集（推荐）",
+            "description": "API + 浏览器混合，约 5-10 分钟",
+        },
+        {
+            "id": "full",
+            "label": "完整采集",
+            "description": "全浏览器模拟真实用户，约 10-20 分钟，数据最准",
+        },
+        {
+            "id": "regenerate",
+            "label": "重新生成问题",
+            "description": "对模拟问题不满意，返回重新生成",
+        },
+    ]
+
+
 def _selected_fetch_mode_from_state(state: AgentState) -> str | None:
     fetch_mode = str(state.get("fetch_mode") or "").strip().lower()
     if fetch_mode in {"fast", "full"}:
@@ -274,40 +296,26 @@ async def _question_set_confirmation_update(
         return {}
 
     request_id = f"question_set_confirmation_{question_set_id}"
-    mode_label = "用户场景监测" if monitor_mode == "scenario" else "全景监测"
+    mode_label = "用户场景问题" if monitor_mode == "scenario" else "品牌全景问题"
     message = (
         f"已生成「{mode_label}」问题集，共 {question_count} 个问题。"
-        "请确认是否启用快速监测。"
+        "接下来进入答案抓取，请选择采集模式："
     )
-    options = [
-        {
-            "id": "confirm_question_set_enable_quick",
-            "label": "确认并启用快速监测",
-            "description": "确认当前问题集，并创建或更新快速监测计划",
-        },
-        {
-            "id": "append_question_set_questions",
-            "label": "继续补充问题",
-            "description": "先补充更多问题，确认后再启用监测",
-        },
-        {
-            "id": "decline_question_set_enable",
-            "label": "暂不启用",
-            "description": "保留为草稿，不启动自动监测",
-        },
-    ]
+    options = build_a3_to_a4_confirmation_options()
     await send_confirmation_request(
         session_id=session_id,
-        step_id="question_set_confirmation",
-        step_name="确认监测问题集",
+        step_id="a3_to_a4_fetch_mode",
+        step_name="选择采集模式",
         message=message,
         options=options,
     )
+    user_decisions = dict(state.get("user_decisions") or {})
+    user_decisions["fetch_mode_pending"] = True
     pending_confirmation = {
         "request_id": request_id,
-        "type": "question_set_confirmation",
-        "step_id": "question_set_confirmation",
-        "step_name": "确认监测问题集",
+        "type": "fetch_mode_confirmation",
+        "step_id": "a3_to_a4_fetch_mode",
+        "step_name": "选择采集模式",
         "message": message,
         "options": options,
         "question_set_id": question_set_id,
@@ -319,6 +327,7 @@ async def _question_set_confirmation_update(
         "execution_status": "awaiting_user",
         "pending_confirmation": pending_confirmation,
         "pending_question_set_confirmation": pending_confirmation,
+        "user_decisions": user_decisions,
         "progress_message": message,
     }
 

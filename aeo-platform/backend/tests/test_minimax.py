@@ -20,6 +20,8 @@ from app.core.llm import get_llm_model, LLMResponse, ThinkingBlock, ToolCallBloc
 from app.core.llm.minimax import MiniMaxConfig, MiniMaxModel
 from app.core.llm.glm5 import GLM5Config, GLM5Model
 from app.core.llm.deepseek import DeepSeekConfig, DeepSeekModel
+from app.workflow.confirmation import resolve_confirmation_selection
+from app.workflow.nodes_a3 import _question_set_confirmation_update
 
 
 # Test configuration
@@ -161,6 +163,95 @@ class TestGLM5Config:
         )
         kwargs = config.to_completion_kwargs()
         assert "extra_body" not in kwargs
+
+    def test_web_search_tool_is_passed_to_glm5_request(self):
+        request_kwargs: dict[str, Any] = {}
+        web_search_tool = {
+            "type": "web_search",
+            "web_search": {"enable": True, "search_engine": "search_std"},
+        }
+
+        GLM5Model._apply_tools_to_request(
+            request_kwargs,
+            [web_search_tool],
+            stream=False,
+        )
+
+        assert request_kwargs["tools"] == [web_search_tool]
+        assert "extra_body" not in request_kwargs
+
+    def test_streaming_function_tools_keep_tool_stream_with_web_search(self):
+        request_kwargs: dict[str, Any] = {
+            "extra_body": {"thinking": {"type": "enabled"}}
+        }
+        function_tool = {
+            "type": "function",
+            "function": {"name": "lookup", "parameters": {"type": "object"}},
+        }
+        web_search_tool = {
+            "type": "web_search",
+            "web_search": {"enable": True, "search_engine": "search_std"},
+        }
+
+        GLM5Model._apply_tools_to_request(
+            request_kwargs,
+            [web_search_tool, function_tool],
+            stream=True,
+        )
+
+        assert request_kwargs["tools"] == [web_search_tool, function_tool]
+        assert request_kwargs["extra_body"]["thinking"]["type"] == "enabled"
+        assert request_kwargs["extra_body"]["tool_stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_a3_question_confirmation_hands_off_to_a4_fetch_mode(monkeypatch):
+    emitted: list[dict[str, Any]] = []
+
+    async def fake_send_confirmation_request(**kwargs: Any) -> None:
+        emitted.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.workflow.nodes_a3.send_confirmation_request",
+        fake_send_confirmation_request,
+    )
+
+    result = await _question_set_confirmation_update(
+        {"session_id": "session-1", "user_decisions": {}},
+        question_set_id="question-set-1",
+        monitor_mode="panorama",
+        question_count=12,
+    )
+
+    option_ids = [item["id"] for item in result["pending_confirmation"]["options"]]
+    assert option_ids == ["fast", "full", "regenerate"]
+    assert result["pending_confirmation"]["type"] == "fetch_mode_confirmation"
+    assert result["pending_confirmation"]["step_id"] == "a3_to_a4_fetch_mode"
+    assert result["user_decisions"]["fetch_mode_pending"] is True
+    assert emitted[0]["step_name"] == "选择采集模式"
+    assert [item["id"] for item in emitted[0]["options"]] == option_ids
+
+
+def test_fast_fetch_confirmation_resolves_to_answer_fetch_and_clears_a3_pending():
+    resolution = resolve_confirmation_selection(
+        selection={"optionId": "fast"},
+        option_id="fast",
+        user_content="快速采集（推荐）",
+        user_decisions={"fetch_mode_pending": True},
+        state_values={
+            "questions": [{"id": "q1", "text": "问题"}],
+            "pending_question_set_confirmation": {"step_id": "a3_to_a4_fetch_mode"},
+        },
+    )
+
+    assert resolution.user_decisions["fetch_mode_confirmed"] is True
+    assert resolution.user_decisions["fetch_mode_pending"] is False
+    assert resolution.state_updates["fetch_mode"] == "fast"
+    assert resolution.state_updates["pending_question_set_confirmation"] is None
+    assert resolution.state_updates["next_required_action"]["tool_name"] == "answer_fetch"
+    assert resolution.state_updates["next_required_action"]["tool_args"] == {
+        "fetch_mode": "fast"
+    }
 
 
 class TestDeepSeekConfig:
