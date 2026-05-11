@@ -15,12 +15,15 @@ def test_normalize_website_url_does_not_add_duplicate_www() -> None:
 
 
 @pytest.mark.asyncio
-async def test_repair_a1_website_uses_reachable_official_evidence_candidate() -> None:
-    async def probe(url: str) -> bool:
-        return url == "https://www.herbalife.cn/"
-
+async def test_repair_a1_website_uses_official_evidence_candidate_without_probe() -> (
+    None
+):
     profile, competitors = await repair_a1_website_fields(
-        {"brand_name": "安利", "official_website": "www.amway.com.cn"},
+        {
+            "brand_name": "安利",
+            "brand_name_en": "Amway",
+            "official_website": "www.amway.com.cn",
+        },
         [
             {
                 "name": "康宝莱",
@@ -35,7 +38,6 @@ async def test_repair_a1_website_uses_reachable_official_evidence_candidate() ->
                 "usage": "用于核验康宝莱官网",
             }
         ],
-        reachability_probe=probe,
     )
 
     assert profile["official_website"] == ""
@@ -43,15 +45,11 @@ async def test_repair_a1_website_uses_reachable_official_evidence_candidate() ->
 
 
 @pytest.mark.asyncio
-async def test_repair_a1_website_clears_unverified_dead_candidate() -> None:
-    async def probe(_url: str) -> bool:
-        return False
-
+async def test_repair_a1_website_clears_model_website_without_evidence() -> None:
     _profile, competitors = await repair_a1_website_fields(
         {"brand_name": "安利", "official_website": ""},
         [{"name": "示例竞品", "website": "https://dead.example.com/"}],
         [],
-        reachability_probe=probe,
     )
 
     assert competitors[0]["website"] == ""

@@ -6,8 +6,6 @@ import re
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-import httpx
-
 
 A1_WEB_SEARCH_PROMPT = (
     "你是品牌档案核验助手。请从网络搜索{search_result}中提取可用于核验品牌档案、"
@@ -162,106 +160,22 @@ def _evidence_website_candidates(
     return ordered
 
 
-def _website_variants(url: str) -> list[str]:
-    normalized = normalize_website_url(url)
-    if not normalized:
-        return []
-    parsed = urlparse(normalized)
-    host = parsed.netloc.lower()
-    hosts = [host]
-    if host.startswith("www."):
-        hosts.append(host[4:])
-    else:
-        hosts.append(f"www.{host}")
-    if host.endswith(".com.cn"):
-        hosts.append(f"{host[:-7]}.cn")
-        if host.startswith("www."):
-            hosts.append(f"www.{host[4:-7]}.cn")
-
-    variants: list[str] = []
-    for candidate_host in hosts:
-        candidate = urlunparse(
-            (parsed.scheme or "https", candidate_host, "/", "", "", "")
-        )
-        if candidate not in variants:
-            variants.append(candidate)
-    return variants
-
-
-async def _default_reachability_probe(url: str) -> bool:
-    try:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0 Safari/537.36"
-            )
-        }
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=5.0,
-            headers=headers,
-        ) as client:
-            try:
-                response = await client.head(url)
-            except httpx.HTTPError:
-                response = await client.get(url)
-            if response.status_code == 405:
-                response = await client.get(url)
-            return response.status_code < 500
-    except Exception:
-        return False
-
-
-async def _first_reachable(
-    candidates: list[str],
-    probe: Any,
-) -> str:
-    seen: list[str] = []
-    for candidate in candidates:
-        normalized = normalize_website_url(candidate)
-        if normalized and normalized not in seen:
-            seen.append(normalized)
-
-    for candidate in seen:
-        if await probe(candidate):
-            return candidate
-    return ""
-
-
 async def repair_a1_website_fields(
     brand_profile: dict[str, Any],
     competitors: list[dict[str, Any]],
     evidence_sources: list[dict[str, str]],
-    *,
-    reachability_probe: Any | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Normalize and repair A1 official website fields.
+    """Normalize A1 official websites from web-search evidence only.
 
-    The model may output plausible but dead official domains. We keep reachable
-    candidates, otherwise try web-search evidence and deterministic domain
-    variants. If no candidate can be verified, the field is cleared instead of
-    persisting a broken link into the artifact.
+    The model may output plausible but unsupported domains. A1 already calls
+    GLM web_search, so the blocking path trusts only evidence-backed candidates
+    and avoids per-competitor HTTP probing.
     """
-
-    probe = reachability_probe or _default_reachability_probe
 
     async def repair_one(item: dict[str, Any], field: str) -> dict[str, Any]:
         next_item = dict(item)
-        current = normalize_website_url(next_item.get(field))
         evidence_candidates = _evidence_website_candidates(next_item, evidence_sources)
-        variant_candidates = [
-            candidate
-            for candidate in _website_variants(current)
-            if candidate != current
-        ]
-        candidates = [
-            current,
-            *evidence_candidates,
-            *variant_candidates,
-        ]
-        repaired = await _first_reachable(candidates, probe)
-        next_item[field] = repaired
+        next_item[field] = evidence_candidates[0] if evidence_candidates else ""
         return next_item
 
     repaired_profile = await repair_one(brand_profile, "official_website")
