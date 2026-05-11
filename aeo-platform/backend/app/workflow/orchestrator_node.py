@@ -880,7 +880,9 @@ def _contains_non_negated_keyword(text: str, keywords: list[str]) -> bool:
     return False
 
 
-def _contains_positive_continuation_marker(text: str, keywords: tuple[str, ...]) -> bool:
+def _contains_positive_continuation_marker(
+    text: str, keywords: tuple[str, ...]
+) -> bool:
     normalized = str(text or "")
     negative_markers = (
         "不要",
@@ -3481,6 +3483,138 @@ def _build_ask_user_fallback_reply(
     return message or "请继续告诉我您的选择。"
 
 
+def _build_a1_next_step_confirmation_payload(
+    state: AgentState,
+) -> tuple[str, list[dict[str, str]]]:
+    brand_name = (
+        (state.get("brand_profile") or {}).get("brand_name")
+        or state.get("brand_name")
+        or "该品牌"
+    )
+    message = (
+        f"{brand_name}品牌档案已生成。建议下一步进入品牌全景分析，"
+        "先用一组行业通用问题采集各 AI 平台回答，建立后续画像细化、"
+        "场景分析和周期对比的基线。请选择下一步："
+    )
+    options = [
+        {
+            "id": "panorama_fast",
+            "label": "全景分析（快速）",
+            "description": "继续生成全景问题，并用快速采集建立基线",
+        },
+        {
+            "id": "panorama_full",
+            "label": "全景分析（完整）",
+            "description": "继续生成全景问题，并用浏览器完整采集",
+        },
+        {
+            "id": "persona_first",
+            "label": "先做画像细化",
+            "description": "先生成用户画像和使用场景，再设计问题",
+        },
+        {
+            "id": "ask",
+            "label": "我先直接提问",
+            "description": "暂不进入流程，直接基于品牌档案追问",
+        },
+    ]
+    return message, options
+
+
+def _should_force_a1_next_step_confirmation(
+    state: AgentState,
+    *,
+    last_tool: str | None,
+) -> bool:
+    if last_tool != "brand_analysis":
+        return False
+    if state.get("awaiting_user") or state.get("pending_confirmation"):
+        return False
+    brand_profile = state.get("brand_profile")
+    if not isinstance(brand_profile, dict) or not brand_profile.get("brand_name"):
+        return False
+    if _is_question_generation_only_state(state):
+        return False
+
+    user_decisions = dict(state.get("user_decisions") or {})
+    if user_decisions.get("a3_mode") or user_decisions.get("fetch_mode_pending"):
+        return False
+    return True
+
+
+async def _force_a1_next_step_confirmation(
+    *,
+    state: AgentState,
+    session_id: str,
+    reply_text: str,
+    new_history: list[dict[str, Any]],
+    request_id: str,
+    current_retry_counts: dict[str, int],
+) -> Command:
+    message, options = _build_a1_next_step_confirmation_payload(state)
+    visible_reply = reply_text.strip() or _build_ask_user_fallback_reply(
+        state,
+        "brand_analysis",
+        message,
+    )
+    if visible_reply and not reply_text.strip():
+        await send_reply_event(
+            session_id,
+            visible_reply,
+            is_delta=True,
+            is_new_round=True,
+        )
+        await send_reply_event(session_id, "", is_complete=True)
+
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "inline_confirmation",
+        {
+            "request_id": request_id,
+            "message": message,
+            "options": options,
+            "type": "simple",
+        },
+    )
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "confirmation_request",
+        {
+            "request_id": request_id,
+            "type": "step_confirmation",
+            "message": message,
+            "options": options,
+            "allow_text_input": True,
+            "step_id": "orchestrator",
+            "step_name": "选择品牌档案下一步",
+        },
+    )
+
+    new_history.append(
+        {
+            "role": "tool",
+            "content": "等待用户选择品牌档案下一步...",
+            "tool_call_id": request_id,
+        }
+    )
+    return Command(
+        goto="wait_for_user",
+        update={
+            "awaiting_user": True,
+            "orchestrator_reply": visible_reply,
+            "orchestrator_history": new_history,
+            "pending_confirmation": {
+                "request_id": request_id,
+                "step_id": "orchestrator",
+                "step_name": "选择品牌档案下一步",
+                "message": message,
+                "options": options,
+            },
+            "agent_retry_counts": current_retry_counts,
+        },
+    )
+
+
 def _should_force_fetch_recovery_confirmation(state: AgentState) -> bool:
     if not _is_latest_run_history_stats_query(_get_latest_user_message(state)):
         return False
@@ -5008,6 +5142,20 @@ async def orchestrator_node(state: AgentState) -> Command:
                 current_retry_counts=current_retry_counts,
             )
 
+        if _should_force_a1_next_step_confirmation(llm_state, last_tool=last_tool):
+            logger.warning(
+                "[Orchestrator] No tool call after A1 completion; "
+                "forcing next-step confirmation instead of ending run."
+            )
+            return await _force_a1_next_step_confirmation(
+                state=llm_state,
+                session_id=session_id,
+                reply_text=reply_text,
+                new_history=new_history,
+                request_id=f"defense_a1_{int(datetime.now().timestamp() * 1000)}",
+                current_retry_counts=current_retry_counts,
+            )
+
         if (
             last_tool == "knowledge_aggregate"
             and _should_force_fetch_recovery_confirmation(llm_state)
@@ -5325,6 +5473,23 @@ async def _handle_tool_call(
                 current_retry_counts=current_retry_counts,
             )
 
+        if not options and _should_force_a1_next_step_confirmation(
+            state,
+            last_tool=last_tool_name,
+        ):
+            logger.warning(
+                "[Orchestrator] ask_user called without options after A1; "
+                "injecting deterministic A1 next-step confirmation."
+            )
+            return await _force_a1_next_step_confirmation(
+                state=state,
+                session_id=session_id,
+                reply_text=reply_text,
+                new_history=new_history,
+                request_id=request_id,
+                current_retry_counts=current_retry_counts,
+            )
+
         if not reply_text.strip():
             fallback_reply = _build_ask_user_fallback_reply(state, last_tool_name, msg)
             await send_reply_event(
@@ -5519,9 +5684,9 @@ async def _handle_tool_call(
                     tool_args["mode"] = "baseline_dynamic"
                     requested_question_mode = "baseline_dynamic"
             latest_user_message = _get_latest_user_message(state)
-            if tool_args.get("question_only") or _is_explicit_question_generation_only_request(
-                latest_user_message
-            ):
+            if tool_args.get(
+                "question_only"
+            ) or _is_explicit_question_generation_only_request(latest_user_message):
                 early_user_decisions = dict(state.get("user_decisions", {}) or {})
                 early_user_decisions["question_generation_only"] = True
                 tool_args = {**tool_args, "question_only": True}
