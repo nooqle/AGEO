@@ -2,7 +2,7 @@ import { writeDashboardChatHandoff } from './dashboardChatHandoff';
 
 export function buildBrandMonitoringSetupDraft(brandName: string): string {
   const safeBrandName = brandName.trim() || '新品牌';
-  return `我想为「${safeBrandName}」建立品牌监测。请先按现有流程确认品牌信息，再生成监测问题集给我确认。`;
+  return `我想为「${safeBrandName}」建立品牌监测。先帮我生成品牌档案。`;
 }
 
 export function buildBrandMonitoringChatUrl({

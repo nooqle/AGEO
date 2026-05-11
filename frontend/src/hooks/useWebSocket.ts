@@ -698,9 +698,7 @@ export function useWebSocket(sessionId: string | null) {
         }
 
         const suggestions = buildFollowUpSuggestions(data);
-        if (suggestions.length > 0) {
-          setFollowUpSuggestions(suggestions);
-        }
+        setFollowUpSuggestions(suggestions);
         break;
       }
 
@@ -1399,7 +1397,6 @@ export function useWebSocket(sessionId: string | null) {
     isConnected,
   };
 }
-
 
 
 

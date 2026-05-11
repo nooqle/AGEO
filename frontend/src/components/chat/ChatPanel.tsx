@@ -2520,9 +2520,17 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
   const inputDisabled = Boolean(!isConnected);
 
+  const hasAnalysisFollowUpMaterial = useMemo(() => {
+    if (activeTask?.snapshot_id) {
+      return true;
+    }
+
+    return stageResults.some((result) => result.resultType === 'metrics_preview');
+  }, [activeTask?.snapshot_id, stageResults]);
+
   // Determine follow-up suggestions to show (backend-provided or defaults)
   const suggestionsToShow = followUpSuggestions.length > 0 ? followUpSuggestions : (
-    !isAgentExecuting && activeTask?.status === 'completed' && stageResults.length > 0 ? DEFAULT_FOLLOWUPS : []
+    !isAgentExecuting && activeTask?.status === 'completed' && hasAnalysisFollowUpMaterial ? DEFAULT_FOLLOWUPS : []
   );
 
   // Determine lightweight badge label for follow-up operations
@@ -2821,4 +2829,3 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     </div>
   );
 }
-
