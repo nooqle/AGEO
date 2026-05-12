@@ -664,6 +664,8 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
         "description": (
             "当需要用户确认或选择时调用。向用户展示选项并等待回复。"
             "例如：确认品牌信息、选择分析模式、确认是否继续下一步。"
+            "必须提供用户可直接理解的 message 和非空 options；"
+            "选项要来自当前上下文和可用工具合同，不要用通用模板凑数。"
         ),
         "parameters": {
             "type": "object",
@@ -683,7 +685,7 @@ AGENT_REGISTRY: list[dict[str, Any]] = [
                         },
                         "required": ["id", "label"],
                     },
-                    "description": "用户可选择的选项",
+                    "description": "用户可选择的选项。必须非空；id 要稳定且能被后续确认解析；不要包含停止、取消、放弃、终止类选项。",
                 },
                 "type": {
                     "type": "string",
@@ -2702,7 +2704,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 - 在回复中说明打算做什么，然后调用对应工具。
                 - 不要一次调用多个工具，每轮只执行一个步骤。
                 - 如果用户只是闲聊，或当前意图不属于任何工具合同，直接使用你的大模型对话能力自然语言回复，不调用工具，也不要为了凑流程而调用 ask_user。
-                - 画像生成完成后，若用户尚未明确后续范围，优先 ask_user 引导其选画像；问题生成完成后，若用户尚未明确采集模式，优先 ask_user 请求确认；答案抓取完成后通常继续进入 analysis_report_skill，但如果最新 A4 observation 明确要求用户先做选择（例如补采后仍有失败项），必须先 ask_user，再决定是否进入 analysis_report_skill；分析报告完成后，若用户尚未明确下一步，再 ask_user 帮助其决定是否做引用置信度评估或继续后续分析。
+                - 画像生成完成后，若用户尚未明确后续范围，优先 ask_user 引导其选画像；问题生成完成后，若用户尚未明确采集模式，优先 ask_user 请求确认；答案抓取完成后通常继续进入 analysis_report_skill，但如果最新 A4 observation 明确要求用户先做选择（例如补采后仍有失败项），必须先 ask_user，再决定是否进入 analysis_report_skill；分析报告完成后，若用户尚未明确下一步，必须基于当前报告内容、已有交付物和可用工具合同调用 ask_user 生成下一步引导，而不是直接 complete。
                 - 如果用户请求不明确，用自然语言追问，不要调用 ask_user。
                 - 步骤完成后的回复应包含 1 个具体数据点或风险发现，不要只报“完成了”。
                 - 如果用户直接提供问题文本并要求抓取答案，可通过 answer_fetch 的 custom_questions 传入，无需先调用 question_simulation，但仍需明确 fetch_mode。
@@ -2712,7 +2714,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 ask_user 使用限制：
                 - 只允许在表格导入确认、品牌/竞品识别后确认基线、基线或分析报告完成后选下一步、画像生成后选画像、问题生成后选采集模式、答案抓取后需确认是否补采剩余失败项、步骤失败恢复这几类场景使用。
                 - 除这些场景外，所有其他情况都直接自然语言回复，绝不调用 ask_user。
-                - 调用 ask_user 时必须显式传入 message 和 options。对于答案抓取后的补采确认，必须提供“补采失败项（浏览器）/继续补采剩余失败项（浏览器）”与“先用当前结果继续分析”这类明确选项。
+                - 调用 ask_user 时必须显式传入 message 和 options。对于答案抓取后的补采确认，必须提供“补采失败项（浏览器）/继续补采剩余失败项（浏览器）”与“先用当前结果继续分析”这类明确选项；对于分析报告完成后的下一步，选项必须来自当前报告揭示的问题、可用后续能力和用户上下文，不要照搬固定模板。
                 """
             ).strip(),
         ),
@@ -3420,108 +3422,16 @@ def _build_ask_user_fallback_reply(
     tool_name: str | None,
     message: str,
 ) -> str:
-    """Build a deterministic user-facing reply when LLM omits natural language."""
-    if tool_name == "brand_analysis":
-        has_baseline = bool(state.get("baseline_metrics"))
-        brand_name = (
-            (state.get("brand_profile", {}) or {}).get("brand_name")
-            or state.get("brand_name")
-            or "该品牌"
-        )
-        if has_baseline:
-            return (
-                f"{brand_name}的品牌分析已完成，我已经整理出品牌画像和竞品格局。"
-                "接下来您可以先做一次引用内容置信度评估，"
-                "也可以继续生成用户画像做场景细化分析、重新运行品牌全景分析，"
-                "或者直接基于已有结果提问。"
-            )
-        return (
-            f"{brand_name}的品牌分析已完成，但当前还没有品牌全景分析结果。"
-            "建议先运行品牌全景分析，建立各 AI 平台对该品牌的整体认知参考，"
-            "后续再做画像和场景分析会更有对照价值。"
-        )
-
-    if tool_name == "persona_generation":
-        return (
-            "用户画像已生成并展示在右侧画布中。"
-            "请先在画布里勾选您想重点分析的画像，然后回复我继续；"
-            "如果不想限定画像，也可以直接告诉我走品牌全景分析。"
-        )
-
-    if tool_name == "question_simulation":
-        return (
-            "问题模拟已完成，相关问题已经展示在右侧画布中。"
-            "您现在可以告诉我选择快速采集、完整采集，或要求我重新生成问题。"
-        )
-
+    """Use the ask_user message itself when the LLM omits natural language."""
     if tool_name == "table_intake_skill":
         result = state.get("table_intake_result") or {}
         summary = result.get("summary") or "表格理解完成。"
         return f"{summary} 请确认是否按我识别的用途继续。"
 
-    if tool_name == "answer_fetch":
-        return (
-            "答案抓取已完成。"
-            "我会基于当前抓取结果立即继续生成分析报告，"
-            "报告出来后您再决定是否继续做引用内容置信度评估或进入后续分析。"
-        )
-
-    if tool_name in {"data_analytics", "analysis_report_skill"}:
-        return (
-            "分析报告已生成。"
-            "您现在可以选择继续做一次引用内容置信度评估，"
-            "或者基于当前报告进入下一步画像分析、深入分析或直接提问。"
-        )
-
-    if tool_name == "confidence_analysis_skill":
-        return (
-            "引用内容置信度评估已完成。"
-            "您现在可以继续基于这份评估追问具体来源问题，"
-            "或者回到主报告继续后续分析。"
-        )
-
-    return message or "请继续告诉我您的选择。"
+    return message or "请确认后继续。"
 
 
-def _build_a1_next_step_confirmation_payload(
-    state: AgentState,
-) -> tuple[str, list[dict[str, str]]]:
-    brand_name = (
-        (state.get("brand_profile") or {}).get("brand_name")
-        or state.get("brand_name")
-        or "该品牌"
-    )
-    message = (
-        f"{brand_name}品牌档案已生成。建议下一步进入品牌全景分析，"
-        "先用一组行业通用问题采集各 AI 平台回答，建立后续画像细化、"
-        "场景分析和周期对比的基线。请选择下一步："
-    )
-    options = [
-        {
-            "id": "panorama_fast",
-            "label": "全景分析（快速）",
-            "description": "继续生成全景问题，并用快速采集建立基线",
-        },
-        {
-            "id": "panorama_full",
-            "label": "全景分析（完整）",
-            "description": "继续生成全景问题，并用浏览器完整采集",
-        },
-        {
-            "id": "persona_first",
-            "label": "先做画像细化",
-            "description": "先生成用户画像和使用场景，再设计问题",
-        },
-        {
-            "id": "ask",
-            "label": "我先直接提问",
-            "description": "暂不进入流程，直接基于品牌档案追问",
-        },
-    ]
-    return message, options
-
-
-def _should_force_a1_next_step_confirmation(
+def _should_require_a1_next_step_ask_user(
     state: AgentState,
     *,
     last_tool: str | None,
@@ -3542,75 +3452,123 @@ def _should_force_a1_next_step_confirmation(
     return True
 
 
-async def _force_a1_next_step_confirmation(
+def _should_require_fetch_mode_ask_user(
+    state: AgentState,
+    *,
+    last_tool: str | None,
+) -> bool:
+    if last_tool != "question_simulation":
+        return False
+    if not state.get("simulated_questions"):
+        return False
+    if _is_question_generation_only_state(state):
+        return False
+    user_decisions = dict(state.get("user_decisions", {}))
+    selected_fetch_mode = str(state.get("fetch_mode") or "").strip().lower()
+    return not (
+        user_decisions.get("fetch_mode_confirmed", False)
+        or user_decisions.get("fetch_mode_pending", False)
+        or selected_fetch_mode in {"fast", "full"}
+    )
+
+
+def _build_required_ask_user_repair_message(
+    state: AgentState,
+    *,
+    last_tool: str | None,
+    reason: str,
+) -> str | None:
+    if _should_require_a1_next_step_ask_user(state, last_tool=last_tool):
+        brand_name = (
+            (state.get("brand_profile") or {}).get("brand_name")
+            or state.get("brand_name")
+            or "该品牌"
+        )
+        return (
+            "【内部编排约束，不是用户新需求】"
+            f"{brand_name}的品牌档案已经生成，但当前没有用户确认的下一步。"
+            "请你基于品牌档案、已有交付物和可用工具合同，立即调用 ask_user；"
+            "ask_user 必须包含 message 和 options。选项应围绕是否进入品牌全景分析、"
+            "是否先做画像/场景细化、或是否让用户直接追问来生成；"
+            "如果使用可被系统识别的固定动作，请遵守现有 option id 合同。"
+            f"触发原因：{reason}。"
+        )
+
+    if _should_require_fetch_mode_ask_user(state, last_tool=last_tool):
+        return (
+            "【内部编排约束，不是用户新需求】问题集已经生成，但还没有用户确认采集模式。"
+            "请你立即调用 ask_user；ask_user 必须包含 message 和 options。"
+            "选项应让用户在快速采集、完整采集或重新生成问题之间选择，"
+            "并遵守现有 option id 合同，以便后续确认可以继续驱动工作流。"
+            f"触发原因：{reason}。"
+        )
+
+    if _is_completed_analysis_report_state(state) and not state.get("headless_mode"):
+        return (
+            "【内部编排约束，不是用户新需求】分析报告已经生成，但用户尚未确认下一步。"
+            "请你基于当前报告内容、已有交付物、可用后续能力和用户上下文，立即调用 ask_user；"
+            "ask_user 必须包含 message 和 options。选项必须来自当前报告揭示的问题，"
+            "不要照搬固定模板，也不要只回复自然语言后结束。"
+            f"触发原因：{reason}。"
+        )
+
+    return None
+
+
+async def _redirect_to_required_ask_user_generation(
     *,
     state: AgentState,
-    session_id: str,
-    reply_text: str,
+    last_tool: str | None,
+    reason: str,
     new_history: list[dict[str, Any]],
-    request_id: str,
     current_retry_counts: dict[str, int],
-) -> Command:
-    message, options = _build_a1_next_step_confirmation_payload(state)
-    visible_reply = reply_text.strip() or _build_ask_user_fallback_reply(
+    blocked_tool_call: Any | None = None,
+    blocked_tool_name: str | None = None,
+) -> Command | None:
+    repair_message = _build_required_ask_user_repair_message(
         state,
-        "brand_analysis",
-        message,
+        last_tool=last_tool,
+        reason=reason,
     )
-    if visible_reply and not reply_text.strip():
-        await send_reply_event(
-            session_id,
-            visible_reply,
-            is_delta=True,
-            is_new_round=True,
+    if not repair_message:
+        return None
+
+    retry_key = f"required_ask_user_repair:{last_tool or 'unknown'}"
+    retry_count = int(current_retry_counts.get(retry_key) or 0)
+    if retry_count >= 1:
+        logger.error(
+            "[Orchestrator] Required ask_user repair already retried once for %s; stopping repair loop.",
+            last_tool,
         )
-        await send_reply_event(session_id, "", is_complete=True)
+        return None
 
-    await session_event_publisher.emit_to_session(
-        session_id,
-        "inline_confirmation",
-        {
-            "request_id": request_id,
-            "message": message,
-            "options": options,
-            "type": "simple",
-        },
-    )
-    await session_event_publisher.emit_to_session(
-        session_id,
-        "confirmation_request",
-        {
-            "request_id": request_id,
-            "type": "step_confirmation",
-            "message": message,
-            "options": options,
-            "allow_text_input": True,
-            "step_id": "orchestrator",
-            "step_name": "选择品牌档案下一步",
-        },
-    )
+    next_retry_counts = dict(current_retry_counts)
+    next_retry_counts[retry_key] = retry_count + 1
 
-    new_history.append(
-        {
+    repaired_history = list(new_history)
+    if blocked_tool_call is not None:
+        tool_msg: dict[str, Any] = {
             "role": "tool",
-            "content": "等待用户选择品牌档案下一步...",
-            "tool_call_id": request_id,
+            "content": (
+                f"{blocked_tool_name or 'tool'} 未执行：当前步骤必须先调用 ask_user "
+                "并等待用户确认。"
+            ),
+            "tool_call_id": getattr(blocked_tool_call, "id", None) or "call_1",
         }
-    )
+        tool_msg_name = blocked_tool_name or getattr(blocked_tool_call, "name", None)
+        if tool_msg_name:
+            tool_msg["name"] = str(tool_msg_name)
+        repaired_history.append(tool_msg)
+    repaired_history.append({"role": "user", "content": repair_message})
+
     return Command(
-        goto="wait_for_user",
+        goto="orchestrator",
         update={
-            "awaiting_user": True,
-            "orchestrator_reply": visible_reply,
-            "orchestrator_history": new_history,
-            "pending_confirmation": {
-                "request_id": request_id,
-                "step_id": "orchestrator",
-                "step_name": "选择品牌档案下一步",
-                "message": message,
-                "options": options,
-            },
-            "agent_retry_counts": current_retry_counts,
+            "execution_status": "running",
+            "awaiting_user": False,
+            "pending_confirmation": None,
+            "orchestrator_history": repaired_history,
+            "agent_retry_counts": next_retry_counts,
         },
     )
 
@@ -3683,6 +3641,7 @@ async def _force_fetch_recovery_confirmation(
         session_id,
         "inline_confirmation",
         {
+            "request_id": request_id,
             "message": defense_msg,
             "options": defense_options,
             "type": "simple",
@@ -3716,109 +3675,9 @@ async def _force_fetch_recovery_confirmation(
             "orchestrator_reply": visible_reply,
             "orchestrator_history": new_history,
             "pending_confirmation": {
+                "request_id": request_id,
                 "step_id": "orchestrator",
                 "step_name": "选择补采策略",
-                "message": defense_msg,
-                "options": defense_options,
-            },
-            "agent_retry_counts": current_retry_counts,
-        },
-    )
-
-
-async def _force_fetch_mode_confirmation(
-    *,
-    state: AgentState,
-    session_id: str,
-    reply_text: str,
-    new_history: list[dict[str, Any]],
-    request_id: str,
-    current_retry_counts: dict[str, int],
-) -> Command:
-    """Deterministically ask for fetch mode after A3.
-
-    This is the hard guard for the A3 -> A4 handoff. It prevents the flow from
-    silently ending when the LLM forgets to call ask_user or returns a pure
-    natural-language reply after simulated questions are ready.
-    """
-    defense_options = [
-        {
-            "id": "fast",
-            "label": "快速采集（推荐）",
-            "description": "API + 浏览器混合，约 5-10 分钟",
-        },
-        {
-            "id": "full",
-            "label": "完整采集",
-            "description": "全浏览器模拟真实用户，约 10-20 分钟，数据最准",
-        },
-        {
-            "id": "regenerate",
-            "label": "重新生成问题",
-            "description": "对模拟问题不满意，返回重新生成",
-        },
-    ]
-    defense_msg = (
-        "品牌全景分析的问题准备已完成。接下来可以进入答案抓取："
-        "您会得到各平台对同一组问题的回答、引用来源与品牌提及情况，"
-        "后续还可以继续生成分析报告。请选择采集模式："
-    )
-    visible_reply = reply_text.strip() or _build_ask_user_fallback_reply(
-        state,
-        "question_simulation",
-        defense_msg,
-    )
-    if visible_reply and not reply_text.strip():
-        await send_reply_event(
-            session_id,
-            visible_reply,
-            is_delta=True,
-            is_new_round=True,
-        )
-        await send_reply_event(session_id, "", is_complete=True)
-
-    await session_event_publisher.emit_to_session(
-        session_id,
-        "inline_confirmation",
-        {
-            "message": defense_msg,
-            "options": defense_options,
-            "type": "simple",
-        },
-    )
-    await session_event_publisher.emit_to_session(
-        session_id,
-        "confirmation_request",
-        {
-            "request_id": request_id,
-            "type": "step_confirmation",
-            "message": defense_msg,
-            "options": defense_options,
-            "allow_text_input": True,
-            "step_id": "orchestrator",
-            "step_name": "选择采集模式",
-        },
-    )
-
-    user_decisions = dict(state.get("user_decisions", {}))
-    user_decisions["fetch_mode_pending"] = True
-    new_history.append(
-        {
-            "role": "tool",
-            "content": "等待用户选择采集模式...",
-            "tool_call_id": request_id,
-        }
-    )
-    return Command(
-        goto="wait_for_user",
-        update={
-            "awaiting_user": True,
-            "orchestrator_reply": visible_reply,
-            "orchestrator_history": new_history,
-            "user_decisions": user_decisions,
-            "pending_confirmation": {
-                "step_id": "orchestrator",
-                "step_name": "选择采集模式",
                 "message": defense_msg,
                 "options": defense_options,
             },
@@ -4735,24 +4594,26 @@ async def orchestrator_node(state: AgentState) -> Command:
         return completed_standalone_command
 
     if _is_completed_analysis_report_state(state):
+        if state.get("headless_mode"):
+            logger.info(
+                "[Orchestrator] Headless final analysis report completed; ending run for session %s",
+                session_id,
+            )
+            return Command(
+                goto=END,
+                update={
+                    "execution_status": "completed",
+                    "awaiting_user": False,
+                    "pending_confirmation": None,
+                    "pending_question_set_confirmation": None,
+                    "next_required_action": None,
+                    "progress": 1.0,
+                    "progress_message": "分析完成",
+                },
+            )
         logger.info(
-            "[Orchestrator] Final analysis report completed; ending run for session %s",
+            "[Orchestrator] Final analysis report completed; delegating next-step guidance to LLM ask_user policy for session %s",
             session_id,
-        )
-        from app.workflow.events import send_execution_complete
-
-        await send_execution_complete(session_id, "分析完成")
-        return Command(
-            goto=END,
-            update={
-                "execution_status": "completed",
-                "awaiting_user": False,
-                "pending_confirmation": None,
-                "pending_question_set_confirmation": None,
-                "next_required_action": None,
-                "progress": 1.0,
-                "progress_message": "分析完成",
-            },
         )
 
     if _is_completed_question_generation_only_state(state):
@@ -5119,42 +4980,45 @@ async def orchestrator_node(state: AgentState) -> Command:
                 current_retry_counts=current_retry_counts,
             )
 
-        user_decisions = dict(state.get("user_decisions", {}))
-        selected_fetch_mode = str(state.get("fetch_mode") or "").strip().lower()
-        if (
-            last_tool == "question_simulation"
-            and state.get("simulated_questions")
-            and not _is_question_generation_only_state(llm_state)
-            and not user_decisions.get("fetch_mode_confirmed", False)
-            and not user_decisions.get("fetch_mode_pending", False)
-            and selected_fetch_mode not in {"fast", "full"}
-        ):
+        if _should_require_fetch_mode_ask_user(llm_state, last_tool=last_tool):
             logger.warning(
                 "[Orchestrator] No tool call after A3 completion; "
-                "forcing fetch-mode confirmation instead of ending run."
+                "redirecting to Orchestrator ask_user generation."
             )
-            return await _force_fetch_mode_confirmation(
+            command = await _redirect_to_required_ask_user_generation(
                 state=llm_state,
-                session_id=session_id,
-                reply_text=reply_text,
+                last_tool=last_tool,
+                reason="A3 completed without ask_user or fetch-mode confirmation",
                 new_history=new_history,
-                request_id=f"defense_fetch_{int(datetime.now().timestamp() * 1000)}",
                 current_retry_counts=current_retry_counts,
             )
+            if command is not None:
+                return command
 
-        if _should_force_a1_next_step_confirmation(llm_state, last_tool=last_tool):
+        if _should_require_a1_next_step_ask_user(llm_state, last_tool=last_tool):
             logger.warning(
                 "[Orchestrator] No tool call after A1 completion; "
-                "forcing next-step confirmation instead of ending run."
+                "redirecting to Orchestrator ask_user generation."
             )
-            return await _force_a1_next_step_confirmation(
+            command = await _redirect_to_required_ask_user_generation(
                 state=llm_state,
-                session_id=session_id,
-                reply_text=reply_text,
+                last_tool=last_tool,
+                reason="A1 completed without ask_user next-step guidance",
                 new_history=new_history,
-                request_id=f"defense_a1_{int(datetime.now().timestamp() * 1000)}",
                 current_retry_counts=current_retry_counts,
             )
+            if command is not None:
+                return command
+
+        command = await _redirect_to_required_ask_user_generation(
+            state=llm_state,
+            last_tool=last_tool,
+            reason="required post-step ask_user was omitted before completion",
+            new_history=new_history,
+            current_retry_counts=current_retry_counts,
+        )
+        if command is not None:
+            return command
 
         if (
             last_tool == "knowledge_aggregate"
@@ -5373,15 +5237,24 @@ async def _handle_tool_call(
     if tool_name == "ask_user":
         # Layer 4: inline confirmation (simple or guided)
         msg = tool_args.get("message", "请确认")
-        options = tool_args.get("options", [])
+        raw_options = tool_args.get("options", [])
+        if not isinstance(raw_options, list):
+            raw_options = []
         last_tool_name = _get_tool_name_from_node(state.get("next_action", "") or "")
         # Hard filter: remove any "stop/cancel" options
         BANNED_KEYWORDS = ["停止", "取消", "放弃", "终止"]
         options = [
             opt
-            for opt in options
+            for opt in raw_options
+            if isinstance(opt, dict)
+            and str(opt.get("id") or "").strip()
+            and str(opt.get("label") or "").strip()
             if not any(
-                kw in (opt.get("label", "") + opt.get("description", ""))
+                kw
+                in (
+                    str(opt.get("label") or "")
+                    + str(opt.get("description") or "")
+                )
                 for kw in BANNED_KEYWORDS
             )
         ]
@@ -5455,40 +5328,22 @@ async def _handle_tool_call(
             result = state.get("table_intake_result") or {}
             msg, options, step_name = build_table_import_confirmation_payload(result)
 
-        if (
-            not options
-            and state.get("simulated_questions")
-            and last_tool_name == "question_simulation"
-        ):
+        if not options:
             logger.warning(
-                "[Orchestrator] ask_user called without options after A3; "
-                "injecting deterministic fetch-mode confirmation."
+                "[Orchestrator] ask_user called without options after %s; redirecting to Orchestrator repair.",
+                last_tool_name,
             )
-            return await _force_fetch_mode_confirmation(
+            command = await _redirect_to_required_ask_user_generation(
                 state=state,
-                session_id=session_id,
-                reply_text=reply_text,
+                last_tool=last_tool_name,
+                reason="ask_user was called without required options",
                 new_history=new_history,
-                request_id=request_id,
+                blocked_tool_call=tool_call,
+                blocked_tool_name=tool_name,
                 current_retry_counts=current_retry_counts,
             )
-
-        if not options and _should_force_a1_next_step_confirmation(
-            state,
-            last_tool=last_tool_name,
-        ):
-            logger.warning(
-                "[Orchestrator] ask_user called without options after A1; "
-                "injecting deterministic A1 next-step confirmation."
-            )
-            return await _force_a1_next_step_confirmation(
-                state=state,
-                session_id=session_id,
-                reply_text=reply_text,
-                new_history=new_history,
-                request_id=request_id,
-                current_retry_counts=current_retry_counts,
-            )
+            if command is not None:
+                return command
 
         if not reply_text.strip():
             fallback_reply = _build_ask_user_fallback_reply(state, last_tool_name, msg)
@@ -6125,80 +5980,24 @@ async def _handle_tool_call(
                 )
             else:
                 logger.warning(
-                    "[Orchestrator] answer_fetch still requires explicit confirmation (%s)",
+                    "[Orchestrator] answer_fetch still requires explicit confirmation (%s); redirecting to Orchestrator ask_user generation.",
                     fetch_mode_policy,
                 )
-                defense_options = [
-                    {
-                        "id": "fast",
-                        "label": "快速采集（推荐）",
-                        "description": "API + 浏览器混合，约 5-10 分钟",
-                    },
-                    {
-                        "id": "full",
-                        "label": "完整采集",
-                        "description": "全浏览器模拟真实用户，约 10-20 分钟，数据最准",
-                    },
-                    {
-                        "id": "regenerate",
-                        "label": "重新生成问题",
-                        "description": "对模拟问题不满意，返回重新生成",
-                    },
-                ]
-                defense_request_id = tool_call.id or f"defense_fetch_{id(tool_call)}"
-                defense_msg = (
-                    "品牌全景分析的问题准备已完成。接下来可以进入答案抓取："
-                    "您会得到各平台对同一组问题的回答、引用来源与品牌提及情况，"
-                    "后续还可以继续生成分析报告。请选择采集模式："
+                command = await _redirect_to_required_ask_user_generation(
+                    state=state,
+                    last_tool="question_simulation",
+                    reason=(
+                        "answer_fetch was requested before an explicit fetch_mode "
+                        f"confirmation ({fetch_mode_policy})"
+                    ),
+                    new_history=new_history,
+                    blocked_tool_call=tool_call,
+                    blocked_tool_name=tool_name,
+                    current_retry_counts=current_retry_counts,
                 )
-                await session_event_publisher.emit_to_session(
-                    session_id,
-                    "inline_confirmation",
-                    {
-                        "message": defense_msg,
-                        "options": defense_options,
-                        "type": "simple",
-                    },
-                )
-                await session_event_publisher.emit_to_session(
-                    session_id,
-                    "confirmation_request",
-                    {
-                        "request_id": defense_request_id,
-                        "type": "step_confirmation",
-                        "message": defense_msg,
-                        "options": defense_options,
-                        "allow_text_input": True,
-                        "step_id": "orchestrator",
-                        "step_name": "选择采集模式",
-                    },
-                )
-                # Mark pending so next call passes through
-                user_decisions["fetch_mode_pending"] = True
-                # Inject tool_result placeholder for MiniMax history consistency
-                new_history.append(
-                    {
-                        "role": "tool",
-                        "content": "等待用户选择采集模式...",
-                        "tool_call_id": tool_call.id or "call_1",
-                    }
-                )
-                return Command(
-                    goto="wait_for_user",
-                    update={
-                        "awaiting_user": True,
-                        "orchestrator_reply": reply_text,
-                        "orchestrator_history": new_history,
-                        "user_decisions": user_decisions,
-                        "pending_confirmation": {
-                            "step_id": "orchestrator",
-                            "step_name": "选择采集模式",
-                            "message": defense_msg,
-                            "options": defense_options,
-                        },
-                        "agent_retry_counts": current_retry_counts,
-                    },
-                )
+                if command is not None:
+                    return command
+                raise RuntimeError("answer_fetch requires explicit fetch_mode confirmation")
 
         # Pass report_type as analysis_mode for A5
         if effective_tool_name in {"data_analytics", "analysis_report_skill"} or (

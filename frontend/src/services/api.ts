@@ -67,6 +67,16 @@ import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
 
+type PendingConfirmationResponse = {
+  request_id?: string;
+  type?: string;
+  message?: string;
+  options?: unknown[];
+  allow_text_input?: boolean;
+  step_id?: string;
+  step_name?: string;
+} | null;
+
 export function getApiBaseUrl(): string {
   return API_URL;
 }
@@ -410,13 +420,18 @@ class ApiService {
   }
 
   // Message management
-  async getMessages(sessionId: string, options?: { limit?: number; before?: string }) {
+  async getMessages(sessionId: string, options?: { limit?: number; before?: string; includePendingConfirmation?: false }): Promise<Message[]>;
+  async getMessages(sessionId: string, options: { limit?: number; before?: string; includePendingConfirmation: true }): Promise<{ messages: Message[]; pending_confirmation?: PendingConfirmationResponse }>;
+  async getMessages(sessionId: string, options?: { limit?: number; before?: string; includePendingConfirmation?: boolean }) {
     const params = new URLSearchParams();
     if (options?.limit) params.set('limit', String(options.limit));
     if (options?.before) params.set('before', options.before);
+    if (options?.includePendingConfirmation) params.set('include_pending_confirmation', 'true');
 
     const query = params.toString();
-    return this.request<Message[]>(`/sessions/${sessionId}/messages${query ? `?${query}` : ''}`);
+    return this.request<Message[] | { messages: Message[]; pending_confirmation?: PendingConfirmationResponse }>(
+      `/sessions/${sessionId}/messages${query ? `?${query}` : ''}`
+    );
   }
 
   async sendMessage(sessionId: string, content: string) {

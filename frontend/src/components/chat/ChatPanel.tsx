@@ -14,12 +14,11 @@ import { FollowUpChips } from './FollowUpChips';
 import { BrowserActionBanner } from './BrowserActionBanner';
 import { InputArea } from './InputArea';
 import { cn } from '@/lib/cn';
-import { getUserFacingStageLabel } from '@/lib/workflowStageLabels';
+import { getUserFacingStageLabel, sanitizeUserFacingWorkflowText } from '@/lib/workflowStageLabels';
 import { DEFAULT_EXAMPLE_BRANDS, ExampleBrand } from '@/config/brands';
 import { normalizePublicPlatformId } from '@/config/platformLabel';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
-import { DEFAULT_FOLLOWUPS } from '@/types/task';
 import type { CanvasContent, CanvasContentDataMap, CanvasContentType } from '@/types/canvas';
 import type { Message as ApiMessage, Output } from '@/types/api';
 import type { ContextTag } from '@/stores/contextStore';
@@ -28,7 +27,7 @@ import type { AnalysisTask, FollowUpSuggestion } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import type { ToolMode } from '@/types/toolMode';
 import type { BrowserState } from '@/types/agent';
-import type { Message as ChatMessage } from '@/types/message';
+import type { ConfirmationRequest, Message as ChatMessage } from '@/types/message';
 import type { AioTakeoverRecord } from '@/types/aio';
 import {
   buildOutputCardsFromApiMessage,
@@ -56,6 +55,18 @@ const INITIAL_HISTORY_MESSAGE_LIMIT = 30;
 const HISTORY_BACKFILL_BATCH_SIZE = 50;
 const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
 type ArtifactCategory = 'baseline' | 'panorama' | 'scenario';
+type MessagesWithPendingConfirmation = {
+  messages: ApiMessage[];
+  pending_confirmation?: {
+    request_id?: string;
+    type?: string;
+    message?: string;
+    options?: unknown[];
+    allow_text_input?: boolean;
+    step_id?: string;
+    step_name?: string;
+  } | null;
+};
 const DASHBOARD_AUTO_START_QUERY_KEYS = [
   'brand',
   'draft',
@@ -70,6 +81,46 @@ const DASHBOARD_AUTO_START_QUERY_KEYS = [
   'question_set_ids',
   'endpoint_ids',
 ];
+
+function normalizePendingConfirmation(
+  pending: MessagesWithPendingConfirmation['pending_confirmation'],
+): ConfirmationRequest | null {
+  if (!pending || typeof pending !== 'object') {
+    return null;
+  }
+
+  const rawType = typeof pending.type === 'string' ? pending.type : 'step_confirmation';
+  const type: ConfirmationRequest['type'] =
+    ['brand_info', 'persona_selection', 'action_choice', 'continue', 'step_confirmation'].includes(rawType)
+      ? rawType as ConfirmationRequest['type']
+      : 'step_confirmation';
+  const options = Array.isArray(pending.options) ? pending.options : [];
+
+  return {
+    requestId: typeof pending.request_id === 'string' ? pending.request_id : 'orchestrator',
+    type,
+    message: sanitizeUserFacingWorkflowText(
+      typeof pending.message === 'string' ? pending.message : ''
+    ) || '请确认后继续。',
+    options: options
+      .filter((option): option is Record<string, unknown> => typeof option === 'object' && option !== null)
+      .map((option) => ({
+        id: typeof option.id === 'string' ? option.id : String(option.label || ''),
+        label: typeof option.label === 'string' ? option.label : '',
+        description: sanitizeUserFacingWorkflowText(
+          typeof option.description === 'string' ? option.description : ''
+        ),
+        icon: typeof option.icon === 'string' ? option.icon : undefined,
+        recommended: typeof option.recommended === 'boolean' ? option.recommended : undefined,
+      }))
+      .filter((option) => option.id && option.label),
+    allowTextInput: typeof pending.allow_text_input === 'boolean' ? pending.allow_text_input : true,
+    stepId: typeof pending.step_id === 'string' ? pending.step_id : undefined,
+    stepName: sanitizeUserFacingWorkflowText(
+      typeof pending.step_name === 'string' ? pending.step_name : ''
+    ),
+  };
+}
 
 const BROWSER_MESSAGE_KEYWORDS: Record<
   BrowserState['platform'],
@@ -1076,8 +1127,18 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const loadHistory = async () => {
       try {
         const initialHistoryLimit = initialArtifactId ? 12 : INITIAL_HISTORY_MESSAGE_LIMIT;
-        const msgs = await api.getMessages(sessionId, { limit: initialHistoryLimit });
+        const historyResponse = await api.getMessages(sessionId, {
+          limit: initialHistoryLimit,
+          includePendingConfirmation: true,
+        });
         if (cancelled) return;
+        const msgs = Array.isArray(historyResponse)
+          ? historyResponse
+          : historyResponse.messages;
+        const pending = Array.isArray(historyResponse)
+          ? null
+          : normalizePendingConfirmation(historyResponse.pending_confirmation);
+        setPendingConfirmation(pending);
         if (!msgs || msgs.length === 0) {
           loadedAllHistoryRef.current = true;
           return;
@@ -1095,7 +1156,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     // and key={sessionId} guarantees a fresh mount on every session change.
     loadHistory();
     return () => { cancelled = true; };
-  }, [initialArtifactId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialArtifactId, sessionId, setPendingConfirmation]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const {
     browserWorkspace,
@@ -2520,18 +2581,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
   const inputDisabled = Boolean(!isConnected);
 
-  const hasAnalysisFollowUpMaterial = useMemo(() => {
-    if (activeTask?.snapshot_id) {
-      return true;
-    }
-
-    return stageResults.some((result) => result.resultType === 'metrics_preview');
-  }, [activeTask?.snapshot_id, stageResults]);
-
-  // Determine follow-up suggestions to show (backend-provided or defaults)
-  const suggestionsToShow = followUpSuggestions.length > 0 ? followUpSuggestions : (
-    !isAgentExecuting && activeTask?.status === 'completed' && hasAnalysisFollowUpMaterial ? DEFAULT_FOLLOWUPS : []
-  );
+  // Only show Orchestrator/backend-provided suggestions. The frontend must not
+  // invent next-step guidance when the workflow has not asked the user.
+  const suggestionsToShow = followUpSuggestions;
 
   // Determine lightweight badge label for follow-up operations
   const getLightweightLabel = (): string | undefined => {
