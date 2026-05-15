@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
@@ -16,6 +16,7 @@ from langgraph.types import Command
 from app.api.v1 import aio as aio_api
 from app.api.v1.aio import _ensure_takeover_bundle_is_active
 from app.config import get_settings
+from app.core.config import Settings
 from app.core.fetchers.browser import aio_client as aio_client_module
 from app.core.fetchers.browser.aio_client import (
     AioBackendError,
@@ -26,6 +27,9 @@ from app.core.fetchers.browser.aio_connected_client import AioConnectedBrowserCl
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
 from app.core.fetchers.browser.doubao_handler import DoubaoHandler
 from app.core.fetchers.browser.yuanbao_handler import YuanbaoHandler
+from app.models.task import TaskStatus
+from app.models.task_run import TaskRunStatus
+from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
 from app.schemas.fetch import BrowserState as FetchBrowserState
 from app.services.aio_runtime_contracts import (
     AioSessionState,
@@ -37,7 +41,6 @@ from app.services.aio_session_manager import (
     SpectaAioSession,
     SpectaAioTakeover,
 )
-from app.services.task_service import TaskService
 from app.services.local_runtime_registry import LocalRuntimeRegistry
 from app.services.skill_contracts import build_skill_contract
 from app.services.skill_package_service import (
@@ -49,35 +52,33 @@ from app.services.skill_registry_service import (
     build_builtin_skill_tool_definitions,
     build_skill_tool_definition,
 )
+from app.services.task_service import TaskService
 from app.services.tool_capability_matrix import (
     get_tool_capability,
     validate_tool_capability_access,
 )
+from app.tools.a3_question_simulation import simulate_questions
 from app.tools.a4_fetch_agent import (
     AioAnswerFetchTool,
     normalize_public_platforms,
     to_executor_platform_id,
     to_public_platform_id,
 )
-from app.tools.a3_question_simulation import simulate_questions
 from app.tools.question_generation import (
     QuestionGenerationTool,
     validate_baseline_questions,
 )
+from app.workflow import browser_action_contract, browser_action_runtime, nodes_a4
 from app.workflow.harness_validation import (
     decide_a4_completion_policy,
     evaluate_skill_postconditions,
     evaluate_skill_preconditions,
-    validate_scoped_fetch_merge,
     validate_artifact_writeback,
+    validate_scoped_fetch_merge,
 )
 from app.workflow.nodes_a3 import _a3_baseline_dynamic_mode
 from app.workflow.nodes_a5 import a5_analytics_node
 from app.workflow.nodes_followup import post_analysis_executor_node
-from app.workflow.orchestrator_instruction_defense import (
-    build_instruction_defense_context,
-    render_instruction_defense_reminder,
-)
 from app.workflow.orchestrator_context_packets import (
     build_active_skill_packet,
     build_orchestrator_context_packets,
@@ -88,11 +89,15 @@ from app.workflow.orchestrator_context_packets import (
     render_pending_decision_packet,
     render_recent_evidence_packet,
 )
+from app.workflow.orchestrator_instruction_defense import (
+    build_instruction_defense_context,
+    render_instruction_defense_reminder,
+)
 from app.workflow.orchestrator_node import (
+    _build_context_summary,
     _build_contextual_tool_surface_note,
     _build_error_recovery_message,
     _build_panorama_step_intro,
-    _build_context_summary,
     _build_public_skill_index,
     _execute_runtime_policy_action,
     _handle_tool_call,
@@ -111,13 +116,6 @@ from app.workflow.runtime_policy_executor import (
     resolve_answer_fetch_mode_policy,
 )
 from app.workflow.skill_state import apply_skill_prompt_context
-from app.workflow import browser_action_runtime
-from app.workflow import browser_action_contract
-from app.workflow import nodes_a4
-from app.models.task import TaskStatus
-from app.models.task_run import TaskRunStatus
-from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
-from app.core.config import Settings
 
 
 def reset_browser_action_test_state():
@@ -228,6 +226,29 @@ def test_a4_platform_filter_treats_string_as_single_platform():
     assert nodes_a4._normalize_platform_filter("deep seek") == ["deepseek"]
     assert nodes_a4._normalize_platform_filter("deepseek_browser") == ["deepseek"]
     assert nodes_a4._normalize_platform_filter("yuanbao_api") == ["hunyuan"]
+
+
+def test_a4_normalizes_monitoring_question_schema_before_fetch():
+    questions = nodes_a4._normalize_fetch_questions(
+        [
+            {
+                "question_id": "bl_001",
+                "question_text": "最近刷牙牙龈出血，护龈牙膏怎么选？",
+                "intent": "vendor_recommendation",
+            },
+            "",
+        ]
+    )
+
+    assert questions == [
+        {
+            "id": "bl_001",
+            "text": "最近刷牙牙龈出血，护龈牙膏怎么选？",
+            "question_id": "bl_001",
+            "question_text": "最近刷牙牙龈出血，护龈牙膏怎么选？",
+            "intent": "vendor_recommendation",
+        }
+    ]
 
 
 def test_aio_answer_fetch_tool_builds_contexts_and_execution_paths(monkeypatch):
@@ -3670,10 +3691,10 @@ def test_question_generation_tool_identity_override_is_opt_in():
 
 @pytest.mark.asyncio
 async def test_streaming_usage_records_prompt_fingerprints(monkeypatch):
+    import app.services.llm_usage_service as usage_service
     from app.core.llm import LLMResponse, LLMUsage
     from app.workflow import nodes_streaming
     from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
-    import app.services.llm_usage_service as usage_service
 
     async def fake_stream_llm_with_tpaor(**kwargs):
         yield LLMResponse(

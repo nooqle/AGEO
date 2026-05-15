@@ -162,7 +162,10 @@ function canonicalizeFetchPlatform(platform: string | undefined): string {
   if (!normalized) {
     return 'unknown';
   }
-  return normalized === 'hunyuan' ? 'yuanbao' : normalized;
+  if (normalized === 'hunyuan' || normalized === '元宝') {
+    return 'yuanbao';
+  }
+  return normalized;
 }
 
 function normalizeFetchStatus(value: unknown): FetchPlatformStatusValue {

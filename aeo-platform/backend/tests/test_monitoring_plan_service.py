@@ -1,6 +1,6 @@
 import os
-from pathlib import Path
 import uuid
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -17,11 +17,14 @@ from app.core.database import Base
 from app.models.entity import Entity, EntityStatus
 from app.models.monitoring_plan import MonitoringPlanStatus, QuestionSetStatus
 from app.models.monitoring_schedule import MonitoringSchedule, ScheduleStatus
+from app.models.session import Session, SessionStatus
 from app.models.user import User, UserRole, UserStatus
 from app.services.monitoring_plan_service import (
-    MonitoringPlanService,
     QUICK_ENDPOINT_IDS,
+    MonitoringPlanService,
 )
+from app.services.scheduler import resolve_monitoring_chat_session
+from app.services.session_service import SessionService
 
 
 async def _build_session(tmp_path):
@@ -247,6 +250,236 @@ async def test_confirmed_question_set_creates_active_plan_and_schedule(tmp_path)
         assert schedule.baseline_data["questions"][0]["text"] == (
             "预算有限时怎么选择品牌智能监测工具？"
         )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_active_plan_carries_source_session_into_schedule_baseline(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-source@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        source_session = Session(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            entity_id=entity.id,
+            title="Specta",
+            status=SessionStatus.ACTIVE,
+        )
+        session.add_all([user, entity, source_session])
+        await session.commit()
+
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=["AI 怎么评价品牌智能平台？"],
+            source_session_id=source_session.id,
+        )
+        await service.confirm_question_set(
+            question_set_id=question_set.id,
+            user_id=user.id,
+        )
+        plan = await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status=MonitoringPlanStatus.ACTIVE.value,
+        )
+
+        schedule = (
+            await session.execute(
+                select(MonitoringSchedule).where(
+                    MonitoringSchedule.monitoring_plan_id == plan.id
+                )
+            )
+        ).scalar_one()
+
+        assert plan.extra_metadata["source_session_id"] == str(source_session.id)
+        assert schedule.baseline_data["source_session_id"] == str(source_session.id)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_monitoring_resolves_source_chat_instead_of_monitoring_session(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-resolve@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        source_session = Session(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            entity_id=entity.id,
+            title="Specta",
+            status=SessionStatus.ACTIVE,
+        )
+        old_monitoring_session = Session(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            entity_id=entity.id,
+            title="Specta 自动监测",
+            status=SessionStatus.ACTIVE,
+            extra_metadata='{"source":"monitoring"}',
+        )
+        session.add_all([user, entity, source_session, old_monitoring_session])
+        await session.commit()
+
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=["AI 怎么评价品牌智能平台？"],
+            source_session_id=source_session.id,
+        )
+        await service.confirm_question_set(
+            question_set_id=question_set.id,
+            user_id=user.id,
+        )
+        plan = await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status=MonitoringPlanStatus.ACTIVE.value,
+        )
+        schedule = (
+            await session.execute(
+                select(MonitoringSchedule).where(
+                    MonitoringSchedule.monitoring_plan_id == plan.id
+                )
+            )
+        ).scalar_one()
+
+        resolved = await resolve_monitoring_chat_session(
+            session,
+            schedule_id=schedule.id,
+            user_id=user.id,
+            entity_id=entity.id,
+            entity_name=entity.name,
+            schedule=schedule,
+        )
+
+        assert resolved.id == source_session.id
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_entity_session_lookup_ignores_legacy_monitoring_session(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-session@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        old_monitoring_session = Session(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            entity_id=entity.id,
+            title="Specta 自动监测",
+            status=SessionStatus.ACTIVE,
+            extra_metadata='{"source":"monitoring"}',
+        )
+        session.add_all([user, entity, old_monitoring_session])
+        await session.commit()
+
+        resolved = await SessionService(session).get_latest_session_by_entity(
+            entity.id,
+            user,
+            allow_internal_admin_bypass=False,
+        )
+
+        assert resolved is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_session_list_excludes_legacy_monitoring_sessions(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-list@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        normal_session = Session(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            entity_id=entity.id,
+            title="Specta",
+            status=SessionStatus.ACTIVE,
+        )
+        old_monitoring_session = Session(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            entity_id=entity.id,
+            title="Specta 自动监测",
+            status=SessionStatus.ACTIVE,
+            extra_metadata='{ "source" :  "monitoring" }',
+        )
+        session.add_all([user, entity, normal_session, old_monitoring_session])
+        await session.commit()
+
+        result = await SessionService(session).list_sessions(
+            viewer=user,
+            allow_internal_admin_bypass=False,
+        )
+
+        assert result["total"] == 1
+        assert [item["id"] for item in result["sessions"]] == [str(normal_session.id)]
     await engine.dispose()
 
 

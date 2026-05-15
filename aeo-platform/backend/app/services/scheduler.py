@@ -21,6 +21,8 @@ from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.models.entity import Entity
+from app.models.monitoring_plan import MonitoringQuestionSet
+from app.models.monitoring_schedule import MonitoringSchedule
 from app.models.session import Session, SessionStatus
 from app.models.task import AnalysisTask
 from app.models.task_run import ExecutorKind, TaskTriggerSource
@@ -50,47 +52,159 @@ def _parse_session_metadata(raw_metadata: str | None) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _build_monitoring_session_title(entity_name: str) -> str:
-    return f"{entity_name} 自动监测"
+def _is_monitoring_session(session: Session | None) -> bool:
+    if session is None:
+        return False
+    metadata = _parse_session_metadata(session.extra_metadata)
+    return metadata.get("source") == "monitoring"
 
 
-async def _get_or_create_monitoring_session(
+def _coerce_uuid(value: object) -> UUID | None:
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_schedule_source_session_candidates(
+    schedule: MonitoringSchedule,
+) -> list[UUID]:
+    baseline = (
+        schedule.baseline_data if isinstance(schedule.baseline_data, dict) else {}
+    )
+    raw_candidates = [
+        baseline.get("source_session_id"),
+        baseline.get("origin_session_id"),
+        baseline.get("chat_session_id"),
+    ]
+    candidates: list[UUID] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        candidate = _coerce_uuid(raw)
+        if candidate is None or str(candidate) in seen:
+            continue
+        candidates.append(candidate)
+        seen.add(str(candidate))
+    return candidates
+
+
+async def _load_question_set_source_session_ids(
+    db,
+    *,
+    schedule: MonitoringSchedule,
+) -> list[UUID]:
+    raw_ids = schedule.question_set_ids or []
+    question_set_ids = [
+        question_set_id
+        for item in raw_ids
+        if (question_set_id := _coerce_uuid(item)) is not None
+    ]
+    if not question_set_ids:
+        return []
+
+    result = await db.execute(
+        select(MonitoringQuestionSet)
+        .where(
+            MonitoringQuestionSet.user_id == schedule.user_id,
+            MonitoringQuestionSet.entity_id == schedule.entity_id,
+            MonitoringQuestionSet.id.in_(question_set_ids),
+        )
+        .order_by(MonitoringQuestionSet.updated_at.desc())
+    )
+    candidates: list[UUID] = []
+    seen: set[str] = set()
+    for question_set in result.scalars().all():
+        candidate = question_set.source_session_id
+        if candidate is None or str(candidate) in seen:
+            continue
+        candidates.append(candidate)
+        seen.add(str(candidate))
+    return candidates
+
+
+async def _get_valid_source_session(
+    db,
+    *,
+    session_id: UUID,
+    user_id: UUID,
+    entity_id: UUID,
+) -> Session | None:
+    session = await db.get(Session, session_id)
+    if (
+        session is None
+        or session.user_id != user_id
+        or session.entity_id != entity_id
+        or session.status == SessionStatus.ARCHIVED
+        or _is_monitoring_session(session)
+    ):
+        return None
+    session.status = SessionStatus.ACTIVE
+    return session
+
+
+async def resolve_monitoring_chat_session(
     db,
     *,
     schedule_id: UUID,
     user_id: UUID,
     entity_id: UUID,
     entity_name: str,
+    schedule: MonitoringSchedule | None = None,
 ) -> Session:
+    """Resolve the user-visible brand chat that scheduled runs should append to."""
+
+    if schedule is not None:
+        for candidate in _iter_schedule_source_session_candidates(schedule):
+            session = await _get_valid_source_session(
+                db,
+                session_id=candidate,
+                user_id=user_id,
+                entity_id=entity_id,
+            )
+            if session is not None:
+                return session
+
+        for candidate in await _load_question_set_source_session_ids(
+            db,
+            schedule=schedule,
+        ):
+            session = await _get_valid_source_session(
+                db,
+                session_id=candidate,
+                user_id=user_id,
+                entity_id=entity_id,
+            )
+            if session is not None:
+                return session
+
     stmt = (
         select(Session)
         .where(
             Session.user_id == user_id,
             Session.entity_id == entity_id,
+            Session.status != SessionStatus.ARCHIVED,
         )
         .order_by(Session.updated_at.desc())
     )
     result = await db.execute(stmt)
     sessions = list(result.scalars().all())
     for session in sessions:
-        metadata = _parse_session_metadata(session.extra_metadata)
-        if metadata.get("source") != "monitoring":
+        if _is_monitoring_session(session):
             continue
-        if str(metadata.get("monitoring_schedule_id") or "") != str(schedule_id):
-            continue
-        session.title = session.title or _build_monitoring_session_title(entity_name)
         session.status = SessionStatus.ACTIVE
         return session
 
     session = Session(
         user_id=user_id,
-        title=_build_monitoring_session_title(entity_name),
+        title=entity_name,
         status=SessionStatus.ACTIVE,
         entity_id=entity_id,
         extra_metadata=json.dumps(
             {
                 "brand_name": entity_name,
-                "source": "monitoring",
+                "source": "scheduled_monitoring_chat",
                 "monitoring_schedule_id": str(schedule_id),
             },
             ensure_ascii=False,
@@ -108,6 +222,92 @@ def _resolve_monitoring_platforms(platforms: list[str] | None) -> list[str]:
         if str(platform).strip()
     ]
     return resolved or list(_DEFAULT_MONITORING_PLATFORMS)
+
+
+def _normalize_intro_questions(questions: list[dict] | None) -> list[dict]:
+    normalized: list[dict] = []
+    for index, item in enumerate(questions or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(
+            item.get("text") or item.get("question_text") or item.get("question") or ""
+        ).strip()
+        if not text:
+            continue
+        normalized.append(
+            {
+                "id": str(item.get("id") or item.get("question_id") or f"Q{index}"),
+                "text": text,
+                "category": item.get("category") or item.get("scene") or "",
+                "intent": item.get("intent") or "",
+                "stage": item.get("stage") or item.get("decision_stage") or "",
+            }
+        )
+    return normalized
+
+
+async def _persist_scheduled_run_intro(
+    *,
+    session_id: UUID,
+    entity_name: str,
+    schedule_id: UUID,
+    run_id: UUID,
+    monitor_mode: str,
+    questions: list[dict] | None,
+) -> None:
+    """Append a visible scheduled-run intro and question artifact to the chat."""
+
+    normalized_questions = _normalize_intro_questions(questions)
+    async with AsyncSessionLocal() as db:
+        from app.services.message_service import MessageService
+
+        message_service = MessageService(db)
+        await message_service.save_message(
+            session_id=session_id,
+            role="agent",
+            content=(
+                f"自动监测已触发。本轮将使用已确认的"
+                f"{'全景' if monitor_mode == 'panorama' else '场景'}问题集，"
+                "继续执行答案抓取与分析。"
+            ),
+            metadata={
+                "triggered_by": "scheduled",
+                "monitoring_schedule_id": str(schedule_id),
+                "run_id": str(run_id),
+                "message_kind": "scheduled_monitoring_intro",
+            },
+        )
+
+    if not normalized_questions:
+        return
+
+    from app.workflow.events import save_and_send_artifact
+
+    await save_and_send_artifact(
+        session_id=str(session_id),
+        output_type="questionList",
+        title="自动监测问题列表",
+        data={
+            "simulatedQuestions": {
+                "generation_mode": "scheduled_monitoring",
+                "simulated_questions": normalized_questions,
+                "generation_context": {
+                    "triggered_by": "scheduled",
+                    "monitoring_schedule_id": str(schedule_id),
+                    "run_id": str(run_id),
+                },
+            },
+            "questions": normalized_questions,
+            "generationMode": "自动监测",
+            "triggered_by": "scheduled",
+            "monitoring": {
+                "schedule_id": str(schedule_id),
+                "run_id": str(run_id),
+                "brand_name": entity_name,
+            },
+        },
+        artifact_key=f"{session_id}_questionList_scheduled_{run_id}",
+    )
 
 
 def _get_semaphore() -> asyncio.Semaphore:
@@ -256,12 +456,13 @@ async def _launch_scheduled_analysis(db, schedule, entity) -> None:
     """
     from app.services.job_submission_service import JobSubmissionService
 
-    monitoring_session = await _get_or_create_monitoring_session(
+    monitoring_session = await resolve_monitoring_chat_session(
         db,
         schedule_id=schedule.id,
         user_id=schedule.user_id,
         entity_id=schedule.entity_id,
         entity_name=entity.name,
+        schedule=schedule,
     )
     submission_service = JobSubmissionService(db)
     submitted = await submission_service.submit_scheduled_analysis(
@@ -338,7 +539,9 @@ async def _dispatch_queued_runs() -> None:
                 monitoring_service = MonitoringService(db)
                 await monitoring_service.record_run_failed(task.monitoring_schedule_id)
                 try:
-                    from app.services.monitoring_plan_service import MonitoringPlanService
+                    from app.services.monitoring_plan_service import (
+                        MonitoringPlanService,
+                    )
 
                     await MonitoringPlanService(db).record_run_failed(
                         task_id=task.id,
@@ -352,20 +555,25 @@ async def _dispatch_queued_runs() -> None:
                     )
                 continue
 
-            if task.session_id is None:
-                monitoring_session = await _get_or_create_monitoring_session(
+            if task.session_id is None or _is_monitoring_session(
+                await db.get(Session, task.session_id)
+            ):
+                monitoring_session = await resolve_monitoring_chat_session(
                     db,
                     schedule_id=schedule.id,
                     user_id=schedule.user_id,
                     entity_id=schedule.entity_id,
                     entity_name=entity.name,
+                    schedule=schedule,
                 )
                 task.session_id = monitoring_session.id
                 await db.commit()
 
             baseline = schedule.baseline_data
             if not baseline or not baseline.get("questions"):
-                error_message = "Scheduled monitoring requires confirmed baseline questions"
+                error_message = (
+                    "Scheduled monitoring requires confirmed baseline questions"
+                )
                 logger.error(
                     "[Scheduler] Schedule %s missing baseline questions; refusing fast monitoring run",
                     schedule.id,
@@ -380,7 +588,9 @@ async def _dispatch_queued_runs() -> None:
                 monitoring_service = MonitoringService(db)
                 await monitoring_service.record_run_failed(task.monitoring_schedule_id)
                 try:
-                    from app.services.monitoring_plan_service import MonitoringPlanService
+                    from app.services.monitoring_plan_service import (
+                        MonitoringPlanService,
+                    )
 
                     await MonitoringPlanService(db).record_run_failed(
                         task_id=task.id,
@@ -465,7 +675,9 @@ async def _dispatch_queued_runs() -> None:
                     run_id=run_id,
                 )
                 try:
-                    from app.services.monitoring_plan_service import MonitoringPlanService
+                    from app.services.monitoring_plan_service import (
+                        MonitoringPlanService,
+                    )
 
                     await MonitoringPlanService(db).record_run_failed(
                         task_id=task_id,
@@ -668,6 +880,22 @@ async def _run_pipeline_headless(
                         execution_task=current_task,
                     )
 
+            try:
+                await _persist_scheduled_run_intro(
+                    session_id=session_id,
+                    entity_name=entity_name,
+                    schedule_id=schedule_id,
+                    run_id=run_id,
+                    monitor_mode=effective_monitor_mode,
+                    questions=initial_state.get("questions"),
+                )
+            except Exception as intro_err:
+                logger.warning(
+                    "[Scheduler] Failed to persist scheduled run intro: %s",
+                    intro_err,
+                    exc_info=True,
+                )
+
             # Invoke the same compiled workflow used by manual analyses
             final_state = await workflow.ainvoke(initial_state, config=config)
 
@@ -707,11 +935,10 @@ async def _handle_pipeline_success(
     user_id: UUID,
     final_state: dict,
 ) -> None:
-    """Handle successful pipeline completion for a scheduled run.
-    """
+    """Handle successful pipeline completion for a scheduled run."""
     from app.services.alert_service import AlertService
-    from app.services.monitoring_service import MonitoringService
     from app.services.monitoring_plan_service import MonitoringPlanService
+    from app.services.monitoring_service import MonitoringService
     from app.services.task_service import TaskService
 
     async with AsyncSessionLocal() as db:
@@ -739,10 +966,10 @@ async def _handle_pipeline_success(
                     alert_err,
                 )
         if snapshot_id is None:
-            error_message = (
-                "本次自动监测已结束，但没有生成可用于看板展示的报告。"
+            error_message = "本次自动监测已结束，但没有生成可用于看板展示的报告。"
+            logger.error(
+                "[Scheduler] %s task=%s run=%s", error_message, task_id, run_id
             )
-            logger.error("[Scheduler] %s task=%s run=%s", error_message, task_id, run_id)
             await task_service.fail_task(
                 task_id,
                 error_message=error_message,
@@ -783,8 +1010,8 @@ async def _handle_pipeline_failure(
     error: str,
 ) -> None:
     """Handle pipeline failure for a scheduled run."""
-    from app.services.monitoring_service import MonitoringService
     from app.services.monitoring_plan_service import MonitoringPlanService
+    from app.services.monitoring_service import MonitoringService
     from app.services.task_service import TaskService
 
     async with AsyncSessionLocal() as db:

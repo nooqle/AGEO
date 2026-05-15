@@ -4,7 +4,7 @@ import json
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.message import Message, MessageRole
@@ -23,6 +23,13 @@ class SessionService:
             db: Database session
         """
         self.db = db
+
+    @staticmethod
+    def non_monitoring_session_filter():
+        return or_(
+            Session.extra_metadata.is_(None),
+            ~Session.extra_metadata.ilike('%"source"%:%"monitoring"%'),
+        )
 
     async def list_sessions(
         self,
@@ -49,7 +56,8 @@ class SessionService:
             AccessScopeService.session_visibility_filter(
                 viewer,
                 allow_internal_admin_bypass=allow_internal_admin_bypass,
-            )
+            ),
+            self.non_monitoring_session_filter(),
         ]
         if status is not None:
             base_filter.append(Session.status == status)
@@ -234,6 +242,7 @@ class SessionService:
                     viewer,
                     allow_internal_admin_bypass=allow_internal_admin_bypass,
                 ),
+                self.non_monitoring_session_filter(),
             )
             .order_by(Session.updated_at.desc())
             .limit(20)
@@ -245,7 +254,7 @@ class SessionService:
         for session in sessions:
             if not self._is_monitoring_session(session):
                 return self._session_to_dict(session)
-        return self._session_to_dict(sessions[0])
+        return None
 
     async def get_session(
         self,

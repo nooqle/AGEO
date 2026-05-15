@@ -1,8 +1,8 @@
 """Output service for managing analysis outputs."""
 
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any, List
 from uuid import UUID
 
@@ -13,16 +13,35 @@ from app.core.config import settings
 from app.models.message import Message, MessageType
 from app.services.fetch_run_platform_state_service import FetchRunPlatformStateService
 
+_STRUCTURAL_PLATFORM_VALUE_KEYS = {
+    "platform",
+    "platform_id",
+    "platform_key",
+    "provider",
+    "engine",
+    "source_platform",
+    "platform_legacy_id",
+}
 
-def _normalize_user_visible_output_payload(value: Any) -> Any:
+
+def _normalize_user_visible_output_payload(
+    value: Any,
+    *,
+    parent_key: str | None = None,
+) -> Any:
     if isinstance(value, str):
         normalized = re.sub(r"\[\]\(@mark_[^)]+\)", "", value)
+        if parent_key in _STRUCTURAL_PLATFORM_VALUE_KEYS:
+            return normalized
         return re.sub(r"\bhunyuan\b", "元宝", normalized, flags=re.IGNORECASE)
     if isinstance(value, list):
-        return [_normalize_user_visible_output_payload(item) for item in value]
+        return [
+            _normalize_user_visible_output_payload(item, parent_key=parent_key)
+            for item in value
+        ]
     if isinstance(value, dict):
         return {
-            key: _normalize_user_visible_output_payload(item)
+            key: _normalize_user_visible_output_payload(item, parent_key=str(key))
             for key, item in value.items()
         }
     return value

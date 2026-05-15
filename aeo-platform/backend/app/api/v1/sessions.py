@@ -1,17 +1,18 @@
 """Sessions API endpoints."""
 
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from uuid import UUID
 
-from app.api.deps import get_db, get_current_user
-from app.models.session import Session as SessionModel, SessionStatus
+from app.api.deps import get_current_user, get_db
+from app.models.session import Session as SessionModel
+from app.models.session import SessionStatus
 from app.schemas.session import SessionListResponse
-from app.services.session_service import SessionService
 from app.services.entity_service import EntityService
+from app.services.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -79,8 +80,11 @@ async def create_session(
         if not entity:
             raise HTTPException(status_code=404, detail="Entity not found")
 
-        # 1:1 唯一性检查：如果 entity_id 已有 Session 则返回 409
-        existing_conditions = [SessionModel.entity_id == entity_id]
+        # 1:1 唯一性检查：旧 source=monitoring 会话不再算作品牌 Chat。
+        existing_conditions = [
+            SessionModel.entity_id == entity_id,
+            SessionService.non_monitoring_session_filter(),
+        ]
         if entity.get("visibility_scope") == "organization":
             existing_stmt = select(SessionModel.id).where(*existing_conditions)
         else:

@@ -234,9 +234,7 @@ class MonitoringPlanService:
                 {
                     "question_id": question_id,
                     "question_text": text,
-                    "scene": str(
-                        raw.get("scene") or raw.get("category") or ""
-                    ).strip(),
+                    "scene": str(raw.get("scene") or raw.get("category") or "").strip(),
                     "intent": str(
                         raw.get("intent") or raw.get("user_intent") or ""
                     ).strip(),
@@ -271,14 +269,17 @@ class MonitoringPlanService:
         self._enforce_question_limit(normalized_questions)
         if not normalized_questions:
             raise ValueError("问题集不能为空。")
-        source_value = source.value if isinstance(source, QuestionSetSource) else str(source)
+        source_value = (
+            source.value if isinstance(source, QuestionSetSource) else str(source)
+        )
         question_set = MonitoringQuestionSet(
             user_id=user_id,
             entity_id=entity_id,
             monitor_mode=mode,
             status=QuestionSetStatus.DRAFT.value,
             source=source_value,
-            title=title or ("用户场景问题集" if mode == "scenario" else "品牌全景问题集"),
+            title=title
+            or ("用户场景问题集" if mode == "scenario" else "品牌全景问题集"),
             version=1,
             questions=normalized_questions,
             question_count=len(normalized_questions),
@@ -326,7 +327,9 @@ class MonitoringPlanService:
         if not question_set.questions:
             raise ValueError("问题集不能为空。")
         question_set.status = QuestionSetStatus.CONFIRMED.value
-        question_set.confirmed_at = question_set.confirmed_at or datetime.now(timezone.utc)
+        question_set.confirmed_at = question_set.confirmed_at or datetime.now(
+            timezone.utc
+        )
         question_set.updated_at = datetime.now(timezone.utc)
         await self.db.commit()
         await self.db.refresh(question_set)
@@ -393,8 +396,13 @@ class MonitoringPlanService:
         run_policy = self._normalize_run_policy(run_policy)
         endpoint_ids = self.normalize_endpoint_ids(endpoint_ids, run_policy=run_policy)
         plan_status = self._normalize_plan_status(status)
-        if plan_status == MonitoringPlanStatus.ACTIVE.value and run_policy != MonitoringRunPolicy.QUICK.value:
-            raise ValueError("v1 自动监测只支持快速监测；完整浏览器监测需后续单独启用。")
+        if (
+            plan_status == MonitoringPlanStatus.ACTIVE.value
+            and run_policy != MonitoringRunPolicy.QUICK.value
+        ):
+            raise ValueError(
+                "v1 自动监测只支持快速监测；完整浏览器监测需后续单独启用。"
+            )
 
         question_sets = await self._load_question_sets(
             user_id=user_id,
@@ -406,19 +414,24 @@ class MonitoringPlanService:
         self._enforce_question_limit(questions)
         if not questions:
             raise ValueError("监测计划至少需要一个问题。")
+        source_session_id = self._source_session_id_from_question_sets(question_sets)
 
         plan = MonitoringPlan(
             user_id=user_id,
             entity_id=entity_id,
             monitor_mode=mode,
             status=plan_status,
-            title=title or ("用户场景监测计划" if mode == "scenario" else "全景监测计划"),
+            title=title
+            or ("用户场景监测计划" if mode == "scenario" else "全景监测计划"),
             question_set_ids=[str(item.id) for item in question_sets],
             endpoint_ids=endpoint_ids,
             run_policy=run_policy,
             frequency=frequency,
             preferred_hour=preferred_hour,
             timezone=timezone_str,
+            extra_metadata=(
+                {"source_session_id": source_session_id} if source_session_id else {}
+            ),
         )
         self.db.add(plan)
         await self.db.flush()
@@ -444,7 +457,9 @@ class MonitoringPlanService:
             else MonitoringRunPolicy.QUICK.value
         )
         if run_policy != MonitoringRunPolicy.QUICK.value:
-            raise ValueError("v1 自动监测只支持快速监测；完整浏览器监测需后续单独启用。")
+            raise ValueError(
+                "v1 自动监测只支持快速监测；完整浏览器监测需后续单独启用。"
+            )
 
         question_set_preview = await self.get_question_set(
             question_set_id,
@@ -482,6 +497,11 @@ class MonitoringPlanService:
         existing.question_set_ids = [str(question_set.id)]
         existing.endpoint_ids = self.normalize_endpoint_ids(None, run_policy=run_policy)
         existing.run_policy = run_policy
+        if question_set.source_session_id:
+            existing.extra_metadata = {
+                **(existing.extra_metadata or {}),
+                "source_session_id": str(question_set.source_session_id),
+            }
         existing.updated_at = datetime.now(timezone.utc)
         await self._upsert_schedule_for_plan(existing, [question_set])
         await self.db.commit()
@@ -519,7 +539,9 @@ class MonitoringPlanService:
             MonitoringPlan.monitor_mode == self.normalize_monitor_mode(monitor_mode),
         ]
         if not include_archived:
-            conditions.append(MonitoringPlan.status != MonitoringPlanStatus.ARCHIVED.value)
+            conditions.append(
+                MonitoringPlan.status != MonitoringPlanStatus.ARCHIVED.value
+            )
         result = await self.db.execute(
             select(MonitoringPlan)
             .where(*conditions)
@@ -536,7 +558,9 @@ class MonitoringPlanService:
         )
         return result.scalar_one_or_none()
 
-    async def get_plan(self, plan_id: UUID, *, user_id: UUID | None = None) -> MonitoringPlan | None:
+    async def get_plan(
+        self, plan_id: UUID, *, user_id: UUID | None = None
+    ) -> MonitoringPlan | None:
         conditions = [MonitoringPlan.id == plan_id]
         if user_id is not None:
             conditions.append(MonitoringPlan.user_id == user_id)
@@ -571,7 +595,9 @@ class MonitoringPlanService:
         if plan is None:
             raise ValueError("监测计划不存在。")
         if plan.run_policy != MonitoringRunPolicy.QUICK.value:
-            raise ValueError("v1 自动监测只支持快速监测；完整浏览器监测需后续单独启用。")
+            raise ValueError(
+                "v1 自动监测只支持快速监测；完整浏览器监测需后续单独启用。"
+            )
         question_sets = await self._load_question_sets(
             user_id=user_id,
             entity_id=plan.entity_id,
@@ -580,6 +606,12 @@ class MonitoringPlanService:
         )
         questions = self._combine_question_sets(question_sets)
         self._enforce_question_limit(questions)
+        source_session_id = self._source_session_id_from_question_sets(question_sets)
+        if source_session_id:
+            plan.extra_metadata = {
+                **(plan.extra_metadata or {}),
+                "source_session_id": source_session_id,
+            }
         plan.status = MonitoringPlanStatus.ACTIVE.value
         plan.updated_at = datetime.now(timezone.utc)
         await self._upsert_schedule_for_plan(plan, question_sets)
@@ -620,6 +652,14 @@ class MonitoringPlanService:
             )
             self._enforce_question_limit(self._combine_question_sets(question_sets))
             plan.question_set_ids = [str(item.id) for item in question_sets]
+            source_session_id = self._source_session_id_from_question_sets(
+                question_sets
+            )
+            if source_session_id:
+                plan.extra_metadata = {
+                    **(plan.extra_metadata or {}),
+                    "source_session_id": source_session_id,
+                }
         if status is not None:
             plan.status = self._normalize_plan_status(status)
         if frequency is not None:
@@ -632,7 +672,9 @@ class MonitoringPlanService:
             plan.title = title
         if plan.status == MonitoringPlanStatus.ACTIVE.value:
             if plan.run_policy != MonitoringRunPolicy.QUICK.value:
-                raise ValueError("v1 自动监测只支持快速监测；完整浏览器监测需后续单独启用。")
+                raise ValueError(
+                    "v1 自动监测只支持快速监测；完整浏览器监测需后续单独启用。"
+                )
             question_sets = await self._load_question_sets(
                 user_id=user_id,
                 entity_id=plan.entity_id,
@@ -674,7 +716,9 @@ class MonitoringPlanService:
             question_sets = await self._load_question_sets(
                 user_id=user_id,
                 entity_id=plan.entity_id,
-                question_set_ids=[UUID(str(item)) for item in plan.question_set_ids or []],
+                question_set_ids=[
+                    UUID(str(item)) for item in plan.question_set_ids or []
+                ],
                 require_confirmed=True,
             )
             schedule = await self._upsert_schedule_for_plan(plan, question_sets)
@@ -684,14 +728,15 @@ class MonitoringPlanService:
             raise ValueError("品牌不存在。")
 
         from app.services.job_submission_service import JobSubmissionService
-        from app.services.scheduler import _get_or_create_monitoring_session
+        from app.services.scheduler import resolve_monitoring_chat_session
 
-        monitoring_session = await _get_or_create_monitoring_session(
+        monitoring_session = await resolve_monitoring_chat_session(
             self.db,
             schedule_id=schedule.id,
             user_id=plan.user_id,
             entity_id=plan.entity_id,
             entity_name=entity.name,
+            schedule=schedule,
         )
         submitted = await JobSubmissionService(self.db).submit_scheduled_analysis(
             user_id=plan.user_id,
@@ -788,7 +833,9 @@ class MonitoringPlanService:
         )
         return list(result.scalars().all())
 
-    async def question_set_to_dict(self, question_set: MonitoringQuestionSet) -> dict[str, Any]:
+    async def question_set_to_dict(
+        self, question_set: MonitoringQuestionSet
+    ) -> dict[str, Any]:
         return {
             "id": str(question_set.id),
             "user_id": str(question_set.user_id),
@@ -806,7 +853,9 @@ class MonitoringPlanService:
                 else None
             ),
             "source_task_id": (
-                str(question_set.source_task_id) if question_set.source_task_id else None
+                str(question_set.source_task_id)
+                if question_set.source_task_id
+                else None
             ),
             "confirmed_at": (
                 question_set.confirmed_at.isoformat()
@@ -839,7 +888,11 @@ class MonitoringPlanService:
             "question_set_label": "、".join(
                 item.title for item in question_sets if item.title
             )
-            or ("用户场景问题集" if plan.monitor_mode == "scenario" else "品牌全景问题集"),
+            or (
+                "用户场景问题集"
+                if plan.monitor_mode == "scenario"
+                else "品牌全景问题集"
+            ),
             "question_count": question_count,
             "endpoint_ids": endpoint_ids,
             "endpoint_labels": self.endpoint_ids_to_labels(endpoint_ids),
@@ -848,7 +901,9 @@ class MonitoringPlanService:
             "preferred_hour": plan.preferred_hour,
             "timezone": plan.timezone,
             "schedule_id": str(schedule.id) if schedule else None,
-            "schedule_status": schedule.status.value if schedule and schedule.status else None,
+            "schedule_status": (
+                schedule.status.value if schedule and schedule.status else None
+            ),
             "created_at": plan.created_at.isoformat(),
             "updated_at": plan.updated_at.isoformat(),
         }
@@ -936,6 +991,15 @@ class MonitoringPlanService:
             combined.extend(question_set.questions or [])
         return self.normalize_questions(combined)
 
+    @staticmethod
+    def _source_session_id_from_question_sets(
+        question_sets: list[MonitoringQuestionSet],
+    ) -> str | None:
+        for question_set in question_sets:
+            if question_set.source_session_id:
+                return str(question_set.source_session_id)
+        return None
+
     def _build_baseline_data(
         self,
         *,
@@ -952,8 +1016,11 @@ class MonitoringPlanService:
             except (TypeError, json.JSONDecodeError):
                 aliases = []
         official_website = entity.domain or ""
-        if official_website and not official_website.startswith(("http://", "https://")):
+        if official_website and not official_website.startswith(
+            ("http://", "https://")
+        ):
             official_website = f"https://{official_website}"
+        source_session_id = self._source_session_id_from_question_sets(question_sets)
         return {
             "questions": [
                 {
@@ -980,6 +1047,7 @@ class MonitoringPlanService:
             "competitive_landscape": None,
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "source": "monitoring_plan",
+            "source_session_id": source_session_id,
             "question_set_ids": [str(item.id) for item in question_sets],
         }
 
@@ -991,7 +1059,9 @@ class MonitoringPlanService:
         entity = await self.db.get(Entity, plan.entity_id)
         if entity is None:
             raise ValueError("品牌不存在。")
-        baseline_data = self._build_baseline_data(entity=entity, question_sets=question_sets)
+        baseline_data = self._build_baseline_data(
+            entity=entity, question_sets=question_sets
+        )
         monitoring_service = MonitoringService(self.db)
         schedule = await self._get_schedule_for_plan(plan.id)
         platforms = self.endpoint_ids_to_platforms(plan.endpoint_ids or [])
@@ -1073,7 +1143,11 @@ class MonitoringPlanService:
         status: str,
     ) -> MonitoringRun:
         existing = await self._get_run_by_task(task.id)
-        question_count = len(schedule.baseline_data.get("questions", [])) if schedule.baseline_data else 0
+        question_count = (
+            len(schedule.baseline_data.get("questions", []))
+            if schedule.baseline_data
+            else 0
+        )
         now = datetime.now(timezone.utc)
         if existing is None:
             existing = MonitoringRun(

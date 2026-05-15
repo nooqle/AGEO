@@ -185,11 +185,7 @@ class MonitoringService:
         ]
         if monitor_mode:
             conditions.append(MonitoringSchedule.monitor_mode == monitor_mode)
-        stmt = (
-            select(MonitoringSchedule)
-            .where(*conditions)
-            .limit(1)
-        )
+        stmt = select(MonitoringSchedule).where(*conditions).limit(1)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -636,7 +632,9 @@ class MonitoringService:
         seeded_baseline = self._build_baseline_from_snapshot(snapshot)
         if seeded_baseline is None:
             if require_report:
-                raise ValueError("最近一次品牌全景分析缺少可复用的问题基线，请先重新生成全景分析。")
+                raise ValueError(
+                    "最近一次品牌全景分析缺少可复用的问题基线，请先重新生成全景分析。"
+                )
             return False
 
         await self.save_baseline(schedule_id, seeded_baseline)
@@ -651,9 +649,7 @@ class MonitoringService:
         raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
         report_data = raw_data.get("report_data", {})
         input_bundle = (
-            report_data.get("input_bundle", {})
-            if isinstance(report_data, dict)
-            else {}
+            report_data.get("input_bundle", {}) if isinstance(report_data, dict) else {}
         )
         brand_master = (
             input_bundle.get("brand_master", {})
@@ -700,6 +696,9 @@ class MonitoringService:
             "competitive_landscape": None,
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "source_task_id": str(snapshot.id),
+            "source_session_id": (
+                str(snapshot.session_id) if snapshot.session_id else None
+            ),
         }
 
     async def _count_active_schedules(self, user_id: UUID | None = None) -> int:

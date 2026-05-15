@@ -5,7 +5,7 @@ import re
 from typing import Any, List
 from uuid import UUID
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.message import Message, MessageRole, MessageType
@@ -22,6 +22,16 @@ _KNOWN_CONFIRMATION_LABELS: dict[str, str] = {
     "run_answer_fetch": "先执行答案抓取",
     "run_supplemental_fetch": "补采上一轮失败项",
     "run_analysis_report": "重新生成分析报告",
+}
+
+_STRUCTURAL_PLATFORM_VALUE_KEYS = {
+    "platform",
+    "platform_id",
+    "platform_key",
+    "provider",
+    "engine",
+    "source_platform",
+    "platform_legacy_id",
 }
 
 
@@ -42,14 +52,23 @@ def _normalize_user_visible_history_text(text: str | None) -> str:
     return known_label or normalized
 
 
-def _normalize_user_visible_output_payload(value: Any) -> Any:
+def _normalize_user_visible_output_payload(
+    value: Any,
+    *,
+    parent_key: str | None = None,
+) -> Any:
     if isinstance(value, str):
+        if parent_key in _STRUCTURAL_PLATFORM_VALUE_KEYS:
+            return re.sub(r"\[\]\(@mark_[^)]+\)", "", value)
         return _normalize_user_visible_history_text(value)
     if isinstance(value, list):
-        return [_normalize_user_visible_output_payload(item) for item in value]
+        return [
+            _normalize_user_visible_output_payload(item, parent_key=parent_key)
+            for item in value
+        ]
     if isinstance(value, dict):
         return {
-            key: _normalize_user_visible_output_payload(item)
+            key: _normalize_user_visible_output_payload(item, parent_key=str(key))
             for key, item in value.items()
         }
     return value

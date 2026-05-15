@@ -25,15 +25,15 @@ from langgraph.types import Command
 
 from app.core.config import settings
 from app.core.constants import PlatformConstants, WorkflowConstants
-from app.core.fetchers.browser.failure_observability import (
-    BrowserFailureEvidenceService,
-    build_failure_contract,
-    is_browser_context_closed_error,
-)
 from app.core.fetchers.browser.browser_executor import (
     PendingBrowserAction,
     handle_browser_failure,
     resume_browser_action,
+)
+from app.core.fetchers.browser.failure_observability import (
+    BrowserFailureEvidenceService,
+    build_failure_contract,
+    is_browser_context_closed_error,
 )
 from app.tools.a4_fetch_agent import (
     AioAnswerFetchTool,
@@ -46,18 +46,11 @@ from app.workflow.browser_action_contract import (
     emit_browser_action_handoff,
     wait_for_browser_action_outcome,
 )
-from app.workflow.state import AgentState
 from app.workflow.events import (
+    send_browser_state_event,
+    send_error_event,
     send_progress_event,
     send_reply_event,
-    send_error_event,
-    send_browser_state_event,
-)
-from app.workflow.harness_validation import (
-    build_harness_decision,
-    decide_a4_completion_policy,
-    validate_artifact_writeback,
-    validate_scoped_fetch_merge,
 )
 from app.workflow.fetch_recovery import (
     build_fetch_recovery_plan,
@@ -65,12 +58,19 @@ from app.workflow.fetch_recovery import (
     extract_latest_fetch_recovery_plan_from_state,
     normalize_question_targets,
 )
+from app.workflow.harness_validation import (
+    build_harness_decision,
+    decide_a4_completion_policy,
+    validate_artifact_writeback,
+    validate_scoped_fetch_merge,
+)
 from app.workflow.runtime_policy_executor import build_next_required_action
 from app.workflow.skill_state import (
     build_harness_decision_update,
     build_skill_result_update,
     build_validation_result_update,
 )
+from app.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -707,6 +707,46 @@ def _question_id_from_state_question(question: dict[str, Any]) -> str:
     return str(
         question.get("id") or question.get("question_id") or question.get("qid") or ""
     ).strip()
+
+
+def _normalize_fetch_questions(raw_questions: list[Any]) -> list[dict[str, Any]]:
+    """Normalize A3/monitoring question shapes into A4's executor contract."""
+
+    normalized: list[dict[str, Any]] = []
+    for index, raw_question in enumerate(raw_questions or [], start=1):
+        if isinstance(raw_question, dict):
+            question = dict(raw_question)
+            question_id = str(
+                question.get("id")
+                or question.get("question_id")
+                or question.get("qid")
+                or f"Q{index}"
+            ).strip()
+            question_text = str(
+                question.get("text")
+                or question.get("question_text")
+                or question.get("question")
+                or question.get("query")
+                or question.get("title")
+                or ""
+            ).strip()
+        else:
+            question = {}
+            question_id = f"Q{index}"
+            question_text = str(raw_question or "").strip()
+
+        if not question_text:
+            logger.warning(
+                "[A4] Dropping empty question at index=%d id=%s",
+                index,
+                question_id,
+            )
+            continue
+
+        question["id"] = question_id
+        question["text"] = question_text
+        normalized.append(question)
+    return normalized
 
 
 def _derive_preserved_fetch_results(
@@ -1954,7 +1994,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
     - full: All 4 platforms via Browser only, no API       (~8-15 min)
     """
     session_id = state["session_id"]
-    state_questions = list(state.get("questions", []) or [])
+    state_questions = _normalize_fetch_questions(list(state.get("questions", []) or []))
     questions = list(state_questions)
     brand_profile = state.get("brand_profile") or {}
     fetch_mode = state.get("fetch_mode") or "fast"
@@ -3366,9 +3406,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # Task milestone: A4 completed (Cycle 3, Module 1)
         if task_id:
             try:
+                from uuid import UUID as _UUID
+
                 from app.core.database import AsyncSessionLocal
                 from app.services.task_service import TaskService
-                from uuid import UUID as _UUID
 
                 async with AsyncSessionLocal() as db:
                     ts = TaskService(db)
@@ -3515,11 +3556,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
         task_id = state.get("task_id")
         if task_id:
             try:
+                from uuid import UUID as _UUID
+
                 from app.core.database import AsyncSessionLocal
                 from app.services.fetch_run_platform_state_service import (
                     FetchRunPlatformStateService,
                 )
-                from uuid import UUID as _UUID
 
                 async with AsyncSessionLocal() as db:
                     if state.get("run_id"):

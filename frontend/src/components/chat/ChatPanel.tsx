@@ -1064,7 +1064,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   useEffect(() => {
     resetConversation();
     useCanvasStore.getState().clearContents();
-  }, [resetConversation]);
+  }, [resetConversation, sessionId]);
 
   const updateAutoScrollState = useCallback(() => {
     const container = scrollRef.current;
@@ -1752,6 +1752,15 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
     const activeContent = contents[activeContentIndex];
     if (!activeContent?.id) {
+      return;
+    }
+    const activeContentSessionMatch = activeContent.id.match(
+      /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_/i,
+    );
+    if (
+      activeContentSessionMatch?.[1]
+      && activeContentSessionMatch[1] !== sessionId
+    ) {
       return;
     }
 

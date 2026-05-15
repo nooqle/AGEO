@@ -6,7 +6,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.services.output_service import OutputService
+from app.services.output_service import (
+    OutputService,
+    _normalize_user_visible_output_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -24,6 +27,9 @@ async def test_get_outputs_appends_synthetic_fetch_results_when_output_message_m
     class FakeResult:
         def scalars(self):
             return FakeScalars()
+
+        def scalar_one_or_none(self):
+            return None
 
     class FakeDb:
         async def execute(self, _query):
@@ -78,8 +84,12 @@ async def test_get_outputs_appends_synthetic_fetch_results_when_output_message_m
     assert synthetic["metadata"]["synthetic"] is True
     assert synthetic["metadata"]["source"] == "fetch_run_platform_states"
     assert synthetic["data"]["fetchResults"][0]["question_id"] == "q-1"
-    assert synthetic["data"]["platformStatus"]["platform_statuses"]["yuanbao"] == "success"
-    assert synthetic["data"]["timingSummary"]["platforms"]["yuanbao"]["total_ms"] == 1200
+    assert (
+        synthetic["data"]["platformStatus"]["platform_statuses"]["yuanbao"] == "success"
+    )
+    assert (
+        synthetic["data"]["timingSummary"]["platforms"]["yuanbao"]["total_ms"] == 1200
+    )
 
 
 @pytest.mark.asyncio
@@ -117,6 +127,7 @@ async def test_get_outputs_keeps_existing_fetch_results_when_no_authoritative_ro
                         output_data='{"fetchResults":[{"question_id":"q-1"}]}',
                         extra_metadata='{"output_id":"artifact-fetch"}',
                         created_at=now,
+                        sequence=1,
                     )
                 ]
             )
@@ -136,3 +147,17 @@ async def test_get_outputs_keeps_existing_fetch_results_when_no_authoritative_ro
     assert len(outputs) == 1
     assert outputs[0]["artifact_id"] == "artifact-fetch"
     assert outputs[0]["data"]["fetchResults"][0]["question_id"] == "q-1"
+
+
+def test_output_payload_keeps_structural_platform_ids():
+    payload = {
+        "platform": "hunyuan",
+        "platform_name": "hunyuan",
+        "answer": "hunyuan 提到了品牌",
+    }
+
+    normalized = _normalize_user_visible_output_payload(payload)
+
+    assert normalized["platform"] == "hunyuan"
+    assert normalized["platform_name"] == "元宝"
+    assert normalized["answer"] == "元宝 提到了品牌"
