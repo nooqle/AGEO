@@ -18,12 +18,12 @@ function findExecutableInDir(root: string): string | null {
   }
 
   for (const entry of candidates) {
-    const base = path.join(root, entry.name);
+    const base = path.join(/*turbopackIgnore: true*/ root, entry.name);
     const possibleFiles = [
-      path.join(base, 'chrome-win', 'chrome.exe'),
-      path.join(base, 'chrome-win64', 'chrome.exe'),
-      path.join(base, 'chrome-linux', 'chrome'),
-      path.join(base, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+      path.join(/*turbopackIgnore: true*/ base, 'chrome-win', 'chrome.exe'),
+      path.join(/*turbopackIgnore: true*/ base, 'chrome-win64', 'chrome.exe'),
+      path.join(/*turbopackIgnore: true*/ base, 'chrome-linux', 'chrome'),
+      path.join(/*turbopackIgnore: true*/ base, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
     ];
 
     for (const file of possibleFiles) {
@@ -70,8 +70,8 @@ function findChromiumExecutable(): string | null {
 
   const home = os.homedir();
   const playwrightRoots = process.platform === 'win32'
-    ? [path.join(home, 'AppData', 'Local', 'ms-playwright')]
-    : [path.join(home, '.cache', 'ms-playwright')];
+    ? [path.join(/*turbopackIgnore: true*/ home, 'AppData', 'Local', 'ms-playwright')]
+    : [path.join(/*turbopackIgnore: true*/ home, '.cache', 'ms-playwright')];
 
   for (const root of playwrightRoots) {
     const found = findExecutableInDir(root);

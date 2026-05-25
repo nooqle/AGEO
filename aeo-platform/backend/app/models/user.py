@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,6 +35,9 @@ def _enum_values(enum_cls: type[PyEnum]) -> list[str]:
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_phone", "phone", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -42,7 +45,7 @@ class User(Base):
         default=uuid.uuid4,
     )
     email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
-    phone: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[UserStatus] = mapped_column(

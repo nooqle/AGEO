@@ -67,8 +67,8 @@ export function HeroSection({
 
   const brandName = selectedBrandName || '当前品牌';
   const helperText = hasMonitoringContext
-    ? `${analysisLabel}已有上下文，可直接提问或继续调整问题集。`
-    : `${analysisLabel}尚未开始，需先通过智能对话完成问题集确认。`;
+    ? `${analysisLabel}已有样本。需要解释、修正或补充时，在这里提交反馈。`
+    : `${analysisLabel}尚未形成可用样本。可以提交补充事实、修正意见或证据追问。`;
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -77,13 +77,14 @@ export function HeroSection({
 
   return (
     <motion.section
-      className="dashboard-shell relative overflow-hidden rounded-[18px] px-6 py-6"
+      className="relative overflow-hidden rounded-[14px] border bg-[var(--bg-elevated)] px-4 py-4"
+      style={{ borderColor: 'var(--border-subtle)' }}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.28 }}
     >
       <span
-        className="absolute right-5 top-5 rounded-full border px-3 py-1.5 text-[12px] font-semibold"
+        className="absolute right-4 top-4 rounded-lg border px-2.5 py-1 text-[11px] font-medium"
         style={{
           background: 'var(--status-warning-bg)',
           borderColor: 'color-mix(in srgb, var(--status-warning) 24%, var(--border-subtle) 76%)',
@@ -93,16 +94,16 @@ export function HeroSection({
         {monitoringStatusLabel}
       </span>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)] xl:items-end">
-        <div className="grid min-w-0 grid-cols-[52px_minmax(0,1fr)] items-center gap-4 pr-0 sm:pr-24">
-          <BrandAvatar name={brandName} domain={selectedBrandDomain} size={52} className="flex-shrink-0" />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(380px,520px)] lg:items-end">
+        <div className="grid min-w-0 grid-cols-[40px_minmax(0,1fr)] items-center gap-3 pr-20 sm:pr-24">
+          <BrandAvatar name={brandName} domain={selectedBrandDomain} size={40} className="flex-shrink-0" />
           <div className="min-w-0">
-            <div className="text-[11px] font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
-              当前品牌
+            <div className="text-[11px] font-medium tracking-[0.12em] text-[var(--text-tertiary)]">
+              事实修正
             </div>
-            <h1 className="mt-1 break-words text-[26px] font-semibold leading-tight text-[var(--text-primary)] sm:text-[30px]">
-              {brandName}
-            </h1>
+            <h2 className="mt-1 break-words text-[17px] font-semibold leading-tight text-[var(--text-primary)]">
+              补充事实与证据
+            </h2>
             <p className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">
               {selectedBrandDomain ? `${selectedBrandDomain} · ` : ''}
               {helperText}
@@ -114,21 +115,21 @@ export function HeroSection({
           <input
             value={commandInput}
             onChange={(event) => setCommandInput(event.target.value)}
-            placeholder="输入您的问题..."
-            className="min-h-12 min-w-0 rounded-[13px] border bg-[var(--bg-secondary)] px-4 text-[14px] text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--brand-primary)]"
+            placeholder="补充事实、修正判断或追问证据..."
+            className="min-h-11 min-w-0 rounded-lg border bg-[var(--bg-secondary)] px-3 text-[13px] text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--brand-primary)]"
             style={{ borderColor: 'var(--border-subtle)' }}
           />
           <button
             type="submit"
             disabled={isCommandSubmitting}
-            className="inline-flex min-h-12 items-center justify-center gap-2 rounded-[13px] bg-[var(--brand-primary)] px-5 text-[14px] font-semibold text-[var(--brand-contrast)] transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-70"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-[var(--brand-primary)] px-4 text-[13px] font-semibold text-[var(--brand-contrast)] transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-70"
           >
             {isCommandSubmitting ? (
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
             ) : (
               <RiSendPlane2Line className="h-4 w-4" />
             )}
-            智能对话
+            提交反馈
           </button>
         </form>
       </div>

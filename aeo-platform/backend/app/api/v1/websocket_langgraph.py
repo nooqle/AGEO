@@ -23,6 +23,7 @@ from app.models.task_run import LIVE_TASK_RUN_STATUSES
 from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
 from app.services.message_service import MessageService
 from app.services.monitoring_plan_service import MonitoringPlanService
+from app.services.brand_action_service import BrandActionService
 from app.services.entity_service import EntityService
 from app.services.session_event_publisher import session_event_publisher
 from app.services.task_service import TaskService
@@ -106,6 +107,44 @@ _STEP_PROGRESS: dict[str, float] = {
 
 _SUPPORTED_TOOL_MODES: set[str] = set()
 
+_INTELLIGENCE_FOLLOW_UP_MARKERS = (
+    "为什么",
+    "哪些",
+    "哪个",
+    "如何",
+    "怎么",
+    "解释",
+    "说明",
+    "分析",
+    "情报",
+    "结论",
+    "判断",
+    "证据",
+    "对象",
+    "关系",
+    "支撑",
+    "影响",
+    "官网",
+    "引用",
+    "来源",
+    "转化率",
+    "不要重新抓取",
+    "不要抓取",
+)
+
+_WAITING_FLOW_CONTINUATION_MARKERS = (
+    "确认",
+    "继续",
+    "开始",
+    "执行",
+    "同意",
+    "可以",
+    "快速采集",
+    "完整采集",
+    "启用",
+    "导入",
+)
+
 
 async def _emit_session_error(
     session_id: str,
@@ -129,6 +168,118 @@ def _state_is_waiting_for_user(state_values: dict[str, Any]) -> bool:
         or state_values.get("execution_status") == "awaiting_user"
         or state_values.get("pending_confirmation")
     )
+
+
+def _context_labels(context: Any) -> list[str]:
+    if not isinstance(context, list):
+        return []
+    labels: list[str] = []
+    for item in context:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label")
+        if isinstance(label, str) and label.strip():
+            labels.append(label.strip())
+    return labels
+
+
+def _extract_dashboard_context(
+    data: dict[str, Any],
+    context: Any,
+) -> dict[str, Any] | None:
+    merged: dict[str, Any] = {}
+    raw_dashboard_context = data.get("dashboard_context")
+    if isinstance(raw_dashboard_context, dict):
+        merged.update(raw_dashboard_context)
+
+    for key in (
+        "entry_source",
+        "entity_id",
+        "brand",
+        "monitor_mode",
+        "question_set_label",
+        "sample_summary",
+        "ai_sources",
+        "monitoring_plan_id",
+        "question_set_ids",
+        "endpoint_ids",
+        "monitoring_run_id",
+        "error_stage",
+    ):
+        value = data.get(key)
+        if value is not None and key not in merged:
+            merged[key] = value
+
+    if isinstance(context, list):
+        for ctx in context:
+            if not isinstance(ctx, dict):
+                continue
+            ctx_data = ctx.get("data")
+            if isinstance(ctx_data, dict):
+                merged.update(ctx_data)
+
+    return merged or None
+
+
+def _is_dashboard_intelligence_surface(
+    *,
+    context: Any,
+    dashboard_context: dict[str, Any] | None,
+) -> bool:
+    if isinstance(dashboard_context, dict) and (
+        dashboard_context.get("entity_id")
+        or dashboard_context.get("brand")
+        or dashboard_context.get("entry_source")
+    ):
+        return True
+    return any("情报研判" in label for label in _context_labels(context))
+
+
+def _looks_like_intelligence_follow_up(content: str) -> bool:
+    normalized = str(content or "").strip()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _INTELLIGENCE_FOLLOW_UP_MARKERS)
+
+
+def _looks_like_waiting_flow_continuation(content: str) -> bool:
+    normalized = str(content or "").strip()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _WAITING_FLOW_CONTINUATION_MARKERS)
+
+
+def _should_supersede_waiting_flow_for_follow_up(
+    *,
+    content: str,
+    context: Any,
+    dashboard_context: dict[str, Any] | None,
+) -> bool:
+    """Treat dashboard intelligence questions as new analysis, not confirmations."""
+
+    if not _is_dashboard_intelligence_surface(
+        context=context,
+        dashboard_context=dashboard_context,
+    ):
+        return False
+    if not _looks_like_intelligence_follow_up(content):
+        return False
+    if _looks_like_waiting_flow_continuation(content) and not any(
+        marker in content
+        for marker in (
+            "为什么",
+            "哪些",
+            "如何",
+            "怎么",
+            "解释",
+            "说明",
+            "证据",
+            "支撑",
+            "影响",
+        )
+    ):
+        return False
+    return True
 
 
 def _sanitize_user_visible_runtime_text(text: str | None) -> str:
@@ -207,6 +358,142 @@ def _apply_explicit_fetch_mode_from_user_input(
     user_decisions["fetch_mode_confirmed"] = True
     state_update["user_decisions"] = user_decisions
     state_update["fetch_mode"] = fetch_mode
+
+
+def _uuid_or_none(value: Any) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _confirmation_action_type(option_id: str) -> str:
+    if option_id == "confirm_question_set_enable_quick":
+        return "confirm_question_set"
+    if option_id in {"create_monitoring_plan", "activate_monitoring_plan"}:
+        return "create_monitoring_plan"
+    return "record_user_feedback"
+
+
+def _question_ids_from_state_values(state_values: dict[str, Any]) -> list[str]:
+    simulated_questions = state_values.get("simulated_questions")
+    if isinstance(simulated_questions, dict):
+        questions = (
+            simulated_questions.get("simulated_questions")
+            or simulated_questions.get("questions")
+            or []
+        )
+    elif isinstance(simulated_questions, list):
+        questions = simulated_questions
+    else:
+        questions = []
+
+    question_ids: list[str] = []
+    seen: set[str] = set()
+    for index, question in enumerate(questions or [], start=1):
+        if isinstance(question, dict):
+            raw_id = (
+                question.get("question_id")
+                or question.get("id")
+                or question.get("core_question")
+                or question.get("question")
+            )
+        else:
+            raw_id = question
+        question_id = str(raw_id or f"q_{index:03d}").strip()
+        if question_id and question_id not in seen:
+            question_ids.append(question_id)
+            seen.add(question_id)
+    return question_ids
+
+
+def _complete_confirmation_action_input_payload(
+    *,
+    action_type: str,
+    state_values: dict[str, Any],
+    input_payload: dict[str, Any],
+) -> dict[str, Any]:
+    payload = dict(input_payload)
+    if action_type in {"confirm_question_set", "create_monitoring_plan"}:
+        payload.setdefault(
+            "question_ids", _question_ids_from_state_values(state_values)
+        )
+    if action_type == "create_monitoring_plan":
+        monitoring_plan = state_values.get("monitoring_plan")
+        if isinstance(monitoring_plan, dict):
+            cadence = monitoring_plan.get("frequency")
+        else:
+            cadence = None
+        payload.setdefault(
+            "cadence",
+            cadence or state_values.get("monitoring_cadence") or "weekly",
+        )
+    return payload
+
+
+async def _record_user_confirmation_action(
+    *,
+    session_id: str,
+    state_values: dict[str, Any],
+    selected_option_id: str,
+    selected_option_label: str | None,
+    user_content: str,
+    request_id: str,
+    pending_confirmation: dict[str, Any],
+    output_payload: dict[str, Any] | None = None,
+) -> str | None:
+    entity_uuid = _uuid_or_none(state_values.get("entity_id"))
+    user_uuid = _uuid_or_none(state_values.get("user_id"))
+    session_uuid = _uuid_or_none(session_id)
+    if entity_uuid is None:
+        return None
+    action_type = _confirmation_action_type(selected_option_id)
+    origin_event_id = (
+        str(request_id or pending_confirmation.get("request_id") or "").strip() or None
+    )
+    input_payload = {
+        "actor_id": str(user_uuid) if user_uuid else None,
+        "feedback_type": selected_option_id or "text_confirmation",
+        "selected_option_id": selected_option_id or None,
+        "selected_option_label": selected_option_label or None,
+        "confirmation_label": user_content,
+        "pending_step_id": pending_confirmation.get("step_id"),
+        "pending_step_name": pending_confirmation.get("step_name"),
+        "question_set_id": pending_confirmation.get("question_set_id")
+        or state_values.get("latest_question_set_id"),
+        "monitor_mode": pending_confirmation.get("monitor_mode")
+        or state_values.get("monitor_mode"),
+    }
+    input_payload = _complete_confirmation_action_input_payload(
+        action_type=action_type,
+        state_values=state_values,
+        input_payload=input_payload,
+    )
+    try:
+        async with AsyncSessionLocal() as db:
+            service = BrandActionService(db)
+            record = await service.record_applied_action(
+                entity_id=entity_uuid,
+                session_id=session_uuid,
+                user_id=user_uuid,
+                action_type=action_type,
+                actor_type="user",
+                origin_surface="chat_confirmation",
+                origin_event_id=origin_event_id,
+                input_payload=input_payload,
+                output_payload=output_payload,
+                decision_type=action_type,
+                decision_key=selected_option_id or "text_confirmation",
+                feedback_text=user_content,
+            )
+            await db.commit()
+            return str(record.id)
+    except Exception as exc:
+        logger.warning(
+            "[LangGraph] Failed to record user confirmation action: %s",
+            exc,
+        )
+        return None
 
 
 async def _get_workflow_state(workflow: Any, config: dict[str, Any]) -> Any:
@@ -843,10 +1130,15 @@ def _resolve_task_label(
     content: str,
     attachments: list[dict[str, Any]],
     tool_mode: str | None = None,
+    dashboard_context: dict[str, Any] | None = None,
 ) -> str:
     candidate_brand = brand_name.strip()
     if candidate_brand:
         return candidate_brand
+
+    dashboard_brand = _dashboard_context_text(dashboard_context, "brand")
+    if dashboard_brand:
+        return dashboard_brand
 
     candidate_content = content.strip()
     if candidate_content:
@@ -859,6 +1151,18 @@ def _resolve_task_label(
             return f"表格导入：{attachment_stem}"
 
     return "表格导入任务"
+
+
+def _dashboard_context_text(
+    dashboard_context: dict[str, Any] | None,
+    key: str,
+) -> str:
+    if not isinstance(dashboard_context, dict):
+        return ""
+    value = dashboard_context.get(key)
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
 
 
 async def _ensure_manual_session_is_idle(
@@ -896,6 +1200,29 @@ async def _ensure_manual_session_is_idle(
         return
 
     raise RuntimeError("当前任务仍在执行，请等待完成或先停止后再继续。")
+
+
+async def _supersede_waiting_flow_for_follow_up(
+    *,
+    session_id: str,
+    task_id: str | None,
+) -> None:
+    """Cancel a stale waiting flow so free-form intelligence questions can proceed."""
+
+    from app.services.runtime_coordinator import runtime_coordinator
+    from app.services.task_service import TaskService
+
+    await runtime_coordinator.cancel_session_execution(session_id)
+
+    async with AsyncSessionLocal() as db:
+        task_service = TaskService(db)
+        await task_service.cancel_session_active_tasks(UUID(session_id))
+
+    logger.info(
+        "[LangGraph] Superseded waiting task %s for session %s with follow-up analysis",
+        task_id,
+        session_id,
+    )
 
 
 async def _submit_resume_run(
@@ -1118,10 +1445,56 @@ async def _sync_runtime_after_stream(workflow, config: dict[str, Any]) -> None:
                 },
                 reason="langgraph_stream_reconcile",
             )
+            if transition is None and not is_waiting_for_user:
+                transition = _build_stream_finished_fallback_transition(
+                    state_values,
+                    reason="langgraph_stream_finished",
+                )
             if transition:
                 await TaskRuntimeStateWriter(task_service).apply_transition(transition)
     except Exception as exc:
         logger.warning("[LangGraph] Failed to sync final runtime state: %s", exc)
+
+
+def _build_stream_finished_fallback_transition(
+    state_values: dict[str, Any],
+    *,
+    reason: str,
+) -> Any | None:
+    """Close a local run when the graph ended without a formal transition."""
+
+    from app.workflow.runtime_state_writer import WorkflowTransition
+
+    if _state_is_waiting_for_user(state_values):
+        return None
+
+    task_id = _uuid_or_none(state_values.get("task_id"))
+    run_id = _uuid_or_none(state_values.get("run_id"))
+    if task_id is None or run_id is None:
+        return None
+
+    error_info = (
+        state_values.get("error_info")
+        if isinstance(state_values.get("error_info"), dict)
+        else {}
+    )
+    if error_info:
+        return None
+
+    execution_status = str(state_values.get("execution_status") or "").lower()
+    if execution_status in {"error", "failed", "awaiting_user"}:
+        return None
+
+    return WorkflowTransition(
+        task_id=task_id,
+        run_id=run_id,
+        status="completed",
+        stage=str(state_values.get("current_step") or "orchestrator"),
+        progress=1.0,
+        message="分析完成",
+        reason=reason,
+        snapshot_id=_uuid_or_none(state_values.get("snapshot_id")),
+    )
 
 
 async def rebuild_state_from_db(
@@ -1203,6 +1576,7 @@ async def rebuild_state_from_db(
         "question_set_ids": None,
         "endpoint_ids": None,
         "pending_question_set_confirmation": None,
+        "latest_user_action_record_id": None,
         "run_policy": None,
         # Cycle 3 fields
         "task_id": None,
@@ -1553,17 +1927,7 @@ async def handle_user_message_langgraph(
     client_message_id = data.get("clientMessageId") or data.get("client_message_id")
     attachments = _normalize_attachment_refs(data.get("attachments", []))
     tool_mode = _normalize_tool_mode(data.get("tool_mode"))
-    dashboard_context: dict[str, Any] | None = None
-    if isinstance(context, list):
-        merged_dashboard_context: dict[str, Any] = {}
-        for ctx in context:
-            if not isinstance(ctx, dict):
-                continue
-            ctx_data = ctx.get("data")
-            if isinstance(ctx_data, dict):
-                merged_dashboard_context.update(ctx_data)
-        if merged_dashboard_context:
-            dashboard_context = merged_dashboard_context
+    dashboard_context = _extract_dashboard_context(data, context)
 
     # Build context-enhanced content for orchestrator
     enhanced_content = content
@@ -1589,13 +1953,6 @@ async def handle_user_message_langgraph(
             enhanced_content = f"{enhanced_content}\n\n{attachment_summary}"
         else:
             enhanced_content = attachment_summary
-    task_label = _resolve_task_label(
-        brand_name=brand_name,
-        content=content,
-        attachments=attachments,
-        tool_mode=tool_mode,
-    )
-
     logger.info(
         f"[LangGraph] Processing message for session {session_id}: {content[:50]}..."
     )
@@ -1672,8 +2029,40 @@ async def handle_user_message_langgraph(
                     )
             elif session_obj:
                 session_user_id = session_obj.user_id
+            dashboard_entity_id = _dashboard_context_text(
+                dashboard_context,
+                "entity_id",
+            )
+            if not entity_id and dashboard_entity_id:
+                entity_id = dashboard_entity_id
+                entity_service = EntityService(db)
+                entity_data = await entity_service.get_entity(entity_id)
+                if entity_data:
+                    if not brand_name:
+                        brand_name = entity_data.get("name", "")
+                    if not official_website:
+                        official_website = entity_data.get("domain", "")
+                    if not industry_hint:
+                        industry_hint = entity_data.get("industry", "")
+                    logger.info(
+                        f"[LangGraph] Auto-injected dashboard entity info: "
+                        f"brand={brand_name}, domain={official_website}, "
+                        f"industry={industry_hint}"
+                    )
         except Exception as e:
             logger.error(f"[LangGraph] Error looking up entity: {e}")
+
+    effective_brand_name = brand_name or _dashboard_context_text(
+        dashboard_context,
+        "brand",
+    )
+    task_label = _resolve_task_label(
+        brand_name=effective_brand_name,
+        content=content,
+        attachments=attachments,
+        tool_mode=tool_mode,
+        dashboard_context=dashboard_context,
+    )
 
     # Reset layer accumulator for this execution round
     from app.workflow.events import reset_session_layers
@@ -1731,14 +2120,23 @@ async def handle_user_message_langgraph(
                     session_id=session_id,
                     allowed_waiting_task_id=state_values.get("task_id"),
                 )
+                supersede_waiting_flow = _state_is_waiting_for_user(
+                    state_values
+                ) and _should_supersede_waiting_flow_for_follow_up(
+                    content=content,
+                    context=context,
+                    dashboard_context=dashboard_context,
+                )
                 resumed_run_id = None
                 follow_up_task_id = state_values.get("task_id")
                 follow_up_brand_name = (
-                    brand_name or state_values.get("brand_name") or content
+                    effective_brand_name or state_values.get("brand_name") or content
                 )
-                if _state_is_waiting_for_user(
-                    state_values
-                ) and await _is_waiting_task_resumable(state_values.get("task_id")):
+                if (
+                    _state_is_waiting_for_user(state_values)
+                    and not supersede_waiting_flow
+                    and await _is_waiting_task_resumable(state_values.get("task_id"))
+                ):
                     resume_kwargs: dict[str, Any] = {}
                     if trigger_source != "websocket":
                         resume_kwargs["trigger_source"] = trigger_source
@@ -1751,6 +2149,11 @@ async def handle_user_message_langgraph(
                             "Failed to submit resume runtime attempt for waiting task"
                         )
                 else:
+                    if supersede_waiting_flow:
+                        await _supersede_waiting_flow_for_follow_up(
+                            session_id=session_id,
+                            task_id=state_values.get("task_id"),
+                        )
                     if session_user_id is None:
                         raise RuntimeError(
                             "Missing session user context for follow-up task"
@@ -1810,6 +2213,8 @@ async def handle_user_message_langgraph(
                     or state_values.get("dashboard_context"),
                     "session_recalled": session_was_recalled,
                 }
+                if effective_brand_name:
+                    update_state["brand_name"] = effective_brand_name
                 _apply_explicit_fetch_mode_from_user_input(update_state, content)
                 if _should_seed_follow_up_brand_profile(state_values):
                     seed_effective_brand_profile(
@@ -1857,14 +2262,23 @@ async def handle_user_message_langgraph(
                         session_id=session_id,
                         allowed_waiting_task_id=restored.get("task_id"),
                     )
+                    supersede_waiting_flow = _state_is_waiting_for_user(
+                        restored
+                    ) and _should_supersede_waiting_flow_for_follow_up(
+                        content=content,
+                        context=context,
+                        dashboard_context=dashboard_context,
+                    )
                     resumed_run_id = None
                     restored_task_id = restored.get("task_id")
                     restored_brand_name = (
-                        brand_name or restored.get("brand_name") or content
+                        effective_brand_name or restored.get("brand_name") or content
                     )
-                    if _state_is_waiting_for_user(
-                        restored
-                    ) and await _is_waiting_task_resumable(restored.get("task_id")):
+                    if (
+                        _state_is_waiting_for_user(restored)
+                        and not supersede_waiting_flow
+                        and await _is_waiting_task_resumable(restored.get("task_id"))
+                    ):
                         resume_kwargs = {}
                         if trigger_source != "websocket":
                             resume_kwargs["trigger_source"] = trigger_source
@@ -1877,6 +2291,11 @@ async def handle_user_message_langgraph(
                                 "Failed to submit resume runtime attempt during DB restore"
                             )
                     else:
+                        if supersede_waiting_flow:
+                            await _supersede_waiting_flow_for_follow_up(
+                                session_id=session_id,
+                                task_id=restored.get("task_id"),
+                            )
                         if session_user_id is None:
                             raise RuntimeError(
                                 "Missing session user context for restored follow-up task"
@@ -1911,10 +2330,12 @@ async def handle_user_message_langgraph(
                     restored["run_id"] = resumed_run_id or restored.get("run_id")
                     restored["selected_tool_mode"] = tool_mode
                     restored["latest_user_input"] = content
-                    restored["dashboard_context"] = (
-                        dashboard_context or restored.get("dashboard_context")
+                    restored["dashboard_context"] = dashboard_context or restored.get(
+                        "dashboard_context"
                     )
                     restored["session_recalled"] = session_was_recalled
+                    if effective_brand_name:
+                        restored["brand_name"] = effective_brand_name
                     if _should_seed_follow_up_brand_profile(restored):
                         seed_effective_brand_profile(
                             restored,
@@ -2002,7 +2423,7 @@ async def handle_user_message_langgraph(
                 "user_id": str(session_user_id) if session_user_id else None,
                 "entity_id": entity_id,
                 "messages": [HumanMessage(content=enhanced_content)],
-                "brand_name": brand_name or content,
+                "brand_name": effective_brand_name or content,
                 "official_website": official_website,
                 "industry_hint": industry_hint,
                 # A1 outputs
@@ -2088,6 +2509,7 @@ async def handle_user_message_langgraph(
                 "question_set_ids": None,
                 "endpoint_ids": None,
                 "pending_question_set_confirmation": None,
+                "latest_user_action_record_id": None,
                 "run_policy": None,
                 # Baseline Analysis (Issue #4)
                 "analysis_mode": None,
@@ -2528,6 +2950,7 @@ async def handle_confirmation_langgraph(
         pending_confirmation = state_values.get("pending_confirmation") or {}
         if not isinstance(pending_confirmation, dict):
             pending_confirmation = {}
+        latest_user_action_record_id: str | None = None
         if selected_option_id in {
             "confirm_question_set_enable_quick",
             "append_question_set_questions",
@@ -2567,6 +2990,24 @@ async def handle_confirmation_langgraph(
                 state_values["endpoint_ids"] = list(plan.endpoint_ids or [])
                 state_values["monitoring_plan"] = plan_payload
                 state_values["pending_question_set_confirmation"] = None
+                latest_user_action_record_id = await _record_user_confirmation_action(
+                    session_id=session_id,
+                    state_values=state_values,
+                    selected_option_id=selected_option_id,
+                    selected_option_label=selected_option_label,
+                    user_content=user_content,
+                    request_id=request_id if isinstance(request_id, str) else "",
+                    pending_confirmation=pending_confirmation,
+                    output_payload={
+                        "question_set_id": question_set_id,
+                        "monitoring_plan_id": str(plan.id),
+                        "decision": "confirmed",
+                    },
+                )
+                if latest_user_action_record_id:
+                    state_values["latest_user_action_record_id"] = (
+                        latest_user_action_record_id
+                    )
                 state_values["next_required_action"] = build_next_required_action(
                     tool_name="answer_fetch",
                     authority="user_confirmation",
@@ -2581,13 +3022,51 @@ async def handle_confirmation_langgraph(
                 user_decisions["question_set_confirmation"] = "append"
                 user_decisions["question_append_requested"] = True
                 state_values["pending_question_set_confirmation"] = None
-                logger.info("[LangGraph] Question set append requested: %s", question_set_id)
+                latest_user_action_record_id = await _record_user_confirmation_action(
+                    session_id=session_id,
+                    state_values=state_values,
+                    selected_option_id=selected_option_id,
+                    selected_option_label=selected_option_label,
+                    user_content=user_content,
+                    request_id=request_id if isinstance(request_id, str) else "",
+                    pending_confirmation=pending_confirmation,
+                    output_payload={
+                        "question_set_id": question_set_id or None,
+                        "decision": "append_requested",
+                    },
+                )
+                if latest_user_action_record_id:
+                    state_values["latest_user_action_record_id"] = (
+                        latest_user_action_record_id
+                    )
+                logger.info(
+                    "[LangGraph] Question set append requested: %s", question_set_id
+                )
             else:
                 user_content = "用户选择暂不启用当前问题集"
                 user_decisions["question_set_confirmation"] = "declined"
                 user_decisions["fetch_mode_confirmed"] = False
                 state_values["pending_question_set_confirmation"] = None
-                logger.info("[LangGraph] Question set activation declined: %s", question_set_id)
+                latest_user_action_record_id = await _record_user_confirmation_action(
+                    session_id=session_id,
+                    state_values=state_values,
+                    selected_option_id=selected_option_id,
+                    selected_option_label=selected_option_label,
+                    user_content=user_content,
+                    request_id=request_id if isinstance(request_id, str) else "",
+                    pending_confirmation=pending_confirmation,
+                    output_payload={
+                        "question_set_id": question_set_id or None,
+                        "decision": "declined",
+                    },
+                )
+                if latest_user_action_record_id:
+                    state_values["latest_user_action_record_id"] = (
+                        latest_user_action_record_id
+                    )
+                logger.info(
+                    "[LangGraph] Question set activation declined: %s", question_set_id
+                )
         if selected_option_id == "run_answer_fetch":
             user_content = "用户选择先执行答案抓取"
             state_values["next_required_action"] = build_next_required_action(
@@ -2630,6 +3109,24 @@ async def handle_confirmation_langgraph(
                 source_step="error_recovery",
             )
             logger.info("[LangGraph] Inline confirmation: run_analysis_report")
+        if latest_user_action_record_id is None:
+            latest_user_action_record_id = await _record_user_confirmation_action(
+                session_id=session_id,
+                state_values=state_values,
+                selected_option_id=selected_option_id,
+                selected_option_label=selected_option_label,
+                user_content=user_content,
+                request_id=request_id if isinstance(request_id, str) else "",
+                pending_confirmation=pending_confirmation,
+                output_payload={
+                    "decision": selected_option_id or "text_feedback",
+                    "next_required_action": state_values.get("next_required_action"),
+                },
+            )
+            if latest_user_action_record_id:
+                state_values["latest_user_action_record_id"] = (
+                    latest_user_action_record_id
+                )
         # Persist the normalized confirmation as a chat message so it survives refresh
         async with AsyncSessionLocal() as db:
             message_service = MessageService(db)
@@ -2676,6 +3173,9 @@ async def handle_confirmation_langgraph(
             "run_id": resumed_run_id or state_values.get("run_id"),
             "selected_tool_mode": state_values.get("selected_tool_mode"),
             "latest_user_input": user_content,
+            "latest_user_action_record_id": state_values.get(
+                "latest_user_action_record_id"
+            ),
         }
         if state_values.get("fetch_mode"):
             update_state["fetch_mode"] = state_values["fetch_mode"]

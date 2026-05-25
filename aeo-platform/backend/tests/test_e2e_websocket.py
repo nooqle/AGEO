@@ -19,9 +19,9 @@ Usage:
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Any
-from uuid import uuid4
 
 import httpx
 import pytest
@@ -39,7 +39,18 @@ HEADERS = {"Authorization": f"Bearer {API_TOKEN}"}
 # Timeouts
 WS_CONNECT_TIMEOUT = 10
 WS_MESSAGE_TIMEOUT = 120  # 2 minutes for normal operations
-WS_LONG_TIMEOUT = 900     # 15 minutes for A4 browser fetch
+WS_LONG_TIMEOUT = int(os.getenv("E2E_WS_LONG_TIMEOUT_SECONDS", "900"))
+
+DEFAULT_CONFIRMATION_PREFERENCE_IDS = (
+    "panorama_fast",
+    "panorama",
+    "brand_panorama",
+    "continue_panorama",
+    "fast",
+    "run_analysis_report",
+    "persona_first",
+    "scenario_first",
+)
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -95,18 +106,84 @@ async def send_ping(ws):
     await ws.send(json.dumps({"event": "ping"}))
 
 
-async def send_confirmation(ws, selection: str, option_id: str = ""):
+async def send_confirmation(
+    ws,
+    selection: str | dict[str, Any],
+    option_id: str = "",
+    request_id: str = "",
+    message: str = "",
+):
     """Send a confirmation event."""
+    if not message:
+        if isinstance(selection, dict):
+            message = str(
+                selection.get("label") or selection.get("optionId") or option_id
+            )
+        else:
+            message = selection
     msg = {
         "event": "confirmation",
         "data": {
             "selection": selection,
             "option_id": option_id,
-            "message": selection,
+            "request_id": request_id,
+            "message": message,
         },
     }
     await ws.send(json.dumps(msg))
-    logger.info(f"Sent confirmation: {selection}")
+    logger.info(f"Sent confirmation: {message}")
+
+
+def choose_confirmation_option(
+    confirmation_event: dict[str, Any],
+    preferred_ids: tuple[str, ...] = DEFAULT_CONFIRMATION_PREFERENCE_IDS,
+) -> dict[str, Any]:
+    """Choose a safe non-cancel option from an inline confirmation event."""
+    data = confirmation_event.get("data") or {}
+    options = list(data.get("options") or [])
+    for preferred_id in preferred_ids:
+        for option in options:
+            if option.get("id") == preferred_id:
+                return option
+    for option in options:
+        label_and_description = (
+            str(option.get("label") or "") + str(option.get("description") or "")
+        )
+        if not any(
+            keyword in label_and_description
+            for keyword in ("停止", "取消", "放弃", "终止")
+        ):
+            return option
+    raise AssertionError(f"No selectable confirmation option: {options}")
+
+
+async def send_confirmation_option(
+    ws,
+    confirmation_event: dict[str, Any],
+    preferred_ids: tuple[str, ...] = DEFAULT_CONFIRMATION_PREFERENCE_IDS,
+):
+    """Send the structured confirmation payload expected by the backend."""
+    data = confirmation_event.get("data") or {}
+    options = list(data.get("options") or [])
+    if not options:
+        await send_confirmation(
+            ws,
+            str(data.get("message") or "确认继续"),
+            request_id=str(data.get("request_id") or ""),
+            message=str(data.get("message") or "确认继续"),
+        )
+        return
+
+    option = choose_confirmation_option(confirmation_event, preferred_ids)
+    option_id = str(option.get("id") or "")
+    label = str(option.get("label") or option_id)
+    await send_confirmation(
+        ws,
+        {"optionId": option_id, "label": label},
+        option_id=option_id,
+        request_id=str(data.get("request_id") or ""),
+        message=label,
+    )
 
 
 async def collect_events(
@@ -308,7 +385,7 @@ class TestHistoryLoading:
         try:
             # Send a message and wait for response
             await send_user_message(ws, "帮我分析安利纽崔莱", "安利纽崔莱")
-            events = await collect_events(
+            _ = await collect_events(
                 ws, timeout=WS_MESSAGE_TIMEOUT, stop_on=["execution_complete"]
             )
         finally:
@@ -413,7 +490,7 @@ class TestConversationResume:
         ws1 = await ws_connect(session_id)
         try:
             await send_user_message(ws1, "帮我分析安利纽崔莱", "安利纽崔莱")
-            events1 = await collect_events(
+            _ = await collect_events(
                 ws1, timeout=WS_MESSAGE_TIMEOUT, stop_on=["execution_complete"]
             )
         finally:
@@ -508,8 +585,7 @@ class TestMultiRoundDialog:
                 conf_data = confirmations[0].get("data", {})
                 options = conf_data.get("options", [])
                 if options:
-                    selected = options[0]
-                    await send_confirmation(ws, selected.get("label", "确认"))
+                    await send_confirmation_option(ws, confirmations[0])
 
                     # Collect follow-up events
                     events2 = await collect_events(
@@ -690,6 +766,7 @@ class TestLongTaskTimeout:
             start = time.time()
             all_events: list[dict] = []
             ping_count = 0
+            confirmations_sent = 0
 
             while time.time() - start < WS_LONG_TIMEOUT:
                 # Send ping every 25 seconds
@@ -702,6 +779,13 @@ class TestLongTaskTimeout:
                     msg = json.loads(raw)
                     event_type = msg.get("event") or msg.get("type", "unknown")
                     all_events.append(msg)
+
+                    if event_type == "inline_confirmation":
+                        await send_confirmation_option(ws, msg)
+                        confirmations_sent += 1
+                        if confirmations_sent > 4:
+                            pytest.fail("Too many confirmation loops during long task")
+                        continue
 
                     if event_type == "execution_complete":
                         break
@@ -717,6 +801,7 @@ class TestLongTaskTimeout:
             pongs = find_events(all_events, "pong")
             assert len(pongs) > 0, "Should have received pong responses"
             logger.info(f"  ✓ {len(pongs)} pong responses received")
+            logger.info(f"  ✓ {confirmations_sent} inline confirmations handled")
 
             logger.info("TEST 2 PASSED: Long task completed without disconnect")
 

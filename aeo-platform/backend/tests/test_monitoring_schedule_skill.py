@@ -5,7 +5,12 @@ import pytest
 
 from app.models.monitoring_schedule import ScheduleFrequency, ScheduleStatus
 from app.workflow.nodes_monitoring import (
+    _build_monitoring_action_input_payload,
+    _build_monitoring_update_action_input_payload,
     _build_schedule_reply,
+    _monitoring_action_cadence,
+    _monitoring_change_type,
+    _monitoring_ontology_action_type,
     _find_schedule,
     _normalize_action,
     _resolve_monitor_mode,
@@ -58,6 +63,92 @@ def test_monitoring_action_and_mode_normalization() -> None:
             {"monitor_mode": "scenario_monitoring"},
         )
         == "scenario"
+    )
+
+
+def test_monitoring_action_payload_contains_required_ontology_inputs() -> None:
+    entity_id = uuid4()
+    plan = SimpleNamespace(
+        id=uuid4(),
+        question_set_ids=["qs-1"],
+        endpoint_ids=["kimi_api"],
+    )
+
+    payload = _build_monitoring_action_input_payload(
+        entity_id=entity_id,
+        question_ids=["q1", "q2"],
+        cadence="weekly",
+        monitor_mode="panorama",
+        plan=plan,
+        schedule=None,
+        dashboard_context={},
+    )
+
+    assert payload["brand_entity_id"] == str(entity_id)
+    assert payload["question_ids"] == ["q1", "q2"]
+    assert payload["cadence"] == "weekly"
+    assert payload["monitor_mode"] == "panorama"
+    assert payload["question_set_ids"] == ["qs-1"]
+    assert payload["endpoint_ids"] == ["kimi_api"]
+    assert payload["monitoring_plan_id"] == str(plan.id)
+
+
+def test_monitoring_lifecycle_action_payload_targets_existing_plan() -> None:
+    entity_id = uuid4()
+    plan = SimpleNamespace(
+        id=uuid4(),
+        question_set_ids=["qs-1"],
+        endpoint_ids=["kimi_api"],
+    )
+    schedule = SimpleNamespace(id=uuid4(), question_set_ids=[], endpoint_ids=[])
+
+    assert _monitoring_ontology_action_type(action="upsert", plan=None) == (
+        "create_monitoring_plan"
+    )
+    assert _monitoring_ontology_action_type(action="pause", plan=plan) == (
+        "update_monitoring_plan"
+    )
+    assert _monitoring_change_type("resume") == "activate"
+    assert _monitoring_change_type("delete") == "archive"
+
+    payload = _build_monitoring_update_action_input_payload(
+        entity_id=entity_id,
+        change_type="pause",
+        cadence="weekly",
+        monitor_mode="panorama",
+        plan=plan,
+        schedule=schedule,
+        dashboard_context={},
+    )
+
+    assert payload["brand_entity_id"] == str(entity_id)
+    assert payload["monitoring_plan_id"] == str(plan.id)
+    assert payload["change_type"] == "pause"
+    assert payload["cadence"] == "weekly"
+    assert payload["question_set_ids"] == ["qs-1"]
+    assert payload["endpoint_ids"] == ["kimi_api"]
+    assert payload["schedule_id"] == str(schedule.id)
+
+
+def test_monitoring_action_cadence_prefers_explicit_frequency() -> None:
+    schedule = SimpleNamespace(frequency=ScheduleFrequency.MONTHLY)
+    plan = SimpleNamespace(frequency="weekly")
+
+    assert (
+        _monitoring_action_cadence(
+            frequency=ScheduleFrequency.DAILY,
+            plan=plan,
+            schedule=schedule,
+        )
+        == "daily"
+    )
+    assert (
+        _monitoring_action_cadence(
+            frequency=None,
+            plan=plan,
+            schedule=schedule,
+        )
+        == "weekly"
     )
 
 

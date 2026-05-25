@@ -22,29 +22,29 @@ const screenshotAssets = {
 const capabilityCards = [
   {
     title: '主动监测',
-    text: '先建立行业基线，再看具体人群和场景。',
+    text: '先建立问题池，观察品牌和竞品在 AI 回答里的位置。',
     icon: <RiSearchEyeLine className="h-5 w-5" />,
     accent: '#46d7bb',
     glow: 'rgba(70,215,187,.34)',
-    labels: ['全景分析', '场景分析', '平台覆盖'],
+    labels: ['问题池', '回答证据', '来源追溯'],
     variant: 'horizontal',
   },
   {
     title: '持续监测',
-    text: '把关键问题设成自动追踪，按天、周、月看变化。',
+    text: '把关键问题设成周期任务，持续记录变化和风险。',
     icon: <RiTimerFlashLine className="h-5 w-5" />,
     accent: '#f0c978',
     glow: 'rgba(240,201,120,.30)',
-    labels: ['自动更新', '变化提醒', '基线对比'],
+    labels: ['周期任务', '变化记录', '反馈处理'],
     variant: 'vertical',
   },
   {
     title: '官网评估',
-    text: '检查官网是否容易被 AI 读取、理解和引用。',
+    text: '检查官网是否被引用、是否可读、是否能支撑品牌叙事。',
     icon: <RiGlobalLine className="h-5 w-5" />,
     accent: '#8cc8ff',
     glow: 'rgba(140,200,255,.28)',
-    labels: ['9 维评分', '内容缺口', '优化建议'],
+    labels: ['引用占比', '内容缺口', '优化建议'],
     variant: 'diagonal',
   },
 ] as const;
@@ -52,7 +52,7 @@ const capabilityCards = [
 const reelSlides = [
   {
     kicker: '主动监测',
-    title: '主动监测',
+    title: 'AI品牌情报系统',
     image: screenshotAssets.panoramaQuestions,
     tone: 'blue',
   },
@@ -64,7 +64,7 @@ const reelSlides = [
   },
   {
     kicker: 'Chat + Canvas',
-    title: '对话驱动',
+    title: 'AI品牌情报系统',
     image: screenshotAssets.agentReport,
     tone: 'teal',
   },
@@ -73,11 +73,11 @@ const reelSlides = [
 const faqs = [
   {
     question: 'Specta 主要解决什么问题？',
-    answer: '看品牌在 AI 答案中的位置，找到竞品优势、官网短板和下一步优化方向。',
+    answer: '看品牌在 AI 答案里的表现，并把问题、回答、引用、官网观测和人的反馈沉淀成可复核的品牌情报。',
   },
   {
     question: '会覆盖哪些平台？',
-    answer: '主动监测覆盖豆包、元宝、DeepSeek、Kimi；持续监测优先覆盖豆包、元宝、Kimi。',
+    answer: '主动监测覆盖豆包、元宝、DeepSeek、Kimi；持续监测优先覆盖豆包、元宝、Kimi，并按周期记录变化。',
   },
   {
     question: '监测采集模式有哪些？',
@@ -86,7 +86,7 @@ const faqs = [
   },
   {
     question: '官网评估为什么重要？',
-    answer: '官网是 AI 答案的重要信源。内容越清晰，被引用和正确转述的机会越高。',
+    answer: '官网是品牌最应该掌握的信源。内容越清晰，越容易被 AI 回答引用、理解和正确转述。',
   },
 ] as const;
 
@@ -111,7 +111,7 @@ function ApertureLogo({ compact = false }: { compact?: boolean }) {
 function PromptBar() {
   return (
     <div className="prompt-bar">
-      <span className="prompt-text">问 Specta：本周品牌在 AI 答案里表现如何？</span>
+      <span className="prompt-text">问 Specta：为什么官网没有被引用？</span>
       <Link href="/auth?mode=apply" className="prompt-button" aria-label="申请体验">
         <RiArrowRightUpLine className="h-5 w-5" />
       </Link>
@@ -135,8 +135,8 @@ function HeroSignal() {
       </div>
 
       <div className="hero-copy">
-        <h1>看清品牌在 AI 答案中的表现</h1>
-        <p>主动监测、持续追踪、官网评估、对话交付。</p>
+        <h1>AI品牌情报系统</h1>
+        <p>问题、回答、引用、官网和人的反馈，沉淀成同一个品牌情报视图。</p>
         <PromptBar />
         <div className="hero-actions">
           <Link href="/auth?mode=apply">申请体验</Link>
@@ -151,8 +151,8 @@ function CapabilitySection() {
   return (
     <section className="section-shell" id="capabilities">
       <div className="section-heading">
-        <h2>三类能力看清 AI 可见度</h2>
-        <p>把品牌位置、用户场景、官网信源和持续变化放在一套工作台里。</p>
+        <h2>三类能力沉淀品牌情报</h2>
+        <p>把品牌位置、证据来源、官网表现和持续变化放在一套工作台里。</p>
       </div>
       <div className="capability-grid">
         {capabilityCards.map((card) => (
@@ -220,7 +220,7 @@ function SlideVisual({ slide }: { slide: (typeof reelSlides)[number] }) {
         <FramedShot
           src={slide.image}
           alt="Specta Chat 与 Canvas 真实产品界面"
-          caption="通过语言驱动 Agent 监测，都听您的指挥。"
+          caption="围绕某条情报继续追问原因、证据和下一步。"
           className="framed-shot--wide framed-shot--chat"
           priority
         />
@@ -234,14 +234,14 @@ function SlideVisual({ slide }: { slide: (typeof reelSlides)[number] }) {
         <FramedShot
           src={slide.image}
           alt="Specta 全景分析真实产品界面"
-          caption="全景分析 - 观测行业内品牌的基准表现"
+          caption="主动监测 - 建立问题池并观察品牌位置"
           className="framed-shot--panorama"
           priority
         />
         <FramedShot
           src={screenshotAssets.scenarioTouchpoints}
           alt="Specta 场景分析与用户画像触点真实产品界面"
-          caption="场景分析 - 观测具体人群痛点里品牌占据的位置"
+          caption="场景分析 - 在具体人群痛点里追溯证据"
           className="framed-shot--scenario"
         />
       </div>
@@ -264,8 +264,8 @@ function ProductReelSection() {
   return (
     <section className="product-reel-section" id="product-reel">
       <div className="section-heading section-heading--center">
-        <h2>把监测变成交付物</h2>
-        <p>用户提问，Specta 执行监测。结果以产品界面、报告和看板持续沉淀。</p>
+        <h2>AI品牌情报系统</h2>
+        <p>用户提问，Specta 执行监测。结果以证据、报告和看板持续沉淀。</p>
       </div>
       <div className="reel-window">
         <div className="reel-rail" aria-hidden="true">
@@ -300,7 +300,7 @@ function BrandPortalSection() {
       </div>
       <h2>Specta AI</h2>
       <p className="portal-heatline" data-heat-target>
-        AI时代的品牌助手，异于他者，于辽阔之地。
+        AI品牌情报系统
       </p>
       <div className="portal-actions">
         <Link href="/auth?mode=apply">申请体验</Link>
@@ -308,7 +308,7 @@ function BrandPortalSection() {
       </div>
       <div className="portal-prompt">
         <span>问 Specta</span>
-        <b>我们的官网是否容易被 AI 引用？</b>
+        <b>哪些证据支撑这个判断？</b>
         <RiArrowRightUpLine className="h-5 w-5" />
       </div>
     </section>
@@ -642,6 +642,7 @@ function HomePage() {
           font-weight: 760;
           line-height: 1.05;
           color: var(--paper);
+          white-space: nowrap;
         }
         .hero-copy p {
           margin: 24px auto 34px;
@@ -962,6 +963,7 @@ function HomePage() {
           font-size: clamp(3rem, 4.4vw, 5rem);
           font-weight: 760;
           line-height: 1.04;
+          white-space: nowrap;
         }
         .reel-copy p {
           margin-top: 26px;
@@ -1157,6 +1159,7 @@ function HomePage() {
           filter: none;
           font-size: 20px;
           line-height: 1.8;
+          white-space: nowrap;
           cursor: default;
           transition: color .35s var(--ease), filter .35s var(--ease), opacity .35s var(--ease);
         }
@@ -1319,7 +1322,7 @@ function HomePage() {
             transform: translateY(210px);
           }
           .hero-copy h1 {
-            font-size: clamp(2.2rem, 12vw, 3.4rem);
+            font-size: clamp(2rem, 10vw, 3.2rem);
             text-align: left;
           }
           .hero-copy p {
@@ -1361,7 +1364,7 @@ function HomePage() {
             margin-top: 160px;
           }
           .reel-copy h3 {
-            font-size: clamp(2.4rem, 14vw, 3.8rem);
+            font-size: clamp(2rem, 10vw, 3.3rem);
           }
           .reel-copy p {
             font-size: 16px;
@@ -1448,7 +1451,7 @@ function HomePage() {
             <ApertureLogo compact />
             <span>Specta AI</span>
           </Link>
-          <p>AI时代品牌助手</p>
+          <p>AI品牌情报系统</p>
         </div>
         <div className="footer-links">
           <a href="#capabilities">平台能力</a>

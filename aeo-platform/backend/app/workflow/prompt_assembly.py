@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
@@ -23,6 +24,34 @@ _GROUP_ORDER: tuple[str, ...] = (
 _SOFT_PROMPT_LIMIT = 5200
 _HARD_PROMPT_LIMIT = 6500
 _SECTION_SEPARATOR = "\n\n"
+
+
+def _fingerprint_text(text: str) -> str:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _metadata_int(
+    metadata: dict[str, Any],
+    key: str,
+    default: int,
+) -> int:
+    raw_value = metadata.get(key, default)
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _metadata_drop_policy(
+    metadata: dict[str, Any],
+    key: str,
+    default: PromptDropPolicy,
+) -> PromptDropPolicy:
+    raw_value = str(metadata.get(key, default) or "").strip()
+    if raw_value in {"keep", "compress", "drop"}:
+        return raw_value  # type: ignore[return-value]
+    return default
 
 
 @dataclass(frozen=True)
@@ -71,6 +100,24 @@ class PromptSection:
             return body
         return f"{self.header()}{body}"
 
+    def cache_layer(self) -> str:
+        explicit = str((self.metadata or {}).get("cache_layer") or "").strip()
+        if explicit:
+            return explicit
+        if self.group == "base_policy_sections":
+            return "static_policy"
+        if self.group == "skill_sections":
+            if (self.metadata or {}).get("static_prompt") is False:
+                return "dynamic_tool_surface"
+            if (self.metadata or {}).get("runtime_body") is not None:
+                return "static_skill_surface"
+            return "static_skill_surface"
+        if self.group == "runtime_context_sections":
+            return "dynamic_context"
+        if self.group == "runtime_reminder_sections":
+            return "ephemeral_runtime_guard"
+        return "unknown"
+
 
 def _compact_text(value: str, limit: int) -> str:
     text = " ".join(str(value or "").split())
@@ -111,7 +158,9 @@ def _render_section_with_limit(section: PromptSection, limit: int) -> str:
 def _group_total_length(rendered_parts: list[str]) -> int:
     if not rendered_parts:
         return 0
-    return sum(len(part) for part in rendered_parts) + _separator_cost(len(rendered_parts))
+    return sum(len(part) for part in rendered_parts) + _separator_cost(
+        len(rendered_parts)
+    )
 
 
 def _render_group_with_budget(
@@ -127,13 +176,13 @@ def _render_group_with_budget(
     rendered = {index: filtered[index].render() for index in keep_indices}
 
     def _current_total() -> int:
-        return _group_total_length([rendered[index] for index in keep_indices if rendered[index]])
+        return _group_total_length(
+            [rendered[index] for index in keep_indices if rendered[index]]
+        )
 
     while _current_total() > budget:
         droppable = [
-            index
-            for index in keep_indices
-            if filtered[index].drop_policy == "drop"
+            index for index in keep_indices if filtered[index].drop_policy == "drop"
         ]
         if not droppable:
             break
@@ -170,7 +219,9 @@ def _render_group_with_budget(
             if available_reduction <= 0:
                 continue
             reduction = min(overflow, available_reduction)
-            candidate = _render_section_with_limit(filtered[index], len(current) - reduction)
+            candidate = _render_section_with_limit(
+                filtered[index], len(current) - reduction
+            )
             if not candidate:
                 if filtered[index].drop_policy == "drop":
                     keep_indices.remove(index)
@@ -219,8 +270,7 @@ class PromptAssembly:
                 section.to_state_payload() for section in self.runtime_context_sections
             ],
             "runtime_reminder_sections": [
-                section.to_state_payload()
-                for section in self.runtime_reminder_sections
+                section.to_state_payload() for section in self.runtime_reminder_sections
             ],
         }
 
@@ -296,7 +346,23 @@ class PromptAssembly:
                 continue
             static_body = metadata.get("static_body")
             if static_body is not None:
-                static_sections.append(replace(section, body=str(static_body)))
+                static_sections.append(
+                    replace(
+                        section,
+                        body=str(static_body),
+                        metadata={
+                            **metadata,
+                            "cache_layer": metadata.get(
+                                "static_cache_layer",
+                                "static_skill_surface",
+                            ),
+                            "volatility": metadata.get(
+                                "static_volatility",
+                                "deployment_static",
+                            ),
+                        },
+                    )
+                )
                 continue
             static_sections.append(section)
         return tuple(static_sections)
@@ -309,10 +375,60 @@ class PromptAssembly:
             if runtime_body is not None:
                 body = str(runtime_body or "").strip()
                 if body:
-                    runtime_sections.append(replace(section, body=body))
+                    runtime_sections.append(
+                        replace(
+                            section,
+                            body=body,
+                            priority=_metadata_int(
+                                metadata,
+                                "runtime_priority",
+                                section.priority,
+                            ),
+                            drop_policy=_metadata_drop_policy(
+                                metadata,
+                                "runtime_drop_policy",
+                                section.drop_policy,
+                            ),
+                            budget_cost=_metadata_int(
+                                metadata,
+                                "runtime_budget_cost",
+                                section.budget_cost,
+                            ),
+                            metadata={
+                                **metadata,
+                                "cache_layer": metadata.get(
+                                    "runtime_cache_layer",
+                                    "dynamic_tool_surface",
+                                ),
+                                "volatility": metadata.get(
+                                    "runtime_volatility",
+                                    "per_turn",
+                                ),
+                            },
+                        )
+                    )
                 continue
             if metadata.get("static_prompt") is False:
-                runtime_sections.append(section)
+                runtime_sections.append(
+                    replace(
+                        section,
+                        priority=_metadata_int(
+                            metadata,
+                            "runtime_priority",
+                            section.priority,
+                        ),
+                        drop_policy=_metadata_drop_policy(
+                            metadata,
+                            "runtime_drop_policy",
+                            section.drop_policy,
+                        ),
+                        budget_cost=_metadata_int(
+                            metadata,
+                            "runtime_budget_cost",
+                            section.budget_cost,
+                        ),
+                    )
+                )
         return tuple(runtime_sections)
 
     def render_static_system_prompt(self) -> str:
@@ -339,3 +455,89 @@ class PromptAssembly:
 
     def render(self) -> str:
         return self._render_group_names(_GROUP_ORDER)
+
+    def cache_layer_manifest(self, *, runtime_reminder_enabled: bool) -> dict[str, Any]:
+        """Return body-free prompt layering metadata for cache observability."""
+
+        static_system_prompt = self.render_static_system_prompt()
+        runtime_reminder_message = self.render_runtime_reminder_message()
+        legacy_system_prompt = self.render()
+        static_sections = (
+            *self.base_policy_sections,
+            *self._static_skill_sections(),
+        )
+        runtime_sections = (
+            *self._runtime_skill_overlay_sections(),
+            *self.runtime_context_sections,
+            *self.runtime_reminder_sections,
+        )
+        if runtime_reminder_enabled:
+            section_entries = [
+                *(
+                    _section_cache_manifest_entry(section, placement="system")
+                    for section in static_sections
+                    if section.normalized_body()
+                ),
+                *(
+                    _section_cache_manifest_entry(
+                        section,
+                        placement="runtime_reminder",
+                    )
+                    for section in runtime_sections
+                    if section.normalized_body()
+                ),
+            ]
+        else:
+            section_entries = [
+                _section_cache_manifest_entry(section, placement="legacy_system")
+                for section in self.ordered_sections()
+                if section.normalized_body()
+            ]
+
+        return {
+            "mode": (
+                "runtime_reminder_split"
+                if runtime_reminder_enabled
+                else "legacy_single_system"
+            ),
+            "budgets": dict(_GROUP_BUDGETS),
+            "soft_prompt_limit": _SOFT_PROMPT_LIMIT,
+            "hard_prompt_limit": _HARD_PROMPT_LIMIT,
+            "static_system": {
+                "fingerprint": _fingerprint_text(static_system_prompt),
+                "length": len(static_system_prompt),
+            },
+            "runtime_reminder": {
+                "fingerprint": _fingerprint_text(runtime_reminder_message),
+                "length": len(runtime_reminder_message),
+                "enabled": runtime_reminder_enabled,
+            },
+            "legacy_system": {
+                "fingerprint": _fingerprint_text(legacy_system_prompt),
+                "length": len(legacy_system_prompt),
+            },
+            "sections": section_entries,
+        }
+
+
+def _section_cache_manifest_entry(
+    section: PromptSection,
+    *,
+    placement: str,
+) -> dict[str, Any]:
+    rendered = section.render()
+    metadata = dict(section.metadata or {})
+    return {
+        "key": section.key,
+        "title": section.title,
+        "group": section.group,
+        "placement": placement,
+        "cache_layer": section.cache_layer(),
+        "volatility": metadata.get("volatility", "unspecified"),
+        "source": metadata.get("source", ""),
+        "priority": section.priority,
+        "drop_policy": section.drop_policy,
+        "estimated_cost": section.estimated_cost(),
+        "rendered_length": len(rendered),
+        "fingerprint": _fingerprint_text(rendered),
+    }

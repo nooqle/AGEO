@@ -196,7 +196,7 @@ function normalizeRiskEvidence(value?: string): string | null {
 function buildRiskMeta(risk: DashboardHomeRiskCard): string[] {
   const meta: string[] = [];
   if (risk.platform?.trim()) {
-    meta.push(`AI来源：${risk.platform.trim()}`);
+    meta.push(`回答来源：${risk.platform.trim()}`);
   }
 
   const evidence = normalizeRiskEvidence(risk.evidence);

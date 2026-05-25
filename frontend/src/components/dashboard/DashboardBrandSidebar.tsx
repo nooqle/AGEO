@@ -4,6 +4,10 @@ import { useState } from 'react';
 import { RiAddLine, RiSettings3Line } from '@remixicon/react';
 import { BrandAvatar } from './BrandAvatar';
 import { BrandManageDialog } from './BrandManageDialog';
+import {
+  cleanEntityDisplayText,
+  splitDashboardEntities,
+} from '@/lib/brandEntityHygiene';
 import type { Entity } from '@/types/entity';
 
 interface DashboardBrandSidebarProps {
@@ -13,12 +17,6 @@ interface DashboardBrandSidebarProps {
   onAddBrand?: () => void;
 }
 
-function cleanText(value: string | null | undefined, fallback: string): string {
-  const text = (value || '').trim();
-  if (!text || /\?{2,}/.test(text)) return fallback;
-  return text;
-}
-
 export function DashboardBrandSidebar({
   entities,
   selectedBrandId,
@@ -26,6 +24,13 @@ export function DashboardBrandSidebar({
   onAddBrand,
 }: DashboardBrandSidebarProps) {
   const [manageOpen, setManageOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const { primary, internal, duplicates } = splitDashboardEntities(
+    entities,
+    selectedBrandId,
+  );
+  void internal;
+  const hiddenDuplicateCount = duplicates.length;
 
   return (
     <aside className="dashboard-shell sticky top-4 h-fit rounded-[18px] px-4 py-4">
@@ -49,10 +54,10 @@ export function DashboardBrandSidebar({
       </div>
 
       <div className="mt-4 space-y-2">
-        {entities.map((entity) => {
+        {primary.map((entity) => {
           const isSelected = entity.id === selectedBrandId;
-          const name = cleanText(entity.name, '未命名品牌');
-          const domain = cleanText(entity.domain, '未设置官网');
+          const name = cleanEntityDisplayText(entity.name, '未命名品牌');
+          const domain = cleanEntityDisplayText(entity.domain, '未设置官网');
           return (
             <button
               key={entity.id}
@@ -81,6 +86,43 @@ export function DashboardBrandSidebar({
           );
         })}
 
+        {hiddenDuplicateCount ? (
+          <div className="px-1 pt-1">
+            <button
+              type="button"
+              className="text-left text-[12px] font-medium text-[var(--text-tertiary)] transition-colors hover:text-[var(--brand-primary)]"
+              aria-expanded={moreOpen}
+              onClick={() => setMoreOpen((open) => !open)}
+            >
+              同名品牌 {hiddenDuplicateCount}
+            </button>
+            {moreOpen ? (
+              <div className="mt-2 space-y-1.5 rounded-[13px] border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-2">
+                {duplicates.map((entity) => {
+                  const name = cleanEntityDisplayText(entity.name, '未命名品牌');
+                  const domain = cleanEntityDisplayText(entity.domain, '未设置官网');
+                  return (
+                    <div
+                      key={entity.id}
+                      className="grid w-full grid-cols-[28px_minmax(0,1fr)] items-center gap-2 rounded-lg px-2 py-2"
+                    >
+                      <BrandAvatar name={name} domain={entity.domain} size={28} />
+                      <span className="min-w-0">
+                        <span className="block truncate text-[12px] font-medium text-[var(--text-secondary)]">
+                          {name}
+                        </span>
+                        <span className="block truncate text-[11px] text-[var(--text-tertiary)]">
+                          {domain}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <button
           type="button"
           onClick={onAddBrand}
@@ -101,12 +143,17 @@ export function DashboardMobileBrandSwitcher({
   entities,
   selectedBrandId,
   onSelectBrand,
-  onAddBrand,
 }: DashboardBrandSidebarProps) {
   const [manageOpen, setManageOpen] = useState(false);
   const selectedBrand = entities.find((entity) => entity.id === selectedBrandId) || entities[0];
-  const selectedName = cleanText(selectedBrand?.name, '未命名品牌');
-  const selectedDomain = cleanText(selectedBrand?.domain, '未设置官网');
+  const selectedName = cleanEntityDisplayText(selectedBrand?.name, '未命名品牌');
+  const selectedDomain = cleanEntityDisplayText(selectedBrand?.domain, '未设置官网');
+  const { primary, internal, duplicates } = splitDashboardEntities(
+    entities,
+    selectedBrandId,
+  );
+  const hiddenCount = duplicates.length;
+  void internal;
 
   return (
     <section className="dashboard-shell rounded-[16px] px-4 py-3 xl:hidden">
@@ -123,14 +170,18 @@ export function DashboardMobileBrandSwitcher({
             style={{ borderColor: 'var(--border-subtle)' }}
             aria-label="切换当前品牌"
           >
-            {entities.map((entity) => (
-              <option key={entity.id} value={entity.id}>
-                {cleanText(entity.name, '未命名品牌')}
-              </option>
-            ))}
+            {primary.length ? (
+              <optgroup label="正式品牌">
+                {primary.map((entity) => (
+                  <option key={entity.id} value={entity.id}>
+                    {cleanEntityDisplayText(entity.name, '未命名品牌')}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
           </select>
           <span className="mt-1 block truncate text-[12px] text-[var(--text-tertiary)]">
-            {selectedDomain}
+            {hiddenCount ? `${selectedDomain} · 已收起 ${hiddenCount} 个同名品牌` : selectedDomain}
           </span>
         </label>
         <button
@@ -144,16 +195,6 @@ export function DashboardMobileBrandSwitcher({
           <RiSettings3Line className="h-4 w-4" />
         </button>
       </div>
-
-      <button
-        type="button"
-        onClick={onAddBrand}
-        className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-dashed text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
-        style={{ background: 'color-mix(in srgb, var(--bg-secondary) 76%, var(--bg-tertiary) 24%)' }}
-      >
-        <RiAddLine className="h-4 w-4" />
-        新建品牌
-      </button>
 
       <BrandManageDialog open={manageOpen} onClose={() => setManageOpen(false)} />
     </section>

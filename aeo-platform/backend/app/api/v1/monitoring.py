@@ -12,12 +12,14 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
-from app.models.snapshot import AnalysisSnapshot
+from app.models.monitoring_plan import MonitoringQuestionSet
 from app.models.monitoring_schedule import ScheduleFrequency, ScheduleStatus
+from app.models.snapshot import AnalysisSnapshot
+from app.services.access_scope_service import AccessScopeService
+from app.services.brand_action_service import BrandActionService
 from app.services.entity_service import EntityService
 from app.services.monitoring_plan_service import MonitoringPlanService
 from app.services.monitoring_service import MonitoringService
-from app.services.access_scope_service import AccessScopeService
 from app.services.task_service import task_to_dict
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,115 @@ def _parse_uuid(value: str, field_name: str = "id") -> UUID:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid UUID for {field_name}: {value}",
         )
+
+
+def _question_ids_from_questions(questions: list[Any] | None) -> list[str]:
+    question_ids: list[str] = []
+    seen: set[str] = set()
+    for index, question in enumerate(questions or [], start=1):
+        if isinstance(question, dict):
+            raw_id = (
+                question.get("question_id")
+                or question.get("id")
+                or question.get("core_question")
+                or question.get("question")
+            )
+        else:
+            raw_id = question
+        question_id = str(raw_id or f"q_{index:03d}").strip()
+        if question_id and question_id not in seen:
+            question_ids.append(question_id)
+            seen.add(question_id)
+    return question_ids
+
+
+async def _question_ids_for_question_set_ids(
+    db: AsyncSession,
+    question_set_ids: list[str],
+) -> list[str]:
+    parsed_ids: list[UUID] = []
+    for item in question_set_ids or []:
+        try:
+            parsed_ids.append(UUID(str(item)))
+        except (TypeError, ValueError):
+            continue
+    if not parsed_ids:
+        return []
+    rows = (
+        (
+            await db.execute(
+                select(MonitoringQuestionSet).where(
+                    MonitoringQuestionSet.id.in_(parsed_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    question_ids: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for question_id in _question_ids_from_questions(row.questions or []):
+            if question_id not in seen:
+                question_ids.append(question_id)
+                seen.add(question_id)
+    return question_ids
+
+
+async def _record_monitoring_user_action(
+    db: AsyncSession,
+    *,
+    current_user: Any,
+    entity_id: UUID,
+    action_type: str,
+    origin_event_id: str,
+    input_payload: dict[str, Any],
+    output_payload: dict[str, Any] | None = None,
+    target_object_type: str | None = None,
+    target_object_id: str | None = None,
+) -> str | None:
+    try:
+        service = BrandActionService(db)
+        record = await service.record_applied_action(
+            entity_id=entity_id,
+            user_id=current_user.id,
+            action_type=action_type,
+            actor_type="user",
+            origin_surface="monitoring_api",
+            origin_event_id=origin_event_id,
+            input_payload=input_payload,
+            output_payload=output_payload,
+            decision_type=action_type,
+            decision_key=str(input_payload.get("feedback_type") or action_type),
+            target_object_type=target_object_type,
+            target_object_id=target_object_id,
+        )
+        if target_object_type == "monitoring_plan" and target_object_id:
+            await service.links.ensure_link(
+                entity_id=entity_id,
+                link_type="action_record_handles_monitoring_plan",
+                from_object_type="action_record",
+                from_object_id=str(record.id),
+                to_object_type="monitoring_plan",
+                to_object_id=str(target_object_id),
+                source_action_record_id=record.id,
+                extra_metadata={"action_type": action_type},
+            )
+        await db.commit()
+        return str(record.id)
+    except Exception as exc:
+        logger.warning("[Monitoring] Failed to record user action: %s", exc)
+        try:
+            await db.rollback()
+        except Exception as rollback_exc:
+            logger.warning(
+                "[Monitoring] Failed to roll back user action logging: %s",
+                rollback_exc,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="监测动作记录失败",
+        ) from exc
 
 
 def _parse_schedule_status(value: str) -> ScheduleStatus:
@@ -241,7 +352,9 @@ async def create_question_set(
     entity_service = EntityService(db)
     entity_model = await entity_service.get_entity_model(str(entity_id), current_user)
     if entity_model is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found"
+        )
     if not AccessScopeService.can_manage_entity(entity_model, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -315,9 +428,28 @@ async def append_question_set_questions(
             question_set_id=_parse_uuid(question_set_id, "question_set_id"),
             user_id=current_user.id,
             questions=body.questions,
+            commit=False,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await _record_monitoring_user_action(
+        db,
+        current_user=current_user,
+        entity_id=question_set.entity_id,
+        action_type="record_user_feedback",
+        origin_event_id=str(question_set.id),
+        input_payload={
+            "actor_id": str(current_user.id),
+            "feedback_type": "append_question_set_questions",
+            "question_set_id": str(question_set.id),
+            "added_question_count": len(body.questions or []),
+        },
+        output_payload={
+            "question_set_id": str(question_set.id),
+            "question_count": question_set.question_count,
+        },
+    )
+    await db.refresh(question_set)
     return {"question_set": await service.question_set_to_dict(question_set)}
 
 
@@ -332,9 +464,29 @@ async def confirm_question_set(
         question_set = await service.confirm_question_set(
             question_set_id=_parse_uuid(question_set_id, "question_set_id"),
             user_id=current_user.id,
+            commit=False,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await _record_monitoring_user_action(
+        db,
+        current_user=current_user,
+        entity_id=question_set.entity_id,
+        action_type="confirm_question_set",
+        origin_event_id=str(question_set.id),
+        input_payload={
+            "actor_id": str(current_user.id),
+            "question_set_id": str(question_set.id),
+            "question_ids": _question_ids_from_questions(question_set.questions or []),
+            "question_count": question_set.question_count,
+            "monitor_mode": question_set.monitor_mode,
+        },
+        output_payload={
+            "question_set_id": str(question_set.id),
+            "status": question_set.status,
+        },
+    )
+    await db.refresh(question_set)
     return {"question_set": await service.question_set_to_dict(question_set)}
 
 
@@ -348,7 +500,9 @@ async def create_monitoring_plan(
     entity_service = EntityService(db)
     entity_model = await entity_service.get_entity_model(str(entity_id), current_user)
     if entity_model is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found"
+        )
     if not AccessScopeService.can_manage_entity(entity_model, current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -370,9 +524,43 @@ async def create_monitoring_plan(
             preferred_hour=body.preferred_hour,
             timezone_str=body.timezone,
             title=body.title,
+            commit=False,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    question_ids = await _question_ids_for_question_set_ids(
+        db,
+        [str(item) for item in plan.question_set_ids or body.question_set_ids],
+    )
+    if not question_ids:
+        question_ids = [
+            str(item) for item in plan.question_set_ids or body.question_set_ids
+        ]
+    await _record_monitoring_user_action(
+        db,
+        current_user=current_user,
+        entity_id=entity_id,
+        action_type="create_monitoring_plan",
+        origin_event_id=str(plan.id),
+        input_payload={
+            "actor_id": str(current_user.id),
+            "question_ids": question_ids,
+            "cadence": plan.frequency or body.frequency,
+            "monitor_mode": body.monitor_mode,
+            "question_set_ids": body.question_set_ids,
+            "endpoint_ids": body.endpoint_ids,
+            "run_policy": body.run_policy,
+            "status": body.status,
+            "frequency": body.frequency,
+        },
+        output_payload={
+            "monitoring_plan_id": str(plan.id),
+            "status": plan.status,
+        },
+        target_object_type="monitoring_plan",
+        target_object_id=str(plan.id),
+    )
+    await db.refresh(plan)
     return {"plan": await service.plan_to_dict(plan)}
 
 
@@ -420,9 +608,13 @@ async def get_monitoring_plan(
     db: AsyncSession = Depends(get_db),
 ):
     service = MonitoringPlanService(db)
-    plan = await service.get_plan(_parse_uuid(plan_id, "plan_id"), user_id=current_user.id)
+    plan = await service.get_plan(
+        _parse_uuid(plan_id, "plan_id"), user_id=current_user.id
+    )
     if plan is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found"
+        )
     return {"plan": await service.plan_to_dict(plan)}
 
 
@@ -450,9 +642,31 @@ async def update_monitoring_plan(
             preferred_hour=body.preferred_hour,
             timezone_str=body.timezone,
             title=body.title,
+            commit=False,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await _record_monitoring_user_action(
+        db,
+        current_user=current_user,
+        entity_id=plan.entity_id,
+        action_type="update_monitoring_plan",
+        origin_event_id=f"{plan.id}:update",
+        input_payload={
+            "actor_id": str(current_user.id),
+            "monitoring_plan_id": str(plan.id),
+            "change_type": "update",
+            "changed_fields": body.model_dump(exclude_unset=True),
+        },
+        output_payload={
+            "monitoring_plan_id": str(plan.id),
+            "status": plan.status,
+            "change_type": "update",
+        },
+        target_object_type="monitoring_plan",
+        target_object_id=str(plan.id),
+    )
+    await db.refresh(plan)
     return {"plan": await service.plan_to_dict(plan)}
 
 
@@ -467,9 +681,30 @@ async def activate_monitoring_plan(
         plan = await service.activate_plan(
             plan_id=_parse_uuid(plan_id, "plan_id"),
             user_id=current_user.id,
+            commit=False,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await _record_monitoring_user_action(
+        db,
+        current_user=current_user,
+        entity_id=plan.entity_id,
+        action_type="update_monitoring_plan",
+        origin_event_id=f"{plan.id}:activate",
+        input_payload={
+            "actor_id": str(current_user.id),
+            "monitoring_plan_id": str(plan.id),
+            "change_type": "activate",
+        },
+        output_payload={
+            "monitoring_plan_id": str(plan.id),
+            "status": plan.status,
+            "change_type": "activate",
+        },
+        target_object_type="monitoring_plan",
+        target_object_id=str(plan.id),
+    )
+    await db.refresh(plan)
     return {"plan": await service.plan_to_dict(plan)}
 
 
@@ -484,9 +719,68 @@ async def pause_monitoring_plan(
         plan = await service.pause_plan(
             plan_id=_parse_uuid(plan_id, "plan_id"),
             user_id=current_user.id,
+            commit=False,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await _record_monitoring_user_action(
+        db,
+        current_user=current_user,
+        entity_id=plan.entity_id,
+        action_type="update_monitoring_plan",
+        origin_event_id=f"{plan.id}:pause",
+        input_payload={
+            "actor_id": str(current_user.id),
+            "monitoring_plan_id": str(plan.id),
+            "change_type": "pause",
+        },
+        output_payload={
+            "monitoring_plan_id": str(plan.id),
+            "status": plan.status,
+            "change_type": "pause",
+        },
+        target_object_type="monitoring_plan",
+        target_object_id=str(plan.id),
+    )
+    await db.refresh(plan)
+    return {"plan": await service.plan_to_dict(plan)}
+
+
+@router.post("/plans/{plan_id}/archive")
+async def archive_monitoring_plan(
+    plan_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = MonitoringPlanService(db)
+    try:
+        plan = await service.archive_plan(
+            plan_id=_parse_uuid(plan_id, "plan_id"),
+            user_id=current_user.id,
+            commit=False,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await _record_monitoring_user_action(
+        db,
+        current_user=current_user,
+        entity_id=plan.entity_id,
+        action_type="update_monitoring_plan",
+        origin_event_id=f"{plan.id}:archive",
+        input_payload={
+            "actor_id": str(current_user.id),
+            "monitoring_plan_id": str(plan.id),
+            "change_type": "archive",
+        },
+        output_payload={
+            "monitoring_plan_id": str(plan.id),
+            "status": plan.status,
+            "change_type": "archive",
+        },
+        target_object_type="monitoring_plan",
+        target_object_id=str(plan.id),
+    )
+    await db.refresh(plan)
     return {"plan": await service.plan_to_dict(plan)}
 
 
@@ -812,7 +1106,9 @@ async def get_panorama_status(
         brand_rank_total = (
             report_data.get("metric_bundle", {}).get("ranked_brand_count")
             if isinstance(report_data.get("metric_bundle"), dict)
-            and isinstance(report_data.get("metric_bundle", {}).get("ranked_brand_count"), int)
+            and isinstance(
+                report_data.get("metric_bundle", {}).get("ranked_brand_count"), int
+            )
             else None
         )
     if not isinstance(brand_rank_total, int):
@@ -841,11 +1137,17 @@ async def get_panorama_status(
     return {
         "panorama_status": {
             "has_report": True,
-            "mention_rate": mention_rate if isinstance(mention_rate, (int, float)) else None,
+            "mention_rate": (
+                mention_rate if isinstance(mention_rate, (int, float)) else None
+            ),
             "brand_rank": brand_rank if isinstance(brand_rank, int) else None,
-            "brand_rank_total": brand_rank_total if isinstance(brand_rank_total, int) else None,
+            "brand_rank_total": (
+                brand_rank_total if isinstance(brand_rank_total, int) else None
+            ),
             "brand_rank_label": brand_rank_label,
-            "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "created_at": (
+                snapshot.created_at.isoformat() if snapshot.created_at else None
+            ),
             "triggered_by": snapshot.triggered_by,
             "session_id": str(snapshot.session_id) if snapshot.session_id else None,
         }

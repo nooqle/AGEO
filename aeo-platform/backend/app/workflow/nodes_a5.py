@@ -163,6 +163,98 @@ async def _resolve_scenario_baseline_context(
         return resolved_existing_report, resolved_existing_id
 
 
+def _uuid_or_none(value: object) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _persist_brand_intelligence_report(
+    *,
+    state: AgentState,
+    report_kind: str,
+    title: str,
+    artifact_key: str,
+    artifact_message_id: str,
+    payload: dict[str, Any],
+) -> None:
+    """Dual-write A5 report output into the durable brand intelligence layer."""
+
+    entity_uuid = _uuid_or_none(state.get("entity_id"))
+    if entity_uuid is None:
+        return
+    session_uuid = _uuid_or_none(state.get("session_id"))
+    if session_uuid is None:
+        logger.info(
+            "[A5] Skipping brand intelligence report projection for non-UUID session"
+        )
+        return
+    message_uuid = _uuid_or_none(artifact_message_id)
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.brand_action_service import BrandActionService
+        from app.services.brand_intelligence_projection_service import (
+            BrandIntelligenceProjectionService,
+        )
+
+        async with AsyncSessionLocal() as db:
+            action_service = BrandActionService(db)
+            action_record = await action_service.start_action(
+                entity_id=entity_uuid,
+                session_id=session_uuid,
+                user_id=_uuid_or_none(state.get("user_id")),
+                parent_action_record_id=_uuid_or_none(
+                    state.get("latest_user_action_record_id")
+                ),
+                actor_type="agent",
+                origin_surface="workflow_node",
+                origin_event_id=(
+                    str(state.get("run_id") or artifact_message_id or "") or None
+                ),
+                action_type="generate_report",
+                input_payload={
+                    "report_kind": report_kind,
+                    "artifact_id": artifact_key,
+                },
+            )
+            service = BrandIntelligenceProjectionService(db)
+            try:
+                report_version = await service.persist_report_artifact(
+                    entity_id=entity_uuid,
+                    session_id=session_uuid,
+                    report_kind=report_kind,
+                    title=title,
+                    artifact_id=artifact_key,
+                    payload=payload,
+                    message_id=message_uuid,
+                    source_action_record_id=action_record.id,
+                )
+                await action_service.complete_action(
+                    action_record,
+                    output_payload={
+                        "report_version_id": str(report_version.id),
+                        "report_id": report_version.report_id,
+                        "version": report_version.version,
+                    },
+                )
+                await db.commit()
+            except Exception as inner_exc:
+                await action_service.fail_action(
+                    action_record,
+                    error_message=str(inner_exc),
+                )
+                await db.commit()
+                raise
+        logger.info(
+            "[A5] Brand intelligence report projected: report_id=%s version=%s",
+            report_version.report_id,
+            report_version.version,
+        )
+    except Exception as exc:
+        logger.warning("[A5] Brand intelligence report projection failed: %s", exc)
+
+
 async def a5_analytics_node(state: AgentState) -> Command:
     """A5: Analyze fetch results and generate comprehensive report.
 
@@ -584,6 +676,14 @@ async def a5_analytics_node(state: AgentState) -> Command:
         )
         if not artifact_validation.passed:
             raise RuntimeError(artifact_validation.reason)
+        await _persist_brand_intelligence_report(
+            state=state,
+            report_kind=report_kind,
+            title=report_title,
+            artifact_key=artifact_key,
+            artifact_message_id=artifact_message_id,
+            payload=report_artifact_data,
+        )
         _ca = metrics.get("citation_analysis", {})
         logger.info(
             "[A5][Artifact] citation_analysis in artifact: total=%s, domains=%s",

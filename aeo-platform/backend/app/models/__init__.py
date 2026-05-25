@@ -6,6 +6,22 @@ from app.models.aio_runtime_session import (
     AioRuntimeTakeover,
 )
 from app.models.brand import BrandProfile
+from app.models.brand_intelligence import (
+    BrandActionRecord,
+    BrandAudiencePersona,
+    BrandCitationSource,
+    BrandCompetitorEntity,
+    BrandEvidenceSet,
+    BrandIntelligenceFinding,
+    BrandIntelligenceQuestion,
+    BrandMetricSnapshot,
+    BrandMention,
+    BrandObjectLink,
+    BrandPlatformAnswer,
+    BrandReportVersion,
+    BrandUserDecision,
+    BrandUsageScenario,
+)
 from app.models.domain_memory import BrandDomainRelation, DomainIdentityRecord
 from app.models.entity import Entity, EntityVisibilityScope
 from app.models.fetch_run_platform_state import FetchRunPlatformState
@@ -75,6 +91,20 @@ __all__ = [
     "Session",
     "Message",
     "BrandProfile",
+    "BrandActionRecord",
+    "BrandAudiencePersona",
+    "BrandCitationSource",
+    "BrandCompetitorEntity",
+    "BrandEvidenceSet",
+    "BrandIntelligenceFinding",
+    "BrandIntelligenceQuestion",
+    "BrandMetricSnapshot",
+    "BrandMention",
+    "BrandObjectLink",
+    "BrandPlatformAnswer",
+    "BrandReportVersion",
+    "BrandUserDecision",
+    "BrandUsageScenario",
     "DomainIdentityRecord",
     "BrandDomainRelation",
     "User",

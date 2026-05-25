@@ -20,6 +20,7 @@ interface DashboardPeriodMonitoringProps {
   selectedBrandName?: string;
   onMonitorModeChange?: (mode: DashboardMonitorMode) => void;
   onDateRangeChange?: (range: DashboardPeriodRange) => void;
+  onPrepareMonitoring?: () => void;
   isLoading?: boolean;
 }
 
@@ -310,6 +311,7 @@ export function DashboardPeriodMonitoring({
   selectedBrandName,
   onMonitorModeChange,
   onDateRangeChange,
+  onPrepareMonitoring,
   isLoading = false,
 }: DashboardPeriodMonitoringProps) {
   const [isQuestionDialogOpen, setIsQuestionDialogOpen] = useState(false);
@@ -347,6 +349,12 @@ export function DashboardPeriodMonitoring({
         positive_count: 0,
         negative_count: 0,
       }));
+  const hasMonitoringSignals = Boolean(
+    home?.monitoring_plan ||
+      home?.latest_report?.session_id ||
+      periodDataCount > 0 ||
+      platformRows.length > 0,
+  );
 
   const loadQuestionSets = useCallback(async () => {
     if (!selectedBrandId) {
@@ -394,6 +402,34 @@ export function DashboardPeriodMonitoring({
           {Array.from({ length: 4 }).map((_, index) => (
             <div key={index} className="h-24 rounded-[16px] animate-shimmer" />
           ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (!hasMonitoringSignals) {
+    return (
+      <section className="dashboard-shell rounded-[18px] px-5 py-5">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div>
+            <div className="text-[12px] font-medium text-[var(--brand-primary)]">
+              监测尚未启动
+            </div>
+            <h2 className="mt-2 text-[20px] font-semibold text-[var(--text-primary)]">
+              先把问题池、来源平台和确认项准备好
+            </h2>
+            <p className="mt-2 max-w-3xl text-[13px] leading-7 text-[var(--text-secondary)]">
+              当品牌对象已经沉淀出问题、回答、引用和报告后，系统会把它们变成可重复运行的监测计划；在此之前，首页只保留下一步入口，不展示空趋势。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onPrepareMonitoring}
+            className="min-h-10 rounded-lg border px-4 py-2 text-[13px] font-medium text-[var(--brand-primary)] transition-colors hover:bg-[var(--brand-bg)]"
+            style={{ borderColor: 'color-mix(in srgb, var(--brand-primary) 30%, var(--border-subtle) 70%)' }}
+          >
+            准备监测
+          </button>
         </div>
       </section>
     );

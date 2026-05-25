@@ -20,6 +20,78 @@ from app.workflow.state import AgentState
 logger = logging.getLogger(__name__)
 
 
+def _uuid_or_none(value: object):
+    try:
+        from uuid import UUID
+
+        return UUID(str(value)) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _record_table_import_apply_action(
+    state: AgentState,
+    *,
+    table_kind: str,
+    intake_result: dict[str, Any],
+    output_payload: dict[str, Any],
+) -> None:
+    entity_uuid = _uuid_or_none(state.get("entity_id"))
+    if entity_uuid is None:
+        return
+    try:
+        from app.services.brand_action_service import BrandActionService
+
+        async with AsyncSessionLocal() as db:
+            action_service = BrandActionService(db)
+            await action_service.record_applied_action(
+                entity_id=entity_uuid,
+                session_id=_uuid_or_none(state.get("session_id")),
+                user_id=_uuid_or_none(state.get("user_id")),
+                parent_action_record_id=_uuid_or_none(
+                    state.get("latest_user_action_record_id")
+                ),
+                action_type="apply_table_import",
+                actor_type="system",
+                origin_surface="workflow_node",
+                origin_event_id=str(state.get("run_id") or "") or None,
+                input_payload=_table_import_action_input_payload(
+                    state=state,
+                    table_kind=table_kind,
+                    intake_result=intake_result,
+                ),
+                output_payload=output_payload,
+            )
+            await db.commit()
+    except Exception as exc:
+        logger.warning("[TableImportApply] Failed to record ontology action: %s", exc)
+
+
+def _table_import_action_input_payload(
+    *,
+    state: AgentState,
+    table_kind: str,
+    intake_result: dict[str, Any],
+) -> dict[str, Any]:
+    normalized_payload = dict(intake_result.get("normalized_payload") or {})
+    detected_columns = dict(intake_result.get("detected_columns") or {})
+    rows = (
+        normalized_payload.get("rows")
+        or normalized_payload.get("competitors")
+        or normalized_payload.get("questions")
+        or normalized_payload.get("links")
+        or []
+    )
+    mapping = detected_columns or {"table_kind": table_kind}
+    return {
+        "actor_id": str(state.get("user_id") or "") or None,
+        "mapping": mapping,
+        "rows": rows,
+        "table_kind": table_kind,
+        "source": "confirmed_table_import",
+    }
+
+
 async def table_import_apply_node(state: AgentState) -> Command:
     session_id = state["session_id"]
     action = dict(state.get("confirmed_import_action") or {})
@@ -144,6 +216,15 @@ async def _apply_brand_competitor_import(
         message="品牌/竞品交付物已更新",
         status="completed",
     )
+    await _record_table_import_apply_action(
+        state,
+        table_kind="brand_competitor_info",
+        intake_result=result,
+        output_payload={
+            "brand_profile_fields": sorted(brand_profile_patch.keys()),
+            "competitor_count": len(merged_competitors),
+        },
+    )
 
     return Command(
         update={
@@ -231,6 +312,12 @@ async def _apply_link_list_import(
         progress=1.0,
         message=f"链接清单交付物已更新，共 {len(rows)} 条",
         status="completed",
+    )
+    await _record_table_import_apply_action(
+        state,
+        table_kind="link_list",
+        intake_result=result,
+        output_payload={"link_count": len(rows)},
     )
 
     return Command(

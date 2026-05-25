@@ -217,6 +217,74 @@ async def _persist_draft_question_set(
         return None
 
 
+def _uuid_or_none(value: object) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _persist_brand_intelligence_questions(
+    state: AgentState,
+    *,
+    payload: dict,
+) -> None:
+    """Dual-write A3 questions into the durable brand intelligence layer."""
+
+    entity_uuid = _uuid_or_none(state.get("entity_id"))
+    if entity_uuid is None:
+        return
+    session_uuid = _uuid_or_none(state.get("session_id"))
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.brand_action_service import BrandActionService
+        from app.services.brand_intelligence_projection_service import (
+            BrandIntelligenceProjectionService,
+        )
+
+        async with AsyncSessionLocal() as db:
+            action_service = BrandActionService(db)
+            action_record = await action_service.start_action(
+                entity_id=entity_uuid,
+                session_id=session_uuid,
+                user_id=_uuid_or_none(state.get("user_id")),
+                parent_action_record_id=_uuid_or_none(
+                    state.get("latest_user_action_record_id")
+                ),
+                actor_type="agent",
+                origin_surface="workflow_node",
+                origin_event_id=str(state.get("run_id") or "") or None,
+                action_type="generate_question_set",
+                input_payload={
+                    "generation_mode": payload.get("generation_mode")
+                    or "workflow_generated",
+                    "question_count": len(payload.get("simulated_questions") or []),
+                },
+            )
+            service = BrandIntelligenceProjectionService(db)
+            try:
+                rows = await service.persist_questions(
+                    entity_id=entity_uuid,
+                    session_id=session_uuid,
+                    payload=payload,
+                )
+                await action_service.complete_action(
+                    action_record,
+                    output_payload={"questions": len(rows)},
+                )
+                await db.commit()
+            except Exception as inner_exc:
+                await action_service.fail_action(
+                    action_record,
+                    error_message=str(inner_exc),
+                )
+                await db.commit()
+                raise
+        logger.info("[A3] Brand intelligence questions projected: %d", len(rows))
+    except Exception as exc:
+        logger.warning("[A3] Brand intelligence question projection failed: %s", exc)
+
+
 async def _question_set_confirmation_update(
     state: AgentState,
     *,
@@ -506,6 +574,7 @@ async def _a3_uploaded_list_mode(state: AgentState) -> Command:
         monitor_mode=monitor_mode,
         question_count=len(flattened_questions),
     )
+    await _persist_brand_intelligence_questions(state, payload=result_payload)
 
     return Command(
         update={
@@ -737,6 +806,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             monitor_mode="panorama",
             question_count=len(flattened_questions),
         )
+        await _persist_brand_intelligence_questions(state, payload=generated_payload)
 
         return Command(
             update={
@@ -1035,6 +1105,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             monitor_mode="scenario",
             question_count=len(flattened_questions),
         )
+        await _persist_brand_intelligence_questions(state, payload=generated_payload)
 
         return Command(
             update={
@@ -1388,6 +1459,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             monitor_mode="panorama",
             question_count=len(flattened_questions),
         )
+        await _persist_brand_intelligence_questions(state, payload=generated_payload)
 
         # Dual-write: baseline_questions + questions
         return Command(

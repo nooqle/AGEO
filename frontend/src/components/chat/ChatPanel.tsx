@@ -52,6 +52,21 @@ interface ChatPanelProps {
   exampleBrands?: ExampleBrand[];
 }
 
+interface DashboardHandoffView {
+  entrySource: string | null;
+  entityId: string | null;
+  brand: string | null;
+  monitorMode: string | null;
+  questionSetLabel: string | null;
+  sampleSummary: string | null;
+  currentMetrics: string | null;
+  taskTitle: string | null;
+  taskGoal: string | null;
+  cleanHandoff: string | null;
+  aiSources: string | null;
+  draft: string | null;
+}
+
 const INITIAL_HISTORY_MESSAGE_LIMIT = 30;
 const HISTORY_BACKFILL_BATCH_SIZE = 50;
 const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
@@ -60,15 +75,22 @@ const DASHBOARD_AUTO_START_QUERY_KEYS = [
   'brand',
   'draft',
   'autosend',
+  'handoff',
   'entry_source',
   'monitor_mode',
   'question_set_label',
   'sample_summary',
+  'current_metrics',
+  'task_title',
+  'task_goal',
+  'clean_handoff',
   'ai_sources',
   'entity_id',
   'monitoring_plan_id',
   'question_set_ids',
   'endpoint_ids',
+  'monitoring_run_id',
+  'error_stage',
 ];
 
 const BROWSER_MESSAGE_KEYWORDS: Record<
@@ -129,6 +151,94 @@ function normalizeArtifactCategory(value: unknown): ArtifactCategory | undefined
     return value;
   }
   return undefined;
+}
+
+function dashboardEntryLabel(value: string | null): string {
+  if (value === 'dashboard_new_brand') return '新建品牌';
+  if (value === 'dashboard_command_bar') return '看板反馈';
+  return '品牌看板';
+}
+
+function dashboardMonitorModeLabel(value: string | null): string {
+  if (value?.includes('scenario')) return '用户场景监测';
+  if (value?.includes('panorama')) return '全景监测';
+  return '品牌情报';
+}
+
+function compactDashboardText(value: string | null, fallback: string): string {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  return text.length > 96 ? `${text.slice(0, 95)}...` : text;
+}
+
+function DashboardHandoffEmptyState({
+  context,
+  disabled,
+  onSend,
+}: {
+  context: DashboardHandoffView;
+  disabled?: boolean;
+  onSend: () => void;
+}) {
+  const brand = compactDashboardText(context.brand, '当前品牌');
+  const taskTitle = compactDashboardText(context.taskTitle, '继续处理品牌情报');
+  const objective = compactDashboardText(
+    context.taskGoal || context.draft,
+    '基于当前证据继续解释、补证或生成内容。',
+  );
+  const facts = [
+    ['要处理的事', taskTitle],
+    ['已分析范围', compactDashboardText(context.sampleSummary, '等待读取本轮证据')],
+    ['关键指标', compactDashboardText(context.currentMetrics, '等待读取指标')],
+    ['问题范围', compactDashboardText(context.questionSetLabel, dashboardMonitorModeLabel(context.monitorMode))],
+  ];
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col items-stretch justify-center py-16">
+      <div className="rounded-[16px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-5 py-5">
+        <div className="text-[12px] font-medium text-[var(--brand-primary)]">
+          从看板继续
+        </div>
+        <h2 className="mt-2 text-[20px] font-semibold leading-7 text-[var(--text-primary)]">
+          {brand}
+        </h2>
+        <p className="mt-3 text-[13px] leading-6 text-[var(--text-secondary)]">
+          {objective}
+        </p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {facts.map(([label, value]) => (
+            <div
+              key={label}
+              className="rounded-[10px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2"
+            >
+              <div className="text-[11px] text-[var(--text-tertiary)]">{label}</div>
+              <div className="mt-1 truncate text-[13px] font-medium text-[var(--text-primary)]">
+                {value}
+              </div>
+            </div>
+          ))}
+        </div>
+        {context.aiSources ? (
+          <div className="mt-3 text-[12px] leading-5 text-[var(--text-tertiary)]">
+            回答平台：{context.aiSources}
+          </div>
+        ) : null}
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onSend}
+            className="inline-flex min-h-10 items-center justify-center rounded-lg bg-[var(--brand-primary)] px-4 py-2 text-[13px] font-semibold text-[var(--brand-contrast)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            发送到对话
+          </button>
+          <span className="text-[12px] leading-5 text-[var(--text-tertiary)]">
+            这里用于补充反馈、解释原因或生成下一步内容。
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function looksLikeCorruptedQuestionMarks(value: unknown): boolean {
@@ -594,18 +704,56 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const initialArtifactId = searchParams.get('artifact_id');
   const initialOutputId = searchParams.get('output_id');
   const [dashboardHandoff, setDashboardHandoff] = useState<DashboardChatHandoffPayload | null>(null);
+  const [dashboardHandoffChecked, setDashboardHandoffChecked] = useState(Boolean(initialArtifactId));
   const hasAutoStartQueryParams = useMemo(
     () => !initialArtifactId && DASHBOARD_AUTO_START_QUERY_KEYS.some((key) => searchParams.has(key)),
     [initialArtifactId, searchParams],
   );
+  const shouldReadDashboardHandoff = !initialArtifactId && searchParams.get('handoff') === '1';
+  const isCleanDashboardHandoff =
+    !initialArtifactId &&
+    searchParams.get('handoff') === '1' &&
+    searchParams.get('clean_handoff') === '1';
   const readAutoStartParam = useCallback((key: string): string | null => {
     return readDashboardChatHandoffValue(dashboardHandoff, key) || searchParams.get(key)?.trim() || null;
   }, [dashboardHandoff, searchParams]);
+  const readDashboardHandoffOnlyParam = useCallback((key: string): string | null => {
+    return readDashboardChatHandoffValue(dashboardHandoff, key);
+  }, [dashboardHandoff]);
   const autoStartBrand = initialArtifactId ? null : readAutoStartParam('brand');
-  const autoStartDraft = initialArtifactId ? null : readAutoStartParam('draft');
+  const autoStartDraft = initialArtifactId ? null : readDashboardHandoffOnlyParam('draft');
   const shouldAutoSendDraft =
     !initialArtifactId &&
-    (isDashboardChatHandoffAutosend(dashboardHandoff) || searchParams.get('autosend') === '1');
+    isDashboardChatHandoffAutosend(dashboardHandoff);
+  const dashboardHandoffView = useMemo(() => {
+    if (initialArtifactId) return null;
+    const entrySource = readAutoStartParam('entry_source');
+    const entityId = readAutoStartParam('entity_id');
+    const brand = readAutoStartParam('brand');
+    const monitorMode = readAutoStartParam('monitor_mode');
+    const questionSetLabel = readAutoStartParam('question_set_label');
+    const sampleSummary = readAutoStartParam('sample_summary');
+    const currentMetrics = readAutoStartParam('current_metrics');
+    const taskTitle = readAutoStartParam('task_title');
+    const taskGoal = readAutoStartParam('task_goal');
+    const aiSources = readAutoStartParam('ai_sources');
+    const draft = readDashboardHandoffOnlyParam('draft');
+    if (!entrySource && !entityId && !brand && !draft) return null;
+    return {
+      entrySource,
+      entityId,
+      brand,
+      monitorMode,
+      questionSetLabel,
+      sampleSummary,
+      currentMetrics,
+      taskTitle,
+      taskGoal,
+      cleanHandoff: readAutoStartParam('clean_handoff'),
+      aiSources,
+      draft,
+    } satisfies DashboardHandoffView;
+  }, [initialArtifactId, readAutoStartParam, readDashboardHandoffOnlyParam]);
   const dashboardAutoContext = useMemo<ContextTag[]>(() => {
     if (initialArtifactId) return [];
 
@@ -613,12 +761,18 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const monitorMode = readAutoStartParam('monitor_mode');
     const questionSetLabel = readAutoStartParam('question_set_label');
     const sampleSummary = readAutoStartParam('sample_summary');
+    const currentMetrics = readAutoStartParam('current_metrics');
+    const taskTitle = readAutoStartParam('task_title');
+    const taskGoal = readAutoStartParam('task_goal');
     const aiSources = readAutoStartParam('ai_sources');
     const entityId = readAutoStartParam('entity_id');
     const brand = readAutoStartParam('brand');
     const monitoringPlanId = readAutoStartParam('monitoring_plan_id');
     const questionSetIds = readAutoStartParam('question_set_ids');
     const endpointIds = readAutoStartParam('endpoint_ids');
+    const monitoringRunId = readAutoStartParam('monitoring_run_id');
+    const errorStage = readAutoStartParam('error_stage');
+    const draft = readDashboardHandoffOnlyParam('draft');
     const tags: ContextTag[] = [];
 
     if (entrySource || monitorMode) {
@@ -628,50 +782,69 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       tags.push({
         id: 'dashboard-structured-context',
         type: 'intent',
-        label: 'Dashboard结构化上下文',
+        label: '品牌看板',
         data: {
-          entry_source: entrySource,
-          monitor_mode: monitorMode,
+          entry_source: dashboardEntryLabel(entrySource),
+          monitor_mode: dashboardMonitorModeLabel(monitorMode),
           entity_id: entityId,
           brand,
           monitoring_plan_id: monitoringPlanId,
           question_set_ids: questionSetIds ? questionSetIds.split(',').filter(Boolean) : [],
           endpoint_ids: endpointIds ? endpointIds.split(',').filter(Boolean) : [],
+          monitoring_run_id: monitoringRunId,
+          error_stage: errorStage,
           question_set_label: questionSetLabel,
           sample_summary: sampleSummary,
+          current_metrics: currentMetrics,
+          task_title: taskTitle,
+          task_goal: taskGoal,
           ai_sources: aiSources ? aiSources.split('、').filter(Boolean) : [],
         },
       });
       tags.push({
         id: 'dashboard-monitor-mode',
         type: 'intent',
-        label: `Dashboard入口：${modeLabel}`,
+        label: `分析范围：${modeLabel}`,
       });
     }
     if (questionSetLabel) {
       tags.push({
         id: 'dashboard-question-set',
         type: 'scenario',
-        label: `问题集：${questionSetLabel}`,
+        label: `问题范围：${questionSetLabel}`,
       });
     }
     if (sampleSummary) {
       tags.push({
         id: 'dashboard-sample-summary',
         type: 'intent',
-        label: `样本：${sampleSummary}`,
+        label: `已分析范围：${sampleSummary}`,
+      });
+    }
+    if (currentMetrics) {
+      tags.push({
+        id: 'dashboard-current-metrics',
+        type: 'intent',
+        label: `当前指标：${currentMetrics}`,
       });
     }
     if (aiSources) {
       tags.push({
         id: 'dashboard-ai-sources',
         type: 'intent',
-        label: `AI来源：${aiSources}`,
+        label: `回答平台：${aiSources}`,
+      });
+    }
+    if (brand || entityId || draft) {
+      tags.push({
+        id: 'dashboard-intelligence-answer-frame',
+        type: 'intent',
+        label: '情报研判：按结论、证据、影响、需要确认、下一步建议回答',
       });
     }
 
     return tags;
-  }, [initialArtifactId, readAutoStartParam]);
+  }, [initialArtifactId, readAutoStartParam, readDashboardHandoffOnlyParam]);
   const stripAutoStartQueryParams = useCallback(() => {
     if (hasAutoStartQueryParams) {
       router.replace(`/chat/${sessionId}`, { scroll: false });
@@ -683,12 +856,15 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const replayAnimatingRef = useRef(false);
 
   useEffect(() => {
-    if (initialArtifactId) {
+    if (initialArtifactId || !shouldReadDashboardHandoff) {
       setDashboardHandoff(null);
+      setDashboardHandoffChecked(true);
       return;
     }
+    setDashboardHandoffChecked(false);
     setDashboardHandoff(consumeDashboardChatHandoff(sessionId));
-  }, [initialArtifactId, sessionId]);
+    setDashboardHandoffChecked(true);
+  }, [initialArtifactId, sessionId, shouldReadDashboardHandoff]);
 
   const {
     messages,
@@ -1075,6 +1251,10 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     let cancelled = false;
     const loadHistory = async () => {
       try {
+        if (isCleanDashboardHandoff) {
+          loadedAllHistoryRef.current = true;
+          return;
+        }
         const initialHistoryLimit = initialArtifactId ? 12 : INITIAL_HISTORY_MESSAGE_LIMIT;
         const msgs = await api.getMessages(sessionId, { limit: initialHistoryLimit });
         if (cancelled) return;
@@ -1095,7 +1275,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     // and key={sessionId} guarantees a fresh mount on every session change.
     loadHistory();
     return () => { cancelled = true; };
-  }, [initialArtifactId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialArtifactId, isCleanDashboardHandoff, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const {
     browserWorkspace,
@@ -2286,10 +2466,19 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const draft = autoStartDraft?.trim() || '';
     const brand = autoStartBrand?.trim() || '';
     const autoMessage = draft || brand;
+    const canAutoSendMessage = Boolean(autoMessage && shouldAutoSendDraft);
     const shouldAutoSendExistingDraft = Boolean(draft && shouldAutoSendDraft && messages.length > 0);
 
     if (!autoMessage) {
       setIsAutoStartingPrompt(false);
+      return;
+    }
+
+    if (!canAutoSendMessage) {
+      setIsAutoStartingPrompt(false);
+      if (draft) {
+        setInputValue(draft);
+      }
       return;
     }
 
@@ -2486,6 +2675,22 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     handleSendMessage(brandName);
   }, [handleSendMessage]);
 
+  const handleSendDashboardHandoff = useCallback(() => {
+    const draft = dashboardHandoffView?.draft?.trim();
+    const brand = dashboardHandoffView?.brand?.trim();
+    const message =
+      draft ||
+      (brand
+        ? `请基于当前品牌情报继续推进「${brand}」的分析任务。`
+        : '请基于当前品牌情报继续推进分析任务。');
+    handleSendMessage(
+      message,
+      undefined,
+      dashboardAutoContext.length > 0 ? dashboardAutoContext : undefined,
+    );
+    stripAutoStartQueryParams();
+  }, [dashboardAutoContext, dashboardHandoffView, handleSendMessage, stripAutoStartQueryParams]);
+
   // Handle input change
   const handleInputChange = useCallback((value: string) => {
     setInputValue(value);
@@ -2516,7 +2721,16 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   // Determine if we should show the empty state with example brands
   // Skip welcome screen when: loading history, has ?brand= param (auto-starting), or already executing
   const hasAutoStartParam = Boolean(autoStartBrand || autoStartDraft);
-  const showExampleBrands = messages.length === 0 && !isAgentExecuting && !isLoadingHistory && !isAutoStartingPrompt && !hasAutoStartParam;
+  const hasDashboardHandoffView = Boolean(dashboardHandoffView);
+  const isCheckingDashboardHandoff = !initialArtifactId && !dashboardHandoffChecked;
+  const showExampleBrands =
+    messages.length === 0 &&
+    !isAgentExecuting &&
+    !isLoadingHistory &&
+    !isAutoStartingPrompt &&
+    !hasAutoStartParam &&
+    !hasDashboardHandoffView &&
+    !isCheckingDashboardHandoff;
 
   const inputDisabled = Boolean(!isConnected);
 
@@ -2682,15 +2896,17 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           )}
 
           {/* Loading state when entering from brand card */}
-          {messages.length === 0 && (isLoadingHistory || isAutoStartingPrompt) && !showExampleBrands && (
+          {messages.length === 0 && (isLoadingHistory || isAutoStartingPrompt || isCheckingDashboardHandoff) && !showExampleBrands && (
             <div className="flex flex-col items-center justify-center py-20">
               <div
                 className="animate-spin rounded-full h-8 w-8 border-2 mb-4"
                 style={{ borderColor: 'var(--border-subtle)', borderTopColor: 'var(--color-primary)' }}
               />
               <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                {autoStartDraft
-                  ? '正在为当前看板准备 AI 解读...'
+                {isCheckingDashboardHandoff
+                  ? '正在读取看板里的品牌情报...'
+                  : autoStartDraft
+                  ? '正在准备下一步处理...'
                   : autoStartBrand
                   ? `正在为「${autoStartBrand}」启动分析...`
                   : '加载对话历史...'}
@@ -2706,6 +2922,15 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             isAgentExecuting={isAgentExecuting}
             exampleBrands={showExampleBrands ? (exampleBrands || DEFAULT_EXAMPLE_BRANDS) : undefined}
             onBrandClick={handleBrandClick}
+            emptyStateOverride={
+              !showExampleBrands && dashboardHandoffView ? (
+                <DashboardHandoffEmptyState
+                  context={dashboardHandoffView}
+                  disabled={inputDisabled || isAgentExecuting}
+                  onSend={handleSendDashboardHandoff}
+                />
+              ) : undefined
+            }
             renderAfterMessage={(message) => {
               const states = actionableBrowserCards.byMessageId.get(message.id);
               if (!states || states.length === 0) {

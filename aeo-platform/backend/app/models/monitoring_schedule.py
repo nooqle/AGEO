@@ -141,7 +141,7 @@ class MonitoringSchedule(Base):
     )
     last_task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("analysis_tasks.id", ondelete="SET NULL"),
+        ForeignKey("analysis_tasks.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
     )
     total_runs: Mapped[int] = mapped_column(

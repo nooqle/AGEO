@@ -14,6 +14,7 @@ from app.api.v1 import (
     files,
     messages,
     monitoring,
+    ontology,
     outputs,
     sessions,
     skills,
@@ -40,6 +41,7 @@ api_router.include_router(snapshots.router)
 api_router.include_router(tasks.router)
 api_router.include_router(global_tasks_router)
 api_router.include_router(monitoring.router)
+api_router.include_router(ontology.router)
 api_router.include_router(alerts.router)
 api_router.include_router(skills.router)
 api_router.include_router(control_plane.router)

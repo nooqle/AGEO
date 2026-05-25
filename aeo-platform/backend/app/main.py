@@ -128,6 +128,7 @@ def _sanitized_websocket_headers(websocket: WebSocket) -> dict[str, str]:
             sanitized[key] = value
     return sanitized
 
+
 app = FastAPI(
     title="Specta AI API",
     description="Specta AI - 品牌声量智能分析平台",
@@ -463,22 +464,32 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             # so the WS loop stays responsive to pings
             if event == "user_message":
                 if agent_task and not agent_task.done():
-                    logger.warning(
-                        "[WebSocket] Agent already running, ignoring message"
+                    logger.info(
+                        "[WebSocket] Agent task still finishing; waiting briefly "
+                        "before accepting next user message..."
                     )
-                    await manager.emit_to_websocket(
-                        websocket,
-                        "error",
-                        {
-                            "message": "正在执行中，请等待当前任务完成",
-                            "recoverable": True,
-                        },
+                    completed = await wait_for_task_without_cancelling(
+                        agent_task,
+                        timeout=3,
                     )
-                else:
-                    agent_task = asyncio.create_task(
-                        handle_user_message(websocket, session_id, data)
-                    )
-                    agent_task.add_done_callback(_on_agent_done)
+                    if not completed:
+                        logger.warning(
+                            "[WebSocket] Agent already running, ignoring message"
+                        )
+                        await manager.emit_to_websocket(
+                            websocket,
+                            "error",
+                            {
+                                "message": "正在执行中，请等待当前任务完成",
+                                "recoverable": True,
+                            },
+                        )
+                        continue
+                    agent_task = None
+                agent_task = asyncio.create_task(
+                    handle_user_message(websocket, session_id, data)
+                )
+                agent_task.add_done_callback(_on_agent_done)
             elif event == "confirmation":
                 _running = agent_task  # local ref to avoid race with _on_agent_done
                 if _running and not _running.done():

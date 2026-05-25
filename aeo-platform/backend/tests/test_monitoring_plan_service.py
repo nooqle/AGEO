@@ -3,6 +3,7 @@ from pathlib import Path
 import uuid
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -14,6 +15,14 @@ os.environ.setdefault(
 )
 
 from app.core.database import Base
+import app.api.v1.monitoring as monitoring_api
+from app.api.v1.monitoring import _record_monitoring_user_action, archive_monitoring_plan
+from app.models.brand_intelligence import (
+    BrandActionRecord,
+    BrandIntelligenceQuestion,
+    BrandObjectLink,
+    BrandUserDecision,
+)
 from app.models.entity import Entity, EntityStatus
 from app.models.monitoring_plan import MonitoringPlanStatus, QuestionSetStatus
 from app.models.monitoring_schedule import MonitoringSchedule, ScheduleStatus
@@ -442,6 +451,23 @@ async def test_question_set_confirmation_contract_activates_quick_plan(tmp_path)
         assert question_set.status == QuestionSetStatus.CONFIRMED.value
         assert plan.status == MonitoringPlanStatus.ACTIVE.value
         assert plan.endpoint_ids == list(QUICK_ENDPOINT_IDS)
+        link_rows = (await session.execute(select(BrandObjectLink))).scalars().all()
+        question_rows = (
+            await session.execute(select(BrandIntelligenceQuestion))
+        ).scalars().all()
+        link_types = {row.link_type for row in link_rows}
+        assert len(question_rows) == 1
+        assert {
+            "monitoring_plan_uses_question_set",
+            "question_set_contains_question",
+            "monitoring_plan_tracks_question",
+        }.issubset(link_types)
+        assert any(
+            row.link_type == "monitoring_plan_tracks_question"
+            and row.from_object_id == str(plan.id)
+            and row.to_object_id == str(question_rows[0].id)
+            for row in link_rows
+        )
     await engine.dispose()
 
 
@@ -485,6 +511,483 @@ async def test_append_questions_blocks_over_thirty_without_mutating_draft(tmp_pa
 
         await session.refresh(question_set)
         assert question_set.question_count == 29
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_updating_active_plan_replaces_monitoring_question_links(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-replace-links@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        session.add_all([user, entity])
+        await session.commit()
+
+        service = MonitoringPlanService(session)
+        first_question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=[{"id": "first", "text": "第一组问题？"}],
+        )
+        second_question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=[{"id": "second", "text": "第二组问题？"}],
+        )
+        first_plan = await service.confirm_question_set_and_activate_quick_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            question_set_id=first_question_set.id,
+            monitor_mode="panorama",
+        )
+        second_plan = await service.confirm_question_set_and_activate_quick_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            question_set_id=second_question_set.id,
+            monitor_mode="panorama",
+        )
+        replayed_plan = await service.confirm_question_set_and_activate_quick_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            question_set_id=second_question_set.id,
+            monitor_mode="panorama",
+        )
+
+        assert second_plan.id == first_plan.id
+        assert replayed_plan.id == first_plan.id
+        tracking_links = (
+            await session.execute(
+                select(BrandObjectLink).where(
+                    BrandObjectLink.link_type == "monitoring_plan_tracks_question",
+                    BrandObjectLink.from_object_id == str(second_plan.id),
+                )
+            )
+        ).scalars().all()
+        assert len(tracking_links) == 1
+        assert tracking_links[0].extra_metadata["question_set_id"] == str(
+            second_question_set.id
+        )
+        question_rows = (
+            await session.execute(select(BrandIntelligenceQuestion))
+        ).scalars().all()
+        assert len(question_rows) == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_update_plan_refreshes_monitoring_question_links(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-update-plan-links@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        session.add_all([user, entity])
+        await session.commit()
+
+        service = MonitoringPlanService(session)
+        first_question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=[{"id": "first", "text": "第一组问题？"}],
+        )
+        second_question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=[{"id": "second", "text": "第二组问题？"}],
+        )
+        await service.confirm_question_set(
+            question_set_id=first_question_set.id,
+            user_id=user.id,
+        )
+        await service.confirm_question_set(
+            question_set_id=second_question_set.id,
+            user_id=user.id,
+        )
+        plan = await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[first_question_set.id],
+            status=MonitoringPlanStatus.ACTIVE.value,
+        )
+
+        updated_plan = await service.update_plan(
+            plan_id=plan.id,
+            user_id=user.id,
+            question_set_ids=[second_question_set.id],
+        )
+        replayed_plan = await service.update_plan(
+            plan_id=plan.id,
+            user_id=user.id,
+            question_set_ids=[second_question_set.id],
+        )
+
+        assert updated_plan.id == plan.id
+        assert replayed_plan.id == plan.id
+        plan_question_set_links = (
+            await session.execute(
+                select(BrandObjectLink).where(
+                    BrandObjectLink.link_type == "monitoring_plan_uses_question_set",
+                    BrandObjectLink.from_object_id == str(plan.id),
+                )
+            )
+        ).scalars().all()
+        tracking_links = (
+            await session.execute(
+                select(BrandObjectLink).where(
+                    BrandObjectLink.link_type == "monitoring_plan_tracks_question",
+                    BrandObjectLink.from_object_id == str(plan.id),
+                )
+            )
+        ).scalars().all()
+        question_rows = (
+            await session.execute(select(BrandIntelligenceQuestion))
+        ).scalars().all()
+
+        assert len(plan_question_set_links) == 1
+        assert plan_question_set_links[0].to_object_id == str(second_question_set.id)
+        assert len(tracking_links) == 1
+        assert tracking_links[0].extra_metadata["question_set_id"] == str(
+            second_question_set.id
+        )
+        assert len(question_rows) == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_monitoring_plan_user_action_links_action_to_plan(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-action-plan-link@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        session.add_all([user, entity])
+        await session.commit()
+
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=[{"id": "first", "text": "第一组问题？"}],
+        )
+        await service.confirm_question_set(
+            question_set_id=question_set.id,
+            user_id=user.id,
+        )
+        plan = await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status=MonitoringPlanStatus.ACTIVE.value,
+        )
+
+        action_id = await _record_monitoring_user_action(
+            session,
+            current_user=user,
+            entity_id=entity.id,
+            action_type="update_monitoring_plan",
+            origin_event_id=f"{plan.id}:pause-test",
+            input_payload={
+                "actor_id": str(user.id),
+                "monitoring_plan_id": str(plan.id),
+                "change_type": "pause",
+            },
+            output_payload={
+                "monitoring_plan_id": str(plan.id),
+                "status": MonitoringPlanStatus.PAUSED.value,
+                "change_type": "pause",
+            },
+            target_object_type="monitoring_plan",
+            target_object_id=str(plan.id),
+        )
+
+        record = await session.get(BrandActionRecord, uuid.UUID(str(action_id)))
+        decision = (await session.execute(select(BrandUserDecision))).scalar_one()
+        link = (
+            await session.execute(
+                select(BrandObjectLink).where(
+                    BrandObjectLink.link_type
+                    == "action_record_handles_monitoring_plan",
+                    BrandObjectLink.from_object_id == str(action_id),
+                    BrandObjectLink.to_object_id == str(plan.id),
+                )
+            )
+        ).scalar_one()
+
+        assert record is not None
+        assert record.action_type == "update_monitoring_plan"
+        assert record.input_payload["change_type"] == "pause"
+        assert decision.target_object_type == "monitoring_plan"
+        assert decision.target_object_id == str(plan.id)
+        assert link.source_action_record_id == record.id
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_archive_plan_moves_lifecycle_and_pauses_schedule(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-archive-plan@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        session.add_all([user, entity])
+        await session.commit()
+
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=[{"id": "first", "text": "第一组问题？"}],
+        )
+        await service.confirm_question_set(
+            question_set_id=question_set.id,
+            user_id=user.id,
+        )
+        plan = await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status=MonitoringPlanStatus.ACTIVE.value,
+        )
+
+        archived_plan = await service.archive_plan(plan_id=plan.id, user_id=user.id)
+        schedule = (
+            await session.execute(
+                select(MonitoringSchedule).where(
+                    MonitoringSchedule.monitoring_plan_id == plan.id
+                )
+            )
+        ).scalar_one()
+
+        assert archived_plan.status == MonitoringPlanStatus.ARCHIVED.value
+        assert schedule.status == ScheduleStatus.PAUSED
+        assert schedule.next_run_at is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_archive_monitoring_plan_api_records_lifecycle_action(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-archive-plan-api@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        session.add_all([user, entity])
+        await session.commit()
+
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=[{"id": "first", "text": "第一组问题？"}],
+        )
+        await service.confirm_question_set(
+            question_set_id=question_set.id,
+            user_id=user.id,
+        )
+        plan = await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status=MonitoringPlanStatus.ACTIVE.value,
+        )
+
+        response = await archive_monitoring_plan(
+            plan_id=str(plan.id),
+            current_user=user,
+            db=session,
+        )
+        record = (
+            await session.execute(
+                select(BrandActionRecord).where(
+                    BrandActionRecord.entity_id == entity.id,
+                    BrandActionRecord.action_type == "update_monitoring_plan",
+                )
+            )
+        ).scalar_one()
+        link = (
+            await session.execute(
+                select(BrandObjectLink).where(
+                    BrandObjectLink.link_type
+                    == "action_record_handles_monitoring_plan",
+                    BrandObjectLink.from_object_id == str(record.id),
+                    BrandObjectLink.to_object_id == str(plan.id),
+                )
+            )
+        ).scalar_one()
+
+        assert response["plan"]["status"] == MonitoringPlanStatus.ARCHIVED.value
+        assert record.input_payload["change_type"] == "archive"
+        assert record.output_payload["status"] == MonitoringPlanStatus.ARCHIVED.value
+        assert link.source_action_record_id == record.id
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_archive_monitoring_plan_rolls_back_when_action_record_fails(
+    tmp_path,
+    monkeypatch,
+):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        user = User(
+            id=uuid.uuid4(),
+            email="owner-archive-rollback@example.com",
+            is_active=True,
+            status=UserStatus.ACTIVE,
+            role=UserRole.CUSTOMER_USER,
+        )
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="Specta",
+            domain="example.com",
+            industry="品牌智能",
+            description="测试品牌",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=user.id,
+        )
+        session.add_all([user, entity])
+        await session.commit()
+
+        service = MonitoringPlanService(session)
+        question_set = await service.create_question_set(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            questions=[{"id": "first", "text": "第一组问题？"}],
+        )
+        await service.confirm_question_set(
+            question_set_id=question_set.id,
+            user_id=user.id,
+        )
+        plan = await service.create_plan(
+            user_id=user.id,
+            entity_id=entity.id,
+            monitor_mode="panorama",
+            question_set_ids=[question_set.id],
+            status=MonitoringPlanStatus.ACTIVE.value,
+        )
+        plan_id = plan.id
+        user_id = user.id
+        entity_id = entity.id
+
+        class FailingActionService:
+            def __init__(self, db):
+                self.db = db
+
+            async def record_applied_action(self, **kwargs):
+                raise RuntimeError("action ledger unavailable")
+
+        monkeypatch.setattr(
+            monitoring_api,
+            "BrandActionService",
+            FailingActionService,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await archive_monitoring_plan(
+                plan_id=str(plan_id),
+                current_user=user,
+                db=session,
+            )
+
+        assert exc_info.value.status_code == 500
+        refetched_plan = await service.get_plan(plan_id, user_id=user_id)
+        assert refetched_plan is not None
+        assert refetched_plan.status == MonitoringPlanStatus.ACTIVE.value
+        schedule = (
+            await session.execute(
+                select(MonitoringSchedule).where(
+                    MonitoringSchedule.monitoring_plan_id == plan_id,
+                )
+            )
+        ).scalar_one()
+        assert schedule.status == ScheduleStatus.ACTIVE
+        records = (
+            await session.execute(
+                select(BrandActionRecord).where(
+                    BrandActionRecord.entity_id == entity_id,
+                    BrandActionRecord.action_type == "update_monitoring_plan",
+                )
+            )
+        ).scalars().all()
+        assert records == []
     await engine.dispose()
 
 

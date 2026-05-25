@@ -51,7 +51,10 @@ export function HomeBrandLink({
       <button
         type="button"
         onClick={handleClick}
-        className={className || 'flex items-center gap-3 rounded-xl px-1 py-1 transition-colors'}
+        className={
+          className ||
+          'flex shrink-0 items-center gap-2 rounded-xl px-1 py-1 transition-colors sm:gap-3'
+        }
         title="返回首页"
         style={{ color: 'var(--text-primary)' }}
         onMouseEnter={(e) => {
@@ -63,19 +66,19 @@ export function HomeBrandLink({
       >
         <ThemedLogo size={size} />
         {compact ? null : (
-          <div className="text-left">
+          <div className="min-w-0 text-left">
             <div
-              className="text-[13px] font-semibold tracking-tight"
+              className="whitespace-nowrap text-[13px] font-semibold leading-5 tracking-normal"
               style={{ color: 'var(--text-primary)' }}
             >
               Specta AI
             </div>
             {showSubtitle ? (
               <div
-                className="text-[10px] tracking-[0.12em]"
+                className="mt-0.5 whitespace-nowrap text-[10px] leading-3 tracking-normal sm:tracking-[0.12em]"
                 style={{ color: 'var(--text-tertiary)' }}
               >
-                品牌AI助手
+                品牌情报
               </div>
             ) : null}
           </div>

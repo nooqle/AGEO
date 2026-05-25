@@ -84,6 +84,7 @@ from app.workflow.orchestrator_context_packets import (
     build_pending_decision_packet,
     build_recent_evidence_packet,
     render_active_skill_packet,
+    render_dashboard_context_packet,
     render_history_availability_packet,
     render_pending_decision_packet,
     render_recent_evidence_packet,
@@ -3033,6 +3034,62 @@ def test_orchestrator_context_packets_split_session_entity_and_history():
     assert "可用过往资料来源" in render_history_availability_packet(
         packets.history_availability
     )
+
+
+def test_dashboard_context_packet_renders_safe_structured_entry_context():
+    packets = build_orchestrator_context_packets(
+        {
+            "dashboard_context": {
+                "entry_source": "dashboard_object_home",
+                "entity_id": "entity-1",
+                "brand": "理想汽车",
+                "monitor_mode": "panorama",
+                "monitoring_plan_id": "plan-1",
+                "question_set_ids": ["qs-1", "qs-2", "qs-1"],
+                "endpoint_ids": "deepseek,kimi",
+                "question_set_label": "核心购车决策问题",
+                "sample_summary": "近 7 天 24 个样本",
+                "ai_sources": ["DeepSeek", "Kimi"],
+                "draft": "这段完整草稿不能进入结构化上下文。",
+            }
+        }
+    )
+
+    packet = packets.dashboard_context
+    rendered = render_dashboard_context_packet(packet)
+
+    assert packet.brand_name == "理想汽车"
+    assert packet.question_set_ids == ("qs-1", "qs-2")
+    assert packet.endpoint_ids == ("deepseek", "kimi")
+    assert "Dashboard 品牌：理想汽车" in rendered
+    assert "问题集：核心购车决策问题" in rendered
+    assert "AI 来源：DeepSeek、Kimi" in rendered
+    assert "不能替代动作授权或对象写入校验" in rendered
+    assert "完整草稿" not in rendered
+
+
+def test_prompt_assembly_keeps_dashboard_context_in_dynamic_runtime_layer():
+    state = {
+        "brand_name": "理想汽车",
+        "dashboard_context": {
+            "entry_source": "dashboard_object_home",
+            "brand": "理想汽车",
+            "monitor_mode": "panorama",
+            "sample_summary": "近 7 天 24 个样本",
+        },
+    }
+
+    assembly = build_orchestrator_prompt_assembly(state)
+    dashboard_section = next(
+        section
+        for section in assembly.runtime_context_sections
+        if section.key == "dashboard_context"
+    )
+
+    assert dashboard_section.metadata["cache_layer"] == "dynamic_dashboard_context"
+    assert dashboard_section.metadata["source"] == "agent_state.dashboard_context"
+    assert "Dashboard 品牌：理想汽车" in assembly.render()
+    assert "Dashboard 品牌：理想汽车" not in assembly.render_static_system_prompt()
 
 
 def test_recent_evidence_packet_tags_untrusted_external_content():

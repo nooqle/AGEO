@@ -24,12 +24,31 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 target_metadata = Base.metadata
 
+UNMANAGED_AUTOGENERATE_TABLES = {
+    "checkpoint_blobs",
+    "checkpoint_migrations",
+    "checkpoint_writes",
+    "checkpoints",
+}
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
 settings = get_settings()
+
+
+def include_object(object_, name, type_, reflected, compare_to):
+    """Skip externally managed runtime tables during autogenerate checks."""
+    if (
+        type_ == "table"
+        and reflected
+        and compare_to is None
+        and name in UNMANAGED_AUTOGENERATE_TABLES
+    ):
+        return False
+    return True
 
 
 def get_database_url() -> str:
@@ -60,6 +79,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -73,6 +93,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        include_object=include_object,
         compare_type=True,
     )
 

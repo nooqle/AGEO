@@ -15,7 +15,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
 
   return (
     <header
-      className="sticky top-0 z-30 flex h-14 items-center justify-between border-b px-5 lg:px-7"
+      className="sticky top-0 z-30 flex h-14 items-center justify-between border-b px-4 lg:px-7"
       style={{
         backgroundColor: 'var(--bg-primary)',
         borderBottomColor: 'var(--border-subtle)',
@@ -25,16 +25,18 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
 
       <div className="flex items-center gap-2">
         <button
+          type="button"
           onClick={onNewAnalysis ?? (() => router.push('/dashboard'))}
-          className="flex min-h-10 items-center gap-1.5 rounded-lg px-3.5 py-2 text-[12px] font-medium transition-opacity hover:opacity-90"
+          className="flex min-h-10 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-medium transition-opacity hover:opacity-90 sm:px-3.5"
           style={{
             background: 'var(--brand-primary)',
             color: 'var(--brand-contrast)',
             boxShadow: 'var(--shadow-sm)',
           }}
+          aria-label="新建品牌"
         >
           <RiAddLine className="h-3.5 w-3.5" />
-          <span>新建品牌</span>
+          <span className="hidden sm:inline">新建品牌</span>
         </button>
         <ThemeToggle />
         <NotificationBell align="right" />

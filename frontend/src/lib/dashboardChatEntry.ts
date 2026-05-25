@@ -1,4 +1,4 @@
-import { writeDashboardChatHandoff } from './dashboardChatHandoff';
+import { buildDashboardChatUrlWithHandoff } from './dashboardChatHandoff';
 
 export function buildBrandMonitoringSetupDraft(brandName: string): string {
   const safeBrandName = brandName.trim() || '新品牌';
@@ -22,8 +22,8 @@ export function buildBrandMonitoringChatUrl({
   params.set('monitor_mode', 'panorama_monitoring');
   params.set('draft', buildBrandMonitoringSetupDraft(safeBrandName));
   params.set('autosend', '1');
-  if (writeDashboardChatHandoff(sessionId, Object.fromEntries(params.entries()))) {
-    return `/chat/${sessionId}`;
-  }
-  return `/chat/${sessionId}?${params.toString()}`;
+  return buildDashboardChatUrlWithHandoff(
+    sessionId,
+    Object.fromEntries(params.entries()),
+  );
 }
