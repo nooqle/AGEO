@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine, Iterator
+from uuid import UUID
 
 import httpx
 from langgraph.types import Command
@@ -161,6 +162,125 @@ def _normalize_platform_filter(platform_filter: Any) -> list[str] | None:
         normalized.append(canonical)
         seen.add(canonical)
     return normalized or None
+
+
+def _uuid_or_none(value: object) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _persist_brand_intelligence_fetch_results(
+    state: AgentState,
+    *,
+    fetch_results: list[dict[str, Any]],
+) -> None:
+    """Dual-write A4 answers and citations into the durable object layer."""
+
+    entity_uuid = _uuid_or_none(state.get("entity_id"))
+    if entity_uuid is None or not fetch_results:
+        return
+    session_uuid = _uuid_or_none(state.get("session_id"))
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.brand_action_service import BrandActionService
+        from app.services.brand_intelligence_projection_service import (
+            BrandIntelligenceProjectionService,
+        )
+
+        async with AsyncSessionLocal() as db:
+            action_service = BrandActionService(db)
+            action_record = await action_service.start_action(
+                entity_id=entity_uuid,
+                session_id=session_uuid,
+                user_id=_uuid_or_none(state.get("user_id")),
+                parent_action_record_id=_uuid_or_none(
+                    state.get("latest_user_action_record_id")
+                ),
+                actor_type="agent",
+                origin_surface="workflow_node",
+                origin_event_id=str(state.get("run_id") or "") or None,
+                action_type="run_answer_fetch",
+                input_payload={
+                    "question_ids": _action_question_ids_from_fetch_results(
+                        fetch_results
+                    ),
+                    "platforms": _action_platforms_from_fetch_results(fetch_results),
+                    "question_count": len(fetch_results),
+                    "run_id": state.get("run_id"),
+                    "fetch_mode": state.get("fetch_mode"),
+                },
+            )
+            service = BrandIntelligenceProjectionService(db)
+            try:
+                counts = await service.persist_fetch_results(
+                    entity_id=entity_uuid,
+                    session_id=session_uuid,
+                    fetch_results=fetch_results,
+                    source_action_record_id=action_record.id,
+                )
+                await action_service.complete_action(
+                    action_record,
+                    output_payload=counts,
+                )
+                await db.commit()
+            except Exception as inner_exc:
+                await action_service.fail_action(
+                    action_record,
+                    error_message=str(inner_exc),
+                )
+                await db.commit()
+                raise
+        logger.info("[A4] Brand intelligence fetch projection: %s", counts)
+    except Exception as exc:
+        logger.warning("[A4] Brand intelligence fetch projection failed: %s", exc)
+
+
+def _action_question_ids_from_fetch_results(
+    fetch_results: list[dict[str, Any]],
+) -> list[str]:
+    question_ids: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(fetch_results or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        question_id = str(
+            item.get("question_id") or item.get("id") or f"q_{index:03d}"
+        ).strip()
+        if question_id and question_id not in seen:
+            question_ids.append(question_id)
+            seen.add(question_id)
+    return question_ids
+
+
+def _action_platforms_from_fetch_results(
+    fetch_results: list[dict[str, Any]],
+) -> list[str]:
+    platforms: list[str] = []
+    seen: set[str] = set()
+    for item in fetch_results or []:
+        if not isinstance(item, dict):
+            continue
+        platform_results = item.get("platform_results")
+        if isinstance(platform_results, list):
+            for platform_result in platform_results:
+                if not isinstance(platform_result, dict):
+                    continue
+                platform = _canonicalize_platform_id(platform_result.get("platform"))
+                if platform and platform not in seen:
+                    platforms.append(platform)
+                    seen.add(platform)
+        aio_packets = item.get("aio_platform_packets")
+        if isinstance(aio_packets, list):
+            for packet in aio_packets:
+                if not isinstance(packet, dict):
+                    continue
+                platform = _canonicalize_platform_id(packet.get("platform"))
+                if platform and platform not in seen:
+                    platforms.append(platform)
+                    seen.add(platform)
+    return platforms
 
 
 def _should_defer_aio_takeover_open(handler: Any) -> bool:
@@ -3341,6 +3461,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
             artifact_validation=artifact_validation,
             completion_decision=completion_decision,
             observation=observation,
+        )
+
+        await _persist_brand_intelligence_fetch_results(
+            state,
+            fetch_results=canonical_result["fetch_results"],
         )
 
         # Write A4 materials into Knowledge Workspace for future retrieval.

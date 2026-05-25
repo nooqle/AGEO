@@ -87,6 +87,7 @@ class TaskRun(Base):
                 "status IN ('queued','claimed','running','waiting_input','cancelling')"
             ),
         ),
+        Index("ix_task_runs_status_submitted_at", "status", "submitted_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

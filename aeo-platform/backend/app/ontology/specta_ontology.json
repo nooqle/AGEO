@@ -1,0 +1,1061 @@
+{
+  "version": "2026-05-16.1",
+  "domain": "AI brand intelligence",
+  "purpose": "Define the first durable business model for Specta so agents, reports, evidence, monitoring, and user decisions can work over the same brand intelligence world.",
+  "principles": [
+    "Model the brand intelligence reality, not workflow implementation details.",
+    "Keep AgentState as runtime memory and make durable brand facts explicit objects over time.",
+    "Make evidence traceable from report conclusions back to questions, platform answers, and citations.",
+    "Expose user and agent changes as controlled actions with audit records.",
+    "Let the brand object become the long-lived center of the product experience."
+  ],
+  "object_types": [
+    {
+      "key": "brand_entity",
+      "display_name": "品牌",
+      "description": "A company, product, or organization whose visibility and reputation across AI answer platforms is monitored by Specta.",
+      "identity_fields": ["id", "normalized_name", "domain"],
+      "lifecycle": ["pending", "active", "monitored", "archived"],
+      "source_systems": ["entities", "AgentState.brand_profile"],
+      "properties": [
+        {
+          "key": "normalized_name",
+          "display_name": "标准品牌名",
+          "value_type": "string",
+          "description": "Canonical brand name used for matching, reporting, and monitoring.",
+          "required": true
+        },
+        {
+          "key": "domain",
+          "display_name": "官网域名",
+          "value_type": "url",
+          "description": "Official website or root domain when known."
+        },
+        {
+          "key": "industry",
+          "display_name": "行业",
+          "value_type": "string",
+          "description": "Primary industry or category used for competitor and scenario analysis."
+        }
+      ]
+    },
+    {
+      "key": "official_website_asset",
+      "display_name": "官网资产",
+      "description": "A derived brand-owned evidence asset that observes whether the official website is carrying value inside AI answer evidence chains.",
+      "identity_fields": ["brand_entity_id", "domain"],
+      "lifecycle": ["missing_domain", "no_evidence", "not_cited", "weak", "visible", "strong"],
+      "source_systems": ["BrandEvidenceDenoisingService", "entities.domain", "brand_citation_sources"],
+      "properties": [
+        {
+          "key": "domain",
+          "display_name": "官网域名",
+          "value_type": "string",
+          "description": "Normalized official domain used as the owned evidence identity.",
+          "required": true
+        },
+        {
+          "key": "value_score",
+          "display_name": "官网证据价值分",
+          "value_type": "integer",
+          "description": "Score based on citation share, question coverage, and platform coverage."
+        },
+        {
+          "key": "citation_count",
+          "display_name": "官网引用次数",
+          "value_type": "integer",
+          "description": "Number of AI-answer citations that match the official website domain."
+        },
+        {
+          "key": "sampling_policy",
+          "display_name": "官网抽样规则",
+          "value_type": "json",
+          "description": "Official-domain-only sampling rule used to inspect current owned-site value."
+        },
+        {
+          "key": "content_audit",
+          "display_name": "官网内容审计",
+          "value_type": "json",
+          "description": "Homepage readability, title, description, headings, schema, and brand-name visibility audit."
+        }
+      ]
+    },
+    {
+      "key": "competitor_entity",
+      "display_name": "竞品",
+      "description": "A competing brand that is compared with the monitored brand.",
+      "identity_fields": ["brand_entity_id", "normalized_name"],
+      "lifecycle": ["suggested", "confirmed", "ignored"],
+      "source_systems": ["brand_competitor_entities", "AgentState.competitors"],
+      "properties": [
+        {
+          "key": "normalized_name",
+          "display_name": "标准竞品名",
+          "value_type": "string",
+          "description": "Canonical competitor name.",
+          "required": true
+        },
+        {
+          "key": "relevance_score",
+          "display_name": "相关度",
+          "value_type": "integer",
+          "description": "Estimated competitive relevance score."
+        }
+      ]
+    },
+    {
+      "key": "audience_persona",
+      "display_name": "用户画像",
+      "description": "A target audience profile used to generate scenarios and questions.",
+      "identity_fields": ["brand_entity_id", "persona_id"],
+      "lifecycle": ["generated", "confirmed", "retired"],
+      "source_systems": ["brand_audience_personas", "AgentState.marketing_personas"],
+      "properties": [
+        {
+          "key": "persona_id",
+          "display_name": "画像编号",
+          "value_type": "string",
+          "description": "Stable persona identifier within a brand analysis.",
+          "required": true
+        },
+        {
+          "key": "persona_name",
+          "display_name": "画像名称",
+          "value_type": "string",
+          "description": "User-facing persona name.",
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "usage_scenario",
+      "display_name": "使用场景",
+      "description": "A decision or usage context that can produce simulated AI search questions.",
+      "identity_fields": ["brand_entity_id", "scenario_key"],
+      "lifecycle": ["generated", "confirmed", "retired"],
+      "source_systems": ["brand_usage_scenarios", "AgentState.marketing_personas", "AgentState.simulated_questions"],
+      "properties": [
+        {
+          "key": "scenario_key",
+          "display_name": "场景标识",
+          "value_type": "string",
+          "description": "Stable scenario key within a brand analysis.",
+          "required": true
+        },
+        {
+          "key": "decision_stage",
+          "display_name": "决策阶段",
+          "value_type": "string",
+          "description": "Awareness, comparison, purchase, or retention stage."
+        }
+      ]
+    },
+    {
+      "key": "simulated_question",
+      "display_name": "模拟问题",
+      "description": "A question representing how target users may ask AI platforms about the brand category.",
+      "identity_fields": ["brand_entity_id", "question_id"],
+      "lifecycle": ["generated", "confirmed", "fetched", "retired"],
+      "source_systems": ["brand_intelligence_questions", "AgentState.simulated_questions", "AgentState.questions"],
+      "properties": [
+        {
+          "key": "question_id",
+          "display_name": "问题编号",
+          "value_type": "string",
+          "description": "Stable question identifier.",
+          "required": true
+        },
+        {
+          "key": "core_question",
+          "display_name": "核心问题",
+          "value_type": "text",
+          "description": "Canonical wording used for fetching and reporting.",
+          "required": true
+        },
+        {
+          "key": "category",
+          "display_name": "问题类别",
+          "value_type": "string",
+          "description": "Business category used to group questions."
+        }
+      ]
+    },
+    {
+      "key": "question_set",
+      "display_name": "问题组",
+      "description": "A user-confirmable collection of questions that can drive answer fetching or monitoring.",
+      "identity_fields": ["question_set_id"],
+      "lifecycle": ["draft", "confirmed", "archived"],
+      "source_systems": ["MonitoringQuestionSet"],
+      "properties": [
+        {
+          "key": "question_set_id",
+          "display_name": "问题组编号",
+          "value_type": "uuid",
+          "description": "Stable question set identifier.",
+          "required": true
+        },
+        {
+          "key": "monitor_mode",
+          "display_name": "监测模式",
+          "value_type": "string",
+          "description": "Panorama or scenario mode for this question set."
+        },
+        {
+          "key": "question_count",
+          "display_name": "问题数量",
+          "value_type": "integer",
+          "description": "Number of questions in the set."
+        }
+      ]
+    },
+    {
+      "key": "platform_answer",
+      "display_name": "AI 平台回答",
+      "description": "An answer returned by a specific AI platform for a simulated question.",
+      "identity_fields": ["question_id", "platform", "run_id"],
+      "lifecycle": ["requested", "captured", "failed", "superseded"],
+      "source_systems": ["brand_platform_answers", "AgentState.fetch_results", "FetchRunPlatformState"],
+      "properties": [
+        {
+          "key": "platform",
+          "display_name": "平台",
+          "value_type": "string",
+          "description": "Public AI answer platform, such as DeepSeek, Kimi, Doubao, or Yuanbao.",
+          "required": true
+        },
+        {
+          "key": "answer_text",
+          "display_name": "回答正文",
+          "value_type": "text",
+          "description": "Captured answer content."
+        },
+        {
+          "key": "success",
+          "display_name": "是否成功",
+          "value_type": "boolean",
+          "description": "Whether the platform answer was captured successfully."
+        }
+      ]
+    },
+    {
+      "key": "brand_mention",
+      "display_name": "品牌提及事实",
+      "description": "A durable fact that a platform answer or report mentioned the monitored brand or a competitor.",
+      "identity_fields": ["answer_id", "mentioned_brand_key", "mention_role"],
+      "lifecycle": ["observed", "reviewed", "dismissed", "superseded"],
+      "source_systems": ["brand_mentions", "brand_platform_answers", "BrandIntelligenceProjectionService"],
+      "properties": [
+        {
+          "key": "mentioned_brand_name",
+          "display_name": "被提及品牌",
+          "value_type": "string",
+          "description": "Brand name detected in the answer or report.",
+          "required": true
+        },
+        {
+          "key": "mention_role",
+          "display_name": "提及角色",
+          "value_type": "string",
+          "description": "Target brand or competitor mention role.",
+          "required": true
+        },
+        {
+          "key": "sentiment",
+          "display_name": "语气性质",
+          "value_type": "string",
+          "description": "Positive, neutral, or negative tone for this mention."
+        },
+        {
+          "key": "quote",
+          "display_name": "提及片段",
+          "value_type": "text",
+          "description": "Public-safe quote excerpt for the mention."
+        },
+        {
+          "key": "confidence",
+          "display_name": "置信度",
+          "value_type": "float",
+          "description": "Extraction confidence when available."
+        }
+      ]
+    },
+    {
+      "key": "citation_source",
+      "display_name": "引用来源",
+      "description": "A source, page, domain, or evidence item cited or implied by an AI platform answer.",
+      "identity_fields": ["url", "source_title"],
+      "lifecycle": ["captured", "ranked", "ignored"],
+      "source_systems": ["brand_citation_sources", "AgentState.fetch_results", "KnowledgeRecord"],
+      "properties": [
+        {
+          "key": "url",
+          "display_name": "来源 URL",
+          "value_type": "url",
+          "description": "Source URL when available."
+        },
+        {
+          "key": "source_title",
+          "display_name": "来源标题",
+          "value_type": "string",
+          "description": "Human-readable title or domain."
+        },
+        {
+          "key": "confidence",
+          "display_name": "可信度",
+          "value_type": "float",
+          "description": "Source confidence or evidence quality score."
+        }
+      ]
+    },
+    {
+      "key": "source_domain",
+      "display_name": "来源域名",
+      "description": "A derived source identity grouping citation pages by normalized domain, site name, and source role.",
+      "identity_fields": ["brand_entity_id", "domain"],
+      "lifecycle": ["derived", "reviewed", "ignored"],
+      "source_systems": ["BrandEvidenceDenoisingService", "A4 url_intelligence_skill"],
+      "properties": [
+        {
+          "key": "domain",
+          "display_name": "域名",
+          "value_type": "string",
+          "description": "Normalized domain used to group citation sources.",
+          "required": true
+        },
+        {
+          "key": "source_role",
+          "display_name": "来源角色",
+          "value_type": "string",
+          "description": "Official website, news media, industry vertical, community, knowledge base, commerce platform, or other."
+        },
+        {
+          "key": "citation_count",
+          "display_name": "引用次数",
+          "value_type": "integer",
+          "description": "Number of raw citations observed for this domain."
+        }
+      ]
+    },
+    {
+      "key": "evidence_cluster",
+      "display_name": "证据簇",
+      "description": "A derived business-readable group of citations organized by intelligence topic and source role, with representative samples.",
+      "identity_fields": ["brand_entity_id", "cluster_id"],
+      "lifecycle": ["derived", "reviewed", "archived"],
+      "source_systems": ["BrandEvidenceDenoisingService", "brand_citation_sources"],
+      "properties": [
+        {
+          "key": "cluster_id",
+          "display_name": "证据簇编号",
+          "value_type": "string",
+          "description": "Stable derived key based on topic and source role.",
+          "required": true
+        },
+        {
+          "key": "topic_label",
+          "display_name": "业务主题",
+          "value_type": "string",
+          "description": "Question, finding, or observation topic represented by this cluster."
+        },
+        {
+          "key": "sample_policy",
+          "display_name": "抽样规则",
+          "value_type": "string",
+          "description": "Representative sample policy such as official, high-frequency, high-confidence, and recent sources."
+        }
+      ]
+    },
+    {
+      "key": "metric_snapshot",
+      "display_name": "指标快照",
+      "description": "A time-stamped set of visibility, sentiment, platform, and source metrics for a brand.",
+      "identity_fields": ["brand_entity_id", "snapshot_id"],
+      "lifecycle": ["created", "compared", "archived"],
+      "source_systems": ["brand_metric_snapshots", "AnalysisSnapshot", "AgentState.metrics"],
+      "properties": [
+        {
+          "key": "snapshot_id",
+          "display_name": "快照编号",
+          "value_type": "uuid",
+          "description": "Stable snapshot identifier.",
+          "required": true
+        },
+        {
+          "key": "bwvs_index",
+          "display_name": "品牌可见度指数",
+          "value_type": "float",
+          "description": "Primary brand visibility score."
+        }
+      ]
+    },
+    {
+      "key": "evidence_set",
+      "display_name": "证据集合",
+      "description": "A reusable set of questions, answers, citations, and metrics used by a report or analysis.",
+      "identity_fields": ["evidence_set_id"],
+      "lifecycle": ["temporary", "attached_to_report", "archived"],
+      "source_systems": ["brand_evidence_sets", "Message.output_data", "KnowledgeRecord"],
+      "properties": [
+        {
+          "key": "evidence_set_id",
+          "display_name": "证据集合编号",
+          "value_type": "uuid",
+          "description": "Stable evidence set identifier.",
+          "required": true
+        },
+        {
+          "key": "definition",
+          "display_name": "集合定义",
+          "value_type": "json",
+          "description": "Static object IDs or dynamic filters defining the set."
+        }
+      ]
+    },
+    {
+      "key": "intelligence_finding",
+      "display_name": "情报判断",
+      "description": "A durable business judgment about brand visibility, recommendation strength, competitor pressure, evidence gaps, or operational opportunity.",
+      "identity_fields": ["brand_entity_id", "finding_key"],
+      "lifecycle": ["observed", "validated", "dismissed", "archived"],
+      "source_systems": ["brand_intelligence_findings", "BrandReportVersion.payload"],
+      "properties": [
+        {
+          "key": "finding_key",
+          "display_name": "判断编号",
+          "value_type": "string",
+          "description": "Stable key for a finding within a brand intelligence report.",
+          "required": true
+        },
+        {
+          "key": "title",
+          "display_name": "判断标题",
+          "value_type": "string",
+          "description": "Short user-facing judgment title.",
+          "required": true
+        },
+        {
+          "key": "summary",
+          "display_name": "判断摘要",
+          "value_type": "text",
+          "description": "Business-readable explanation of the judgment.",
+          "required": true
+        },
+        {
+          "key": "finding_type",
+          "display_name": "判断类型",
+          "value_type": "string",
+          "description": "Observation, risk, opportunity, recommendation advantage, competitor pressure, or evidence gap."
+        },
+        {
+          "key": "evidence_summary",
+          "display_name": "证据摘要",
+          "value_type": "text",
+          "description": "Compact evidence explanation without exposing raw answers or prompts."
+        }
+      ]
+    },
+    {
+      "key": "report_artifact",
+      "display_name": "报告",
+      "description": "A user-facing report artifact derived from brand intelligence objects and evidence sets.",
+      "identity_fields": ["report_id"],
+      "lifecycle": ["draft", "published", "superseded", "archived"],
+      "source_systems": ["brand_report_versions", "Message.output_data", "OutputService"],
+      "properties": [
+        {
+          "key": "report_id",
+          "display_name": "报告编号",
+          "value_type": "uuid",
+          "description": "Stable report identifier.",
+          "required": true
+        },
+        {
+          "key": "report_kind",
+          "display_name": "报告类型",
+          "value_type": "string",
+          "description": "Panorama, scenario, site confidence, or follow-up report type."
+        }
+      ]
+    },
+    {
+      "key": "monitoring_plan",
+      "display_name": "监测计划",
+      "description": "A recurring plan that tracks a brand and a question set over time.",
+      "identity_fields": ["monitoring_plan_id"],
+      "lifecycle": ["draft", "active", "paused", "archived"],
+      "source_systems": ["MonitoringPlan"],
+      "properties": [
+        {
+          "key": "monitoring_plan_id",
+          "display_name": "监测计划编号",
+          "value_type": "uuid",
+          "description": "Stable monitoring plan identifier.",
+          "required": true
+        },
+        {
+          "key": "cadence",
+          "display_name": "频率",
+          "value_type": "string",
+          "description": "Monitoring cadence requested by the user."
+        }
+      ]
+    },
+    {
+      "key": "user_decision",
+      "display_name": "用户决策",
+      "description": "A confirmation, rejection, or edit made by a user or authorized agent.",
+      "identity_fields": ["decision_id"],
+      "lifecycle": ["submitted", "applied", "failed", "reverted"],
+      "source_systems": ["brand_user_decisions", "confirmation runtime"],
+      "properties": [
+        {
+          "key": "decision_id",
+          "display_name": "决策编号",
+          "value_type": "uuid",
+          "description": "Stable decision identifier.",
+          "required": true
+        },
+        {
+          "key": "actor_id",
+          "display_name": "操作者",
+          "value_type": "uuid",
+          "description": "User or agent identity that submitted the decision."
+        }
+      ]
+    },
+    {
+      "key": "action_record",
+      "display_name": "动作记录",
+      "description": "An auditable record of a controlled action submitted by a user or agent.",
+      "identity_fields": ["action_record_id"],
+      "lifecycle": ["submitted", "applied", "failed", "reverted"],
+      "source_systems": ["brand_action_records", "workflow events"],
+      "properties": [
+        {
+          "key": "action_record_id",
+          "display_name": "动作记录编号",
+          "value_type": "uuid",
+          "description": "Stable action record identifier.",
+          "required": true
+        },
+        {
+          "key": "action_type",
+          "display_name": "动作类型",
+          "value_type": "string",
+          "description": "Registered action type key."
+        },
+        {
+          "key": "status",
+          "display_name": "动作状态",
+          "value_type": "string",
+          "description": "Submitted, applied, failed, or reverted."
+        }
+      ]
+    }
+  ],
+  "link_types": [
+    {
+      "key": "brand_has_competitor",
+      "display_name": "品牌拥有竞品",
+      "description": "Connects a monitored brand to one of its competitors.",
+      "from_object": "brand_entity",
+      "to_object": "competitor_entity",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "brand_has_persona",
+      "display_name": "品牌面向用户画像",
+      "description": "Connects a brand to target audience personas.",
+      "from_object": "brand_entity",
+      "to_object": "audience_persona",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "persona_has_scenario",
+      "display_name": "画像包含场景",
+      "description": "Connects a persona to decision or usage scenarios.",
+      "from_object": "audience_persona",
+      "to_object": "usage_scenario",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "scenario_generates_question",
+      "display_name": "场景产生问题",
+      "description": "Connects a scenario to simulated AI search questions.",
+      "from_object": "usage_scenario",
+      "to_object": "simulated_question",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "question_answered_by",
+      "display_name": "问题得到回答",
+      "description": "Connects a question to platform answers.",
+      "from_object": "simulated_question",
+      "to_object": "platform_answer",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "platform_answer_has_brand_mention",
+      "display_name": "回答包含品牌提及",
+      "description": "Connects a platform answer to a durable brand mention fact.",
+      "from_object": "platform_answer",
+      "to_object": "brand_mention",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "brand_mention_mentions_brand",
+      "display_name": "提及当前品牌",
+      "description": "Connects a brand mention fact to the monitored brand.",
+      "from_object": "brand_mention",
+      "to_object": "brand_entity",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "brand_mention_mentions_competitor",
+      "display_name": "提及竞品",
+      "description": "Connects a brand mention fact to a competitor brand.",
+      "from_object": "brand_mention",
+      "to_object": "competitor_entity",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "brand_mention_about_question",
+      "display_name": "提及对应问题",
+      "description": "Connects a brand mention fact to the question that produced it.",
+      "from_object": "brand_mention",
+      "to_object": "simulated_question",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "report_contains_brand_mention",
+      "display_name": "报告包含品牌提及",
+      "description": "Connects a report artifact to brand mention facts extracted from it.",
+      "from_object": "report_artifact",
+      "to_object": "brand_mention",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "platform_answer_cites_source",
+      "display_name": "回答引用来源",
+      "description": "Connects a platform answer to citation sources.",
+      "from_object": "platform_answer",
+      "to_object": "citation_source",
+      "cardinality": "many_to_many"
+    },
+    {
+      "key": "metric_snapshot_measures_brand",
+      "display_name": "指标快照衡量品牌",
+      "description": "Connects a metric snapshot to the brand being measured.",
+      "from_object": "metric_snapshot",
+      "to_object": "brand_entity",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "evidence_set_contains_answer",
+      "display_name": "证据集合包含回答",
+      "description": "Connects an evidence set to the platform answers it contains.",
+      "from_object": "evidence_set",
+      "to_object": "platform_answer",
+      "cardinality": "many_to_many"
+    },
+    {
+      "key": "brand_has_intelligence_finding",
+      "display_name": "品牌拥有情报判断",
+      "description": "Connects a monitored brand to durable intelligence judgments derived from its evidence.",
+      "from_object": "brand_entity",
+      "to_object": "intelligence_finding",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "report_uses_evidence_set",
+      "display_name": "报告使用证据集合",
+      "description": "Connects a report to the evidence set that supports it.",
+      "from_object": "report_artifact",
+      "to_object": "evidence_set",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "report_contains_intelligence_finding",
+      "display_name": "报告包含情报判断",
+      "description": "Connects a report version to the business judgments it produced.",
+      "from_object": "report_artifact",
+      "to_object": "intelligence_finding",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "intelligence_finding_uses_evidence_set",
+      "display_name": "情报判断使用证据集合",
+      "description": "Connects an intelligence judgment to the evidence set that supports it.",
+      "from_object": "intelligence_finding",
+      "to_object": "evidence_set",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "monitoring_plan_tracks_question",
+      "display_name": "监测计划跟踪问题",
+      "description": "Connects a monitoring plan to the questions it tracks.",
+      "from_object": "monitoring_plan",
+      "to_object": "simulated_question",
+      "cardinality": "many_to_many"
+    },
+    {
+      "key": "question_set_contains_question",
+      "display_name": "问题组包含问题",
+      "description": "Connects a question set to the durable simulated questions it contains.",
+      "from_object": "question_set",
+      "to_object": "simulated_question",
+      "cardinality": "one_to_many"
+    },
+    {
+      "key": "monitoring_plan_uses_question_set",
+      "display_name": "监测计划使用问题组",
+      "description": "Connects a monitoring plan to the confirmed question sets used by that plan.",
+      "from_object": "monitoring_plan",
+      "to_object": "question_set",
+      "cardinality": "many_to_many"
+    },
+    {
+      "key": "user_decision_confirms_action_record",
+      "display_name": "用户决策确认动作记录",
+      "description": "Connects a user decision to the action record it confirmed or rejected.",
+      "from_object": "user_decision",
+      "to_object": "action_record",
+      "cardinality": "one_to_one"
+    },
+    {
+      "key": "user_decision_updates_intelligence_finding",
+      "display_name": "用户决策修正情报判断",
+      "description": "Connects user feedback to the intelligence judgment it validates, dismisses, or corrects.",
+      "from_object": "user_decision",
+      "to_object": "intelligence_finding",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "action_record_affects_brand",
+      "display_name": "动作记录影响品牌",
+      "description": "Connects an action record to the brand whose intelligence world it changed.",
+      "from_object": "action_record",
+      "to_object": "brand_entity",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "action_record_handles_intelligence_finding",
+      "display_name": "动作处理情报判断",
+      "description": "Connects a controlled action record to the intelligence judgment it handles.",
+      "from_object": "action_record",
+      "to_object": "intelligence_finding",
+      "cardinality": "many_to_one"
+    },
+    {
+      "key": "action_record_handles_monitoring_plan",
+      "display_name": "动作处理监测计划",
+      "description": "Connects a controlled action record to the monitoring plan it creates or changes.",
+      "from_object": "action_record",
+      "to_object": "monitoring_plan",
+      "cardinality": "many_to_one"
+    }
+  ],
+  "action_types": [
+    {
+      "key": "generate_question_set",
+      "display_name": "生成问题组",
+      "description": "Create or import durable simulated questions for a brand analysis run.",
+      "target_objects": ["brand_entity", "simulated_question"],
+      "required_inputs": ["brand_entity_id", "question_count", "generation_mode"],
+      "writes": ["simulated_question"],
+      "creates_links": ["action_record_affects_brand"],
+      "requires_confirmation": false,
+      "permission_scope": "entity_execute",
+      "audit_event": "question_set_generated",
+      "side_effects": ["emit_question_list_artifact"]
+    },
+    {
+      "key": "generate_brand_context",
+      "display_name": "生成品牌上下文",
+      "description": "Project brand profile and competitor candidates into durable brand intelligence objects.",
+      "target_objects": ["brand_entity", "competitor_entity"],
+      "required_inputs": ["brand_entity_id"],
+      "writes": ["competitor_entity"],
+      "creates_links": ["brand_has_competitor", "action_record_affects_brand"],
+      "requires_confirmation": false,
+      "permission_scope": "entity_execute",
+      "audit_event": "brand_context_generated",
+      "side_effects": ["update_brand_object_context"]
+    },
+    {
+      "key": "generate_persona_map",
+      "display_name": "生成画像场景图",
+      "description": "Project audience personas and usage scenarios into durable brand intelligence objects.",
+      "target_objects": ["brand_entity", "audience_persona", "usage_scenario"],
+      "required_inputs": ["brand_entity_id"],
+      "writes": ["audience_persona", "usage_scenario"],
+      "creates_links": ["brand_has_persona", "persona_has_scenario", "action_record_affects_brand"],
+      "requires_confirmation": false,
+      "permission_scope": "entity_execute",
+      "audit_event": "persona_map_generated",
+      "side_effects": ["update_brand_object_context"]
+    },
+    {
+      "key": "update_brand_profile",
+      "display_name": "更新品牌画像",
+      "description": "Update durable brand profile fields after user confirmation or trusted enrichment.",
+      "target_objects": ["brand_entity"],
+      "required_inputs": ["brand_entity_id", "profile_patch"],
+      "writes": ["brand_entity.normalized_name", "brand_entity.domain", "brand_entity.industry"],
+      "creates_links": [],
+      "requires_confirmation": true,
+      "permission_scope": "entity_write",
+      "audit_event": "brand_profile_updated",
+      "side_effects": ["invalidate_brand_summary_cache"]
+    },
+    {
+      "key": "confirm_question_set",
+      "display_name": "确认问题组",
+      "description": "Mark generated questions as confirmed and ready for answer fetching.",
+      "target_objects": ["question_set", "simulated_question", "user_decision"],
+      "required_inputs": ["brand_entity_id", "question_ids", "actor_id"],
+      "writes": ["simulated_question.lifecycle", "user_decision"],
+      "creates_links": ["user_decision_confirms_action_record", "action_record_affects_brand"],
+      "requires_confirmation": true,
+      "permission_scope": "entity_write",
+      "audit_event": "question_set_confirmed",
+      "side_effects": ["resume_workflow_from_a4"]
+    },
+    {
+      "key": "record_user_feedback",
+      "display_name": "记录用户反馈",
+      "description": "Record a user observation, selection, rejection, or guidance that may drive later orchestrator action.",
+      "target_objects": ["brand_entity", "intelligence_finding", "user_decision"],
+      "required_inputs": ["brand_entity_id", "feedback_type", "actor_id"],
+      "writes": ["user_decision", "intelligence_finding.lifecycle"],
+      "creates_links": ["action_record_affects_brand", "user_decision_updates_intelligence_finding", "action_record_handles_intelligence_finding"],
+      "requires_confirmation": false,
+      "permission_scope": "entity_write",
+      "audit_event": "user_feedback_recorded",
+      "side_effects": ["resume_orchestrator_if_needed"]
+    },
+    {
+      "key": "run_answer_fetch",
+      "display_name": "抓取 AI 平台回答",
+      "description": "Fetch platform answers for confirmed questions and create answer/citation evidence.",
+      "target_objects": ["simulated_question", "platform_answer", "brand_mention", "citation_source"],
+      "required_inputs": ["brand_entity_id", "question_ids", "platforms"],
+      "writes": ["platform_answer", "brand_mention", "citation_source"],
+      "creates_links": ["question_answered_by", "platform_answer_has_brand_mention", "brand_mention_mentions_brand", "brand_mention_mentions_competitor", "brand_mention_about_question", "platform_answer_cites_source"],
+      "requires_confirmation": false,
+      "permission_scope": "entity_execute",
+      "audit_event": "answer_fetch_run",
+      "side_effects": ["emit_fetch_results_artifact"]
+    },
+    {
+      "key": "generate_report",
+      "display_name": "生成报告",
+      "description": "Generate a report and durable intelligence judgments from brand facts, metrics, answers, citations, and an evidence set.",
+      "target_objects": ["brand_entity", "evidence_set", "report_artifact", "metric_snapshot", "brand_mention", "intelligence_finding"],
+      "required_inputs": ["brand_entity_id", "report_kind"],
+      "writes": ["report_artifact", "metric_snapshot", "brand_mention", "intelligence_finding"],
+      "creates_links": ["report_uses_evidence_set", "metric_snapshot_measures_brand", "report_contains_brand_mention", "brand_has_intelligence_finding", "report_contains_intelligence_finding", "intelligence_finding_uses_evidence_set"],
+      "requires_confirmation": false,
+      "permission_scope": "entity_execute",
+      "audit_event": "report_generated",
+      "side_effects": ["emit_report_artifact", "update_canvas"]
+    },
+    {
+      "key": "generate_official_website_evidence_plan",
+      "display_name": "生成官网证据页优化建议",
+      "description": "Turn official website citation and content observations into a reviewable improvement plan for owned brand evidence.",
+      "target_objects": ["brand_entity", "official_website_asset", "intelligence_finding", "report_artifact"],
+      "required_inputs": ["brand_entity_id", "official_domain", "improvement_scope"],
+      "writes": ["intelligence_finding", "report_artifact"],
+      "creates_links": ["brand_has_intelligence_finding", "report_contains_intelligence_finding", "action_record_affects_brand"],
+      "requires_confirmation": true,
+      "permission_scope": "entity_execute",
+      "audit_event": "official_website_evidence_plan_generated",
+      "side_effects": ["emit_followup_result", "update_canvas"]
+    },
+    {
+      "key": "create_monitoring_plan",
+      "display_name": "创建监测计划",
+      "description": "Create a recurring monitoring plan for a brand and a confirmed question set.",
+      "target_objects": ["brand_entity", "monitoring_plan", "question_set", "simulated_question"],
+      "required_inputs": ["brand_entity_id", "question_ids", "cadence"],
+      "writes": ["monitoring_plan"],
+      "creates_links": ["monitoring_plan_uses_question_set", "monitoring_plan_tracks_question", "action_record_handles_monitoring_plan"],
+      "requires_confirmation": true,
+      "permission_scope": "entity_write",
+      "audit_event": "monitoring_plan_created",
+      "side_effects": ["schedule_monitoring_run"]
+    },
+    {
+      "key": "update_monitoring_plan",
+      "display_name": "更新监测计划",
+      "description": "Update, activate, pause, or archive a monitoring plan after an explicit user operation.",
+      "target_objects": ["brand_entity", "monitoring_plan", "user_decision"],
+      "required_inputs": ["brand_entity_id", "monitoring_plan_id", "change_type", "actor_id"],
+      "writes": ["monitoring_plan", "user_decision"],
+      "creates_links": ["action_record_affects_brand", "user_decision_confirms_action_record", "action_record_handles_monitoring_plan"],
+      "requires_confirmation": true,
+      "permission_scope": "entity_write",
+      "audit_event": "monitoring_plan_updated",
+      "side_effects": ["reschedule_monitoring_run"]
+    },
+    {
+      "key": "apply_table_import",
+      "display_name": "应用表格导入",
+      "description": "Apply a confirmed table import to supported brand intelligence objects.",
+      "target_objects": ["brand_entity", "competitor_entity", "simulated_question"],
+      "required_inputs": ["brand_entity_id", "mapping", "rows", "actor_id"],
+      "writes": ["brand_entity", "competitor_entity", "simulated_question"],
+      "creates_links": ["brand_has_competitor"],
+      "requires_confirmation": true,
+      "permission_scope": "entity_write",
+      "audit_event": "table_import_applied",
+      "side_effects": ["emit_import_summary_artifact"]
+    },
+    {
+      "key": "compare_snapshots",
+      "display_name": "对比指标快照",
+      "description": "Compare two metric snapshots and produce explainable deltas.",
+      "target_objects": ["brand_entity", "metric_snapshot", "evidence_set"],
+      "required_inputs": ["brand_entity_id", "baseline_snapshot_id", "current_snapshot_id"],
+      "writes": ["evidence_set"],
+      "creates_links": ["evidence_set_contains_answer"],
+      "requires_confirmation": false,
+      "permission_scope": "entity_read",
+      "audit_event": "snapshots_compared",
+      "side_effects": ["emit_followup_result"]
+    },
+    {
+      "key": "export_evidence_set",
+      "display_name": "导出证据集合",
+      "description": "Export a selected evidence set for review, sharing, or downstream analysis.",
+      "target_objects": ["evidence_set"],
+      "required_inputs": ["evidence_set_id", "format"],
+      "writes": [],
+      "creates_links": [],
+      "requires_confirmation": false,
+      "permission_scope": "entity_read",
+      "audit_event": "evidence_set_exported",
+      "side_effects": ["emit_export_artifact"]
+    }
+  ],
+  "functions": [
+    {
+      "key": "normalize_brand_identity",
+      "display_name": "标准化品牌身份",
+      "description": "Normalize brand names, aliases, and domains before matching or reporting.",
+      "reads": ["brand_entity"],
+      "inputs": ["raw_name", "domain", "aliases"],
+      "outputs": ["normalized_name", "identity_confidence"],
+      "used_by_actions": ["update_brand_profile", "run_answer_fetch"]
+    },
+    {
+      "key": "compute_brand_visibility",
+      "display_name": "计算品牌可见度",
+      "description": "Compute visibility metrics from platform answers, mentions, sentiment, and citations.",
+      "reads": ["platform_answer", "brand_mention", "citation_source", "simulated_question"],
+      "inputs": ["brand_entity_id", "evidence_set_id"],
+      "outputs": ["metric_snapshot"],
+      "used_by_actions": ["generate_report"]
+    },
+    {
+      "key": "rank_citation_sources",
+      "display_name": "排序引用来源",
+      "description": "Rank citation sources by authority, freshness, brand relevance, and platform usage.",
+      "reads": ["citation_source", "platform_answer"],
+      "inputs": ["evidence_set_id"],
+      "outputs": ["ranked_sources"],
+      "used_by_actions": ["generate_report", "export_evidence_set"]
+    },
+    {
+      "key": "compare_metric_snapshots",
+      "display_name": "比较指标快照",
+      "description": "Compute deltas between snapshots and attach likely cause evidence.",
+      "reads": ["metric_snapshot", "platform_answer", "brand_mention", "citation_source"],
+      "inputs": ["baseline_snapshot_id", "current_snapshot_id"],
+      "outputs": ["delta_summary", "supporting_evidence_set"],
+      "used_by_actions": ["compare_snapshots"]
+    },
+    {
+      "key": "build_report_context",
+      "display_name": "构建报告上下文",
+      "description": "Build the structured context a report generator needs from objects, links, and evidence.",
+      "reads": ["brand_entity", "competitor_entity", "platform_answer", "brand_mention", "citation_source", "metric_snapshot"],
+      "inputs": ["brand_entity_id", "report_kind"],
+      "outputs": ["report_context"],
+      "used_by_actions": ["generate_report"]
+    },
+    {
+      "key": "derive_intelligence_findings",
+      "display_name": "沉淀情报判断",
+      "description": "Turn report conclusions into durable findings with compact evidence summaries and suggested follow-up actions.",
+      "reads": ["report_artifact", "evidence_set", "platform_answer", "brand_mention", "citation_source"],
+      "inputs": ["brand_entity_id", "report_id"],
+      "outputs": ["intelligence_finding"],
+      "used_by_actions": ["generate_report"]
+    },
+    {
+      "key": "retrieve_brand_evidence",
+      "display_name": "检索品牌证据",
+      "description": "Retrieve object-linked evidence for finding follow-up questions, exports, and monitoring reviews.",
+      "reads": ["brand_entity", "simulated_question", "platform_answer", "citation_source", "report_artifact", "intelligence_finding"],
+      "inputs": ["brand_entity_id", "filters"],
+      "outputs": ["evidence_set"],
+      "used_by_actions": ["export_evidence_set", "compare_snapshots"]
+    },
+    {
+      "key": "observe_official_website_asset",
+      "display_name": "观测官网资产",
+      "description": "Evaluate whether the brand official website is being used by AI answers as a source of brand evidence.",
+      "reads": ["brand_entity", "platform_answer", "citation_source"],
+      "inputs": ["brand_entity_id", "official_domain"],
+      "outputs": ["official_website_asset", "official_website_observation"],
+      "used_by_actions": ["generate_report", "compare_snapshots", "generate_official_website_evidence_plan"]
+    },
+    {
+      "key": "audit_official_website_content",
+      "display_name": "审计官网内容",
+      "description": "Inspect whether the official homepage is readable, structured, and able to carry brand-owned evidence.",
+      "reads": ["brand_entity"],
+      "inputs": ["brand_entity_id", "official_domain"],
+      "outputs": ["official_website_asset", "official_website_content_audit"],
+      "used_by_actions": ["generate_report", "compare_snapshots", "generate_official_website_evidence_plan"]
+    },
+    {
+      "key": "cluster_citation_evidence",
+      "display_name": "聚合引用证据",
+      "description": "Group raw citation leaves into source domains and business evidence clusters with representative samples.",
+      "reads": ["simulated_question", "platform_answer", "citation_source"],
+      "inputs": ["brand_entity_id", "sampling_policy"],
+      "outputs": ["source_domain_summary", "evidence_cluster"],
+      "used_by_actions": ["generate_report", "export_evidence_set", "compare_snapshots"]
+    }
+  ],
+  "object_views": [
+    {
+      "key": "brand_intelligence_home",
+      "display_name": "品牌情报主页",
+      "description": "The future central workspace for one brand's profile, questions, answers, evidence, metrics, reports, monitoring, and actions.",
+      "object_type": "brand_entity",
+      "sections": ["profile", "official_website_asset", "official_website_observation", "competitors", "personas", "question_sets", "platform_answers", "brand_mentions", "source_domains", "evidence_clusters", "metrics", "findings", "reports", "monitoring", "decisions"],
+      "actions": ["generate_brand_context", "generate_persona_map", "update_brand_profile", "confirm_question_set", "record_user_feedback", "run_answer_fetch", "generate_report", "generate_official_website_evidence_plan", "create_monitoring_plan", "update_monitoring_plan", "apply_table_import"]
+    },
+    {
+      "key": "report_evidence_view",
+      "display_name": "报告证据视图",
+      "description": "A review surface showing which questions, answers, citations, and metrics support a report.",
+      "object_type": "report_artifact",
+      "sections": ["summary", "evidence_set", "linked_findings", "linked_answers", "linked_citations", "metric_snapshot", "decision_log"],
+      "actions": ["export_evidence_set", "compare_snapshots"]
+    },
+    {
+      "key": "monitoring_plan_view",
+      "display_name": "监测计划视图",
+      "description": "A review and control surface for recurring brand monitoring.",
+      "object_type": "monitoring_plan",
+      "sections": ["plan", "tracked_questions", "recent_runs", "metric_changes", "alerts"],
+      "actions": ["update_monitoring_plan", "run_answer_fetch", "generate_report", "compare_snapshots"]
+    }
+  ]
+}

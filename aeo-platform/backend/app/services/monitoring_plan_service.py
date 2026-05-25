@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy import case, delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.brand_intelligence import BrandIntelligenceQuestion, BrandObjectLink
 from app.models.entity import Entity
 from app.models.monitoring_plan import (
     MonitoringEvidenceRecord,
@@ -29,6 +30,7 @@ from app.models.monitoring_schedule import (
     ScheduleStatus,
 )
 from app.models.task import AnalysisTask
+from app.services.brand_object_link_service import BrandObjectLinkService
 from app.services.monitoring_service import MonitoringService
 
 logger = logging.getLogger(__name__)
@@ -105,6 +107,13 @@ class MonitoringPlanService:
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def _finish_mutation(self, row: Any, *, commit: bool = True) -> None:
+        if commit:
+            await self.db.commit()
+            await self.db.refresh(row)
+            return
+        await self.db.flush()
 
     @classmethod
     def normalize_monitor_mode(cls, value: str | None) -> str:
@@ -253,6 +262,145 @@ class MonitoringPlanService:
                 f"一个监测计划最多支持 {self.MAX_PLAN_QUESTIONS} 个问题，请删减或拆分问题集。"
             )
 
+    @staticmethod
+    def _monitoring_question_object_id(
+        question_set_id: UUID,
+        question_id: str,
+    ) -> str:
+        normalized_question_id = str(question_id or "").strip() or "question"
+        return f"mqs:{question_set_id.hex[:12]}:{normalized_question_id[:80]}"
+
+    async def _ensure_brand_questions_for_question_set(
+        self,
+        question_set: MonitoringQuestionSet,
+    ) -> list[BrandIntelligenceQuestion]:
+        rows: list[BrandIntelligenceQuestion] = []
+        normalized_questions = self.normalize_questions(question_set.questions or [])
+        for projection in normalized_questions:
+            original_question_id = str(projection.get("question_id") or "")
+            durable_question_id = self._monitoring_question_object_id(
+                question_set.id,
+                original_question_id,
+            )
+            conditions = [
+                BrandIntelligenceQuestion.entity_id == question_set.entity_id,
+                BrandIntelligenceQuestion.question_id.in_(
+                    [original_question_id, durable_question_id]
+                ),
+                BrandIntelligenceQuestion.question_text
+                == str(projection.get("question_text") or ""),
+            ]
+            if question_set.source_session_id is None:
+                conditions.append(BrandIntelligenceQuestion.session_id.is_(None))
+            else:
+                conditions.append(
+                    BrandIntelligenceQuestion.session_id
+                    == question_set.source_session_id
+                )
+            existing = (
+                await self.db.execute(
+                    select(BrandIntelligenceQuestion)
+                    .where(*conditions)
+                    .order_by(desc(BrandIntelligenceQuestion.created_at))
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if question_set.status == QuestionSetStatus.CONFIRMED.value:
+                    existing.status = "confirmed"
+                rows.append(existing)
+                continue
+
+            row = BrandIntelligenceQuestion(
+                entity_id=question_set.entity_id,
+                session_id=question_set.source_session_id,
+                question_id=durable_question_id,
+                question_text=str(projection.get("question_text") or ""),
+                category=str(projection.get("scene") or ""),
+                user_intent=str(projection.get("intent") or ""),
+                decision_stage=str(projection.get("stage") or ""),
+                status=(
+                    "confirmed"
+                    if question_set.status == QuestionSetStatus.CONFIRMED.value
+                    else "generated"
+                ),
+                source_payload={
+                    "source": "monitoring_question_set",
+                    "question_set_id": str(question_set.id),
+                    "original_question_id": str(projection.get("question_id") or ""),
+                },
+            )
+            self.db.add(row)
+            rows.append(row)
+        await self.db.flush()
+        return rows
+
+    async def _replace_monitoring_plan_links(
+        self,
+        plan: MonitoringPlan,
+        question_sets: list[MonitoringQuestionSet],
+    ) -> None:
+        await self.db.execute(
+            delete(BrandObjectLink).where(
+                BrandObjectLink.entity_id == plan.entity_id,
+                BrandObjectLink.from_object_type == "monitoring_plan",
+                BrandObjectLink.from_object_id == str(plan.id),
+                BrandObjectLink.link_type.in_(
+                    [
+                        "monitoring_plan_uses_question_set",
+                        "monitoring_plan_tracks_question",
+                    ]
+                ),
+            )
+        )
+        link_service = BrandObjectLinkService(self.db)
+        for question_set in question_sets:
+            await self.db.execute(
+                delete(BrandObjectLink).where(
+                    BrandObjectLink.entity_id == plan.entity_id,
+                    BrandObjectLink.from_object_type == "question_set",
+                    BrandObjectLink.from_object_id == str(question_set.id),
+                    BrandObjectLink.link_type == "question_set_contains_question",
+                )
+            )
+            await link_service.ensure_link(
+                entity_id=plan.entity_id,
+                link_type="monitoring_plan_uses_question_set",
+                from_object_type="monitoring_plan",
+                from_object_id=str(plan.id),
+                to_object_type="question_set",
+                to_object_id=str(question_set.id),
+                extra_metadata={
+                    "monitor_mode": question_set.monitor_mode,
+                    "question_count": question_set.question_count,
+                },
+            )
+            question_rows = await self._ensure_brand_questions_for_question_set(
+                question_set
+            )
+            for question in question_rows:
+                await link_service.ensure_link(
+                    entity_id=plan.entity_id,
+                    link_type="question_set_contains_question",
+                    from_object_type="question_set",
+                    from_object_id=str(question_set.id),
+                    to_object_type="simulated_question",
+                    to_object_id=str(question.id),
+                    extra_metadata={"question_id": question.question_id},
+                )
+                await link_service.ensure_link(
+                    entity_id=plan.entity_id,
+                    link_type="monitoring_plan_tracks_question",
+                    from_object_type="monitoring_plan",
+                    from_object_id=str(plan.id),
+                    to_object_type="simulated_question",
+                    to_object_id=str(question.id),
+                    extra_metadata={
+                        "question_set_id": str(question_set.id),
+                        "question_id": question.question_id,
+                    },
+                )
+
     async def create_question_set(
         self,
         *,
@@ -265,6 +413,7 @@ class MonitoringPlanService:
         source_session_id: UUID | None = None,
         source_task_id: UUID | None = None,
         extra_metadata: dict[str, Any] | None = None,
+        commit: bool = True,
     ) -> MonitoringQuestionSet:
         mode = self.normalize_monitor_mode(monitor_mode)
         normalized_questions = self.normalize_questions(questions)
@@ -287,8 +436,7 @@ class MonitoringPlanService:
             extra_metadata=extra_metadata or {},
         )
         self.db.add(question_set)
-        await self.db.commit()
-        await self.db.refresh(question_set)
+        await self._finish_mutation(question_set, commit=commit)
         return question_set
 
     async def append_questions(
@@ -297,6 +445,7 @@ class MonitoringPlanService:
         question_set_id: UUID,
         user_id: UUID,
         questions: list[Any],
+        commit: bool = True,
     ) -> MonitoringQuestionSet:
         question_set = await self.get_question_set(question_set_id, user_id=user_id)
         if question_set is None:
@@ -309,8 +458,7 @@ class MonitoringPlanService:
         question_set.question_count = len(merged)
         question_set.version = (question_set.version or 1) + 1
         question_set.updated_at = datetime.now(timezone.utc)
-        await self.db.commit()
-        await self.db.refresh(question_set)
+        await self._finish_mutation(question_set, commit=commit)
         return question_set
 
     async def confirm_question_set(
@@ -318,6 +466,7 @@ class MonitoringPlanService:
         *,
         question_set_id: UUID,
         user_id: UUID,
+        commit: bool = True,
     ) -> MonitoringQuestionSet:
         question_set = await self.get_question_set(question_set_id, user_id=user_id)
         if question_set is None:
@@ -328,8 +477,7 @@ class MonitoringPlanService:
         question_set.status = QuestionSetStatus.CONFIRMED.value
         question_set.confirmed_at = question_set.confirmed_at or datetime.now(timezone.utc)
         question_set.updated_at = datetime.now(timezone.utc)
-        await self.db.commit()
-        await self.db.refresh(question_set)
+        await self._finish_mutation(question_set, commit=commit)
         return question_set
 
     async def get_question_set(
@@ -388,6 +536,7 @@ class MonitoringPlanService:
         preferred_hour: int = 3,
         timezone_str: str = "Asia/Shanghai",
         title: str | None = None,
+        commit: bool = True,
     ) -> MonitoringPlan:
         mode = self.normalize_monitor_mode(monitor_mode)
         run_policy = self._normalize_run_policy(run_policy)
@@ -422,10 +571,10 @@ class MonitoringPlanService:
         )
         self.db.add(plan)
         await self.db.flush()
+        await self._replace_monitoring_plan_links(plan, question_sets)
         if plan.status == MonitoringPlanStatus.ACTIVE.value:
             await self._upsert_schedule_for_plan(plan, question_sets)
-        await self.db.commit()
-        await self.db.refresh(plan)
+        await self._finish_mutation(plan, commit=commit)
         return plan
 
     async def create_or_update_active_plan_from_question_set(
@@ -483,6 +632,7 @@ class MonitoringPlanService:
         existing.endpoint_ids = self.normalize_endpoint_ids(None, run_policy=run_policy)
         existing.run_policy = run_policy
         existing.updated_at = datetime.now(timezone.utc)
+        await self._replace_monitoring_plan_links(existing, [question_set])
         await self._upsert_schedule_for_plan(existing, [question_set])
         await self.db.commit()
         await self.db.refresh(existing)
@@ -566,7 +716,13 @@ class MonitoringPlanService:
         )
         return list(result.scalars().all())
 
-    async def activate_plan(self, *, plan_id: UUID, user_id: UUID) -> MonitoringPlan:
+    async def activate_plan(
+        self,
+        *,
+        plan_id: UUID,
+        user_id: UUID,
+        commit: bool = True,
+    ) -> MonitoringPlan:
         plan = await self.get_plan(plan_id, user_id=user_id)
         if plan is None:
             raise ValueError("监测计划不存在。")
@@ -582,9 +738,9 @@ class MonitoringPlanService:
         self._enforce_question_limit(questions)
         plan.status = MonitoringPlanStatus.ACTIVE.value
         plan.updated_at = datetime.now(timezone.utc)
+        await self._replace_monitoring_plan_links(plan, question_sets)
         await self._upsert_schedule_for_plan(plan, question_sets)
-        await self.db.commit()
-        await self.db.refresh(plan)
+        await self._finish_mutation(plan, commit=commit)
         return plan
 
     async def update_plan(
@@ -600,10 +756,12 @@ class MonitoringPlanService:
         preferred_hour: int | None = None,
         timezone_str: str | None = None,
         title: str | None = None,
+        commit: bool = True,
     ) -> MonitoringPlan:
         plan = await self.get_plan(plan_id, user_id=user_id)
         if plan is None:
             raise ValueError("监测计划不存在。")
+        question_sets_for_links: list[MonitoringQuestionSet] | None = None
         if run_policy is not None:
             plan.run_policy = self._normalize_run_policy(run_policy)
         if endpoint_ids is not None:
@@ -620,6 +778,7 @@ class MonitoringPlanService:
             )
             self._enforce_question_limit(self._combine_question_sets(question_sets))
             plan.question_set_ids = [str(item.id) for item in question_sets]
+            question_sets_for_links = question_sets
         if status is not None:
             plan.status = self._normalize_plan_status(status)
         if frequency is not None:
@@ -641,13 +800,21 @@ class MonitoringPlanService:
                 ],
                 require_confirmed=True,
             )
+            await self._replace_monitoring_plan_links(plan, question_sets)
             await self._upsert_schedule_for_plan(plan, question_sets)
+        elif question_sets_for_links is not None:
+            await self._replace_monitoring_plan_links(plan, question_sets_for_links)
         plan.updated_at = datetime.now(timezone.utc)
-        await self.db.commit()
-        await self.db.refresh(plan)
+        await self._finish_mutation(plan, commit=commit)
         return plan
 
-    async def pause_plan(self, *, plan_id: UUID, user_id: UUID) -> MonitoringPlan:
+    async def pause_plan(
+        self,
+        *,
+        plan_id: UUID,
+        user_id: UUID,
+        commit: bool = True,
+    ) -> MonitoringPlan:
         plan = await self.get_plan(plan_id, user_id=user_id)
         if plan is None:
             raise ValueError("监测计划不存在。")
@@ -657,8 +824,26 @@ class MonitoringPlanService:
         if schedule is not None and schedule.status == ScheduleStatus.ACTIVE:
             schedule.status = ScheduleStatus.PAUSED
             schedule.next_run_at = None
-        await self.db.commit()
-        await self.db.refresh(plan)
+        await self._finish_mutation(plan, commit=commit)
+        return plan
+
+    async def archive_plan(
+        self,
+        *,
+        plan_id: UUID,
+        user_id: UUID,
+        commit: bool = True,
+    ) -> MonitoringPlan:
+        plan = await self.get_plan(plan_id, user_id=user_id)
+        if plan is None:
+            raise ValueError("监测计划不存在。")
+        plan.status = MonitoringPlanStatus.ARCHIVED.value
+        plan.updated_at = datetime.now(timezone.utc)
+        schedule = await self._get_schedule_for_plan(plan.id)
+        if schedule is not None:
+            schedule.status = ScheduleStatus.PAUSED
+            schedule.next_run_at = None
+        await self._finish_mutation(plan, commit=commit)
         return plan
 
     async def submit_plan_run(self, *, plan_id: UUID, user_id: UUID) -> MonitoringRun:

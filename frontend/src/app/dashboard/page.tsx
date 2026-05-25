@@ -54,10 +54,10 @@ function DashboardContent({ currentUser }: { currentUser: AuthUser }) {
   };
 
   return (
-    <div className="h-screen flex flex-col" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="flex min-h-screen flex-col" style={{ backgroundColor: 'var(--bg-primary)' }}>
       <DashboardTopBar onNewAnalysis={handleNewAnalysis} />
-      <div className="flex-1 overflow-auto">
-      <DashboardPage onNewAnalysis={handleNewAnalysis} />
+      <div className="flex-1">
+        <DashboardPage onNewAnalysis={handleNewAnalysis} />
       </div>
       <EntityFormDialog
         open={entityFormOpen || shouldAutoPrompt}

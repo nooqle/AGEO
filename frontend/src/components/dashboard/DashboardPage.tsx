@@ -7,22 +7,26 @@ import {
   DashboardBrandSidebar,
   DashboardMobileBrandSwitcher,
 } from './DashboardBrandSidebar';
-import { DashboardPeriodMonitoring } from './DashboardPeriodMonitoring';
-import { DashboardTodoStrip } from './DashboardTodoStrip';
+import { BrandOntologyHome } from './BrandOntologyHome';
 import { HeroSection } from './HeroSection';
 import { useDashboardStore } from '@/stores/dashboardStore';
 import { useEntityStore } from '@/stores/entityStore';
+import { useOntologyStore } from '@/stores/ontologyStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { uniqueAiSourceDisplayNames } from '@/lib/aiSourceDisplay';
-import { writeDashboardChatHandoff } from '@/lib/dashboardChatHandoff';
+import {
+  preferredDashboardEntity,
+  splitDashboardEntities,
+} from '@/lib/brandEntityHygiene';
+import { buildDashboardChatUrlWithHandoff } from '@/lib/dashboardChatHandoff';
 import type {
   DashboardHomeData,
   DashboardLatestReport,
   DashboardMonitorMode,
-  DashboardTodoItem,
 } from '@/types/dashboard';
+import type { OntologyWorldSummary } from '@/types/ontology';
 
 interface DashboardPageProps {
   onNewAnalysis?: () => void;
@@ -57,6 +61,39 @@ function resolveAiSourceLabels(home?: DashboardHomeData | null): string[] {
   return uniqueAiSourceDisplayNames((home?.platform_diagnosis || []).map((row) => row.platform));
 }
 
+function formatBrandWorldSampleSummary(
+  scope?: {
+    platform_count?: number;
+    question_count?: number;
+    answer_count?: number;
+    citation_count?: number;
+  },
+): string | null {
+  if (!scope) return null;
+  const parts = [
+    typeof scope.platform_count === 'number' ? `${scope.platform_count} 个平台` : null,
+    typeof scope.question_count === 'number' ? `${scope.question_count} 个问题` : null,
+    typeof scope.answer_count === 'number' ? `${scope.answer_count} 条答案样本` : null,
+    typeof scope.citation_count === 'number' ? `${scope.citation_count} 次引用` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
+}
+
+function formatBrandWorldMetricSummary(world?: OntologyWorldSummary | null): string | null {
+  const metrics = world?.summary_projection?.metrics;
+  if (!metrics) return null;
+  const parts = [
+    metrics.mention_rate?.display_value ? `AI 提及率 ${metrics.mention_rate.display_value}` : null,
+    metrics.mention_ranking?.display_rank
+      ? `提及排名 第 ${metrics.mention_ranking.display_rank} / ${metrics.mention_ranking.total || 1}`
+      : metrics.mention_ranking?.sample_sufficiency?.rank_status_label
+        ? `提及排名 ${metrics.mention_ranking.sample_sufficiency.rank_status_label}`
+        : null,
+    metrics.official_citation_rate?.display_value ? `官网引用率 ${metrics.official_citation_rate.display_value}` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
+}
+
 function hasDashboardHomePayload(home?: DashboardHomeData | null): boolean {
   if (!home) return false;
   const latestReport = home.latest_report;
@@ -83,11 +120,18 @@ function resolveHomeMonitorMode(home?: DashboardHomeData | null): DashboardMonit
 }
 
 function resolveMonitoringStatusLabel(home?: DashboardHomeData | null): string {
-  if (home?.has_active_monitoring_schedule) return '正在监测';
-  const status = home?.monitoring_plan?.status;
-  if (status === 'active') return '正在监测';
+  const plan = home?.monitoring_plan;
+  const scheduleStatus = plan?.schedule_status;
+  if (scheduleStatus === 'active') return '正在监测';
+  if (scheduleStatus === 'paused') return '暂停监测';
+  if (scheduleStatus === 'error') return '监测异常';
+  if (scheduleStatus === 'completed') return '监测已完成';
+  if (home?.has_active_monitoring_schedule && !plan) return '正在监测';
+  const status = plan?.status;
+  if (status === 'active') return plan?.schedule_id ? '正在监测' : '计划已就绪';
   if (status === 'paused') return '暂停监测';
-  return '待监测';
+  if (status === 'draft') return '计划草稿';
+  return '未启用监测';
 }
 
 function latestReportRef(report?: DashboardLatestReport): string {
@@ -108,11 +152,6 @@ function reportTodoStorageKey(brandId: string, reportRef: string): string {
   return `specta.dashboard.report.viewed.${brandId}.${reportRef}`;
 }
 
-function isReportTodoViewed(brandId: string | null, reportRef: string | null | undefined): boolean {
-  if (!brandId || !reportRef || typeof window === 'undefined') return false;
-  return window.localStorage.getItem(reportTodoStorageKey(brandId, reportRef)) === '1';
-}
-
 function markReportTodoViewed(brandId: string | null, reportRef: string | null | undefined) {
   if (!brandId || !reportRef || typeof window === 'undefined') return;
   window.localStorage.setItem(reportTodoStorageKey(brandId, reportRef), '1');
@@ -123,11 +162,38 @@ function buildDashboardVisibleDraft(input: string): string | null {
   return trimmedInput || null;
 }
 
-function buildChatUrlWithHandoff(sessionId: string, params: URLSearchParams): string {
-  if (writeDashboardChatHandoff(sessionId, Object.fromEntries(params.entries()))) {
-    return `/chat/${sessionId}`;
-  }
-  return `/chat/${sessionId}?${params.toString()}`;
+function DashboardMonitoringEntry({
+  brandName,
+  monitorModeLabel,
+  statusLabel,
+  onOpen,
+}: {
+  brandName?: string;
+  monitorModeLabel: string;
+  statusLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <section className="mt-5 border-t border-[var(--border-subtle)] pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[12px] font-medium text-[var(--brand-primary)]">
+            监测与样本
+          </div>
+          <p className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">
+            {brandName || '当前品牌'} · {monitorModeLabel} · {statusLabel}。开启监测后，会定期补充问题、回答、引用和指标。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-h-10 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
+        >
+          查看趋势与样本
+        </button>
+      </div>
+    </section>
+  );
 }
 
 export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
@@ -135,21 +201,18 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const searchParams = useSearchParams();
   const isMonitoringMode = searchParams.get('tab') === 'monitoring';
   const shouldEditMonitoringSchedule = searchParams.get('edit_schedule') === '1';
+  const requestedEntityId = searchParams.get('entity_id');
   const [isOpeningDashboardChat, setIsOpeningDashboardChat] = useState(false);
-  const [viewedReportVersion, setViewedReportVersion] = useState(0);
   const {
     selectedBrandId,
     setSelectedBrandId,
     homeMonitorMode: selectedMonitorMode,
-    setHomeMonitorMode,
-    dateRange,
-    setDateRange,
     home,
-    isHomeLoading,
     homeError,
     fetchHome,
   } = useDashboardStore();
   const { entities, isLoading: entitiesLoading, error: entityError, fetchEntities } = useEntityStore();
+  const { worldsByEntity } = useOntologyStore();
   const { listError, fetchSessionList } = useSessionStore();
 
   useEffect(() => {
@@ -161,17 +224,36 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     if (selectedBrandId && !isMonitoringMode) {
       void fetchHome();
     }
-  }, [dateRange, fetchHome, isMonitoringMode, selectedBrandId, selectedMonitorMode]);
+  }, [fetchHome, isMonitoringMode, selectedBrandId, selectedMonitorMode]);
 
   useEffect(() => {
     if (entities.length === 0) {
       if (selectedBrandId) setSelectedBrandId(null);
-    } else if (!selectedBrandId || !entities.some((entity) => entity.id === selectedBrandId)) {
-      setSelectedBrandId(entities[0].id);
+      return;
     }
-  }, [selectedBrandId, entities, setSelectedBrandId]);
+    if (
+      requestedEntityId &&
+      entities.some((entity) => entity.id === requestedEntityId) &&
+      selectedBrandId !== requestedEntityId
+    ) {
+      setSelectedBrandId(requestedEntityId);
+      return;
+    }
+    const visiblePrimary = splitDashboardEntities(entities, selectedBrandId).primary;
+    const selectedIsPrimary = visiblePrimary.some(
+      (entity) => entity.id === selectedBrandId,
+    );
+    if (!selectedBrandId || !selectedIsPrimary) {
+      setSelectedBrandId((preferredDashboardEntity(entities) || entities[0]).id);
+    }
+  }, [requestedEntityId, selectedBrandId, entities, setSelectedBrandId]);
 
   const selectedBrand = entities.find((entity) => entity.id === selectedBrandId);
+  const selectedWorld = selectedBrandId ? worldsByEntity[selectedBrandId] : null;
+  const brandWorldSampleSummary = formatBrandWorldSampleSummary(
+    selectedWorld?.summary_projection?.sample_scope,
+  );
+  const brandWorldMetricSummary = formatBrandWorldMetricSummary(selectedWorld);
   const selectedBrandName = selectedBrand?.name;
   const homeMonitorMode = resolveHomeMonitorMode(home);
   const homePlanMonitorMode = home?.monitoring_plan?.monitor_mode ?? null;
@@ -193,22 +275,13 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const hasData = entities.length > 0;
   const isInitialLoading = entitiesLoading;
 
-  const visibleTodoItem = (() => {
-    void viewedReportVersion;
-    const items = home?.todo_items || [];
-    const backendItem = items.find((item) => {
-      if (item.kind !== 'unread_latest_report') return true;
-      return !isReportTodoViewed(selectedBrandId, item.ref_id || item.id);
-    }) || null;
-    if (backendItem) return backendItem;
-    return null;
-  })();
-
-  const handleMonitorModeChange = (mode: DashboardMonitorMode) => {
-    setHomeMonitorMode(mode);
-  };
-
-  const handleDashboardCommand = async (input: string) => {
+  const handleDashboardCommand = async (
+    input: string,
+    options?: {
+      autosend?: boolean;
+      handoff?: { taskTitle?: string; taskGoal?: string };
+    },
+  ) => {
     if (!selectedBrand || isOpeningDashboardChat) {
       if (!selectedBrand) onNewAnalysis?.();
       return;
@@ -216,7 +289,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
     setIsOpeningDashboardChat(true);
     try {
-      const session = await api.getOrCreateSessionByEntity(selectedBrand.id);
+      const session = await api.createSession();
       const draft = buildDashboardVisibleDraft(input);
       if (!draft) {
         router.push(`/chat/${session.id}`);
@@ -236,14 +309,19 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       } else if (home?.monitoring_plan?.question_set_label) {
         params.set('question_set_label', home.monitoring_plan.question_set_label);
       }
-      if (home?.latest_report?.sample_summary) {
-        params.set('sample_summary', home.latest_report.sample_summary);
-      } else if (home?.monitoring_plan) {
-        params.set(
-          'sample_summary',
-          `${home.monitoring_plan.question_count} 个问题 · ${home.monitoring_plan.endpoint_labels.length} 个来源平台`,
-        );
+      if (brandWorldSampleSummary) {
+        params.set('sample_summary', brandWorldSampleSummary);
       }
+      if (brandWorldMetricSummary) {
+        params.set('current_metrics', brandWorldMetricSummary);
+      }
+      if (options?.handoff?.taskTitle) {
+        params.set('task_title', options.handoff.taskTitle);
+      }
+      if (options?.handoff?.taskGoal) {
+        params.set('task_goal', options.handoff.taskGoal);
+      }
+      params.set('clean_handoff', '1');
       if (isRealMonitoringPlanId(home?.monitoring_plan?.id)) {
         params.set('monitoring_plan_id', home.monitoring_plan.id);
       }
@@ -257,8 +335,15 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
         params.set('ai_sources', aiSourceLabels.join('、'));
       }
       params.set('draft', draft);
-      params.set('autosend', '1');
-      router.push(buildChatUrlWithHandoff(session.id, params));
+      if (options?.autosend !== false) {
+        params.set('autosend', '1');
+      }
+      router.push(
+        buildDashboardChatUrlWithHandoff(
+          session.id,
+          Object.fromEntries(params.entries()),
+        ),
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '打开对话失败，请稍后重试。');
     } finally {
@@ -270,7 +355,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     if (!home?.latest_report?.session_id) return;
     const reportRef = latestReportRef(home.latest_report);
     markReportTodoViewed(selectedBrandId, reportRef);
-    setViewedReportVersion((version) => version + 1);
     const params = new URLSearchParams();
     const artifactTarget = home.latest_report.artifact_id || home.latest_report.output_id;
     if (artifactTarget) {
@@ -279,46 +363,51 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     if (home.latest_report.output_id) {
       params.set('output_id', home.latest_report.output_id);
     }
-    const query = params.toString();
-    router.push(`/chat/${home.latest_report.session_id}${query ? `?${query}` : ''}`);
+    if (selectedBrand?.id) {
+      params.set('entity_id', selectedBrand.id);
+      params.set('brand', selectedBrand.name);
+      params.set('entry_source', 'dashboard_latest_report');
+    }
+    const targetUrl = buildDashboardChatUrlWithHandoff(
+      home.latest_report.session_id,
+      Object.fromEntries(params.entries()),
+    );
+    router.push(targetUrl);
   };
 
-  const handleTodoAction = (item: DashboardTodoItem) => {
-    if (item.action === 'latest_report') {
-      handleOpenLatestReport();
-      return;
-    }
-    if (item.kind === 'monitoring_plan_incomplete') {
-      const params = new URLSearchParams();
-      params.set('section', 'monitoring');
-      if (selectedBrand?.id) {
-        params.set('entity_id', selectedBrand.id);
-      }
-      if (item.monitor_mode) {
-        setHomeMonitorMode(item.monitor_mode);
-      }
-      router.push(`/settings?${params.toString()}`);
-      return;
-    }
-    void handleDashboardCommand('请帮我完成品牌基本信息与问题生成。');
+  const handleOpenMonitoringSettings = (context?: {
+    recommendationId?: string;
+    targetMetric?: string;
+    contentFormat?: string;
+  }) => {
+    if (!selectedBrand?.id) return;
+    const params = new URLSearchParams();
+    params.set('section', 'monitoring');
+    params.set('entity_id', selectedBrand.id);
+    if (context?.recommendationId) params.set('recommendation_id', context.recommendationId);
+    if (context?.targetMetric) params.set('monitor_metric', context.targetMetric);
+    if (context?.contentFormat) params.set('content_format', context.contentFormat);
+    router.push(`/settings?${params.toString()}`);
   };
 
   const mainContent = (
     <div className="space-y-4">
-      <HeroSection
-        totalBrands={entities.length}
-        selectedBrandName={selectedBrandName}
-        selectedBrandDomain={selectedBrand?.domain}
-        analysisLabel={selectedMonitorModeLabel}
-        monitoringStatusLabel={resolveMonitoringStatusLabel(home)}
-        hasMonitoringContext={hasSelectedMonitorModeContext}
-        isLoading={isInitialLoading}
-        onNewAnalysis={onNewAnalysis ?? (() => {})}
-        onCommandSubmit={(value) => {
-          void handleDashboardCommand(value);
-        }}
-        isCommandSubmitting={isOpeningDashboardChat}
-      />
+      {(!hasData || !selectedBrand || isMonitoringMode) ? (
+        <HeroSection
+          totalBrands={entities.length}
+          selectedBrandName={selectedBrandName}
+          selectedBrandDomain={selectedBrand?.domain}
+          analysisLabel={selectedMonitorModeLabel}
+          monitoringStatusLabel={resolveMonitoringStatusLabel(home)}
+          hasMonitoringContext={hasSelectedMonitorModeContext}
+          isLoading={isInitialLoading}
+          onNewAnalysis={onNewAnalysis ?? (() => {})}
+          onCommandSubmit={(value) => {
+            void handleDashboardCommand(value);
+          }}
+          isCommandSubmitting={isOpeningDashboardChat}
+        />
+      ) : null}
 
       {hasLoadError && (
         <div
@@ -348,16 +437,31 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
       {hasData && selectedBrand && !isMonitoringMode ? (
         <>
-          <DashboardTodoStrip item={visibleTodoItem} onAction={handleTodoAction} />
-          <DashboardPeriodMonitoring
-            home={home}
-            selectedBrandId={selectedBrandId}
-            selectedMonitorMode={selectedMonitorMode}
-            selectedDateRange={dateRange}
-            selectedBrandName={selectedBrandName}
-            onMonitorModeChange={handleMonitorModeChange}
-            onDateRangeChange={setDateRange}
-            isLoading={isHomeLoading}
+          <BrandOntologyHome
+            entityId={selectedBrand.id}
+            brandName={selectedBrand.name}
+            brandDomain={selectedBrand.domain}
+            brandIndustry={selectedBrand.industry}
+            brandUpdatedAt={selectedBrand.updatedAt}
+            dashboardHome={home}
+            hasLatestReport={Boolean(home?.latest_report?.session_id)}
+            onOpenLatestReport={handleOpenLatestReport}
+            onAskIntelligence={(prompt, handoff) => {
+              void handleDashboardCommand(prompt, { autosend: false, handoff });
+            }}
+            onOpenMonitoringSettings={handleOpenMonitoringSettings}
+            isAskingIntelligence={isOpeningDashboardChat}
+          />
+          <DashboardMonitoringEntry
+            brandName={selectedBrandName}
+            monitorModeLabel={selectedMonitorModeLabel}
+            statusLabel={resolveMonitoringStatusLabel(home)}
+            onOpen={() => {
+              const params = new URLSearchParams();
+              params.set('tab', 'monitoring');
+              params.set('entity_id', selectedBrand.id);
+              router.push(`/dashboard?${params.toString()}`);
+            }}
           />
         </>
       ) : null}
@@ -365,7 +469,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   );
 
   return (
-    <div className="dashboard-page-bg relative flex flex-1 flex-col overflow-auto">
+    <div className="dashboard-page-bg relative flex flex-1 flex-col">
       <div className="relative mx-auto w-full max-w-[1920px] px-5 py-4 lg:px-7 lg:py-5 2xl:px-10">
         {hasData && !isMonitoringMode ? (
           <div className="space-y-4 xl:space-y-0">
@@ -400,10 +504,10 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">
-                    持续监测
+                    监测与样本
                   </div>
                   <h2 className="mt-2 text-[22px] font-semibold text-[var(--text-primary)]">
-                    {selectedBrand.name} 的持续监测
+                    {selectedBrand.name} 的监测与样本更新
                   </h2>
                 </div>
                 <button

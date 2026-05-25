@@ -27,11 +27,13 @@
     "next": "^16.1.5",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-force-graph-3d": "^1.29.1",
     "react-markdown": "^10.1.0",
     "recharts": "^3.7.0",
     "remark-gfm": "^4.0.1",
     "socket.io-client": "^4.8.3",
     "tailwind-merge": "^3.4.0",
+    "three": "^0.184.0",
     "zustand": "^5.0.10"
   },
   "devDependencies": {
@@ -40,6 +42,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.184.1",
     "eslint": "^9",
     "eslint-config-next": "^16.1.5",
     "playwright-core": "^1.58.1",

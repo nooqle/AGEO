@@ -6,7 +6,7 @@ Each node wraps the corresponding agent logic and handles state updates.
 
 import logging
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from langgraph.types import Command
 
@@ -59,6 +59,77 @@ def parse_llm_response(response) -> dict | None:
     """Parse MiniMax response and extract JSON data."""
     content = response.content if hasattr(response, "content") else str(response)
     return extract_json_from_content(content)
+
+
+def _uuid_or_none(value: object) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _persist_brand_context_objects(
+    state: AgentState,
+    *,
+    action_type: str,
+    competitors: list | None = None,
+    marketing_personas: dict | list | None = None,
+) -> None:
+    entity_uuid = _uuid_or_none(state.get("entity_id"))
+    if entity_uuid is None:
+        return
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.brand_action_service import BrandActionService
+        from app.services.brand_intelligence_projection_service import (
+            BrandIntelligenceProjectionService,
+        )
+
+        async with AsyncSessionLocal() as db:
+            action_service = BrandActionService(db)
+            action_record = await action_service.start_action(
+                entity_id=entity_uuid,
+                session_id=_uuid_or_none(state.get("session_id")),
+                user_id=_uuid_or_none(state.get("user_id")),
+                parent_action_record_id=_uuid_or_none(
+                    state.get("latest_user_action_record_id")
+                ),
+                actor_type="agent",
+                origin_surface="workflow_node",
+                origin_event_id=str(state.get("run_id") or "") or None,
+                action_type=action_type,
+                input_payload={
+                    "competitor_count": len(competitors or []),
+                    "persona_count": len(
+                        (marketing_personas or {}).get("user_personas", [])
+                        if isinstance(marketing_personas, dict)
+                        else marketing_personas or []
+                    ),
+                },
+            )
+            projection_service = BrandIntelligenceProjectionService(db)
+            try:
+                counts = await projection_service.persist_brand_context(
+                    entity_id=entity_uuid,
+                    session_id=_uuid_or_none(state.get("session_id")),
+                    competitors=competitors,
+                    marketing_personas=marketing_personas,
+                    source_action_record_id=action_record.id,
+                )
+                await action_service.complete_action(
+                    action_record,
+                    output_payload=counts,
+                )
+                await db.commit()
+            except Exception as inner_exc:
+                await action_service.fail_action(
+                    action_record,
+                    error_message=str(inner_exc),
+                )
+                await db.commit()
+                raise
+    except Exception as exc:
+        logger.warning("[Ontology] Failed to persist brand context objects: %s", exc)
 
 
 # ============================================================================
@@ -508,6 +579,12 @@ async def a1_brand_node(state: AgentState) -> Command:
         except Exception as knowledge_err:
             logger.warning("[A1] Knowledge write-back failed: %s", knowledge_err)
 
+        await _persist_brand_context_objects(
+            {**state, "entity_id": resolved_entity_id},
+            action_type="generate_brand_context",
+            competitors=data["competitors"],
+        )
+
         return Command(
             update={
                 "brand_profile": data["brand_profile"],
@@ -859,6 +936,13 @@ async def a2_persona_node(state: AgentState) -> Command:
                     })
             except Exception as e:
                 logger.warning("[A2] Failed to persist stage_result: %s", e)
+
+        await _persist_brand_context_objects(
+            state,
+            action_type="generate_persona_map",
+            competitors=competitors,
+            marketing_personas=data,
+        )
 
         return Command(
             goto="wait_for_user",

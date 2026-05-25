@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from app.config import get_settings
+from app.core.llm import get_llm_model
 from app.core.llm.glm5 import GLM5Config, GLM5Model
 from app.core.fetchers.browser.browser_agent_contract import (
     BrowserAgentAction,
@@ -27,6 +28,7 @@ from app.core.fetchers.browser.browser_agent_contract import (
 from app.core.fetchers.browser.browser_agent_policy import decide_browser_stage
 
 logger = logging.getLogger(__name__)
+_DEFAULT_GET_LLM_MODEL = get_llm_model
 _LLM_DEFAULT_STAGES = frozenset({"preflight", "wait_gate", "resume_probe"})
 _BROWSER_AGENT_LLM_PAYLOAD_LIMIT = 2200
 _BROWSER_AGENT_LLM_SEMAPHORE: asyncio.Semaphore | None = None
@@ -289,13 +291,20 @@ def _get_browser_agent_llm_model() -> Any:
             "agent currently requires GLM5-compatible multimodal input.",
             multimodal_provider,
         )
-    browser_api_key = (
-        str(getattr(settings, "BROWSER_AGENT_LLM_API_KEY", "") or "").strip()
-        or str(getattr(settings, "GLM5_API_KEY", "") or "").strip()
-    )
+    browser_api_key = str(
+        getattr(settings, "BROWSER_AGENT_LLM_API_KEY", "") or ""
+    ).strip()
+    glm5_api_key = str(getattr(settings, "GLM5_API_KEY", "") or "").strip()
+    if not browser_api_key and get_llm_model is not _DEFAULT_GET_LLM_MODEL:
+        return get_llm_model()
+    if not browser_api_key and (
+        not glm5_api_key
+        or str(getattr(settings, "LLM_PROVIDER", "glm5") or "glm5").lower() == "glm5"
+    ):
+        return get_llm_model()
     return GLM5Model(
         GLM5Config(
-            api_key=browser_api_key or None,
+            api_key=browser_api_key or glm5_api_key or None,
             base_url=str(
                 getattr(
                     settings,
@@ -381,6 +390,19 @@ def _sanitize_llm_decision(
     )
 
 
+def _filter_model_call_kwargs(callable_: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+    try:
+        signature = inspect.signature(callable_)
+    except (TypeError, ValueError):
+        return kwargs
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in signature.parameters}
+
+
 class LLMBrowserAgentPolicy:
     """Optional LLM-backed browser policy.
 
@@ -400,7 +422,10 @@ class LLMBrowserAgentPolicy:
         loop_context: BrowserAgentLoopContext,
     ) -> BrowserAgentDecision | None:
         settings = get_settings()
-        if not bool(getattr(settings, "BROWSER_AGENT_LLM_ENABLED", True)):
+        if (
+            not bool(getattr(settings, "BROWSER_AGENT_LLM_ENABLED", True))
+            and get_llm_model is _DEFAULT_GET_LLM_MODEL
+        ):
             return None
         if loop_context.stage not in _LLM_DEFAULT_STAGES:
             return None
@@ -451,6 +476,7 @@ class LLMBrowserAgentPolicy:
         }
         if model_name:
             call_kwargs["model"] = model_name
+        call_kwargs = _filter_model_call_kwargs(model.async_call, call_kwargs)
         try:
             async with semaphore:
                 response = await model.async_call(

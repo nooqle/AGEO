@@ -10,6 +10,8 @@ export interface Entity {
   organizationId: string | null;
   lastAnalyzed: string | null;
   status: 'active' | 'pending' | 'inactive';
+  isInternalTestData: boolean;
+  hygieneLabels: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -48,6 +50,12 @@ export function normalizeEntity(raw: Record<string, unknown>): Entity {
     organizationId: (raw.organization_id ?? raw.organizationId ?? null) as string | null,
     lastAnalyzed: (raw.last_analyzed ?? raw.lastAnalyzed ?? null) as string | null,
     status: (raw.status || 'pending') as Entity['status'],
+    isInternalTestData: Boolean(
+      raw.is_internal_test_data ?? raw.isInternalTestData ?? false,
+    ),
+    hygieneLabels: Array.isArray(raw.hygiene_labels ?? raw.hygieneLabels)
+      ? ((raw.hygiene_labels ?? raw.hygieneLabels) as unknown[]).map(String)
+      : [],
     createdAt: String(raw.created_at ?? raw.createdAt ?? new Date().toISOString()),
     updatedAt: String(raw.updated_at ?? raw.updatedAt ?? new Date().toISOString()),
   };

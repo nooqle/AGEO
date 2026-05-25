@@ -237,7 +237,7 @@ export const useMonitoringStore = create<MonitoringState>((set, get) => ({
       const currentSchedule = get().schedule;
       await api.deleteSchedule(scheduleId);
       if (currentPlan?.id && currentPlan.id === currentSchedule?.monitoring_plan_id) {
-        await api.updateMonitoringPlan(currentPlan.id, { status: 'archived' }).catch(() => null);
+        await api.archiveMonitoringPlan(currentPlan.id).catch(() => null);
       }
       set({ schedule: null, plan: null });
       return true;

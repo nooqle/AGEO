@@ -12,6 +12,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -77,15 +78,17 @@ class BuiltinSkillSpec:
 
 class SkillDefinition(Base):
     __tablename__ = "skill_definitions"
+    __table_args__ = (
+        UniqueConstraint("skill_key", name="uq_skill_definitions_skill_key"),
+        Index("ix_skill_definitions_skill_key", "skill_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )
-    skill_key: Mapped[str] = mapped_column(
-        String(120), unique=True, nullable=False, index=True
-    )
+    skill_key: Mapped[str] = mapped_column(String(120), nullable=False)
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     executor_kind: Mapped[str] = mapped_column(String(32), nullable=False)

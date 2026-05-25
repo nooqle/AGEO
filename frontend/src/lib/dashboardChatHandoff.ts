@@ -5,7 +5,33 @@ export type DashboardChatHandoffPayload = Record<
 
 const DASHBOARD_CHAT_HANDOFF_PREFIX = 'specta.dashboard.chat.handoff.';
 const DASHBOARD_CHAT_HANDOFF_MAX_AGE_MS = 5 * 60 * 1000;
+const DASHBOARD_CHAT_HANDOFF_REPLAY_MS = 15 * 1000;
 const DASHBOARD_CHAT_HANDOFF_CREATED_AT = 'created_at_ms';
+const SAFE_DASHBOARD_CHAT_QUERY_KEYS = new Set([
+  'entity_id',
+  'brand',
+  'entry_source',
+  'monitor_mode',
+  'question_set_label',
+  'sample_summary',
+  'current_metrics',
+  'task_title',
+  'task_goal',
+  'clean_handoff',
+  'ai_sources',
+  'monitoring_plan_id',
+  'question_set_ids',
+  'endpoint_ids',
+  'monitoring_run_id',
+  'error_stage',
+  'artifact_id',
+  'output_id',
+]);
+
+const recentlyConsumedHandoffs = new Map<
+  string,
+  { expiresAt: number; payload: DashboardChatHandoffPayload }
+>();
 
 function handoffKey(sessionId: string): string {
   return `${DASHBOARD_CHAT_HANDOFF_PREFIX}${sessionId}`;
@@ -48,7 +74,15 @@ export function consumeDashboardChatHandoff(
 
   const key = handoffKey(sessionId);
   const raw = storage.getItem(key);
-  if (!raw) return null;
+  if (!raw) {
+    const cached = recentlyConsumedHandoffs.get(key);
+    if (!cached) return null;
+    if (Date.now() > cached.expiresAt) {
+      recentlyConsumedHandoffs.delete(key);
+      return null;
+    }
+    return cached.payload;
+  }
   storage.removeItem(key);
 
   try {
@@ -66,6 +100,10 @@ export function consumeDashboardChatHandoff(
       return null;
     }
 
+    recentlyConsumedHandoffs.set(key, {
+      expiresAt: Date.now() + DASHBOARD_CHAT_HANDOFF_REPLAY_MS,
+      payload: parsed,
+    });
     return parsed;
   } catch {
     return null;
@@ -98,4 +136,47 @@ export function isDashboardChatHandoffAutosend(
   if (!payload) return false;
   const value = payload.autosend;
   return value === true || value === '1' || value === 'true';
+}
+
+export function buildSafeDashboardChatQuery(
+  payload: DashboardChatHandoffPayload,
+): URLSearchParams {
+  const params = new URLSearchParams();
+  Object.entries(payload).forEach(([key, value]) => {
+    if (!SAFE_DASHBOARD_CHAT_QUERY_KEYS.has(key)) return;
+    if (typeof value === 'string') {
+      const normalized = value.trim();
+      if (normalized) params.set(key, normalized);
+      return;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      params.set(key, String(value));
+      return;
+    }
+    if (typeof value === 'boolean') {
+      params.set(key, value ? '1' : '0');
+      return;
+    }
+    if (Array.isArray(value)) {
+      const normalized = value.filter((item): item is string => typeof item === 'string');
+      if (normalized.length) params.set(key, normalized.join(','));
+    }
+  });
+  if (params.size > 0) {
+    params.set('handoff', '1');
+  }
+  return params;
+}
+
+export function buildDashboardChatUrlWithHandoff(
+  sessionId: string,
+  payload: DashboardChatHandoffPayload,
+): string {
+  const safeQuery = buildSafeDashboardChatQuery(payload);
+  const query = safeQuery.toString();
+  const safeUrl = `/chat/${sessionId}${query ? `?${query}` : ''}`;
+  if (writeDashboardChatHandoff(sessionId, payload)) {
+    return safeUrl;
+  }
+  return safeUrl;
 }

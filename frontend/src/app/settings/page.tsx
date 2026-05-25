@@ -19,6 +19,10 @@ import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { toast } from '@/components/ui/toast';
 import { getPlatformDisplayName } from '@/config/platformLabel';
+import {
+  cleanEntityDisplayText,
+  primaryBrandEntities,
+} from '@/lib/brandEntityHygiene';
 import { cn, formatDateTime } from '@/lib/utils';
 import { api } from '@/services/api';
 import { useDashboardStore } from '@/stores/dashboardStore';
@@ -318,6 +322,14 @@ function createMonitoringForm(schedule: MonitoringSchedule | null, timezone: str
     timezone: schedule?.timezone || timezone,
     platforms,
   };
+}
+
+function monitorMetricLabel(metric?: string | null) {
+  if (metric === 'mention_rate') return 'AI 提及率';
+  if (metric === 'mention_ranking') return '提及排名';
+  if (metric === 'official_citation_rate') return '官网引用率';
+  if (metric === 'sentiment_distribution') return '语气性质';
+  return '品牌情报指标';
 }
 
 function getStatusLabel(status: MonitoringSchedule['status'] | 'inactive') {
@@ -722,10 +734,13 @@ function SettingsPageContent() {
   const timezone = getDefaultTimezone();
   const requestedEntityId = searchParams.get('entity_id');
   const requestedSection = searchParams.get('section');
+  const requestedMonitorMetric = searchParams.get('monitor_metric');
+  const requestedContentFormat = searchParams.get('content_format');
 
   const { entities, isLoading: isEntityLoading, hasFetched, fetchEntities } = useEntityStore();
   const { selectedBrandId, setSelectedBrandId } = useDashboardStore();
   const { schedule, fetchSchedule, pauseSchedule, resumeSchedule } = useMonitoringStore();
+  const visibleEntities = useMemo(() => primaryBrandEntities(entities), [entities]);
 
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [workspaceEntityId, setWorkspaceEntityId] = useState('');
@@ -765,12 +780,12 @@ function SettingsPageContent() {
   }, []);
 
   useEffect(() => {
-    if (entities.length === 0) return;
-    const validIds = new Set(entities.map((entity) => entity.id));
+    if (visibleEntities.length === 0) return;
+    const validIds = new Set(visibleEntities.map((entity) => entity.id));
     const preferredEntityId =
-      [requestedEntityId, localSettings.defaultEntityId, selectedBrandId, entities[0]?.id].find(
+      [requestedEntityId, localSettings.defaultEntityId, selectedBrandId, visibleEntities[0]?.id].find(
         (value) => value && validIds.has(value)
-      ) || entities[0].id;
+      ) || visibleEntities[0].id;
 
     if (!workspaceEntityId || !validIds.has(workspaceEntityId)) {
       setWorkspaceEntityId(preferredEntityId);
@@ -779,11 +794,11 @@ function SettingsPageContent() {
       setMonitoringEntityId(preferredEntityId);
     }
   }, [
-    entities,
     localSettings.defaultEntityId,
     monitoringEntityId,
     requestedEntityId,
     selectedBrandId,
+    visibleEntities,
     workspaceEntityId,
   ]);
 
@@ -831,15 +846,15 @@ function SettingsPageContent() {
       document.getElementById('monitoring')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [requestedSection, entities.length]);
+  }, [requestedSection, visibleEntities.length]);
 
   const workspaceEntity = useMemo(
-    () => entities.find((entity) => entity.id === workspaceEntityId) || null,
-    [entities, workspaceEntityId]
+    () => visibleEntities.find((entity) => entity.id === workspaceEntityId) || null,
+    [visibleEntities, workspaceEntityId]
   );
   const monitoringEntity = useMemo(
-    () => entities.find((entity) => entity.id === monitoringEntityId) || null,
-    [entities, monitoringEntityId]
+    () => visibleEntities.find((entity) => entity.id === monitoringEntityId) || null,
+    [visibleEntities, monitoringEntityId]
   );
   const statusTone = getStatusTone(schedule?.status || 'inactive');
 
@@ -1009,11 +1024,11 @@ function SettingsPageContent() {
             </div>
           </div>
 
-          {isEntityLoading && entities.length === 0 ? (
+          {isEntityLoading && visibleEntities.length === 0 ? (
             <div className="rounded-[28px] border px-6 py-8 text-sm" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
               正在加载品牌列表...
             </div>
-          ) : entities.length === 0 ? (
+          ) : visibleEntities.length === 0 ? (
             <div className="rounded-[28px] border px-6 py-8" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-elevated)' }}>
               <div className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>还没有可设置的品牌</div>
               <div className="mt-2 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
@@ -1045,15 +1060,36 @@ function SettingsPageContent() {
               >
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
                   <div className="space-y-6">
+                    {(requestedMonitorMetric || requestedContentFormat) && (
+                      <div
+                        className="rounded-xl border px-4 py-3 text-sm leading-6"
+                        style={{
+                          borderColor: 'var(--brand-border)',
+                          backgroundColor: 'var(--brand-soft)',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        <div className="font-medium" style={{ color: 'var(--text-primary)' }}>
+                          来自品牌情报的复查建议
+                        </div>
+                        <div className="mt-1">
+                          {requestedMonitorMetric
+                            ? `优先复查 ${monitorMetricLabel(requestedMonitorMetric)}`
+                            : '优先复查品牌情报指标'}
+                          {requestedContentFormat ? `，对应内容：${requestedContentFormat}` : ''}
+                        </div>
+                      </div>
+                    )}
+
                     <div>
                       <FieldLabel label="监测品牌" hint="自动监测会沿用这个品牌最近一次全景分析的问题集。" />
                       <NativeSelect
                         value={monitoringEntityId}
                         onChange={(event) => setMonitoringEntityId(event.target.value)}
                       >
-                        {entities.map((entity) => (
+                        {visibleEntities.map((entity) => (
                           <option key={entity.id} value={entity.id}>
-                            {entity.name}
+                            {cleanEntityDisplayText(entity.name, '未命名品牌')}
                           </option>
                         ))}
                       </NativeSelect>
@@ -1198,9 +1234,9 @@ function SettingsPageContent() {
                         value={workspaceEntityId}
                         onChange={(event) => setWorkspaceEntityId(event.target.value)}
                       >
-                        {entities.map((entity) => (
+                        {visibleEntities.map((entity) => (
                           <option key={entity.id} value={entity.id}>
-                            {entity.name}
+                            {cleanEntityDisplayText(entity.name, '未命名品牌')}
                           </option>
                         ))}
                       </NativeSelect>

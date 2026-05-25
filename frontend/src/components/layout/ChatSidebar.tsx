@@ -18,6 +18,10 @@ import { HomeBrandLink } from './HomeBrandLink';
 import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
+import {
+  cleanEntityDisplayText,
+  primaryBrandEntities,
+} from '@/lib/brandEntityHygiene';
 
 interface ChatSidebarProps {
   activeSessionId?: string;
@@ -38,6 +42,7 @@ export function ChatSidebar({
   const { entities, fetchEntities, removeEntity } = useEntityStore();
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [navigating, setNavigating] = useState(false);
+  const visibleEntities = primaryBrandEntities(entities);
 
   useEffect(() => {
     fetchEntities();
@@ -58,7 +63,7 @@ export function ChatSidebar({
       const session = await api.getOrCreateSessionByEntity(entityId);
       const entity = entities.find((item) => item.id === entityId);
       router.push(
-        `/chat/${session.id}?entity_id=${encodeURIComponent(entityId)}&brand=${encodeURIComponent(entity?.name || '')}`
+        `/chat/${session.id}?entity_id=${encodeURIComponent(entityId)}&brand=${encodeURIComponent(cleanEntityDisplayText(entity?.name, ''))}`
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '数据加载失败');
@@ -185,7 +190,10 @@ export function ChatSidebar({
 
       <div className="flex-1 overflow-y-auto py-2">
         <AnimatePresence mode="popLayout">
-          {entities.map((entity) => (
+          {visibleEntities.map((entity) => {
+            const displayName = cleanEntityDisplayText(entity.name, '未命名品牌');
+            const displayDomain = cleanEntityDisplayText(entity.domain, '未设置域名');
+            return (
             <motion.div
               key={entity.id}
               layout
@@ -213,7 +221,7 @@ export function ChatSidebar({
               }}
               title={
                 collapsed
-                  ? `${entity.name}\n${entity.domain || '未设置域名'}\n${formatTime(entity.lastAnalyzed)}`
+                  ? `${displayName}\n${displayDomain}\n${formatTime(entity.lastAnalyzed)}`
                   : undefined
               }
             >
@@ -227,19 +235,19 @@ export function ChatSidebar({
                 >
                   {collapsed ? (
                     <>
-                      <BrandAvatar name={entity.name} domain={entity.domain} size={40} />
+                      <BrandAvatar name={displayName} domain={entity.domain} size={40} />
                       <span
                         className="w-full truncate text-center text-[11px] font-medium"
                         style={{ color: 'var(--text-secondary)' }}
                       >
-                        {entity.name}
+                        {displayName}
                       </span>
                       {renderMenuButton(entity.id, true)}
                     </>
                   ) : (
                     <>
                       <BrandAvatar
-                        name={entity.name}
+                        name={displayName}
                         domain={entity.domain}
                         size={40}
                         className="mt-0.5 shrink-0"
@@ -249,13 +257,13 @@ export function ChatSidebar({
                           className="truncate text-sm font-medium"
                           style={{ color: 'var(--text-primary)' }}
                         >
-                          {entity.name}
+                          {displayName}
                         </h3>
                         <p
                           className="mt-0.5 truncate text-xs"
                           style={{ color: 'var(--text-secondary)' }}
                         >
-                          {entity.domain || '未设置域名'}
+                          {displayDomain}
                         </p>
                         <div className="mt-1.5 flex items-center gap-2">
                           <RiTimeLine
@@ -308,7 +316,8 @@ export function ChatSidebar({
                 )}
               </div>
             </motion.div>
-          ))}
+            );
+          })}
         </AnimatePresence>
       </div>
     </div>

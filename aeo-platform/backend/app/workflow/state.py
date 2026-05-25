@@ -291,7 +291,9 @@ class AgentState(TypedDict):
     current_skill_prompt_overlay: (
         str | None
     )  # Optional prompt overlay resolved from selected profile
-    current_skill_profiles: list | None  # Available profile summaries for this skill family
+    current_skill_profiles: (
+        list | None
+    )  # Available profile summaries for this skill family
     current_skill_contract: dict | None  # Structured public skill contract payload
     current_skill_prompt_sections: (
         list | None
@@ -354,7 +356,12 @@ class AgentState(TypedDict):
     question_set_ids: list | None
     endpoint_ids: list | None
     pending_question_set_confirmation: Annotated[dict | None, _merge_error_info]
+    latest_user_action_record_id: str | None
     run_policy: str | None
+    ontology_world: dict | None
+    ontology_action_plan: dict | None
+    ontology_action_feedback: dict | None
+    ontology_confirmed_action: dict | None
 
     # =========================================================================
     # Baseline Analysis (Issue #4, Phase 4a)

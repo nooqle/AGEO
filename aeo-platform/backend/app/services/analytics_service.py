@@ -607,7 +607,9 @@ class AnalyticsService:
             or "panorama"
         )
 
-    def _snapshot_to_report_payload(self, snapshot: AnalysisSnapshot) -> dict[str, Any] | None:
+    def _snapshot_to_report_payload(
+        self, snapshot: AnalysisSnapshot
+    ) -> dict[str, Any] | None:
         raw_data = snapshot.raw_data if isinstance(snapshot.raw_data, dict) else {}
         report_data = raw_data.get("report_data")
         report_data = report_data if isinstance(report_data, dict) else {}
@@ -631,7 +633,9 @@ class AnalyticsService:
                 else report_data.get("dashboard_projection")
             ),
             "_output_type": "report",
-            "_created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "_created_at": (
+                snapshot.created_at.isoformat() if snapshot.created_at else None
+            ),
             "_session_id": str(snapshot.session_id) if snapshot.session_id else "",
             "_artifact_id": "",
             "_artifact_kind": "geo_report",
@@ -682,11 +686,15 @@ class AnalyticsService:
     def _normalize_rate_value(self, metric: str, value: float | None) -> float | None:
         if value is None:
             return None
-        if metric in {
-            "mention_rate",
-            "content_citation_rate",
-            "official_conversion_rate",
-        } and 1 < value <= 100:
+        if (
+            metric
+            in {
+                "mention_rate",
+                "content_citation_rate",
+                "official_conversion_rate",
+            }
+            and 1 < value <= 100
+        ):
             return value / 100
         return value
 
@@ -696,7 +704,9 @@ class AnalyticsService:
                 return float(value)
         return None
 
-    def _metric_from_mapping(self, mapping: dict[str, Any], metric: str) -> float | None:
+    def _metric_from_mapping(
+        self, mapping: dict[str, Any], metric: str
+    ) -> float | None:
         if not isinstance(mapping, dict):
             return None
         candidate_keys = {
@@ -731,7 +741,12 @@ class AnalyticsService:
         metric: str,
     ) -> float | None:
         column_value = None
-        if metric in {"bwvs_index", "mention_rate", "sentiment_score", "coverage_score"}:
+        if metric in {
+            "bwvs_index",
+            "mention_rate",
+            "sentiment_score",
+            "coverage_score",
+        }:
             column_value = self._first_numeric(getattr(snapshot, metric, None))
         elif metric == "content_citation_rate":
             column_value = self._first_numeric(snapshot.citation_score)
@@ -749,14 +764,32 @@ class AnalyticsService:
         source_summary = source_summary if isinstance(source_summary, dict) else {}
         candidates = [
             raw_data,
-            raw_data.get("metric_bundle") if isinstance(raw_data.get("metric_bundle"), dict) else {},
-            raw_data.get("metrics") if isinstance(raw_data.get("metrics"), dict) else {},
+            (
+                raw_data.get("metric_bundle")
+                if isinstance(raw_data.get("metric_bundle"), dict)
+                else {}
+            ),
+            (
+                raw_data.get("metrics")
+                if isinstance(raw_data.get("metrics"), dict)
+                else {}
+            ),
             report_data,
-            report_data.get("metric_bundle") if isinstance(report_data.get("metric_bundle"), dict) else {},
-            report_data.get("metrics") if isinstance(report_data.get("metrics"), dict) else {},
-            dashboard_projection.get("headline_metrics")
-            if isinstance(dashboard_projection.get("headline_metrics"), dict)
-            else {},
+            (
+                report_data.get("metric_bundle")
+                if isinstance(report_data.get("metric_bundle"), dict)
+                else {}
+            ),
+            (
+                report_data.get("metrics")
+                if isinstance(report_data.get("metrics"), dict)
+                else {}
+            ),
+            (
+                dashboard_projection.get("headline_metrics")
+                if isinstance(dashboard_projection.get("headline_metrics"), dict)
+                else {}
+            ),
             source_summary,
         ]
         for candidate in candidates:
@@ -782,7 +815,11 @@ class AnalyticsService:
         group_by: str = "overall",
     ) -> dict[str, Any]:
         ordered = sorted(points, key=lambda item: str(item.get("date") or ""))
-        values = [item.get("value") for item in ordered if isinstance(item.get("value"), (int, float))]
+        values = [
+            item.get("value")
+            for item in ordered
+            if isinstance(item.get("value"), (int, float))
+        ]
         current_value = values[-1] if values else None
         previous_value = values[-2] if len(values) >= 2 else None
         change_absolute = (
@@ -795,7 +832,9 @@ class AnalyticsService:
             if change_absolute is not None and previous_value not in (None, 0)
             else None
         )
-        average_value = sum(float(value) for value in values) / len(values) if values else None
+        average_value = (
+            sum(float(value) for value in values) / len(values) if values else None
+        )
         return {
             "id": series_id,
             "label": label,
@@ -832,9 +871,11 @@ class AnalyticsService:
                     continue
                 points.append(
                     {
-                        "date": snapshot.created_at.date().isoformat()
-                        if snapshot.created_at
-                        else "",
+                        "date": (
+                            snapshot.created_at.date().isoformat()
+                            if snapshot.created_at
+                            else ""
+                        ),
                         "value": value,
                         "snapshot_id": str(snapshot.id),
                     }
@@ -920,7 +961,9 @@ class AnalyticsService:
 
                 raw_mentioned_brands = answer.get("mentioned_brands")
                 mentioned_brands = (
-                    raw_mentioned_brands if isinstance(raw_mentioned_brands, list) else []
+                    raw_mentioned_brands
+                    if isinstance(raw_mentioned_brands, list)
+                    else []
                 )
                 answer_brands = {
                     str(brand).strip()
@@ -941,7 +984,9 @@ class AnalyticsService:
                         row["negativeCount"] += 1
                     raw_negative_topics = answer.get("negative_topics")
                     negative_topics = (
-                        raw_negative_topics if isinstance(raw_negative_topics, list) else []
+                        raw_negative_topics
+                        if isinstance(raw_negative_topics, list)
+                        else []
                     )
                     for topic in negative_topics:
                         topic_key = str(topic or "").strip()
@@ -1070,11 +1115,14 @@ class AnalyticsService:
             .strip()
             .lower()
         )
-        monitor_mode = self._normalize_dashboard_monitor_mode(monitor_mode) or "panorama"
+        monitor_mode = (
+            self._normalize_dashboard_monitor_mode(monitor_mode) or "panorama"
+        )
 
-        has_complete_plan = self._dashboard_monitoring_plan_is_complete(
-            monitoring_plan
-        ) or has_active_monitoring_schedule
+        has_complete_plan = (
+            self._dashboard_monitoring_plan_is_complete(monitoring_plan)
+            or has_active_monitoring_schedule
+        )
         data_point_count = int(period_summary.get("data_point_count") or 0)
 
         items: list[dict[str, Any]] = []
@@ -1144,7 +1192,10 @@ class AnalyticsService:
             .where(
                 MonitoringRun.entity_id == brand_uuid,
                 MonitoringRun.monitor_mode
-                == (monitor_mode or MonitoringPlanService.normalize_monitor_mode("panorama")),
+                == (
+                    monitor_mode
+                    or MonitoringPlanService.normalize_monitor_mode("panorama")
+                ),
             )
             .order_by(desc(MonitoringRun.updated_at))
             .limit(30)
@@ -1161,7 +1212,11 @@ class AnalyticsService:
             if updated_at and updated_at.tzinfo is None:
                 updated_at = updated_at.replace(tzinfo=timezone.utc)
             if (
-                run.status in {MonitoringRunStatus.PENDING.value, MonitoringRunStatus.RUNNING.value}
+                run.status
+                in {
+                    MonitoringRunStatus.PENDING.value,
+                    MonitoringRunStatus.RUNNING.value,
+                }
                 and updated_at
                 and updated_at < stale_before
             ):
@@ -1179,10 +1234,16 @@ class AnalyticsService:
             "id": str(selected.id),
             "type": issue_kind,
             "status": selected.status,
-            "title": "自动监测运行失败" if issue_kind == "failed" else "自动监测可能卡住",
+            "title": (
+                "自动监测运行失败" if issue_kind == "failed" else "自动监测可能卡住"
+            ),
             "error_stage": selected.error_stage or "monitoring_run",
             "error_message": selected.error_message
-            or ("运行长时间未完成，请通过对话查看上下文。" if issue_kind == "stale" else ""),
+            or (
+                "运行长时间未完成，请通过对话查看上下文。"
+                if issue_kind == "stale"
+                else ""
+            ),
             "monitor_mode": selected.monitor_mode,
             "monitoring_plan_id": str(selected.plan_id),
             "monitoring_run_id": str(selected.id),
@@ -1193,8 +1254,12 @@ class AnalyticsService:
                 selected.endpoint_ids or []
             ),
             "question_set_ids": selected.question_set_ids or [],
-            "created_at": selected.created_at.isoformat() if selected.created_at else None,
-            "updated_at": selected.updated_at.isoformat() if selected.updated_at else None,
+            "created_at": (
+                selected.created_at.isoformat() if selected.created_at else None
+            ),
+            "updated_at": (
+                selected.updated_at.isoformat() if selected.updated_at else None
+            ),
         }
 
     def _is_successful_evidence(self, evidence: MonitoringEvidenceRecord) -> bool:
@@ -1290,9 +1355,11 @@ class AnalyticsService:
                     continue
                 points.append(
                     {
-                        "date": snapshot.created_at.date().isoformat()
-                        if snapshot.created_at
-                        else "",
+                        "date": (
+                            snapshot.created_at.date().isoformat()
+                            if snapshot.created_at
+                            else ""
+                        ),
                         "value": value,
                         "snapshot_id": str(snapshot.id),
                         "data_point_count": 1,
@@ -1348,9 +1415,11 @@ class AnalyticsService:
                     observed_question_set_ids.add(qsid)
                     series_points[qsid].append(
                         {
-                            "date": snapshot.created_at.date().isoformat()
-                            if snapshot.created_at
-                            else "",
+                            "date": (
+                                snapshot.created_at.date().isoformat()
+                                if snapshot.created_at
+                                else ""
+                            ),
                             "value": value,
                             "snapshot_id": str(snapshot.id),
                             "run_id": str(run.id),
@@ -1424,9 +1493,7 @@ class AnalyticsService:
                     if run is None:
                         continue
                     date_source = run.completed_at or evidence.created_at
-                    date_label = (
-                        date_source.date().isoformat() if date_source else ""
-                    )
+                    date_label = date_source.date().isoformat() if date_source else ""
                     key = (str(evidence.endpoint_id or ""), date_label)
                     grouped[key]["total"] += 1
                     if self._is_successful_evidence(evidence):
@@ -1732,7 +1799,7 @@ class AnalyticsService:
             if question_count:
                 sample_parts.append(f"{question_count} 个问题")
             if platform_labels:
-                sample_parts.append(f"{len(platform_labels)} 个来源平台")
+                sample_parts.append(f"{len(platform_labels)} 个回答来源")
             if answers_for_scope:
                 sample_parts.append(f"{len(answers_for_scope)} 条有效回答")
 
@@ -3701,9 +3768,7 @@ class AnalyticsService:
         if schedule is None:
             return None
         baseline = (
-            schedule.baseline_data
-            if isinstance(schedule.baseline_data, dict)
-            else {}
+            schedule.baseline_data if isinstance(schedule.baseline_data, dict) else {}
         )
         questions = baseline.get("questions")
         question_count = len(questions) if isinstance(questions, list) else 0
@@ -3768,10 +3833,9 @@ class AnalyticsService:
             brand_id=brand_id,
             monitor_mode=normalized_monitor_mode,
         )
-        has_active_monitoring_schedule = (
-            self._dashboard_monitoring_plan_is_complete(monitoring_plan)
-            or await self._dashboard_has_complete_active_schedule(brand_id=brand_id)
-        )
+        has_active_monitoring_schedule = self._dashboard_monitoring_plan_is_complete(
+            monitoring_plan
+        ) or await self._dashboard_has_complete_active_schedule(brand_id=brand_id)
         recent_issue = await self._get_recent_monitoring_issue(
             brand_id=brand_id,
             monitor_mode=normalized_monitor_mode,
@@ -3808,50 +3872,50 @@ class AnalyticsService:
         if not current:
             return self._augment_home_with_period_context(
                 {
-                "summary": {"headline": "暂无最近分析"},
-                "latestReport": {
-                    "title": "暂无最新报告",
-                    "subtitle": "",
-                    "reportKind": None,
-                    "reportKindLabel": None,
-                    "sessionId": "",
-                    "artifactId": "",
-                    "outputId": "",
-                    "createdAt": "",
-                    "actionLabel": "打开报告",
-                },
-                "metrics": [
-                    {
-                        "id": "mention_rate",
-                        "label": "提及率",
-                        "value": None,
-                        "format": "percent",
+                    "summary": {"headline": "暂无最近分析"},
+                    "latestReport": {
+                        "title": "暂无最新报告",
                         "subtitle": "",
+                        "reportKind": None,
+                        "reportKindLabel": None,
+                        "sessionId": "",
+                        "artifactId": "",
+                        "outputId": "",
+                        "createdAt": "",
+                        "actionLabel": "打开报告",
                     },
-                    {
-                        "id": "brand_rank",
-                        "label": "排名",
-                        "value": None,
-                        "format": "rank",
-                        "subtitle": "",
+                    "metrics": [
+                        {
+                            "id": "mention_rate",
+                            "label": "提及率",
+                            "value": None,
+                            "format": "percent",
+                            "subtitle": "",
+                        },
+                        {
+                            "id": "brand_rank",
+                            "label": "排名",
+                            "value": None,
+                            "format": "rank",
+                            "subtitle": "",
+                        },
+                        {
+                            "id": "official_conversion_rate",
+                            "label": "官网转化率",
+                            "value": None,
+                            "format": "percent",
+                            "subtitle": "",
+                        },
+                    ],
+                    "citationDistribution": {
+                        "summary": "",
+                        "sourceTypes": [],
+                        "topDomains": [],
                     },
-                    {
-                        "id": "official_conversion_rate",
-                        "label": "官网转化率",
-                        "value": None,
-                        "format": "percent",
-                        "subtitle": "",
+                    "relatedQuestions": {
+                        "summary": "",
+                        "items": [],
                     },
-                ],
-                "citationDistribution": {
-                    "summary": "",
-                    "sourceTypes": [],
-                    "topDomains": [],
-                },
-                "relatedQuestions": {
-                    "summary": "",
-                    "items": [],
-                },
                 },
                 monitoring_plan=monitoring_plan,
                 has_active_monitoring_schedule=has_active_monitoring_schedule,

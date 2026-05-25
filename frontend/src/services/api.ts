@@ -56,6 +56,18 @@ import type {
   MonitoringTrendResponse,
 } from '@/types/monitoring';
 import type {
+  OntologyActionFeedbackResponse,
+  OntologyActionFeedbackType,
+  OntologyFindingFeedbackResponse,
+  OntologyFindingFeedbackType,
+  OntologyObject,
+  OntologyObjectCollection,
+  OntologyObjectLinksResponse,
+  OntologyRecommendationTaskRequest,
+  OntologyRecommendationTaskResponse,
+  OntologyWorldSummary,
+} from '@/types/ontology';
+import type {
   AioCanvasConfig,
   AioTakeoverMode,
   AioTakeoverRecord,
@@ -668,6 +680,107 @@ class ApiService {
     return buildDashboardHomeData(raw) ?? null;
   }
 
+  async getOntologyWorld(entityId: string): Promise<OntologyWorldSummary> {
+    return this.request<OntologyWorldSummary>(`/ontology/entities/${entityId}/world`);
+  }
+
+  async submitOntologyFindingFeedback(
+    entityId: string,
+    findingId: string,
+    payload: {
+      feedback_type: OntologyFindingFeedbackType;
+      feedback_text?: string;
+      origin_event_id?: string;
+    },
+  ): Promise<OntologyFindingFeedbackResponse> {
+    return this.request<OntologyFindingFeedbackResponse>(
+      `/ontology/entities/${entityId}/findings/${findingId}/feedback`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async submitOntologyActionFeedback(
+    entityId: string,
+    actionKey: string,
+    payload: {
+      feedback_type: OntologyActionFeedbackType;
+      feedback_text?: string;
+      provided_inputs?: Record<string, unknown>;
+      origin_event_id?: string;
+    },
+  ): Promise<OntologyActionFeedbackResponse> {
+    return this.request<OntologyActionFeedbackResponse>(
+      `/ontology/entities/${entityId}/actions/${actionKey}/feedback`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async submitOntologyRecommendationTask(
+    entityId: string,
+    recommendationId: string,
+    payload: OntologyRecommendationTaskRequest,
+  ): Promise<OntologyRecommendationTaskResponse> {
+    return this.request<OntologyRecommendationTaskResponse>(
+      `/ontology/entities/${entityId}/recommendations/${recommendationId}/task`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  async listOntologyObjects(
+    entityId: string,
+    objectType: string,
+    params?: {
+      status?: string;
+      createdAfter?: string;
+      createdBefore?: string;
+      sort?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ): Promise<OntologyObjectCollection> {
+    const query = new URLSearchParams();
+    if (params?.status) query.set('status', params.status);
+    if (params?.createdAfter) query.set('created_after', params.createdAfter);
+    if (params?.createdBefore) query.set('created_before', params.createdBefore);
+    if (params?.sort) query.set('sort', params.sort);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.offset) query.set('offset', String(params.offset));
+    const qs = query.toString();
+    return this.request<OntologyObjectCollection>(
+      `/ontology/entities/${entityId}/objects/${objectType}${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async getOntologyObject(
+    entityId: string,
+    objectType: string,
+    objectId: string,
+  ): Promise<OntologyObject> {
+    return this.request<OntologyObject>(
+      `/ontology/entities/${entityId}/objects/${objectType}/${objectId}`,
+    );
+  }
+
+  async listOntologyObjectLinks(
+    entityId: string,
+    objectType: string,
+    objectId: string,
+    direction: 'in' | 'out' | 'both' = 'both',
+  ): Promise<OntologyObjectLinksResponse> {
+    return this.request<OntologyObjectLinksResponse>(
+      `/ontology/entities/${entityId}/objects/${objectType}/${objectId}/links?direction=${direction}`,
+    );
+  }
+
   async getAnalyticsRisksActionsV2(
     brandId?: string,
     options?: RequestOptions,
@@ -1148,6 +1261,14 @@ class ApiService {
   async pauseMonitoringPlan(planId: string): Promise<MonitoringPlan> {
     const resp = await this.request<{ plan: MonitoringPlan }>(
       `/monitoring/plans/${planId}/pause`,
+      { method: 'POST' }
+    );
+    return resp.plan;
+  }
+
+  async archiveMonitoringPlan(planId: string): Promise<MonitoringPlan> {
+    const resp = await this.request<{ plan: MonitoringPlan }>(
+      `/monitoring/plans/${planId}/archive`,
       { method: 'POST' }
     );
     return resp.plan;

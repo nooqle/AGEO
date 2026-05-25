@@ -25,6 +25,7 @@ interface MessageListProps {
   onStepSkip?: () => void;
   onStepRetry?: () => void;
   renderAfterMessage?: (message: MessageType, index: number) => ReactNode;
+  emptyStateOverride?: ReactNode;
 }
 
 export function MessageList({
@@ -40,8 +41,12 @@ export function MessageList({
   onStepSkip,
   onStepRetry,
   renderAfterMessage,
+  emptyStateOverride,
 }: MessageListProps) {
   if (messages.length === 0) {
+    if (emptyStateOverride) {
+      return <>{emptyStateOverride}</>;
+    }
     return (
       <EmptyState
         exampleBrands={exampleBrands}

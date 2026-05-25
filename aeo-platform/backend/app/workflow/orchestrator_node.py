@@ -13,45 +13,62 @@ from textwrap import dedent
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
+from uuid import UUID
 
 from langgraph.graph import END
 from langgraph.types import Command
 
 from app.config import get_settings
-from app.workflow.state import AgentState
 from app.core.database import AsyncSessionLocal
 from app.core.llm.task_routing import get_orchestrator_llm_model
-from app.services.knowledge_workspace_service import KnowledgeWorkspaceService
-from app.services.skill_registry_service import (
-    build_builtin_skill_tool_definitions,
-    SkillScopeContext,
+from app.services.brand_ontology_action_planner_service import (
+    BrandOntologyActionPlannerService,
 )
-from app.services.skill_registry_service import SkillRegistryService
+from app.services.brand_ontology_world_service import BrandOntologyWorldService
+from app.services.knowledge_workspace_service import KnowledgeWorkspaceService
+from app.services.session_event_publisher import session_event_publisher
 from app.services.skill_invocation_service import (
     SkillInvocationPlan,
     SkillInvocationService,
+)
+from app.services.skill_registry_service import (
+    SkillRegistryService,
+    SkillScopeContext,
+    build_builtin_skill_tool_definitions,
 )
 from app.services.tool_capability_matrix import (
     ToolAvailabilityConstraint,
     get_tool_capability,
     validate_tool_capability_access,
 )
-from app.services.session_event_publisher import session_event_publisher
+from app.workflow.confirmation import build_table_import_confirmation_payload
 from app.workflow.events import (
-    send_reply_event,
-    send_plan_event,
     send_action_log_event,
-    send_thought_event,
     send_confirmation_request,
+    send_plan_event,
+    send_reply_event,
+    send_thought_event,
 )
+from app.workflow.fetch_recovery import (
+    extract_base_fetch_results_from_state,
+    extract_latest_fetch_recovery_plan_from_state,
+    is_supplemental_fetch_request,
+    normalize_question_targets,
+    prefers_browser_fetch_mode,
+    resolve_supplemental_fetch_mode,
+)
+from app.workflow.nodes_streaming import async_wrap_sync_gen
 from app.workflow.orchestrator_context_packets import (
     RecentEvidencePacket,
     build_entity_context_packet,
     build_orchestrator_context_packets,
     build_session_status_packet,
     render_active_skill_packet,
+    render_dashboard_context_packet,
     render_entity_context_packet,
     render_history_availability_packet,
+    render_ontology_action_plan_packet,
+    render_ontology_world_packet,
     render_pending_decision_packet,
     render_recent_evidence_packet,
     render_session_status_packet,
@@ -62,29 +79,18 @@ from app.workflow.orchestrator_instruction_defense import (
     detect_instruction_injection,
     render_instruction_defense_reminder,
 )
-from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
 from app.workflow.prompt_assembly import PromptAssembly, PromptSection
+from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
 from app.workflow.runtime_policy_executor import (
-    build_next_required_action,
     build_alternative_action_catalog,
+    build_next_required_action,
     clear_runtime_policy_fields,
     get_user_visible_runtime_label,
     parse_next_required_action,
     resolve_answer_fetch_mode_policy,
     summarize_alternative_actions,
 )
-from app.workflow.fetch_recovery import (
-    extract_base_fetch_results_from_state,
-    extract_latest_fetch_recovery_plan_from_state,
-    is_supplemental_fetch_request,
-    normalize_question_targets,
-    prefers_browser_fetch_mode,
-    resolve_supplemental_fetch_mode,
-)
-from app.workflow.confirmation import (
-    build_table_import_confirmation_payload,
-)
-from app.workflow.nodes_streaming import async_wrap_sync_gen
+from app.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +102,9 @@ class OrchestratorPromptBundle:
     system_prompt: str
     runtime_reminder_message: str
     runtime_reminder_enabled: bool
+    static_prompt_hash: str = ""
+    runtime_reminder_hash: str = ""
+    prompt_layer_manifest: dict[str, Any] | None = None
 
 
 SKILLIZED_TOOL_NAMES = {
@@ -125,6 +134,36 @@ _VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
     "ask_user": "用户确认",
     "fast": "快速采集",
     "full": "完整采集",
+}
+
+ONTOLOGY_TOOL_ACTION_MAP: dict[str, str] = {
+    "brand_analysis": "generate_brand_context",
+    "persona_generation": "generate_persona_map",
+    "question_simulation": "generate_question_set",
+    "answer_fetch": "run_answer_fetch",
+    "analysis_report_skill": "generate_report",
+    "data_analytics": "generate_report",
+    "compare_snapshots": "compare_snapshots",
+    "site_confidence_assessment_skill": "generate_official_website_evidence_plan",
+    "manage_monitoring_schedule": "create_monitoring_plan",
+    "create_monitoring_schedule": "create_monitoring_plan",
+}
+
+ONTOLOGY_ACTION_INPUT_TOOL_ARG_ALIASES: dict[str, dict[str, str]] = {
+    "generate_question_set": {
+        "generation_mode": "mode",
+        "question_count": "question_count",
+    },
+    "generate_report": {
+        "report_kind": "report_type",
+    },
+    "create_monitoring_plan": {
+        "cadence": "cadence",
+        "question_ids": "question_ids",
+    },
+    "generate_official_website_evidence_plan": {
+        "official_domain": "root_url",
+    },
 }
 
 _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES = frozenset(
@@ -807,7 +846,7 @@ def _build_panorama_step_intro(
         focus_label = topic_label or brand_name or "当前主题"
         return (
             f"开始围绕「{focus_label}」生成全景问题列表。\n"
-            "本次只生成问题，不会抓取 AI 回答，也不会生成品牌全景分析报告。"
+            "本次只生成问题，不会抓取平台回答，也不会生成品牌全景分析报告。"
         )
 
     if (
@@ -880,7 +919,9 @@ def _contains_non_negated_keyword(text: str, keywords: list[str]) -> bool:
     return False
 
 
-def _contains_positive_continuation_marker(text: str, keywords: tuple[str, ...]) -> bool:
+def _contains_positive_continuation_marker(
+    text: str, keywords: tuple[str, ...]
+) -> bool:
     normalized = str(text or "")
     negative_markers = (
         "不要",
@@ -2579,7 +2620,14 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
         else ""
     )
     active_skill_context = render_active_skill_packet(context_packets.active_skill)
+    dashboard_context = render_dashboard_context_packet(
+        context_packets.dashboard_context
+    )
     pending_decision = render_pending_decision_packet(context_packets.pending_decision)
+    ontology_world = render_ontology_world_packet(context_packets.ontology_world)
+    ontology_action_plan = render_ontology_action_plan_packet(
+        context_packets.ontology_action_plan
+    )
     recent_evidence = _render_recent_evidence_for_prompt(
         context_packets.recent_evidence
     )
@@ -2596,6 +2644,37 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
         else ""
     )
 
+    def _default_section_metadata(group: str) -> dict[str, Any]:
+        if group == "base_policy_sections":
+            return {
+                "cache_layer": "static_policy",
+                "volatility": "release_static",
+                "source": "orchestrator_policy",
+            }
+        if group == "skill_sections":
+            return {
+                "cache_layer": "static_skill_surface",
+                "volatility": "deployment_static",
+                "source": "skill_registry",
+            }
+        if group == "runtime_context_sections":
+            return {
+                "cache_layer": "dynamic_context",
+                "volatility": "per_turn",
+                "source": "agent_state",
+            }
+        if group == "runtime_reminder_sections":
+            return {
+                "cache_layer": "ephemeral_runtime_guard",
+                "volatility": "per_turn",
+                "source": "runtime_policy",
+            }
+        return {
+            "cache_layer": "unknown",
+            "volatility": "unspecified",
+            "source": "",
+        }
+
     def _section(
         *,
         key: str,
@@ -2607,6 +2686,8 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
         budget_cost: int = 0,
         metadata: dict[str, Any] | None = None,
     ) -> PromptSection:
+        section_metadata = _default_section_metadata(group)
+        section_metadata.update(metadata or {})
         return PromptSection(
             key=key,
             title=title,
@@ -2615,7 +2696,7 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
             priority=priority,
             drop_policy=drop_policy,
             budget_cost=budget_cost,
-            metadata=metadata or {},
+            metadata=section_metadata,
         )
 
     base_policy_sections = (
@@ -2754,7 +2835,12 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                     priority=0,
                     drop_policy="keep",
                     body=contextual_tool_surface_note,
-                    metadata={"static_prompt": False},
+                    metadata={
+                        "static_prompt": False,
+                        "cache_layer": "dynamic_tool_surface",
+                        "volatility": "per_turn",
+                        "source": "tool_surface_gate",
+                    },
                 ),
             )
             if contextual_tool_surface_note
@@ -2770,6 +2856,11 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
             metadata={
                 "static_body": static_public_skill_index,
                 "runtime_body": dynamic_public_skill_index,
+                "static_cache_layer": "static_skill_surface",
+                "runtime_cache_layer": "dynamic_tool_surface",
+                "runtime_priority": 9,
+                "runtime_drop_policy": "compress",
+                "source": "skill_registry",
             },
         ),
     )
@@ -2783,6 +2874,10 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 group="runtime_context_sections",
                 priority=0,
                 body=status_text,
+                metadata={
+                    "cache_layer": "dynamic_session_state",
+                    "source": "agent_state.session_status",
+                },
             ),
             _section(
                 key="entity_context",
@@ -2790,27 +2885,79 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 group="runtime_context_sections",
                 priority=1,
                 body=entity_context,
+                metadata={
+                    "cache_layer": "dynamic_entity_context",
+                    "source": "agent_state.entity_context",
+                },
             ),
             _section(
                 key="active_skill_context",
                 title="当前技能上下文",
                 group="runtime_context_sections",
-                priority=2,
+                priority=4,
                 body=active_skill_context,
+                metadata={
+                    "cache_layer": "dynamic_skill_context",
+                    "source": "skill_registry.active_skill",
+                },
+            ),
+            _section(
+                key="dashboard_context",
+                title="Dashboard入口上下文",
+                group="runtime_context_sections",
+                priority=2,
+                body=dashboard_context,
+                metadata={
+                    "cache_layer": "dynamic_dashboard_context",
+                    "volatility": "per_turn",
+                    "source": "agent_state.dashboard_context",
+                },
+            ),
+            _section(
+                key="ontology_world",
+                title="品牌情报状态",
+                group="runtime_context_sections",
+                priority=3,
+                body=ontology_world,
+                metadata={
+                    "cache_layer": "dynamic_object_world",
+                    "volatility": "per_entity_object_state",
+                    "source": "ontology_world",
+                },
+            ),
+            _section(
+                key="ontology_action_plan",
+                title="行动建议",
+                group="runtime_context_sections",
+                priority=2,
+                body=ontology_action_plan,
+                metadata={
+                    "cache_layer": "dynamic_object_action_plan",
+                    "volatility": "per_entity_object_state",
+                    "source": "ontology_action_planner",
+                },
             ),
             _section(
                 key="pending_decision",
                 title="待处理决策",
                 group="runtime_context_sections",
-                priority=3,
+                priority=1,
                 body=pending_decision,
+                metadata={
+                    "cache_layer": "ephemeral_human_gate",
+                    "source": "agent_state.pending_decision",
+                },
             ),
             _section(
                 key="context_summary",
                 title="当前会话摘要",
                 group="runtime_context_sections",
-                priority=4,
+                priority=6,
                 body=context_summary,
+                metadata={
+                    "cache_layer": "dynamic_session_summary",
+                    "source": "agent_state.context_summary",
+                },
             ),
             _section(
                 key="history_availability",
@@ -2819,13 +2966,21 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 priority=8,
                 drop_policy="drop",
                 body=history_availability,
+                metadata={
+                    "cache_layer": "dynamic_history_manifest",
+                    "source": "knowledge_manifest",
+                },
             ),
             _section(
                 key="recent_evidence_packet",
                 title="最近证据包",
                 group="runtime_context_sections",
-                priority=5,
+                priority=7,
                 body=recent_evidence,
+                metadata={
+                    "cache_layer": "dynamic_evidence_context",
+                    "source": "recent_evidence_packet",
+                },
             ),
         )
         if section.normalized_body()
@@ -2841,6 +2996,10 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 priority=1,
                 drop_policy="drop",
                 body=knowledge_hint,
+                metadata={
+                    "cache_layer": "ephemeral_planning_hint",
+                    "source": "knowledge_manifest",
+                },
             ),
             _section(
                 key="instruction_defense_reminder",
@@ -2849,6 +3008,10 @@ def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
                 priority=0,
                 drop_policy="drop",
                 body=instruction_defense,
+                metadata={
+                    "cache_layer": "ephemeral_security_guard",
+                    "source": "instruction_defense",
+                },
             ),
         )
         if section.normalized_body()
@@ -2881,19 +3044,30 @@ def _build_orchestrator_prompt_bundle_from_assembly(
     """Build cache-friendly prompt parts while preserving the legacy default."""
 
     runtime_enabled = _runtime_reminder_message_enabled()
+    static_system_prompt = assembly.render_static_system_prompt()
+    runtime_reminder_source = assembly.render_runtime_reminder_message()
+    layer_manifest = assembly.cache_layer_manifest(
+        runtime_reminder_enabled=runtime_enabled
+    )
     if not runtime_enabled:
+        system_prompt = assembly.render()
         return OrchestratorPromptBundle(
-            system_prompt=assembly.render(),
+            system_prompt=system_prompt,
             runtime_reminder_message="",
             runtime_reminder_enabled=False,
+            static_prompt_hash=fingerprint_text(static_system_prompt),
+            runtime_reminder_hash="",
+            prompt_layer_manifest=layer_manifest,
         )
 
+    runtime_reminder_message = _wrap_runtime_reminder_message(runtime_reminder_source)
     return OrchestratorPromptBundle(
-        system_prompt=assembly.render_static_system_prompt(),
-        runtime_reminder_message=_wrap_runtime_reminder_message(
-            assembly.render_runtime_reminder_message()
-        ),
+        system_prompt=static_system_prompt,
+        runtime_reminder_message=runtime_reminder_message,
         runtime_reminder_enabled=True,
+        static_prompt_hash=fingerprint_text(static_system_prompt),
+        runtime_reminder_hash=fingerprint_text(runtime_reminder_message),
+        prompt_layer_manifest=layer_manifest,
     )
 
 
@@ -3151,7 +3325,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
         return (
             "过往资料检索未命中足够记录。"
             "如果用户的问题仍需真实数据，请根据问题类型决定是否调用 brand_analysis 或 answer_fetch；"
-            "如果该动作链路较长或模式不明确，再使用 ask_user。"
+            "如果该处理链路较长或模式不明确，再使用 ask_user。"
         )
 
     if tool_name == "knowledge_aggregate":
@@ -3243,7 +3417,7 @@ def _build_agent_result_summary(state: AgentState, tool_name: str) -> str:
                 f"变化最大项是 {top.get('group_key', 'unknown')}，增量 {top.get('delta', 0)}。"
                 "\n关键变化如下：\n"
                 f"{comparison_lines}\n"
-                "请基于这些变化继续解释趋势、给出分析结论或建议下一步动作。"
+                "请基于这些变化继续解释趋势、给出分析结论或建议下一步。"
             )
         return (
             "过往资料对比未得到有效变化结果。"
@@ -3750,7 +3924,7 @@ async def _force_table_import_confirmation(
     new_history.append(
         {
             "role": "tool",
-            "content": "等待用户确认表格导入动作...",
+            "content": "等待用户确认表格导入...",
             "tool_call_id": request_id,
         }
     )
@@ -3897,6 +4071,847 @@ async def _hydrate_knowledge_manifest(state: AgentState) -> dict[str, Any] | Non
     except Exception as exc:
         logger.warning("[Orchestrator] Failed to load knowledge manifest: %s", exc)
         return None
+
+
+async def _hydrate_ontology_world(state: AgentState) -> dict[str, Any] | None:
+    """Load a compact durable object-world summary for planning."""
+
+    raw_entity_id = state.get("entity_id")
+    if not raw_entity_id:
+        return None
+    try:
+        entity_uuid = UUID(str(raw_entity_id))
+    except (TypeError, ValueError):
+        return None
+
+    actor_uuid: UUID | None = None
+    raw_actor_id = state.get("user_id") or state.get("actor_id")
+    if raw_actor_id:
+        try:
+            actor_uuid = UUID(str(raw_actor_id))
+        except (TypeError, ValueError):
+            actor_uuid = None
+
+    try:
+        async with AsyncSessionLocal() as db:
+            service = BrandOntologyWorldService(db)
+            return await service.build_dashboard_summary(
+                entity_id=entity_uuid,
+                actor_id=actor_uuid,
+                include_action_input_values=True,
+                include_official_content_audit=False,
+            )
+    except Exception as exc:
+        logger.warning("[Orchestrator] Failed to load ontology world: %s", exc)
+        return None
+
+
+def _build_ontology_action_plan(
+    state: AgentState,
+    ontology_world: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Derive deterministic action advice from the durable object world."""
+
+    try:
+        planner = BrandOntologyActionPlannerService()
+        return planner.build_plan(ontology_world=ontology_world, state=state)
+    except Exception as exc:
+        logger.warning("[Orchestrator] Failed to build ontology action plan: %s", exc)
+        return None
+
+
+def _is_ontology_intelligence_explanation_request(state: AgentState) -> bool:
+    latest = str(state.get("latest_user_input") or _get_latest_user_message(state))
+    if not latest.strip():
+        return False
+    normalized = re.sub(r"\s+", "", latest)
+    explanation_markers = (
+        "为什么",
+        "哪些",
+        "哪个",
+        "谁",
+        "什么",
+        "如何",
+        "怎么",
+        "是否",
+        "能不能",
+        "要不要",
+        "需要",
+        "解释",
+        "说明",
+        "支撑",
+        "影响",
+        "风险",
+    )
+    ontology_markers = (
+        "官网",
+        "引用",
+        "来源",
+        "外部来源",
+        "证据",
+        "证据主题",
+        "证据包",
+        "对象",
+        "关系",
+        "辅助关联",
+        "弱关系",
+        "其他关联",
+        "隐藏关系",
+        "情报",
+        "结论",
+        "转化率",
+        "替代",
+        "叙事",
+        "动作",
+        "监测",
+        "监测计划",
+        "确认",
+    )
+    action_boundary_markers = (
+        "跳过确认",
+        "直接执行",
+        "自动执行",
+        "需要确认",
+        "人确认",
+        "人工确认",
+        "先确认",
+        "下一步",
+    )
+    action_markers = ("创建", "生成", "执行", "抓取", "采集", "导入", "修改", "更新")
+    if not any(marker in normalized for marker in explanation_markers):
+        return False
+    if not any(marker in normalized for marker in ontology_markers):
+        return False
+    if (
+        any(marker in normalized for marker in action_markers)
+        and "不要重新抓取" not in normalized
+        and not any(marker in normalized for marker in action_boundary_markers)
+    ):
+        return False
+    dashboard_context = state.get("dashboard_context") or {}
+    if isinstance(dashboard_context, dict) and (
+        dashboard_context.get("entity_id") or dashboard_context.get("brand")
+    ):
+        return True
+    return "对象" in normalized or "情报" in normalized
+
+
+def _format_source_domains_for_reply(ontology_world: dict[str, Any]) -> str:
+    domains = ontology_world.get("source_domain_summary") or []
+    if not isinstance(domains, list) or not domains:
+        return "暂无可用来源域名摘要。"
+    lines: list[str] = []
+    for item in domains[:5]:
+        if not isinstance(item, dict):
+            continue
+        domain = str(item.get("domain") or "").strip() or "unknown"
+        role = str(
+            item.get("source_role_label") or item.get("source_role") or ""
+        ).strip()
+        citations = int(item.get("citation_count") or 0)
+        answers = int(item.get("answer_count") or 0)
+        detail = f"{domain}：{citations} 个引用"
+        if answers:
+            detail += f"，覆盖 {answers} 条回答"
+        if role:
+            detail += f"，类型是{role}"
+        lines.append(detail)
+    return "\n".join(f"- {line}" for line in lines) or "暂无可用来源域名摘要。"
+
+
+CORE_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
+    {
+        "brand_has_intelligence_finding",
+        "question_answered_by",
+        "platform_answer_cites_source",
+        "evidence_set_contains_answer",
+        "intelligence_finding_uses_evidence_set",
+        "report_contains_intelligence_finding",
+        "report_uses_evidence_set",
+    }
+)
+
+
+def _relationship_is_core(item: dict[str, Any]) -> bool:
+    link_type = str(item.get("link_type") or "").strip()
+    visibility = str(item.get("visibility") or "").strip()
+    if visibility == "core":
+        return True
+    if visibility == "supporting":
+        return False
+    if "default_visible" in item:
+        return bool(item.get("default_visible"))
+    return link_type in CORE_RELATIONSHIP_TYPES
+
+
+def _format_relationships_for_reply(
+    ontology_world: dict[str, Any],
+    *,
+    include_supporting: bool = False,
+    supporting_only: bool = False,
+) -> str:
+    core_relationships = ontology_world.get("relationship_summary") or []
+    supporting_relationships = ontology_world.get("supporting_relationship_summary") or []
+    if supporting_only:
+        if supporting_relationships:
+            relationships = supporting_relationships
+        elif isinstance(core_relationships, list):
+            relationships = core_relationships
+        else:
+            relationships = []
+    elif include_supporting:
+        relationships = list(core_relationships) + list(supporting_relationships)
+    else:
+        relationships = core_relationships
+    if not isinstance(relationships, list) or not relationships:
+        counts = ontology_world.get("relationship_counts") or {}
+        if not isinstance(counts, dict) or not counts:
+            return (
+                "暂无可用辅助关联摘要。"
+                if supporting_only
+                else "暂无可用核心关系摘要。"
+            )
+        relationships = []
+        for key, value in counts.items():
+            item = {"link_type": key, "display_name": key, "count": value}
+            is_core = key in CORE_RELATIONSHIP_TYPES
+            if supporting_only and is_core:
+                continue
+            if not supporting_only and not include_supporting and not is_core:
+                continue
+            relationships.append(item)
+    priority = {
+        "brand_has_intelligence_finding": 1,
+        "question_answered_by": 2,
+        "platform_answer_cites_source": 3,
+        "report_contains_intelligence_finding": 4,
+        "intelligence_finding_uses_evidence_set": 5,
+        "evidence_set_contains_answer": 6,
+    }
+    filtered_relationships: list[dict[str, Any]] = []
+    for item in relationships:
+        if not isinstance(item, dict):
+            continue
+        count = int(item.get("count") or 0)
+        if count <= 0:
+            continue
+        is_core = _relationship_is_core(item)
+        if supporting_only and is_core:
+            continue
+        if not supporting_only and not include_supporting and not is_core:
+            continue
+        filtered_relationships.append(item)
+    sorted_relationships = sorted(
+        filtered_relationships,
+        key=lambda item: priority.get(str(item.get("link_type") or ""), 99),
+    )
+    lines = []
+    for item in sorted_relationships[:6]:
+        name = str(item.get("display_name") or item.get("link_type") or "").strip()
+        count = int(item.get("count") or 0)
+        if name and count:
+            lines.append(f"- {name}：{count}")
+    if lines:
+        return "\n".join(lines)
+    return "暂无可用辅助关联摘要。" if supporting_only else "暂无可用核心关系摘要。"
+
+
+def _ontology_status_label(status: str) -> str:
+    labels = {
+        "not_cited": "未被引用",
+        "active": "活跃",
+        "observed": "已观测",
+        "captured": "已采集",
+        "derived": "已归纳",
+        "published": "已发布",
+        "created": "已创建",
+        "suggested": "已建议",
+        "failed": "采集失败",
+    }
+    normalized = str(status or "").strip()
+    return labels.get(normalized, normalized or "未知")
+
+
+def _ontology_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ontology_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _ontology_brand_label(
+    state: AgentState | dict[str, Any],
+    ontology_world: dict[str, Any],
+) -> str:
+    brand = ontology_world.get("brand") or {}
+    label = str(brand.get("label") or "").strip() if isinstance(brand, dict) else ""
+    return label or str(state.get("brand_name") or "该品牌").strip()
+
+
+def _ontology_object_summaries(
+    ontology_world: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("object_type")): item
+        for item in list(ontology_world.get("object_summaries") or [])
+        if isinstance(item, dict)
+    }
+
+
+def _ontology_object_total(
+    ontology_world: dict[str, Any],
+    object_type: str,
+) -> int:
+    item = _ontology_object_summaries(ontology_world).get(object_type) or {}
+    total = _ontology_int(item.get("total"))
+    if total:
+        return total
+    if object_type == "source_domain":
+        return len(
+            [
+                item
+                for item in list(ontology_world.get("source_domain_summary") or [])
+                if isinstance(item, dict)
+            ]
+        )
+    if object_type == "evidence_cluster":
+        return len(
+            [
+                item
+                for item in list(ontology_world.get("evidence_clusters") or [])
+                if isinstance(item, dict)
+            ]
+        )
+    return 0
+
+
+def _source_domain_sort_key(item: dict[str, Any]) -> tuple[int, int, int, str]:
+    return (
+        _ontology_int(item.get("citation_count")),
+        _ontology_int(item.get("answer_count")),
+        _ontology_int(item.get("platform_count")),
+        str(item.get("domain") or ""),
+    )
+
+
+def _sorted_source_domains(
+    ontology_world: dict[str, Any],
+    *,
+    prefer_external: bool = False,
+) -> list[dict[str, Any]]:
+    raw_domains = [
+        item
+        for item in list(ontology_world.get("source_domain_summary") or [])
+        if isinstance(item, dict)
+    ]
+    if prefer_external:
+        external = [item for item in raw_domains if not bool(item.get("is_official"))]
+        if external:
+            raw_domains = external
+    return sorted(raw_domains, key=_source_domain_sort_key, reverse=True)
+
+
+def _source_domain_reply_line(item: dict[str, Any]) -> str:
+    domain = str(item.get("domain") or "").strip() or "unknown"
+    role = str(item.get("source_role_label") or item.get("source_role") or "").strip()
+    citations = _ontology_int(item.get("citation_count"))
+    answers = _ontology_int(item.get("answer_count"))
+    platforms = _ontology_int(item.get("platform_count"))
+    samples = [
+        str(sample).strip()
+        for sample in list(item.get("sample_titles") or [])
+        if str(sample).strip()
+    ]
+    detail = f"{domain}：{citations} 个引用"
+    if answers:
+        detail += f"，覆盖 {answers} 条回答"
+    if platforms:
+        detail += f"，覆盖 {platforms} 个回答来源"
+    if role:
+        detail += f"，类型是{role}"
+    if samples:
+        detail += f"，样本是{samples[0]}"
+    return detail
+
+
+def _evidence_cluster_sort_key(
+    item: dict[str, Any],
+) -> tuple[int, int, int, int, str]:
+    topic_label = str(item.get("topic_label") or item.get("title") or "").strip()
+    return (
+        1 if topic_label == "综合外部来源" else 0,
+        -_ontology_int(item.get("question_count")),
+        -_ontology_int(item.get("answer_count")),
+        -_ontology_int(item.get("citation_count")),
+        str(item.get("title") or ""),
+    )
+
+
+def _sorted_evidence_clusters(
+    ontology_world: dict[str, Any],
+) -> list[dict[str, Any]]:
+    clusters = [
+        item
+        for item in list(ontology_world.get("evidence_clusters") or [])
+        if isinstance(item, dict)
+    ]
+    return sorted(clusters, key=_evidence_cluster_sort_key)
+
+
+def _evidence_cluster_reply_line(item: dict[str, Any]) -> str:
+    title = str(item.get("title") or "未命名证据主题").strip()
+    topic = str(item.get("topic_label") or "").strip()
+    role = str(item.get("source_role_label") or "").strip()
+    citations = _ontology_int(item.get("citation_count"))
+    answers = _ontology_int(item.get("answer_count"))
+    questions = _ontology_int(item.get("question_count"))
+    domains = _ontology_int(item.get("domain_count"))
+    official_citations = _ontology_int(item.get("official_citation_count"))
+    readout = str(item.get("business_readout") or "").strip()
+    domain_items = [
+        str(domain).strip()
+        for domain in list(item.get("source_domains") or [])
+        if str(domain).strip()
+    ][:3]
+
+    parts = [f"{title}：{citations} 个引用"]
+    if answers:
+        parts.append(f"{answers} 条回答")
+    if questions:
+        parts.append(f"{questions} 个问题")
+    if domains:
+        parts.append(f"{domains} 个域名")
+    if official_citations:
+        parts.append(f"官网引用 {official_citations} 个")
+    else:
+        parts.append("官网引用为 0")
+    if topic:
+        parts.append(f"主题是{topic}")
+    if role:
+        parts.append(f"来源类型是{role}")
+    if domain_items:
+        parts.append(f"代表域名是{'、'.join(domain_items)}")
+    line = "，".join(parts)
+    if readout:
+        line += f"。{readout}"
+    return line
+
+
+def _available_action_items(
+    state: AgentState | dict[str, Any],
+    ontology_world: dict[str, Any],
+) -> list[dict[str, Any]]:
+    action_plan = state.get("ontology_action_plan") or {}
+    raw_actions = []
+    if isinstance(action_plan, dict):
+        raw_actions = list(action_plan.get("recommended_actions") or [])
+    if not raw_actions:
+        raw_actions = list(ontology_world.get("available_actions") or [])
+    return [item for item in raw_actions if isinstance(item, dict)]
+
+
+def _action_readiness_label(value: Any) -> str:
+    labels = {
+        "ready": "可进入执行",
+        "ready_with_defaults": "可用默认值进入执行",
+        "needs_input": "需要补充信息",
+        "needs_confirmation": "需要人确认",
+        "blocked": "被阻塞",
+    }
+    normalized = str(value or "").strip()
+    return labels.get(normalized, normalized or "待判断")
+
+
+def _action_reply_line(item: dict[str, Any]) -> str:
+    display_name = str(
+        item.get("display_name")
+        or item.get("action_key")
+        or item.get("key")
+        or "未命名建议"
+    ).strip()
+    readiness = _action_readiness_label(item.get("readiness"))
+    if bool(item.get("requires_confirmation")):
+        readiness = "需要人确认"
+    reason = str(item.get("reason") or "").strip()
+    line = f"{display_name}：{readiness}"
+    if reason:
+        line += f"，原因是{reason}"
+    return line
+
+
+def _ontology_intelligence_question_kind(state: AgentState | dict[str, Any]) -> str:
+    latest = str(state.get("latest_user_input") or _get_latest_user_message(state))
+    normalized = re.sub(r"\s+", "", latest)
+    if any(
+        marker in normalized
+        for marker in (
+            "跳过确认",
+            "需要确认",
+            "人工确认",
+            "人确认",
+            "直接执行",
+            "自动执行",
+            "下一步",
+            "监测计划",
+        )
+    ):
+        return "action_boundary"
+    if "证据簇" in normalized or "证据主题" in normalized or "证据包" in normalized:
+        return "evidence_cluster_value"
+    if any(marker in normalized for marker in ("替代", "取代", "外部来源")):
+        return "source_substitution"
+    if any(
+        marker in normalized
+        for marker in (
+            "弱关系",
+            "辅助关联",
+            "其他关联",
+            "隐藏关系",
+            "非核心关系",
+            "边缘关系",
+            "全部关系",
+            "所有关系",
+        )
+    ):
+        return "supporting_relationships"
+    if "关系" in normalized or "链路" in normalized or "风险" in normalized:
+        return "relationship_risk"
+    return "official_gap"
+
+
+def _build_official_website_gap_reply(
+    state: AgentState,
+    ontology_world: dict[str, Any],
+) -> str:
+    brand_label = _ontology_brand_label(state, ontology_world)
+    official = ontology_world.get("official_website_observation") or {}
+    if not isinstance(official, dict):
+        official = {}
+    official_domain = str(official.get("domain") or "官网").strip()
+    citation_count = _ontology_int(official.get("citation_count"))
+    citation_share = _ontology_float(official.get("citation_share"))
+    observed_question_count = _ontology_int(official.get("question_count"))
+    observed_platform_count = _ontology_int(official.get("platform_count"))
+    status = str(official.get("status") or "").strip() or "unknown"
+    status_label = _ontology_status_label(status)
+    official_readout = str(official.get("business_readout") or "").strip()
+    gaps = [
+        str(item).strip()
+        for item in list(official.get("gaps") or [])
+        if str(item).strip()
+    ]
+    comparison_domains = official.get("comparison_domains") or []
+    comparison_lines = []
+    if isinstance(comparison_domains, list):
+        for item in comparison_domains[:3]:
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain") or "").strip()
+            count = _ontology_int(item.get("citation_count"))
+            if domain:
+                comparison_lines.append(f"{domain}（{count} 个引用）")
+
+    def total_for(object_type: str) -> int:
+        return _ontology_object_total(ontology_world, object_type)
+
+    findings = ontology_world.get("intelligence_findings") or []
+    finding_line = ""
+    if isinstance(findings, list):
+        for item in findings:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if "官网" in title or "引用" in title:
+                finding_line = title
+                evidence_summary = str(item.get("evidence_summary") or "").strip()
+                if evidence_summary:
+                    finding_line += f" 证据范围：{evidence_summary}。"
+                break
+
+    source_domains_text = _format_source_domains_for_reply(ontology_world)
+    relationships_text = _format_relationships_for_reply(ontology_world)
+    external_domains = (
+        "、".join(comparison_lines) if comparison_lines else "外部汽车媒体和内容平台"
+    )
+    gap_text = "；".join(gaps) if gaps else "智能回答没有引用官网"
+
+    return (
+        f"结论：{brand_label}的官网引用转化率为 0，不是因为系统没有找到品牌证据，"
+        f"而是因为当前证据里，官网 {official_domain} 的状态是{status_label}，"
+        f"官网引用数为 {citation_count}，引用占比为 {citation_share:.1%}，"
+        f"覆盖问题数为 {observed_question_count}，覆盖平台数为 {observed_platform_count}。\n\n"
+        "支撑这个判断的证据有四层：\n"
+        f"- 品牌：{brand_label}。\n"
+        f"- 官网：{official_domain}，当前缺口是{gap_text}。\n"
+        f"- 平台回答：{total_for('platform_answer')} 条。\n"
+        f"- 引用来源：{total_for('citation_source')} 个，"
+        f"被进一步聚合为 {total_for('source_domain')} 个来源域名和 "
+        f"{total_for('evidence_cluster')} 个证据主题。\n\n"
+        f"最直接的情报判断：{finding_line or official_readout or '官网暂未成为智能回答证据源。'}\n\n"
+        "证据关系是：问题产生回答，回答引用来源，来源再聚合成域名和证据主题，"
+        "最后支撑情报判断。当前关键关系如下：\n"
+        f"{relationships_text}\n\n"
+        "外部对照来源显示，品牌叙事主要被这些域名承接：\n"
+        f"{source_domains_text}\n\n"
+        f"业务影响：智能回答并不是没有谈到{brand_label}，而是更多用 {external_domains} "
+        "这类外部来源来支撑判断。官网没有进入证据链，会让官方产品叙事、技术解释、"
+        "车型信息和品牌立场更难被 AI 平台直接采用。\n\n"
+        "下一步不应该自动改官网，也不应该直接跳过确认。更稳的建议是先生成一份"
+        "官网证据页优化建议，明确哪些官网页面、标题、正文、结构化信息需要补强，"
+        "再由人确认是否进入执行。"
+    )
+
+
+def _build_source_substitution_reply(
+    state: AgentState,
+    ontology_world: dict[str, Any],
+) -> str:
+    brand_label = _ontology_brand_label(state, ontology_world)
+    official = ontology_world.get("official_website_observation") or {}
+    if not isinstance(official, dict):
+        official = {}
+    official_domain = str(official.get("domain") or "官网").strip()
+    domains = _sorted_source_domains(ontology_world, prefer_external=True)
+    top_lines = [
+        f"- {_source_domain_reply_line(item)}"
+        for item in domains[:5]
+        if isinstance(item, dict)
+    ]
+    top_domain_names = [
+        str(item.get("domain") or "").strip()
+        for item in domains[:3]
+        if str(item.get("domain") or "").strip()
+    ]
+    external_summary = "、".join(top_domain_names) or "外部来源"
+    source_domain_total = _ontology_object_total(ontology_world, "source_domain")
+    citation_total = _ontology_object_total(ontology_world, "citation_source")
+    answer_total = _ontology_object_total(ontology_world, "platform_answer")
+    cluster_total = _ontology_object_total(ontology_world, "evidence_cluster")
+    official_citations = _ontology_int(official.get("citation_count"))
+
+    return (
+        f"结论：正在替代 {official_domain} 承接{brand_label}品牌叙事的，"
+        f"主要是 {external_summary}。这不是单条引用的问题，而是当前证据里"
+        f"来源域名、引用来源和平台回答形成了稳定外部证据链。\n\n"
+        "当前最强的外部来源是：\n"
+        f"{chr(10).join(top_lines) if top_lines else '- 暂无可用外部来源摘要。'}\n\n"
+        "这个判断由四类证据支撑：\n"
+        f"- 来源域名：{source_domain_total} 个，用来判断谁在承接叙事。\n"
+        f"- 引用来源：{citation_total} 个，用来判断外部来源被采用的强度。\n"
+        f"- 平台回答：{answer_total} 条，用来判断这些来源在哪些回答里生效。\n"
+        f"- 证据主题：{cluster_total} 个，用来把大量引用压缩成可审阅的主题。\n\n"
+        f"官网 {official_domain} 当前引用数是 {official_citations}。"
+        "因此风险不是“没有品牌声量”，而是品牌声量的证据入口被外部来源掌握。"
+        "企业用户应该优先看这些外部来源讲了什么，再决定官网证据页要补哪类内容。"
+    )
+
+
+def _build_evidence_cluster_value_reply(
+    state: AgentState,
+    ontology_world: dict[str, Any],
+) -> str:
+    brand_label = _ontology_brand_label(state, ontology_world)
+    clusters = _sorted_evidence_clusters(ontology_world)
+    cluster_lines = [
+        f"- {_evidence_cluster_reply_line(item)}"
+        for item in clusters[:4]
+        if isinstance(item, dict)
+    ]
+    citation_total = _ontology_object_total(ontology_world, "citation_source")
+    cluster_total = _ontology_object_total(ontology_world, "evidence_cluster")
+    source_domain_total = _ontology_object_total(ontology_world, "source_domain")
+
+    return (
+        f"证据主题的价值，是把{brand_label}的大量引用降噪成少量可判断主题。"
+        f"当前有 {citation_total} 个引用来源、{source_domain_total} 个来源域名，"
+        f"聚合成 {cluster_total} 个证据主题。\n\n"
+        "优先看的证据主题是：\n"
+        f"{chr(10).join(cluster_lines) if cluster_lines else '- 暂无可用证据主题摘要。'}\n\n"
+        "它们比原始引用更适合给企业用户看，因为用户不需要逐条读完全部引用；"
+        "用户需要先知道哪类主题正在支撑智能回答、这些主题由哪些域名承接、"
+        "官网有没有进入这些主题。然后再从每个主题里抽少量样本做深读。"
+    )
+
+
+def _build_relationship_risk_reply(
+    state: AgentState,
+    ontology_world: dict[str, Any],
+) -> str:
+    brand_label = _ontology_brand_label(state, ontology_world)
+    official = ontology_world.get("official_website_observation") or {}
+    if not isinstance(official, dict):
+        official = {}
+    official_domain = str(official.get("domain") or "官网").strip()
+    official_citations = _ontology_int(official.get("citation_count"))
+    relationships_text = _format_relationships_for_reply(ontology_world)
+    domains = _sorted_source_domains(ontology_world, prefer_external=True)
+    external_names = [
+        str(item.get("domain") or "").strip()
+        for item in domains[:3]
+        if str(item.get("domain") or "").strip()
+    ]
+    external_summary = "、".join(external_names) or "外部来源"
+
+    return (
+        f"证据关系暴露的核心风险是：智能回答已经形成了关于{brand_label}的证据链，"
+        f"但这条证据链绕过了官网 {official_domain}。"
+        f"官网当前引用数是 {official_citations}，外部来源则由 {external_summary} "
+        "等域名承接。\n\n"
+        "当前关键关系是：\n"
+        f"{relationships_text}\n\n"
+        "这说明用户看到的不是零散数据，而是一条链路：问题先产生回答，回答引用来源，"
+        "来源聚合成域名和证据主题，最后支撑情报判断。只要官网不在这条链路里，"
+        "官方叙事就很难成为智能回答的默认证据。"
+    )
+
+
+def _build_supporting_relationships_reply(
+    state: AgentState,
+    ontology_world: dict[str, Any],
+) -> str:
+    brand_label = _ontology_brand_label(state, ontology_world)
+    supporting_text = _format_relationships_for_reply(
+        ontology_world,
+        supporting_only=True,
+    )
+    core_text = _format_relationships_for_reply(ontology_world)
+
+    return (
+        f"可以查，但{brand_label}的辅助关联不适合默认放在看板主视图里。"
+        "它们通常提供背景、运营线索或历史上下文，不能直接替代证据链本身。\n\n"
+        "当前查到的辅助关联是：\n"
+        f"{supporting_text}\n\n"
+        "我会先把主视图收紧在这些核心关系上：\n"
+        f"{core_text}\n\n"
+        "什么时候值得继续看辅助关联：当你要追问竞品背景、指标来源、监测任务、"
+        "用户反馈或历史操作原因时，再展开它们。否则默认先看问题、回答、引用来源、"
+        "证据主题和情报判断之间的链路。"
+    )
+
+
+def _build_action_boundary_reply(
+    state: AgentState,
+    ontology_world: dict[str, Any],
+) -> str:
+    brand_label = _ontology_brand_label(state, ontology_world)
+    actions = _available_action_items(state, ontology_world)
+    action_lines = [f"- {_action_reply_line(item)}" for item in actions[:5]]
+    guardrail_text = (
+        "所有会影响长期记录的操作，都必须记录来源、校验输入、保留处理脉络，"
+        "并在需要确认时先交给人。"
+    )
+
+    return (
+        f"不能直接跳过确认去执行{brand_label}的后续操作。"
+        f"{guardrail_text}\n\n"
+        "当前可见的操作边界是：\n"
+        f"{chr(10).join(action_lines) if action_lines else '- 暂无可用建议。'}\n\n"
+        "这一步不是替用户偷偷执行，而是解释情报、说明证据、"
+        "把建议理由和风险讲清楚。真正需要修改长期记录、创建计划、生成官网优化建议时，"
+        "系统只能发起待确认请求；人确认后，再进入受控执行。"
+    )
+
+
+def _build_ontology_intelligence_explanation_reply(
+    state: AgentState,
+    ontology_world: dict[str, Any],
+) -> str:
+    kind = _ontology_intelligence_question_kind(state)
+    if kind == "source_substitution":
+        reply = _build_source_substitution_reply(state, ontology_world)
+        return _with_intelligence_reply_closure(reply)
+    if kind == "evidence_cluster_value":
+        reply = _build_evidence_cluster_value_reply(state, ontology_world)
+        return _with_intelligence_reply_closure(reply)
+    if kind == "supporting_relationships":
+        reply = _build_supporting_relationships_reply(state, ontology_world)
+        return _with_intelligence_reply_closure(reply)
+    if kind == "relationship_risk":
+        reply = _build_relationship_risk_reply(state, ontology_world)
+        return _with_intelligence_reply_closure(reply)
+    if kind == "action_boundary":
+        reply = _build_action_boundary_reply(state, ontology_world)
+        return _with_intelligence_reply_closure(reply)
+    reply = _build_official_website_gap_reply(state, ontology_world)
+    return _with_intelligence_reply_closure(reply)
+
+
+def _with_intelligence_reply_closure(reply: str) -> str:
+    """Ensure fast ontology replies keep a stable business-analysis shape."""
+
+    closure_parts: list[str] = []
+    if "结论" not in reply:
+        closure_parts.append(
+            "结论：这条回答只围绕当前品牌情报里的已沉淀证据做解释，"
+            "不把推断当成已经执行的结果。"
+        )
+    if "证据：" not in reply:
+        closure_parts.append(
+            "证据：以上判断只使用当前品牌情报里的问题、回答、引用、官网观测、"
+            "来源域名、证据主题和待处理事项。"
+        )
+    if "影响：" not in reply and "业务影响：" not in reply:
+        closure_parts.append(
+            "影响：如果官网缺席或外部来源主导，品牌叙事会更多被第三方来源塑造，"
+            "内容团队需要优先补强可被引用的官方材料。"
+        )
+    if "需要确认：" not in reply:
+        closure_parts.append(
+            "需要确认：请先确认是否要把这条判断进入持续监测、官网补证或内容优化；"
+            "没有确认时系统只解释，不会修改长期记录。"
+        )
+    if "下一步建议：" not in reply:
+        closure_parts.append(
+            "下一步建议：先围绕当前证据追问样本、来源或影响；需要执行时再提交确认。"
+        )
+    if not closure_parts:
+        return reply
+    return f"{reply}\n\n" + "\n".join(closure_parts)
+
+
+async def _route_ontology_intelligence_explanation_without_llm(
+    *,
+    state: AgentState,
+    session_id: str,
+    ontology_world: dict[str, Any] | None,
+) -> Command | None:
+    if not ontology_world:
+        return None
+    if not _is_ontology_intelligence_explanation_request(state):
+        return None
+
+    from app.workflow.events import send_execution_complete
+
+    reply_text = _build_ontology_intelligence_explanation_reply(state, ontology_world)
+    await send_reply_event(
+        session_id,
+        reply_text,
+        is_delta=True,
+        is_new_round=True,
+    )
+    await send_reply_event(session_id, "", is_complete=True)
+    await send_execution_complete(session_id, "情报解释完成")
+
+    new_history = list(state.get("orchestrator_history") or [])
+    new_history.append({"role": "assistant", "content": reply_text})
+    return Command(
+        goto=END,
+        update={
+            "execution_status": "completed",
+            "awaiting_user": False,
+            "pending_confirmation": None,
+            "orchestrator_reply": reply_text,
+            "orchestrator_history": new_history,
+            "ontology_world": ontology_world,
+        },
+    )
 
 
 async def _resolve_skill_tool(
@@ -4726,9 +5741,32 @@ async def orchestrator_node(state: AgentState) -> Command:
         return site_confidence_command
 
     working_state = state
+    state_updates: dict[str, Any] = {}
     manifest = await _hydrate_knowledge_manifest(state)
     if manifest is not None:
-        working_state = {**state, "knowledge_manifest": manifest}
+        state_updates["knowledge_manifest"] = manifest
+    ontology_world = await _hydrate_ontology_world(state)
+    if ontology_world is not None:
+        state_updates["ontology_world"] = ontology_world
+        ontology_action_plan = _build_ontology_action_plan(
+            {**state, **state_updates},
+            ontology_world,
+        )
+        if ontology_action_plan is not None:
+            state_updates["ontology_action_plan"] = ontology_action_plan
+    if state_updates:
+        working_state = {**state, **state_updates}
+
+    ontology_explanation_command = (
+        await _route_ontology_intelligence_explanation_without_llm(
+            state=working_state,
+            session_id=session_id,
+            ontology_world=working_state.get("ontology_world"),
+        )
+    )
+    if ontology_explanation_command is not None:
+        return ontology_explanation_command
+
     llm_state = _sanitize_runtime_policy_state(working_state)
 
     # Build orchestrator call
@@ -4895,12 +5933,12 @@ async def orchestrator_node(state: AgentState) -> Command:
                     "streaming": True,
                     "message_count": len(messages) + 1,
                     "tool_count": len(tools),
-                    "static_prompt_hash": fingerprint_text(
-                        prompt_assembly.render_static_system_prompt()
-                    ),
+                    "static_prompt_hash": prompt_bundle.static_prompt_hash,
+                    "runtime_reminder_hash": prompt_bundle.runtime_reminder_hash,
                     "tool_surface_hash": fingerprint_tools(tools),
                     "system_prompt_length": len(system_prompt),
                     "runtime_context_size": len(runtime_reminder_source),
+                    "prompt_layer_manifest": prompt_bundle.prompt_layer_manifest,
                     "model_identity": resolve_llm_model_identity(model),
                     "runtime_reminder_enabled": (
                         prompt_bundle.runtime_reminder_enabled
@@ -5190,6 +6228,453 @@ def _build_tool_gate_block_command(
     )
 
 
+def _ontology_action_gate_decision(
+    state: AgentState | dict[str, Any] | None,
+    tool_name: str | None,
+    tool_args: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return a blocking decision when the ontology plan disallows a tool call."""
+
+    if not state:
+        return None
+    action_key = ONTOLOGY_TOOL_ACTION_MAP.get(str(tool_name or "").strip())
+    if not action_key:
+        return None
+    raw_plan = state.get("ontology_action_plan") or {}
+    if not isinstance(raw_plan, dict):
+        return None
+    action_item = _find_ontology_action_plan_item(raw_plan, action_key)
+    if action_item is None:
+        return None
+    readiness = str(action_item.get("readiness") or "").strip().lower()
+    missing_inputs = list(action_item.get("missing_inputs") or [])
+    missing_objects = list(action_item.get("missing_objects") or [])
+    feedback = _ontology_action_feedback_for_key(state, action_key)
+    feedback_type = _normalize_ontology_action_feedback_type(
+        feedback.get("feedback_type") if feedback else None
+    )
+    feedback_action_record_id = str(
+        (feedback or {}).get("action_record_id") or ""
+    ).strip()
+    consumed_by_action_record_id = str(
+        (feedback or {}).get("consumed_by_action_record_id") or ""
+    ).strip()
+    feedback_is_usable = bool(
+        feedback_action_record_id and not consumed_by_action_record_id
+    )
+    has_user_confirmation = bool(feedback_type == "confirm" and feedback_is_usable)
+    has_provided_inputs = _ontology_feedback_covers_missing_inputs(
+        action_key=action_key,
+        missing_inputs=missing_inputs,
+        feedback=feedback,
+    )
+    has_user_input = bool(
+        feedback_type == "provide_input" and feedback_is_usable and has_provided_inputs
+    )
+    if feedback_type == "defer":
+        return {
+            "kind": "blocked",
+            "action_key": action_key,
+            "tool_name": tool_name,
+            "action": action_item,
+            "reason": "用户已在品牌看板暂缓这个操作，系统不能绕过人的反馈继续执行。",
+        }
+    if missing_objects or readiness == "blocked":
+        return {
+            "kind": "blocked",
+            "action_key": action_key,
+            "tool_name": tool_name,
+            "action": action_item,
+            "reason": action_item.get("reason")
+            or "当前情报还缺少执行该操作所需的前置信息。",
+        }
+    if missing_inputs or readiness == "needs_input":
+        if has_user_input:
+            if bool(action_item.get("requires_confirmation")):
+                return {
+                    "kind": "needs_confirmation",
+                    "action_key": action_key,
+                    "tool_name": tool_name,
+                    "action": action_item,
+                    "reason": "所需信息已补齐，但这项操作仍需要人的确认，系统不能直接执行。",
+                }
+            return None
+        return {
+            "kind": "needs_input",
+            "action_key": action_key,
+            "tool_name": tool_name,
+            "action": action_item,
+            "reason": "这项操作还缺少必填信息，不能继续处理。",
+        }
+    if bool(action_item.get("requires_confirmation")) or readiness == (
+        "needs_confirmation"
+    ):
+        if has_user_confirmation:
+            return None
+        return {
+            "kind": "needs_confirmation",
+            "action_key": action_key,
+            "tool_name": tool_name,
+            "action": action_item,
+            "reason": "这项操作需要人的确认，系统不能直接执行。",
+        }
+    if readiness in {"ready", "ready_with_defaults"}:
+        return None
+    return {
+        "kind": "blocked",
+        "action_key": action_key,
+        "tool_name": tool_name,
+        "action": action_item,
+        "reason": "行动计划返回了未知状态，已阻止继续处理。",
+    }
+
+
+def _ontology_action_feedback_for_key(
+    state: AgentState | dict[str, Any] | None,
+    action_key: str,
+) -> dict[str, Any] | None:
+    if not state:
+        return None
+    raw_world = state.get("ontology_world") or {}
+    if not isinstance(raw_world, dict):
+        return None
+    raw_summary = raw_world.get("action_feedback_summary") or {}
+    if not isinstance(raw_summary, dict):
+        return None
+    raw_latest = raw_summary.get("latest_by_action") or {}
+    if not isinstance(raw_latest, dict):
+        return None
+    feedback = raw_latest.get(action_key)
+    return feedback if isinstance(feedback, dict) else None
+
+
+def _normalize_ontology_action_feedback_type(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized.startswith("action_queue_"):
+        normalized = normalized.removeprefix("action_queue_")
+    if normalized in {"confirm", "confirmed", "accept", "accepted"}:
+        return "confirm"
+    if normalized in {"provide_input", "input", "input_provided"}:
+        return "provide_input"
+    if normalized in {"defer", "deferred", "dismiss", "skip"}:
+        return "defer"
+    return normalized
+
+
+def _ontology_feedback_covers_missing_inputs(
+    *,
+    action_key: str,
+    missing_inputs: list[Any],
+    feedback: dict[str, Any] | None,
+) -> bool:
+    normalized_missing = [
+        str(item).strip() for item in (missing_inputs or []) if str(item).strip()
+    ]
+    if not normalized_missing:
+        return False
+    provided_inputs = _ontology_feedback_provided_inputs(feedback)
+    if not provided_inputs:
+        return False
+    provided_keys = set(provided_inputs.keys())
+    return all(
+        input_key in provided_keys
+        or _ontology_tool_arg_key_for_input(action_key, input_key) in provided_keys
+        for input_key in normalized_missing
+    )
+
+
+def _ontology_feedback_provided_inputs(
+    feedback: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(feedback, dict):
+        return {}
+    provided_inputs = feedback.get("provided_inputs")
+    if not isinstance(provided_inputs, dict):
+        return {}
+    return {
+        str(key).strip(): value
+        for key, value in provided_inputs.items()
+        if str(key).strip() and _ontology_payload_has_value(value)
+    }
+
+
+def _ontology_tool_arg_key_for_input(action_key: str, input_key: str) -> str:
+    return (
+        ONTOLOGY_ACTION_INPUT_TOOL_ARG_ALIASES.get(action_key, {}).get(input_key)
+        or input_key
+    )
+
+
+def _ontology_payload_has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _ontology_confirmed_action_for_tool(
+    state: AgentState | dict[str, Any] | None,
+    tool_name: str | None,
+) -> dict[str, Any] | None:
+    action_key = ONTOLOGY_TOOL_ACTION_MAP.get(str(tool_name or "").strip())
+    if not action_key:
+        return None
+    feedback = _ontology_action_feedback_for_key(state, action_key)
+    if not feedback:
+        return None
+    feedback_type = _normalize_ontology_action_feedback_type(
+        feedback.get("feedback_type")
+    )
+    action_record_id = str(feedback.get("action_record_id") or "").strip()
+    consumed_by_action_record_id = str(
+        feedback.get("consumed_by_action_record_id") or ""
+    ).strip()
+    if (
+        feedback_type != "confirm"
+        or not action_record_id
+        or consumed_by_action_record_id
+    ):
+        return None
+    return {
+        "action_key": action_key,
+        "action_record_id": action_record_id,
+        "decision_id": feedback.get("decision_id"),
+        "decided_at": feedback.get("decided_at"),
+    }
+
+
+def _ontology_action_feedback_for_tool(
+    state: AgentState | dict[str, Any] | None,
+    tool_name: str | None,
+) -> dict[str, Any] | None:
+    action_key = ONTOLOGY_TOOL_ACTION_MAP.get(str(tool_name or "").strip())
+    if not action_key:
+        return None
+    feedback = _ontology_action_feedback_for_key(state, action_key)
+    if not feedback:
+        return None
+    feedback_type = _normalize_ontology_action_feedback_type(
+        feedback.get("feedback_type")
+    )
+    action_record_id = str(feedback.get("action_record_id") or "").strip()
+    consumed_by_action_record_id = str(
+        feedback.get("consumed_by_action_record_id") or ""
+    ).strip()
+    if feedback_type not in {"confirm", "provide_input"}:
+        return None
+    if not action_record_id or consumed_by_action_record_id:
+        return None
+    return {
+        "action_key": action_key,
+        "feedback_type": feedback_type,
+        "action_record_id": action_record_id,
+        "decision_id": feedback.get("decision_id"),
+        "decided_at": feedback.get("decided_at"),
+        "provided_inputs": _ontology_feedback_provided_inputs(feedback),
+    }
+
+
+def _merge_ontology_provided_inputs_into_tool_args(
+    *,
+    action_key: str,
+    tool_args: dict[str, Any],
+    provided_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    if not provided_inputs:
+        return tool_args
+    merged = dict(tool_args or {})
+    for input_key, value in provided_inputs.items():
+        target_key = _ontology_tool_arg_key_for_input(action_key, input_key)
+        if not _ontology_payload_has_value(merged.get(target_key)):
+            merged[target_key] = value
+    return merged
+
+
+def _find_ontology_action_plan_item(
+    action_plan: dict[str, Any],
+    action_key: str,
+) -> dict[str, Any] | None:
+    for collection_key in ("action_readiness", "recommended_actions"):
+        for raw_item in action_plan.get(collection_key) or []:
+            if not isinstance(raw_item, dict):
+                continue
+            if str(raw_item.get("action_key") or "").strip() == action_key:
+                return raw_item
+    return None
+
+
+async def _build_ontology_action_gate_command(
+    *,
+    state: AgentState,
+    session_id: str,
+    tool_call,
+    reply_text: str,
+    new_history: list[dict[str, Any]],
+    current_retry_counts: dict[str, Any],
+    decision: dict[str, Any],
+    display_name: str,
+) -> Command:
+    action_item = decision.get("action") or {}
+    action_name = str(action_item.get("display_name") or display_name).strip()
+    kind = str(decision.get("kind") or "blocked")
+    message = _ontology_action_gate_message(
+        kind=kind,
+        action_name=action_name,
+        action_item=action_item,
+        reason=str(decision.get("reason") or ""),
+    )
+    tool_call_id = getattr(tool_call, "id", None) or "call_1"
+
+    if state.get("headless_mode") or kind == "blocked":
+        new_history.append(
+            {
+                "role": "tool",
+                "content": message,
+                "tool_call_id": tool_call_id,
+                "name": getattr(tool_call, "name", display_name),
+            }
+        )
+        return Command(
+            goto="orchestrator",
+            update={
+                "orchestrator_reply": reply_text,
+                "orchestrator_history": new_history,
+                "agent_retry_counts": current_retry_counts,
+                "last_validation_result": {
+                    "gate_name": "ontology_action_gate",
+                    "passed": False,
+                    "tool_name": getattr(tool_call, "name", display_name),
+                    "action_key": decision.get("action_key"),
+                    "reason": message,
+                },
+            },
+        )
+
+    if not reply_text.strip():
+        await send_reply_event(
+            session_id,
+            message,
+            is_delta=True,
+            is_new_round=True,
+        )
+        await send_reply_event(session_id, "", is_complete=True)
+        reply_text = message
+
+    request_id = f"ontology_{decision.get('action_key')}_{tool_call_id}"
+    options = _ontology_action_gate_options(kind, action_item)
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "inline_confirmation",
+        {
+            "request_id": request_id,
+            "message": message,
+            "options": options,
+            "type": "simple",
+        },
+    )
+    await session_event_publisher.emit_to_session(
+        session_id,
+        "confirmation_request",
+        {
+            "request_id": request_id,
+            "type": "step_confirmation",
+            "message": message,
+            "options": options,
+            "allow_text_input": True,
+            "step_id": "ontology_action_gate",
+            "step_name": "确认行动",
+        },
+    )
+    new_history.append(
+        {
+            "role": "tool",
+            "content": "等待用户补充信息或确认行动。",
+            "tool_call_id": tool_call_id,
+            "name": getattr(tool_call, "name", display_name),
+        }
+    )
+    return Command(
+        goto="wait_for_user",
+        update={
+            "awaiting_user": True,
+            "orchestrator_reply": reply_text,
+            "orchestrator_history": new_history,
+            "pending_confirmation": {
+                "request_id": request_id,
+                "step_id": "ontology_action_gate",
+                "step_name": "确认行动",
+                "message": message,
+                "options": options,
+            },
+            "agent_retry_counts": current_retry_counts,
+            "last_validation_result": {
+                "gate_name": "ontology_action_gate",
+                "passed": False,
+                "tool_name": getattr(tool_call, "name", display_name),
+                "action_key": decision.get("action_key"),
+                "reason": message,
+            },
+        },
+    )
+
+
+def _ontology_action_gate_message(
+    *,
+    kind: str,
+    action_name: str,
+    action_item: dict[str, Any],
+    reason: str,
+) -> str:
+    if kind == "needs_input":
+        missing_inputs = ", ".join(action_item.get("missing_inputs") or [])
+        suffix = f"还缺少：{missing_inputs}。" if missing_inputs else ""
+        return f"{action_name} 还不能直接执行。{suffix}{reason}"
+    if kind == "needs_confirmation":
+        return f"{action_name} 需要你确认后才能执行。{reason}"
+    missing_objects = action_item.get("missing_objects") or []
+    if missing_objects:
+        object_labels = ", ".join(
+            str(item.get("object_type") or "") for item in missing_objects
+        )
+        return f"{action_name} 暂时被阻止，缺少前置信息：{object_labels}。{reason}"
+    return f"{action_name} 暂时被阻止。{reason}"
+
+
+def _ontology_action_gate_options(
+    kind: str,
+    action_item: dict[str, Any],
+) -> list[dict[str, str]]:
+    action_key = str(action_item.get("action_key") or "action")
+    if kind == "needs_confirmation":
+        return [
+            {
+                "id": f"confirm_{action_key}",
+                "label": "确认执行",
+                "description": "记录这次确认，再继续执行。",
+            },
+            {
+                "id": f"defer_{action_key}",
+                "label": "暂不执行",
+                "description": "保留当前情报状态，不触发这个操作。",
+            },
+        ]
+    return [
+        {
+            "id": f"provide_input_{action_key}",
+            "label": "补充信息",
+            "description": "补齐缺少字段后再重新判断。",
+        },
+        {
+            "id": f"defer_{action_key}",
+            "label": "稍后处理",
+            "description": "暂时不进入这个操作。",
+        },
+    ]
+
+
 async def _handle_tool_call(
     state: AgentState,
     session_id: str,
@@ -5470,6 +6955,38 @@ async def _handle_tool_call(
                 },
             )
 
+    ontology_gate_decision = _ontology_action_gate_decision(
+        state,
+        effective_tool_name,
+        tool_args,
+    )
+    if ontology_gate_decision is not None:
+        logger.warning(
+            "[Orchestrator] Ontology action gate blocked %s: %s",
+            effective_tool_name,
+            ontology_gate_decision.get("reason"),
+        )
+        return await _build_ontology_action_gate_command(
+            state=state,
+            session_id=session_id,
+            tool_call=tool_call,
+            reply_text=reply_text,
+            new_history=new_history,
+            current_retry_counts=current_retry_counts,
+            decision=ontology_gate_decision,
+            display_name=display_name,
+        )
+    ontology_action_feedback = _ontology_action_feedback_for_tool(
+        state,
+        effective_tool_name,
+    )
+    if ontology_action_feedback is not None:
+        tool_args = _merge_ontology_provided_inputs_into_tool_args(
+            action_key=str(ontology_action_feedback["action_key"]),
+            tool_args=tool_args,
+            provided_inputs=ontology_action_feedback.get("provided_inputs") or {},
+        )
+
     capability = get_tool_capability(tool_name) or get_tool_capability(
         effective_tool_name
     )
@@ -5519,9 +7036,9 @@ async def _handle_tool_call(
                     tool_args["mode"] = "baseline_dynamic"
                     requested_question_mode = "baseline_dynamic"
             latest_user_message = _get_latest_user_message(state)
-            if tool_args.get("question_only") or _is_explicit_question_generation_only_request(
-                latest_user_message
-            ):
+            if tool_args.get(
+                "question_only"
+            ) or _is_explicit_question_generation_only_request(latest_user_message):
                 early_user_decisions = dict(state.get("user_decisions", {}) or {})
                 early_user_decisions["question_generation_only"] = True
                 tool_args = {**tool_args, "question_only": True}
@@ -5697,8 +7214,8 @@ async def _handle_tool_call(
                 "brand_analysis": "正在收集品牌基本信息和竞品格局，请稍候...",
                 "persona_generation": "正在根据品牌特征生成用户画像，请稍候...",
                 "question_simulation": "正在模拟真实用户可能在 AI 平台中提出的问题，请稍候...",
-                "analysis_report_skill": "正在整理场景、风险与优先动作建议，请稍候…",
-                "data_analytics": "正在整理场景、风险与优先动作建议，请稍候…",
+                "analysis_report_skill": "正在整理场景、风险与优先建议，请稍候…",
+                "data_analytics": "正在整理场景、风险与优先建议，请稍候…",
                 "confidence_analysis_skill": "正在评估当前引用来源的可信度和结构化质量，请稍候...",
                 "site_confidence_assessment_skill": "正在评估官网 AI 友好度，请稍候...",
                 "post_analysis_skill": "正在基于已有结果执行后续分析，请稍候...",
@@ -5741,6 +7258,13 @@ async def _handle_tool_call(
 
         # Pass brand_name from tool_args if brand_analysis
         extra_updates: dict[str, Any] = {}
+        if ontology_action_feedback is not None:
+            extra_updates["latest_user_action_record_id"] = ontology_action_feedback[
+                "action_record_id"
+            ]
+            extra_updates["ontology_action_feedback"] = ontology_action_feedback
+            if ontology_action_feedback.get("feedback_type") == "confirm":
+                extra_updates["ontology_confirmed_action"] = ontology_action_feedback
         if effective_tool_name == "brand_analysis" and tool_args.get("brand_name"):
             extra_updates["brand_name"] = tool_args["brand_name"]
 

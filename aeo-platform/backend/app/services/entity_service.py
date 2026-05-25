@@ -6,6 +6,7 @@ storage if no DB session is provided (backward compat).
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4, UUID
@@ -26,6 +27,76 @@ logger = logging.getLogger(__name__)
 # In-memory fallback (used when no DB session)
 _entities: dict[str, dict[str, Any]] = {}
 
+_INTERNAL_ENTITY_NAME_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "automation_marker",
+        re.compile(
+            r"(^|\s)(codex|smoke|e2e|debug|validation|postfix|cleanup)(\s|$)",
+            re.IGNORECASE,
+        ),
+    ),
+    ("test_marker", re.compile(r"(^|\s)(test|testing)(\s|$)", re.IGNORECASE)),
+    ("localized_test_marker", re.compile(r"测试|验证|调试")),
+    ("corrupted_label", re.compile(r"\?{3,}")),
+    ("generated_numeric_suffix", re.compile(r"\b\d{8,}\b")),
+)
+
+_INTERNAL_ENTITY_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("placeholder_domain", re.compile(r"(^|\.)example\.com$", re.IGNORECASE)),
+    ("test_domain", re.compile(r"\.test$", re.IGNORECASE)),
+    (
+        "automation_domain",
+        re.compile(r"(^|[.-])(smoke|e2e|debug|validation|test)([.-]|$)", re.IGNORECASE),
+    ),
+    ("e2e_path_marker", re.compile(r"/e2e-\d+", re.IGNORECASE)),
+)
+
+
+def classify_entity_hygiene(
+    *,
+    name: str | None,
+    domain: str | None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Classify entity data quality without mutating the persisted entity."""
+
+    labels: list[str] = []
+    name_text = str(name or "")
+    domain_text = str(domain or "")
+    description_text = str(description or "")
+
+    def add_label(label: str) -> None:
+        if label not in labels:
+            labels.append(label)
+
+    for label, pattern in _INTERNAL_ENTITY_NAME_PATTERNS:
+        if pattern.search(name_text):
+            add_label(label)
+
+    for label, pattern in _INTERNAL_ENTITY_DOMAIN_PATTERNS:
+        if pattern.search(domain_text):
+            add_label(label)
+
+    if "runtime smoke" in description_text.lower():
+        add_label("automation_description")
+
+    return {
+        "is_internal_test_data": bool(labels),
+        "hygiene_labels": labels,
+    }
+
+
+def _with_entity_hygiene(entity: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(entity)
+    payload.update(
+        classify_entity_hygiene(
+            name=payload.get("name"),
+            domain=payload.get("domain"),
+            description=payload.get("description"),
+        )
+    )
+    return payload
+
 
 class EntityService:
     """Manages brand entity CRUD operations."""
@@ -42,29 +113,37 @@ class EntityService:
             except (json.JSONDecodeError, TypeError):
                 aliases = [entity.aliases] if entity.aliases else []
 
-        return {
-            "id": str(entity.id),
-            "name": entity.name,
-            "aliases": aliases,
-            "domain": entity.domain or "",
-            "industry": entity.industry or "",
-            "description": entity.description or "",
-            "visibility_scope": (
-                entity.visibility_scope.value if entity.visibility_scope else "personal"
-            ),
-            "owner_user_id": (
-                str(entity.owner_user_id) if entity.owner_user_id else None
-            ),
-            "organization_id": (
-                str(entity.organization_id) if entity.organization_id else None
-            ),
-            "last_analyzed": (
-                entity.last_analyzed.isoformat() if entity.last_analyzed else None
-            ),
-            "status": entity.status.value if entity.status else "pending",
-            "created_at": entity.created_at.isoformat() if entity.created_at else None,
-            "updated_at": entity.updated_at.isoformat() if entity.updated_at else None,
-        }
+        return _with_entity_hygiene(
+            {
+                "id": str(entity.id),
+                "name": entity.name,
+                "aliases": aliases,
+                "domain": entity.domain or "",
+                "industry": entity.industry or "",
+                "description": entity.description or "",
+                "visibility_scope": (
+                    entity.visibility_scope.value
+                    if entity.visibility_scope
+                    else "personal"
+                ),
+                "owner_user_id": (
+                    str(entity.owner_user_id) if entity.owner_user_id else None
+                ),
+                "organization_id": (
+                    str(entity.organization_id) if entity.organization_id else None
+                ),
+                "last_analyzed": (
+                    entity.last_analyzed.isoformat() if entity.last_analyzed else None
+                ),
+                "status": entity.status.value if entity.status else "pending",
+                "created_at": (
+                    entity.created_at.isoformat() if entity.created_at else None
+                ),
+                "updated_at": (
+                    entity.updated_at.isoformat() if entity.updated_at else None
+                ),
+            }
+        )
 
     async def list_entities(
         self,
@@ -85,7 +164,7 @@ class EntityService:
             result = await self.db.execute(stmt)
             entities = result.scalars().all()
             return [self._model_to_dict(e) for e in entities]
-        return list(_entities.values())
+        return [_with_entity_hygiene(entity) for entity in _entities.values()]
 
     async def get_entity_model(
         self,
@@ -127,7 +206,8 @@ class EntityService:
                 allow_internal_admin_bypass=allow_internal_admin_bypass,
             )
             return self._model_to_dict(entity) if entity else None
-        return _entities.get(entity_id)
+        entity = _entities.get(entity_id)
+        return _with_entity_hygiene(entity) if entity else None
 
     async def create_entity(
         self,
@@ -189,13 +269,15 @@ class EntityService:
         logger.info(
             "[Entity] Created (in-memory): %s (id=%s)", entity["name"], entity_id
         )
-        return entity
+        return _with_entity_hygiene(entity)
 
     async def update_entity(
         self,
         entity_id: str,
         data: dict[str, Any],
         viewer: User | None = None,
+        *,
+        commit: bool = True,
     ) -> dict[str, Any] | None:
         if self.db:
             entity = await self.get_entity_model(entity_id, viewer)
@@ -240,7 +322,10 @@ class EntityService:
                 if "last_analyzed" in data and data["last_analyzed"] is not None:
                     entity.last_analyzed = data["last_analyzed"]
                 entity.updated_at = datetime.now(timezone.utc)
-                await self.db.commit()
+                if commit:
+                    await self.db.commit()
+                else:
+                    await self.db.flush()
                 await self.db.refresh(entity)
                 logger.info("[Entity] Updated: %s (id=%s)", entity.name, entity_id)
                 return self._model_to_dict(entity)
@@ -263,7 +348,7 @@ class EntityService:
         logger.info(
             "[Entity] Updated (in-memory): %s (id=%s)", entity["name"], entity_id
         )
-        return entity
+        return _with_entity_hygiene(entity)
 
     async def delete_entity(
         self,

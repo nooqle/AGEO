@@ -14,7 +14,7 @@ import { AlertCard } from '../notifications/AlertCard';
 import { EmptyState } from '@/components/ui/empty-state';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
-import { writeDashboardChatHandoff } from '@/lib/dashboardChatHandoff';
+import { buildDashboardChatUrlWithHandoff } from '@/lib/dashboardChatHandoff';
 import {
   getUserFacingStageLabel,
   sanitizeUserFacingErrorMessage,
@@ -31,10 +31,10 @@ interface MonitoringTabProps {
 }
 
 function buildChatUrlWithHandoff(sessionId: string, params: URLSearchParams): string {
-  if (writeDashboardChatHandoff(sessionId, Object.fromEntries(params.entries()))) {
-    return `/chat/${sessionId}`;
-  }
-  return `/chat/${sessionId}?${params.toString()}`;
+  return buildDashboardChatUrlWithHandoff(
+    sessionId,
+    Object.fromEntries(params.entries()),
+  );
 }
 
 function MonitoringIssueCard({
@@ -220,35 +220,16 @@ export function MonitoringTab({
     }
   }, [scheduleId, clearBaseline]);
 
-  const handleStartChat = useCallback(async () => {
+  const handleOpenMonitoringSettings = useCallback(() => {
     if (!activeEntityId) {
       router.push('/dashboard');
       return;
     }
-    try {
-      const session = await api.getOrCreateSessionByEntity(activeEntityId);
-      const params = new URLSearchParams();
-      params.set('entity_id', activeEntityId);
-      if (brandName) params.set('brand', brandName);
-      params.set('entry_source', 'dashboard_monitoring_tab');
-      params.set(
-        'monitor_mode',
-        homeMonitorMode === 'scenario' ? 'scenario_monitoring' : 'panorama_monitoring',
-      );
-      if (plan?.id) params.set('monitoring_plan_id', plan.id);
-      if (plan?.question_set_ids?.length) {
-        params.set('question_set_ids', plan.question_set_ids.join(','));
-      }
-      params.set(
-        'draft',
-        `${brandName ? `请基于「${brandName}」` : '请'}继续完善${homeMonitorMode === 'scenario' ? '用户场景监测' : '全景监测'}计划。`,
-      );
-      params.set('autosend', '1');
-      router.push(buildChatUrlWithHandoff(session.id, params));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '打开对话失败，请稍后重试。');
-    }
-  }, [activeEntityId, brandName, homeMonitorMode, plan, router]);
+    const params = new URLSearchParams();
+    params.set('section', 'monitoring');
+    params.set('entity_id', activeEntityId);
+    router.push(`/settings?${params.toString()}`);
+  }, [activeEntityId, router]);
 
   const handleOpenIssueChat = useCallback(async (issue: MonitoringRun) => {
     if (!activeEntityId) return;
@@ -363,11 +344,11 @@ export function MonitoringTab({
       <EmptyState
         icon={RiCalendar2Line}
         title={`尚未建立${planModeLabel}`}
-        description="需要先通过智能对话完成品牌信息、问题集和平台来源确认。确认后才能启用自动监测。"
+        description="请在监测设置中选择品牌、频率和平台来源。保存后，看板会读取周期样本。"
         action={{
-          label: `智能对话建立${planModeLabel}`,
+          label: '打开监测设置',
           onClick: () => {
-            void handleStartChat();
+            handleOpenMonitoringSettings();
           },
         }}
       />
@@ -391,9 +372,9 @@ export function MonitoringTab({
           title="监测计划已建立，等待首次运行"
           description={latestQuestionSet ? `最近问题集：${latestQuestionSet.title}` : '可以先触发一次快速复测，生成新的完整报告。'}
           action={{
-            label: '智能对话调整计划',
+            label: '调整监测设置',
             onClick: () => {
-              void handleStartChat();
+              handleOpenMonitoringSettings();
             },
           }}
         />

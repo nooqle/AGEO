@@ -7,7 +7,7 @@ type Theme = 'dark' | 'light';
 type ThemeListener = (theme: Theme) => void;
 
 const listeners = new Set<ThemeListener>();
-let currentTheme: Theme = 'dark';
+let currentTheme: Theme = 'light';
 
 function applyTheme(theme: Theme) {
   const html = document.documentElement;
@@ -18,11 +18,11 @@ function applyTheme(theme: Theme) {
 
 function getDomTheme(): Theme {
   if (typeof document === 'undefined') {
-    return 'dark';
+    return 'light';
   }
 
   const current = document.documentElement.getAttribute('data-theme');
-  return current === 'light' || current === 'dark' ? current : 'dark';
+  return current === 'light' || current === 'dark' ? current : 'light';
 }
 
 function notifyThemeChange(theme: Theme) {
@@ -57,7 +57,7 @@ function getThemeSnapshot(): Theme {
 }
 
 function getServerThemeSnapshot(): Theme {
-  return 'dark';
+  return 'light';
 }
 
 function subscribeMounted() {

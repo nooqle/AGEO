@@ -13,17 +13,19 @@ from typing import Any
 from uuid import UUID
 
 from langgraph.types import Command
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.models.monitoring_plan import MonitoringPlanStatus
+from app.models.monitoring_plan import MonitoringQuestionSet, QuestionSetStatus
 from app.models.monitoring_schedule import (
     MonitoringSchedule,
     ScheduleFrequency,
     ScheduleStatus,
 )
 from app.models.session import Session
+from app.services.brand_action_service import BrandActionService
 from app.services.monitoring_plan_service import MonitoringPlanService
 from app.services.monitoring_service import MonitoringService
 from app.workflow.events import send_action_log_event, send_reply_event
@@ -206,13 +208,37 @@ async def create_monitoring_node(state: AgentState) -> Command:
                 return Command(update={"orchestrator_reply": msg})
 
             if action == "pause":
-                plan, schedule = await _pause_existing_monitoring(
-                    plan_service,
-                    monitoring_service,
+                action_service = BrandActionService(db)
+                monitoring_action_record = await _start_monitoring_plan_action(
+                    db=db,
+                    action_service=action_service,
+                    state=state,
+                    tool_args=tool_args,
+                    dashboard_context=dashboard_context,
                     user_id=user_id,
+                    entity_id=entity_uuid,
+                    monitor_mode=monitor_mode,
+                    action=action,
                     plan=plan,
                     schedule=schedule,
+                    frequency=frequency,
                 )
+                try:
+                    plan, schedule = await _pause_existing_monitoring(
+                        plan_service,
+                        monitoring_service,
+                        user_id=user_id,
+                        plan=plan,
+                        schedule=schedule,
+                    )
+                except Exception as exc:
+                    await _fail_monitoring_action(
+                        db=db,
+                        action_service=action_service,
+                        record=monitoring_action_record,
+                        error_message=str(exc),
+                    )
+                    raise
                 if plan is not None:
                     schedule = await _find_schedule(
                         monitoring_service,
@@ -221,6 +247,14 @@ async def create_monitoring_node(state: AgentState) -> Command:
                         monitor_mode=monitor_mode,
                         monitoring_plan_id=plan.id,
                     )
+                await _complete_monitoring_action(
+                    db=db,
+                    action_service=action_service,
+                    record=monitoring_action_record,
+                    plan=plan,
+                    schedule=schedule,
+                    monitor_mode=monitor_mode,
+                )
                 msg = _build_schedule_reply(
                     prefix="监测计划已暂停。",
                     brand_name=brand_name,
@@ -231,13 +265,37 @@ async def create_monitoring_node(state: AgentState) -> Command:
                 return Command(update=_build_state_update(msg, plan=plan, schedule=schedule))
 
             if action == "resume":
-                plan, schedule = await _resume_existing_monitoring(
-                    plan_service,
-                    monitoring_service,
+                action_service = BrandActionService(db)
+                monitoring_action_record = await _start_monitoring_plan_action(
+                    db=db,
+                    action_service=action_service,
+                    state=state,
+                    tool_args=tool_args,
+                    dashboard_context=dashboard_context,
                     user_id=user_id,
+                    entity_id=entity_uuid,
+                    monitor_mode=monitor_mode,
+                    action=action,
                     plan=plan,
                     schedule=schedule,
+                    frequency=frequency,
                 )
+                try:
+                    plan, schedule = await _resume_existing_monitoring(
+                        plan_service,
+                        monitoring_service,
+                        user_id=user_id,
+                        plan=plan,
+                        schedule=schedule,
+                    )
+                except Exception as exc:
+                    await _fail_monitoring_action(
+                        db=db,
+                        action_service=action_service,
+                        record=monitoring_action_record,
+                        error_message=str(exc),
+                    )
+                    raise
                 if plan is not None:
                     schedule = await _find_schedule(
                         monitoring_service,
@@ -246,6 +304,14 @@ async def create_monitoring_node(state: AgentState) -> Command:
                         monitor_mode=monitor_mode,
                         monitoring_plan_id=plan.id,
                     )
+                await _complete_monitoring_action(
+                    db=db,
+                    action_service=action_service,
+                    record=monitoring_action_record,
+                    plan=plan,
+                    schedule=schedule,
+                    monitor_mode=monitor_mode,
+                )
                 msg = _build_schedule_reply(
                     prefix="监测计划已恢复。",
                     brand_name=brand_name,
@@ -256,14 +322,55 @@ async def create_monitoring_node(state: AgentState) -> Command:
                 return Command(update=_build_state_update(msg, plan=plan, schedule=schedule))
 
             if action == "delete":
-                deleted = await _delete_existing_schedule(monitoring_service, schedule=schedule)
-                if plan is not None:
-                    plan = await plan_service.update_plan(
-                        plan_id=plan.id,
-                        user_id=user_id,
-                        status=MonitoringPlanStatus.ARCHIVED.value,
+                action_service = BrandActionService(db)
+                monitoring_action_record = await _start_monitoring_plan_action(
+                    db=db,
+                    action_service=action_service,
+                    state=state,
+                    tool_args=tool_args,
+                    dashboard_context=dashboard_context,
+                    user_id=user_id,
+                    entity_id=entity_uuid,
+                    monitor_mode=monitor_mode,
+                    action=action,
+                    plan=plan,
+                    schedule=schedule,
+                    frequency=frequency,
+                )
+                try:
+                    archived = False
+                    deleted = await _delete_existing_schedule(
+                        monitoring_service,
+                        schedule=schedule,
                     )
-                msg = "监测计划已删除。" if deleted else "当前没有找到可删除的监测计划。"
+                    if plan is not None:
+                        plan = await plan_service.archive_plan(
+                            plan_id=plan.id,
+                            user_id=user_id,
+                            commit=False,
+                        )
+                        archived = True
+                except Exception as exc:
+                    await _fail_monitoring_action(
+                        db=db,
+                        action_service=action_service,
+                        record=monitoring_action_record,
+                        error_message=str(exc),
+                    )
+                    raise
+                await _complete_monitoring_action(
+                    db=db,
+                    action_service=action_service,
+                    record=monitoring_action_record,
+                    plan=plan,
+                    schedule=None,
+                    monitor_mode=monitor_mode,
+                )
+                msg = (
+                    "监测计划已删除。"
+                    if deleted or archived
+                    else "当前没有找到可删除的监测计划。"
+                )
                 return Command(update=_build_state_update(msg, plan=plan, schedule=None))
 
             if action == "update" and plan is None and schedule is None:
@@ -273,20 +380,55 @@ async def create_monitoring_node(state: AgentState) -> Command:
                 )
                 return Command(update={"orchestrator_reply": msg})
 
-            plan, schedule = await _upsert_monitoring(
-                plan_service,
-                monitoring_service,
+            action_service = BrandActionService(db)
+            monitoring_action_record = await _start_monitoring_plan_action(
+                db=db,
+                action_service=action_service,
+                state=state,
+                tool_args=tool_args,
+                dashboard_context=dashboard_context,
                 user_id=user_id,
                 entity_id=entity_uuid,
                 monitor_mode=monitor_mode,
-                dashboard_context=dashboard_context,
+                action=action,
                 plan=plan,
                 schedule=schedule,
                 frequency=frequency,
-                preferred_hour=preferred_hour,
-                timezone_str=timezone_str,
-                alert_threshold=alert_threshold,
             )
+            try:
+                plan, schedule = await _upsert_monitoring(
+                    plan_service,
+                    monitoring_service,
+                    user_id=user_id,
+                    entity_id=entity_uuid,
+                    monitor_mode=monitor_mode,
+                    dashboard_context=dashboard_context,
+                    plan=plan,
+                    schedule=schedule,
+                    frequency=frequency,
+                    preferred_hour=preferred_hour,
+                    timezone_str=timezone_str,
+                    alert_threshold=alert_threshold,
+                )
+            except Exception as exc:
+                await _fail_monitoring_action(
+                    db=db,
+                    action_service=action_service,
+                    record=monitoring_action_record,
+                    error_message=str(exc),
+                )
+                raise
+            if monitoring_action_record is not None:
+                await _complete_monitoring_action(
+                    db=db,
+                    action_service=action_service,
+                    record=monitoring_action_record,
+                    plan=plan,
+                    schedule=schedule,
+                    monitor_mode=monitor_mode,
+                )
+            else:
+                await db.commit()
 
         prefix = "监测计划已更新。" if schedule is not None else "监测计划已设置。"
         msg = _build_schedule_reply(
@@ -511,7 +653,11 @@ async def _pause_existing_monitoring(
     schedule: MonitoringSchedule | None,
 ) -> tuple[Any | None, MonitoringSchedule | None]:
     if plan is not None:
-        plan = await plan_service.pause_plan(plan_id=plan.id, user_id=user_id)
+        plan = await plan_service.pause_plan(
+            plan_id=plan.id,
+            user_id=user_id,
+            commit=False,
+        )
     elif schedule is not None and schedule.status == ScheduleStatus.ACTIVE:
         schedule = await monitoring_service.pause_schedule(schedule.id)
     return plan, schedule
@@ -530,6 +676,7 @@ async def _resume_existing_monitoring(
             plan_id=plan.id,
             user_id=user_id,
             status=MonitoringPlanStatus.ACTIVE.value,
+            commit=False,
         )
     elif schedule is not None and schedule.status in {ScheduleStatus.PAUSED, ScheduleStatus.ERROR}:
         schedule = await monitoring_service.resume_schedule(schedule.id)
@@ -544,6 +691,424 @@ async def _delete_existing_schedule(
     if schedule is None:
         return False
     return await monitoring_service.delete_schedule(schedule.id)
+
+
+async def _start_monitoring_plan_action(
+    *,
+    db: AsyncSession,
+    action_service: BrandActionService,
+    state: AgentState,
+    tool_args: dict[str, Any],
+    dashboard_context: dict[str, Any],
+    user_id: UUID,
+    entity_id: UUID,
+    monitor_mode: str,
+    action: str,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+    frequency: ScheduleFrequency | None,
+) -> Any | None:
+    parent_action_record_id = _parse_uuid(state.get("latest_user_action_record_id"))
+    actor_type = "agent" if parent_action_record_id is not None else "user"
+    origin_surface = (
+        "workflow_monitoring_node"
+        if parent_action_record_id is not None
+        else "workflow_monitoring_user_command"
+    )
+
+    cadence = _monitoring_action_cadence(
+        frequency=frequency,
+        plan=plan,
+        schedule=schedule,
+    )
+    ontology_action_type = _monitoring_ontology_action_type(
+        action=action,
+        plan=plan,
+    )
+    if ontology_action_type == "update_monitoring_plan" and plan is None:
+        logger.info(
+            "[MonitoringNode] Skipping monitoring plan lifecycle action because "
+            "no monitoring_plan object exists yet."
+        )
+        return None
+    question_ids = await _resolve_monitoring_action_question_ids(
+        db=db,
+        user_id=user_id,
+        entity_id=entity_id,
+        monitor_mode=monitor_mode,
+        plan=plan,
+        tool_args=tool_args,
+        dashboard_context=dashboard_context,
+        state=state,
+    )
+    if ontology_action_type == "create_monitoring_plan" and not question_ids:
+        if parent_action_record_id is not None:
+            raise ValueError(
+                "Confirmed monitoring plan action requires question_ids"
+            )
+        logger.info(
+            "[MonitoringNode] Skipping monitoring plan create action because "
+            "legacy schedule input has no confirmed question ids."
+        )
+        return None
+    if ontology_action_type == "update_monitoring_plan":
+        input_payload = _build_monitoring_update_action_input_payload(
+            entity_id=entity_id,
+            change_type=_monitoring_change_type(action),
+            cadence=cadence,
+            monitor_mode=monitor_mode,
+            plan=plan,
+            schedule=schedule,
+            dashboard_context=dashboard_context,
+        )
+    else:
+        input_payload = _build_monitoring_action_input_payload(
+            entity_id=entity_id,
+            question_ids=question_ids,
+            cadence=cadence,
+            monitor_mode=monitor_mode,
+            plan=plan,
+            schedule=schedule,
+            dashboard_context=dashboard_context,
+        )
+    return await action_service.start_action(
+        entity_id=entity_id,
+        session_id=_parse_uuid(state.get("session_id")),
+        user_id=user_id,
+        parent_action_record_id=parent_action_record_id,
+        actor_type=actor_type,
+        origin_surface=origin_surface,
+        origin_event_id=_monitoring_action_origin_event_id(
+            state=state,
+            entity_id=entity_id,
+            monitor_mode=monitor_mode,
+            action=action,
+            cadence=cadence,
+        ),
+        action_type=ontology_action_type,
+        input_payload=input_payload,
+    )
+
+
+async def _complete_monitoring_action(
+    *,
+    db: AsyncSession,
+    action_service: BrandActionService,
+    record: Any | None,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+    monitor_mode: str,
+) -> None:
+    if record is None:
+        return
+    await action_service.complete_action(
+        record,
+        output_payload=_build_monitoring_action_output_payload(
+            plan=plan,
+            schedule=schedule,
+            monitor_mode=monitor_mode,
+        ),
+    )
+    if plan is not None:
+        await action_service.links.ensure_link(
+            entity_id=record.entity_id,
+            link_type="action_record_handles_monitoring_plan",
+            from_object_type="action_record",
+            from_object_id=str(record.id),
+            to_object_type="monitoring_plan",
+            to_object_id=str(plan.id),
+            source_action_record_id=record.id,
+            extra_metadata={"action_type": record.action_type},
+        )
+    await db.commit()
+
+
+async def _fail_monitoring_action(
+    *,
+    db: AsyncSession,
+    action_service: BrandActionService,
+    record: Any | None,
+    error_message: str,
+) -> None:
+    if record is None:
+        await db.rollback()
+        return
+    failure_context = {
+        "entity_id": record.entity_id,
+        "session_id": record.session_id,
+        "user_id": record.user_id,
+        "parent_action_record_id": record.parent_action_record_id,
+        "actor_type": record.actor_type,
+        "origin_surface": record.origin_surface,
+        "origin_event_id": record.origin_event_id,
+        "action_type": record.action_type,
+        "input_payload": (
+            dict(record.input_payload)
+            if isinstance(record.input_payload, dict)
+            else {}
+        ),
+    }
+    await db.rollback()
+    try:
+        failed_record = await action_service.start_action(
+            entity_id=failure_context["entity_id"],
+            session_id=failure_context["session_id"],
+            user_id=failure_context["user_id"],
+            parent_action_record_id=failure_context["parent_action_record_id"],
+            actor_type=failure_context["actor_type"],
+            origin_surface=failure_context["origin_surface"],
+            origin_event_id=failure_context["origin_event_id"],
+            action_type=failure_context["action_type"],
+            input_payload=failure_context["input_payload"],
+            strict_input_validation=False,
+        )
+        await action_service.fail_action(
+            failed_record,
+            error_message=error_message,
+        )
+        await db.commit()
+    except Exception as fail_exc:
+        await db.rollback()
+        logger.warning(
+            "[MonitoringNode] Failed to persist monitoring action failure: %s",
+            fail_exc,
+        )
+
+
+def _monitoring_action_origin_event_id(
+    *,
+    state: AgentState,
+    entity_id: UUID,
+    monitor_mode: str,
+    action: str,
+    cadence: str,
+) -> str:
+    run_id = str(state.get("run_id") or "").strip() or "manual"
+    return f"monitoring-plan:{run_id}:{entity_id}:{monitor_mode}:{action}:{cadence}"
+
+
+def _monitoring_ontology_action_type(*, action: str, plan: Any | None) -> str:
+    if action in {"pause", "resume", "delete", "update"}:
+        return "update_monitoring_plan"
+    if action == "upsert" and plan is not None:
+        return "update_monitoring_plan"
+    return "create_monitoring_plan"
+
+
+def _monitoring_change_type(action: str) -> str:
+    if action == "resume":
+        return "activate"
+    if action == "delete":
+        return "archive"
+    if action == "upsert":
+        return "update"
+    return action
+
+
+def _monitoring_action_cadence(
+    *,
+    frequency: ScheduleFrequency | None,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+) -> str:
+    if frequency is not None:
+        return frequency.value
+    plan_frequency = str(getattr(plan, "frequency", "") or "").strip()
+    if plan_frequency:
+        return plan_frequency
+    schedule_frequency = getattr(schedule, "frequency", None)
+    if isinstance(schedule_frequency, ScheduleFrequency):
+        return schedule_frequency.value
+    schedule_frequency_text = str(schedule_frequency or "").strip()
+    return schedule_frequency_text or ScheduleFrequency.WEEKLY.value
+
+
+async def _resolve_monitoring_action_question_ids(
+    *,
+    db: AsyncSession,
+    user_id: UUID,
+    entity_id: UUID,
+    monitor_mode: str,
+    plan: Any | None,
+    tool_args: dict[str, Any],
+    dashboard_context: dict[str, Any],
+    state: AgentState,
+) -> list[str]:
+    explicit_question_ids = _normalize_string_list(
+        _first_value(
+            tool_args.get("question_ids"),
+            dashboard_context.get("question_ids"),
+            state.get("question_ids"),
+            state.get("selected_question_ids"),
+        )
+    )
+    if explicit_question_ids:
+        return explicit_question_ids
+
+    question_set_ids = [
+        parsed
+        for parsed in (
+            _parse_uuid(item)
+            for item in _normalize_string_list(
+                _first_value(
+                    tool_args.get("question_set_ids"),
+                    dashboard_context.get("question_set_ids"),
+                    state.get("question_set_ids"),
+                    getattr(plan, "question_set_ids", None),
+                )
+            )
+        )
+        if parsed is not None
+    ]
+    question_sets = await _load_monitoring_action_question_sets(
+        db=db,
+        user_id=user_id,
+        entity_id=entity_id,
+        monitor_mode=monitor_mode,
+        question_set_ids=question_set_ids,
+    )
+    return _question_ids_from_question_sets(question_sets)
+
+
+async def _load_monitoring_action_question_sets(
+    *,
+    db: AsyncSession,
+    user_id: UUID,
+    entity_id: UUID,
+    monitor_mode: str,
+    question_set_ids: list[UUID],
+) -> list[MonitoringQuestionSet]:
+    conditions = [
+        MonitoringQuestionSet.user_id == user_id,
+        MonitoringQuestionSet.entity_id == entity_id,
+        MonitoringQuestionSet.monitor_mode == monitor_mode,
+        MonitoringQuestionSet.status == QuestionSetStatus.CONFIRMED.value,
+    ]
+    if question_set_ids:
+        conditions.append(MonitoringQuestionSet.id.in_(question_set_ids))
+    statement = select(MonitoringQuestionSet).where(*conditions).order_by(
+        desc(MonitoringQuestionSet.updated_at)
+    )
+    if not question_set_ids:
+        statement = statement.limit(1)
+    result = await db.execute(statement)
+    rows = list(result.scalars().all())
+    if question_set_ids:
+        by_id = {item.id: item for item in rows}
+        return [by_id[item] for item in question_set_ids if item in by_id]
+    return rows
+
+
+def _question_ids_from_question_sets(
+    question_sets: list[MonitoringQuestionSet],
+) -> list[str]:
+    question_ids: list[str] = []
+    for question_set in question_sets:
+        for question in MonitoringPlanService.normalize_questions(
+            question_set.questions or []
+        ):
+            question_id = str(question.get("question_id") or "").strip()
+            if question_id and question_id not in question_ids:
+                question_ids.append(question_id)
+    return question_ids
+
+
+def _build_monitoring_action_input_payload(
+    *,
+    entity_id: UUID,
+    question_ids: list[str],
+    cadence: str,
+    monitor_mode: str,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+    dashboard_context: dict[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "brand_entity_id": str(entity_id),
+        "question_ids": question_ids,
+        "cadence": cadence,
+        "monitor_mode": monitor_mode,
+    }
+    question_set_ids = _normalize_string_list(
+        _first_value(
+            dashboard_context.get("question_set_ids"),
+            getattr(plan, "question_set_ids", None),
+            getattr(schedule, "question_set_ids", None),
+        )
+    )
+    if question_set_ids:
+        payload["question_set_ids"] = question_set_ids
+    endpoint_ids = _normalize_string_list(
+        _first_value(
+            dashboard_context.get("endpoint_ids"),
+            getattr(plan, "endpoint_ids", None),
+            getattr(schedule, "endpoint_ids", None),
+        )
+    )
+    if endpoint_ids:
+        payload["endpoint_ids"] = endpoint_ids
+    if plan is not None:
+        payload["monitoring_plan_id"] = str(plan.id)
+    if schedule is not None:
+        payload["schedule_id"] = str(schedule.id)
+    return payload
+
+
+def _build_monitoring_update_action_input_payload(
+    *,
+    entity_id: UUID,
+    change_type: str,
+    cadence: str,
+    monitor_mode: str,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+    dashboard_context: dict[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "brand_entity_id": str(entity_id),
+        "monitoring_plan_id": str(plan.id) if plan is not None else "",
+        "change_type": change_type,
+        "monitor_mode": monitor_mode,
+        "cadence": cadence,
+    }
+    question_set_ids = _normalize_string_list(
+        _first_value(
+            dashboard_context.get("question_set_ids"),
+            getattr(plan, "question_set_ids", None),
+            getattr(schedule, "question_set_ids", None),
+        )
+    )
+    if question_set_ids:
+        payload["question_set_ids"] = question_set_ids
+    endpoint_ids = _normalize_string_list(
+        _first_value(
+            dashboard_context.get("endpoint_ids"),
+            getattr(plan, "endpoint_ids", None),
+            getattr(schedule, "endpoint_ids", None),
+        )
+    )
+    if endpoint_ids:
+        payload["endpoint_ids"] = endpoint_ids
+    if schedule is not None:
+        payload["schedule_id"] = str(schedule.id)
+    return payload
+
+
+def _build_monitoring_action_output_payload(
+    *,
+    plan: Any | None,
+    schedule: MonitoringSchedule | None,
+    monitor_mode: str,
+) -> dict[str, Any]:
+    return {
+        "monitoring_plan_id": str(plan.id) if plan is not None else None,
+        "schedule_id": str(schedule.id) if schedule is not None else None,
+        "monitor_mode": monitor_mode,
+        "status": (
+            str(getattr(plan, "status", "") or getattr(schedule, "status", "") or "")
+            or None
+        ),
+    }
 
 
 async def _upsert_monitoring(
@@ -579,6 +1144,7 @@ async def _upsert_monitoring(
             frequency=(frequency.value if frequency is not None else None),
             preferred_hour=preferred_hour,
             timezone_str=timezone_str,
+            commit=False,
         )
         schedule = await _find_schedule(
             monitoring_service,
@@ -622,6 +1188,7 @@ async def _upsert_monitoring(
             frequency=(frequency.value if frequency is not None else "weekly"),
             preferred_hour=preferred_hour if preferred_hour is not None else 11,
             timezone_str=timezone_str,
+            commit=False,
         )
         schedule = await _find_schedule(
             monitoring_service,

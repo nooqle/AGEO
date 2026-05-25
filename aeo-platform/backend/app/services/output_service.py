@@ -295,7 +295,7 @@ class OutputService:
             "data": data,
             "metadata": metadata,
             "category": category,
-            "sequence": message.sequence,
+            "sequence": getattr(message, "sequence", None),
             "created_at": message.created_at.isoformat(),
         }
 
@@ -333,7 +333,11 @@ class OutputService:
             .limit(1)
         )
         fetch_anchor_result = await self.db.execute(fetch_anchor_query)
-        fetch_anchor_message = fetch_anchor_result.scalar_one_or_none()
+        fetch_anchor_message = (
+            fetch_anchor_result.scalar_one_or_none()
+            if hasattr(fetch_anchor_result, "scalar_one_or_none")
+            else None
+        )
 
         data = {
             "fetchResults": fetch_results,
@@ -365,7 +369,11 @@ class OutputService:
                 "hydration_stub": compact,
             },
             "category": None,
-            "sequence": fetch_anchor_message.sequence if fetch_anchor_message else None,
+            "sequence": (
+                getattr(fetch_anchor_message, "sequence", None)
+                if fetch_anchor_message
+                else None
+            ),
             "created_at": (
                 fetch_anchor_message.created_at
                 if fetch_anchor_message
