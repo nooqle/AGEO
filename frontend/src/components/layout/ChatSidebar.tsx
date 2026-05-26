@@ -31,6 +31,16 @@ interface ChatSidebarProps {
   onToggleCollapsed?: () => void;
 }
 
+function getDeleteBrandErrorMessage(error: unknown): string {
+  if (!(error instanceof Error) || !error.message) {
+    return '删除品牌失败，请稍后重试';
+  }
+  if (/request failed|status code|network error|failed to fetch/i.test(error.message)) {
+    return '删除品牌失败，请稍后重试';
+  }
+  return error.message;
+}
+
 export function ChatSidebar({
   activeSessionId,
   activeEntityId,
@@ -85,7 +95,7 @@ export function ChatSidebar({
         router.push('/dashboard');
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '删除失败，请稍后重试');
+      toast.error(getDeleteBrandErrorMessage(error));
     }
   };
 
