@@ -12,6 +12,7 @@ from app.api.v1 import (
     entities,
     favicons,
     files,
+    intelligence_runs,
     messages,
     monitoring,
     ontology,
@@ -37,6 +38,7 @@ api_router.include_router(entities.router)
 api_router.include_router(favicons.router)
 api_router.include_router(touchpoints.router)
 api_router.include_router(files.router)
+api_router.include_router(intelligence_runs.router)
 api_router.include_router(snapshots.router)
 api_router.include_router(tasks.router)
 api_router.include_router(global_tasks_router)

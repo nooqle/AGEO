@@ -68,6 +68,12 @@ import type {
   OntologyWorldSummary,
 } from '@/types/ontology';
 import type {
+  BrandIntelligenceRun,
+  BrandIntelligenceRunResponse,
+  ConfirmBrandIntelligenceRunInput,
+  CreateBrandIntelligenceRunInput,
+} from '@/types/intelligenceRun';
+import type {
   AioCanvasConfig,
   AioTakeoverMode,
   AioTakeoverRecord,
@@ -1024,6 +1030,68 @@ class ApiService {
     if (params?.limit) query.set('limit', String(params.limit));
     const qs = query.toString();
     return this.request<LLMObservabilitySnapshot>(`/tasks/observability${qs ? `?${qs}` : ''}`);
+  }
+
+  async getActiveBrandIntelligenceRun(entityId: string): Promise<BrandIntelligenceRun | null> {
+    const response = await this.request<BrandIntelligenceRunResponse>(
+      `/intelligence-runs/entities/${entityId}/active`,
+    );
+    return response.run;
+  }
+
+  async createBrandIntelligenceRun(
+    entityId: string,
+    payload: CreateBrandIntelligenceRunInput,
+  ): Promise<BrandIntelligenceRun> {
+    const response = await this.request<BrandIntelligenceRunResponse>(
+      `/intelligence-runs/entities/${entityId}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!response.run) throw new Error('任务创建失败');
+    return response.run;
+  }
+
+  async getBrandIntelligenceRun(runId: string): Promise<BrandIntelligenceRun | null> {
+    const response = await this.request<BrandIntelligenceRunResponse>(
+      `/intelligence-runs/${runId}`,
+    );
+    return response.run;
+  }
+
+  async resumeBrandIntelligenceRun(runId: string): Promise<BrandIntelligenceRun> {
+    const response = await this.request<BrandIntelligenceRunResponse>(
+      `/intelligence-runs/${runId}/resume`,
+      { method: 'POST' },
+    );
+    if (!response.run) throw new Error('任务继续失败');
+    return response.run;
+  }
+
+  async cancelBrandIntelligenceRun(runId: string): Promise<BrandIntelligenceRun> {
+    const response = await this.request<BrandIntelligenceRunResponse>(
+      `/intelligence-runs/${runId}/cancel`,
+      { method: 'POST' },
+    );
+    if (!response.run) throw new Error('任务取消失败');
+    return response.run;
+  }
+
+  async confirmBrandIntelligenceRun(
+    runId: string,
+    payload: ConfirmBrandIntelligenceRunInput,
+  ): Promise<BrandIntelligenceRun> {
+    const response = await this.request<BrandIntelligenceRunResponse>(
+      `/intelligence-runs/${runId}/confirm`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!response.run) throw new Error('确认提交失败');
+    return response.run;
   }
 
   // =========================================================================

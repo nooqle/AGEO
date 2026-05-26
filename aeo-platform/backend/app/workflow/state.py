@@ -222,6 +222,7 @@ class AgentState(TypedDict):
     #   "recommendations": [...],
     #   "action_plan": {...}
     # }
+    snapshot_id: str | None  # AnalysisSnapshot created by A5 for this run
 
     confidence_signal_summary: dict | None
     # {

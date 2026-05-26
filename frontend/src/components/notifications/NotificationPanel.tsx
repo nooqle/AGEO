@@ -159,16 +159,17 @@ export function NotificationPanel({
   const handleAlertClick = useCallback(
     (alert: MonitoringAlert) => {
       closePanel();
-      // Navigate to dashboard with the entity selected and monitoring tab active
       setSelectedBrandId(alert.entity_id);
-      router.push('/dashboard?tab=monitoring');
+      router.push(
+        `/settings?section=monitoring&entity_id=${encodeURIComponent(alert.entity_id)}`,
+      );
     },
     [closePanel, setSelectedBrandId, router]
   );
 
   const handleViewAll = useCallback(() => {
     closePanel();
-    router.push('/dashboard?tab=monitoring');
+    router.push('/settings?section=monitoring');
   }, [closePanel, router]);
 
   if (!shouldRender || !panelPosition) return null;

@@ -5643,7 +5643,34 @@ async def orchestrator_node(state: AgentState) -> Command:
         )
         from app.workflow.events import send_execution_complete
 
-        await send_execution_complete(session_id, "问题生成完成")
+        brand_name = (
+            str((state.get("brand_profile") or {}).get("brand_name") or "").strip()
+            or str(state.get("brand_name") or "").strip()
+            or "当前品牌"
+        )
+        await send_execution_complete(
+            session_id,
+            "问题生成完成",
+            follow_up_suggestions=[
+                {
+                    "id": "continue-fetch-answers",
+                    "label": "继续抓取答案",
+                    "message": (
+                        f"请基于刚生成的问题列表，继续抓取「{brand_name}」在 AI 平台里的回答，"
+                        "并完成品牌情报分析。重点输出 AI 提及率、提及排名、官网引用率和语气性质。"
+                    ),
+                    "type": "refetch",
+                },
+                {
+                    "id": "adjust-question-scope",
+                    "label": "调整问题范围",
+                    "message": (
+                        f"请先帮我调整「{brand_name}」的问题范围，再继续抓取 AI 平台回答。"
+                    ),
+                    "type": "general",
+                },
+            ],
+        )
         return Command(
             goto=END,
             update={

@@ -1,18 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import dynamic from 'next/dynamic';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   DashboardBrandSidebar,
   DashboardMobileBrandSwitcher,
 } from './DashboardBrandSidebar';
+import { BrandIntelligenceChatBubble } from './BrandIntelligenceChatBubble';
+import { BrandIntelligenceRunBanner } from './BrandIntelligenceRunBanner';
 import { BrandOntologyHome } from './BrandOntologyHome';
 import { HeroSection } from './HeroSection';
 import { useDashboardStore } from '@/stores/dashboardStore';
 import { useEntityStore } from '@/stores/entityStore';
+import { useIntelligenceRunStore } from '@/stores/intelligenceRunStore';
 import { useOntologyStore } from '@/stores/ontologyStore';
-import { useSessionStore } from '@/stores/sessionStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { uniqueAiSourceDisplayNames } from '@/lib/aiSourceDisplay';
@@ -26,31 +27,12 @@ import type {
   DashboardLatestReport,
   DashboardMonitorMode,
 } from '@/types/dashboard';
+import { isActiveBrandIntelligenceRun } from '@/types/intelligenceRun';
 import type { OntologyWorldSummary } from '@/types/ontology';
 
 interface DashboardPageProps {
   onNewAnalysis?: () => void;
 }
-
-const MonitoringTab = dynamic(
-  () => import('./MonitoringTab').then((module) => module.MonitoringTab),
-  {
-    ssr: false,
-    loading: () => (
-      <section
-        className="rounded-[18px] border bg-[var(--bg-tertiary)] px-5 py-5"
-        style={{ borderColor: 'var(--border-subtle)' }}
-      >
-        <div className="h-7 w-36 rounded-lg animate-shimmer" />
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, index) => (
-            <div key={index} className="h-28 rounded-[16px] animate-shimmer" />
-          ))}
-        </div>
-      </section>
-    ),
-  },
-);
 
 const MONITOR_MODE_LABELS: Record<DashboardMonitorMode, string> = {
   panorama: '全景分析',
@@ -162,47 +144,19 @@ function buildDashboardVisibleDraft(input: string): string | null {
   return trimmedInput || null;
 }
 
-function DashboardMonitoringEntry({
-  brandName,
-  monitorModeLabel,
-  statusLabel,
-  onOpen,
-}: {
-  brandName?: string;
-  monitorModeLabel: string;
-  statusLabel: string;
-  onOpen: () => void;
-}) {
-  return (
-    <section className="mt-5 border-t border-[var(--border-subtle)] pt-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[12px] font-medium text-[var(--brand-primary)]">
-            监测与样本
-          </div>
-          <p className="mt-1 text-[13px] leading-6 text-[var(--text-secondary)]">
-            {brandName || '当前品牌'} · {monitorModeLabel} · {statusLabel}。开启监测后，会定期补充问题、回答、引用和指标。
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onOpen}
-          className="min-h-10 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
-        >
-          查看趋势与样本
-        </button>
-      </div>
-    </section>
-  );
+function createHandoffId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const isMonitoringMode = searchParams.get('tab') === 'monitoring';
-  const shouldEditMonitoringSchedule = searchParams.get('edit_schedule') === '1';
   const requestedEntityId = searchParams.get('entity_id');
   const [isOpeningDashboardChat, setIsOpeningDashboardChat] = useState(false);
+  const isOpeningDashboardChatRef = useRef(false);
   const {
     selectedBrandId,
     setSelectedBrandId,
@@ -212,19 +166,28 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     fetchHome,
   } = useDashboardStore();
   const { entities, isLoading: entitiesLoading, error: entityError, fetchEntities } = useEntityStore();
-  const { worldsByEntity } = useOntologyStore();
-  const { listError, fetchSessionList } = useSessionStore();
+  const { worldsByEntity, fetchWorld } = useOntologyStore();
+  const {
+    runsByEntity,
+    loadingByEntity: runLoadingByEntity,
+    errorByEntity: runErrorByEntity,
+    submittingByEntity: runSubmittingByEntity,
+    fetchActiveRun,
+    createRun,
+    resumeRun,
+    cancelRun,
+  } = useIntelligenceRunStore();
 
   useEffect(() => {
     fetchEntities();
-    fetchSessionList();
-  }, [fetchEntities, fetchSessionList]);
+  }, [fetchEntities]);
 
   useEffect(() => {
-    if (selectedBrandId && !isMonitoringMode) {
+    if (selectedBrandId) {
       void fetchHome();
+      void fetchActiveRun(selectedBrandId);
     }
-  }, [fetchHome, isMonitoringMode, selectedBrandId, selectedMonitorMode]);
+  }, [fetchActiveRun, fetchHome, selectedBrandId, selectedMonitorMode]);
 
   useEffect(() => {
     if (entities.length === 0) {
@@ -250,6 +213,8 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
   const selectedBrand = entities.find((entity) => entity.id === selectedBrandId);
   const selectedWorld = selectedBrandId ? worldsByEntity[selectedBrandId] : null;
+  const selectedRun = selectedBrandId ? runsByEntity[selectedBrandId] : null;
+  const isSelectedRunActive = isActiveBrandIntelligenceRun(selectedRun);
   const brandWorldSampleSummary = formatBrandWorldSampleSummary(
     selectedWorld?.summary_projection?.sample_scope,
   );
@@ -271,82 +236,120 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     : hasSelectedMonitorModePlan
       ? home?.monitoring_plan?.endpoint_labels || []
       : [];
-  const hasLoadError = Boolean(entityError || listError);
+  const hasLoadError = Boolean(entityError);
   const hasData = entities.length > 0;
   const isInitialLoading = entitiesLoading;
 
-  const handleDashboardCommand = async (
+  useEffect(() => {
+    if (!selectedBrandId || !isSelectedRunActive) return;
+    const timer = window.setInterval(() => {
+      void fetchActiveRun(selectedBrandId);
+      void fetchWorld(selectedBrandId);
+    }, 6000);
+    return () => window.clearInterval(timer);
+  }, [fetchActiveRun, fetchWorld, isSelectedRunActive, selectedBrandId, selectedRun?.id, selectedRun?.status]);
+
+  const openDashboardChat = async (
     input: string,
     options?: {
       autosend?: boolean;
       handoff?: { taskTitle?: string; taskGoal?: string };
+      entrySource?: string;
+      runContext?: {
+        runId?: string;
+        handoffId?: string;
+        intent?: string;
+      };
     },
   ) => {
-    if (!selectedBrand || isOpeningDashboardChat) {
+    if (!selectedBrand) {
+      onNewAnalysis?.();
+      return;
+    }
+
+    const session = await api.createSession();
+    const draft = buildDashboardVisibleDraft(input);
+    if (!draft) {
+      router.push(`/chat/${session.id}`);
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set('entity_id', selectedBrand.id);
+    params.set('brand', selectedBrand.name);
+    params.set('entry_source', options?.entrySource || 'dashboard_command_bar');
+    params.set(
+      'monitor_mode',
+      selectedMonitorMode === 'scenario' ? 'scenario_monitoring' : 'panorama_monitoring',
+    );
+    if (options?.runContext?.runId) {
+      params.set('run_id', options.runContext.runId);
+    }
+    if (options?.runContext?.handoffId) {
+      params.set('handoff_id', options.runContext.handoffId);
+    }
+    if (options?.runContext?.intent) {
+      params.set('intent', options.runContext.intent);
+    }
+    if (home?.latest_report?.question_set_label) {
+      params.set('question_set_label', home.latest_report.question_set_label);
+    } else if (home?.monitoring_plan?.question_set_label) {
+      params.set('question_set_label', home.monitoring_plan.question_set_label);
+    }
+    if (brandWorldSampleSummary) {
+      params.set('sample_summary', brandWorldSampleSummary);
+    }
+    if (brandWorldMetricSummary) {
+      params.set('current_metrics', brandWorldMetricSummary);
+    }
+    if (options?.handoff?.taskTitle) {
+      params.set('task_title', options.handoff.taskTitle);
+    }
+    if (options?.handoff?.taskGoal) {
+      params.set('task_goal', options.handoff.taskGoal);
+    }
+    params.set('clean_handoff', '1');
+    if (isRealMonitoringPlanId(home?.monitoring_plan?.id)) {
+      params.set('monitoring_plan_id', home.monitoring_plan.id);
+    }
+    if (home?.monitoring_plan?.question_set_ids?.length) {
+      params.set('question_set_ids', home.monitoring_plan.question_set_ids.join(','));
+    }
+    if (home?.monitoring_plan?.endpoint_ids?.length) {
+      params.set('endpoint_ids', home.monitoring_plan.endpoint_ids.join(','));
+    }
+    if (aiSourceLabels.length) {
+      params.set('ai_sources', aiSourceLabels.join('、'));
+    }
+    params.set('draft', draft);
+    if (options?.autosend !== false) {
+      params.set('autosend', '1');
+    }
+    router.push(
+      buildDashboardChatUrlWithHandoff(
+        session.id,
+        Object.fromEntries(params.entries()),
+      ),
+    );
+  };
+
+  const handleDashboardCommand = async (
+    input: string,
+    options?: Parameters<typeof openDashboardChat>[1],
+  ) => {
+    if (!selectedBrand || isOpeningDashboardChatRef.current) {
       if (!selectedBrand) onNewAnalysis?.();
       return;
     }
 
+    isOpeningDashboardChatRef.current = true;
     setIsOpeningDashboardChat(true);
     try {
-      const session = await api.createSession();
-      const draft = buildDashboardVisibleDraft(input);
-      if (!draft) {
-        router.push(`/chat/${session.id}`);
-        return;
-      }
-
-      const params = new URLSearchParams();
-      params.set('entity_id', selectedBrand.id);
-      params.set('brand', selectedBrand.name);
-      params.set('entry_source', 'dashboard_command_bar');
-      params.set(
-        'monitor_mode',
-        selectedMonitorMode === 'scenario' ? 'scenario_monitoring' : 'panorama_monitoring',
-      );
-      if (home?.latest_report?.question_set_label) {
-        params.set('question_set_label', home.latest_report.question_set_label);
-      } else if (home?.monitoring_plan?.question_set_label) {
-        params.set('question_set_label', home.monitoring_plan.question_set_label);
-      }
-      if (brandWorldSampleSummary) {
-        params.set('sample_summary', brandWorldSampleSummary);
-      }
-      if (brandWorldMetricSummary) {
-        params.set('current_metrics', brandWorldMetricSummary);
-      }
-      if (options?.handoff?.taskTitle) {
-        params.set('task_title', options.handoff.taskTitle);
-      }
-      if (options?.handoff?.taskGoal) {
-        params.set('task_goal', options.handoff.taskGoal);
-      }
-      params.set('clean_handoff', '1');
-      if (isRealMonitoringPlanId(home?.monitoring_plan?.id)) {
-        params.set('monitoring_plan_id', home.monitoring_plan.id);
-      }
-      if (home?.monitoring_plan?.question_set_ids?.length) {
-        params.set('question_set_ids', home.monitoring_plan.question_set_ids.join(','));
-      }
-      if (home?.monitoring_plan?.endpoint_ids?.length) {
-        params.set('endpoint_ids', home.monitoring_plan.endpoint_ids.join(','));
-      }
-      if (aiSourceLabels.length) {
-        params.set('ai_sources', aiSourceLabels.join('、'));
-      }
-      params.set('draft', draft);
-      if (options?.autosend !== false) {
-        params.set('autosend', '1');
-      }
-      router.push(
-        buildDashboardChatUrlWithHandoff(
-          session.id,
-          Object.fromEntries(params.entries()),
-        ),
-      );
+      await openDashboardChat(input, options);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '打开对话失败，请稍后重试。');
     } finally {
+      isOpeningDashboardChatRef.current = false;
       setIsOpeningDashboardChat(false);
     }
   };
@@ -390,9 +393,106 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     router.push(`/settings?${params.toString()}`);
   };
 
+  const handleStartBrandIntelligenceRun = async () => {
+    if (!selectedBrand?.id) return;
+    try {
+      await createRun(selectedBrand.id, {
+        run_goal: '分析当前品牌在 AI 平台里的表现',
+        analysis_mode: selectedMonitorMode,
+        origin_surface: 'dashboard',
+        origin_event_id: `dashboard-start:${selectedBrand.id}:${selectedMonitorMode}:${createHandoffId()}`,
+        auto_dispatch: true,
+        input_scope: {
+          monitor_mode: selectedMonitorMode,
+          sample_summary: brandWorldSampleSummary,
+          current_metrics: brandWorldMetricSummary,
+          ai_sources: aiSourceLabels,
+        },
+      });
+      void fetchActiveRun(selectedBrand.id);
+      void fetchWorld(selectedBrand.id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '开始分析失败，请稍后重试。');
+    }
+  };
+
+  const handleResumeBrandIntelligenceRun = async () => {
+    if (!selectedBrand?.id) return;
+    if (!selectedRun) {
+      await handleStartBrandIntelligenceRun();
+      return;
+    }
+    try {
+      await resumeRun(selectedBrand.id, selectedRun.id);
+      void fetchActiveRun(selectedBrand.id);
+      void fetchWorld(selectedBrand.id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '继续分析失败，请稍后重试。');
+    }
+  };
+
+  const handleCancelBrandIntelligenceRun = async () => {
+    if (!selectedBrand?.id || !selectedRun?.id) return;
+    try {
+      await cancelRun(selectedBrand.id, selectedRun.id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '取消任务失败，请稍后重试。');
+    }
+  };
+
+  const handleOpenRunChat = async (intent = 'explain_current_intelligence') => {
+    if (!selectedBrand?.id || isOpeningDashboardChatRef.current) {
+      if (!selectedBrand) onNewAnalysis?.();
+      return;
+    }
+
+    isOpeningDashboardChatRef.current = true;
+    setIsOpeningDashboardChat(true);
+    try {
+      const handoffId = createHandoffId();
+      const reusableRun = selectedRun?.status === 'cancelled' ? null : selectedRun;
+      const run =
+        reusableRun ||
+        (await createRun(selectedBrand.id, {
+          run_goal: '解释当前品牌在 AI 平台里的表现',
+          analysis_mode: selectedMonitorMode,
+          origin_surface: 'dashboard_chat_bubble',
+          origin_event_id: `dashboard-chat:${selectedBrand.id}:${selectedMonitorMode}:${intent}:${handoffId}`,
+          auto_dispatch: false,
+          input_scope: {
+            monitor_mode: selectedMonitorMode,
+            sample_summary: brandWorldSampleSummary,
+            current_metrics: brandWorldMetricSummary,
+            ai_sources: aiSourceLabels,
+          },
+        }));
+
+      const draft = run.requires_user_action
+        ? '我需要确认当前情报任务的下一步。'
+        : run.status === 'failed'
+          ? '请解释这次分析为什么失败，并给我下一步处理建议。'
+          : '请基于当前品牌情报解释重点、证据和下一步建议。';
+
+      await openDashboardChat(draft, {
+        autosend: false,
+        entrySource: 'dashboard_chat_bubble',
+        runContext: { runId: run.id, handoffId, intent },
+        handoff: {
+          taskTitle: run.message || '当前品牌情报任务',
+          taskGoal: run.run_goal || '解释当前品牌在 AI 平台里的表现',
+        },
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '打开对话失败，请稍后重试。');
+    } finally {
+      isOpeningDashboardChatRef.current = false;
+      setIsOpeningDashboardChat(false);
+    }
+  };
+
   const mainContent = (
     <div className="space-y-4">
-      {(!hasData || !selectedBrand || isMonitoringMode) ? (
+      {(!hasData || !selectedBrand) ? (
         <HeroSection
           totalBrands={entities.length}
           selectedBrandName={selectedBrandName}
@@ -422,7 +522,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
         </div>
       )}
 
-      {!hasLoadError && homeError && !isMonitoringMode && (
+      {!hasLoadError && homeError && (
         <div
           className="rounded-[20px] border px-5 py-4"
           style={{
@@ -435,8 +535,26 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
         </div>
       )}
 
-      {hasData && selectedBrand && !isMonitoringMode ? (
+      {hasData && selectedBrand ? (
         <>
+          <BrandIntelligenceRunBanner
+            run={selectedRun}
+            isLoading={runLoadingByEntity[selectedBrand.id]}
+            isSubmitting={runSubmittingByEntity[selectedBrand.id]}
+            error={runErrorByEntity[selectedBrand.id]}
+            onStart={() => {
+              void handleStartBrandIntelligenceRun();
+            }}
+            onResume={() => {
+              void handleResumeBrandIntelligenceRun();
+            }}
+            onCancel={() => {
+              void handleCancelBrandIntelligenceRun();
+            }}
+            onOpenChat={() => {
+              void handleOpenRunChat();
+            }}
+          />
           <BrandOntologyHome
             entityId={selectedBrand.id}
             brandName={selectedBrand.name}
@@ -446,22 +564,18 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
             dashboardHome={home}
             hasLatestReport={Boolean(home?.latest_report?.session_id)}
             onOpenLatestReport={handleOpenLatestReport}
-            onAskIntelligence={(prompt, handoff) => {
-              void handleDashboardCommand(prompt, { autosend: false, handoff });
+            onAskIntelligence={(prompt, handoff, options) => {
+              if (options?.autosend) {
+                void handleResumeBrandIntelligenceRun();
+                return;
+              }
+              void handleDashboardCommand(prompt, {
+                autosend: false,
+                handoff,
+              });
             }}
             onOpenMonitoringSettings={handleOpenMonitoringSettings}
-            isAskingIntelligence={isOpeningDashboardChat}
-          />
-          <DashboardMonitoringEntry
-            brandName={selectedBrandName}
-            monitorModeLabel={selectedMonitorModeLabel}
-            statusLabel={resolveMonitoringStatusLabel(home)}
-            onOpen={() => {
-              const params = new URLSearchParams();
-              params.set('tab', 'monitoring');
-              params.set('entity_id', selectedBrand.id);
-              router.push(`/dashboard?${params.toString()}`);
-            }}
+            isAskingIntelligence={isOpeningDashboardChat || Boolean(runSubmittingByEntity[selectedBrand.id])}
           />
         </>
       ) : null}
@@ -470,8 +584,8 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
   return (
     <div className="dashboard-page-bg relative flex flex-1 flex-col">
-      <div className="relative mx-auto w-full max-w-[1920px] px-5 py-4 lg:px-7 lg:py-5 2xl:px-10">
-        {hasData && !isMonitoringMode ? (
+      <div className="relative mx-auto w-full max-w-[1920px] px-5 pb-28 pt-4 lg:px-7 lg:pb-24 lg:pt-5 2xl:px-10">
+        {hasData ? (
           <div className="space-y-4 xl:space-y-0">
             <DashboardMobileBrandSwitcher
               entities={entities}
@@ -495,39 +609,16 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
           mainContent
         )}
 
-        {hasData && isMonitoringMode && selectedBrand ? (
-          <div className="mt-4 space-y-5">
-            <section
-              className="rounded-[18px] border bg-[var(--bg-tertiary)] px-6 py-5"
-              style={{ borderColor: 'var(--border-subtle)' }}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <div className="text-[11px] font-medium tracking-[0.16em] text-[var(--text-tertiary)]">
-                    监测与样本
-                  </div>
-                  <h2 className="mt-2 text-[22px] font-semibold text-[var(--text-primary)]">
-                    {selectedBrand.name} 的监测与样本更新
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => router.push('/dashboard')}
-                  className="min-h-10 rounded-lg border px-4 py-2 text-[13px] font-medium"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
-                >
-                  返回首页看板
-                </button>
-              </div>
-            </section>
-            <MonitoringTab
-              entityId={selectedBrandId}
-              brandName={selectedBrandName}
-              autoEditSchedule={shouldEditMonitoringSchedule}
-            />
-          </div>
-        ) : null}
       </div>
+      {hasData && selectedBrand ? (
+        <BrandIntelligenceChatBubble
+          run={selectedRun}
+          isOpening={isOpeningDashboardChat}
+          onOpenChat={() => {
+            void handleOpenRunChat();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

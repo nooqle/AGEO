@@ -2,10 +2,19 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload, selectinload
 
 from app.core.security import hash_password, verify_password
 from app.models.user import User, UserRole, UserStatus
 from app.services.identity_normalization_service import normalize_email, normalize_phone
+
+
+def _lightweight_user_select():
+    return select(User).options(
+        lazyload(User.sessions),
+        lazyload(User.owned_entities),
+        selectinload(User.organization),
+    )
 
 
 class UserService:
@@ -17,7 +26,7 @@ class UserService:
         if normalized_email is None:
             return None
         result = await self.db.execute(
-            select(User).where(User.email == normalized_email)
+            _lightweight_user_select().where(User.email == normalized_email)
         )
         return result.scalar_one_or_none()
 
@@ -26,7 +35,7 @@ class UserService:
         if normalized_phone is None:
             return None
         result = await self.db.execute(
-            select(User).where(User.phone == normalized_phone)
+            _lightweight_user_select().where(User.phone == normalized_phone)
         )
         return result.scalar_one_or_none()
 
@@ -38,7 +47,7 @@ class UserService:
         return None
 
     async def get_user_by_id(self, user_id: UUID) -> User | None:
-        result = await self.db.execute(select(User).where(User.id == user_id))
+        result = await self.db.execute(_lightweight_user_select().where(User.id == user_id))
         return result.scalar_one_or_none()
 
     async def create_user(self, email: str, password: str) -> User:

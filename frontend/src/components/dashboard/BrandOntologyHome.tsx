@@ -45,6 +45,7 @@ import type {
   OntologyGraphNode,
   OntologyGraphProjection,
   OntologyMetricProjection,
+  OntologyRecommendationProjection,
   OntologyPlatformMetricRow,
   OntologyRecommendationItem,
   OntologySummaryProjection,
@@ -62,6 +63,7 @@ interface BrandOntologyHomeProps {
   onAskIntelligence?: (
     prompt: string,
     handoff?: { taskTitle?: string; taskGoal?: string },
+    options?: { autosend?: boolean },
   ) => void;
   onOpenMonitoringSettings?: (context?: {
     recommendationId?: string;
@@ -229,6 +231,23 @@ export function BrandOntologyHome({
       `请分析${summary.brand?.name || brandName || '当前品牌'}的${metricLabel}。按结论、证据、影响、需要确认什么、下一步建议回答。`,
     );
   };
+  const continueAnswerSampling = () => {
+    const name = summary.brand?.name || brandName || '当前品牌';
+    const scope = summary.sample_scope || {};
+    const hasQuestions = Number(scope.question_count ?? 0) > 0;
+    onAskIntelligence?.(
+      hasQuestions
+        ? `请基于当前品牌已生成的问题列表，继续抓取「${name}」在 AI 平台里的回答，并完成品牌情报分析。重点输出 AI 提及率、提及排名、官网引用率和语气性质。`
+        : `请为「${name}」生成品牌情报问题，继续抓取 AI 平台里的回答，并完成品牌情报分析。重点输出 AI 提及率、提及排名、官网引用率和语气性质。`,
+      {
+        taskTitle: hasQuestions ? '继续抓取 AI 回答' : '开始品牌情报分析',
+        taskGoal: hasQuestions
+          ? '补齐答案样本，生成可用于判断的品牌情报。'
+          : '生成问题并补齐答案样本，形成可用于判断的品牌情报。',
+      },
+      { autosend: true },
+    );
+  };
 
   if (!hasWorld) {
     return (
@@ -299,6 +318,7 @@ export function BrandOntologyHome({
           onOpenLatestReport={onOpenLatestReport}
           onOpenEvidence={openEvidence}
           onAskMetric={explainMetric}
+          onContinueAnalysis={continueAnswerSampling}
           isAskingIntelligence={isAskingIntelligence}
         />
       )}
@@ -335,6 +355,7 @@ export function BrandOntologyHome({
           entityId={entityId}
           recommendations={recommendations}
           summary={summary}
+          sampleStatus={world?.recommendation_projection?.sample_status}
           onAsk={(item) => {
             onAskIntelligence?.(
               buildRecommendationChatRequest(item, summary),
@@ -344,6 +365,7 @@ export function BrandOntologyHome({
               },
             );
           }}
+          onContinueAnalysis={continueAnswerSampling}
           onOpenMonitoringSettings={onOpenMonitoringSettings}
           isAskingIntelligence={isAskingIntelligence}
         />
@@ -429,6 +451,44 @@ function BrandIntelligenceLoading() {
   );
 }
 
+function SampleNeededBanner({
+  summary,
+  onContinueAnalysis,
+  disabled,
+}: {
+  summary: OntologySummaryProjection;
+  onContinueAnalysis: () => void;
+  disabled?: boolean;
+}) {
+  const scope = summary.sample_scope || {};
+  const hasQuestions = Number(scope.question_count ?? 0) > 0;
+  return (
+    <div className="border-b border-[var(--border-subtle)] px-5 py-4">
+      <div className="flex flex-col gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="text-sm font-semibold text-[var(--text-primary)]">
+            {hasQuestions ? '需要先抓取 AI 回答' : '需要先生成问题'}
+          </div>
+          <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
+            {hasQuestions
+              ? `当前有 ${scope.question_count ?? 0} 个问题，暂无可分析的答案样本。抓取完成后再计算提及率、排名、官网引用率和语气性质。`
+              : '当前还没有可用于采集的问题。先生成问题并抓取答案，再计算提及率、排名、官网引用率和语气性质。'}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onContinueAnalysis}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[var(--brand-primary)] px-4 py-2 text-sm font-medium text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:opacity-50"
+        >
+          <MessageSquareText size={16} />
+          {hasQuestions ? '继续抓取答案' : '开始分析'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MobileMetricStrip({
   summary,
   onOpenEvidence,
@@ -468,6 +528,7 @@ function BriefPanel({
   onOpenLatestReport,
   onOpenEvidence,
   onAskMetric,
+  onContinueAnalysis,
   isAskingIntelligence,
 }: {
   summary: OntologySummaryProjection;
@@ -475,9 +536,11 @@ function BriefPanel({
   onOpenLatestReport?: () => void;
   onOpenEvidence: (metricKey: EvidenceTab) => void;
   onAskMetric: (metricKey: EvidenceTab) => void;
+  onContinueAnalysis: () => void;
   isAskingIntelligence?: boolean;
 }) {
   const metrics = summary.metrics || {};
+  const needsSampling = needsAnswerSampling(summary);
   const metricRows = [
     buildMetricRow('mention_rate', metrics.mention_rate),
     buildMetricRow('mention_ranking', metrics.mention_ranking),
@@ -490,6 +553,13 @@ function BriefPanel({
       <div className="border-b border-[var(--border-subtle)] px-5 py-4">
         <h3 className="text-base font-semibold text-[var(--text-primary)]">简要情报</h3>
       </div>
+      {needsSampling && (
+        <SampleNeededBanner
+          summary={summary}
+          onContinueAnalysis={onContinueAnalysis}
+          disabled={isAskingIntelligence}
+        />
+      )}
       <div className="divide-y divide-[var(--border-subtle)]">
         {metricRows.map((row, index) => (
           <div key={row.key} className="grid gap-4 px-5 py-5 lg:grid-cols-[52px_1fr_auto] lg:items-center">
@@ -1088,14 +1158,18 @@ function RecommendationPanel({
   entityId,
   recommendations,
   summary,
+  sampleStatus,
   onAsk,
+  onContinueAnalysis,
   onOpenMonitoringSettings,
   isAskingIntelligence,
 }: {
   entityId: string;
   recommendations: OntologyRecommendationItem[];
   summary: OntologySummaryProjection;
+  sampleStatus?: OntologyRecommendationProjection['sample_status'];
   onAsk: (item: OntologyRecommendationItem) => void;
+  onContinueAnalysis: () => void;
   onOpenMonitoringSettings?: (context?: {
     recommendationId?: string;
     targetMetric?: string;
@@ -1327,7 +1401,27 @@ function RecommendationPanel({
           ))
         ) : (
           <div className="px-5 py-10">
-            <EmptyLine text={`${summary.brand?.name || '当前品牌'} 暂无新的跟进建议。`} />
+            {isRecommendationSamplePending(sampleStatus, summary) ? (
+              <div className="max-w-2xl">
+                <div className="text-base font-semibold text-[var(--text-primary)]">
+                  {sampleStatus?.status === 'needs_question_samples' ? '先生成问题' : '先补答案样本'}
+                </div>
+                <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                  {sampleStatus?.reason || '还没有可分析的 AI 回答，先补齐样本后再生成跟进建议。'}
+                </p>
+                <button
+                  type="button"
+                  disabled={isAskingIntelligence}
+                  onClick={onContinueAnalysis}
+                  className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-4 py-2 text-sm font-medium text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:opacity-50"
+                >
+                  <MessageSquareText size={16} />
+                  {sampleStatus?.status === 'needs_question_samples' ? '开始分析' : '继续抓取答案'}
+                </button>
+              </div>
+            ) : (
+              <EmptyLine text={`${summary.brand?.name || '当前品牌'} 暂无新的跟进建议。`} />
+            )}
           </div>
         )}
       </div>
@@ -1412,6 +1506,25 @@ function hasRecommendationBrief(item: OntologyRecommendationItem) {
       (item.content_directions || []).length ||
       (item.distribution_targets || []).length ||
       (item.execution_steps || []).length,
+  );
+}
+
+function needsAnswerSampling(summary: OntologySummaryProjection) {
+  const scope = summary.sample_scope || {};
+  const answerCount = Number(scope.answer_count ?? 0);
+  const rawAnswerCount = Number(scope.raw_answer_record_count ?? 0);
+  const mentionStatus = summary.metrics?.mention_rate?.sample_sufficiency?.status;
+  return answerCount <= 0 || rawAnswerCount <= 0 || mentionStatus === 'no_sample';
+}
+
+function isRecommendationSamplePending(
+  sampleStatus: OntologyRecommendationProjection['sample_status'] | undefined,
+  summary: OntologySummaryProjection,
+) {
+  return (
+    sampleStatus?.status === 'needs_question_samples' ||
+    sampleStatus?.status === 'needs_answer_samples' ||
+    needsAnswerSampling(summary)
   );
 }
 

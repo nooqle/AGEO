@@ -36,8 +36,9 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
     try {
       await api.deleteEntity(id);
       removeEntity(id);
-    } catch {
-      // silent for now
+      toast.success('品牌已删除');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '删除失败，请稍后重试');
     }
   };
 

@@ -559,6 +559,15 @@ export interface OntologyRecommendationItem {
 }
 
 export interface OntologyRecommendationProjection {
+  sample_status?: {
+    is_ready?: boolean;
+    status?: string;
+    status_label?: string;
+    reason?: string;
+    question_count?: number;
+    answer_count?: number;
+    platform_count?: number;
+  };
   recommendations: OntologyRecommendationItem[];
 }
 
