@@ -489,13 +489,29 @@ async def send_artifact_patch(
     await session_event_publisher.emit_to_session(session_id, "artifact_patch", payload)
 
 
-async def send_execution_complete(session_id: str, message: str = "分析完成") -> None:
+async def send_execution_complete(
+    session_id: str,
+    message: str = "分析完成",
+    *,
+    follow_up_suggestions: list[dict[str, Any]] | None = None,
+) -> None:
     """Send execution complete event."""
     if _is_headless(session_id):
         return
     message = _sanitize_user_visible_text(message)
+    payload: dict[str, Any] = {"message": message}
+    if follow_up_suggestions:
+        payload["follow_up_suggestions"] = [
+            {
+                **item,
+                "label": _sanitize_user_visible_text(item.get("label")),
+                "message": _sanitize_user_visible_text(item.get("message")),
+            }
+            for item in follow_up_suggestions
+            if item.get("label") and item.get("message")
+        ]
     await session_event_publisher.emit_to_session(
-        session_id, "execution_complete", {"message": message}
+        session_id, "execution_complete", payload
     )
 
 

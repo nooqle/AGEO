@@ -204,7 +204,8 @@ class BrandKnowledgeGraphProjectionService:
                 "platform_count": len(
                     {answer.platform for answer in answers if answer.platform}
                 ),
-                "question_count": len(
+                "question_count": len(questions)
+                or len(
                     {
                         answer.question_id
                         for answer in analyzable_answers
@@ -289,6 +290,11 @@ class BrandKnowledgeGraphProjectionService:
                 ranking_sufficiency=ranking_sufficiency,
             ),
         }
+        recommendation_sample_status = _recommendation_sample_status(
+            question_count=summary_projection["sample_scope"]["question_count"],
+            answer_count=denominator,
+            platform_count=summary_projection["sample_scope"]["platform_count"],
+        )
         evidence_projection = {
             "mention_rate_detail": {
                 "metric_key": "mention_rate",
@@ -372,6 +378,7 @@ class BrandKnowledgeGraphProjectionService:
             },
         }
         recommendation_projection = {
+            "sample_status": recommendation_sample_status,
             "recommendations": self._recommendations(
                 entity=entity,
                 mention_rate=mention_rate,
@@ -385,6 +392,7 @@ class BrandKnowledgeGraphProjectionService:
                 action_queue=action_queue or [],
                 denominator=denominator,
                 numerator=numerator,
+                sample_ready=recommendation_sample_status["is_ready"],
                 content_topics=content_topics,
                 unmentioned_answer_samples=unmentioned_answer_samples,
                 recommendation_tasks=recommendation_tasks,
@@ -1010,10 +1018,14 @@ class BrandKnowledgeGraphProjectionService:
         action_queue: list[dict[str, Any]],
         denominator: int,
         numerator: int,
+        sample_ready: bool,
         content_topics: list[dict[str, str]],
         unmentioned_answer_samples: list[dict[str, Any]],
         recommendation_tasks: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        if not sample_ready:
+            return []
+
         recommendations: list[dict[str, Any]] = []
         official_domain = primary_official_domain(entity)
         distribution_targets = _content_distribution_targets(
@@ -1945,6 +1957,43 @@ def _sample_quality(
         "sample_count": max(int(sample_count or 0), 0),
         "evidence_count": max(int(evidence_count or 0), 0),
         "excluded_unreadable_count": max(int(excluded_count or 0), 0),
+    }
+
+
+def _recommendation_sample_status(
+    *,
+    question_count: int,
+    answer_count: int,
+    platform_count: int,
+) -> dict[str, Any]:
+    if question_count <= 0:
+        return {
+            "is_ready": False,
+            "status": "needs_question_samples",
+            "status_label": "等待问题样本",
+            "reason": "还没有可用于采集的品牌问题，先生成问题并抓取答案后再生成跟进建议。",
+            "question_count": 0,
+            "answer_count": 0,
+            "platform_count": max(int(platform_count or 0), 0),
+        }
+    if answer_count <= 0:
+        return {
+            "is_ready": False,
+            "status": "needs_answer_samples",
+            "status_label": "等待答案样本",
+            "reason": "还没有可分析的 AI 回答，先抓取答案后再生成跟进建议。",
+            "question_count": max(int(question_count or 0), 0),
+            "answer_count": 0,
+            "platform_count": max(int(platform_count or 0), 0),
+        }
+    return {
+        "is_ready": True,
+        "status": "ready",
+        "status_label": "可以生成建议",
+        "reason": "已存在可分析的 AI 回答样本。",
+        "question_count": max(int(question_count or 0), 0),
+        "answer_count": max(int(answer_count or 0), 0),
+        "platform_count": max(int(platform_count or 0), 0),
     }
 
 

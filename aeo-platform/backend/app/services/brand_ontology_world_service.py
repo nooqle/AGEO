@@ -56,7 +56,13 @@ WORLD_OBJECT_TYPES: tuple[str, ...] = (
 DEFAULT_SAMPLE_LIMIT = 3
 WORLD_SUMMARY_CACHE_TTL_SECONDS = 20
 WORLD_SUMMARY_CACHE_MAX_ENTRIES = 64
-DASHBOARD_WORLD_PROJECTION_VERSION = 4
+DASHBOARD_WORLD_PROJECTION_VERSION = 6
+REQUIRED_DASHBOARD_WORLD_PROJECTION_KEYS = (
+    "summary_projection",
+    "evidence_projection",
+    "graph_projection",
+    "recommendation_projection",
+)
 CORRUPTED_LABEL_RE = re.compile(r"[?]{3,}")
 PHASE_LABELS: dict[str, str] = {
     "missing_brand": "缺少品牌",
@@ -308,10 +314,12 @@ class BrandOntologyWorldService:
         )
         if not force_refresh:
             instance_cached = self._dashboard_summary_cache.get(cache_key)
-            if instance_cached is not None:
+            if _dashboard_summary_cache_is_current(instance_cached):
                 return (
                     deepcopy(instance_cached) if instance_cached is not None else None
                 )
+            if instance_cached is not None:
+                self._dashboard_summary_cache.pop(cache_key, None)
             shared_cached = _read_world_summary_cache(cache_key)
             if shared_cached is not None:
                 self._dashboard_summary_cache[cache_key] = deepcopy(shared_cached)
@@ -670,6 +678,9 @@ def _read_world_summary_cache(cache_key: tuple[Any, ...]) -> dict[str, Any] | No
     if time.time() - cached_at > WORLD_SUMMARY_CACHE_TTL_SECONDS:
         _world_summary_cache.pop(cache_key, None)
         return None
+    if not _dashboard_summary_cache_is_current(payload):
+        _world_summary_cache.pop(cache_key, None)
+        return None
     return deepcopy(payload)
 
 
@@ -684,6 +695,29 @@ def _write_world_summary_cache(
         )[0]
         _world_summary_cache.pop(oldest_key, None)
     _world_summary_cache[cache_key] = (time.time(), deepcopy(payload))
+
+
+def _dashboard_summary_cache_is_current(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    try:
+        version = int(payload.get("projection_version") or 0)
+    except (TypeError, ValueError):
+        return False
+    if version < DASHBOARD_WORLD_PROJECTION_VERSION:
+        return False
+    for key in REQUIRED_DASHBOARD_WORLD_PROJECTION_KEYS:
+        if not isinstance(payload.get(key), dict):
+            return False
+    recommendation_projection = payload.get("recommendation_projection") or {}
+    if not isinstance(recommendation_projection.get("recommendations"), list):
+        return False
+    if not isinstance(recommendation_projection.get("sample_status"), dict):
+        return False
+    sample_scope = (payload.get("summary_projection") or {}).get("sample_scope")
+    if not isinstance(sample_scope, dict):
+        return False
+    return True
 
 
 def _split_relationship_summary(

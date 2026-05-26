@@ -19,7 +19,6 @@ import { DEFAULT_EXAMPLE_BRANDS, ExampleBrand } from '@/config/brands';
 import { normalizePublicPlatformId } from '@/config/platformLabel';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
-import { DEFAULT_FOLLOWUPS } from '@/types/task';
 import type { CanvasContent, CanvasContentDataMap, CanvasContentType } from '@/types/canvas';
 import type { Message as ApiMessage, Output } from '@/types/api';
 import type { ContextTag } from '@/stores/contextStore';
@@ -62,6 +61,9 @@ interface DashboardHandoffView {
   currentMetrics: string | null;
   taskTitle: string | null;
   taskGoal: string | null;
+  runId: string | null;
+  handoffId: string | null;
+  intent: string | null;
   cleanHandoff: string | null;
   aiSources: string | null;
   draft: string | null;
@@ -81,6 +83,9 @@ const DASHBOARD_AUTO_START_QUERY_KEYS = [
   'question_set_label',
   'sample_summary',
   'current_metrics',
+  'run_id',
+  'handoff_id',
+  'intent',
   'task_title',
   'task_goal',
   'clean_handoff',
@@ -233,7 +238,7 @@ function DashboardHandoffEmptyState({
             发送到对话
           </button>
           <span className="text-[12px] leading-5 text-[var(--text-tertiary)]">
-            这里用于补充反馈、解释原因或生成下一步内容。
+            补充反馈、追问证据，或生成下一步内容。
           </span>
         </div>
       </div>
@@ -736,6 +741,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const currentMetrics = readAutoStartParam('current_metrics');
     const taskTitle = readAutoStartParam('task_title');
     const taskGoal = readAutoStartParam('task_goal');
+    const runId = readAutoStartParam('run_id');
+    const handoffId = readAutoStartParam('handoff_id');
+    const intent = readAutoStartParam('intent');
     const aiSources = readAutoStartParam('ai_sources');
     const draft = readDashboardHandoffOnlyParam('draft');
     if (!entrySource && !entityId && !brand && !draft) return null;
@@ -749,6 +757,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       currentMetrics,
       taskTitle,
       taskGoal,
+      runId,
+      handoffId,
+      intent,
       cleanHandoff: readAutoStartParam('clean_handoff'),
       aiSources,
       draft,
@@ -764,6 +775,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const currentMetrics = readAutoStartParam('current_metrics');
     const taskTitle = readAutoStartParam('task_title');
     const taskGoal = readAutoStartParam('task_goal');
+    const runId = readAutoStartParam('run_id');
+    const handoffId = readAutoStartParam('handoff_id');
+    const intent = readAutoStartParam('intent');
     const aiSources = readAutoStartParam('ai_sources');
     const entityId = readAutoStartParam('entity_id');
     const brand = readAutoStartParam('brand');
@@ -798,6 +812,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
           current_metrics: currentMetrics,
           task_title: taskTitle,
           task_goal: taskGoal,
+          run_id: runId,
+          handoff_id: handoffId,
+          intent,
           ai_sources: aiSources ? aiSources.split('、').filter(Boolean) : [],
         },
       });
@@ -851,7 +868,9 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
   }, [hasAutoStartQueryParams, router, sessionId]);
   const autoSentRef = useRef(false);
-  const [isAutoStartingPrompt, setIsAutoStartingPrompt] = useState(Boolean(autoStartBrand || autoStartDraft));
+  const [isAutoStartingPrompt, setIsAutoStartingPrompt] = useState(
+    Boolean((autoStartBrand || autoStartDraft) && shouldAutoSendDraft),
+  );
   const [reconnectionTask, setReconnectionTask] = useState<AnalysisTask | null>(null);
   const replayAnimatingRef = useRef(false);
 
@@ -2734,10 +2753,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
 
   const inputDisabled = Boolean(!isConnected);
 
-  // Determine follow-up suggestions to show (backend-provided or defaults)
-  const suggestionsToShow = followUpSuggestions.length > 0 ? followUpSuggestions : (
-    !isAgentExecuting && activeTask?.status === 'completed' && stageResults.length > 0 ? DEFAULT_FOLLOWUPS : []
-  );
+  const suggestionsToShow = followUpSuggestions;
 
   // Determine lightweight badge label for follow-up operations
   const getLightweightLabel = (): string | undefined => {

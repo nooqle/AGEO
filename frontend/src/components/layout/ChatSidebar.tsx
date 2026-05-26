@@ -84,8 +84,8 @@ export function ChatSidebar({
       if (activeEntityId === entityId) {
         router.push('/dashboard');
       }
-    } catch {
-      toast.error('删除失败，请重试');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '删除失败，请稍后重试');
     }
   };
 

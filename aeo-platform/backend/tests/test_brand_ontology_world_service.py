@@ -17,7 +17,11 @@ os.environ.setdefault(
 )
 
 from app.core.database import Base
-from app.models.brand_intelligence import BrandIntelligenceFinding, BrandReportVersion
+from app.models.brand_intelligence import (
+    BrandIntelligenceFinding,
+    BrandIntelligenceQuestion,
+    BrandReportVersion,
+)
 from app.models.entity import Entity, EntityStatus
 from app.models.message import Message, MessageRole, MessageType
 from app.models.session import Session, SessionStatus
@@ -34,6 +38,7 @@ from app.services.brand_ontology_action_planner_service import (
     BrandOntologyActionPlannerService,
 )
 from app.services.brand_ontology_world_service import (
+    DASHBOARD_WORLD_PROJECTION_VERSION,
     BrandOntologyWorldService,
     _object_label,
 )
@@ -85,6 +90,104 @@ async def _build_session(tmp_path):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     return engine, session_factory
+
+
+@pytest.mark.asyncio
+async def test_recommendations_wait_for_answer_samples(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _active_user()
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="理想汽车",
+            domain="li.auto",
+            industry="新能源汽车",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=owner.id,
+        )
+        session.add_all(
+            [
+                owner,
+                entity,
+                BrandIntelligenceQuestion(
+                    entity_id=entity.id,
+                    question_id="q001",
+                    question_text="理想汽车适合家庭用户吗？",
+                    category="购买决策",
+                ),
+                BrandIntelligenceQuestion(
+                    entity_id=entity.id,
+                    question_id="q002",
+                    question_text="理想汽车和竞品怎么选？",
+                    category="竞品对比",
+                ),
+            ]
+        )
+        await session.commit()
+
+        world = await BrandOntologyWorldService(session).build_dashboard_summary(
+            entity_id=entity.id,
+            force_refresh=True,
+        )
+
+        recommendation_projection = world["recommendation_projection"]
+        assert world["summary_projection"]["sample_scope"]["question_count"] == 2
+        assert recommendation_projection["recommendations"] == []
+        assert recommendation_projection["sample_status"]["status"] == (
+            "needs_answer_samples"
+        )
+        assert "先抓取答案" in recommendation_projection["sample_status"]["reason"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_summary_ignores_stale_projection_cache(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _active_user()
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="理想汽车",
+            domain="li.auto",
+            industry="新能源汽车",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=owner.id,
+        )
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandOntologyWorldService(session)
+        cache_key = (
+            "dashboard",
+            DASHBOARD_WORLD_PROJECTION_VERSION,
+            str(entity.id),
+            "",
+            7,
+            False,
+            True,
+        )
+        service._dashboard_summary_cache[cache_key] = {  # noqa: SLF001
+            "projection_version": DASHBOARD_WORLD_PROJECTION_VERSION,
+            "brand": {"name": "stale"},
+        }
+
+        world = await service.build_dashboard_summary(
+            entity_id=entity.id,
+            sample_limit=7,
+        )
+
+        assert world is not None
+        assert world["summary_projection"]["brand"]["name"] == "理想汽车"
+        assert "summary_projection" in world
+        assert "evidence_projection" in world
+        assert "graph_projection" in world
+        assert "recommendation_projection" in world
+        assert world["recommendation_projection"]["sample_status"]["status"] == (
+            "needs_question_samples"
+        )
+
+    await engine.dispose()
 
 
 def _active_user() -> User:

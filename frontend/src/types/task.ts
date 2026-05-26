@@ -86,25 +86,3 @@ export interface TaskNotification {
 
 /** Quality level for A1 data validation */
 export type QualityLevel = 'high' | 'good' | 'adequate' | 'partial';
-
-/** Default follow-up suggestions when backend does not provide them */
-export const DEFAULT_FOLLOWUPS: FollowUpSuggestion[] = [
-  {
-    id: 'dd1',
-    label: '深入分析某个平台的表现',
-    message: '请详细分析各平台的具体表现',
-    type: 'drill_down',
-  },
-  {
-    id: 'cmp',
-    label: '与上次分析对比',
-    message: '请将本次分析结果与上次分析进行对比',
-    type: 'compare',
-  },
-  {
-    id: 'gen',
-    label: '我应该优先改进什么?',
-    message: '根据分析结果，我应该优先改进哪些方面?',
-    type: 'general',
-  },
-];

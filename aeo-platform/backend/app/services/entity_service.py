@@ -13,7 +13,25 @@ from uuid import uuid4, UUID
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload
 
+from app.models.brand_intelligence import (
+    BrandActionRecord,
+    BrandAudiencePersona,
+    BrandCitationSource,
+    BrandCompetitorEntity,
+    BrandEvidenceSet,
+    BrandIntelligenceFinding,
+    BrandIntelligenceQuestion,
+    BrandMention,
+    BrandMetricSnapshot,
+    BrandObjectLink,
+    BrandPlatformAnswer,
+    BrandReportVersion,
+    BrandUsageScenario,
+    BrandUserDecision,
+)
+from app.models.brand_intelligence_run import BrandIntelligenceRun
 from app.models.entity import Entity, EntityStatus, EntityVisibilityScope
 from app.models.monitoring_alert import MonitoringAlert
 from app.models.monitoring_schedule import MonitoringSchedule
@@ -145,6 +163,13 @@ class EntityService:
             }
         )
 
+    def _lightweight_entity_select(self):
+        return select(Entity).options(
+            lazyload(Entity.sessions),
+            lazyload(Entity.owner),
+            lazyload(Entity.organization),
+        )
+
     async def list_entities(
         self,
         viewer: User | None = None,
@@ -152,7 +177,7 @@ class EntityService:
         allow_internal_admin_bypass: bool = True,
     ) -> list[dict[str, Any]]:
         if self.db:
-            stmt = select(Entity)
+            stmt = self._lightweight_entity_select()
             if viewer is not None:
                 stmt = stmt.where(
                     AccessScopeService.entity_visibility_filter(
@@ -179,9 +204,12 @@ class EntityService:
             except ValueError:
                 return None
             if viewer is None:
-                return await self.db.get(Entity, entity_uuid)
+                result = await self.db.execute(
+                    self._lightweight_entity_select().where(Entity.id == entity_uuid)
+                )
+                return result.scalar_one_or_none()
             result = await self.db.execute(
-                select(Entity).where(
+                self._lightweight_entity_select().where(
                     Entity.id == entity_uuid,
                     AccessScopeService.entity_visibility_filter(
                         viewer,
@@ -380,6 +408,7 @@ class EntityService:
                 await self.db.execute(
                     delete(AnalysisSnapshot).where(AnalysisSnapshot.entity_id == uid)
                 )
+                await self._delete_brand_intelligence_dependents(uid)
                 # Delete sessions (messages cascade via ORM delete-orphan)
                 result = await self.db.execute(
                     select(Session).where(Session.entity_id == uid)
@@ -407,3 +436,32 @@ class EntityService:
             logger.info("[Entity] Deleted (in-memory): %s (id=%s)", name, entity_id)
             return True
         return False
+
+    async def _delete_brand_intelligence_dependents(self, entity_id: UUID) -> None:
+        """Delete ontology/intelligence rows before deleting the brand entity.
+
+        Production Postgres has ON DELETE rules, but SQLAlchemy relationship
+        backrefs and SQLite test/runtime paths can otherwise try to null a
+        required entity_id. Keep the order explicit so brand deletion stays
+        deterministic as the ontology schema grows.
+        """
+
+        ordered_models = (
+            BrandObjectLink,
+            BrandUserDecision,
+            BrandIntelligenceRun,
+            BrandMention,
+            BrandCitationSource,
+            BrandMetricSnapshot,
+            BrandIntelligenceFinding,
+            BrandReportVersion,
+            BrandEvidenceSet,
+            BrandPlatformAnswer,
+            BrandIntelligenceQuestion,
+            BrandUsageScenario,
+            BrandAudiencePersona,
+            BrandCompetitorEntity,
+            BrandActionRecord,
+        )
+        for model in ordered_models:
+            await self.db.execute(delete(model).where(model.entity_id == entity_id))
