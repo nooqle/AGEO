@@ -19,6 +19,16 @@ interface BrandManageDialogProps {
   onClose: () => void;
 }
 
+function getDeleteBrandErrorMessage(error: unknown): string {
+  if (!(error instanceof Error) || !error.message) {
+    return '删除品牌失败，请稍后重试';
+  }
+  if (/request failed|status code|network error|failed to fetch/i.test(error.message)) {
+    return '删除品牌失败，请稍后重试';
+  }
+  return error.message;
+}
+
 export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
   const router = useRouter();
   const { entities, addEntity, updateEntity, removeEntity } = useEntityStore();
@@ -38,7 +48,7 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
       removeEntity(id);
       toast.success('品牌已删除');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '删除失败，请稍后重试');
+      toast.error(getDeleteBrandErrorMessage(error));
     }
   };
 

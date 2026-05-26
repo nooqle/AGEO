@@ -11,10 +11,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4, UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import lazyload
 
+from app.models.brand import BrandProfile
 from app.models.brand_intelligence import (
     BrandActionRecord,
     BrandAudiencePersona,
@@ -32,11 +33,23 @@ from app.models.brand_intelligence import (
     BrandUserDecision,
 )
 from app.models.brand_intelligence_run import BrandIntelligenceRun
+from app.models.fetch_run_platform_state import FetchRunPlatformState
+from app.models.knowledge import KnowledgeRecord, KnowledgeSegment
+from app.models.llm_usage import LLMUsageRecord
 from app.models.entity import Entity, EntityStatus, EntityVisibilityScope
 from app.models.monitoring_alert import MonitoringAlert
+from app.models.monitoring_plan import (
+    MonitoringEvidenceRecord,
+    MonitoringPlan,
+    MonitoringQuestionSet,
+    MonitoringRun,
+)
 from app.models.monitoring_schedule import MonitoringSchedule
 from app.models.session import Session
 from app.models.snapshot import AnalysisSnapshot
+from app.models.task import AnalysisTask
+from app.models.task_run import TaskRun
+from app.models.task_run_child_attempt import TaskRunChildAttempt
 from app.models.user import User
 from app.services.access_scope_service import AccessScopeService
 
@@ -394,20 +407,7 @@ class EntityService:
             try:
                 name = entity.name
                 uid = UUID(entity_id)
-                # Bulk-delete dependents via SQL DELETE to avoid ORM
-                # relationship interference (backref tries SET NULL on
-                # NOT NULL columns, causing IntegrityError).
-                await self.db.execute(
-                    delete(MonitoringAlert).where(MonitoringAlert.entity_id == uid)
-                )
-                await self.db.execute(
-                    delete(MonitoringSchedule).where(
-                        MonitoringSchedule.entity_id == uid
-                    )
-                )
-                await self.db.execute(
-                    delete(AnalysisSnapshot).where(AnalysisSnapshot.entity_id == uid)
-                )
+                await self._delete_entity_runtime_dependents(uid)
                 await self._delete_brand_intelligence_dependents(uid)
                 # Delete sessions (messages cascade via ORM delete-orphan)
                 result = await self.db.execute(
@@ -436,6 +436,123 @@ class EntityService:
             logger.info("[Entity] Deleted (in-memory): %s (id=%s)", name, entity_id)
             return True
         return False
+
+    async def _delete_entity_runtime_dependents(self, entity_id: UUID) -> None:
+        """Delete non-ontology runtime rows before deleting a brand entity.
+
+        Some production tables were added across migrations with mixed DB-level
+        cascade behavior. Keep deletion explicit so a single old FK cannot turn
+        brand removal into a 500.
+        """
+
+        session_ids = list(
+            (
+                await self.db.execute(
+                    select(Session.id).where(Session.entity_id == entity_id)
+                )
+            ).scalars()
+        )
+        task_filter = AnalysisTask.entity_id == entity_id
+        if session_ids:
+            task_filter = or_(task_filter, AnalysisTask.session_id.in_(session_ids))
+        task_ids = list(
+            (await self.db.execute(select(AnalysisTask.id).where(task_filter))).scalars()
+        )
+        task_run_ids: list[UUID] = []
+        if task_ids:
+            task_run_ids = list(
+                (
+                    await self.db.execute(
+                        select(TaskRun.id).where(TaskRun.task_id.in_(task_ids))
+                    )
+                ).scalars()
+            )
+
+        await self.db.execute(
+            delete(MonitoringEvidenceRecord).where(
+                MonitoringEvidenceRecord.entity_id == entity_id
+            )
+        )
+        await self.db.execute(
+            delete(MonitoringRun).where(MonitoringRun.entity_id == entity_id)
+        )
+        await self.db.execute(
+            delete(MonitoringAlert).where(MonitoringAlert.entity_id == entity_id)
+        )
+        await self.db.execute(
+            delete(MonitoringQuestionSet).where(
+                MonitoringQuestionSet.entity_id == entity_id
+            )
+        )
+
+        fetch_filters = [FetchRunPlatformState.entity_id == entity_id]
+        if session_ids:
+            fetch_filters.append(FetchRunPlatformState.session_id.in_(session_ids))
+        if task_ids:
+            fetch_filters.append(FetchRunPlatformState.task_id.in_(task_ids))
+        if task_run_ids:
+            fetch_filters.append(FetchRunPlatformState.task_run_id.in_(task_run_ids))
+        await self.db.execute(
+            delete(FetchRunPlatformState).where(or_(*fetch_filters))
+        )
+
+        usage_filters = []
+        if session_ids:
+            usage_filters.append(LLMUsageRecord.session_id.in_(session_ids))
+        if task_ids:
+            usage_filters.append(LLMUsageRecord.task_id.in_(task_ids))
+        if usage_filters:
+            await self.db.execute(delete(LLMUsageRecord).where(or_(*usage_filters)))
+
+        if task_run_ids:
+            await self.db.execute(
+                delete(TaskRunChildAttempt).where(
+                    TaskRunChildAttempt.task_run_id.in_(task_run_ids)
+                )
+            )
+            await self.db.execute(delete(TaskRun).where(TaskRun.id.in_(task_run_ids)))
+        if task_ids:
+            await self.db.execute(delete(AnalysisTask).where(AnalysisTask.id.in_(task_ids)))
+
+        await self.db.execute(
+            delete(MonitoringSchedule).where(MonitoringSchedule.entity_id == entity_id)
+        )
+        await self.db.execute(
+            delete(MonitoringPlan).where(MonitoringPlan.entity_id == entity_id)
+        )
+
+        knowledge_filters = [KnowledgeRecord.entity_id == str(entity_id)]
+        if session_ids:
+            knowledge_filters.append(
+                KnowledgeRecord.session_id.in_([str(value) for value in session_ids])
+            )
+        if task_ids:
+            knowledge_filters.append(
+                KnowledgeRecord.task_id.in_([str(value) for value in task_ids])
+            )
+        knowledge_ids = list(
+            (
+                await self.db.execute(
+                    select(KnowledgeRecord.id).where(or_(*knowledge_filters))
+                )
+            ).scalars()
+        )
+        if knowledge_ids:
+            await self.db.execute(
+                delete(KnowledgeSegment).where(KnowledgeSegment.record_id.in_(knowledge_ids))
+            )
+            await self.db.execute(
+                delete(KnowledgeRecord).where(KnowledgeRecord.id.in_(knowledge_ids))
+            )
+
+        if session_ids:
+            await self.db.execute(
+                delete(BrandProfile).where(BrandProfile.session_id.in_(session_ids))
+            )
+
+        await self.db.execute(
+            delete(AnalysisSnapshot).where(AnalysisSnapshot.entity_id == entity_id)
+        )
 
     async def _delete_brand_intelligence_dependents(self, entity_id: UUID) -> None:
         """Delete ontology/intelligence rows before deleting the brand entity.
