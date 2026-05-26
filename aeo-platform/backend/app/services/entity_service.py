@@ -407,8 +407,8 @@ class EntityService:
             try:
                 name = entity.name
                 uid = UUID(entity_id)
-                await self._delete_entity_runtime_dependents(uid)
                 await self._delete_brand_intelligence_dependents(uid)
+                await self._delete_entity_runtime_dependents(uid)
                 # Delete sessions (messages cascade via ORM delete-orphan)
                 result = await self.db.execute(
                     select(Session).where(Session.entity_id == uid)
