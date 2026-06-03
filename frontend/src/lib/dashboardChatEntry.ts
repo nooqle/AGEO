@@ -21,6 +21,7 @@ export function buildBrandMonitoringChatUrl({
   params.set('entry_source', 'dashboard_new_brand');
   params.set('monitor_mode', 'panorama_monitoring');
   params.set('draft', buildBrandMonitoringSetupDraft(safeBrandName));
+  params.set('autosend', '1');
   return buildDashboardChatUrlWithHandoff(
     sessionId,
     Object.fromEntries(params.entries()),

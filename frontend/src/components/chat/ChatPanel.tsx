@@ -720,7 +720,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return readDashboardChatHandoffValue(dashboardHandoff, key);
   }, [dashboardHandoff]);
   const autoStartBrand = initialArtifactId ? null : readAutoStartParam('brand');
-  const autoStartEntrySource = initialArtifactId ? null : readAutoStartParam('entry_source');
   const autoStartDraft = initialArtifactId ? null : readDashboardHandoffOnlyParam('draft');
   const shouldAutoSendDraft =
     !initialArtifactId &&
@@ -2470,7 +2469,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     sendMessage(content.trim(), context, attachments, toolMode);
   }, [addMessage, startExecution, sendMessage, isAgentExecuting, pendingConfirmation, setPendingConfirmation]);
 
-  // Auto-send brand name when navigating from Dashboard with ?brand= param
+  // Auto-send Dashboard handoffs after history has loaded, so context becomes part of the conversation.
   useEffect(() => {
     const draft = autoStartDraft?.trim() || '';
     const brand = autoStartBrand?.trim() || '';
@@ -2479,8 +2478,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const shouldAutoSendExistingDraft = Boolean(
       draft &&
       shouldAutoSendDraft &&
-      messages.length > 0 &&
-      autoStartEntrySource === 'dashboard_command_bar',
+      messages.length > 0,
     );
 
     if (!autoMessage) {
@@ -2538,9 +2536,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     }
 
     if (isAgentExecuting) {
-      setInputValue(autoMessage);
-      setIsAutoStartingPrompt(false);
-      stripAutoStartQueryParams();
+      setIsAutoStartingPrompt(true);
       return;
     }
 
@@ -2558,7 +2554,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return () => clearTimeout(timer);
   }, [
     autoStartBrand,
-    autoStartEntrySource,
     autoStartDraft,
     dashboardAutoContext,
     shouldAutoSendDraft,

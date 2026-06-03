@@ -80,15 +80,8 @@ function ChatPageContent() {
           return;
         }
 
-        const entityId = session.entity_id || undefined;
+        const entityId = session.entity_id || queryEntityId || undefined;
         setResolvedEntityId(entityId);
-
-        if (queryEntityId && entityId && entityId !== queryEntityId) {
-          const restored = await restoreSessionForEntity();
-          if (!restored) {
-            setResolvedEntityId(queryEntityId);
-          }
-        }
       } catch {
         if (cancelled) {
           return;
@@ -162,7 +155,7 @@ function ChatPageContent() {
       sidebar={(
         <ChatSidebar
           activeSessionId={sessionId}
-          activeEntityId={queryEntityId ?? resolvedEntityId}
+          activeEntityId={resolvedEntityId ?? queryEntityId}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
         />
