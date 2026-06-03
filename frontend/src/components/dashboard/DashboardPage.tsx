@@ -26,6 +26,7 @@ import type {
   DashboardLatestReport,
   DashboardMonitorMode,
 } from '@/types/dashboard';
+import type { AnalysisTask } from '@/types/task';
 import { isActiveBrandIntelligenceRun } from '@/types/intelligenceRun';
 import type { OntologyWorldSummary } from '@/types/ontology';
 
@@ -150,11 +151,44 @@ function createHandoffId(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function activeTaskTime(task: AnalysisTask): number {
+  const parsed = Date.parse(task.started_at || task.created_at || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isDashboardConversationTask(task: AnalysisTask): boolean {
+  return Boolean(
+    task.session_id &&
+      (task.status === 'running' ||
+        task.status === 'pending' ||
+        task.latest_run?.status === 'waiting_input'),
+  );
+}
+
+function compareDashboardConversationTasks(selectedBrandId: string | null) {
+  return (a: AnalysisTask, b: AnalysisTask) => {
+    if (selectedBrandId) {
+      const aSelected = a.entity_id === selectedBrandId;
+      const bSelected = b.entity_id === selectedBrandId;
+      if (aSelected !== bSelected) return aSelected ? -1 : 1;
+    }
+
+    const aWaiting = a.latest_run?.status === 'waiting_input';
+    const bWaiting = b.latest_run?.status === 'waiting_input';
+    if (aWaiting !== bWaiting) return aWaiting ? -1 : 1;
+
+    if (a.status !== b.status) return a.status === 'running' ? -1 : 1;
+    return activeTaskTime(b) - activeTaskTime(a);
+  };
+}
+
 export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedEntityId = searchParams.get('entity_id');
   const [isOpeningDashboardChat, setIsOpeningDashboardChat] = useState(false);
+  const [activeConversationTasks, setActiveConversationTasks] = useState<AnalysisTask[]>([]);
+  const [isConversationTaskLoading, setIsConversationTaskLoading] = useState(false);
   const isOpeningDashboardChatRef = useRef(false);
   const {
     selectedBrandId,
@@ -189,6 +223,45 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   }, [fetchActiveRun, fetchHome, selectedBrandId, selectedMonitorMode]);
 
   useEffect(() => {
+    let cancelled = false;
+    const fetchActiveConversationTasks = async () => {
+      setIsConversationTaskLoading(true);
+      try {
+        const [running, pending] = await Promise.all([
+          api.getUserTasks({
+            status: 'running',
+            triggeredBy: 'manual',
+            limit: 10,
+          }),
+          api.getUserTasks({
+            status: 'pending',
+            triggeredBy: 'manual',
+            limit: 10,
+          }),
+        ]);
+        if (cancelled) return;
+        const candidates = [...(running.tasks || []), ...(pending.tasks || [])]
+          .filter(isDashboardConversationTask)
+          .sort(compareDashboardConversationTasks(selectedBrandId));
+        setActiveConversationTasks(candidates);
+      } catch {
+        if (!cancelled) setActiveConversationTasks([]);
+      } finally {
+        if (!cancelled) setIsConversationTaskLoading(false);
+      }
+    };
+
+    void fetchActiveConversationTasks();
+    const timer = window.setInterval(() => {
+      void fetchActiveConversationTasks();
+    }, 6000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedBrandId]);
+
+  useEffect(() => {
     if (entities.length === 0) {
       if (selectedBrandId) setSelectedBrandId(null);
       return;
@@ -214,6 +287,12 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const selectedWorld = selectedBrandId ? worldsByEntity[selectedBrandId] : null;
   const selectedRun = selectedBrandId ? runsByEntity[selectedBrandId] : null;
   const isSelectedRunActive = isActiveBrandIntelligenceRun(selectedRun);
+  const activeConversationTask = activeConversationTasks[0] ?? null;
+  const activeConversationTaskEntity = activeConversationTask?.entity_id
+    ? entities.find((entity) => entity.id === activeConversationTask.entity_id)
+    : null;
+  const activeConversationTaskBrandName =
+    activeConversationTaskEntity?.name || activeConversationTask?.brand_name || null;
   const brandWorldSampleSummary = formatBrandWorldSampleSummary(
     selectedWorld?.summary_projection?.sample_scope,
   );
@@ -488,6 +567,20 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     }
   };
 
+  const handleOpenActiveConversationChat = () => {
+    if (!activeConversationTask?.session_id) {
+      void handleOpenRunChat();
+      return;
+    }
+    const params = new URLSearchParams();
+    params.set('entry_source', 'dashboard_active_conversation');
+    if (activeConversationTaskBrandName) {
+      params.set('brand', activeConversationTaskBrandName);
+    }
+    const query = params.toString();
+    router.push(`/chat/${activeConversationTask.session_id}${query ? `?${query}` : ''}`);
+  };
+
   const mainContent = (
     <div className="space-y-4">
       {(!hasData || !selectedBrand) ? (
@@ -537,6 +630,8 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
         <>
           <BrandIntelligenceRunBanner
             run={selectedRun}
+            activeConversationTask={activeConversationTask}
+            isConversationTaskLoading={isConversationTaskLoading}
             isLoading={runLoadingByEntity[selectedBrand.id]}
             isSubmitting={runSubmittingByEntity[selectedBrand.id]}
             error={runErrorByEntity[selectedBrand.id]}
@@ -550,7 +645,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
               void handleCancelBrandIntelligenceRun();
             }}
             onOpenChat={() => {
-              void handleOpenRunChat();
+              handleOpenActiveConversationChat();
             }}
           />
           <BrandOntologyHome

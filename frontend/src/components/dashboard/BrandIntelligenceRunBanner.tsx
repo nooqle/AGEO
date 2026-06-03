@@ -1,12 +1,15 @@
 'use client';
 
-import { AlertCircle, CheckCircle2, Loader2, Play, RefreshCw, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock3, Loader2, MessageCircle, Play, RefreshCw, X } from 'lucide-react';
 
+import type { AnalysisTask } from '@/types/task';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
 import { isActiveBrandIntelligenceRun } from '@/types/intelligenceRun';
 
 interface BrandIntelligenceRunBannerProps {
   run?: BrandIntelligenceRun | null;
+  activeConversationTask?: AnalysisTask | null;
+  isConversationTaskLoading?: boolean;
   isLoading?: boolean;
   isSubmitting?: boolean;
   error?: string | null;
@@ -50,8 +53,42 @@ function runMessage(run?: BrandIntelligenceRun | null): string {
   return run.message || '任务进行中。';
 }
 
+function taskProgressLabel(task?: AnalysisTask | null): string | null {
+  if (!task) return null;
+  const value = Math.max(0, Math.min(100, Math.round((task.progress || 0) * 100)));
+  return `${value}%`;
+}
+
+function isTaskWaitingForInput(task?: AnalysisTask | null): boolean {
+  return task?.latest_run?.status === 'waiting_input';
+}
+
+function conversationTaskLabel(task?: AnalysisTask | null): string | null {
+  if (!task) return null;
+  if (isTaskWaitingForInput(task)) return '等待确认';
+  if (task.status === 'pending') return '排队中';
+  if (task.status === 'running') return '对话进行中';
+  return null;
+}
+
+function conversationTaskMessage(task?: AnalysisTask | null): string | null {
+  if (!task) return null;
+  if (isTaskWaitingForInput(task)) {
+    return '对话已到确认步骤，进入对话即可继续。';
+  }
+  if (task.status === 'pending') {
+    return '对话任务已排队，进入对话可查看进度。';
+  }
+  if (task.status === 'running') {
+    return '对话正在执行，进入对话可查看实时进度。';
+  }
+  return null;
+}
+
 export function BrandIntelligenceRunBanner({
   run,
+  activeConversationTask,
+  isConversationTaskLoading,
   isLoading,
   isSubmitting,
   error,
@@ -65,7 +102,12 @@ export function BrandIntelligenceRunBanner({
   const waiting = run?.requires_user_action || run?.status === 'waiting_user';
   const failed = run?.status === 'failed';
   const completed = run?.status === 'completed';
-  const statusLabel = run ? STATUS_LABELS[run.status] || run.status : '未开始';
+  const conversationLabel = conversationTaskLabel(activeConversationTask);
+  const conversationWaiting = isTaskWaitingForInput(activeConversationTask);
+  const hasConversationActivity = Boolean(conversationLabel);
+  const statusLabel = conversationLabel || (run ? STATUS_LABELS[run.status] || run.status : '未开始');
+  const statusProgressLabel = activeConversationTask ? taskProgressLabel(activeConversationTask) : run ? progressLabel(run) : null;
+  const displayMessage = error || conversationTaskMessage(activeConversationTask) || runMessage(run);
   const primaryLabel = !run || run.status === 'not_started'
     ? '开始分析'
     : failed || run.status === 'cancelled'
@@ -74,22 +116,32 @@ export function BrandIntelligenceRunBanner({
   const showPrimary = !completed && !waiting;
 
   return (
-    <section className="rounded-[18px] border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-5 py-4">
+    <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-5 py-4 shadow-sm">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex h-7 items-center gap-2 rounded-lg bg-[var(--bg-secondary)] px-2.5 text-[12px] font-medium text-[var(--brand-primary)]">
-              {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {isLoading || isConversationTaskLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               当前情报任务
             </span>
             <span className="text-[12px] text-[var(--text-tertiary)]">{statusLabel}</span>
-            {run ? (
-              <span className="text-[12px] text-[var(--text-tertiary)]">{progressLabel(run)}</span>
+            {statusProgressLabel ? (
+              <span className="text-[12px] text-[var(--text-tertiary)]">{statusProgressLabel}</span>
             ) : null}
           </div>
           <div className="mt-2 flex items-start gap-2">
-            {waiting ? (
-              <AlertCircle className="mt-1 h-4 w-4 flex-shrink-0 text-[var(--status-warning)]" />
+            {error ? (
+              <AlertCircle className="mt-1 h-4 w-4 flex-shrink-0 text-[var(--status-error)]" />
+            ) : hasConversationActivity ? (
+              conversationWaiting ? (
+                <Clock3 className="mt-1 h-4 w-4 flex-shrink-0 text-[var(--brand-primary)]" />
+              ) : (
+                <Loader2 className="mt-1 h-4 w-4 flex-shrink-0 animate-spin text-[var(--brand-primary)]" />
+              )
+            ) : failed ? (
+              <AlertCircle className="mt-1 h-4 w-4 flex-shrink-0 text-[var(--status-error)]" />
+            ) : waiting ? (
+              <Clock3 className="mt-1 h-4 w-4 flex-shrink-0 text-[var(--brand-primary)]" />
             ) : completed ? (
               <CheckCircle2 className="mt-1 h-4 w-4 flex-shrink-0 text-[var(--success)]" />
             ) : running ? (
@@ -98,7 +150,7 @@ export function BrandIntelligenceRunBanner({
               <Play className="mt-1 h-4 w-4 flex-shrink-0 text-[var(--brand-primary)]" />
             )}
             <p className="text-[13px] leading-6 text-[var(--text-secondary)]">
-              {error || runMessage(run)}
+              {displayMessage}
             </p>
           </div>
           {run?.sample_scope ? (
@@ -113,7 +165,17 @@ export function BrandIntelligenceRunBanner({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {showPrimary ? (
+          {hasConversationActivity ? (
+            <button
+              type="button"
+              disabled
+              aria-busy={!conversationWaiting || undefined}
+              className="inline-flex min-h-10 cursor-default items-center gap-2 rounded-lg border border-[var(--brand-border)] bg-[var(--brand-bg)] px-3.5 text-[13px] font-semibold text-[var(--brand-primary)] disabled:opacity-100"
+            >
+              {conversationWaiting ? <Clock3 className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
+              {conversationLabel}
+            </button>
+          ) : showPrimary ? (
             <button
               type="button"
               disabled={isSubmitting}
@@ -127,8 +189,9 @@ export function BrandIntelligenceRunBanner({
           <button
             type="button"
             onClick={onOpenChat}
-            className="inline-flex min-h-10 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3.5 text-[13px] font-medium text-[var(--text-primary)] hover:border-[var(--brand-primary)]"
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-[var(--brand-border)] bg-[color-mix(in_srgb,var(--brand-bg)_52%,var(--bg-primary)_48%)] px-3.5 text-[13px] font-medium text-[var(--brand-primary)] hover:bg-[var(--brand-bg)]"
           >
+            <MessageCircle className="h-4 w-4" />
             进入对话
           </button>
           {running || waiting ? (
