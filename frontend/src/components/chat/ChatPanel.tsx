@@ -64,7 +64,6 @@ interface DashboardHandoffView {
   runId: string | null;
   handoffId: string | null;
   intent: string | null;
-  cleanHandoff: string | null;
   aiSources: string | null;
   draft: string | null;
 }
@@ -88,7 +87,6 @@ const DASHBOARD_AUTO_START_QUERY_KEYS = [
   'intent',
   'task_title',
   'task_goal',
-  'clean_handoff',
   'ai_sources',
   'entity_id',
   'monitoring_plan_id',
@@ -715,10 +713,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     [initialArtifactId, searchParams],
   );
   const shouldReadDashboardHandoff = !initialArtifactId && searchParams.get('handoff') === '1';
-  const isCleanDashboardHandoff =
-    !initialArtifactId &&
-    searchParams.get('handoff') === '1' &&
-    searchParams.get('clean_handoff') === '1';
   const readAutoStartParam = useCallback((key: string): string | null => {
     return readDashboardChatHandoffValue(dashboardHandoff, key) || searchParams.get(key)?.trim() || null;
   }, [dashboardHandoff, searchParams]);
@@ -726,6 +720,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return readDashboardChatHandoffValue(dashboardHandoff, key);
   }, [dashboardHandoff]);
   const autoStartBrand = initialArtifactId ? null : readAutoStartParam('brand');
+  const autoStartEntrySource = initialArtifactId ? null : readAutoStartParam('entry_source');
   const autoStartDraft = initialArtifactId ? null : readDashboardHandoffOnlyParam('draft');
   const shouldAutoSendDraft =
     !initialArtifactId &&
@@ -760,7 +755,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       runId,
       handoffId,
       intent,
-      cleanHandoff: readAutoStartParam('clean_handoff'),
       aiSources,
       draft,
     } satisfies DashboardHandoffView;
@@ -1270,10 +1264,6 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     let cancelled = false;
     const loadHistory = async () => {
       try {
-        if (isCleanDashboardHandoff) {
-          loadedAllHistoryRef.current = true;
-          return;
-        }
         const initialHistoryLimit = initialArtifactId ? 12 : INITIAL_HISTORY_MESSAGE_LIMIT;
         const msgs = await api.getMessages(sessionId, { limit: initialHistoryLimit });
         if (cancelled) return;
@@ -1294,7 +1284,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     // and key={sessionId} guarantees a fresh mount on every session change.
     loadHistory();
     return () => { cancelled = true; };
-  }, [initialArtifactId, isCleanDashboardHandoff, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialArtifactId, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const {
     browserWorkspace,
@@ -2486,7 +2476,12 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     const brand = autoStartBrand?.trim() || '';
     const autoMessage = draft || brand;
     const canAutoSendMessage = Boolean(autoMessage && shouldAutoSendDraft);
-    const shouldAutoSendExistingDraft = Boolean(draft && shouldAutoSendDraft && messages.length > 0);
+    const shouldAutoSendExistingDraft = Boolean(
+      draft &&
+      shouldAutoSendDraft &&
+      messages.length > 0 &&
+      autoStartEntrySource === 'dashboard_command_bar',
+    );
 
     if (!autoMessage) {
       setIsAutoStartingPrompt(false);
@@ -2563,6 +2558,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     return () => clearTimeout(timer);
   }, [
     autoStartBrand,
+    autoStartEntrySource,
     autoStartDraft,
     dashboardAutoContext,
     shouldAutoSendDraft,

@@ -139,6 +139,7 @@ global_tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
 async def list_user_tasks(
     status_filter: str | None = None,
     triggered_by: str | None = None,
+    entity_id: str | None = None,
     limit: int = 20,
     offset: int = 0,
     current_user=Depends(get_current_user),
@@ -171,8 +172,11 @@ async def list_user_tasks(
     elif triggered_by == "manual":
         scheduled_filter = False
 
+    parsed_entity_id = _parse_uuid(entity_id, "entity_id") if entity_id else None
+
     tasks, total = await service.list_tasks_for_viewer(
         viewer=current_user,
+        entity_id=parsed_entity_id,
         status=task_status,
         is_scheduled=scheduled_filter,
         limit=limit,

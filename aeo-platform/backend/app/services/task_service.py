@@ -1071,6 +1071,7 @@ class TaskService:
         user_id: UUID,
         *,
         session_id: UUID | None = None,
+        entity_id: UUID | None = None,
         status: TaskStatus | None = None,
         is_scheduled: bool | None = None,
         limit: int = 20,
@@ -1086,6 +1087,8 @@ class TaskService:
         conditions = [AnalysisTask.user_id == user_id]
         if session_id is not None:
             conditions.append(AnalysisTask.session_id == session_id)
+        if entity_id is not None:
+            conditions.append(AnalysisTask.entity_id == entity_id)
         if status is not None:
             conditions.append(AnalysisTask.status == status)
         if is_scheduled is True:
@@ -1121,6 +1124,7 @@ class TaskService:
         viewer: User,
         *,
         session_id: UUID | None = None,
+        entity_id: UUID | None = None,
         status: TaskStatus | None = None,
         is_scheduled: bool | None = None,
         limit: int = 20,
@@ -1129,6 +1133,8 @@ class TaskService:
         conditions = [AccessScopeService.task_visibility_filter(viewer)]
         if session_id is not None:
             conditions.append(AnalysisTask.session_id == session_id)
+        if entity_id is not None:
+            conditions.append(AnalysisTask.entity_id == entity_id)
         if status is not None:
             conditions.append(AnalysisTask.status == status)
         if is_scheduled is True:

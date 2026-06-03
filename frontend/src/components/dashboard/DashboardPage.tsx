@@ -8,6 +8,7 @@ import {
 } from './DashboardBrandSidebar';
 import { BrandIntelligenceChatBubble } from './BrandIntelligenceChatBubble';
 import { BrandIntelligenceRunBanner } from './BrandIntelligenceRunBanner';
+import { DashboardChatTaskBanner } from './DashboardChatTaskBanner';
 import { BrandOntologyHome } from './BrandOntologyHome';
 import { HeroSection } from './HeroSection';
 import { useDashboardStore } from '@/stores/dashboardStore';
@@ -27,6 +28,7 @@ import type {
   DashboardLatestReport,
   DashboardMonitorMode,
 } from '@/types/dashboard';
+import type { AnalysisTask } from '@/types/task';
 import { isActiveBrandIntelligenceRun } from '@/types/intelligenceRun';
 import type { OntologyWorldSummary } from '@/types/ontology';
 
@@ -151,11 +153,35 @@ function createHandoffId(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function activeTaskTime(task: AnalysisTask): number {
+  const parsed = Date.parse(task.started_at || task.created_at || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareDashboardActiveTasks(selectedBrandId: string | null) {
+  return (a: AnalysisTask, b: AnalysisTask) => {
+    const aWaiting = a.latest_run?.status === 'waiting_input';
+    const bWaiting = b.latest_run?.status === 'waiting_input';
+    if (aWaiting !== bWaiting) return aWaiting ? -1 : 1;
+
+    if (selectedBrandId) {
+      const aSelected = a.entity_id === selectedBrandId;
+      const bSelected = b.entity_id === selectedBrandId;
+      if (aSelected !== bSelected) return aSelected ? -1 : 1;
+    }
+
+    if (a.status !== b.status) return a.status === 'running' ? -1 : 1;
+    return activeTaskTime(b) - activeTaskTime(a);
+  };
+}
+
 export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedEntityId = searchParams.get('entity_id');
   const [isOpeningDashboardChat, setIsOpeningDashboardChat] = useState(false);
+  const [activeAnalysisTasks, setActiveAnalysisTasks] = useState<AnalysisTask[]>([]);
+  const [isAnalysisTaskLoading, setIsAnalysisTaskLoading] = useState(false);
   const isOpeningDashboardChatRef = useRef(false);
   const {
     selectedBrandId,
@@ -190,6 +216,45 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   }, [fetchActiveRun, fetchHome, selectedBrandId, selectedMonitorMode]);
 
   useEffect(() => {
+    let cancelled = false;
+    const fetchActiveAnalysisTasks = async () => {
+      setIsAnalysisTaskLoading(true);
+      try {
+        const [running, pending] = await Promise.all([
+          api.getUserTasks({
+            status: 'running',
+            triggeredBy: 'manual',
+            limit: 10,
+          }),
+          api.getUserTasks({
+            status: 'pending',
+            triggeredBy: 'manual',
+            limit: 10,
+          }),
+        ]);
+        if (cancelled) return;
+        const candidates = [...(running.tasks || []), ...(pending.tasks || [])]
+          .filter((task) => Boolean(task.session_id))
+          .sort(compareDashboardActiveTasks(selectedBrandId));
+        setActiveAnalysisTasks(candidates);
+      } catch {
+        if (!cancelled) setActiveAnalysisTasks([]);
+      } finally {
+        if (!cancelled) setIsAnalysisTaskLoading(false);
+      }
+    };
+
+    void fetchActiveAnalysisTasks();
+    const timer = window.setInterval(() => {
+      void fetchActiveAnalysisTasks();
+    }, 6000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedBrandId]);
+
+  useEffect(() => {
     if (entities.length === 0) {
       if (selectedBrandId) setSelectedBrandId(null);
       return;
@@ -215,6 +280,16 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const selectedWorld = selectedBrandId ? worldsByEntity[selectedBrandId] : null;
   const selectedRun = selectedBrandId ? runsByEntity[selectedBrandId] : null;
   const isSelectedRunActive = isActiveBrandIntelligenceRun(selectedRun);
+  const visibleActiveAnalysisTask =
+    activeAnalysisTasks.find((task) => selectedRun?.analysis_task_id !== task.id) ?? null;
+  const visibleActiveTaskEntity = visibleActiveAnalysisTask
+    ? entities.find((entity) => entity.id === visibleActiveAnalysisTask.entity_id)
+    : null;
+  const visibleActiveTaskBrandName =
+    visibleActiveTaskEntity?.name ||
+    (visibleActiveAnalysisTask?.entity_id === selectedBrand?.id ? (selectedBrand?.name ?? null) : null);
+  const isVisibleActiveTaskCurrentBrand =
+    Boolean(visibleActiveAnalysisTask && visibleActiveAnalysisTask.entity_id === selectedBrand?.id);
   const brandWorldSampleSummary = formatBrandWorldSampleSummary(
     selectedWorld?.summary_projection?.sample_scope,
   );
@@ -267,7 +342,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       return;
     }
 
-    const session = await api.createSession();
+    const session = await api.getOrCreateSessionByEntity(selectedBrand.id);
     const draft = buildDashboardVisibleDraft(input);
     if (!draft) {
       router.push(`/chat/${session.id}`);
@@ -308,7 +383,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     if (options?.handoff?.taskGoal) {
       params.set('task_goal', options.handoff.taskGoal);
     }
-    params.set('clean_handoff', '1');
     if (isRealMonitoringPlanId(home?.monitoring_plan?.id)) {
       params.set('monitoring_plan_id', home.monitoring_plan.id);
     }
@@ -376,6 +450,15 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
       Object.fromEntries(params.entries()),
     );
     router.push(targetUrl);
+  };
+
+  const handleOpenActiveAnalysisTaskChat = () => {
+    if (!visibleActiveAnalysisTask?.session_id) return;
+    const params = new URLSearchParams();
+    if (visibleActiveTaskBrandName) params.set('brand', visibleActiveTaskBrandName);
+    params.set('entry_source', 'dashboard_active_chat_task');
+    const query = params.toString();
+    router.push(`/chat/${visibleActiveAnalysisTask.session_id}${query ? `?${query}` : ''}`);
   };
 
   const handleOpenMonitoringSettings = (context?: {
@@ -554,6 +637,13 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
             onOpenChat={() => {
               void handleOpenRunChat();
             }}
+          />
+          <DashboardChatTaskBanner
+            task={visibleActiveAnalysisTask}
+            brandName={visibleActiveTaskBrandName}
+            isCurrentBrandTask={isVisibleActiveTaskCurrentBrand}
+            isLoading={isAnalysisTaskLoading}
+            onOpenChat={handleOpenActiveAnalysisTaskChat}
           />
           <BrandOntologyHome
             entityId={selectedBrand.id}

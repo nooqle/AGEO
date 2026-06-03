@@ -1007,12 +1007,20 @@ class ApiService {
   }
 
   /** List all tasks for the current user across all sessions */
-  async getUserTasks(params?: { status?: string; limit?: number; offset?: number }): Promise<{
+  async getUserTasks(params?: {
+    status?: string;
+    triggeredBy?: 'manual' | 'scheduled';
+    entityId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{
     tasks: AnalysisTask[];
     total: number;
   }> {
     const query = new URLSearchParams();
     if (params?.status) query.set('status_filter', params.status);
+    if (params?.triggeredBy) query.set('triggered_by', params.triggeredBy);
+    if (params?.entityId) query.set('entity_id', params.entityId);
     if (params?.limit) query.set('limit', String(params.limit));
     if (params?.offset) query.set('offset', String(params.offset));
     const qs = query.toString();
