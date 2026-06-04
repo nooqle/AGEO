@@ -156,8 +156,10 @@ function activeTaskTime(task: AnalysisTask): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function isDashboardConversationTask(task: AnalysisTask): boolean {
+function isDashboardConversationTask(task: AnalysisTask, selectedBrandId: string | null): boolean {
   return Boolean(
+    selectedBrandId &&
+      task.entity_id === selectedBrandId &&
     task.session_id &&
       (task.status === 'running' ||
         task.status === 'pending' ||
@@ -225,23 +227,30 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   useEffect(() => {
     let cancelled = false;
     const fetchActiveConversationTasks = async () => {
+      setActiveConversationTasks([]);
+      if (!selectedBrandId) {
+        setIsConversationTaskLoading(false);
+        return;
+      }
       setIsConversationTaskLoading(true);
       try {
         const [running, pending] = await Promise.all([
           api.getUserTasks({
             status: 'running',
             triggeredBy: 'manual',
+            entityId: selectedBrandId,
             limit: 10,
           }),
           api.getUserTasks({
             status: 'pending',
             triggeredBy: 'manual',
+            entityId: selectedBrandId,
             limit: 10,
           }),
         ]);
         if (cancelled) return;
         const candidates = [...(running.tasks || []), ...(pending.tasks || [])]
-          .filter(isDashboardConversationTask)
+          .filter((task) => isDashboardConversationTask(task, selectedBrandId))
           .sort(compareDashboardConversationTasks(selectedBrandId));
         setActiveConversationTasks(candidates);
       } catch {
@@ -287,7 +296,8 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const selectedWorld = selectedBrandId ? worldsByEntity[selectedBrandId] : null;
   const selectedRun = selectedBrandId ? runsByEntity[selectedBrandId] : null;
   const isSelectedRunActive = isActiveBrandIntelligenceRun(selectedRun);
-  const activeConversationTask = activeConversationTasks[0] ?? null;
+  const activeConversationTask =
+    activeConversationTasks.find((task) => task.entity_id === selectedBrandId) ?? null;
   const activeConversationTaskEntity = activeConversationTask?.entity_id
     ? entities.find((entity) => entity.id === activeConversationTask.entity_id)
     : null;
@@ -568,7 +578,11 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   };
 
   const handleOpenActiveConversationChat = () => {
-    if (!activeConversationTask?.session_id) {
+    if (
+      !selectedBrand?.id ||
+      !activeConversationTask?.session_id ||
+      activeConversationTask.entity_id !== selectedBrand.id
+    ) {
       void handleOpenRunChat();
       return;
     }

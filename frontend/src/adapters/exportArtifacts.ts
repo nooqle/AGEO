@@ -162,7 +162,68 @@ function canonicalizeFetchPlatform(platform: string | undefined): string {
   if (!normalized) {
     return 'unknown';
   }
-  return normalized === 'hunyuan' ? 'yuanbao' : normalized;
+  if (
+    [
+      'hunyuan',
+      'hunyuan_api',
+      'hunyuan_browser',
+      'yuanbao_api',
+      'yuanbao_browser',
+      'tencent_yuanbao',
+      '腾讯元宝',
+      '混元',
+      '元宝',
+    ].includes(normalized)
+  ) {
+    return 'yuanbao';
+  }
+  return normalized;
+}
+
+function mergePlatformStatusSummaries(
+  summaries: FetchPlatformStatusSummary[],
+): FetchPlatformStatusSummary[] {
+  const byPlatform = new Map<string, FetchPlatformStatusSummary>();
+  summaries.forEach((summary) => {
+    const platform = canonicalizeFetchPlatform(summary.platform);
+    if (platform === 'unknown') return;
+    const existing = byPlatform.get(platform);
+    byPlatform.set(platform, {
+      ...existing,
+      ...summary,
+      platform,
+      questions_completed:
+        summary.questions_completed ?? existing?.questions_completed,
+      questions_total: summary.questions_total ?? existing?.questions_total,
+      mention_count: summary.mention_count ?? existing?.mention_count,
+      timing: {
+        ...(existing?.timing || {}),
+        ...(summary.timing || {}),
+      },
+    });
+  });
+  return Array.from(byPlatform.values());
+}
+
+function normalizeFetchTimingSummary(
+  timingSummary: FetchTimingSummary | undefined,
+): FetchTimingSummary | undefined {
+  if (!timingSummary?.platforms) {
+    return timingSummary;
+  }
+  const platforms: NonNullable<FetchTimingSummary['platforms']> = {};
+  Object.entries(timingSummary.platforms).forEach(([platform, timing]) => {
+    const canonical = canonicalizeFetchPlatform(platform);
+    if (canonical === 'unknown') return;
+    platforms[canonical] = {
+      ...(platforms[canonical] || {}),
+      ...timing,
+    };
+  });
+  return {
+    ...timingSummary,
+    platforms,
+  };
 }
 
 function normalizeFetchStatus(value: unknown): FetchPlatformStatusValue {
@@ -375,9 +436,9 @@ export function buildFetchExportViewModel(content: FetchResultsCanvasContent): F
   )
     ? (readField(content.data as UnknownRecord, 'platformStatus', 'platform_status') as UnknownRecord)
     : undefined;
-  const platformStatusPlatforms = toRecordArray(readField(rawPlatformStatus, 'platforms'))
+  const platformStatusPlatforms = mergePlatformStatusSummaries(toRecordArray(readField(rawPlatformStatus, 'platforms'))
     .map(normalizePlatformStatusSummary)
-    .filter((item): item is FetchPlatformStatusSummary => Boolean(item));
+    .filter((item): item is FetchPlatformStatusSummary => Boolean(item)));
   const platformStatuses = isRecord(readField(rawPlatformStatus, 'platform_statuses', 'platformStatuses'))
     ? Object.fromEntries(
         Object.entries(
@@ -393,11 +454,11 @@ export function buildFetchExportViewModel(content: FetchResultsCanvasContent): F
         }
       : undefined;
 
-  const timingSummary = isRecord(
+  const timingSummary = normalizeFetchTimingSummary(isRecord(
     readField(content.data as UnknownRecord, 'timingSummary', 'timing_summary')
   )
     ? ((readField(content.data as UnknownRecord, 'timingSummary', 'timing_summary') as UnknownRecord) as FetchTimingSummary)
-    : undefined;
+    : undefined);
 
   const platformSet = new Set<string>();
   let successCount = 0;
@@ -405,7 +466,7 @@ export function buildFetchExportViewModel(content: FetchResultsCanvasContent): F
   let skippedCount = 0;
   items.forEach((item) => {
     item.platform_results.forEach((result) => {
-      platformSet.add(canonicalizeFetchPlatform(result.platform_name || result.platform));
+      platformSet.add(canonicalizeFetchPlatform(result.platform));
       const status = normalizeFetchStatus(result.status ?? (result.success ? 'success' : 'failed'));
       if (status === 'success') {
         successCount += 1;
