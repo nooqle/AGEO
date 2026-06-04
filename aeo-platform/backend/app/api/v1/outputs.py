@@ -26,7 +26,11 @@ async def get_outputs(
     legacy clients that explicitly need full output payloads in the list.
     """
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user)
+    session = await session_service.get_session(
+        session_id,
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = OutputService(db)
@@ -43,7 +47,11 @@ async def get_output(
 ):
     """Get single output details."""
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user)
+    session = await session_service.get_session(
+        session_id,
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = OutputService(db)
@@ -63,7 +71,11 @@ async def export_output(
 ):
     """Export output."""
     session_service = SessionService(db)
-    session = await session_service.get_session(session_id, current_user)
+    session = await session_service.get_session(
+        session_id,
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     service = OutputService(db)

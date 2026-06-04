@@ -381,7 +381,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
         logger.info("[WebSocket] 🔍 Checking session access...")
         session_service = SessionService(db)
-        session = await session_service.get_session(session_uuid, user)
+        session = await session_service.get_session(
+            session_uuid,
+            user,
+            allow_internal_admin_bypass=False,
+        )
         if not session:
             logger.error(f"[WebSocket] ❌ Session not found: {session_uuid}")
             await websocket.close(code=1008, reason="Session not found")

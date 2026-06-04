@@ -737,6 +737,8 @@ class TaskService:
         self,
         task_id: UUID,
         viewer: User,
+        *,
+        allow_internal_admin_bypass: bool = False,
     ) -> AnalysisTask | None:
         stmt = (
             select(AnalysisTask)
@@ -747,7 +749,10 @@ class TaskService:
             )
             .where(
                 AnalysisTask.id == task_id,
-                AccessScopeService.task_visibility_filter(viewer),
+                AccessScopeService.task_visibility_filter(
+                    viewer,
+                    allow_internal_admin_bypass=allow_internal_admin_bypass,
+                ),
             )
         )
         result = await self.db.execute(stmt)
@@ -1129,8 +1134,14 @@ class TaskService:
         is_scheduled: bool | None = None,
         limit: int = 20,
         offset: int = 0,
+        allow_internal_admin_bypass: bool = False,
     ) -> tuple[list[AnalysisTask], int]:
-        conditions = [AccessScopeService.task_visibility_filter(viewer)]
+        conditions = [
+            AccessScopeService.task_visibility_filter(
+                viewer,
+                allow_internal_admin_bypass=allow_internal_admin_bypass,
+            )
+        ]
         if session_id is not None:
             conditions.append(AnalysisTask.session_id == session_id)
         if entity_id is not None:

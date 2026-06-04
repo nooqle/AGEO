@@ -79,7 +79,11 @@ async def get_active_task(
     task = await service.get_session_active_task(sid)
     if task is None:
         return {"task": None}
-    if not AccessScopeService.can_access_task(task, current_user):
+    if not AccessScopeService.can_access_task(
+        task,
+        current_user,
+        allow_internal_admin_bypass=False,
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied",
