@@ -8,6 +8,16 @@ on:
         required: false
         default: "720"
         type: string
+      mode:
+        description: "logs or brand_scope."
+        required: false
+        default: "logs"
+        type: string
+      target_entity_id:
+        description: "Entity UUID for brand_scope mode."
+        required: false
+        default: "63ec1ec3-7ccf-4b6b-97b1-33121fbc94cf"
+        type: string
 
 permissions:
   contents: read
@@ -25,6 +35,8 @@ jobs:
     env:
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
       SINCE_MINUTES: ${{ github.event.inputs.since_minutes || '720' }}
+      INSPECT_MODE: ${{ github.event.inputs.mode || 'logs' }}
+      TARGET_ENTITY_ID: ${{ github.event.inputs.target_entity_id || '63ec1ec3-7ccf-4b6b-97b1-33121fbc94cf' }}
 
     steps:
       - name: Validate SSH configuration
@@ -73,6 +85,8 @@ jobs:
           remote_script=$(cat <<'SCRIPT'
           set -euo pipefail
           minutes="$1"
+          inspect_mode="${2:-logs}"
+          target_entity_id="${3:-63ec1ec3-7ccf-4b6b-97b1-33121fbc94cf}"
           since="${minutes} minutes ago"
 
           redact() {
@@ -101,6 +115,505 @@ jobs:
               echo "$name=missing"
             fi
           }
+
+          if [ "$inspect_mode" = "brand_scope" ]; then
+            echo "== production db brand scope check =="
+            hostname
+            date -Is
+            current="$(readlink -f /srv/ageo-deploy/current || true)"
+            echo "current=${current:-missing}"
+            if [ -n "${current:-}" ] && [ -f "$current/.release-sha" ]; then
+              echo "sha=$(cat "$current/.release-sha")"
+            fi
+            echo
+
+            if [ -z "${current:-}" ] || [ ! -x "$current/aeo-platform/backend/.venv/bin/python" ]; then
+              echo "backend python runtime not found"
+              exit 2
+            fi
+
+            cd "$current/aeo-platform/backend"
+            "$current/aeo-platform/backend/.venv/bin/python" - "$target_entity_id" <<'PY'
+          import asyncio
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+          from typing import Any
+
+          target_entity_id = sys.argv[1]
+
+
+          def load_env(path: Path) -> None:
+              if not path.exists():
+                  return
+              for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  key = key.strip()
+                  value = value.strip().strip('"').strip("'")
+                  if key and key not in os.environ:
+                      os.environ[key] = value
+
+
+          def clean(value: object, limit: int = 320) -> str:
+              text_value = str(value or "")
+              text_value = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED_SK]", text_value)
+              text_value = re.sub(r"Bearer [A-Za-z0-9._-]+", "Bearer [REDACTED]", text_value)
+              text_value = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[REDACTED_EMAIL]", text_value)
+              text_value = re.sub(r"(?<!\d)1[3-9]\d{9}(?!\d)", "[REDACTED_PHONE]", text_value)
+              text_value = text_value.replace("\n", " ")
+              text_value = re.sub(r"\s+", " ", text_value).strip()
+              return text_value[:limit] + ("..." if len(text_value) > limit else "")
+
+
+          def row_to_dict(row: Any) -> dict[str, Any]:
+              output: dict[str, Any] = {}
+              for key, value in dict(row).items():
+                  if value is None:
+                      output[key] = None
+                  elif key.endswith("_at"):
+                      output[key] = value.isoformat() if hasattr(value, "isoformat") else str(value)
+                  elif isinstance(value, (str, int, float, bool)):
+                      output[key] = clean(value, 420) if isinstance(value, str) else value
+                  else:
+                      output[key] = clean(value, 420)
+              return output
+
+
+          def print_rows(title: str, rows: list[Any]) -> None:
+              print(f"## {title} count={len(rows)}")
+              for row in rows:
+                  print(json.dumps(row_to_dict(row), ensure_ascii=False, sort_keys=True))
+              print()
+
+
+          def parse_payload(value: object) -> Any:
+              if value is None:
+                  return None
+              if isinstance(value, (dict, list)):
+                  return value
+              text_value = str(value)
+              try:
+                  return json.loads(text_value)
+              except Exception:
+                  return None
+
+
+          def walk_platforms(value: Any, path: str = "$", out: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
+              if out is None:
+                  out = []
+              if len(out) >= 80:
+                  return out
+              if isinstance(value, dict):
+                  for key, item in value.items():
+                      key_text = str(key)
+                      lowered_key = key_text.lower()
+                      if lowered_key in {"platform", "platform_name", "source_platform", "source", "provider"}:
+                          text_item = str(item)
+                          lowered_value = text_item.lower()
+                          if any(token in lowered_value for token in ("hunyuan", "yuanbao")) or any(token in text_item for token in ("元宝", "混元")):
+                              out.append({"path": f"{path}.{key_text}", "value": clean(text_item, 160)})
+                      walk_platforms(item, f"{path}.{key_text}", out)
+              elif isinstance(value, list):
+                  for index, item in enumerate(value[:200]):
+                      walk_platforms(item, f"{path}[{index}]", out)
+              elif isinstance(value, str):
+                  lowered_value = value.lower()
+                  if any(token in lowered_value for token in ("hunyuan", "yuanbao")) or any(token in value for token in ("元宝", "混元")):
+                      out.append({"path": path, "value": clean(value, 220)})
+              return out
+
+
+          async def main() -> None:
+              load_env(Path(".env.local"))
+              from sqlalchemy import text
+              from app.core.database import AsyncSessionLocal
+
+              async with AsyncSessionLocal() as db:
+                  await db.execute(text("set statement_timeout = '20s'"))
+                  await db.execute(text("set transaction read only"))
+                  print(f"target_entity_id={target_entity_id}")
+
+                  target_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select
+                                e.id::text as id,
+                                e.name,
+                                e.domain,
+                                e.industry,
+                                e.status::text as status,
+                                e.visibility_scope::text as visibility_scope,
+                                e.owner_user_id::text as owner_user_id,
+                                e.organization_id::text as organization_id,
+                                e.created_at,
+                                e.updated_at,
+                                (select count(*) from sessions s where s.entity_id = e.id) as session_count,
+                                (select count(*) from analysis_tasks t where t.entity_id = e.id) as task_count
+                              from entities e
+                              where e.id::text = :target_entity_id
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  print_rows("target entity", list(target_rows))
+
+                  entity_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select
+                                e.id::text as id,
+                                e.name,
+                                e.domain,
+                                e.industry,
+                                e.status::text as status,
+                                e.visibility_scope::text as visibility_scope,
+                                e.owner_user_id::text as owner_user_id,
+                                e.organization_id::text as organization_id,
+                                e.created_at,
+                                e.updated_at,
+                                (select count(*) from sessions s where s.entity_id = e.id) as session_count,
+                                (select count(*) from analysis_tasks t where t.entity_id = e.id) as task_count
+                              from entities e
+                              where e.id::text = :target_entity_id
+                                 or lower(coalesce(e.name, '')) like '%whobot%'
+                                 or coalesce(e.name, '') like '%呼波特%'
+                                 or lower(coalesce(e.domain, '')) like '%whobot%'
+                                 or coalesce(e.name, '') like '%纽崔莱%'
+                                 or lower(coalesce(e.domain, '')) like '%amway.com.cn%'
+                              order by e.updated_at desc
+                              limit 60
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  print_rows("entities matching target or whobot/nutrilite", list(entity_rows))
+
+                  user_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              with related_users as (
+                                select owner_user_id as user_id from entities where id::text = :target_entity_id and owner_user_id is not null
+                                union
+                                select user_id from sessions where entity_id::text = :target_entity_id
+                                union
+                                select user_id from analysis_tasks where entity_id::text = :target_entity_id
+                                union
+                                select e.owner_user_id from entities e
+                                  where e.owner_user_id is not null and (
+                                    lower(coalesce(e.name, '')) like '%whobot%'
+                                    or coalesce(e.name, '') like '%呼波特%'
+                                    or lower(coalesce(e.domain, '')) like '%whobot%'
+                                  )
+                                union
+                                select s.user_id from sessions s left join entities e on e.id = s.entity_id
+                                  where lower(coalesce(e.name, '')) like '%whobot%'
+                                     or coalesce(e.name, '') like '%呼波特%'
+                                     or lower(coalesce(e.domain, '')) like '%whobot%'
+                                union
+                                select t.user_id from analysis_tasks t
+                                  where lower(coalesce(t.brand_name, '')) like '%whobot%'
+                                     or coalesce(t.brand_name, '') like '%呼波特%'
+                              )
+                              select
+                                u.id::text as id,
+                                u.role::text as role,
+                                u.status::text as status,
+                                u.is_active,
+                                u.organization_id::text as organization_id,
+                                u.created_at,
+                                u.updated_at,
+                                (select count(*) from entities e where e.owner_user_id = u.id) as owned_entity_count,
+                                (select count(distinct s.entity_id) from sessions s where s.user_id = u.id and s.entity_id is not null) as session_entity_count,
+                                (select count(distinct t.entity_id) from analysis_tasks t where t.user_id = u.id and t.entity_id is not null) as task_entity_count,
+                                (select count(*) from sessions s where s.user_id = u.id) as session_count,
+                                (select count(*) from analysis_tasks t where t.user_id = u.id) as task_count
+                              from users u
+                              where u.id in (select user_id from related_users where user_id is not null)
+                              order by u.updated_at desc
+                              limit 80
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  print_rows("related users redacted", list(user_rows))
+
+                  session_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select
+                                s.id::text as id,
+                                s.user_id::text as user_id,
+                                s.entity_id::text as entity_id,
+                                e.name as entity_name,
+                                e.domain as entity_domain,
+                                s.title,
+                                s.status::text as status,
+                                s.created_at,
+                                s.updated_at,
+                                (select count(*) from messages m where m.session_id = s.id) as message_count,
+                                exists (
+                                  select 1 from messages m
+                                  where m.session_id = s.id and (
+                                    lower(coalesce(m.content, '')) like '%whobot%'
+                                    or coalesce(m.content, '') like '%呼波特%'
+                                    or lower(coalesce(m.output_data, '')) like '%whobot%'
+                                    or coalesce(m.output_data, '') like '%呼波特%'
+                                    or lower(coalesce(m.extra_metadata, '')) like '%whobot%'
+                                  )
+                                ) as has_whobot_message
+                              from sessions s
+                              left join entities e on e.id = s.entity_id
+                              where s.entity_id::text = :target_entity_id
+                              order by s.updated_at desc
+                              limit 50
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  print_rows("target entity sessions", list(session_rows))
+
+                  whobot_session_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              with whobot_sessions as (
+                                select distinct m.session_id from messages m
+                                where lower(coalesce(m.content, '')) like '%whobot%'
+                                   or coalesce(m.content, '') like '%呼波特%'
+                                   or lower(coalesce(m.output_data, '')) like '%whobot%'
+                                   or coalesce(m.output_data, '') like '%呼波特%'
+                                   or lower(coalesce(m.extra_metadata, '')) like '%whobot%'
+                                limit 200
+                              )
+                              select
+                                s.id::text as id,
+                                s.user_id::text as user_id,
+                                s.entity_id::text as entity_id,
+                                e.name as entity_name,
+                                e.domain as entity_domain,
+                                s.title,
+                                s.status::text as status,
+                                s.created_at,
+                                s.updated_at,
+                                (s.entity_id::text = :target_entity_id) as is_target_entity,
+                                (select count(*) from messages m where m.session_id = s.id) as message_count
+                              from sessions s
+                              left join entities e on e.id = s.entity_id
+                              where s.id in (select session_id from whobot_sessions)
+                                 or lower(coalesce(e.name, '')) like '%whobot%'
+                                 or coalesce(e.name, '') like '%呼波特%'
+                                 or lower(coalesce(e.domain, '')) like '%whobot%'
+                              order by s.updated_at desc
+                              limit 80
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  print_rows("whobot sessions", list(whobot_session_rows))
+
+                  task_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select
+                                t.id::text as id,
+                                t.user_id::text as user_id,
+                                t.entity_id::text as entity_id,
+                                e.name as entity_name,
+                                e.domain as entity_domain,
+                                t.session_id::text as session_id,
+                                t.brand_name,
+                                t.status::text as status,
+                                t.current_stage,
+                                t.progress,
+                                t.progress_message,
+                                t.created_at,
+                                t.started_at,
+                                t.updated_at,
+                                t.completed_at,
+                                (
+                                  lower(coalesce(t.stage_results_cache::text, '')) like '%whobot%'
+                                  or coalesce(t.stage_results_cache::text, '') like '%呼波特%'
+                                ) as has_whobot_payload,
+                                (
+                                  lower(coalesce(t.stage_results_cache::text, '')) like '%hunyuan%'
+                                  or lower(coalesce(t.stage_results_cache::text, '')) like '%yuanbao%'
+                                  or coalesce(t.stage_results_cache::text, '') like '%元宝%'
+                                  or coalesce(t.stage_results_cache::text, '') like '%混元%'
+                                ) as has_yuanbao_or_hunyuan_payload
+                              from analysis_tasks t
+                              left join entities e on e.id = t.entity_id
+                              where t.entity_id::text = :target_entity_id
+                                 or lower(coalesce(t.brand_name, '')) like '%whobot%'
+                                 or coalesce(t.brand_name, '') like '%呼波特%'
+                                 or lower(coalesce(t.stage_results_cache::text, '')) like '%whobot%'
+                                 or coalesce(t.stage_results_cache::text, '') like '%呼波特%'
+                              order by t.updated_at desc
+                              limit 80
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  print_rows("target or whobot analysis tasks", list(task_rows))
+
+                  active_task_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              with target_users as (
+                                select owner_user_id as user_id from entities where id::text = :target_entity_id and owner_user_id is not null
+                                union
+                                select user_id from sessions where entity_id::text = :target_entity_id
+                                union
+                                select user_id from analysis_tasks where entity_id::text = :target_entity_id
+                              )
+                              select
+                                t.id::text as id,
+                                t.user_id::text as user_id,
+                                t.entity_id::text as entity_id,
+                                e.name as entity_name,
+                                e.domain as entity_domain,
+                                t.session_id::text as session_id,
+                                t.brand_name,
+                                t.status::text as status,
+                                t.current_stage,
+                                t.progress,
+                                t.progress_message,
+                                t.created_at,
+                                t.started_at,
+                                t.updated_at,
+                                (t.entity_id::text = :target_entity_id) as is_target_entity
+                              from analysis_tasks t
+                              left join entities e on e.id = t.entity_id
+                              where t.user_id in (select user_id from target_users where user_id is not null)
+                                and t.status::text in ('pending', 'running')
+                              order by t.updated_at desc
+                              limit 60
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  print_rows("active pending/running tasks for target users", list(active_task_rows))
+
+                  whobot_message_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select
+                                m.id::text as id,
+                                m.session_id::text as session_id,
+                                s.entity_id::text as entity_id,
+                                e.name as entity_name,
+                                m.role::text as role,
+                                m.type::text as type,
+                                m.output_type,
+                                m.sequence,
+                                m.created_at,
+                                left(coalesce(m.content, '') || ' ' || coalesce(m.output_data, '') || ' ' || coalesce(m.extra_metadata, ''), 900) as snippet
+                              from messages m
+                              join sessions s on s.id = m.session_id
+                              left join entities e on e.id = s.entity_id
+                              where s.entity_id::text = :target_entity_id
+                                and (
+                                  lower(coalesce(m.content, '')) like '%whobot%'
+                                  or coalesce(m.content, '') like '%呼波特%'
+                                  or lower(coalesce(m.output_data, '')) like '%whobot%'
+                                  or coalesce(m.output_data, '') like '%呼波特%'
+                                  or lower(coalesce(m.extra_metadata, '')) like '%whobot%'
+                                )
+                              order by m.created_at desc
+                              limit 40
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  print_rows("target session messages containing whobot", list(whobot_message_rows))
+
+                  payload_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select 'message' as source_kind, m.id::text as source_id, m.session_id::text as session_id,
+                                     s.entity_id::text as entity_id, m.created_at as created_at, m.output_data as payload
+                              from messages m
+                              join sessions s on s.id = m.session_id
+                              where s.entity_id::text = :target_entity_id
+                                and m.output_data is not null
+                                and (
+                                  lower(coalesce(m.output_data, '')) like '%hunyuan%'
+                                  or lower(coalesce(m.output_data, '')) like '%yuanbao%'
+                                  or coalesce(m.output_data, '') like '%元宝%'
+                                  or coalesce(m.output_data, '') like '%混元%'
+                                )
+                              order by m.created_at desc
+                              limit 20
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+                  task_payload_rows = (
+                      await db.execute(
+                          text(
+                              """
+                              select 'task' as source_kind, t.id::text as source_id, t.session_id::text as session_id,
+                                     t.entity_id::text as entity_id, t.updated_at as created_at, t.stage_results_cache::text as payload
+                              from analysis_tasks t
+                              where t.entity_id::text = :target_entity_id
+                                and (
+                                  lower(coalesce(t.stage_results_cache::text, '')) like '%hunyuan%'
+                                  or lower(coalesce(t.stage_results_cache::text, '')) like '%yuanbao%'
+                                  or coalesce(t.stage_results_cache::text, '') like '%元宝%'
+                                  or coalesce(t.stage_results_cache::text, '') like '%混元%'
+                                )
+                              order by t.updated_at desc
+                              limit 20
+                              """
+                          ),
+                          {"target_entity_id": target_entity_id},
+                      )
+                  ).mappings().all()
+
+                  print("## platform token hits from target payloads")
+                  hit_count = 0
+                  for row in list(payload_rows) + list(task_payload_rows):
+                      parsed = parse_payload(row["payload"])
+                      hits = walk_platforms(parsed if parsed is not None else row["payload"])
+                      if not hits:
+                          continue
+                      hit_count += len(hits)
+                      print(json.dumps({
+                          "source_kind": row["source_kind"],
+                          "source_id": row["source_id"],
+                          "session_id": row["session_id"],
+                          "entity_id": row["entity_id"],
+                          "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+                          "hits": hits[:12],
+                      }, ensure_ascii=False, sort_keys=True))
+                  print(f"platform_token_hit_count={hit_count}")
+
+
+          asyncio.run(main())
+          PY
+            exit 0
+          fi
 
           echo "== host =="
           hostname
@@ -409,4 +922,4 @@ jobs:
           )
 
           ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
-            "bash -s -- $(printf '%q' "$SINCE_MINUTES")" <<< "$remote_script"
+            "bash -s -- $(printf '%q' "$SINCE_MINUTES") $(printf '%q' "$INSPECT_MODE") $(printf '%q' "$TARGET_ENTITY_ID")" <<< "$remote_script"
