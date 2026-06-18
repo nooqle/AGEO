@@ -6,7 +6,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,7 +42,6 @@ class BoardRun(Base):
     __table_args__ = (
         Index("ix_board_runs_entity_status", "entity_id", "status"),
         Index("ix_board_runs_entity_updated", "entity_id", "updated_at"),
-        Index("ix_board_runs_brand_intelligence_run", "brand_intelligence_run_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -79,6 +88,11 @@ class BoardRun(Base):
         default="running",
         nullable=False,
         index=True,
+    )
+    is_scaffold: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
     )
     progress: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -260,7 +274,6 @@ class GraphUpdate(Base):
     __tablename__ = "graph_updates"
     __table_args__ = (
         Index("ix_graph_updates_entity_status", "entity_id", "status"),
-        Index("ix_graph_updates_board_run", "board_run_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -382,7 +395,6 @@ class ReportGuardrailResult(Base):
     __tablename__ = "report_guardrail_results"
     __table_args__ = (
         Index("ix_report_guardrails_update_severity", "graph_update_id", "severity"),
-        Index("ix_report_guardrails_report", "report_version_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

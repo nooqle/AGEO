@@ -19,6 +19,9 @@ from app.api.v1.brand_space import (
     create_board_run,
     decide_graph_patch,
     generate_graph_update_report,
+    get_board_run_assets,
+    get_board_run_events,
+    get_brand_graph,
     get_brand_space,
     pause_board_run,
     resume_board_run,
@@ -71,12 +74,35 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
 
         created = await create_board_run(
             entity_id=str(entity.id),
-            payload=BoardRunCreate(auto_dispatch=False),
+            payload=BoardRunCreate(),
             db=session,
             current_user=owner,
         )
         run_id = created["run"]["id"]
         assert created["run"]["status"] == "running"
+        assert created["run"]["is_scaffold"] is True
+
+        graph = await get_brand_graph(
+            entity_id=str(entity.id),
+            db=session,
+            current_user=owner,
+        )
+        assert graph["graph_update"]["id"] == created["graph_update"]["id"]
+        assert any(item["label"] == "安利" for item in graph["graph"]["entities"])
+
+        events = await get_board_run_events(
+            run_id=run_id,
+            db=session,
+            current_user=owner,
+        )
+        assert any(event["type"] == "scaffold_data_loaded" for event in events["events"])
+
+        assets = await get_board_run_assets(
+            run_id=run_id,
+            db=session,
+            current_user=owner,
+        )
+        assert len(assets["artifacts"]) == 8
 
         paused = await pause_board_run(run_id=run_id, db=session, current_user=owner)
         assert paused["run"]["status"] == "paused"
@@ -96,6 +122,17 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
         decided_patch = next(item for item in decided["patches"] if item["id"] == patch["id"])
         assert decided_patch["status"] == "accepted"
 
+        duplicate_decision = await decide_graph_patch(
+            patch_id=patch["id"],
+            payload=GraphPatchDecision(status="needs_review", reason="继续观察"),
+            db=session,
+            current_user=owner,
+        )
+        duplicate_patch = next(
+            item for item in duplicate_decision["patches"] if item["id"] == patch["id"]
+        )
+        assert duplicate_patch["status"] == "needs_review"
+
         report = await generate_graph_update_report(
             graph_update_id=resumed["graph_update"]["id"],
             payload=GraphUpdateReportCreate(),
@@ -103,6 +140,24 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert report["report"]["title"] == "安利圈层状态更新"
+
+        accepted_again = await decide_graph_patch(
+            patch_id=patch["id"],
+            payload=GraphPatchDecision(status="accepted", reason="证据已补足"),
+            db=session,
+            current_user=owner,
+        )
+        assert next(
+            item for item in accepted_again["patches"] if item["id"] == patch["id"]
+        )["status"] == "accepted"
+
+        publishable_report = await generate_graph_update_report(
+            graph_update_id=resumed["graph_update"]["id"],
+            payload=GraphUpdateReportCreate(publish_requested=True),
+            db=session,
+            current_user=owner,
+        )
+        assert publishable_report["report"]["payload"]["publication_status"] == "publishable"
 
         stopped = await stop_board_run(run_id=run_id, db=session, current_user=owner)
         assert stopped["run"]["status"] == "stopped"
@@ -136,7 +191,7 @@ async def test_brand_space_api_blocks_other_user(tmp_path):
 
         await create_board_run(
             entity_id=str(entity.id),
-            payload=BoardRunCreate(auto_dispatch=False),
+            payload=BoardRunCreate(),
             db=session,
             current_user=owner,
         )

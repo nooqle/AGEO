@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -29,6 +30,9 @@ from app.services.brand_knowledge_graph_projection_service import (
     BrandKnowledgeGraphProjectionService,
 )
 from app.services.entity_service import EntityService
+
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -211,6 +215,7 @@ class BrandSpaceService:
             board_id=board_id,
             template_id=template_id,
             status="running",
+            is_scaffold=True,
             progress=0.86,
             summary="AI 能见度监测画布已生成一组待审阅图谱更新。",
             input_scope=input_scope or {"platforms": ["chatgpt", "deepseek", "kimi", "doubao"]},
@@ -364,10 +369,13 @@ class BrandSpaceService:
         graph_update = await self._require_graph_update(patch.graph_update_id, current_user)
 
         patches = await self._patches(graph_update.id)
-        if all(item.status in {"auto_applied", "accepted", "rejected", "blocked"} for item in patches):
+        terminal_patch_statuses = {"auto_applied", "accepted", "rejected", "blocked"}
+        if all(item.status in terminal_patch_statuses for item in patches):
             graph_update.status = "applied"
         elif any(item.status == "needs_review" for item in patches):
             graph_update.status = "needs_review"
+        else:
+            graph_update.status = "partial"
 
         await self._append_event(
             entity_id=patch.entity_id,
@@ -946,7 +954,12 @@ class BrandSpaceService:
             graph_projection = projection.get("graph_projection") or {}
             existing_nodes = graph_projection.get("nodes") or []
             existing_edges = graph_projection.get("edges") or []
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Knowledge graph projection failed for entity %s: %s",
+                entity.id,
+                exc,
+            )
             existing_nodes = []
             existing_edges = []
 
@@ -1017,6 +1030,7 @@ class BrandSpaceService:
         review_count = sum(1 for patch in patches if patch.status == "needs_review")
         rows = [
             ("run_started", "info", "已从 AI 能见度监测模板启动画布运行。", None),
+            ("scaffold_data_loaded", "warning", "当前运行使用脚手架数据预览，尚未触发真实 AI 抓取。", None),
             ("artifact_written", "success", "问题集资产已写入，共 1,248 条问题。", "question-set"),
             ("node_progress", "info", "ChatGPT、DeepSeek、Kimi、豆包正在并行抓取。", "platform-rack"),
             ("artifact_written", "success", "标准化回答表已生成，可以进入实体抽取。", "answer-normalize"),
@@ -1143,7 +1157,7 @@ class BrandSpaceService:
             "boardName": "AI 能见度监测画布",
             "runId": str(board_run.id),
             "startedAt": board_run.started_at.isoformat() if board_run.started_at else "",
-            "duration": "00:02:14",
+            "duration": self._duration_label(board_run),
         }
 
     def _template_node_to_dict(self, template: dict[str, Any], *, status: str, progress: float) -> dict[str, Any]:
@@ -1168,6 +1182,7 @@ class BrandSpaceService:
             "board_id": board_run.board_id,
             "template_id": board_run.template_id,
             "status": board_run.status,
+            "is_scaffold": board_run.is_scaffold,
             "progress": board_run.progress,
             "summary": board_run.summary,
             "input_scope": board_run.input_scope,
@@ -1274,6 +1289,8 @@ class BrandSpaceService:
         graph_update: GraphUpdate,
         patches: list[GraphPatch],
     ) -> dict[str, Any]:
+        # Scaffold report copy keeps the MVP contract stable until real
+        # extraction and synthesis replace these deterministic sections.
         competitor_claims = [
             {
                 "patch_id": str(patch.id),
@@ -1307,3 +1324,18 @@ class BrandSpaceService:
             "rejected": "拒绝",
             "needs_review": "继续审阅",
         }.get(status, status)
+
+    @staticmethod
+    def _duration_label(board_run: BoardRun) -> str:
+        if board_run.started_at is None:
+            return "00:00:00"
+        started_at = board_run.started_at
+        end = board_run.completed_at or _now()
+        if started_at.tzinfo is None and end.tzinfo is not None:
+            end = end.replace(tzinfo=None)
+        elif started_at.tzinfo is not None and end.tzinfo is None:
+            started_at = started_at.replace(tzinfo=None)
+        seconds = max(int((end - started_at).total_seconds()), 0)
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"

@@ -29,6 +29,7 @@ def upgrade() -> None:
         sa.Column("board_id", sa.String(length=120), nullable=False),
         sa.Column("template_id", sa.String(length=120), nullable=False),
         sa.Column("status", sa.String(length=40), nullable=False),
+        sa.Column("is_scaffold", sa.Boolean(), nullable=False),
         sa.Column("progress", sa.Float(), nullable=False),
         sa.Column("summary", sa.Text(), nullable=False),
         sa.Column("input_scope", sa.Text(), nullable=True),
@@ -47,7 +48,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_board_runs_analysis_task_id", "board_runs", ["analysis_task_id"])
-    op.create_index("ix_board_runs_brand_intelligence_run", "board_runs", ["brand_intelligence_run_id"])
     op.create_index("ix_board_runs_brand_intelligence_run_id", "board_runs", ["brand_intelligence_run_id"])
     op.create_index("ix_board_runs_created_by_user_id", "board_runs", ["created_by_user_id"])
     op.create_index("ix_board_runs_entity_id", "board_runs", ["entity_id"])
@@ -144,7 +144,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["entity_id"], ["entities.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_graph_updates_board_run", "graph_updates", ["board_run_id"])
     op.create_index("ix_graph_updates_board_run_id", "graph_updates", ["board_run_id"])
     op.create_index("ix_graph_updates_created_by_user_id", "graph_updates", ["created_by_user_id"])
     op.create_index("ix_graph_updates_entity_id", "graph_updates", ["entity_id"])
@@ -201,7 +200,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_report_guardrails_graph_update_id", "report_guardrail_results", ["graph_update_id"])
-    op.create_index("ix_report_guardrails_report", "report_guardrail_results", ["report_version_id"])
     op.create_index("ix_report_guardrails_report_version_id", "report_guardrail_results", ["report_version_id"])
     op.create_index("ix_report_guardrails_update_severity", "report_guardrail_results", ["graph_update_id", "severity"])
 
@@ -209,7 +207,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_report_guardrails_update_severity", table_name="report_guardrail_results")
     op.drop_index("ix_report_guardrails_report_version_id", table_name="report_guardrail_results")
-    op.drop_index("ix_report_guardrails_report", table_name="report_guardrail_results")
     op.drop_index("ix_report_guardrails_graph_update_id", table_name="report_guardrail_results")
     op.drop_table("report_guardrail_results")
 
@@ -224,7 +221,6 @@ def downgrade() -> None:
     op.drop_index("ix_graph_updates_entity_id", table_name="graph_updates")
     op.drop_index("ix_graph_updates_created_by_user_id", table_name="graph_updates")
     op.drop_index("ix_graph_updates_board_run_id", table_name="graph_updates")
-    op.drop_index("ix_graph_updates_board_run", table_name="graph_updates")
     op.drop_table("graph_updates")
 
     op.drop_index("ix_board_runtime_events_run_sequence", table_name="board_runtime_events")
@@ -250,6 +246,5 @@ def downgrade() -> None:
     op.drop_index("ix_board_runs_entity_id", table_name="board_runs")
     op.drop_index("ix_board_runs_created_by_user_id", table_name="board_runs")
     op.drop_index("ix_board_runs_brand_intelligence_run_id", table_name="board_runs")
-    op.drop_index("ix_board_runs_brand_intelligence_run", table_name="board_runs")
     op.drop_index("ix_board_runs_analysis_task_id", table_name="board_runs")
     op.drop_table("board_runs")

@@ -105,6 +105,17 @@ const fallbackGraph: BrandSpaceGraph = {
   evidenceRefs,
 };
 
+function backendNoticeFromError(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) return fallback;
+  if (/failed to fetch|fetch failed|load failed|networkerror/i.test(error.message)) {
+    return `${fallback}（后端连接不可用）`;
+  }
+  if (/request failed:\s*\d+/i.test(error.message)) {
+    return `${fallback}（接口返回异常）`;
+  }
+  return error.message || fallback;
+}
+
 export function BrandSpaceShell() {
   const [activeView, setActiveView] = useState<BrandSpaceView>('boards');
   const [context, setContext] = useState(brandSpaceContext);
@@ -174,7 +185,7 @@ export function BrandSpaceShell() {
       } catch (error) {
         if (cancelled) return;
         setIsBackendMode(false);
-        setBackendNotice(error instanceof Error ? error.message : '后端不可用，正在使用本地演示底版');
+        setBackendNotice(backendNoticeFromError(error, '后端不可用，正在使用本地演示底版'));
       } finally {
         if (!cancelled) {
           setIsLoadingSpace(false);
@@ -197,7 +208,7 @@ export function BrandSpaceShell() {
         .getBrandSpaceBoardRun(spaceRun.id)
         .then(applySpacePayload)
         .catch((error) => {
-          setBackendNotice(error instanceof Error ? error.message : '运行态刷新失败');
+          setBackendNotice(backendNoticeFromError(error, '运行态刷新失败'));
         });
     }, 2500);
 
@@ -251,7 +262,7 @@ export function BrandSpaceShell() {
         : await api.createBrandSpaceBoardRun(entityId);
       applySpacePayload(payload);
     } catch (error) {
-      setBackendNotice(error instanceof Error ? error.message : '启动画布失败，已切回本地动态');
+      setBackendNotice(backendNoticeFromError(error, '启动画布失败，已切回本地动态'));
       startLocalRun();
     }
   };
@@ -265,7 +276,7 @@ export function BrandSpaceShell() {
       const payload = await api.pauseBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
-      setBackendNotice(error instanceof Error ? error.message : '暂停失败，已使用本地状态');
+      setBackendNotice(backendNoticeFromError(error, '暂停失败，已使用本地状态'));
       pauseLocalRun();
     }
   };
@@ -279,7 +290,7 @@ export function BrandSpaceShell() {
       const payload = await api.resumeBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
-      setBackendNotice(error instanceof Error ? error.message : '继续失败，已使用本地状态');
+      setBackendNotice(backendNoticeFromError(error, '继续失败，已使用本地状态'));
       resumeLocalRun();
     }
   };
@@ -293,7 +304,7 @@ export function BrandSpaceShell() {
       const payload = await api.stopBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
-      setBackendNotice(error instanceof Error ? error.message : '停止失败，已使用本地状态');
+      setBackendNotice(backendNoticeFromError(error, '停止失败，已使用本地状态'));
       stopLocalRun();
     }
   };
@@ -314,7 +325,7 @@ export function BrandSpaceShell() {
         }
         return;
       } catch (error) {
-        setBackendNotice(error instanceof Error ? error.message : '审阅提交失败，已使用本地状态');
+        setBackendNotice(backendNoticeFromError(error, '审阅提交失败，已使用本地状态'));
       }
     }
     setPatches((current) => current.map((patch) => (patch.id === patchId ? { ...patch, status } : patch)));
@@ -328,7 +339,7 @@ export function BrandSpaceShell() {
       setReport(response.report);
       setGuardrails(response.guardrails);
     } catch (error) {
-      setBackendNotice(error instanceof Error ? error.message : '报告生成失败');
+      setBackendNotice(backendNoticeFromError(error, '报告生成失败'));
     } finally {
       setIsGeneratingReport(false);
     }
@@ -469,7 +480,7 @@ export function BrandSpaceShell() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">
-                  {isBackendMode ? '真实运行态' : '底版演示运行'}
+                  {isBackendMode ? (spaceRun?.is_scaffold ? '脚手架预览运行' : '真实运行态') : '底版演示运行'}
                   {isLoadingSpace ? ' · 加载中' : ''}
                 </p>
                 <h2 className="mt-1 text-xl font-semibold text-[var(--text-primary)]">{selectedView.label}</h2>

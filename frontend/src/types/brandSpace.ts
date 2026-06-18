@@ -182,6 +182,7 @@ export interface BrandSpaceBoardRun {
   board_id: string;
   template_id: string;
   status: BoardRunStatus;
+  is_scaffold: boolean;
   progress: number;
   summary: string;
   input_scope?: Record<string, unknown> | null;
@@ -242,5 +243,4 @@ export interface CreateBrandSpaceBoardRunInput {
   board_id?: string;
   template_id?: string;
   input_scope?: Record<string, unknown> | null;
-  auto_dispatch?: boolean;
 }

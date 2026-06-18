@@ -1129,7 +1129,6 @@ class ApiService {
           input_scope: payload.input_scope ?? {
             platforms: ['chatgpt', 'deepseek', 'kimi', 'doubao'],
           },
-          auto_dispatch: payload.auto_dispatch ?? false,
         }),
       },
     );
