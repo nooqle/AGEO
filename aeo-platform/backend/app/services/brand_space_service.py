@@ -13,7 +13,12 @@ from uuid import UUID
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.brand_intelligence import BrandReportVersion
+from app.models.brand_intelligence import (
+    BrandReportVersion,
+    BrandIntelligenceQuestion,
+    BrandPlatformAnswer,
+)
+from app.models.brand_intelligence_run import BrandIntelligenceRun
 from app.models.brand_space import (
     BoardArtifact,
     BoardNodeRun,
@@ -24,6 +29,7 @@ from app.models.brand_space import (
     ReportGuardrailResult,
 )
 from app.models.entity import Entity
+from app.models.snapshot import AnalysisSnapshot
 from app.models.user import User
 from app.services.brand_intelligence_run_service import BrandIntelligenceRunService
 from app.services.brand_knowledge_graph_projection_service import (
@@ -161,6 +167,41 @@ EXPLICIT_COMPETITOR_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"alternative|instead of|versus|vs\.?|better than|competitor", re.IGNORECASE),
 )
 
+REAL_EXECUTION_MODE = "real"
+SCAFFOLD_EXECUTION_MODE = "scaffold"
+
+REAL_RUN_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+REAL_RUN_STATUS_TO_BOARD_STATUS = {
+    "not_started": "idle",
+    "planning_questions": "running",
+    "waiting_scope_confirmation": "paused",
+    "fetching_answers": "running",
+    "waiting_takeover": "paused",
+    "analyzing_metrics": "running",
+    "building_world": "running",
+    "generating_recommendations": "running",
+    "waiting_user": "paused",
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "stopped",
+}
+
+REAL_RUN_STATUS_EVENT_MESSAGES = {
+    "not_started": ("runtime_waiting", "info", "真实运行已创建，等待启动后台执行器。"),
+    "planning_questions": ("runtime_stage_changed", "info", "正在生成问题集与样本范围。"),
+    "waiting_scope_confirmation": ("runtime_waiting_user", "warning", "运行需要用户确认问题范围。"),
+    "fetching_answers": ("runtime_stage_changed", "info", "四个平台抓取正在执行。"),
+    "waiting_takeover": ("runtime_waiting_user", "warning", "运行等待平台接管或登录确认。"),
+    "analyzing_metrics": ("runtime_stage_changed", "info", "正在清洗回答并计算指标。"),
+    "building_world": ("runtime_stage_changed", "info", "正在写入品牌对象图谱。"),
+    "generating_recommendations": ("runtime_stage_changed", "info", "正在生成图谱更新解读基础材料。"),
+    "waiting_user": ("runtime_waiting_user", "warning", "运行暂停在用户确认节点。"),
+    "completed": ("runtime_completed", "success", "真实运行已完成。"),
+    "failed": ("runtime_failed", "error", "真实运行失败。"),
+    "cancelled": ("runtime_cancelled", "warning", "真实运行已取消。"),
+}
+
 
 class BrandSpaceService:
     """Persistent state source for the Brand Space MVP."""
@@ -171,6 +212,8 @@ class BrandSpaceService:
     async def get_space(self, *, entity_id: str | UUID, current_user: User) -> dict[str, Any]:
         entity = await self._require_entity(entity_id, current_user)
         board_run = await self._latest_board_run(entity.id)
+        if board_run is not None:
+            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         return await self._space_payload(entity=entity, board_run=board_run)
 
     async def get_graph(self, *, entity_id: str | UUID, current_user: User) -> dict[str, Any]:
@@ -194,17 +237,21 @@ class BrandSpaceService:
         board_id: str = "ai_visibility_monitor",
         template_id: str = "ai_visibility_monitor:v0.1",
         input_scope: dict[str, Any] | None = None,
+        execution_mode: str = SCAFFOLD_EXECUTION_MODE,
     ) -> dict[str, Any]:
         entity = await self._require_entity(entity_id, current_user)
+        normalized_execution_mode = str(execution_mode or SCAFFOLD_EXECUTION_MODE).strip().lower()
+        is_scaffold = normalized_execution_mode != REAL_EXECUTION_MODE
+        effective_input_scope = input_scope or {"platforms": ["chatgpt", "deepseek", "kimi", "doubao"]}
         intelligence_run = await BrandIntelligenceRunService(self.db).create_or_reuse_run(
             entity_id=entity.id,
             current_user=current_user,
             run_goal="通过 Brand Space 画布更新品牌实体关系图谱",
             analysis_mode="panorama",
-            input_scope=input_scope or {"platforms": ["chatgpt", "deepseek", "kimi", "doubao"]},
+            input_scope=effective_input_scope,
             origin_surface="brand_space",
-            origin_event_id=f"brand-space:start:{entity.id}",
-            start_immediately=False,
+            origin_event_id=f"brand-space:scaffold:{entity.id}" if is_scaffold else None,
+            start_immediately=not is_scaffold,
         )
 
         board_run = BoardRun(
@@ -214,18 +261,34 @@ class BrandSpaceService:
             analysis_task_id=intelligence_run.analysis_task_id,
             board_id=board_id,
             template_id=template_id,
-            status="running",
-            is_scaffold=True,
-            progress=0.86,
-            summary="AI 能见度监测画布已生成一组待审阅图谱更新。",
-            input_scope=input_scope or {"platforms": ["chatgpt", "deepseek", "kimi", "doubao"]},
-            active_node_ids=["platform-rack", "graph-patch", "graph-update"],
+            status=(
+                "running"
+                if is_scaffold
+                else REAL_RUN_STATUS_TO_BOARD_STATUS.get(intelligence_run.status, "running")
+            ),
+            is_scaffold=is_scaffold,
+            progress=0.86 if is_scaffold else float(intelligence_run.progress or 0.0),
+            summary=(
+                "AI 能见度监测画布已生成一组待审阅图谱更新。"
+                if is_scaffold
+                else intelligence_run.message or "真实运行已创建，等待后台执行器。"
+            ),
+            input_scope=effective_input_scope,
+            active_node_ids=(
+                ["platform-rack", "graph-patch", "graph-update"]
+                if is_scaffold
+                else self._active_node_ids_for_real_status(intelligence_run.status)
+            ),
             started_at=_now(),
         )
         self.db.add(board_run)
         await self.db.flush()
 
-        node_runs = self._build_initial_nodes(board_run=board_run)
+        node_runs = self._build_initial_nodes(
+            board_run=board_run,
+            scaffold=is_scaffold,
+            intelligence_run=intelligence_run,
+        )
         self.db.add_all(node_runs)
         await self.db.flush()
         node_by_id = {node.node_id: node for node in node_runs}
@@ -234,37 +297,103 @@ class BrandSpaceService:
             entity=entity,
             board_run=board_run,
             node_by_id=node_by_id,
+            scaffold=is_scaffold,
         )
         self.db.add_all(artifacts)
 
-        graph_update, patches = await self._build_graph_update(
-            entity=entity,
-            board_run=board_run,
-            current_user=current_user,
-        )
-        self.db.add(graph_update)
-        await self.db.flush()
-        for patch in patches:
-            patch.graph_update_id = graph_update.id
-        self.db.add_all(patches)
-        await self.db.flush()
-
-        graph_update.graph_snapshot = await self._fallback_graph(entity=entity, patches=patches)
-        graph_update.summary = self._graph_update_summary(patches)
-        graph_update.status = (
-            "needs_review"
-            if any(patch.status == "needs_review" for patch in patches)
-            else "applied"
-        )
         board_run.output_refs = {
             "brand_intelligence_run_id": str(intelligence_run.id),
-            "graph_update_id": str(graph_update.id),
+            "execution_mode": REAL_EXECUTION_MODE if not is_scaffold else SCAFFOLD_EXECUTION_MODE,
+            "intelligence_status": intelligence_run.status,
+            "intelligence_stage": intelligence_run.stage,
         }
 
-        events = self._build_initial_events(entity=entity, board_run=board_run, patches=patches)
+        patches: list[GraphPatch] = []
+        if is_scaffold:
+            graph_update, patches = await self._build_graph_update(
+                entity=entity,
+                board_run=board_run,
+                current_user=current_user,
+            )
+            self.db.add(graph_update)
+            await self.db.flush()
+            for patch in patches:
+                patch.graph_update_id = graph_update.id
+            self.db.add_all(patches)
+            await self.db.flush()
+
+            graph_update.graph_snapshot = await self._fallback_graph(entity=entity, patches=patches)
+            graph_update.summary = self._graph_update_summary(patches)
+            graph_update.status = (
+                "needs_review"
+                if any(patch.status == "needs_review" for patch in patches)
+                else "applied"
+            )
+            board_run.output_refs = {
+                **(board_run.output_refs or {}),
+                "graph_update_id": str(graph_update.id),
+            }
+
+        events = self._build_initial_events(
+            entity=entity,
+            board_run=board_run,
+            patches=patches,
+            scaffold=is_scaffold,
+        )
         self.db.add_all(events)
         await self.db.commit()
         return await self._space_payload(entity=entity, board_run=board_run)
+
+    async def submit_board_run_runtime(
+        self,
+        *,
+        run_id: str | UUID,
+        current_user: User,
+    ) -> tuple[dict[str, Any], str | None]:
+        board_run = await self._require_board_run(run_id, current_user)
+        if board_run.brand_intelligence_run_id is None:
+            raise ValueError("Board run is not linked to a brand intelligence run")
+        intelligence_service = BrandIntelligenceRunService(self.db)
+        intelligence_run = await intelligence_service.get_run(
+            run_id=board_run.brand_intelligence_run_id,
+            current_user=current_user,
+        )
+        if intelligence_run is None:
+            raise LookupError("Brand intelligence run not found")
+        intelligence_run = await intelligence_service.ensure_runtime_submitted(
+            run=intelligence_run,
+            current_user=current_user,
+        )
+        board_run.is_scaffold = False
+        board_run.analysis_task_id = intelligence_run.analysis_task_id
+        board_run.started_at = board_run.started_at or intelligence_run.started_at or _now()
+        board_run.output_refs = {
+            **(board_run.output_refs or {}),
+            "brand_intelligence_run_id": str(intelligence_run.id),
+            "analysis_task_id": str(intelligence_run.analysis_task_id)
+            if intelligence_run.analysis_task_id
+            else None,
+            "execution_mode": REAL_EXECUTION_MODE,
+            "session_id": str(intelligence_run.origin_session_id)
+            if intelligence_run.origin_session_id
+            else None,
+            "task_run_id": (intelligence_run.output_refs or {}).get("task_run_id"),
+        }
+        await self._append_event(
+            entity_id=board_run.entity_id,
+            board_run_id=board_run.id,
+            event_type="runtime_dispatch_requested",
+            severity="info",
+            message="真实后台运行已提交，画布将按阶段同步节点状态。",
+            node_id="brand-seed",
+            payload={"brand_intelligence_run_id": str(intelligence_run.id)},
+        )
+        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        entity = await self._entity_by_id(board_run.entity_id)
+        return (
+            await self._space_payload(entity=entity, board_run=board_run),
+            str(intelligence_run.id),
+        )
 
     async def get_board_run(
         self,
@@ -273,6 +402,7 @@ class BrandSpaceService:
         current_user: User,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
+        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         entity = await self._entity_by_id(board_run.entity_id)
         return await self._space_payload(entity=entity, board_run=board_run)
 
@@ -284,6 +414,8 @@ class BrandSpaceService:
         status: str,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
+        if not board_run.is_scaffold:
+            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         if status == "pause_requested":
             board_run.status = "paused"
             board_run.active_node_ids = []
@@ -300,6 +432,11 @@ class BrandSpaceService:
             board_run.completed_at = _now()
             message = "画布运行已停止，已保留当前图谱更新草稿。"
             node_status = "paused"
+            if not board_run.is_scaffold and board_run.brand_intelligence_run_id:
+                await BrandIntelligenceRunService(self.db).cancel_run(
+                    run_id=board_run.brand_intelligence_run_id,
+                    current_user=current_user,
+                )
         else:
             raise ValueError(f"Unsupported board run status: {status}")
 
@@ -325,6 +462,7 @@ class BrandSpaceService:
         current_user: User,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
+        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         events = await self._events(board_run.id)
         return {"events": [self._event_to_dict(event) for event in events]}
 
@@ -335,6 +473,7 @@ class BrandSpaceService:
         current_user: User,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
+        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         artifacts = await self._artifacts(board_run.id)
         return {"artifacts": [self._artifact_to_dict(artifact) for artifact in artifacts]}
 
@@ -642,6 +781,277 @@ class BrandSpaceService:
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Invalid UUID for {field_name}: {value}") from exc
 
+    async def _sync_real_board_run(
+        self,
+        *,
+        board_run: BoardRun,
+        current_user: User,
+    ) -> None:
+        if board_run.is_scaffold or board_run.brand_intelligence_run_id is None:
+            return
+        intelligence_service = BrandIntelligenceRunService(self.db)
+        intelligence_run = await intelligence_service.get_run(
+            run_id=board_run.brand_intelligence_run_id,
+            current_user=current_user,
+        )
+        if intelligence_run is None:
+            return
+
+        counts = await self._real_artifact_counts(
+            entity_id=board_run.entity_id,
+            intelligence_run=intelligence_run,
+        )
+        board_status = REAL_RUN_STATUS_TO_BOARD_STATUS.get(
+            intelligence_run.status,
+            board_run.status,
+        )
+        active_node_ids = self._active_node_ids_for_real_status(intelligence_run.status)
+        output_refs = dict(board_run.output_refs or {})
+        previous_stage_key = output_refs.get("last_synced_intelligence_stage")
+        current_stage_key = f"{intelligence_run.status}:{intelligence_run.stage}"
+
+        board_run.status = board_status
+        board_run.progress = max(0.0, min(1.0, float(intelligence_run.progress or 0.0)))
+        board_run.summary = intelligence_run.message or board_run.summary
+        board_run.analysis_task_id = intelligence_run.analysis_task_id
+        board_run.active_node_ids = active_node_ids
+        board_run.error_code = intelligence_run.error_code
+        board_run.error_message = intelligence_run.error_message
+        board_run.completed_at = (
+            intelligence_run.completed_at
+            if intelligence_run.status in REAL_RUN_TERMINAL_STATUSES
+            else board_run.completed_at
+        )
+        board_run.output_refs = {
+            **output_refs,
+            "brand_intelligence_run_id": str(intelligence_run.id),
+            "analysis_task_id": str(intelligence_run.analysis_task_id)
+            if intelligence_run.analysis_task_id
+            else None,
+            "execution_mode": REAL_EXECUTION_MODE,
+            "intelligence_status": intelligence_run.status,
+            "intelligence_stage": intelligence_run.stage,
+            "intelligence_message": intelligence_run.message,
+            "last_synced_intelligence_stage": current_stage_key,
+            "session_id": str(intelligence_run.origin_session_id)
+            if intelligence_run.origin_session_id
+            else None,
+            "snapshot_id": (intelligence_run.output_refs or {}).get("snapshot_id"),
+            "task_run_id": (intelligence_run.output_refs or {}).get("task_run_id"),
+        }
+
+        await self._sync_real_nodes(
+            board_run=board_run,
+            intelligence_run=intelligence_run,
+            counts=counts,
+        )
+        await self._sync_real_artifacts(
+            board_run=board_run,
+            intelligence_run=intelligence_run,
+            counts=counts,
+        )
+        if previous_stage_key != current_stage_key:
+            event_type, severity, default_message = REAL_RUN_STATUS_EVENT_MESSAGES.get(
+                intelligence_run.status,
+                ("runtime_stage_changed", "info", "真实运行状态已更新。"),
+            )
+            await self._append_event(
+                entity_id=board_run.entity_id,
+                board_run_id=board_run.id,
+                event_type=event_type,
+                severity=severity,
+                message=intelligence_run.message or default_message,
+                node_id=active_node_ids[0] if active_node_ids else None,
+                payload={
+                    "brand_intelligence_run_id": str(intelligence_run.id),
+                    "status": intelligence_run.status,
+                    "stage": intelligence_run.stage,
+                    "progress": intelligence_run.progress,
+                },
+            )
+        await self.db.commit()
+
+    async def _real_artifact_counts(
+        self,
+        *,
+        entity_id: UUID,
+        intelligence_run: BrandIntelligenceRun,
+    ) -> dict[str, int]:
+        session_id = intelligence_run.origin_session_id
+        question_conditions = [BrandIntelligenceQuestion.entity_id == entity_id]
+        answer_conditions = [BrandPlatformAnswer.entity_id == entity_id]
+        snapshot_conditions = [AnalysisSnapshot.entity_id == entity_id]
+        if session_id is not None:
+            question_conditions.append(BrandIntelligenceQuestion.session_id == session_id)
+            answer_conditions.append(BrandPlatformAnswer.session_id == session_id)
+            snapshot_conditions.append(AnalysisSnapshot.session_id == session_id)
+        question_count = await self.db.scalar(
+            select(func.count(BrandIntelligenceQuestion.id)).where(*question_conditions)
+        )
+        answer_count = await self.db.scalar(
+            select(func.count(BrandPlatformAnswer.id)).where(*answer_conditions)
+        )
+        snapshot_count = await self.db.scalar(
+            select(func.count(AnalysisSnapshot.id)).where(*snapshot_conditions)
+        )
+        return {
+            "questions": int(question_count or 0),
+            "answers": int(answer_count or 0),
+            "snapshots": int(snapshot_count or 0),
+        }
+
+    async def _sync_real_nodes(
+        self,
+        *,
+        board_run: BoardRun,
+        intelligence_run: BrandIntelligenceRun,
+        counts: dict[str, int],
+    ) -> None:
+        node_states = self._real_node_state_map(intelligence_run)
+        nodes = await self._node_runs(board_run.id)
+        for node in nodes:
+            state = node_states.get(node.node_id)
+            if state is None:
+                continue
+            node.status = state["status"]
+            node.progress = state["progress"]
+            node.metrics = self._real_node_metrics(node.node_id, intelligence_run, counts)
+            if node.status == "running":
+                node.started_at = node.started_at or _now()
+                node.completed_at = None
+            elif node.status in {"completed", "needs_review", "failed"}:
+                node.started_at = node.started_at or board_run.started_at
+                node.completed_at = node.completed_at or _now()
+
+    async def _sync_real_artifacts(
+        self,
+        *,
+        board_run: BoardRun,
+        intelligence_run: BrandIntelligenceRun,
+        counts: dict[str, int],
+    ) -> None:
+        row_counts = {
+            "artifact-lexicon": 1,
+            "artifact-questions": counts["questions"],
+            "artifact-raw-answers": counts["answers"],
+            "artifact-parsed-answers": counts["answers"],
+            "artifact-relation-set": counts["answers"],
+            "artifact-patch-set": 0,
+            "artifact-review-list": 0,
+            "artifact-graph-update": counts["snapshots"],
+        }
+        artifacts = await self._artifacts(board_run.id)
+        for artifact in artifacts:
+            artifact.row_count = row_counts.get(artifact.artifact_key, artifact.row_count)
+            artifact.extra_metadata = {
+                **(artifact.extra_metadata or {}),
+                "execution_mode": REAL_EXECUTION_MODE,
+                "brand_intelligence_run_id": str(intelligence_run.id),
+                "session_id": str(intelligence_run.origin_session_id)
+                if intelligence_run.origin_session_id
+                else None,
+                "analysis_task_id": str(intelligence_run.analysis_task_id)
+                if intelligence_run.analysis_task_id
+                else None,
+            }
+
+    def _real_node_state_map(self, intelligence_run: BrandIntelligenceRun) -> dict[str, dict[str, Any]]:
+        status = intelligence_run.status
+        progress = int(max(0.0, min(1.0, float(intelligence_run.progress or 0.0))) * 100)
+        queued = {"status": "queued", "progress": 0.0}
+        completed = {"status": "completed", "progress": 100.0}
+        states: dict[str, dict[str, Any]] = {
+            "brand-seed": completed,
+            "question-set": queued,
+            "platform-rack": queued,
+            "answer-normalize": queued,
+            "entity-match": queued,
+            "graph-patch": queued,
+            "anomaly-review": queued,
+            "graph-update": queued,
+        }
+        if status == "not_started":
+            states["brand-seed"] = {"status": "running", "progress": 35.0}
+        elif status in {"planning_questions", "waiting_scope_confirmation"}:
+            states["question-set"] = {
+                "status": "needs_review" if status == "waiting_scope_confirmation" else "running",
+                "progress": max(12.0, float(progress)),
+            }
+        elif status in {"fetching_answers", "waiting_takeover"}:
+            states["question-set"] = completed
+            states["platform-rack"] = {
+                "status": "paused" if status == "waiting_takeover" else "running",
+                "progress": max(35.0, float(progress)),
+            }
+        elif status == "analyzing_metrics":
+            states["question-set"] = completed
+            states["platform-rack"] = completed
+            states["answer-normalize"] = {"status": "running", "progress": max(55.0, float(progress))}
+            states["entity-match"] = {"status": "running", "progress": max(55.0, float(progress))}
+        elif status == "building_world":
+            states["question-set"] = completed
+            states["platform-rack"] = completed
+            states["answer-normalize"] = completed
+            states["entity-match"] = completed
+            states["graph-patch"] = {"status": "running", "progress": max(72.0, float(progress))}
+        elif status == "generating_recommendations":
+            states["question-set"] = completed
+            states["platform-rack"] = completed
+            states["answer-normalize"] = completed
+            states["entity-match"] = completed
+            states["graph-patch"] = completed
+            states["graph-update"] = {"status": "running", "progress": max(86.0, float(progress))}
+        elif status == "waiting_user":
+            states["question-set"] = completed
+            states["platform-rack"] = completed
+            states["answer-normalize"] = completed
+            states["entity-match"] = completed
+            states["graph-patch"] = {"status": "needs_review", "progress": 100.0}
+            states["anomaly-review"] = {"status": "needs_review", "progress": 100.0}
+        elif status == "completed":
+            states = {node_id: completed for node_id in states}
+        elif status == "failed":
+            active = self._active_node_ids_for_real_status(intelligence_run.status)
+            for node_id in active or ["graph-update"]:
+                states[node_id] = {"status": "failed", "progress": float(progress)}
+        elif status == "cancelled":
+            for node_id in self._active_node_ids_for_real_status(intelligence_run.status):
+                states[node_id] = {"status": "paused", "progress": float(progress)}
+        return states
+
+    def _real_node_metrics(
+        self,
+        node_id: str,
+        intelligence_run: BrandIntelligenceRun,
+        counts: dict[str, int],
+    ) -> list[dict[str, str]]:
+        if node_id == "brand-seed":
+            return [{"label": "模式", "value": "真实"}, {"label": "状态", "value": intelligence_run.status}]
+        if node_id == "question-set":
+            return [{"label": "问题", "value": str(counts["questions"])}, {"label": "阶段", "value": intelligence_run.stage or "-"}]
+        if node_id == "platform-rack":
+            return [{"label": "平台", "value": "4"}, {"label": "回答", "value": str(counts["answers"])}]
+        if node_id in {"answer-normalize", "entity-match"}:
+            return [{"label": "回答", "value": str(counts["answers"])}, {"label": "状态", "value": intelligence_run.status}]
+        if node_id == "graph-update":
+            return [{"label": "快照", "value": str(counts["snapshots"])}, {"label": "进度", "value": f"{intelligence_run.progress:.0%}"}]
+        return [{"label": "状态", "value": intelligence_run.status}]
+
+    def _active_node_ids_for_real_status(self, status: str) -> list[str]:
+        if status in {"not_started", "planning_questions", "waiting_scope_confirmation"}:
+            return ["question-set"]
+        if status in {"fetching_answers", "waiting_takeover"}:
+            return ["platform-rack"]
+        if status == "analyzing_metrics":
+            return ["answer-normalize", "entity-match"]
+        if status == "building_world":
+            return ["graph-patch"]
+        if status == "generating_recommendations":
+            return ["graph-update"]
+        if status == "waiting_user":
+            return ["anomaly-review"]
+        return []
+
     async def _latest_board_run(self, entity_id: UUID) -> BoardRun | None:
         result = await self.db.execute(
             select(BoardRun)
@@ -731,28 +1141,49 @@ class BrandSpaceService:
             "guardrails": [],
         }
 
-    def _build_initial_nodes(self, *, board_run: BoardRun) -> list[BoardNodeRun]:
+    def _build_initial_nodes(
+        self,
+        *,
+        board_run: BoardRun,
+        scaffold: bool,
+        intelligence_run: BrandIntelligenceRun,
+    ) -> list[BoardNodeRun]:
         node_runs: list[BoardNodeRun] = []
-        status_by_id = {
-            "brand-seed": ("completed", 100.0),
-            "question-set": ("completed", 100.0),
-            "platform-rack": ("running", 61.0),
-            "answer-normalize": ("completed", 100.0),
-            "entity-match": ("completed", 100.0),
-            "graph-patch": ("running", 74.0),
-            "anomaly-review": ("needs_review", 100.0),
-            "graph-update": ("running", 68.0),
-        }
-        metrics_by_id = {
-            "brand-seed": [{"label": "实体", "value": "126"}, {"label": "别名", "value": "342"}],
-            "question-set": [{"label": "问题", "value": "1,248"}, {"label": "场景", "value": "42"}],
-            "platform-rack": [{"label": "运行中", "value": "4 / 4"}, {"label": "回答", "value": "994"}],
-            "answer-normalize": [{"label": "回答", "value": "1,248"}, {"label": "失败", "value": "3"}],
-            "entity-match": [{"label": "已映射", "value": "2,193"}, {"label": "新实体", "value": "36"}],
-            "graph-patch": [{"label": "变更", "value": "4"}, {"label": "待审阅", "value": "2"}],
-            "anomaly-review": [{"label": "条目", "value": "2"}, {"label": "优先级", "value": "高"}],
-            "graph-update": [{"label": "已应用", "value": "1"}, {"label": "待处理", "value": "2"}],
-        }
+        if scaffold:
+            status_by_id = {
+                "brand-seed": ("completed", 100.0),
+                "question-set": ("completed", 100.0),
+                "platform-rack": ("running", 61.0),
+                "answer-normalize": ("completed", 100.0),
+                "entity-match": ("completed", 100.0),
+                "graph-patch": ("running", 74.0),
+                "anomaly-review": ("needs_review", 100.0),
+                "graph-update": ("running", 68.0),
+            }
+            metrics_by_id = {
+                "brand-seed": [{"label": "实体", "value": "126"}, {"label": "别名", "value": "342"}],
+                "question-set": [{"label": "问题", "value": "1,248"}, {"label": "场景", "value": "42"}],
+                "platform-rack": [{"label": "运行中", "value": "4 / 4"}, {"label": "回答", "value": "994"}],
+                "answer-normalize": [{"label": "回答", "value": "1,248"}, {"label": "失败", "value": "3"}],
+                "entity-match": [{"label": "已映射", "value": "2,193"}, {"label": "新实体", "value": "36"}],
+                "graph-patch": [{"label": "变更", "value": "4"}, {"label": "待审阅", "value": "2"}],
+                "anomaly-review": [{"label": "条目", "value": "2"}, {"label": "优先级", "value": "高"}],
+                "graph-update": [{"label": "已应用", "value": "1"}, {"label": "待处理", "value": "2"}],
+            }
+        else:
+            real_states = self._real_node_state_map(intelligence_run)
+            status_by_id = {
+                node_id: (state["status"], state["progress"])
+                for node_id, state in real_states.items()
+            }
+            metrics_by_id = {
+                template["node_id"]: self._real_node_metrics(
+                    template["node_id"],
+                    intelligence_run,
+                    {"questions": 0, "answers": 0, "snapshots": 0},
+                )
+                for template in NODE_TEMPLATES
+            }
         for template in NODE_TEMPLATES:
             status, progress = status_by_id[template["node_id"]]
             node_runs.append(
@@ -779,6 +1210,7 @@ class BrandSpaceService:
         entity: Entity,
         board_run: BoardRun,
         node_by_id: dict[str, BoardNodeRun],
+        scaffold: bool,
     ) -> list[BoardArtifact]:
         base = f"assets/{entity.id}/{board_run.id}"
         rows = [
@@ -803,8 +1235,11 @@ class BrandSpaceService:
                     label=label,
                     path=path,
                     mime_type="application/json",
-                    row_count=row_count,
-                    extra_metadata={"node_id": node_id},
+                    row_count=row_count if scaffold else 0,
+                    extra_metadata={
+                        "node_id": node_id,
+                        "execution_mode": SCAFFOLD_EXECUTION_MODE if scaffold else REAL_EXECUTION_MODE,
+                    },
                 )
             )
         return artifacts
@@ -1026,16 +1461,23 @@ class BrandSpaceService:
         entity: Entity,
         board_run: BoardRun,
         patches: list[GraphPatch],
+        scaffold: bool,
     ) -> list[BoardRuntimeEvent]:
         review_count = sum(1 for patch in patches if patch.status == "needs_review")
-        rows = [
-            ("run_started", "info", "已从 AI 能见度监测模板启动画布运行。", None),
-            ("scaffold_data_loaded", "warning", "当前运行使用脚手架数据预览，尚未触发真实 AI 抓取。", None),
-            ("artifact_written", "success", "问题集资产已写入，共 1,248 条问题。", "question-set"),
-            ("node_progress", "info", "ChatGPT、DeepSeek、Kimi、豆包正在并行抓取。", "platform-rack"),
-            ("artifact_written", "success", "标准化回答表已生成，可以进入实体抽取。", "answer-normalize"),
-            ("graph_patch_needs_review", "warning", f"{review_count} 个图谱补丁需要审阅。", "graph-patch"),
-        ]
+        if scaffold:
+            rows = [
+                ("run_started", "info", "已从 AI 能见度监测模板启动画布运行。", None),
+                ("scaffold_data_loaded", "warning", "当前运行使用脚手架数据预览，尚未触发真实 AI 抓取。", None),
+                ("artifact_written", "success", "问题集资产已写入，共 1,248 条问题。", "question-set"),
+                ("node_progress", "info", "ChatGPT、DeepSeek、Kimi、豆包正在并行抓取。", "platform-rack"),
+                ("artifact_written", "success", "标准化回答表已生成，可以进入实体抽取。", "answer-normalize"),
+                ("graph_patch_needs_review", "warning", f"{review_count} 个图谱补丁需要审阅。", "graph-patch"),
+            ]
+        else:
+            rows = [
+                ("run_started", "info", f"{entity.name}真实画布运行已创建。", "brand-seed"),
+                ("runtime_waiting", "info", "等待后台执行器提交并推进问题生成节点。", "question-set"),
+            ]
         return [
             BoardRuntimeEvent(
                 entity_id=entity.id,
@@ -1141,6 +1583,27 @@ class BrandSpaceService:
         return int(result.scalar_one_or_none() or 0) + 1
 
     def _platforms_for_run(self, board_run: BoardRun) -> list[dict[str, Any]]:
+        if not board_run.is_scaffold:
+            if board_run.status == "completed":
+                status = "completed"
+            elif board_run.status in {"paused", "stopped"}:
+                status = "paused"
+            elif "platform-rack" in (board_run.active_node_ids or []):
+                status = "running"
+            else:
+                status = "queued"
+            progress = int(max(0.0, min(1.0, float(board_run.progress or 0.0))) * 100)
+            answers = 0
+            return [
+                {
+                    **platform,
+                    "status": status,
+                    "progress": 100 if status == "completed" else progress,
+                    "answers": answers,
+                    "failures": 0,
+                }
+                for platform in PLATFORM_TEMPLATES
+            ]
         status = "paused" if board_run.status in {"paused", "stopped"} else "running"
         return [{**platform, "status": status} for platform in PLATFORM_TEMPLATES]
 

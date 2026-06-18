@@ -22,6 +22,7 @@ class BoardRunCreate(BaseModel):
     board_id: str = Field(default="ai_visibility_monitor", max_length=120)
     template_id: str = Field(default="ai_visibility_monitor:v0.1", max_length=120)
     input_scope: dict[str, Any] | None = Field(default=None)
+    execution_mode: Literal["scaffold", "real"] = Field(default="scaffold")
 
 
 class GraphPatchDecision(BaseModel):

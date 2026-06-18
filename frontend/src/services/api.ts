@@ -1129,6 +1129,7 @@ class ApiService {
           input_scope: payload.input_scope ?? {
             platforms: ['chatgpt', 'deepseek', 'kimi', 'doubao'],
           },
+          execution_mode: payload.execution_mode ?? 'scaffold',
         }),
       },
     );

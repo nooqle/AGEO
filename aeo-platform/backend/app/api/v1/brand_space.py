@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
@@ -13,6 +13,7 @@ from app.schemas.brand_space import (
     GraphPatchDecision,
     GraphUpdateReportCreate,
 )
+from app.services.brand_intelligence_run_service import dispatch_brand_intelligence_run
 from app.services.brand_space_service import BrandSpaceService
 
 router = APIRouter(prefix="/brand-space", tags=["brand-space"])
@@ -66,18 +67,28 @@ async def get_brand_graph(
 async def create_board_run(
     entity_id: str,
     payload: BoardRunCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     service = BrandSpaceService(db)
     try:
-        return await service.create_board_run(
+        response = await service.create_board_run(
             entity_id=entity_id,
             current_user=current_user,
             board_id=payload.board_id,
             template_id=payload.template_id,
             input_scope=payload.input_scope,
+            execution_mode=payload.execution_mode,
         )
+        if payload.execution_mode == "real":
+            response, intelligence_run_id = await service.submit_board_run_runtime(
+                run_id=response["run"]["id"],
+                current_user=current_user,
+            )
+            if intelligence_run_id:
+                background_tasks.add_task(dispatch_brand_intelligence_run, intelligence_run_id)
+        return response
     except Exception as exc:
         _raise_http(exc)
 
@@ -117,17 +128,26 @@ async def pause_board_run(
 @router.post("/board-runs/{run_id}/resume")
 async def resume_board_run(
     run_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     _parse_uuid(run_id, "run_id")
     service = BrandSpaceService(db)
     try:
-        return await service.update_board_run_status(
+        response = await service.update_board_run_status(
             run_id=run_id,
             current_user=current_user,
             status="running",
         )
+        if response["run"] and response["run"].get("is_scaffold") is False:
+            response, intelligence_run_id = await service.submit_board_run_runtime(
+                run_id=run_id,
+                current_user=current_user,
+            )
+            if intelligence_run_id:
+                background_tasks.add_task(dispatch_brand_intelligence_run, intelligence_run_id)
+        return response
     except Exception as exc:
         _raise_http(exc)
 

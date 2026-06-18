@@ -18,8 +18,10 @@ os.environ.setdefault(
 
 from app.core.database import Base
 from app.models import *  # noqa: F401, F403
+from app.models.brand_intelligence_run import BrandIntelligenceRun
 from app.models.brand_space import GraphPatch
 from app.models.entity import Entity, EntityStatus
+from app.models.task import AnalysisTask, TaskStatus
 from app.models.user import User, UserRole, UserStatus
 from app.services.brand_space_service import BrandSpaceService
 
@@ -165,6 +167,63 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
             reason="覆盖未来状态兜底",
         )
         assert partial_payload["graph_update"]["status"] == "partial"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_real_board_run_syncs_brand_intelligence_stage_to_canvas(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-real-owner@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            input_scope={"platforms": ["chatgpt", "deepseek", "kimi", "doubao"]},
+            execution_mode="real",
+        )
+
+        assert payload["run"]["is_scaffold"] is False
+        assert payload["graph_update"] is None
+        assert any(event["type"] == "runtime_waiting" for event in payload["events"])
+
+        intelligence_run = await session.get(
+            BrandIntelligenceRun,
+            uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
+        )
+        assert intelligence_run is not None
+        task = AnalysisTask(
+            id=uuid.uuid4(),
+            user_id=owner.id,
+            session_id=None,
+            entity_id=entity.id,
+            brand_name=entity.name,
+            status=TaskStatus.RUNNING,
+            current_stage="A4",
+            progress=0.62,
+            progress_message="正在采集 AI 回答",
+        )
+        session.add(task)
+        intelligence_run.analysis_task_id = task.id
+        await session.commit()
+
+        synced = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+
+        assert synced["run"]["status"] == "running"
+        assert synced["run"]["progress"] == 0.62
+        assert synced["run"]["analysis_task_id"] == str(task.id)
+        node_by_id = {node["id"]: node for node in synced["nodes"]}
+        assert node_by_id["question-set"]["status"] == "completed"
+        assert node_by_id["platform-rack"]["status"] == "running"
+        assert any(event["message"] == "正在采集 AI 回答" for event in synced["events"])
 
     await engine.dispose()
 

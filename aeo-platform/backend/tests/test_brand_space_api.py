@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from fastapi import BackgroundTasks
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -75,6 +76,7 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
         created = await create_board_run(
             entity_id=str(entity.id),
             payload=BoardRunCreate(),
+            background_tasks=BackgroundTasks(),
             db=session,
             current_user=owner,
         )
@@ -107,7 +109,12 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
         paused = await pause_board_run(run_id=run_id, db=session, current_user=owner)
         assert paused["run"]["status"] == "paused"
 
-        resumed = await resume_board_run(run_id=run_id, db=session, current_user=owner)
+        resumed = await resume_board_run(
+            run_id=run_id,
+            background_tasks=BackgroundTasks(),
+            db=session,
+            current_user=owner,
+        )
         assert resumed["run"]["status"] == "running"
 
         patch = next(
@@ -192,6 +199,7 @@ async def test_brand_space_api_blocks_other_user(tmp_path):
         await create_board_run(
             entity_id=str(entity.id),
             payload=BoardRunCreate(),
+            background_tasks=BackgroundTasks(),
             db=session,
             current_user=owner,
         )
@@ -203,5 +211,42 @@ async def test_brand_space_api_blocks_other_user(tmp_path):
                 current_user=other,
             )
         assert exc_info.value.status_code == 404
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_brand_space_api_real_run_submits_background_dispatch(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-api-real-owner@example.com")
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="安利",
+            domain="amway.com.cn",
+            industry="营养健康",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=owner.id,
+        )
+        session.add_all([owner, entity])
+        await session.commit()
+
+        background_tasks = BackgroundTasks()
+        created = await create_board_run(
+            entity_id=str(entity.id),
+            payload=BoardRunCreate(execution_mode="real"),
+            background_tasks=background_tasks,
+            db=session,
+            current_user=owner,
+        )
+
+        assert created["run"]["is_scaffold"] is False
+        assert created["run"]["analysis_task_id"]
+        assert created["graph_update"] is None
+        assert any(
+            event["type"] == "runtime_dispatch_requested"
+            for event in created["events"]
+        )
+        assert len(background_tasks.tasks) == 1
 
     await engine.dispose()

@@ -259,7 +259,7 @@ export function BrandSpaceShell() {
     try {
       const payload = spaceRun?.id && runStatus === 'paused'
         ? await api.resumeBrandSpaceBoardRun(spaceRun.id)
-        : await api.createBrandSpaceBoardRun(entityId);
+        : await api.createBrandSpaceBoardRun(entityId, { execution_mode: 'real' });
       applySpacePayload(payload);
     } catch (error) {
       setBackendNotice(backendNoticeFromError(error, '启动画布失败，已切回本地动态'));
