@@ -188,8 +188,11 @@ export interface BrandSpaceBoardRun {
   input_scope?: Record<string, unknown> | null;
   active_node_ids: string[];
   output_refs: Record<string, unknown>;
+  error_code?: string | null;
+  error_message?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
+  last_synced_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -198,6 +201,10 @@ export interface BrandSpaceGraph {
   entities: GraphEntity[];
   relations: GraphRelation[];
   evidenceRefs: EvidenceRef[];
+  meta?: {
+    state?: string;
+    message?: string;
+  };
 }
 
 export interface BrandSpaceGraphUpdate {

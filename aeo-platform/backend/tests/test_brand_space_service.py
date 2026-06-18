@@ -18,8 +18,9 @@ os.environ.setdefault(
 
 from app.core.database import Base
 from app.models import *  # noqa: F401, F403
+from app.models.brand_intelligence import BrandPlatformAnswer
 from app.models.brand_intelligence_run import BrandIntelligenceRun
-from app.models.brand_space import GraphPatch
+from app.models.brand_space import BoardRun, GraphPatch
 from app.models.entity import Entity, EntityStatus
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.user import User, UserRole, UserStatus
@@ -190,6 +191,8 @@ async def test_real_board_run_syncs_brand_intelligence_stage_to_canvas(tmp_path)
 
         assert payload["run"]["is_scaffold"] is False
         assert payload["graph_update"] is None
+        assert payload["graph"]["meta"]["state"] == "runtime_pending"
+        assert len(payload["graph"]["entities"]) > 1
         assert any(event["type"] == "runtime_waiting" for event in payload["events"])
 
         intelligence_run = await session.get(
@@ -209,6 +212,21 @@ async def test_real_board_run_syncs_brand_intelligence_stage_to_canvas(tmp_path)
             progress_message="正在采集 AI 回答",
         )
         session.add(task)
+        session.add_all(
+            [
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    question_id=f"q-{index}",
+                    dedupe_key=f"{entity.id}:answer:{index}",
+                    platform="kimi" if index % 2 else "chatgpt",
+                    fetch_method="test",
+                    status="captured",
+                    success=True,
+                    answer_text="测试回答",
+                )
+                for index in range(5)
+            ]
+        )
         intelligence_run.analysis_task_id = task.id
         await session.commit()
 
@@ -223,7 +241,125 @@ async def test_real_board_run_syncs_brand_intelligence_stage_to_canvas(tmp_path)
         node_by_id = {node["id"]: node for node in synced["nodes"]}
         assert node_by_id["question-set"]["status"] == "completed"
         assert node_by_id["platform-rack"]["status"] == "running"
+        assert sum(platform["answers"] for platform in synced["platforms"]) == 5
         assert any(event["message"] == "正在采集 AI 回答" for event in synced["events"])
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_real_board_run_sync_is_throttled_for_repeated_reads(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-throttle-owner@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            execution_mode="real",
+        )
+        first = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+        board_run = await session.get(BoardRun, uuid.UUID(payload["run"]["id"]))
+        assert board_run is not None
+        first_synced_at = board_run.last_synced_at
+        assert first_synced_at is not None
+
+        intelligence_run = await session.get(
+            BrandIntelligenceRun,
+            uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
+        )
+        assert intelligence_run is not None
+        intelligence_run.message = "不应在 TTL 内同步"
+        intelligence_run.progress = 0.99
+        await session.commit()
+
+        second = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+        await session.refresh(board_run)
+
+        assert second["run"]["summary"] == first["run"]["summary"]
+        assert second["run"]["progress"] == first["run"]["progress"]
+        assert board_run.last_synced_at == first_synced_at
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_real_board_run_marks_missing_intelligence_run_failed(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-missing-run-owner@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            execution_mode="real",
+        )
+        board_run = await session.get(BoardRun, uuid.UUID(payload["run"]["id"]))
+        assert board_run is not None
+        board_run.brand_intelligence_run_id = uuid.uuid4()
+        board_run.last_synced_at = None
+        await session.commit()
+
+        synced = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+
+        assert synced["run"]["status"] == "failed"
+        assert synced["run"]["error_code"] == "intelligence_run_missing"
+        assert any(event["type"] == "runtime_missing" for event in synced["events"])
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_real_board_run_failed_stage_marks_matching_node(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-failed-stage-owner@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            execution_mode="real",
+        )
+        intelligence_run = await session.get(
+            BrandIntelligenceRun,
+            uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
+        )
+        assert intelligence_run is not None
+        intelligence_run.status = "failed"
+        intelligence_run.stage = "A4"
+        intelligence_run.progress = 0.48
+        intelligence_run.message = "A4 抓取失败"
+        await session.commit()
+
+        synced = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+
+        node_by_id = {node["id"]: node for node in synced["nodes"]}
+        assert node_by_id["platform-rack"]["status"] == "failed"
+        assert node_by_id["graph-update"]["status"] == "queued"
 
     await engine.dispose()
 

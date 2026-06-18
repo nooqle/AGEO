@@ -249,4 +249,22 @@ async def test_brand_space_api_real_run_submits_background_dispatch(tmp_path):
         )
         assert len(background_tasks.tasks) == 1
 
+        first_resume_tasks = BackgroundTasks()
+        await resume_board_run(
+            run_id=created["run"]["id"],
+            background_tasks=first_resume_tasks,
+            db=session,
+            current_user=owner,
+        )
+        assert len(first_resume_tasks.tasks) == 0
+
+        second_resume_tasks = BackgroundTasks()
+        await resume_board_run(
+            run_id=created["run"]["id"],
+            background_tasks=second_resume_tasks,
+            db=session,
+            current_user=owner,
+        )
+        assert len(second_resume_tasks.tasks) == 0
+
     await engine.dispose()

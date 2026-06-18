@@ -169,6 +169,7 @@ EXPLICIT_COMPETITOR_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 REAL_EXECUTION_MODE = "real"
 SCAFFOLD_EXECUTION_MODE = "scaffold"
+REAL_SYNC_MIN_INTERVAL_SECONDS = 30
 
 REAL_RUN_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -360,15 +361,37 @@ class BrandSpaceService:
         )
         if intelligence_run is None:
             raise LookupError("Brand intelligence run not found")
+        original_output_refs = dict(intelligence_run.output_refs or {})
+        had_runtime_context = bool(
+            intelligence_run.analysis_task_id and original_output_refs.get("task_run_id")
+        )
         intelligence_run = await intelligence_service.ensure_runtime_submitted(
             run=intelligence_run,
             current_user=current_user,
+        )
+        runtime_context_ready = bool(
+            intelligence_run.analysis_task_id
+            and (intelligence_run.output_refs or {}).get("task_run_id")
+        )
+        output_refs = dict(board_run.output_refs or {})
+        dispatch_key = self._runtime_dispatch_key(intelligence_run)
+        should_dispatch = (
+            runtime_context_ready
+            and intelligence_run.status not in REAL_RUN_TERMINAL_STATUSES
+            and (
+                not had_runtime_context
+                or (
+                    intelligence_run.status
+                    in {"waiting_user", "waiting_scope_confirmation", "waiting_takeover"}
+                    and output_refs.get("last_dispatched_runtime_key") != dispatch_key
+                )
+            )
         )
         board_run.is_scaffold = False
         board_run.analysis_task_id = intelligence_run.analysis_task_id
         board_run.started_at = board_run.started_at or intelligence_run.started_at or _now()
         board_run.output_refs = {
-            **(board_run.output_refs or {}),
+            **output_refs,
             "brand_intelligence_run_id": str(intelligence_run.id),
             "analysis_task_id": str(intelligence_run.analysis_task_id)
             if intelligence_run.analysis_task_id
@@ -379,20 +402,26 @@ class BrandSpaceService:
             else None,
             "task_run_id": (intelligence_run.output_refs or {}).get("task_run_id"),
         }
-        await self._append_event(
-            entity_id=board_run.entity_id,
-            board_run_id=board_run.id,
-            event_type="runtime_dispatch_requested",
-            severity="info",
-            message="真实后台运行已提交，画布将按阶段同步节点状态。",
-            node_id="brand-seed",
-            payload={"brand_intelligence_run_id": str(intelligence_run.id)},
-        )
-        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        if should_dispatch:
+            board_run.output_refs = {
+                **(board_run.output_refs or {}),
+                "last_dispatched_runtime_key": dispatch_key,
+                "last_dispatched_at": _now().isoformat(),
+            }
+            await self._append_event(
+                entity_id=board_run.entity_id,
+                board_run_id=board_run.id,
+                event_type="runtime_dispatch_requested",
+                severity="info",
+                message="真实后台运行已提交，画布将按阶段同步节点状态。",
+                node_id="brand-seed",
+                payload={"brand_intelligence_run_id": str(intelligence_run.id)},
+            )
+        await self._sync_real_board_run(board_run=board_run, current_user=current_user, force=True)
         entity = await self._entity_by_id(board_run.entity_id)
         return (
             await self._space_payload(entity=entity, board_run=board_run),
-            str(intelligence_run.id),
+            str(intelligence_run.id) if should_dispatch else None,
         )
 
     async def get_board_run(
@@ -415,7 +444,7 @@ class BrandSpaceService:
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
         if not board_run.is_scaffold:
-            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+            await self._sync_real_board_run(board_run=board_run, current_user=current_user, force=True)
         if status == "pause_requested":
             board_run.status = "paused"
             board_run.active_node_ids = []
@@ -781,21 +810,79 @@ class BrandSpaceService:
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Invalid UUID for {field_name}: {value}") from exc
 
+    @staticmethod
+    def _assign_if_changed(target: Any, field_name: str, value: Any) -> bool:
+        if getattr(target, field_name) == value:
+            return False
+        setattr(target, field_name, value)
+        return True
+
+    @staticmethod
+    def _elapsed_seconds(start: datetime, end: datetime) -> float:
+        normalized_start = start
+        normalized_end = end
+        if normalized_start.tzinfo is None and normalized_end.tzinfo is not None:
+            normalized_end = normalized_end.replace(tzinfo=None)
+        elif normalized_start.tzinfo is not None and normalized_end.tzinfo is None:
+            normalized_start = normalized_start.replace(tzinfo=None)
+        return max((normalized_end - normalized_start).total_seconds(), 0.0)
+
+    @staticmethod
+    def _runtime_dispatch_key(intelligence_run: BrandIntelligenceRun) -> str:
+        task_run_id = (intelligence_run.output_refs or {}).get("task_run_id") or ""
+        return f"{intelligence_run.id}:{task_run_id}:{intelligence_run.status}"
+
     async def _sync_real_board_run(
         self,
         *,
         board_run: BoardRun,
         current_user: User,
-    ) -> None:
+        force: bool = False,
+    ) -> bool:
         if board_run.is_scaffold or board_run.brand_intelligence_run_id is None:
-            return
+            return False
+        sync_started_at = _now()
+        if (
+            not force
+            and board_run.last_synced_at is not None
+            and self._elapsed_seconds(board_run.last_synced_at, sync_started_at)
+            < REAL_SYNC_MIN_INTERVAL_SECONDS
+        ):
+            return False
+
         intelligence_service = BrandIntelligenceRunService(self.db)
         intelligence_run = await intelligence_service.get_run(
             run_id=board_run.brand_intelligence_run_id,
             current_user=current_user,
         )
         if intelligence_run is None:
-            return
+            logger.warning(
+                "Intelligence run %s not found for board run %s",
+                board_run.brand_intelligence_run_id,
+                board_run.id,
+            )
+            output_refs = dict(board_run.output_refs or {})
+            missing_event_written = bool(output_refs.get("missing_intelligence_event_written"))
+            board_run.status = "failed"
+            board_run.error_code = "intelligence_run_missing"
+            board_run.error_message = "关联的智能运行已不存在"
+            board_run.active_node_ids = []
+            board_run.last_synced_at = sync_started_at
+            board_run.output_refs = {
+                **output_refs,
+                "missing_intelligence_event_written": True,
+            }
+            if not missing_event_written:
+                await self._append_event(
+                    entity_id=board_run.entity_id,
+                    board_run_id=board_run.id,
+                    event_type="runtime_missing",
+                    severity="error",
+                    message="关联的智能运行已不存在，画布运行已标记失败。",
+                    payload={"brand_intelligence_run_id": str(board_run.brand_intelligence_run_id)},
+                )
+            await self.db.commit()
+            return True
 
         counts = await self._real_artifact_counts(
             entity_id=board_run.entity_id,
@@ -810,19 +897,30 @@ class BrandSpaceService:
         previous_stage_key = output_refs.get("last_synced_intelligence_stage")
         current_stage_key = f"{intelligence_run.status}:{intelligence_run.stage}"
 
-        board_run.status = board_status
-        board_run.progress = max(0.0, min(1.0, float(intelligence_run.progress or 0.0)))
-        board_run.summary = intelligence_run.message or board_run.summary
-        board_run.analysis_task_id = intelligence_run.analysis_task_id
-        board_run.active_node_ids = active_node_ids
-        board_run.error_code = intelligence_run.error_code
-        board_run.error_message = intelligence_run.error_message
-        board_run.completed_at = (
+        changed = False
+        changed |= self._assign_if_changed(board_run, "status", board_status)
+        changed |= self._assign_if_changed(
+            board_run,
+            "progress",
+            max(0.0, min(1.0, float(intelligence_run.progress or 0.0))),
+        )
+        changed |= self._assign_if_changed(
+            board_run,
+            "summary",
+            intelligence_run.message or board_run.summary,
+        )
+        changed |= self._assign_if_changed(board_run, "analysis_task_id", intelligence_run.analysis_task_id)
+        changed |= self._assign_if_changed(board_run, "active_node_ids", active_node_ids)
+        changed |= self._assign_if_changed(board_run, "error_code", intelligence_run.error_code)
+        changed |= self._assign_if_changed(board_run, "error_message", intelligence_run.error_message)
+        changed |= self._assign_if_changed(
+            board_run,
+            "completed_at",
             intelligence_run.completed_at
             if intelligence_run.status in REAL_RUN_TERMINAL_STATUSES
-            else board_run.completed_at
+            else board_run.completed_at,
         )
-        board_run.output_refs = {
+        next_output_refs = {
             **output_refs,
             "brand_intelligence_run_id": str(intelligence_run.id),
             "analysis_task_id": str(intelligence_run.analysis_task_id)
@@ -838,14 +936,16 @@ class BrandSpaceService:
             else None,
             "snapshot_id": (intelligence_run.output_refs or {}).get("snapshot_id"),
             "task_run_id": (intelligence_run.output_refs or {}).get("task_run_id"),
+            "real_counts": counts,
         }
+        changed |= self._assign_if_changed(board_run, "output_refs", next_output_refs)
 
-        await self._sync_real_nodes(
+        changed |= await self._sync_real_nodes(
             board_run=board_run,
             intelligence_run=intelligence_run,
             counts=counts,
         )
-        await self._sync_real_artifacts(
+        changed |= await self._sync_real_artifacts(
             board_run=board_run,
             intelligence_run=intelligence_run,
             counts=counts,
@@ -869,7 +969,11 @@ class BrandSpaceService:
                     "progress": intelligence_run.progress,
                 },
             )
-        await self.db.commit()
+            changed = True
+        changed |= self._assign_if_changed(board_run, "last_synced_at", sync_started_at)
+        if changed:
+            await self.db.commit()
+        return changed
 
     async def _real_artifact_counts(
         self,
@@ -906,22 +1010,34 @@ class BrandSpaceService:
         board_run: BoardRun,
         intelligence_run: BrandIntelligenceRun,
         counts: dict[str, int],
-    ) -> None:
+    ) -> bool:
+        changed = False
         node_states = self._real_node_state_map(intelligence_run)
         nodes = await self._node_runs(board_run.id)
         for node in nodes:
             state = node_states.get(node.node_id)
             if state is None:
                 continue
-            node.status = state["status"]
-            node.progress = state["progress"]
-            node.metrics = self._real_node_metrics(node.node_id, intelligence_run, counts)
+            changed |= self._assign_if_changed(node, "status", state["status"])
+            changed |= self._assign_if_changed(node, "progress", state["progress"])
+            changed |= self._assign_if_changed(
+                node,
+                "metrics",
+                self._real_node_metrics(node.node_id, intelligence_run, counts),
+            )
             if node.status == "running":
-                node.started_at = node.started_at or _now()
-                node.completed_at = None
+                if node.started_at is None:
+                    node.started_at = _now()
+                    changed = True
+                changed |= self._assign_if_changed(node, "completed_at", None)
             elif node.status in {"completed", "needs_review", "failed"}:
-                node.started_at = node.started_at or board_run.started_at
-                node.completed_at = node.completed_at or _now()
+                if node.started_at is None:
+                    node.started_at = board_run.started_at
+                    changed = True
+                if node.completed_at is None:
+                    node.completed_at = _now()
+                    changed = True
+        return changed
 
     async def _sync_real_artifacts(
         self,
@@ -929,7 +1045,8 @@ class BrandSpaceService:
         board_run: BoardRun,
         intelligence_run: BrandIntelligenceRun,
         counts: dict[str, int],
-    ) -> None:
+    ) -> bool:
+        changed = False
         row_counts = {
             "artifact-lexicon": 1,
             "artifact-questions": counts["questions"],
@@ -942,8 +1059,9 @@ class BrandSpaceService:
         }
         artifacts = await self._artifacts(board_run.id)
         for artifact in artifacts:
-            artifact.row_count = row_counts.get(artifact.artifact_key, artifact.row_count)
-            artifact.extra_metadata = {
+            new_row_count = row_counts.get(artifact.artifact_key, artifact.row_count)
+            changed |= self._assign_if_changed(artifact, "row_count", new_row_count)
+            next_metadata = {
                 **(artifact.extra_metadata or {}),
                 "execution_mode": REAL_EXECUTION_MODE,
                 "brand_intelligence_run_id": str(intelligence_run.id),
@@ -954,6 +1072,8 @@ class BrandSpaceService:
                 if intelligence_run.analysis_task_id
                 else None,
             }
+            changed |= self._assign_if_changed(artifact, "extra_metadata", next_metadata)
+        return changed
 
     def _real_node_state_map(self, intelligence_run: BrandIntelligenceRun) -> dict[str, dict[str, Any]]:
         status = intelligence_run.status
@@ -1011,11 +1131,11 @@ class BrandSpaceService:
         elif status == "completed":
             states = {node_id: completed for node_id in states}
         elif status == "failed":
-            active = self._active_node_ids_for_real_status(intelligence_run.status)
-            for node_id in active or ["graph-update"]:
+            failed_nodes = self._active_node_ids_for_real_status(intelligence_run.stage)
+            for node_id in failed_nodes or ["platform-rack"]:
                 states[node_id] = {"status": "failed", "progress": float(progress)}
         elif status == "cancelled":
-            for node_id in self._active_node_ids_for_real_status(intelligence_run.status):
+            for node_id in self._active_node_ids_for_real_status(intelligence_run.stage):
                 states[node_id] = {"status": "paused", "progress": float(progress)}
         return states
 
@@ -1038,17 +1158,24 @@ class BrandSpaceService:
         return [{"label": "状态", "value": intelligence_run.status}]
 
     def _active_node_ids_for_real_status(self, status: str) -> list[str]:
-        if status in {"not_started", "planning_questions", "waiting_scope_confirmation"}:
+        normalized = str(status or "").strip()
+        if normalized in {
+            "not_started",
+            "planning_questions",
+            "waiting_scope_confirmation",
+            "A3",
+            "question_simulation",
+        }:
             return ["question-set"]
-        if status in {"fetching_answers", "waiting_takeover"}:
+        if normalized in {"fetching_answers", "waiting_takeover", "A4", "answer_fetch"}:
             return ["platform-rack"]
-        if status == "analyzing_metrics":
+        if normalized in {"analyzing_metrics", "A5", "analysis_report", "analysis_report_skill"}:
             return ["answer-normalize", "entity-match"]
-        if status == "building_world":
+        if normalized == "building_world":
             return ["graph-patch"]
-        if status == "generating_recommendations":
+        if normalized in {"generating_recommendations", "completed"}:
             return ["graph-update"]
-        if status == "waiting_user":
+        if normalized == "waiting_user":
             return ["anomaly-review"]
         return []
 
@@ -1081,7 +1208,11 @@ class BrandSpaceService:
         graph = (
             graph_update.graph_snapshot
             if graph_update and graph_update.graph_snapshot
-            else await self._fallback_graph(entity=entity, patches=patches)
+            else await self._fallback_graph(
+                entity=entity,
+                patches=patches,
+                runtime_pending=not board_run.is_scaffold and graph_update is None,
+            )
         )
         guardrails = await self._guardrails(graph_update.id) if graph_update else []
         return {
@@ -1383,7 +1514,13 @@ class BrandSpaceService:
             ),
         ]
 
-    async def _fallback_graph(self, *, entity: Entity, patches: list[GraphPatch]) -> dict[str, Any]:
+    async def _fallback_graph(
+        self,
+        *,
+        entity: Entity,
+        patches: list[GraphPatch],
+        runtime_pending: bool = False,
+    ) -> dict[str, Any]:
         try:
             projection = await BrandKnowledgeGraphProjectionService(self.db).build(entity_id=entity.id)
             graph_projection = projection.get("graph_projection") or {}
@@ -1440,10 +1577,44 @@ class BrandSpaceService:
             entities.extend(existing_nodes[:12])
         if existing_edges and not relations:
             relations.extend(existing_edges[:20])
+        if runtime_pending and len(entities) == 1:
+            entities.append(
+                {
+                    "id": "runtime-pending",
+                    "label": "真实运行进行中",
+                    "zone": "pending_review",
+                    "x": 64,
+                    "y": 42,
+                    "strength": 35,
+                    "evidenceCount": 0,
+                }
+            )
+            relations.append(
+                {
+                    "id": "rel-runtime-pending",
+                    "from": str(entity.id),
+                    "to": "runtime-pending",
+                    "kind": "runtime_pending",
+                    "strength": 0.35,
+                }
+            )
+            evidence_refs.append(
+                {
+                    "id": "runtime-pending",
+                    "question": "真实运行进行中",
+                    "platform": "Brand Space",
+                    "excerpt": "真实运行进行中，图谱将在抓取和分析完成后更新。",
+                    "polarity": "neutral",
+                }
+            )
         return {
             "entities": entities,
             "relations": relations,
             "evidenceRefs": evidence_refs,
+            "meta": {
+                "state": "runtime_pending" if runtime_pending else "ready",
+                "message": "真实运行进行中，图谱将在完成后更新。" if runtime_pending else "",
+            },
         }
 
     def _graph_update_summary(self, patches: list[GraphPatch]) -> dict[str, Any]:
@@ -1593,16 +1764,18 @@ class BrandSpaceService:
             else:
                 status = "queued"
             progress = int(max(0.0, min(1.0, float(board_run.progress or 0.0))) * 100)
-            answers = 0
+            real_counts = (board_run.output_refs or {}).get("real_counts") or {}
+            total_answers = int(real_counts.get("answers") or 0)
+            base_answers, remainder = divmod(total_answers, len(PLATFORM_TEMPLATES))
             return [
                 {
                     **platform,
                     "status": status,
                     "progress": 100 if status == "completed" else progress,
-                    "answers": answers,
+                    "answers": base_answers + (1 if index < remainder else 0),
                     "failures": 0,
                 }
-                for platform in PLATFORM_TEMPLATES
+                for index, platform in enumerate(PLATFORM_TEMPLATES)
             ]
         status = "paused" if board_run.status in {"paused", "stopped"} else "running"
         return [{**platform, "status": status} for platform in PLATFORM_TEMPLATES]
@@ -1651,8 +1824,11 @@ class BrandSpaceService:
             "input_scope": board_run.input_scope,
             "active_node_ids": board_run.active_node_ids or [],
             "output_refs": board_run.output_refs or {},
+            "error_code": board_run.error_code,
+            "error_message": board_run.error_message,
             "started_at": board_run.started_at.isoformat() if board_run.started_at else None,
             "completed_at": board_run.completed_at.isoformat() if board_run.completed_at else None,
+            "last_synced_at": board_run.last_synced_at.isoformat() if board_run.last_synced_at else None,
             "created_at": board_run.created_at.isoformat(),
             "updated_at": board_run.updated_at.isoformat(),
         }
@@ -1792,13 +1968,8 @@ class BrandSpaceService:
     def _duration_label(board_run: BoardRun) -> str:
         if board_run.started_at is None:
             return "00:00:00"
-        started_at = board_run.started_at
         end = board_run.completed_at or _now()
-        if started_at.tzinfo is None and end.tzinfo is not None:
-            end = end.replace(tzinfo=None)
-        elif started_at.tzinfo is not None and end.tzinfo is None:
-            started_at = started_at.replace(tzinfo=None)
-        seconds = max(int((end - started_at).total_seconds()), 0)
+        seconds = int(BrandSpaceService._elapsed_seconds(board_run.started_at, end))
         hours, remainder = divmod(seconds, 3600)
         minutes, secs = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
