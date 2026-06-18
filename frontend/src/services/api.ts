@@ -74,6 +74,13 @@ import type {
   CreateBrandIntelligenceRunInput,
 } from '@/types/intelligenceRun';
 import type {
+  BrandSpacePayload,
+  CreateBrandSpaceBoardRunInput,
+  GraphPatchStatus,
+  ReportGuardrailResult,
+  BrandSpaceReport,
+} from '@/types/brandSpace';
+import type {
   AioCanvasConfig,
   AioTakeoverMode,
   AioTakeoverRecord,
@@ -1092,6 +1099,116 @@ class ApiService {
     );
     if (!response.run) throw new Error('确认提交失败');
     return response.run;
+  }
+
+  // =========================================================================
+  // Brand Space API
+  // =========================================================================
+
+  async getBrandSpace(entityId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(`/brand-space/brands/${entityId}/space`);
+  }
+
+  async getBrandSpaceGraph(entityId: string) {
+    return this.request<{ graph: BrandSpacePayload['graph']; graph_update: BrandSpacePayload['graph_update'] }>(
+      `/brand-space/brands/${entityId}/graph`,
+    );
+  }
+
+  async createBrandSpaceBoardRun(
+    entityId: string,
+    payload: CreateBrandSpaceBoardRunInput = {},
+  ): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(
+      `/brand-space/brands/${entityId}/board-runs`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          board_id: payload.board_id ?? 'ai_visibility_monitor',
+          template_id: payload.template_id ?? 'ai_visibility_monitor:v0.1',
+          input_scope: payload.input_scope ?? {
+            platforms: ['chatgpt', 'deepseek', 'kimi', 'doubao'],
+          },
+          auto_dispatch: payload.auto_dispatch ?? false,
+        }),
+      },
+    );
+  }
+
+  async getBrandSpaceBoardRun(runId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(`/brand-space/board-runs/${runId}`);
+  }
+
+  async pauseBrandSpaceBoardRun(runId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(
+      `/brand-space/board-runs/${runId}/pause`,
+      { method: 'POST' },
+    );
+  }
+
+  async resumeBrandSpaceBoardRun(runId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(
+      `/brand-space/board-runs/${runId}/resume`,
+      { method: 'POST' },
+    );
+  }
+
+  async stopBrandSpaceBoardRun(runId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(
+      `/brand-space/board-runs/${runId}/stop`,
+      { method: 'POST' },
+    );
+  }
+
+  async getBrandSpaceRunEvents(runId: string) {
+    return this.request<{ events: BrandSpacePayload['events'] }>(
+      `/brand-space/board-runs/${runId}/events`,
+    );
+  }
+
+  async getBrandSpaceRunAssets(runId: string) {
+    return this.request<{ artifacts: BrandSpacePayload['artifacts'] }>(
+      `/brand-space/board-runs/${runId}/assets`,
+    );
+  }
+
+  async decideBrandSpaceGraphPatch(
+    patchId: string,
+    payload: {
+      status: Extract<GraphPatchStatus, 'accepted' | 'rejected' | 'needs_review'>;
+      reason?: string | null;
+    },
+  ) {
+    return this.request<{
+      graph_update: BrandSpacePayload['graph_update'];
+      patches: BrandSpacePayload['patches'];
+      guardrails: ReportGuardrailResult[];
+    }>(
+      `/brand-space/graph-patches/${patchId}/decision`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          status: payload.status,
+          reason: payload.reason ?? null,
+        }),
+      },
+    );
+  }
+
+  async generateBrandSpaceReport(
+    graphUpdateId: string,
+    payload: { publishRequested?: boolean } = {},
+  ): Promise<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }> {
+    return this.request<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }>(
+      `/brand-space/graph-updates/${graphUpdateId}/reports`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          report_kind: 'graph_update_interpretation',
+          publish_requested: payload.publishRequested ?? false,
+        }),
+      },
+    );
   }
 
   // =========================================================================

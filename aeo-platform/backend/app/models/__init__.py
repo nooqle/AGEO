@@ -28,6 +28,15 @@ from app.models.brand_intelligence_run import (
     BrandIntelligenceRun,
     BrandIntelligenceRunStatus,
 )
+from app.models.brand_space import (
+    BoardArtifact,
+    BoardNodeRun,
+    BoardRun,
+    BoardRuntimeEvent,
+    GraphPatch,
+    GraphUpdate,
+    ReportGuardrailResult,
+)
 from app.models.domain_memory import BrandDomainRelation, DomainIdentityRecord
 from app.models.entity import Entity, EntityVisibilityScope
 from app.models.fetch_run_platform_state import FetchRunPlatformState
@@ -115,6 +124,13 @@ __all__ = [
     "BrandIntelligenceRunStatus",
     "BRAND_INTELLIGENCE_ACTIVE_RUN_STATUSES",
     "BRAND_INTELLIGENCE_TERMINAL_RUN_STATUSES",
+    "BoardArtifact",
+    "BoardNodeRun",
+    "BoardRun",
+    "BoardRuntimeEvent",
+    "GraphPatch",
+    "GraphUpdate",
+    "ReportGuardrailResult",
     "DomainIdentityRecord",
     "BrandDomainRelation",
     "User",

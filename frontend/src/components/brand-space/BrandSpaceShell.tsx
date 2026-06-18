@@ -1,0 +1,536 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Bell,
+  Cable,
+  ChevronDown,
+  CircleHelp,
+  CircleUserRound,
+  FileText,
+  LayoutGrid,
+  Pause,
+  Play,
+  Share2,
+  Square,
+  Settings,
+  type LucideIcon,
+} from 'lucide-react';
+import { AssetsView } from './AssetsView';
+import { BoardRuntimeView } from './BoardRuntimeView';
+import { GraphHomeView } from './GraphHomeView';
+import { ReportReviewView } from './ReportReviewView';
+import styles from './BrandSpace.module.css';
+import {
+  artifacts,
+  boardEdges,
+  brandSpaceContext,
+  brandSpaceNavItems,
+  evidenceRefs,
+  graphEntities,
+  graphRelations,
+  initialBoardNodes,
+  initialGraphPatches,
+  initialPlatforms,
+  reportGuardrails,
+  runtimeEvents,
+} from '@/mocks/brandSpaceMock';
+import { api } from '@/services/api';
+import type {
+  BoardNode,
+  BoardRunStatus,
+  BrandSpaceBoardRun,
+  BrandSpaceGraph,
+  BrandSpaceGraphUpdate,
+  BrandSpacePayload,
+  BrandSpaceReport,
+  BrandSpaceView,
+  GraphPatch,
+  GraphPatchStatus,
+  InspectorTab,
+  NodeStatus,
+  PlatformFetchNode,
+} from '@/types/brandSpace';
+
+function classNames(...classes: Array<string | false | undefined>) {
+  return classes.filter(Boolean).join(' ');
+}
+
+function runStatusLabel(status: BoardRunStatus) {
+  if (status === 'running') return '运行中';
+  if (status === 'pause_requested') return '暂停中';
+  if (status === 'paused') return '已暂停';
+  if (status === 'stopped') return '已停止';
+  if (status === 'completed') return '已完成';
+  if (status === 'failed') return '失败';
+  return '就绪';
+}
+
+function advanceStatus(status: NodeStatus): NodeStatus {
+  if (status === 'paused') return 'running';
+  if (status === 'idle' || status === 'queued') return 'running';
+  return status;
+}
+
+function pauseStatus(status: NodeStatus): NodeStatus {
+  return status === 'running' ? 'paused' : status;
+}
+
+function progressPlatform(platform: PlatformFetchNode, index: number): PlatformFetchNode {
+  if (platform.status !== 'running') return platform;
+  return {
+    ...platform,
+    progress: Math.min(96, platform.progress + 2 + index),
+    answers: platform.answers + 3 + index,
+  };
+}
+
+function progressNode(node: BoardNode, index: number): BoardNode {
+  if (node.status !== 'running') return node;
+  return {
+    ...node,
+    progress: Math.min(96, node.progress + 1 + (index % 3)),
+  };
+}
+
+const workspaceItems: Array<{ label: string; icon: LucideIcon }> = [
+  { label: '模板', icon: LayoutGrid },
+  { label: '连接', icon: Cable },
+  { label: '设置', icon: Settings },
+];
+
+const fallbackGraph: BrandSpaceGraph = {
+  entities: graphEntities,
+  relations: graphRelations,
+  evidenceRefs,
+};
+
+export function BrandSpaceShell() {
+  const [activeView, setActiveView] = useState<BrandSpaceView>('boards');
+  const [context, setContext] = useState(brandSpaceContext);
+  const [spaceRun, setSpaceRun] = useState<BrandSpaceBoardRun | null>(null);
+  const [entityId, setEntityId] = useState<string | null>(null);
+  const [isBackendMode, setIsBackendMode] = useState(false);
+  const [isLoadingSpace, setIsLoadingSpace] = useState(true);
+  const [backendNotice, setBackendNotice] = useState('');
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [runStatus, setRunStatus] = useState<BoardRunStatus>('running');
+  const [nodes, setNodes] = useState<BoardNode[]>(initialBoardNodes);
+  const [platforms, setPlatforms] = useState<PlatformFetchNode[]>(initialPlatforms);
+  const [edges, setEdges] = useState(boardEdges);
+  const [patches, setPatches] = useState<GraphPatch[]>(initialGraphPatches);
+  const [artifactsState, setArtifactsState] = useState(artifacts);
+  const [events, setEvents] = useState(runtimeEvents);
+  const [graph, setGraph] = useState<BrandSpaceGraph>(fallbackGraph);
+  const [graphUpdate, setGraphUpdate] = useState<BrandSpaceGraphUpdate | null>(null);
+  const [guardrails, setGuardrails] = useState(reportGuardrails);
+  const [report, setReport] = useState<BrandSpaceReport | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState('platform-rack');
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
+
+  const selectedView = useMemo(
+    () => brandSpaceNavItems.find((item) => item.id === activeView) ?? brandSpaceNavItems[0],
+    [activeView],
+  );
+
+  const applySpacePayload = useCallback((payload: BrandSpacePayload) => {
+    setContext(payload.context);
+    setSpaceRun(payload.run);
+    setRunStatus(payload.run?.status ?? 'idle');
+    setNodes(payload.nodes.length ? payload.nodes : initialBoardNodes);
+    setPlatforms(payload.platforms.length ? payload.platforms : initialPlatforms);
+    setEdges(payload.edges.length ? payload.edges : boardEdges);
+    setPatches(payload.patches);
+    setArtifactsState(payload.artifacts);
+    setEvents(payload.events);
+    setGraph(payload.graph ?? fallbackGraph);
+    setGraphUpdate(payload.graph_update);
+    setGuardrails(payload.guardrails.length ? payload.guardrails : reportGuardrails);
+    if (payload.report !== undefined) {
+      setReport(payload.report);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBrandSpace() {
+      setIsLoadingSpace(true);
+      try {
+        const entities = await api.listEntities();
+        const entity = entities.find((item) => !item.isInternalTestData) ?? entities[0];
+        if (!entity) {
+          throw new Error('当前账号还没有可用品牌');
+        }
+        let payload = await api.getBrandSpace(entity.id);
+        if (!payload.run) {
+          payload = await api.createBrandSpaceBoardRun(entity.id);
+        }
+        if (cancelled) return;
+        setEntityId(entity.id);
+        setIsBackendMode(true);
+        setBackendNotice('');
+        applySpacePayload(payload);
+      } catch (error) {
+        if (cancelled) return;
+        setIsBackendMode(false);
+        setBackendNotice(error instanceof Error ? error.message : '后端不可用，正在使用本地演示底版');
+      } finally {
+        if (!cancelled) {
+          setIsLoadingSpace(false);
+        }
+      }
+    }
+
+    void loadBrandSpace();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applySpacePayload]);
+
+  useEffect(() => {
+    if (!isBackendMode || !spaceRun?.id || runStatus !== 'running') return undefined;
+
+    const intervalId = window.setInterval(() => {
+      void api
+        .getBrandSpaceBoardRun(spaceRun.id)
+        .then(applySpacePayload)
+        .catch((error) => {
+          setBackendNotice(error instanceof Error ? error.message : '运行态刷新失败');
+        });
+    }, 2500);
+
+    return () => window.clearInterval(intervalId);
+  }, [applySpacePayload, isBackendMode, runStatus, spaceRun?.id]);
+
+  useEffect(() => {
+    if (isBackendMode) return undefined;
+    if (runStatus !== 'running') return undefined;
+
+    const intervalId = window.setInterval(() => {
+      setPlatforms((current) => current.map(progressPlatform));
+      setNodes((current) => current.map(progressNode));
+    }, 1400);
+
+    return () => window.clearInterval(intervalId);
+  }, [isBackendMode, runStatus]);
+
+  const startLocalRun = () => {
+    setRunStatus('running');
+    setPlatforms((current) => current.map((platform) => ({ ...platform, status: advanceStatus(platform.status) })));
+    setNodes((current) => current.map((node) => ({ ...node, status: advanceStatus(node.status) })));
+  };
+
+  const pauseLocalRun = () => {
+    setRunStatus('paused');
+    setPlatforms((current) => current.map((platform) => ({ ...platform, status: pauseStatus(platform.status) })));
+    setNodes((current) => current.map((node) => ({ ...node, status: pauseStatus(node.status) })));
+  };
+
+  const resumeLocalRun = () => {
+    setRunStatus('running');
+    setPlatforms((current) => current.map((platform) => ({ ...platform, status: platform.status === 'paused' ? 'running' : platform.status })));
+    setNodes((current) => current.map((node) => ({ ...node, status: node.status === 'paused' ? 'running' : node.status })));
+  };
+
+  const stopLocalRun = () => {
+    setRunStatus('stopped');
+    setPlatforms((current) => current.map((platform) => ({ ...platform, status: platform.status === 'running' ? 'paused' : platform.status })));
+    setNodes((current) => current.map((node) => ({ ...node, status: node.status === 'running' ? 'paused' : node.status })));
+  };
+
+  const handleRunStart = async () => {
+    if (!isBackendMode || !entityId) {
+      startLocalRun();
+      return;
+    }
+    try {
+      const payload = spaceRun?.id && runStatus === 'paused'
+        ? await api.resumeBrandSpaceBoardRun(spaceRun.id)
+        : await api.createBrandSpaceBoardRun(entityId);
+      applySpacePayload(payload);
+    } catch (error) {
+      setBackendNotice(error instanceof Error ? error.message : '启动画布失败，已切回本地动态');
+      startLocalRun();
+    }
+  };
+
+  const handleRunPause = async () => {
+    if (!isBackendMode || !spaceRun?.id) {
+      pauseLocalRun();
+      return;
+    }
+    try {
+      const payload = await api.pauseBrandSpaceBoardRun(spaceRun.id);
+      applySpacePayload(payload);
+    } catch (error) {
+      setBackendNotice(error instanceof Error ? error.message : '暂停失败，已使用本地状态');
+      pauseLocalRun();
+    }
+  };
+
+  const handleRunResume = async () => {
+    if (!isBackendMode || !spaceRun?.id) {
+      resumeLocalRun();
+      return;
+    }
+    try {
+      const payload = await api.resumeBrandSpaceBoardRun(spaceRun.id);
+      applySpacePayload(payload);
+    } catch (error) {
+      setBackendNotice(error instanceof Error ? error.message : '继续失败，已使用本地状态');
+      resumeLocalRun();
+    }
+  };
+
+  const handleRunStop = async () => {
+    if (!isBackendMode || !spaceRun?.id) {
+      stopLocalRun();
+      return;
+    }
+    try {
+      const payload = await api.stopBrandSpaceBoardRun(spaceRun.id);
+      applySpacePayload(payload);
+    } catch (error) {
+      setBackendNotice(error instanceof Error ? error.message : '停止失败，已使用本地状态');
+      stopLocalRun();
+    }
+  };
+
+  const handlePatchDecision = async (
+    patchId: string,
+    status: Extract<GraphPatchStatus, 'accepted' | 'rejected' | 'needs_review'>,
+  ) => {
+    if (isBackendMode) {
+      try {
+        const response = await api.decideBrandSpaceGraphPatch(patchId, { status });
+        setPatches(response.patches);
+        setGraphUpdate(response.graph_update);
+        setGuardrails(response.guardrails.length ? response.guardrails : guardrails);
+        if (spaceRun?.id) {
+          const payload = await api.getBrandSpaceBoardRun(spaceRun.id);
+          applySpacePayload(payload);
+        }
+        return;
+      } catch (error) {
+        setBackendNotice(error instanceof Error ? error.message : '审阅提交失败，已使用本地状态');
+      }
+    }
+    setPatches((current) => current.map((patch) => (patch.id === patchId ? { ...patch, status } : patch)));
+  };
+
+  const handleGenerateReport = async () => {
+    if (!graphUpdate?.id) return;
+    setIsGeneratingReport(true);
+    try {
+      const response = await api.generateBrandSpaceReport(graphUpdate.id);
+      setReport(response.report);
+      setGuardrails(response.guardrails);
+    } catch (error) {
+      setBackendNotice(error instanceof Error ? error.message : '报告生成失败');
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
+  return (
+    <div className={styles.root}>
+      <div className={styles.shell}>
+        <aside className={styles.sidebar}>
+          <div className="flex h-16 items-center gap-3 border-b px-5" style={{ borderColor: 'var(--border-subtle)' }}>
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--brand-primary)] text-sm font-bold text-[var(--brand-contrast)]">
+              S
+            </span>
+            <div>
+              <p className="text-base font-semibold text-[var(--text-primary)]">specta</p>
+              <p className="text-[11px] uppercase text-[var(--text-tertiary)]">品牌空间</p>
+            </div>
+          </div>
+
+          <nav className="space-y-1 px-3 py-5">
+            {brandSpaceNavItems.map((item) => {
+              const Icon = item.icon;
+              const active = activeView === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveView(item.id)}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors"
+                  style={{
+                    background: active ? 'var(--brand-bg)' : 'transparent',
+                    color: active ? 'var(--brand-text)' : 'var(--text-secondary)',
+                  }}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>
+                    <span className="block text-sm font-semibold">{item.label}</span>
+                    <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">{item.description}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="mt-4 border-t px-3 py-5" style={{ borderColor: 'var(--border-subtle)' }}>
+            <p className="mb-2 px-3 text-[11px] font-semibold uppercase text-[var(--text-tertiary)]">工作区</p>
+            {workspaceItems.map(({ label, icon: Icon }) => (
+              <button
+                key={label}
+                type="button"
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <main className={styles.main}>
+          <header className={classNames(styles.topbar, 'flex min-h-16 flex-wrap items-center justify-between gap-3 px-4 py-3 lg:px-6')}>
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h1 className="truncate text-lg font-semibold text-[var(--text-primary)]">{context.brandName}</h1>
+                  <ChevronDown className="h-4 w-4 text-[var(--text-tertiary)]" />
+                </div>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                  {context.boardName} · {context.graphVersion}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}>
+                <span className={classNames('h-2 w-2 rounded-full', runStatus === 'running' && 'animate-pulse')} style={{ background: runStatus === 'running' ? 'var(--brand-primary)' : 'var(--text-tertiary)' }} />
+                {runStatusLabel(runStatus)}
+              </span>
+              <button
+                type="button"
+                onClick={runStatus === 'running' ? handleRunPause : runStatus === 'paused' ? handleRunResume : handleRunStart}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+              >
+                {runStatus === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                {runStatus === 'running' ? '暂停' : runStatus === 'paused' ? '继续' : '运行'}
+              </button>
+              <button
+                type="button"
+                onClick={handleRunStop}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+              >
+                <Square className="h-4 w-4" />
+                停止
+              </button>
+              <button type="button" className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)]">
+                <Share2 className="h-4 w-4" />
+                分享
+              </button>
+              <button type="button" className="grid h-10 w-10 place-items-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="帮助">
+                <CircleHelp className="h-4 w-4" />
+              </button>
+              <button type="button" className="grid h-10 w-10 place-items-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="通知">
+                <Bell className="h-4 w-4" />
+              </button>
+              <span className="grid h-10 w-10 place-items-center rounded-full bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
+                <CircleUserRound className="h-5 w-5" />
+              </span>
+            </div>
+          </header>
+
+          <div className={classNames(styles.viewTabs, 'flex flex-wrap items-center justify-between gap-3 px-4 py-3 lg:px-6')}>
+            <div className="flex flex-wrap items-center gap-2">
+              {brandSpaceNavItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveView(item.id)}
+                  className="rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+                  style={{
+                    background: activeView === item.id ? 'var(--bg-elevated)' : 'transparent',
+                    color: activeView === item.id ? 'var(--brand-text)' : 'var(--text-secondary)',
+                    boxShadow: activeView === item.id ? 'var(--shadow-sm)' : 'none',
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+              <FileText className="h-3.5 w-3.5" />
+              <span>{selectedView.description}</span>
+            </div>
+          </div>
+
+          <div className="min-h-0 overflow-auto p-4 lg:p-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">
+                  {isBackendMode ? '真实运行态' : '底版演示运行'}
+                  {isLoadingSpace ? ' · 加载中' : ''}
+                </p>
+                <h2 className="mt-1 text-xl font-semibold text-[var(--text-primary)]">{selectedView.label}</h2>
+                {backendNotice ? (
+                  <p className="mt-1 text-xs text-[var(--warning)]">{backendNotice}</p>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+                <span className="rounded-lg border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                  运行 ID：{context.runId || '未创建'}
+                </span>
+                <span className="rounded-lg border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                  开始：{context.startedAt || '待启动'}
+                </span>
+              </div>
+            </div>
+
+            {activeView === 'boards' ? (
+              <BoardRuntimeView
+                runStatus={runStatus}
+                nodes={nodes}
+                platforms={platforms}
+                edges={edges}
+                patches={patches}
+                artifacts={artifactsState}
+                events={events}
+                selectedNodeId={selectedNodeId}
+                inspectorTab={inspectorTab}
+                onSelectNode={setSelectedNodeId}
+                onInspectorTabChange={setInspectorTab}
+                onRunStart={handleRunStart}
+                onRunPause={handleRunPause}
+                onRunResume={handleRunResume}
+                onRunStop={handleRunStop}
+                onPatchDecision={handlePatchDecision}
+              />
+            ) : null}
+
+            {activeView === 'graph' ? (
+              <GraphHomeView
+                patches={patches}
+                graph={graph}
+                brandName={context.brandName.replace('品牌空间', '')}
+                onPatchDecision={handlePatchDecision}
+              />
+            ) : null}
+
+            {activeView === 'assets' ? <AssetsView artifacts={artifactsState} /> : null}
+
+            {activeView === 'reports' ? (
+              <ReportReviewView
+                report={report}
+                graphUpdate={graphUpdate}
+                guardrails={guardrails}
+                onGenerateReport={handleGenerateReport}
+                isGenerating={isGeneratingReport}
+              />
+            ) : null}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}

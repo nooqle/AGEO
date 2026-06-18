@@ -1,0 +1,412 @@
+.root {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 92%, #e7ece8 8%), var(--bg-primary));
+  color: var(--text-primary);
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-secondary) 86%, var(--bg-primary) 14%);
+}
+
+.main {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.topbar {
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, var(--bg-primary) 16%);
+}
+
+.viewTabs {
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-secondary) 80%, var(--bg-primary) 20%);
+}
+
+.surface {
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-primary) 12%);
+  box-shadow: 0 12px 26px rgba(24, 30, 28, 0.06);
+}
+
+.canvas {
+  position: relative;
+  min-height: 720px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-tertiary) 28%, transparent) 1px, transparent 0),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 94%, #edf2ef 6%), var(--bg-elevated));
+  background-size: 22px 22px, 100% 100%;
+}
+
+.boardStage {
+  position: relative;
+  min-width: 1120px;
+  height: 720px;
+  isolation: isolate;
+}
+
+.canvas::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--brand-primary) 10%, transparent), transparent);
+  opacity: 0;
+  transform: translateX(-70%);
+}
+
+.runningCanvas::after {
+  animation: board-sweep 3.2s ease-in-out infinite;
+}
+
+.edgeLayer {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  width: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.edgeGroup {
+  color: color-mix(in srgb, var(--brand-primary) 72%, var(--text-tertiary) 28%);
+}
+
+.edgePath {
+  fill: none;
+  stroke: color-mix(in srgb, var(--text-tertiary) 48%, transparent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.edgePathPulse {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-dasharray: 8 9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  animation: edge-flow 1.2s linear infinite;
+}
+
+.edgePathDashed {
+  stroke-dasharray: 5 6;
+}
+
+.edgePort {
+  fill: var(--bg-elevated);
+  stroke: color-mix(in srgb, var(--text-tertiary) 62%, transparent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.edgePortActive {
+  fill: var(--brand-primary);
+  stroke: var(--bg-elevated);
+}
+
+.edgePacket {
+  fill: var(--brand-primary);
+  opacity: 0.86;
+}
+
+.node {
+  position: absolute;
+  z-index: 2;
+  width: 188px;
+  min-height: 106px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, var(--bg-primary) 6%);
+  box-shadow: 0 12px 24px rgba(24, 30, 28, 0.08);
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.node:hover {
+  transform: translate(-50%, -50%) translateY(-1px);
+  border-color: var(--border-hover);
+}
+
+.nodeActive {
+  border-color: var(--brand-border);
+  background: color-mix(in srgb, var(--brand-bg) 24%, var(--bg-elevated) 76%);
+}
+
+.nodeRunning {
+  border-color: color-mix(in srgb, var(--brand-primary) 52%, var(--border-subtle) 48%);
+  background: color-mix(in srgb, var(--brand-bg) 16%, var(--bg-elevated) 84%);
+}
+
+.nodeRunning::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--brand-primary) 12%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: node-sweep 1.8s ease-in-out infinite;
+}
+
+.nodeReview {
+  border-color: color-mix(in srgb, var(--warning) 48%, var(--border-subtle) 52%);
+}
+
+.nodeReview::before {
+  content: '';
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  height: 8px;
+  width: 8px;
+  border-radius: 999px;
+  background: var(--warning);
+  animation: status-pulse 1.8s ease-in-out infinite;
+}
+
+.rack {
+  position: absolute;
+  z-index: 2;
+  left: 55%;
+  top: 40%;
+  width: 270px;
+  min-height: 462px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-secondary) 74%, transparent);
+}
+
+.rackRunning {
+  border-color: color-mix(in srgb, var(--brand-primary) 36%, var(--border-subtle) 64%);
+}
+
+.rackRunning::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--brand-primary) 10%, transparent), transparent);
+  transform: translateY(-100%);
+  animation: rack-sweep 2.8s ease-in-out infinite;
+}
+
+.platformCard {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--info) 34%, var(--border-subtle) 66%);
+  background: var(--bg-elevated);
+}
+
+.platformRunning {
+  border-color: color-mix(in srgb, var(--brand-primary) 45%, var(--info) 55%);
+}
+
+.platformRunning::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--brand-primary) 11%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: platform-scan 2.4s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+
+.graphPanel {
+  position: relative;
+  min-height: 520px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background:
+    radial-gradient(circle at center, color-mix(in srgb, var(--brand-primary) 8%, transparent) 0 16%, transparent 17%),
+    color-mix(in srgb, var(--bg-elevated) 90%, var(--bg-primary) 10%);
+}
+
+.graphLink {
+  stroke: color-mix(in srgb, var(--text-tertiary) 45%, transparent);
+  stroke-width: 1;
+}
+
+.graphEntity {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+.entityPoint {
+  height: 12px;
+  width: 12px;
+  border-radius: 999px;
+  background: var(--brand-primary);
+  border: 2px solid var(--bg-elevated);
+}
+
+.entityCenter {
+  height: 28px;
+  width: 28px;
+  border-radius: 999px;
+  background: var(--brand-primary);
+  border: 3px solid var(--bg-elevated);
+  box-shadow: 0 0 0 7px var(--brand-bg);
+}
+
+.entityRisk .entityPoint {
+  background: var(--error);
+}
+
+.entityCompetitor .entityPoint {
+  background: var(--warning);
+}
+
+.entityPending .entityPoint {
+  background: var(--info);
+  animation: status-pulse 2s ease-in-out infinite;
+}
+
+.queueItem {
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg-primary) 8%);
+}
+
+.queueAttention {
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--border-subtle) 62%);
+}
+
+.guardrailBlock {
+  border-color: color-mix(in srgb, var(--error) 42%, var(--border-subtle) 58%);
+  background: color-mix(in srgb, var(--status-error-bg) 44%, var(--bg-elevated) 56%);
+  animation: report-enter 320ms ease-out;
+}
+
+@keyframes board-sweep {
+  0% {
+    opacity: 0;
+    transform: translateX(-70%);
+  }
+  18%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(70%);
+  }
+}
+
+@keyframes edge-flow {
+  to {
+    stroke-dashoffset: -34;
+  }
+}
+
+@keyframes platform-scan {
+  0% {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+  24%,
+  64% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+@keyframes node-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  60%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes rack-sweep {
+  0% {
+    transform: translateY(-100%);
+  }
+  65%,
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.35);
+  }
+}
+
+@keyframes report-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 1100px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .canvas {
+    min-height: 720px;
+  }
+}
+
+@media (max-width: 760px) {
+  .main {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .canvas {
+    min-height: 720px;
+  }
+
+  .boardStage {
+    min-width: 1120px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runningCanvas::after,
+  .edgePathPulse,
+  .edgePacket,
+  .nodeRunning::after,
+  .rackRunning::after,
+  .platformRunning::after,
+  .nodeReview::before,
+  .entityPending .entityPoint,
+  .guardrailBlock {
+    animation: none;
+  }
+}
