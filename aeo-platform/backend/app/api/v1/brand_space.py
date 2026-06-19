@@ -14,7 +14,10 @@ from app.schemas.brand_space import (
     GraphUpdateReportCreate,
 )
 from app.services.brand_intelligence_run_service import dispatch_brand_intelligence_run
-from app.services.brand_space_service import BrandSpaceService
+from app.services.brand_space_service import (
+    BrandSpaceService,
+    build_real_graph_update_for_board_run,
+)
 
 router = APIRouter(prefix="/brand-space", tags=["brand-space"])
 
@@ -118,13 +121,26 @@ async def create_board_run(
 @router.get("/board-runs/{run_id}")
 async def get_board_run(
     run_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     _parse_uuid(run_id, "run_id")
     service = BrandSpaceService(db)
     try:
-        return await service.get_board_run(run_id=run_id, current_user=current_user)
+        response = await service.get_board_run(run_id=run_id, current_user=current_user)
+        output_refs = (response.get("run") or {}).get("output_refs") or {}
+        if output_refs.get("graph_update_build_status") == "pending":
+            if await service.claim_graph_update_build(
+                run_id=run_id,
+                current_user=current_user,
+            ):
+                background_tasks.add_task(
+                    build_real_graph_update_for_board_run,
+                    run_id,
+                    current_user.id,
+                )
+        return response
     except Exception as exc:
         _raise_http(exc)
 

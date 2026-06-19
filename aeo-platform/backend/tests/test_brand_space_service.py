@@ -24,7 +24,7 @@ from app.models.brand_space import BoardRun, GraphPatch, GraphUpdate
 from app.models.entity import Entity, EntityStatus
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.user import User, UserRole, UserStatus
-from app.services.brand_space_service import BrandSpaceService
+from app.services.brand_space_service import BrandSpaceService, GraphPatchBuilderService
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -60,6 +60,18 @@ def _entity(owner: User, name: str = "安利") -> Entity:
         industry="营养健康",
         status=EntityStatus.ACTIVE,
         owner_user_id=owner.id,
+    )
+
+
+def _answer_stub(platform: str) -> BrandPlatformAnswer:
+    return BrandPlatformAnswer(
+        entity_id=uuid.uuid4(),
+        dedupe_key=f"stub:{uuid.uuid4()}:{platform}",
+        platform=platform,
+        fetch_method="test",
+        status="captured",
+        success=True,
+        answer_text="",
     )
 
 
@@ -164,6 +176,11 @@ async def test_amway_real_fixture_builds_lexicon_backed_graph_update_and_review_
         board_run.last_synced_at = None
         await session.commit()
 
+        await service._sync_real_board_run(
+            board_run=board_run,
+            current_user=owner,
+            force=True,
+        )
         synced = await service.get_board_run(
             run_id=payload["run"]["id"],
             current_user=owner,
@@ -595,12 +612,28 @@ async def test_real_completed_run_builds_graph_update_from_answers(tmp_path):
         board_run.last_synced_at = None
         await session.commit()
 
+        pending = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+
+        assert pending["run"]["status"] == "completed"
+        assert pending["run"]["output_refs"]["graph_update_build_status"] == "pending"
+        assert pending["graph_update"] is None
+        assert any(event["type"] == "graph_update_build_pending" for event in pending["events"])
+
+        await service._sync_real_board_run(
+            board_run=board_run,
+            current_user=owner,
+            force=True,
+        )
         synced = await service.get_board_run(
             run_id=payload["run"]["id"],
             current_user=owner,
         )
 
         assert synced["run"]["status"] == "completed"
+        assert synced["run"]["output_refs"]["graph_update_build_status"] == "ready"
         assert synced["graph_update"] is not None
         assert synced["graph_update"]["summary"]["total"] == 3
         patch_by_type = {patch["patchType"]: patch for patch in synced["patches"]}
@@ -626,6 +659,88 @@ async def test_real_completed_run_builds_graph_update_from_answers(tmp_path):
             select(GraphUpdate).where(GraphUpdate.board_run_id == board_run.id)
         )
         assert len(list(updates.scalars().all())) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_competitor_patch_becomes_strength_update_on_later_run(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-competitor-merge@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+
+        async def create_completed_competitor_run(suffix: str) -> dict:
+            payload = await service.create_board_run(
+                entity_id=entity.id,
+                current_user=owner,
+                execution_mode="real",
+            )
+            board_run = await session.get(BoardRun, uuid.UUID(payload["run"]["id"]))
+            intelligence_run = await session.get(
+                BrandIntelligenceRun,
+                uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
+            )
+            assert board_run is not None
+            assert intelligence_run is not None
+            question = BrandIntelligenceQuestion(
+                entity_id=entity.id,
+                question_id=f"q-competitor-{suffix}",
+                question_text="用户购买营养补充品前通常会比较什么？",
+                category="competitor",
+            )
+            session.add(question)
+            await session.flush()
+            session.add(
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    question_object_id=question.id,
+                    question_id=question.question_id,
+                    dedupe_key=f"{entity.id}:real:competitor:{suffix}",
+                    platform="ChatGPT",
+                    fetch_method="test",
+                    status="captured",
+                    success=True,
+                    answer_text="相比之下，用户可能更推荐汤臣倍健作为替代选择。",
+                )
+            )
+            intelligence_run.status = "completed"
+            intelligence_run.stage = "generating_recommendations"
+            intelligence_run.progress = 1.0
+            intelligence_run.message = "真实运行已完成"
+            board_run.last_synced_at = None
+            await session.commit()
+            await service._sync_real_board_run(
+                board_run=board_run,
+                current_user=owner,
+                force=True,
+            )
+            return await service.get_board_run(
+                run_id=payload["run"]["id"],
+                current_user=owner,
+            )
+
+        first = await create_completed_competitor_run("first")
+        first_competitor_patch = next(
+            patch for patch in first["patches"] if patch["patchType"] == "add_competitor_relation"
+        )
+        await service.decide_graph_patch(
+            patch_id=first_competitor_patch["id"],
+            current_user=owner,
+            status="accepted",
+            reason="确认竞品关系",
+        )
+
+        second = await create_completed_competitor_run("second")
+        second_competitor_patch = next(
+            patch for patch in second["patches"] if patch["affectedObjectId"] == "by-health"
+        )
+        assert second_competitor_patch["patchType"] == "update_strength"
+        assert second_competitor_patch["relationType"] == "competes_with"
 
     await engine.dispose()
 
@@ -831,6 +946,52 @@ def test_circle_allocation_and_competitor_rules_are_guarded():
     )
     assert exact_confidence_competitor["is_competitor"] is True
     assert exact_confidence_competitor["status"] == "auto_applied"
+
+
+def test_graph_patch_builder_scoring_confidence_and_term_boundaries():
+    same_platform_answers = [_answer_stub("ChatGPT") for _ in range(3)]
+    diverse_platform_answers = [
+        _answer_stub("ChatGPT"),
+        _answer_stub("DeepSeek"),
+        _answer_stub("Kimi"),
+        _answer_stub("ChatGPT"),
+        _answer_stub("DeepSeek"),
+    ]
+
+    assert (
+        GraphPatchBuilderService._competitor_confidence_from_answers(
+            same_platform_answers,
+            base=0.58,
+        )
+        < 0.7
+    )
+    assert (
+        GraphPatchBuilderService._competitor_confidence_from_answers(
+            diverse_platform_answers,
+            base=0.58,
+        )
+        >= 0.7
+    )
+
+    ten_answer_score = GraphPatchBuilderService._score_from_answers(
+        [_answer_stub("ChatGPT") for _ in range(10)],
+        base=56,
+        per_answer=3,
+        per_platform=5,
+        cap=76,
+    )
+    twenty_answer_score = GraphPatchBuilderService._score_from_answers(
+        [_answer_stub("ChatGPT") for _ in range(20)],
+        base=56,
+        per_answer=3,
+        per_platform=5,
+        cap=76,
+    )
+    assert twenty_answer_score - ten_answer_score <= 3
+
+    assert GraphPatchBuilderService._contains_term("安利和纽崔莱经常一起出现", "安利")
+    assert not GraphPatchBuilderService._contains_term("这是一段不健康的表达", "健康")
+    assert not GraphPatchBuilderService._contains_term("这个句子里是不安利用法", "安利")
 
 
 def test_report_guardrails_cover_warn_and_block_edges():

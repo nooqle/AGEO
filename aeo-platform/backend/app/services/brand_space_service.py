@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import math
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from uuid import UUID
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import AsyncSessionLocal
 from app.models.brand_intelligence import (
     BrandReportVersion,
     BrandIntelligenceQuestion,
@@ -180,6 +182,8 @@ RISK_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
 SCENARIO_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"职场|熬夜|精力|运动|备孕|银发|中老年|家庭"),
 )
+CHINESE_NEGATION_PREFIXES = {"不", "非", "无", "没", "未"}
+CHINESE_GLUE_SUFFIXES = {"用", "化", "性", "型"}
 
 COMPETITOR_CANDIDATES: tuple[dict[str, str], ...] = (
     {"id": "by-health", "label": "汤臣倍健"},
@@ -223,6 +227,8 @@ REAL_SYNC_MIN_INTERVAL_SECONDS = 30
 
 REVIEWABLE_PATCH_STATUSES = {"needs_review", "blocked"}
 IMMUTABLE_PATCH_STATUSES = {"auto_applied", "accepted", "rejected"}
+CONFIRMED_COMPETITOR_PATCH_STATUSES = {"auto_applied", "accepted"}
+GRAPH_UPDATE_BUILD_ACTIVE_STATUSES = {"pending", "queued", "building"}
 
 REAL_RUN_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -418,6 +424,10 @@ class GraphPatchBuilderService:
             )
             for candidate in COMPETITOR_CANDIDATES
         ]
+        confirmed_competitor_ids = await self._confirmed_competitor_object_ids(
+            entity_id=entity.id,
+            candidate_ids=[entry.entity_id for entry in competitor_entries],
+        )
 
         patches.extend(
             self._competitor_patches(
@@ -429,6 +439,7 @@ class GraphPatchBuilderService:
                 graph_index=graph_index,
                 allocate_graph_zone=allocate_graph_zone,
                 detect_competitor_context=detect_competitor_context,
+                confirmed_competitor_ids=confirmed_competitor_ids,
             )
         )
 
@@ -525,6 +536,33 @@ class GraphPatchBuilderService:
                 lookup[str(question.id)] = question.question_text
                 lookup[question.question_id] = question.question_text
         return lookup
+
+    async def _confirmed_competitor_object_ids(
+        self,
+        *,
+        entity_id: UUID,
+        candidate_ids: list[str],
+    ) -> set[str]:
+        normalized_ids = {
+            str(candidate_id).strip().lower()
+            for candidate_id in candidate_ids
+            if str(candidate_id).strip()
+        }
+        if not normalized_ids:
+            return set()
+        result = await self.db.execute(
+            select(GraphPatch.affected_object_id).where(
+                GraphPatch.entity_id == entity_id,
+                GraphPatch.relation_type == "competes_with",
+                GraphPatch.status.in_(CONFIRMED_COMPETITOR_PATCH_STATUSES),
+                GraphPatch.affected_object_id.in_(normalized_ids),
+            )
+        )
+        return {
+            str(item).strip().lower()
+            for item in result.scalars().all()
+            if str(item).strip()
+        }
 
     def _answers_matching(
         self,
@@ -665,11 +703,28 @@ class GraphPatchBuilderService:
 
     @staticmethod
     def _contains_term(text: str, term: str) -> bool:
-        if not term:
+        needle = str(term or "").strip()
+        if not needle:
             return False
-        if term.isascii():
-            return term.lower() in (text or "").lower()
-        return term in (text or "")
+        haystack = text or ""
+        if needle.isascii():
+            return needle.lower() in haystack.lower()
+
+        start = 0
+        while True:
+            index = haystack.find(needle, start)
+            if index < 0:
+                return False
+            previous_char = haystack[index - 1] if index > 0 else ""
+            next_index = index + len(needle)
+            next_char = haystack[next_index] if next_index < len(haystack) else ""
+            if previous_char in CHINESE_NEGATION_PREFIXES:
+                start = next_index
+                continue
+            if len(needle) <= 2 and next_char in CHINESE_GLUE_SUFFIXES:
+                start = next_index
+                continue
+            return True
 
     @staticmethod
     def _answer_union(
@@ -903,6 +958,7 @@ class GraphPatchBuilderService:
         graph_index: dict[str, set[str]],
         allocate_graph_zone: Callable[..., dict[str, Any]],
         detect_competitor_context: Callable[..., dict[str, Any]],
+        confirmed_competitor_ids: set[str],
     ) -> list[GraphPatch]:
         patches: list[GraphPatch] = []
         for candidate in candidates:
@@ -917,7 +973,7 @@ class GraphPatchBuilderService:
             ]
             if not candidate_answers:
                 continue
-            confidence = self._confidence_from_answers(candidate_answers, base=0.58)
+            confidence = self._competitor_confidence_from_answers(candidate_answers, base=0.58)
             joined_text = " ".join(
                 self._combined_text(answer, question_lookup)
                 for answer in candidate_answers
@@ -938,14 +994,24 @@ class GraphPatchBuilderService:
                 relation_type="competes_with",
                 confidence=confidence,
             )
+            is_confirmed_competitor = candidate.entity_id.lower() in confirmed_competitor_ids
+            patch_type = "update_strength" if is_confirmed_competitor else "add_competitor_relation"
             patches.append(
                 GraphPatch(
                     graph_update_id=graph_update.id,
                     entity_id=entity.id,
-                    patch_type="add_competitor_relation",
+                    patch_type=patch_type,
                     status=allocation["status"],
-                    title=f"新增{candidate.label}竞品候选",
-                    description="真实回答包含明确替代、推荐或对比信号，非同品类共现。",
+                    title=(
+                        f"更新{candidate.label}竞品关系强度"
+                        if is_confirmed_competitor
+                        else f"新增{candidate.label}竞品候选"
+                    ),
+                    description=(
+                        "已确认竞品关系在本次抓取中再次出现，当前补丁只更新连接强度。"
+                        if is_confirmed_competitor
+                        else "真实回答包含明确替代、推荐或对比信号，非同品类共现。"
+                    ),
                     affected_object_type=candidate.entity_type,
                     affected_object_id=candidate.entity_id,
                     relation_type="competes_with",
@@ -960,6 +1026,7 @@ class GraphPatchBuilderService:
                             entry=candidate,
                             graph_index=graph_index,
                         ),
+                        "existing_competitor_relation": is_confirmed_competitor,
                     },
                     score_breakdown={
                         "connection_strength": strength,
@@ -1117,7 +1184,9 @@ class GraphPatchBuilderService:
         cap: int,
     ) -> int:
         platforms = {answer.platform for answer in answers if answer.platform}
-        return min(cap, base + len(answers) * per_answer + len(platforms) * per_platform)
+        answer_score = per_answer * math.log2(1 + len(answers))
+        platform_score = per_platform * math.log2(1 + len(platforms))
+        return min(cap, int(base + answer_score + platform_score))
 
     @staticmethod
     def _confidence_from_answers(
@@ -1127,6 +1196,16 @@ class GraphPatchBuilderService:
     ) -> float:
         platforms = {answer.platform for answer in answers if answer.platform}
         confidence = base + len(answers) * 0.02 + len(platforms) * 0.06
+        return round(min(0.9, confidence), 2)
+
+    @staticmethod
+    def _competitor_confidence_from_answers(
+        answers: list[BrandPlatformAnswer],
+        *,
+        base: float,
+    ) -> float:
+        platforms = {answer.platform for answer in answers if answer.platform}
+        confidence = base + len(answers) * 0.015 + len(platforms) * 0.04
         return round(min(0.9, confidence), 2)
 
     @staticmethod
@@ -1415,6 +1494,24 @@ class BrandSpaceService:
         await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         entity = await self._entity_by_id(board_run.entity_id)
         return await self._space_payload(entity=entity, board_run=board_run)
+
+    async def claim_graph_update_build(
+        self,
+        *,
+        run_id: str | UUID,
+        current_user: User,
+    ) -> bool:
+        board_run = await self._require_board_run(run_id, current_user)
+        output_refs = dict(board_run.output_refs or {})
+        if output_refs.get("graph_update_build_status") != "pending":
+            return False
+        board_run.output_refs = {
+            **output_refs,
+            "graph_update_build_status": "queued",
+            "graph_update_build_queued_at": _now().isoformat(),
+        }
+        await self.db.commit()
+        return True
 
     async def update_board_run_status(
         self,
@@ -1990,6 +2087,7 @@ class BrandSpaceService:
             board_run=board_run,
             intelligence_run=intelligence_run,
             current_user=current_user,
+            build_immediately=force,
         )
         if previous_stage_key != current_stage_key:
             event_type, severity, default_message = REAL_RUN_STATUS_EVENT_MESSAGES.get(
@@ -2022,12 +2120,49 @@ class BrandSpaceService:
         board_run: BoardRun,
         intelligence_run: BrandIntelligenceRun,
         current_user: User,
+        build_immediately: bool = False,
     ) -> bool:
         if board_run.is_scaffold or intelligence_run.status != "completed":
             return False
         existing = await self._graph_update_for_run(board_run.id)
         if existing is not None:
+            output_refs = dict(board_run.output_refs or {})
+            if output_refs.get("graph_update_build_status") != "ready":
+                board_run.output_refs = {
+                    **output_refs,
+                    "graph_update_id": str(existing.id),
+                    "graph_update_build_status": "ready",
+                }
+                return True
             return False
+        output_refs = dict(board_run.output_refs or {})
+        if not build_immediately:
+            if output_refs.get("graph_update_build_status") in GRAPH_UPDATE_BUILD_ACTIVE_STATUSES:
+                return False
+            board_run.output_refs = {
+                **output_refs,
+                "graph_update_build_status": "pending",
+                "graph_update_build_requested_at": _now().isoformat(),
+            }
+            await self._append_event(
+                entity_id=board_run.entity_id,
+                board_run_id=board_run.id,
+                node_id="graph-update",
+                event_type="graph_update_build_pending",
+                severity="info",
+                message="真实抓取已完成，图谱更新构建已进入后台队列。",
+                payload={
+                    "brand_intelligence_run_id": str(intelligence_run.id),
+                    "status": "pending",
+                },
+            )
+            return True
+
+        board_run.output_refs = {
+            **output_refs,
+            "graph_update_build_status": "building",
+            "graph_update_build_started_at": _now().isoformat(),
+        }
 
         entity = await self._entity_by_id(board_run.entity_id)
         graph_update, patches = await self._build_graph_update(
@@ -2056,6 +2191,8 @@ class BrandSpaceService:
         board_run.output_refs = {
             **(board_run.output_refs or {}),
             "graph_update_id": str(graph_update.id),
+            "graph_update_build_status": "ready",
+            "graph_update_build_completed_at": _now().isoformat(),
         }
         await self._sync_real_graph_artifact_counts(
             board_run=board_run,
@@ -3225,3 +3362,39 @@ class BrandSpaceService:
         hours, remainder = divmod(seconds, 3600)
         minutes, secs = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+async def build_real_graph_update_for_board_run(run_id: str | UUID, user_id: str | UUID) -> None:
+    """Build a completed real-run graph update outside the polling request path."""
+
+    async with AsyncSessionLocal() as db:
+        service = BrandSpaceService(db)
+        user = await db.get(User, BrandSpaceService._coerce_uuid(user_id, "user_id"))
+        if user is None:
+            logger.warning("Cannot build graph update for board run %s: user %s missing", run_id, user_id)
+            return
+        board_run = await service._require_board_run(run_id, user)
+        try:
+            await service._sync_real_board_run(
+                board_run=board_run,
+                current_user=user,
+                force=True,
+            )
+        except Exception:
+            logger.exception("Brand Space graph update build failed for board run %s", run_id)
+            output_refs = dict(board_run.output_refs or {})
+            board_run.output_refs = {
+                **output_refs,
+                "graph_update_build_status": "failed",
+                "graph_update_build_failed_at": _now().isoformat(),
+            }
+            await service._append_event(
+                entity_id=board_run.entity_id,
+                board_run_id=board_run.id,
+                node_id="graph-update",
+                event_type="graph_update_build_failed",
+                severity="error",
+                message="图谱更新后台构建失败，请检查运行产物后重试。",
+                payload={"status": "failed"},
+            )
+            await db.commit()
