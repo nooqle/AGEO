@@ -206,6 +206,9 @@ export interface ReportGuardrailResult {
   severity: GuardrailSeverity;
   title: string;
   message: string;
+  guardrailKey?: string;
+  guardrail_key?: string;
+  payload?: Record<string, unknown>;
 }
 
 export interface TraceStep {
@@ -261,6 +264,7 @@ export interface BrandSpaceGraphUpdate {
 
 export interface BrandSpaceReport {
   id: string;
+  entity_id?: string;
   report_id: string;
   version: number;
   report_kind: string;
@@ -268,7 +272,25 @@ export interface BrandSpaceReport {
   title: string;
   summary: string;
   payload: Record<string, unknown>;
+  source_type?: 'graph_update' | 'pre_graph_update' | string;
+  graph_update_id?: string | null;
+  publication_status?: string;
   created_at: string;
+  updated_at?: string;
+}
+
+export interface BrandSpaceReportSummary {
+  id: string;
+  report_id: string;
+  version: number;
+  report_kind: string;
+  title: string;
+  summary: string;
+  source_type: 'graph_update' | 'pre_graph_update' | string;
+  graph_update_id?: string | null;
+  publication_status: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface BrandSpacePayload {
@@ -284,6 +306,7 @@ export interface BrandSpacePayload {
   patches: GraphPatch[];
   guardrails: ReportGuardrailResult[];
   report?: BrandSpaceReport | null;
+  reports?: BrandSpaceReportSummary[];
 }
 
 export interface CreateBrandSpaceBoardRunInput {

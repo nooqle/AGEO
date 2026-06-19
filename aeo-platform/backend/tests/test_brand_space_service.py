@@ -18,7 +18,11 @@ os.environ.setdefault(
 
 from app.core.database import Base
 from app.models import *  # noqa: F401, F403
-from app.models.brand_intelligence import BrandIntelligenceQuestion, BrandPlatformAnswer
+from app.models.brand_intelligence import (
+    BrandIntelligenceQuestion,
+    BrandPlatformAnswer,
+    BrandReportVersion,
+)
 from app.models.brand_intelligence_run import BrandIntelligenceRun
 from app.models.brand_space import BoardRun, GraphPatch, GraphUpdate
 from app.models.entity import Entity, EntityStatus
@@ -266,11 +270,22 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
             current_user=owner,
         )
         assert report_payload["report"]["payload"]["publication_status"] == "needs_review"
-        guardrail_by_key = {
-            item["guardrail_key"]: item for item in report_payload["guardrails"]
-        }
+        assert report_payload["report"]["payload"]["claims"]
+        assert report_payload["report"]["payload"]["trace_chains"]
+        assert report_payload["report"]["payload"]["platform_differences"]
+        first_trace = report_payload["report"]["payload"]["trace_chains"][0]
+        assert [step["type"] for step in first_trace["steps"]] == [
+            "report_claim",
+            "graph_patch",
+            "entity_relation",
+            "answer",
+            "question",
+            "platform",
+        ]
+        guardrail_by_key = {item["guardrailKey"]: item for item in report_payload["guardrails"]}
         assert guardrail_by_key["competitor_claim_evidence"]["severity"] == "block"
         assert guardrail_by_key["action_platform_specificity"]["severity"] == "pass"
+        assert guardrail_by_key["graph_update_scope"]["severity"] == "pass"
 
         risk_result = await session.execute(
             select(GraphPatch).where(
@@ -291,6 +306,194 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
             reason="覆盖未来状态兜底",
         )
         assert partial_payload["graph_update"]["status"] == "partial"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mcdonalds_report_versions_publish_and_legacy_mapping(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-mcdonalds@example.com")
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="麦当劳",
+            domain="mcdonalds.com.cn",
+            industry="餐饮",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=owner.id,
+        )
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        board_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            status="completed",
+            is_scaffold=False,
+            progress=1.0,
+            summary="麦当劳餐饮品牌图谱更新完成",
+            active_node_ids=[],
+        )
+        session.add(board_run)
+        await session.flush()
+        graph_update = GraphUpdate(
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            created_by_user_id=owner.id,
+            before_graph_version="v1.0.0",
+            after_graph_version="v1.1.0",
+            status="needs_review",
+            summary={"total": 3, "needs_review": 1, "accepted": 1, "auto_applied": 1},
+        )
+        session.add(graph_update)
+        await session.flush()
+        session.add_all(
+            [
+                GraphPatch(
+                    graph_update_id=graph_update.id,
+                    entity_id=entity.id,
+                    patch_type="update_strength",
+                    status="auto_applied",
+                    title="麦辣鸡腿堡核心产品连接增强",
+                    description="多平台回答把麦辣鸡腿堡作为麦当劳核心产品提及。",
+                    affected_object_type="menu_item",
+                    affected_object_id="spicy-chicken-burger",
+                    relation_type="supports",
+                    connection_strength=86,
+                    confidence=0.88,
+                    sentiment_or_risk_score=8.1,
+                    after_payload={"zone": "inner", "label": "麦辣鸡腿堡"},
+                    evidence_refs=[
+                        {
+                            "id": "answer:mcd-chatgpt-menu",
+                            "answer_id": "mcd-chatgpt-menu",
+                            "question_id": "mcd-q-menu",
+                            "question": "麦当劳最有代表性的产品是什么？",
+                            "platform": "ChatGPT",
+                            "excerpt": "麦辣鸡腿堡和巨无霸常被视为麦当劳核心产品。",
+                        },
+                        {
+                            "id": "answer:mcd-kimi-menu",
+                            "answer_id": "mcd-kimi-menu",
+                            "question_id": "mcd-q-menu",
+                            "question": "麦当劳最有代表性的产品是什么？",
+                            "platform": "Kimi",
+                            "excerpt": "麦辣鸡腿堡在本土菜单中有强识别度。",
+                        },
+                    ],
+                ),
+                GraphPatch(
+                    graph_update_id=graph_update.id,
+                    entity_id=entity.id,
+                    patch_type="add_risk_relation",
+                    status="needs_review",
+                    title="食品安全质疑进入风险层",
+                    description="回答中出现食品安全和卫生顾虑，需要审阅。",
+                    affected_object_type="risk_signal",
+                    affected_object_id="food-safety-concern",
+                    relation_type="risk_related",
+                    connection_strength=67,
+                    confidence=0.72,
+                    sentiment_or_risk_score=4.1,
+                    after_payload={"zone": "risk", "label": "食品安全质疑"},
+                    evidence_refs=[
+                        {
+                            "id": "answer:mcd-deepseek-risk",
+                            "answer_id": "mcd-deepseek-risk",
+                            "question_id": "mcd-q-risk",
+                            "question": "麦当劳有哪些用户顾虑？",
+                            "platform": "DeepSeek",
+                            "excerpt": "部分用户会关注食品安全、门店卫生和配料透明度。",
+                        }
+                    ],
+                ),
+                GraphPatch(
+                    graph_update_id=graph_update.id,
+                    entity_id=entity.id,
+                    patch_type="add_competitor_relation",
+                    status="accepted",
+                    title="肯德基竞品关系确认",
+                    description="回答包含明确对比语境。",
+                    affected_object_type="competitor",
+                    affected_object_id="kfc",
+                    relation_type="competes_with",
+                    connection_strength=74,
+                    confidence=0.78,
+                    sentiment_or_risk_score=6.2,
+                    after_payload={"zone": "middle", "label": "肯德基"},
+                    evidence_refs=[
+                        {
+                            "id": "answer:mcd-doubao-kfc",
+                            "answer_id": "mcd-doubao-kfc",
+                            "question_id": "mcd-q-competitor",
+                            "question": "消费者会把麦当劳和哪些品牌比较？",
+                            "platform": "豆包",
+                            "excerpt": "消费者常把麦当劳和肯德基进行套餐、价格和门店体验对比。",
+                        }
+                    ],
+                ),
+            ]
+        )
+        legacy_report = BrandReportVersion(
+            entity_id=entity.id,
+            report_id="legacy-mcdonalds-report",
+            version=1,
+            report_kind="legacy_brand_report",
+            artifact_id="legacy:mcdonalds:1",
+            title="麦当劳旧版品牌报告",
+            summary="旧报告没有 Graph Update 追溯链。",
+            payload={"publication_status": "published"},
+        )
+        session.add(legacy_report)
+        await session.commit()
+
+        report_payload = await service.generate_report(
+            graph_update_id=graph_update.id,
+            current_user=owner,
+        )
+        report = report_payload["report"]
+        assert report["source_type"] == "graph_update"
+        assert report["payload"]["publication_status"] == "draft"
+        report_text = json.dumps(report["payload"], ensure_ascii=False)
+        assert "麦辣鸡腿堡" in report_text
+        assert "食品安全质疑" in report_text
+        assert "肯德基" in report_text
+        assert "健康管理" not in report_text
+        assert "营养补充" not in report_text
+        assert any("DeepSeek" in action for action in report["payload"]["recommended_actions"])
+        assert report["payload"]["trace_chains"][0]["steps"][-1]["type"] == "platform"
+
+        report_list = await service.list_reports(entity_id=entity.id, current_user=owner)
+        assert report_list["summary"]["graph_update"] == 1
+        assert report_list["summary"]["pre_graph_update"] == 1
+        legacy_filtered = await service.list_reports(
+            entity_id=entity.id,
+            current_user=owner,
+            publication_status="pre_graph_update",
+        )
+        assert legacy_filtered["summary"]["pre_graph_update"] == 1
+        legacy_item = next(item for item in report_list["reports"] if item["id"] == str(legacy_report.id))
+        assert legacy_item["source_type"] == "pre_graph_update"
+
+        detail = await service.get_report(
+            report_version_id=report["id"],
+            current_user=owner,
+        )
+        assert detail["report"]["id"] == report["id"]
+        assert {item["severity"] for item in detail["guardrails"]} <= {"pass", "warn"}
+
+        published = await service.publish_report(
+            report_version_id=report["id"],
+            current_user=owner,
+        )
+        assert published["report"]["payload"]["publication_status"] == "published"
+        with pytest.raises(ValueError):
+            await service.publish_report(
+                report_version_id=legacy_report.id,
+                current_user=owner,
+            )
 
     await engine.dispose()
 
@@ -1035,3 +1238,14 @@ def test_report_guardrails_cover_warn_and_block_edges():
     )
     guardrail_by_key = {item["guardrail_key"]: item for item in guardrails}
     assert guardrail_by_key["action_platform_specificity"]["severity"] == "block"
+
+    out_of_scope_payload = {
+        **report_payload,
+        "claims": [{"patch_id": str(uuid.uuid4()), "statement": "越界引用"}],
+    }
+    guardrails = BrandSpaceService.validate_report_payload(
+        out_of_scope_payload,
+        concentrated_patches,
+    )
+    guardrail_by_key = {item["guardrail_key"]: item for item in guardrails}
+    assert guardrail_by_key["graph_update_scope"]["severity"] == "block"

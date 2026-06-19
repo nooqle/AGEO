@@ -23,9 +23,12 @@ from app.api.v1.brand_space import (
     get_board_run_assets,
     get_board_run_events,
     get_brand_graph,
+    get_brand_reports,
     get_brand_review_items,
     get_brand_space,
+    get_report_version,
     pause_board_run,
+    publish_report_version,
     resume_board_run,
     stop_board_run,
 )
@@ -187,6 +190,18 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert report["report"]["title"] == "安利圈层状态更新"
+        reports = await get_brand_reports(
+            entity_id=str(entity.id),
+            db=session,
+            current_user=owner,
+        )
+        assert reports["summary"]["graph_update"] == 1
+        report_detail = await get_report_version(
+            report_version_id=report["report"]["id"],
+            db=session,
+            current_user=owner,
+        )
+        assert report_detail["report"]["id"] == report["report"]["id"]
 
         accepted_again = await decide_graph_patch(
             patch_id=patch["id"],
@@ -205,6 +220,12 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert publishable_report["report"]["payload"]["publication_status"] == "publishable"
+        published_report = await publish_report_version(
+            report_version_id=publishable_report["report"]["id"],
+            db=session,
+            current_user=owner,
+        )
+        assert published_report["report"]["payload"]["publication_status"] == "published"
 
         stopped = await stop_board_run(run_id=run_id, db=session, current_user=owner)
         assert stopped["run"]["status"] == "stopped"

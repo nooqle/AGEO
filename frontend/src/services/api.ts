@@ -80,6 +80,7 @@ import type {
   GraphReviewItemsResponse,
   ReportGuardrailResult,
   BrandSpaceReport,
+  BrandSpaceReportSummary,
 } from '@/types/brandSpace';
 import type {
   AioCanvasConfig,
@@ -1223,6 +1224,33 @@ class ApiService {
           publish_requested: payload.publishRequested ?? false,
         }),
       },
+    );
+  }
+
+  async getBrandSpaceReports(
+    entityId: string,
+    params: { reportKind?: string; publicationStatus?: string; limit?: number } = {},
+  ): Promise<{ reports: BrandSpaceReportSummary[]; summary: Record<string, number> }> {
+    const searchParams = new URLSearchParams();
+    if (params.reportKind) searchParams.set('report_kind', params.reportKind);
+    if (params.publicationStatus) searchParams.set('publication_status', params.publicationStatus);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    const query = searchParams.toString();
+    return this.request<{ reports: BrandSpaceReportSummary[]; summary: Record<string, number> }>(
+      `/brand-space/brands/${entityId}/reports${query ? `?${query}` : ''}`,
+    );
+  }
+
+  async getBrandSpaceReport(reportVersionId: string): Promise<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }> {
+    return this.request<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }>(
+      `/brand-space/reports/${reportVersionId}`,
+    );
+  }
+
+  async publishBrandSpaceReport(reportVersionId: string): Promise<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }> {
+    return this.request<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }>(
+      `/brand-space/reports/${reportVersionId}/publish`,
+      { method: 'POST' },
     );
   }
 

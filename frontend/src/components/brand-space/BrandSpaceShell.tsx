@@ -44,6 +44,7 @@ import type {
   BrandSpaceGraphUpdate,
   BrandSpacePayload,
   BrandSpaceReport,
+  BrandSpaceReportSummary,
   BrandSpaceView,
   GraphReviewItem,
   GraphPatch,
@@ -163,6 +164,7 @@ export function BrandSpaceShell() {
   const [graphUpdate, setGraphUpdate] = useState<BrandSpaceGraphUpdate | null>(null);
   const [guardrails, setGuardrails] = useState(reportGuardrails);
   const [report, setReport] = useState<BrandSpaceReport | null>(null);
+  const [reports, setReports] = useState<BrandSpaceReportSummary[]>([]);
   const [pendingPatchDecisionIds, setPendingPatchDecisionIds] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState('platform-rack');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
@@ -184,9 +186,21 @@ export function BrandSpaceShell() {
     setEvents(payload.events);
     setGraph(payload.graph ?? fallbackGraph);
     setGraphUpdate(payload.graph_update);
-    setGuardrails(payload.guardrails.length ? payload.guardrails : reportGuardrails);
+    setGuardrails(payload.guardrails);
     if (payload.report !== undefined) {
       setReport(payload.report);
+    }
+    if (payload.reports) {
+      setReports(payload.reports);
+    }
+  }, []);
+
+  const refreshReports = useCallback(async (targetEntityId: string) => {
+    try {
+      const response = await api.getBrandSpaceReports(targetEntityId, { limit: 30 });
+      setReports(response.reports);
+    } catch (error) {
+      setBackendNotice(backendNoticeFromError(error, '报告列表刷新失败'));
     }
   }, []);
 
@@ -387,15 +401,48 @@ export function BrandSpaceShell() {
     setPendingPatchDecisionIds((current) => current.filter((id) => id !== patchId));
   };
 
-  const handleGenerateReport = async () => {
+  const handleGenerateReport = async (publishRequested = false) => {
     if (!graphUpdate?.id) return;
     setIsGeneratingReport(true);
     try {
-      const response = await api.generateBrandSpaceReport(graphUpdate.id);
+      const response = await api.generateBrandSpaceReport(graphUpdate.id, { publishRequested });
+      setReport(response.report);
+      setGuardrails(response.guardrails);
+      if (entityId) {
+        await refreshReports(entityId);
+      }
+    } catch (error) {
+      setBackendNotice(backendNoticeFromError(error, '报告生成失败'));
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
+  const handleSelectReport = async (reportId: string) => {
+    if (!isBackendMode) {
+      return;
+    }
+    try {
+      const response = await api.getBrandSpaceReport(reportId);
       setReport(response.report);
       setGuardrails(response.guardrails);
     } catch (error) {
-      setBackendNotice(backendNoticeFromError(error, '报告生成失败'));
+      setBackendNotice(backendNoticeFromError(error, '报告读取失败'));
+    }
+  };
+
+  const handlePublishReport = async () => {
+    if (!report?.id) return;
+    setIsGeneratingReport(true);
+    try {
+      const response = await api.publishBrandSpaceReport(report.id);
+      setReport(response.report);
+      setGuardrails(response.guardrails);
+      if (entityId) {
+        await refreshReports(entityId);
+      }
+    } catch (error) {
+      setBackendNotice(backendNoticeFromError(error, '报告发布失败'));
     } finally {
       setIsGeneratingReport(false);
     }
@@ -592,10 +639,14 @@ export function BrandSpaceShell() {
             {activeView === 'reports' ? (
               <ReportReviewView
                 report={report}
+                reports={reports}
                 graphUpdate={graphUpdate}
                 guardrails={guardrails}
-                onGenerateReport={handleGenerateReport}
+                onGenerateReport={() => handleGenerateReport(false)}
+                onPublishReport={handlePublishReport}
+                onSelectReport={handleSelectReport}
                 isGenerating={isGeneratingReport}
+                selectedReportId={report?.id ?? null}
               />
             ) : null}
           </div>

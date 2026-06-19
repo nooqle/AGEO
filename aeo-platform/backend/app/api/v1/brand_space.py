@@ -88,6 +88,28 @@ async def get_brand_review_items(
         _raise_http(exc)
 
 
+@router.get("/brands/{entity_id}/reports")
+async def get_brand_reports(
+    entity_id: str,
+    report_kind: str | None = None,
+    publication_status: str | None = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    service = BrandSpaceService(db)
+    try:
+        return await service.list_reports(
+            entity_id=entity_id,
+            current_user=current_user,
+            report_kind=report_kind,
+            publication_status=publication_status,
+            limit=limit,
+        )
+    except Exception as exc:
+        _raise_http(exc)
+
+
 @router.post("/brands/{entity_id}/board-runs", status_code=201)
 async def create_board_run(
     entity_id: str,
@@ -247,6 +269,40 @@ async def get_graph_update(
     try:
         return await service.get_graph_update(
             graph_update_id=graph_update_id,
+            current_user=current_user,
+        )
+    except Exception as exc:
+        _raise_http(exc)
+
+
+@router.get("/reports/{report_version_id}")
+async def get_report_version(
+    report_version_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    _parse_uuid(report_version_id, "report_version_id")
+    service = BrandSpaceService(db)
+    try:
+        return await service.get_report(
+            report_version_id=report_version_id,
+            current_user=current_user,
+        )
+    except Exception as exc:
+        _raise_http(exc)
+
+
+@router.post("/reports/{report_version_id}/publish")
+async def publish_report_version(
+    report_version_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    _parse_uuid(report_version_id, "report_version_id")
+    service = BrandSpaceService(db)
+    try:
+        return await service.publish_report(
+            report_version_id=report_version_id,
             current_user=current_user,
         )
     except Exception as exc:
