@@ -45,6 +45,7 @@ import type {
   BrandSpacePayload,
   BrandSpaceReport,
   BrandSpaceView,
+  GraphReviewItem,
   GraphPatch,
   GraphPatchStatus,
   InspectorTab,
@@ -105,6 +106,31 @@ const fallbackGraph: BrandSpaceGraph = {
   evidenceRefs,
 };
 
+function fallbackReviewCategory(patch: GraphPatch) {
+  if (patch.category) return patch.category;
+  if (patch.patchType === 'add_competitor_relation' || patch.relationType === 'competes_with') return 'competitor';
+  if (patch.patchType === 'add_risk_relation') return 'risk';
+  if (patch.patchType === 'add_entity') return 'new_entity';
+  if (patch.confidence !== null && patch.confidence !== undefined && patch.confidence < 0.7) return 'low_confidence';
+  return patch.status === 'blocked' ? 'conflict' : 'graph_change';
+}
+
+function reviewItemsFromPatches(patches: GraphPatch[], graphUpdate?: BrandSpaceGraphUpdate | null): GraphReviewItem[] {
+  return patches
+    .filter((patch) => patch.status === 'needs_review' || patch.status === 'blocked')
+    .map((patch) => ({
+      ...patch,
+      graphUpdateId: patch.graphUpdateId ?? graphUpdate?.id ?? 'local-graph-update',
+      graphUpdateStatus: graphUpdate?.status ?? 'needs_review',
+      boardRunId: graphUpdate?.board_run_id ?? null,
+      beforeGraphVersion: graphUpdate?.before_graph_version ?? 'v0.0.0',
+      afterGraphVersion: graphUpdate?.after_graph_version ?? 'v0.1.0',
+      graphUpdateCreatedAt: graphUpdate?.created_at ?? patch.createdAt ?? '',
+      category: fallbackReviewCategory(patch),
+      priority: patch.priority ?? (patch.status === 'blocked' ? 'high' : 'medium'),
+    }));
+}
+
 function backendNoticeFromError(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback;
   if (/failed to fetch|fetch failed|load failed|networkerror/i.test(error.message)) {
@@ -130,12 +156,14 @@ export function BrandSpaceShell() {
   const [platforms, setPlatforms] = useState<PlatformFetchNode[]>(initialPlatforms);
   const [edges, setEdges] = useState(boardEdges);
   const [patches, setPatches] = useState<GraphPatch[]>(initialGraphPatches);
+  const [reviewItems, setReviewItems] = useState<GraphReviewItem[]>(() => reviewItemsFromPatches(initialGraphPatches));
   const [artifactsState, setArtifactsState] = useState(artifacts);
   const [events, setEvents] = useState(runtimeEvents);
   const [graph, setGraph] = useState<BrandSpaceGraph>(fallbackGraph);
   const [graphUpdate, setGraphUpdate] = useState<BrandSpaceGraphUpdate | null>(null);
   const [guardrails, setGuardrails] = useState(reportGuardrails);
   const [report, setReport] = useState<BrandSpaceReport | null>(null);
+  const [pendingPatchDecisionIds, setPendingPatchDecisionIds] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState('platform-rack');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
 
@@ -162,6 +190,16 @@ export function BrandSpaceShell() {
     }
   }, []);
 
+  const refreshReviewItems = useCallback(async (targetEntityId: string, fallbackPatches: GraphPatch[], fallbackUpdate?: BrandSpaceGraphUpdate | null) => {
+    try {
+      const response = await api.getBrandSpaceReviewItems(targetEntityId);
+      setReviewItems(response.review_items);
+    } catch (error) {
+      setReviewItems(reviewItemsFromPatches(fallbackPatches, fallbackUpdate));
+      setBackendNotice(backendNoticeFromError(error, '审阅队列刷新失败'));
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -182,9 +220,12 @@ export function BrandSpaceShell() {
         setIsBackendMode(true);
         setBackendNotice('');
         applySpacePayload(payload);
+        setReviewItems(reviewItemsFromPatches(payload.patches, payload.graph_update));
+        await refreshReviewItems(entity.id, payload.patches, payload.graph_update);
       } catch (error) {
         if (cancelled) return;
         setIsBackendMode(false);
+        setReviewItems(reviewItemsFromPatches(initialGraphPatches));
         setBackendNotice(backendNoticeFromError(error, '后端不可用，正在使用本地演示底版'));
       } finally {
         if (!cancelled) {
@@ -198,7 +239,7 @@ export function BrandSpaceShell() {
     return () => {
       cancelled = true;
     };
-  }, [applySpacePayload]);
+  }, [applySpacePayload, refreshReviewItems]);
 
   useEffect(() => {
     if (!isBackendMode || !spaceRun?.id || runStatus !== 'running') return undefined;
@@ -261,6 +302,7 @@ export function BrandSpaceShell() {
         ? await api.resumeBrandSpaceBoardRun(spaceRun.id)
         : await api.createBrandSpaceBoardRun(entityId, { execution_mode: 'real' });
       applySpacePayload(payload);
+      await refreshReviewItems(entityId, payload.patches, payload.graph_update);
     } catch (error) {
       setBackendNotice(backendNoticeFromError(error, '启动画布失败，已切回本地动态'));
       startLocalRun();
@@ -313,6 +355,8 @@ export function BrandSpaceShell() {
     patchId: string,
     status: Extract<GraphPatchStatus, 'accepted' | 'rejected' | 'needs_review'>,
   ) => {
+    if (pendingPatchDecisionIds.includes(patchId)) return;
+    setPendingPatchDecisionIds((current) => [...current, patchId]);
     if (isBackendMode) {
       try {
         const response = await api.decideBrandSpaceGraphPatch(patchId, { status });
@@ -322,13 +366,25 @@ export function BrandSpaceShell() {
         if (spaceRun?.id) {
           const payload = await api.getBrandSpaceBoardRun(spaceRun.id);
           applySpacePayload(payload);
+          if (entityId) {
+            await refreshReviewItems(entityId, payload.patches, payload.graph_update);
+          }
+        } else if (entityId) {
+          await refreshReviewItems(entityId, response.patches, response.graph_update);
         }
         return;
       } catch (error) {
         setBackendNotice(backendNoticeFromError(error, '审阅提交失败，已使用本地状态'));
+      } finally {
+        setPendingPatchDecisionIds((current) => current.filter((id) => id !== patchId));
       }
     }
-    setPatches((current) => current.map((patch) => (patch.id === patchId ? { ...patch, status } : patch)));
+    setPatches((current) => {
+      const nextPatches = current.map((patch) => (patch.id === patchId ? { ...patch, status } : patch));
+      setReviewItems(reviewItemsFromPatches(nextPatches, graphUpdate));
+      return nextPatches;
+    });
+    setPendingPatchDecisionIds((current) => current.filter((id) => id !== patchId));
   };
 
   const handleGenerateReport = async () => {
@@ -516,6 +572,7 @@ export function BrandSpaceShell() {
                 onRunResume={handleRunResume}
                 onRunStop={handleRunStop}
                 onPatchDecision={handlePatchDecision}
+                pendingPatchDecisionIds={pendingPatchDecisionIds}
               />
             ) : null}
 
@@ -525,6 +582,8 @@ export function BrandSpaceShell() {
                 graph={graph}
                 brandName={context.brandName.replace('品牌空间', '')}
                 onPatchDecision={handlePatchDecision}
+                reviewItems={reviewItems}
+                pendingPatchDecisionIds={pendingPatchDecisionIds}
               />
             ) : null}
 

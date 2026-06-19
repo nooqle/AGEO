@@ -77,6 +77,7 @@ import type {
   BrandSpacePayload,
   CreateBrandSpaceBoardRunInput,
   GraphPatchStatus,
+  GraphReviewItemsResponse,
   ReportGuardrailResult,
   BrandSpaceReport,
 } from '@/types/brandSpace';
@@ -1112,6 +1113,20 @@ class ApiService {
   async getBrandSpaceGraph(entityId: string) {
     return this.request<{ graph: BrandSpacePayload['graph']; graph_update: BrandSpacePayload['graph_update'] }>(
       `/brand-space/brands/${entityId}/graph`,
+    );
+  }
+
+  async getBrandSpaceReviewItems(
+    entityId: string,
+    params: { reviewStatus?: string; category?: string; limit?: number } = {},
+  ): Promise<GraphReviewItemsResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.reviewStatus) searchParams.set('review_status', params.reviewStatus);
+    if (params.category) searchParams.set('category', params.category);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    const query = searchParams.toString();
+    return this.request<GraphReviewItemsResponse>(
+      `/brand-space/brands/${entityId}/review-items${query ? `?${query}` : ''}`,
     );
   }
 

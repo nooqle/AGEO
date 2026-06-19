@@ -63,6 +63,28 @@ async def get_brand_graph(
         _raise_http(exc)
 
 
+@router.get("/brands/{entity_id}/review-items")
+async def get_brand_review_items(
+    entity_id: str,
+    review_status: str | None = None,
+    category: str | None = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    service = BrandSpaceService(db)
+    try:
+        return await service.get_review_items(
+            entity_id=entity_id,
+            current_user=current_user,
+            status=review_status,
+            category=category,
+            limit=limit,
+        )
+    except Exception as exc:
+        _raise_http(exc)
+
+
 @router.post("/brands/{entity_id}/board-runs", status_code=201)
 async def create_board_run(
     entity_id: str,

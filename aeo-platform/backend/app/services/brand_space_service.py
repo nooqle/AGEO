@@ -6,6 +6,8 @@ import difflib
 import logging
 import re
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -78,7 +80,7 @@ NODE_TEMPLATES: list[dict[str, Any]] = [
         "node_type": "fetch",
         "title": "AI 平台抓取组",
         "subtitle": "四个平台并行抓取",
-        "position": {"x": 55, "y": 40},
+        "position": {"x": 55, "y": 36},
         "artifact_keys": ["artifact-raw-answers"],
     },
     {
@@ -110,7 +112,7 @@ NODE_TEMPLATES: list[dict[str, Any]] = [
         "node_type": "review",
         "title": "异常审阅",
         "subtitle": "新实体 + 低置信关系",
-        "position": {"x": 55, "y": 86},
+        "position": {"x": 55, "y": 88},
         "artifact_keys": ["artifact-review-list"],
     },
     {
@@ -118,7 +120,7 @@ NODE_TEMPLATES: list[dict[str, Any]] = [
         "node_type": "graph_update",
         "title": "品牌图谱更新",
         "subtitle": "生成圈层状态更新",
-        "position": {"x": 78, "y": 86},
+        "position": {"x": 78, "y": 88},
         "artifact_keys": ["artifact-graph-update"],
     },
 ]
@@ -167,9 +169,60 @@ EXPLICIT_COMPETITOR_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"alternative|instead of|versus|vs\.?|better than|competitor", re.IGNORECASE),
 )
 
+POSITIVE_HEALTH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"健康管理|营养补充|免疫|纽崔莱|蛋白|维生素|膳食补充|家庭健康"),
+)
+
+RISK_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"监管|顾虑|质疑|争议|投诉|价格|直销|安全|副作用|负面|风险"),
+)
+
+SCENARIO_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"职场|熬夜|精力|运动|备孕|银发|中老年|家庭"),
+)
+
+COMPETITOR_CANDIDATES: tuple[dict[str, str], ...] = (
+    {"id": "by-health", "label": "汤臣倍健"},
+    {"id": "swisse", "label": "Swisse"},
+    {"id": "gnc", "label": "GNC"},
+    {"id": "blackmores", "label": "Blackmores"},
+)
+
+POSITIVE_LEXICON_TYPES = {
+    "brandstrategy",
+    "community",
+    "digitaltool",
+    "evidenceasset",
+    "flowerdimension",
+    "fourvalue",
+    "healthylifestyle",
+    "marketcontext",
+    "productcategory",
+    "productfeature",
+    "product_line",
+    "solution",
+    "subbrand",
+    "touchpoint",
+}
+
+SUPPORTS_LEXICON_TYPES = {
+    "evidenceasset",
+    "productcategory",
+    "productfeature",
+    "product_line",
+    "subbrand",
+}
+
+RISK_LEXICON_TYPES = {"risk_signal", "risklabel"}
+COMPETITOR_LEXICON_TYPES = {"competitor", "competitor_candidate"}
+LEXICON_SPLIT_PATTERN = re.compile(r"[、,，/|;；\s]+")
+
 REAL_EXECUTION_MODE = "real"
 SCAFFOLD_EXECUTION_MODE = "scaffold"
 REAL_SYNC_MIN_INTERVAL_SECONDS = 30
+
+REVIEWABLE_PATCH_STATUSES = {"needs_review", "blocked"}
+IMMUTABLE_PATCH_STATUSES = {"auto_applied", "accepted", "rejected"}
 
 REAL_RUN_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -204,6 +257,884 @@ REAL_RUN_STATUS_EVENT_MESSAGES = {
 }
 
 
+@dataclass(frozen=True)
+class EntityLexiconEntry:
+    entity_id: str
+    label: str
+    entity_type: str
+    aliases: tuple[str, ...] = ()
+
+    @property
+    def normalized_type(self) -> str:
+        return re.sub(r"[^a-z0-9_]+", "", self.entity_type.lower())
+
+    @property
+    def terms(self) -> tuple[str, ...]:
+        seen: set[str] = set()
+        terms: list[str] = []
+        for term in (self.label, *self.aliases):
+            normalized = str(term or "").strip()
+            if not normalized:
+                continue
+            lowered = normalized.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            terms.append(normalized)
+        return tuple(terms)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "entity_id": self.entity_id,
+            "label": self.label,
+            "type": self.entity_type,
+            "aliases": list(self.aliases),
+        }
+
+
+class GraphPatchBuilderService:
+    """Build graph patches from persisted questions and captured platform answers.
+
+    The first MVP slice stays deterministic on purpose: it turns durable A3/A4
+    outputs into reviewable patches without introducing another LLM extraction
+    path. Later slices can replace the signal matchers with entity-lexicon
+    matching while keeping the same GraphPatch contract.
+    """
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def build(
+        self,
+        *,
+        entity: Entity,
+        board_run: BoardRun,
+        intelligence_run: BrandIntelligenceRun,
+        graph_update: GraphUpdate,
+        current_graph_projection: dict[str, Any] | None = None,
+        allocate_graph_zone: Callable[..., dict[str, Any]],
+        detect_competitor_context: Callable[..., dict[str, Any]],
+    ) -> list[GraphPatch]:
+        answers = await self._answers_for_run(
+            entity_id=entity.id,
+            intelligence_run=intelligence_run,
+        )
+        question_lookup = await self._question_lookup(
+            entity_id=entity.id,
+            intelligence_run=intelligence_run,
+            answers=answers,
+        )
+        lexicon_entries = self._lexicon_entries(board_run=board_run, entity=entity)
+        graph_index = self._graph_projection_index(current_graph_projection or {})
+        if not answers:
+            return [
+                self._insufficient_data_patch(
+                    entity=entity,
+                    graph_update=graph_update,
+                    board_run=board_run,
+                )
+            ]
+
+        patches: list[GraphPatch] = []
+        positive_entry_matches = self._matched_entries(
+            entries=[
+                entry
+                for entry in lexicon_entries
+                if entry.normalized_type in POSITIVE_LEXICON_TYPES
+            ],
+            answers=answers,
+            question_lookup=question_lookup,
+        )
+        has_positive_signal = bool(positive_entry_matches)
+        if positive_entry_matches:
+            patches.extend(
+                self._positive_entity_patches(
+                    entity=entity,
+                    graph_update=graph_update,
+                    matches=positive_entry_matches,
+                    question_lookup=question_lookup,
+                    graph_index=graph_index,
+                    allocate_graph_zone=allocate_graph_zone,
+                )
+            )
+        else:
+            positive_answers = self._answers_matching(
+                answers=answers,
+                question_lookup=question_lookup,
+                patterns=POSITIVE_HEALTH_PATTERNS,
+            )
+            if positive_answers:
+                has_positive_signal = True
+                patches.append(
+                    self._positive_health_patch(
+                        entity=entity,
+                        graph_update=graph_update,
+                        answers=positive_answers,
+                        question_lookup=question_lookup,
+                        allocate_graph_zone=allocate_graph_zone,
+                    )
+                )
+
+        risk_entry_matches = self._matched_entries(
+            entries=[
+                entry
+                for entry in lexicon_entries
+                if entry.normalized_type in RISK_LEXICON_TYPES
+            ],
+            answers=answers,
+            question_lookup=question_lookup,
+        )
+        risk_answers = self._answer_union(
+            self._answers_matching(
+                answers=answers,
+                question_lookup=question_lookup,
+                patterns=RISK_SIGNAL_PATTERNS,
+            ),
+            *[entry_answers for _, entry_answers in risk_entry_matches],
+        )
+        if risk_answers:
+            risk_entry = risk_entry_matches[0][0] if risk_entry_matches else None
+            patches.append(
+                self._risk_patch(
+                    entity=entity,
+                    graph_update=graph_update,
+                    answers=risk_answers,
+                    question_lookup=question_lookup,
+                    lexicon_entry=risk_entry,
+                    graph_index=graph_index,
+                    allocate_graph_zone=allocate_graph_zone,
+                )
+            )
+
+        competitor_entries = [
+            entry
+            for entry in lexicon_entries
+            if entry.normalized_type in COMPETITOR_LEXICON_TYPES
+        ] or [
+            EntityLexiconEntry(
+                entity_id=str(candidate["id"]),
+                label=str(candidate["label"]),
+                entity_type="Competitor",
+            )
+            for candidate in COMPETITOR_CANDIDATES
+        ]
+
+        patches.extend(
+            self._competitor_patches(
+                entity=entity,
+                graph_update=graph_update,
+                answers=answers,
+                question_lookup=question_lookup,
+                candidates=competitor_entries,
+                graph_index=graph_index,
+                allocate_graph_zone=allocate_graph_zone,
+                detect_competitor_context=detect_competitor_context,
+            )
+        )
+
+        scenario_answers = self._answers_matching(
+            answers=answers,
+            question_lookup=question_lookup,
+            patterns=SCENARIO_SIGNAL_PATTERNS,
+        )
+        if scenario_answers and not has_positive_signal:
+            patches.append(
+                self._weak_scenario_patch(
+                    entity=entity,
+                    graph_update=graph_update,
+                    answers=scenario_answers,
+                    question_lookup=question_lookup,
+                    allocate_graph_zone=allocate_graph_zone,
+                )
+            )
+
+        if patches:
+            return patches
+        return [
+            self._insufficient_data_patch(
+                entity=entity,
+                graph_update=graph_update,
+                board_run=board_run,
+            )
+        ]
+
+    async def _answers_for_run(
+        self,
+        *,
+        entity_id: UUID,
+        intelligence_run: BrandIntelligenceRun,
+    ) -> list[BrandPlatformAnswer]:
+        conditions = [
+            BrandPlatformAnswer.entity_id == entity_id,
+            BrandPlatformAnswer.success.is_(True),
+        ]
+        if intelligence_run.origin_session_id is not None:
+            conditions.append(
+                BrandPlatformAnswer.session_id == intelligence_run.origin_session_id
+            )
+        result = await self.db.execute(
+            select(BrandPlatformAnswer)
+            .where(*conditions)
+            .order_by(desc(BrandPlatformAnswer.captured_at), desc(BrandPlatformAnswer.created_at))
+            .limit(200)
+        )
+        return list(result.scalars().all())
+
+    async def _question_lookup(
+        self,
+        *,
+        entity_id: UUID,
+        intelligence_run: BrandIntelligenceRun,
+        answers: list[BrandPlatformAnswer],
+    ) -> dict[str, str]:
+        lookup: dict[str, str] = {}
+        object_ids = {
+            answer.question_object_id
+            for answer in answers
+            if answer.question_object_id is not None
+        }
+        if object_ids:
+            result = await self.db.execute(
+                select(BrandIntelligenceQuestion).where(
+                    BrandIntelligenceQuestion.id.in_(object_ids)
+                )
+            )
+            for question in result.scalars().all():
+                lookup[str(question.id)] = question.question_text
+                lookup[question.question_id] = question.question_text
+
+        question_ids = {
+            answer.question_id
+            for answer in answers
+            if answer.question_id and answer.question_id not in lookup
+        }
+        if question_ids:
+            conditions = [
+                BrandIntelligenceQuestion.entity_id == entity_id,
+                BrandIntelligenceQuestion.question_id.in_(question_ids),
+            ]
+            if intelligence_run.origin_session_id is not None:
+                conditions.append(
+                    BrandIntelligenceQuestion.session_id
+                    == intelligence_run.origin_session_id
+                )
+            result = await self.db.execute(
+                select(BrandIntelligenceQuestion).where(*conditions)
+            )
+            for question in result.scalars().all():
+                lookup[str(question.id)] = question.question_text
+                lookup[question.question_id] = question.question_text
+        return lookup
+
+    def _answers_matching(
+        self,
+        *,
+        answers: list[BrandPlatformAnswer],
+        question_lookup: dict[str, str],
+        patterns: tuple[re.Pattern[str], ...],
+    ) -> list[BrandPlatformAnswer]:
+        return [
+            answer
+            for answer in answers
+            if any(
+                pattern.search(self._combined_text(answer, question_lookup))
+                for pattern in patterns
+            )
+        ]
+
+    def _lexicon_entries(
+        self,
+        *,
+        board_run: BoardRun,
+        entity: Entity,
+    ) -> list[EntityLexiconEntry]:
+        input_scope = board_run.input_scope or {}
+        raw_entries = (
+            input_scope.get("entity_lexicon")
+            or input_scope.get("lexicon")
+            or input_scope.get("brand_entity_lexicon")
+            or []
+        )
+        entries: list[EntityLexiconEntry] = [
+            EntityLexiconEntry(
+                entity_id=str(entity.id),
+                label=entity.name,
+                entity_type="CenterBrand",
+                aliases=tuple(
+                    alias
+                    for alias in [entity.domain, f"{entity.name}品牌"]
+                    if alias
+                ),
+            )
+        ]
+        if not isinstance(raw_entries, list):
+            return entries
+        seen: set[str] = {entity.name.lower()}
+        for row in raw_entries:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label") or row.get("entity_name") or row.get("name") or "").strip()
+            if not label:
+                continue
+            entity_id = str(row.get("entity_id") or row.get("id") or label).strip()
+            entity_type = str(row.get("type") or row.get("entity_type") or "Concept").strip()
+            aliases = self._alias_terms(row)
+            identity = f"{entity_id.lower()}:{label.lower()}"
+            if identity in seen:
+                continue
+            seen.add(identity)
+            entries.append(
+                EntityLexiconEntry(
+                    entity_id=entity_id,
+                    label=label,
+                    entity_type=entity_type,
+                    aliases=aliases,
+                )
+            )
+        return entries
+
+    @staticmethod
+    def _alias_terms(row: dict[str, Any]) -> tuple[str, ...]:
+        raw_aliases = (
+            row.get("aliases")
+            or row.get("alias")
+            or row.get("trigger_terms")
+            or row.get("terms")
+            or row.get("triggers")
+            or []
+        )
+        if isinstance(raw_aliases, str):
+            candidates = LEXICON_SPLIT_PATTERN.split(raw_aliases)
+        elif isinstance(raw_aliases, list):
+            candidates = []
+            for item in raw_aliases:
+                if isinstance(item, str):
+                    candidates.extend(LEXICON_SPLIT_PATTERN.split(item))
+                else:
+                    candidates.append(str(item))
+        else:
+            candidates = [str(raw_aliases)] if raw_aliases else []
+        aliases: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            alias = str(candidate or "").strip()
+            if not alias:
+                continue
+            lowered = alias.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            aliases.append(alias)
+        return tuple(aliases)
+
+    def _matched_entries(
+        self,
+        *,
+        entries: list[EntityLexiconEntry],
+        answers: list[BrandPlatformAnswer],
+        question_lookup: dict[str, str],
+    ) -> list[tuple[EntityLexiconEntry, list[BrandPlatformAnswer]]]:
+        matches: list[tuple[EntityLexiconEntry, list[BrandPlatformAnswer]]] = []
+        for entry in entries:
+            matched_answers = [
+                answer
+                for answer in answers
+                if self._answer_mentions_entry(
+                    answer=answer,
+                    question_lookup=question_lookup,
+                    entry=entry,
+                )
+            ]
+            if matched_answers:
+                matches.append((entry, matched_answers))
+        return sorted(
+            matches,
+            key=lambda item: (len(item[1]), len({answer.platform for answer in item[1]})),
+            reverse=True,
+        )
+
+    def _answer_mentions_entry(
+        self,
+        *,
+        answer: BrandPlatformAnswer,
+        question_lookup: dict[str, str],
+        entry: EntityLexiconEntry,
+    ) -> bool:
+        text = self._combined_text(answer, question_lookup)
+        return any(self._contains_term(text, term) for term in entry.terms)
+
+    @staticmethod
+    def _contains_term(text: str, term: str) -> bool:
+        if not term:
+            return False
+        if term.isascii():
+            return term.lower() in (text or "").lower()
+        return term in (text or "")
+
+    @staticmethod
+    def _answer_union(
+        *answer_groups: list[BrandPlatformAnswer],
+    ) -> list[BrandPlatformAnswer]:
+        seen: set[UUID] = set()
+        merged: list[BrandPlatformAnswer] = []
+        for answers in answer_groups:
+            for answer in answers:
+                if answer.id in seen:
+                    continue
+                seen.add(answer.id)
+                merged.append(answer)
+        return merged
+
+    @staticmethod
+    def _graph_projection_index(graph_projection: dict[str, Any]) -> dict[str, set[str]]:
+        labels: set[str] = set()
+        ids: set[str] = set()
+        for node in graph_projection.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "").strip()
+            label = str(node.get("label") or node.get("name") or "").strip()
+            if node_id:
+                ids.add(node_id.lower())
+            if label:
+                labels.add(label.lower())
+        return {"ids": ids, "labels": labels}
+
+    @staticmethod
+    def _existing_graph_match(
+        *,
+        entry: EntityLexiconEntry,
+        graph_index: dict[str, set[str]],
+    ) -> bool:
+        ids = graph_index.get("ids") or set()
+        labels = graph_index.get("labels") or set()
+        return entry.entity_id.lower() in ids or entry.label.lower() in labels
+
+    @staticmethod
+    def _relation_type_for_entry(entry: EntityLexiconEntry) -> str:
+        if entry.normalized_type in SUPPORTS_LEXICON_TYPES:
+            return "supports"
+        return "associated_with"
+
+    def _positive_entity_patches(
+        self,
+        *,
+        entity: Entity,
+        graph_update: GraphUpdate,
+        matches: list[tuple[EntityLexiconEntry, list[BrandPlatformAnswer]]],
+        question_lookup: dict[str, str],
+        graph_index: dict[str, set[str]],
+        allocate_graph_zone: Callable[..., dict[str, Any]],
+    ) -> list[GraphPatch]:
+        patches: list[GraphPatch] = []
+        for entry, entry_answers in matches[:3]:
+            relation_type = self._relation_type_for_entry(entry)
+            strength = self._score_from_answers(
+                entry_answers,
+                base=74 if relation_type == "supports" else 70,
+                per_answer=3,
+                per_platform=4,
+                cap=92,
+            )
+            confidence = self._confidence_from_answers(entry_answers, base=0.68)
+            allocation = allocate_graph_zone(
+                connection_strength=strength,
+                sentiment_or_risk_score=8.0,
+                relation_type=relation_type,
+                confidence=confidence,
+            )
+            graph_match = self._existing_graph_match(
+                entry=entry,
+                graph_index=graph_index,
+            )
+            patches.append(
+                GraphPatch(
+                    graph_update_id=graph_update.id,
+                    entity_id=entity.id,
+                    patch_type="add_entity_relation",
+                    status=allocation["status"],
+                    title=f"连接{entry.label}关系",
+                    description=f"真实回答命中词表实体“{entry.label}”，生成 {relation_type} 关系候选。",
+                    affected_object_type=entry.entity_type,
+                    affected_object_id=entry.entity_id,
+                    relation_type=relation_type,
+                    connection_strength=strength,
+                    confidence=confidence,
+                    sentiment_or_risk_score=8.0,
+                    after_payload={
+                        "zone": allocation["zone"],
+                        "label": entry.label,
+                        "lexicon_entry": entry.to_payload(),
+                        "existing_graph_match": graph_match,
+                    },
+                    score_breakdown={
+                        "connection_strength": strength,
+                        "sentiment": 8.0,
+                        "confidence": confidence,
+                        "allocation_reason": allocation["reason"],
+                        "matched_answer_count": len(entry_answers),
+                        "matched_platform_count": len(
+                            {answer.platform for answer in entry_answers if answer.platform}
+                        ),
+                    },
+                    evidence_refs=self._evidence_refs(
+                        answers=entry_answers,
+                        question_lookup=question_lookup,
+                        polarity="positive",
+                        matched_entry=entry,
+                    ),
+                )
+            )
+        return patches
+
+    def _positive_health_patch(
+        self,
+        *,
+        entity: Entity,
+        graph_update: GraphUpdate,
+        answers: list[BrandPlatformAnswer],
+        question_lookup: dict[str, str],
+        allocate_graph_zone: Callable[..., dict[str, Any]],
+    ) -> GraphPatch:
+        strength = self._score_from_answers(answers, base=76, per_answer=3, per_platform=4, cap=92)
+        confidence = self._confidence_from_answers(answers, base=0.68)
+        allocation = allocate_graph_zone(
+            connection_strength=strength,
+            sentiment_or_risk_score=8.1,
+            relation_type="associated_with",
+            confidence=confidence,
+        )
+        platforms = self._platform_label(answers)
+        return GraphPatch(
+            graph_update_id=graph_update.id,
+            entity_id=entity.id,
+            patch_type="update_strength",
+            status=allocation["status"],
+            title="增强健康管理关系",
+            description=f"{platforms} 的真实回答中出现健康管理、营养补充或家庭健康正向证据。",
+            affected_object_type="brand_concept",
+            affected_object_id="health-management",
+            relation_type="associated_with",
+            connection_strength=strength,
+            confidence=confidence,
+            sentiment_or_risk_score=8.1,
+            after_payload={"zone": allocation["zone"], "label": "健康管理"},
+            score_breakdown={
+                "connection_strength": strength,
+                "sentiment": 8.1,
+                "confidence": confidence,
+                "allocation_reason": allocation["reason"],
+            },
+            evidence_refs=self._evidence_refs(
+                answers=answers,
+                question_lookup=question_lookup,
+                polarity="positive",
+            ),
+        )
+
+    def _risk_patch(
+        self,
+        *,
+        entity: Entity,
+        graph_update: GraphUpdate,
+        answers: list[BrandPlatformAnswer],
+        question_lookup: dict[str, str],
+        lexicon_entry: EntityLexiconEntry | None,
+        graph_index: dict[str, set[str]],
+        allocate_graph_zone: Callable[..., dict[str, Any]],
+    ) -> GraphPatch:
+        strength = self._score_from_answers(answers, base=58, per_answer=4, per_platform=5, cap=78)
+        confidence = self._confidence_from_answers(answers, base=0.62)
+        allocation = allocate_graph_zone(
+            connection_strength=strength,
+            sentiment_or_risk_score=4.2,
+            relation_type="risk_related",
+            confidence=confidence,
+        )
+        label = lexicon_entry.label if lexicon_entry else "监管与价格顾虑"
+        affected_object_id = lexicon_entry.entity_id if lexicon_entry else "regulatory-price-risk"
+        affected_object_type = lexicon_entry.entity_type if lexicon_entry else "risk_signal"
+        return GraphPatch(
+            graph_update_id=graph_update.id,
+            entity_id=entity.id,
+            patch_type="add_risk_relation",
+            status=allocation["status"],
+            title=f"{label}进入风险层",
+            description="真实回答出现监管、价格、直销或安全顾虑，情绪/风险闸门阻止其进入内圈。",
+            affected_object_type=affected_object_type,
+            affected_object_id=affected_object_id,
+            relation_type="risk_related",
+            connection_strength=strength,
+            confidence=confidence,
+            sentiment_or_risk_score=4.2,
+            after_payload={
+                "zone": allocation["zone"],
+                "label": label,
+                "lexicon_entry": lexicon_entry.to_payload() if lexicon_entry else None,
+                "existing_graph_match": self._existing_graph_match(
+                    entry=lexicon_entry,
+                    graph_index=graph_index,
+                )
+                if lexicon_entry
+                else False,
+            },
+            score_breakdown={
+                "connection_strength": strength,
+                "sentiment": 4.2,
+                "confidence": confidence,
+                "allocation_reason": allocation["reason"],
+            },
+            evidence_refs=self._evidence_refs(
+                answers=answers,
+                question_lookup=question_lookup,
+                polarity="questioning",
+                matched_entry=lexicon_entry,
+            ),
+        )
+
+    def _competitor_patches(
+        self,
+        *,
+        entity: Entity,
+        graph_update: GraphUpdate,
+        answers: list[BrandPlatformAnswer],
+        question_lookup: dict[str, str],
+        candidates: list[EntityLexiconEntry],
+        graph_index: dict[str, set[str]],
+        allocate_graph_zone: Callable[..., dict[str, Any]],
+        detect_competitor_context: Callable[..., dict[str, Any]],
+    ) -> list[GraphPatch]:
+        patches: list[GraphPatch] = []
+        for candidate in candidates:
+            candidate_answers = [
+                answer
+                for answer in answers
+                if self._answer_mentions_entry(
+                    answer=answer,
+                    question_lookup=question_lookup,
+                    entry=candidate,
+                )
+            ]
+            if not candidate_answers:
+                continue
+            confidence = self._confidence_from_answers(candidate_answers, base=0.58)
+            joined_text = " ".join(
+                self._combined_text(answer, question_lookup)
+                for answer in candidate_answers
+            )
+            detection = detect_competitor_context(text=joined_text, confidence=confidence)
+            if not detection["is_competitor"]:
+                continue
+            strength = self._score_from_answers(
+                candidate_answers,
+                base=56,
+                per_answer=3,
+                per_platform=5,
+                cap=76,
+            )
+            allocation = allocate_graph_zone(
+                connection_strength=strength,
+                sentiment_or_risk_score=6.2,
+                relation_type="competes_with",
+                confidence=confidence,
+            )
+            patches.append(
+                GraphPatch(
+                    graph_update_id=graph_update.id,
+                    entity_id=entity.id,
+                    patch_type="add_competitor_relation",
+                    status=allocation["status"],
+                    title=f"新增{candidate.label}竞品候选",
+                    description="真实回答包含明确替代、推荐或对比信号，非同品类共现。",
+                    affected_object_type=candidate.entity_type,
+                    affected_object_id=candidate.entity_id,
+                    relation_type="competes_with",
+                    connection_strength=strength,
+                    confidence=confidence,
+                    sentiment_or_risk_score=6.2,
+                    after_payload={
+                        "zone": allocation["zone"],
+                        "label": candidate.label,
+                        "lexicon_entry": candidate.to_payload(),
+                        "existing_graph_match": self._existing_graph_match(
+                            entry=candidate,
+                            graph_index=graph_index,
+                        ),
+                    },
+                    score_breakdown={
+                        "connection_strength": strength,
+                        "sentiment": 6.2,
+                        "confidence": confidence,
+                        "allocation_reason": allocation["reason"],
+                        "competitor_reason": detection["reason"],
+                    },
+                    evidence_refs=self._evidence_refs(
+                        answers=candidate_answers,
+                        question_lookup=question_lookup,
+                        polarity="neutral",
+                        matched_entry=candidate,
+                    ),
+                )
+            )
+        return patches[:2]
+
+    def _weak_scenario_patch(
+        self,
+        *,
+        entity: Entity,
+        graph_update: GraphUpdate,
+        answers: list[BrandPlatformAnswer],
+        question_lookup: dict[str, str],
+        allocate_graph_zone: Callable[..., dict[str, Any]],
+    ) -> GraphPatch:
+        strength = self._score_from_answers(answers, base=42, per_answer=2, per_platform=2, cap=56)
+        confidence = self._confidence_from_answers(answers, base=0.48)
+        allocation = allocate_graph_zone(
+            connection_strength=strength,
+            sentiment_or_risk_score=5.8,
+            relation_type="scenario_for",
+            confidence=confidence,
+        )
+        status = "blocked" if len(answers) < 2 else allocation["status"]
+        return GraphPatch(
+            graph_update_id=graph_update.id,
+            entity_id=entity.id,
+            patch_type="add_entity",
+            status=status,
+            title="新增弱证据场景候选",
+            description="真实回答出现新使用场景，但证据量不足时不会直接进入正式圈层。",
+            affected_object_type="usage_scenario",
+            affected_object_id="emerging-usage-scenario",
+            relation_type="scenario_for",
+            connection_strength=strength,
+            confidence=confidence,
+            sentiment_or_risk_score=5.8,
+            after_payload={"zone": allocation["zone"], "label": "新兴使用场景"},
+            score_breakdown={
+                "connection_strength": strength,
+                "sentiment": 5.8,
+                "confidence": confidence,
+                "allocation_reason": allocation["reason"],
+            },
+            evidence_refs=self._evidence_refs(
+                answers=answers,
+                question_lookup=question_lookup,
+                polarity="neutral",
+            ),
+        )
+
+    def _insufficient_data_patch(
+        self,
+        *,
+        entity: Entity,
+        graph_update: GraphUpdate,
+        board_run: BoardRun,
+    ) -> GraphPatch:
+        return GraphPatch(
+            graph_update_id=graph_update.id,
+            entity_id=entity.id,
+            patch_type="insufficient_data",
+            status="needs_review",
+            title="真实运行缺少可用回答",
+            description="未读取到成功抓取的 AI 平台回答，图谱更新需要人工检查运行产物。",
+            affected_object_type="runtime_input",
+            affected_object_id=f"board-run-{board_run.id}",
+            relation_type="evidence_missing",
+            connection_strength=0,
+            confidence=0,
+            sentiment_or_risk_score=5.0,
+            after_payload={"zone": "pending_review", "label": "缺少可用回答"},
+            score_breakdown={
+                "connection_strength": 0,
+                "sentiment": 5.0,
+                "confidence": 0,
+                "allocation_reason": "no_successful_answers",
+            },
+            evidence_refs=[],
+        )
+
+    def _evidence_refs(
+        self,
+        *,
+        answers: list[BrandPlatformAnswer],
+        question_lookup: dict[str, str],
+        polarity: str,
+        matched_entry: EntityLexiconEntry | None = None,
+    ) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = []
+        for answer in answers[:5]:
+            ref = {
+                "id": f"answer:{answer.id}",
+                "answer_id": str(answer.id),
+                "question_id": answer.question_id,
+                "question": self._question_text(answer, question_lookup),
+                "platform": answer.platform,
+                "excerpt": self._clip(answer.answer_text, 180),
+                "polarity": polarity,
+            }
+            if matched_entry is not None:
+                ref.update(
+                    {
+                        "matched_entity_id": matched_entry.entity_id,
+                        "matched_entity_label": matched_entry.label,
+                        "matched_entity_type": matched_entry.entity_type,
+                    }
+                )
+            refs.append(ref)
+        return refs
+
+    @staticmethod
+    def _combined_text(
+        answer: BrandPlatformAnswer,
+        question_lookup: dict[str, str],
+    ) -> str:
+        question = GraphPatchBuilderService._question_text(answer, question_lookup)
+        return f"{question}\n{answer.answer_text or ''}"
+
+    @staticmethod
+    def _question_text(
+        answer: BrandPlatformAnswer,
+        question_lookup: dict[str, str],
+    ) -> str:
+        if answer.question_object_id is not None:
+            by_object_id = question_lookup.get(str(answer.question_object_id))
+            if by_object_id:
+                return by_object_id
+        return question_lookup.get(answer.question_id) or answer.question_id or "未记录问题"
+
+    @staticmethod
+    def _clip(text: str, limit: int) -> str:
+        normalized = " ".join((text or "").split())
+        return normalized if len(normalized) <= limit else f"{normalized[:limit]}..."
+
+    @staticmethod
+    def _score_from_answers(
+        answers: list[BrandPlatformAnswer],
+        *,
+        base: int,
+        per_answer: int,
+        per_platform: int,
+        cap: int,
+    ) -> int:
+        platforms = {answer.platform for answer in answers if answer.platform}
+        return min(cap, base + len(answers) * per_answer + len(platforms) * per_platform)
+
+    @staticmethod
+    def _confidence_from_answers(
+        answers: list[BrandPlatformAnswer],
+        *,
+        base: float,
+    ) -> float:
+        platforms = {answer.platform for answer in answers if answer.platform}
+        confidence = base + len(answers) * 0.02 + len(platforms) * 0.06
+        return round(min(0.9, confidence), 2)
+
+    @staticmethod
+    def _platform_label(answers: list[BrandPlatformAnswer]) -> str:
+        platforms = sorted({answer.platform for answer in answers if answer.platform})
+        return "、".join(platforms[:4]) if platforms else "AI 平台"
+
+
 class BrandSpaceService:
     """Persistent state source for the Brand Space MVP."""
 
@@ -228,6 +1159,56 @@ class BrandSpaceService:
         return {
             "graph": await self._fallback_graph(entity=entity, patches=[]),
             "graph_update": None,
+        }
+
+    async def get_review_items(
+        self,
+        *,
+        entity_id: str | UUID,
+        current_user: User,
+        status: str | None = None,
+        category: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        entity = await self._require_entity(entity_id, current_user)
+        normalized_status = (status or "").strip().lower()
+        normalized_category = (category or "").strip().lower()
+        safe_limit = max(1, min(int(limit or 100), 200))
+        allowed_statuses = {
+            "all",
+            "auto_applied",
+            "needs_review",
+            "accepted",
+            "rejected",
+            "blocked",
+        }
+        if normalized_status and normalized_status not in allowed_statuses:
+            raise ValueError(f"Unsupported review item status: {status}")
+
+        query = (
+            select(GraphPatch, GraphUpdate)
+            .join(GraphUpdate, GraphPatch.graph_update_id == GraphUpdate.id)
+            .where(GraphUpdate.entity_id == entity.id)
+            .order_by(desc(GraphPatch.updated_at), desc(GraphPatch.created_at))
+        )
+        if not normalized_status:
+            query = query.where(GraphPatch.status.in_(REVIEWABLE_PATCH_STATUSES))
+        elif normalized_status != "all":
+            query = query.where(GraphPatch.status == normalized_status)
+        query = query.limit(safe_limit * 3 if normalized_category else safe_limit)
+
+        result = await self.db.execute(query)
+        rows = list(result.all())
+        items = [
+            self._review_item_to_dict(patch=patch, graph_update=graph_update)
+            for patch, graph_update in rows
+        ]
+        if normalized_category:
+            items = [item for item in items if item["category"] == normalized_category]
+        items = items[:safe_limit]
+        return {
+            "review_items": items,
+            "summary": self._review_items_summary(items),
         }
 
     async def create_board_run(
@@ -530,30 +1511,85 @@ class BrandSpaceService:
         current_user: User,
     ) -> dict[str, Any]:
         patch = await self._require_patch(patch_id, current_user)
+        graph_update = await self._require_graph_update(patch.graph_update_id, current_user)
+        previous_status = patch.status
+        normalized_reason = reason or ""
+
+        if previous_status in IMMUTABLE_PATCH_STATUSES:
+            if previous_status == status:
+                return await self.get_graph_update(
+                    graph_update_id=graph_update.id,
+                    current_user=current_user,
+                )
+            raise ValueError("Graph patch already has a terminal decision")
+
+        no_change = (
+            previous_status == status
+            and (patch.review_reason or "") == normalized_reason
+            and patch.reviewed_at is not None
+        )
+        if no_change:
+            return await self.get_graph_update(
+                graph_update_id=graph_update.id,
+                current_user=current_user,
+            )
+
         patch.status = status
-        patch.review_reason = reason or ""
+        patch.review_reason = normalized_reason
         patch.reviewed_by_user_id = current_user.id
         patch.reviewed_at = _now()
-        graph_update = await self._require_graph_update(patch.graph_update_id, current_user)
 
         patches = await self._patches(graph_update.id)
-        terminal_patch_statuses = {"auto_applied", "accepted", "rejected", "blocked"}
-        if all(item.status in terminal_patch_statuses for item in patches):
+        previous_graph_update_status = graph_update.status
+        if all(item.status in IMMUTABLE_PATCH_STATUSES | {"blocked"} for item in patches):
             graph_update.status = "applied"
         elif any(item.status == "needs_review" for item in patches):
             graph_update.status = "needs_review"
         else:
             graph_update.status = "partial"
+        entity = await self._entity_by_id(graph_update.entity_id)
+        graph_update.summary = self._graph_update_summary(patches)
+        graph_update.graph_snapshot = await self._fallback_graph(
+            entity=entity,
+            patches=self._patches_for_graph_snapshot(patches),
+        )
 
+        event_type_by_status = {
+            "accepted": "graph_patch_accepted",
+            "rejected": "graph_patch_rejected",
+            "needs_review": "graph_patch_kept_review",
+        }
+        severity_by_status = {
+            "accepted": "success",
+            "rejected": "info",
+            "needs_review": "warning",
+        }
         await self._append_event(
             entity_id=patch.entity_id,
             board_run_id=graph_update.board_run_id,
             node_id="anomaly-review",
-            event_type="graph_patch_reviewed",
-            severity="success" if status == "accepted" else "info",
+            event_type=event_type_by_status.get(status, "graph_patch_reviewed"),
+            severity=severity_by_status.get(status, "info"),
             message=f"图谱补丁已标记为{self._decision_label(status)}。",
-            payload={"patch_id": str(patch.id), "status": status},
+            payload={
+                "patch_id": str(patch.id),
+                "previous_status": previous_status,
+                "status": status,
+                "reason": normalized_reason,
+                "category": self._patch_review_category(patch),
+            },
         )
+        if previous_graph_update_status != "applied" and graph_update.status == "applied":
+            await self.db.flush()
+            await self._append_event(
+                entity_id=patch.entity_id,
+                board_run_id=graph_update.board_run_id,
+                node_id="graph-update",
+                event_type="graph_update_applied",
+                severity="success",
+                message="图谱更新已进入已应用状态。",
+                payload={"graph_update_id": str(graph_update.id)},
+            )
         await self.db.commit()
         return await self.get_graph_update(graph_update_id=graph_update.id, current_user=current_user)
 
@@ -950,6 +1986,11 @@ class BrandSpaceService:
             intelligence_run=intelligence_run,
             counts=counts,
         )
+        changed |= await self._ensure_real_graph_update(
+            board_run=board_run,
+            intelligence_run=intelligence_run,
+            current_user=current_user,
+        )
         if previous_stage_key != current_stage_key:
             event_type, severity, default_message = REAL_RUN_STATUS_EVENT_MESSAGES.get(
                 intelligence_run.status,
@@ -974,6 +2015,68 @@ class BrandSpaceService:
         if changed:
             await self.db.commit()
         return changed
+
+    async def _ensure_real_graph_update(
+        self,
+        *,
+        board_run: BoardRun,
+        intelligence_run: BrandIntelligenceRun,
+        current_user: User,
+    ) -> bool:
+        if board_run.is_scaffold or intelligence_run.status != "completed":
+            return False
+        existing = await self._graph_update_for_run(board_run.id)
+        if existing is not None:
+            return False
+
+        entity = await self._entity_by_id(board_run.entity_id)
+        graph_update, patches = await self._build_graph_update(
+            entity=entity,
+            board_run=board_run,
+            current_user=current_user,
+            intelligence_run=intelligence_run,
+        )
+        self.db.add(graph_update)
+        await self.db.flush()
+        for patch in patches:
+            patch.graph_update_id = graph_update.id
+        self.db.add_all(patches)
+        await self.db.flush()
+
+        graph_update.graph_snapshot = await self._fallback_graph(
+            entity=entity,
+            patches=patches,
+        )
+        graph_update.summary = self._graph_update_summary(patches)
+        graph_update.status = (
+            "needs_review"
+            if any(patch.status == "needs_review" for patch in patches)
+            else "applied"
+        )
+        board_run.output_refs = {
+            **(board_run.output_refs or {}),
+            "graph_update_id": str(graph_update.id),
+        }
+        await self._sync_real_graph_artifact_counts(
+            board_run=board_run,
+            patches=patches,
+        )
+        await self._append_event(
+            entity_id=board_run.entity_id,
+            board_run_id=board_run.id,
+            node_id="graph-update",
+            event_type="graph_update_created",
+            severity="success",
+            message=f"真实抓取答案已生成 {len(patches)} 个图谱补丁。",
+            payload={
+                "graph_update_id": str(graph_update.id),
+                "patch_count": len(patches),
+                "needs_review": sum(
+                    1 for patch in patches if patch.status in REVIEWABLE_PATCH_STATUSES
+                ),
+            },
+        )
+        return True
 
     async def _real_artifact_counts(
         self,
@@ -1073,6 +2176,38 @@ class BrandSpaceService:
                 else None,
             }
             changed |= self._assign_if_changed(artifact, "extra_metadata", next_metadata)
+        return changed
+
+    async def _sync_real_graph_artifact_counts(
+        self,
+        *,
+        board_run: BoardRun,
+        patches: list[GraphPatch],
+    ) -> bool:
+        row_counts = {
+            "artifact-patch-set": len(patches),
+            "artifact-review-list": sum(
+                1 for patch in patches if patch.status in REVIEWABLE_PATCH_STATUSES
+            ),
+            "artifact-graph-update": 1,
+        }
+        changed = False
+        for artifact in await self._artifacts(board_run.id):
+            if artifact.artifact_key not in row_counts:
+                continue
+            changed |= self._assign_if_changed(
+                artifact,
+                "row_count",
+                row_counts[artifact.artifact_key],
+            )
+            changed |= self._assign_if_changed(
+                artifact,
+                "extra_metadata",
+                {
+                    **(artifact.extra_metadata or {}),
+                    "graph_update_generated": True,
+                },
+            )
         return changed
 
     def _real_node_state_map(self, intelligence_run: BrandIntelligenceRun) -> dict[str, dict[str, Any]]:
@@ -1381,6 +2516,7 @@ class BrandSpaceService:
         entity: Entity,
         board_run: BoardRun,
         current_user: User,
+        intelligence_run: BrandIntelligenceRun | None = None,
     ) -> tuple[GraphUpdate, list[GraphPatch]]:
         graph_update = GraphUpdate(
             entity_id=entity.id,
@@ -1390,8 +2526,32 @@ class BrandSpaceService:
             after_graph_version="v0.1.0",
             status="needs_review",
         )
-        patches = self._default_patches(entity=entity, graph_update=graph_update)
+        if board_run.is_scaffold or intelligence_run is None:
+            patches = self._default_patches(entity=entity, graph_update=graph_update)
+        else:
+            current_graph_projection = await self._current_graph_projection(entity.id)
+            patches = await GraphPatchBuilderService(self.db).build(
+                entity=entity,
+                board_run=board_run,
+                intelligence_run=intelligence_run,
+                graph_update=graph_update,
+                current_graph_projection=current_graph_projection,
+                allocate_graph_zone=self.allocate_graph_zone,
+                detect_competitor_context=self.detect_competitor_context,
+            )
         return graph_update, patches
+
+    async def _current_graph_projection(self, entity_id: UUID) -> dict[str, Any]:
+        try:
+            projection = await BrandKnowledgeGraphProjectionService(self.db).build(entity_id=entity_id)
+        except Exception as exc:
+            logger.warning(
+                "Knowledge graph projection lookup failed for graph patch builder %s: %s",
+                entity_id,
+                exc,
+            )
+            return {}
+        return projection.get("graph_projection") or {}
 
     def _default_patches(self, *, entity: Entity, graph_update: GraphUpdate) -> list[GraphPatch]:
         brand_name = entity.name
@@ -1554,6 +2714,11 @@ class BrandSpaceService:
             entities.append(
                 {
                     "id": patch.affected_object_id or str(patch.id),
+                    "patchId": str(patch.id),
+                    "patchStatus": patch.status,
+                    "patchType": patch.patch_type,
+                    "category": self._patch_review_category(patch),
+                    "priority": self._patch_review_priority(patch),
                     "label": after_payload.get("label") or patch.title,
                     "zone": after_payload.get("zone") or "pending_review",
                     "x": coordinates[index % len(coordinates)][0],
@@ -1569,6 +2734,8 @@ class BrandSpaceService:
                     "to": patch.affected_object_id or str(patch.id),
                     "kind": patch.relation_type or patch.patch_type,
                     "strength": float((patch.connection_strength or 0) / 100),
+                    "patchId": str(patch.id),
+                    "patchStatus": patch.status,
                 }
             )
             evidence_refs.extend(patch.evidence_refs or [])
@@ -1622,8 +2789,67 @@ class BrandSpaceService:
         return {
             "auto_applied": counts.get("auto_applied", 0),
             "needs_review": counts.get("needs_review", 0),
+            "accepted": counts.get("accepted", 0),
+            "rejected": counts.get("rejected", 0),
             "blocked": counts.get("blocked", 0),
             "total": len(patches),
+        }
+
+    @staticmethod
+    def _patches_for_graph_snapshot(patches: list[GraphPatch]) -> list[GraphPatch]:
+        return [patch for patch in patches if patch.status != "rejected"]
+
+    @staticmethod
+    def _patch_review_category(patch: GraphPatch) -> str:
+        patch_type = patch.patch_type or ""
+        relation_type = patch.relation_type or ""
+        if patch_type == "add_competitor_relation" or relation_type == "competes_with":
+            return "competitor"
+        if patch_type == "add_risk_relation" or "risk" in patch_type or "risk" in relation_type:
+            return "risk"
+        if patch_type == "add_entity":
+            return "new_entity"
+        if patch.confidence is not None and float(patch.confidence) < 0.7:
+            return "low_confidence"
+        if patch.status == "blocked":
+            return "conflict"
+        return "graph_change"
+
+    @staticmethod
+    def _patch_review_priority(patch: GraphPatch) -> str:
+        if patch.status == "blocked":
+            return "high"
+        if patch.patch_type == "add_competitor_relation" or patch.relation_type == "competes_with":
+            return "high" if (patch.confidence or 0) < 0.7 else "medium"
+        sentiment = patch.sentiment_or_risk_score
+        if sentiment is not None and float(sentiment) < 5:
+            return "high"
+        if patch.confidence is not None and float(patch.confidence) < 0.7:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _review_suggested_action(patch: GraphPatch) -> str:
+        if patch.status == "blocked":
+            return "保留阻断，除非补充了更强证据。"
+        if patch.patch_type == "add_competitor_relation":
+            return "确认是否存在明确替代、推荐或对比信号。"
+        if patch.patch_type == "add_risk_relation":
+            return "确认风险语境是否应停留在风险层。"
+        if patch.patch_type == "add_entity":
+            return "确认新实体是否应进入品牌圈层。"
+        return "确认该图谱变化是否应应用。"
+
+    def _review_items_summary(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        status_counts = Counter(str(item.get("status") or "") for item in items)
+        category_counts = Counter(str(item.get("category") or "") for item in items)
+        return {
+            "total": len(items),
+            "needs_review": status_counts.get("needs_review", 0),
+            "blocked": status_counts.get("blocked", 0),
+            "accepted": status_counts.get("accepted", 0),
+            "rejected": status_counts.get("rejected", 0),
+            "by_category": dict(category_counts),
         }
 
     def _build_initial_events(
@@ -1886,17 +3112,43 @@ class BrandSpaceService:
     def _patch_to_dict(self, patch: GraphPatch) -> dict[str, Any]:
         return {
             "id": str(patch.id),
+            "graphUpdateId": str(patch.graph_update_id),
             "title": patch.title,
             "description": patch.description,
             "status": patch.status,
             "patchType": patch.patch_type,
+            "relationType": patch.relation_type,
             "score": int(patch.connection_strength or 0),
             "evidenceRefIds": [str(item.get("id")) for item in patch.evidence_refs or [] if item.get("id")],
             "affectedEntityId": patch.affected_object_id,
+            "affectedObjectType": patch.affected_object_type,
+            "affectedObjectId": patch.affected_object_id,
             "evidenceRefs": patch.evidence_refs or [],
             "confidence": patch.confidence,
             "sentimentOrRiskScore": patch.sentiment_or_risk_score,
+            "category": self._patch_review_category(patch),
+            "priority": self._patch_review_priority(patch),
+            "reviewReason": patch.review_reason,
+            "reviewedByUserId": str(patch.reviewed_by_user_id) if patch.reviewed_by_user_id else None,
+            "reviewedAt": patch.reviewed_at.isoformat() if patch.reviewed_at else None,
+            "suggestedAction": self._review_suggested_action(patch),
+            "createdAt": patch.created_at.isoformat(),
+            "updatedAt": patch.updated_at.isoformat(),
         }
+
+    def _review_item_to_dict(self, *, patch: GraphPatch, graph_update: GraphUpdate) -> dict[str, Any]:
+        item = self._patch_to_dict(patch)
+        item.update(
+            {
+                "graphUpdateId": str(graph_update.id),
+                "graphUpdateStatus": graph_update.status,
+                "boardRunId": str(graph_update.board_run_id) if graph_update.board_run_id else None,
+                "beforeGraphVersion": graph_update.before_graph_version,
+                "afterGraphVersion": graph_update.after_graph_version,
+                "graphUpdateCreatedAt": graph_update.created_at.isoformat(),
+            }
+        )
+        return item
 
     def _guardrail_to_dict(self, item: ReportGuardrailResult) -> dict[str, Any]:
         return {

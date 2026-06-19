@@ -129,6 +129,11 @@ export interface GraphEntity {
   y: number;
   strength: number;
   evidenceCount: number;
+  patchId?: string;
+  patchStatus?: GraphPatchStatus;
+  patchType?: string;
+  category?: string;
+  priority?: string;
 }
 
 export interface GraphRelation {
@@ -137,6 +142,8 @@ export interface GraphRelation {
   to: string;
   kind: string;
   strength: number;
+  patchId?: string;
+  patchStatus?: GraphPatchStatus;
 }
 
 export interface EvidenceRef {
@@ -149,16 +156,49 @@ export interface EvidenceRef {
 
 export interface GraphPatch {
   id: string;
+  graphUpdateId?: string;
   title: string;
   description: string;
   status: GraphPatchStatus;
   patchType: string;
+  relationType?: string;
   score: number;
   evidenceRefIds: string[];
   affectedEntityId?: string;
+  affectedObjectType?: string;
+  affectedObjectId?: string;
   evidenceRefs?: EvidenceRef[];
   confidence?: number | null;
   sentimentOrRiskScore?: number | null;
+  category?: string;
+  priority?: 'high' | 'medium' | 'low' | string;
+  reviewReason?: string | null;
+  reviewedByUserId?: string | null;
+  reviewedAt?: string | null;
+  suggestedAction?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface GraphReviewItem extends GraphPatch {
+  graphUpdateId: string;
+  graphUpdateStatus: string;
+  boardRunId?: string | null;
+  beforeGraphVersion: string;
+  afterGraphVersion: string;
+  graphUpdateCreatedAt: string;
+}
+
+export interface GraphReviewItemsResponse {
+  review_items: GraphReviewItem[];
+  summary: {
+    total: number;
+    needs_review?: number;
+    blocked?: number;
+    accepted?: number;
+    rejected?: number;
+    by_category?: Record<string, number>;
+  };
 }
 
 export interface ReportGuardrailResult {

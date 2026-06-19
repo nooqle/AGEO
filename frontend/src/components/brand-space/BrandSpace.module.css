@@ -182,7 +182,7 @@
   position: absolute;
   z-index: 2;
   left: 55%;
-  top: 40%;
+  top: 36%;
   width: 270px;
   min-height: 462px;
   transform: translate(-50%, -50%);
@@ -282,6 +282,11 @@
 
 .queueAttention {
   border-color: color-mix(in srgb, var(--warning) 38%, var(--border-subtle) 62%);
+}
+
+.queueSelected {
+  border-color: color-mix(in srgb, var(--brand-primary) 54%, var(--border-subtle) 46%);
+  background: color-mix(in srgb, var(--brand-bg) 20%, var(--bg-elevated) 80%);
 }
 
 .guardrailBlock {

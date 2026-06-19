@@ -18,9 +18,9 @@ os.environ.setdefault(
 
 from app.core.database import Base
 from app.models import *  # noqa: F401, F403
-from app.models.brand_intelligence import BrandPlatformAnswer
+from app.models.brand_intelligence import BrandIntelligenceQuestion, BrandPlatformAnswer
 from app.models.brand_intelligence_run import BrandIntelligenceRun
-from app.models.brand_space import BoardRun, GraphPatch
+from app.models.brand_space import BoardRun, GraphPatch, GraphUpdate
 from app.models.entity import Entity, EntityStatus
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.user import User, UserRole, UserStatus
@@ -63,6 +63,36 @@ def _entity(owner: User, name: str = "安利") -> Entity:
     )
 
 
+async def _seed_recorded_answers(
+    session: AsyncSession,
+    *,
+    entity: Entity,
+    fixture: dict,
+) -> None:
+    for index, row in enumerate(fixture["recorded_answers"], start=1):
+        question = BrandIntelligenceQuestion(
+            entity_id=entity.id,
+            question_id=f"fixture-q-{index}",
+            question_text=row["question"],
+            category=row.get("polarity", ""),
+        )
+        session.add(question)
+        await session.flush()
+        session.add(
+            BrandPlatformAnswer(
+                entity_id=entity.id,
+                question_object_id=question.id,
+                question_id=question.question_id,
+                dedupe_key=f"{entity.id}:fixture:{index}:{row['platform']}",
+                platform=row["platform"],
+                fetch_method="fixture",
+                status="captured",
+                success=True,
+                answer_text=row["answer_excerpt"],
+            )
+        )
+
+
 @pytest.mark.asyncio
 async def test_amway_recorded_backtest_fixture_reaches_graph_update_and_report(tmp_path):
     fixture = json.loads((FIXTURE_DIR / "brand_space_amway_backtest.json").read_text(encoding="utf-8"))
@@ -94,6 +124,82 @@ async def test_amway_recorded_backtest_fixture_reaches_graph_update_and_report(t
         )
         assert report["report"]["payload"]["graph_update_id"] == payload["graph_update"]["id"]
         assert any(item["severity"] == "block" for item in report["guardrails"])
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_amway_real_fixture_builds_lexicon_backed_graph_update_and_review_items(tmp_path):
+    fixture = json.loads((FIXTURE_DIR / "brand_space_amway_backtest.json").read_text(encoding="utf-8"))
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-real-fixture@example.com")
+        entity = _entity(owner, fixture["brand"]["name"])
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            execution_mode="real",
+            input_scope={
+                "fixture": "brand_space_amway_backtest",
+                "entity_lexicon": fixture["lexicon"],
+                "platforms": ["chatgpt", "deepseek", "kimi", "doubao"],
+            },
+        )
+        board_run = await session.get(BoardRun, uuid.UUID(payload["run"]["id"]))
+        intelligence_run = await session.get(
+            BrandIntelligenceRun,
+            uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
+        )
+        assert board_run is not None
+        assert intelligence_run is not None
+        await _seed_recorded_answers(session, entity=entity, fixture=fixture)
+        intelligence_run.status = "completed"
+        intelligence_run.stage = "generating_recommendations"
+        intelligence_run.progress = 1.0
+        intelligence_run.message = "真实 fixture 回测完成"
+        board_run.last_synced_at = None
+        await session.commit()
+
+        synced = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+
+        assert synced["graph_update"] is not None
+        assert synced["graph_update"]["summary"]["total"] == 5
+        patch_by_object = {
+            patch["affectedObjectId"]: patch for patch in synced["patches"]
+        }
+        assert patch_by_object["nutrilite"]["relationType"] == "supports"
+        assert patch_by_object["nutrition-supplement"]["relationType"] == "supports"
+        assert patch_by_object["active-health"]["relationType"] == "associated_with"
+        assert patch_by_object["regulatory"]["relationType"] == "risk_related"
+        assert patch_by_object["regulatory"]["status"] == "needs_review"
+        assert patch_by_object["by-health"]["relationType"] == "competes_with"
+        assert patch_by_object["by-health"]["status"] == "needs_review"
+        assert patch_by_object["by-health"]["evidenceRefs"][0]["matched_entity_label"] == "汤臣倍健"
+        assert patch_by_object["nutrilite"]["evidenceRefs"][0]["matched_entity_type"] == "SubBrand"
+
+        review_items = await service.get_review_items(
+            entity_id=entity.id,
+            current_user=owner,
+        )
+        assert review_items["summary"]["total"] == 2
+        assert {item["category"] for item in review_items["review_items"]} == {
+            "competitor",
+            "risk",
+        }
+        graph_entity_ids = {
+            item["id"] for item in synced["graph"]["entities"]
+        }
+        assert {"nutrilite", "nutrition-supplement", "active-health", "regulatory", "by-health"} <= graph_entity_ids
+        artifact_by_key = {artifact["id"]: artifact for artifact in synced["artifacts"]}
+        assert artifact_by_key["artifact-patch-set"]["rowCount"] == 5
+        assert artifact_by_key["artifact-review-list"]["rowCount"] == 2
 
     await engine.dispose()
 
@@ -173,6 +279,161 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
 
 
 @pytest.mark.asyncio
+async def test_review_items_and_patch_decision_are_idempotent(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-review-loop@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(entity_id=entity.id, current_user=owner)
+
+        review_items = await service.get_review_items(
+            entity_id=entity.id,
+            current_user=owner,
+        )
+        assert review_items["summary"]["total"] == 3
+        assert {item["category"] for item in review_items["review_items"]} == {
+            "risk",
+            "competitor",
+            "new_entity",
+        }
+
+        competitor_items = await service.get_review_items(
+            entity_id=entity.id,
+            current_user=owner,
+            category="competitor",
+        )
+        assert len(competitor_items["review_items"]) == 1
+        competitor_patch_id = competitor_items["review_items"][0]["id"]
+
+        accepted = await service.decide_graph_patch(
+            patch_id=competitor_patch_id,
+            current_user=owner,
+            status="accepted",
+            reason="比较语境明确",
+        )
+        accepted_patch = next(
+            patch for patch in accepted["patches"] if patch["id"] == competitor_patch_id
+        )
+        assert accepted_patch["status"] == "accepted"
+        assert accepted_patch["reviewedAt"]
+        assert accepted_patch["reviewReason"] == "比较语境明确"
+
+        duplicate = await service.decide_graph_patch(
+            patch_id=competitor_patch_id,
+            current_user=owner,
+            status="accepted",
+            reason="重复提交不改变终态",
+        )
+        duplicate_patch = next(
+            patch for patch in duplicate["patches"] if patch["id"] == competitor_patch_id
+        )
+        assert duplicate_patch["status"] == "accepted"
+        assert duplicate_patch["reviewReason"] == "比较语境明确"
+
+        events = await service.get_events(run_id=payload["run"]["id"], current_user=owner)
+        assert [event["type"] for event in events["events"]].count("graph_patch_accepted") == 1
+
+        with pytest.raises(ValueError):
+            await service.decide_graph_patch(
+                patch_id=competitor_patch_id,
+                current_user=owner,
+                status="rejected",
+                reason="终态不允许反转",
+            )
+
+        risk_patch_id = next(item["id"] for item in review_items["review_items"] if item["category"] == "risk")
+        applied = await service.decide_graph_patch(
+            patch_id=risk_patch_id,
+            current_user=owner,
+            status="accepted",
+            reason="风险证据已确认归档",
+        )
+        assert applied["graph_update"]["status"] == "applied"
+        assert applied["graph_update"]["summary"]["accepted"] == 2
+        graph_update = await session.get(GraphUpdate, uuid.UUID(applied["graph_update"]["id"]))
+        assert graph_update is not None
+        snapshot_entities = graph_update.graph_snapshot["entities"]
+        accepted_competitor_entity = next(
+            item for item in snapshot_entities if item.get("id") == "by-health"
+        )
+        assert accepted_competitor_entity["patchId"] == competitor_patch_id
+        assert accepted_competitor_entity["patchStatus"] == "accepted"
+
+        remaining_review_items = await service.get_review_items(
+            entity_id=entity.id,
+            current_user=owner,
+        )
+        assert all(item["id"] != competitor_patch_id for item in remaining_review_items["review_items"])
+
+        events = await service.get_events(run_id=payload["run"]["id"], current_user=owner)
+        event_types = [event["type"] for event in events["events"]]
+        assert event_types.count("graph_patch_accepted") == 2
+        assert event_types.count("graph_update_applied") == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_review_items_aggregate_runs_and_rejected_patch_is_removed_from_snapshot(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-review-multi-run@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        first = await service.create_board_run(entity_id=entity.id, current_user=owner)
+        await service.create_board_run(entity_id=entity.id, current_user=owner)
+
+        review_items = await service.get_review_items(
+            entity_id=entity.id,
+            current_user=owner,
+        )
+        assert review_items["summary"]["total"] == 6
+        competitor_items = await service.get_review_items(
+            entity_id=entity.id,
+            current_user=owner,
+            category="competitor",
+        )
+        assert len(competitor_items["review_items"]) == 2
+
+        first_competitor_patch = next(
+            patch for patch in first["patches"] if patch["patchType"] == "add_competitor_relation"
+        )
+        first_risk_patch = next(
+            patch for patch in first["patches"] if patch["patchType"] == "add_risk_relation"
+        )
+        rejected = await service.decide_graph_patch(
+            patch_id=first_competitor_patch["id"],
+            current_user=owner,
+            status="rejected",
+            reason="比较语境不足",
+        )
+        assert rejected["graph_update"]["status"] == "needs_review"
+        applied = await service.decide_graph_patch(
+            patch_id=first_risk_patch["id"],
+            current_user=owner,
+            status="accepted",
+            reason="风险层归档",
+        )
+        assert applied["graph_update"]["status"] == "applied"
+        graph_update = await session.get(GraphUpdate, uuid.UUID(first["graph_update"]["id"]))
+        assert graph_update is not None
+        snapshot_entity_ids = {
+            item.get("id") for item in (graph_update.graph_snapshot or {}).get("entities", [])
+        }
+        assert "by-health" not in snapshot_entity_ids
+        assert "workplace-energy" in snapshot_entity_ids
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_real_board_run_syncs_brand_intelligence_stage_to_canvas(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:
@@ -243,6 +504,128 @@ async def test_real_board_run_syncs_brand_intelligence_stage_to_canvas(tmp_path)
         assert node_by_id["platform-rack"]["status"] == "running"
         assert sum(platform["answers"] for platform in synced["platforms"]) == 5
         assert any(event["message"] == "正在采集 AI 回答" for event in synced["events"])
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_real_completed_run_builds_graph_update_from_answers(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-real-graph-update@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            execution_mode="real",
+        )
+        board_run = await session.get(BoardRun, uuid.UUID(payload["run"]["id"]))
+        intelligence_run = await session.get(
+            BrandIntelligenceRun,
+            uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
+        )
+        assert board_run is not None
+        assert intelligence_run is not None
+
+        health_question = BrandIntelligenceQuestion(
+            entity_id=entity.id,
+            question_id="q-health",
+            question_text="哪些营养品牌适合日常健康管理？",
+            category="health",
+        )
+        risk_question = BrandIntelligenceQuestion(
+            entity_id=entity.id,
+            question_id="q-risk",
+            question_text="直销类营养品牌是否存在用户顾虑？",
+            category="risk",
+        )
+        competitor_question = BrandIntelligenceQuestion(
+            entity_id=entity.id,
+            question_id="q-competitor",
+            question_text="用户购买营养补充品前通常会比较什么？",
+            category="competitor",
+        )
+        session.add_all([health_question, risk_question, competitor_question])
+        await session.flush()
+        session.add_all(
+            [
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    question_object_id=health_question.id,
+                    question_id=health_question.question_id,
+                    dedupe_key=f"{entity.id}:real:health:kimi",
+                    platform="Kimi",
+                    fetch_method="test",
+                    status="captured",
+                    success=True,
+                    answer_text="安利和纽崔莱经常在营养补充和健康管理语境中被提及。",
+                ),
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    question_object_id=risk_question.id,
+                    question_id=risk_question.question_id,
+                    dedupe_key=f"{entity.id}:real:risk:deepseek",
+                    platform="DeepSeek",
+                    fetch_method="test",
+                    status="captured",
+                    success=True,
+                    answer_text="回答提到价格和监管相关疑问，需要更多澄清证据。",
+                ),
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    question_object_id=competitor_question.id,
+                    question_id=competitor_question.question_id,
+                    dedupe_key=f"{entity.id}:real:competitor:chatgpt",
+                    platform="ChatGPT",
+                    fetch_method="test",
+                    status="captured",
+                    success=True,
+                    answer_text="用户会把安利与汤臣倍健进行对比后再选择。",
+                ),
+            ]
+        )
+        intelligence_run.status = "completed"
+        intelligence_run.stage = "generating_recommendations"
+        intelligence_run.progress = 1.0
+        intelligence_run.message = "真实运行已完成"
+        board_run.last_synced_at = None
+        await session.commit()
+
+        synced = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+
+        assert synced["run"]["status"] == "completed"
+        assert synced["graph_update"] is not None
+        assert synced["graph_update"]["summary"]["total"] == 3
+        patch_by_type = {patch["patchType"]: patch for patch in synced["patches"]}
+        assert patch_by_type["update_strength"]["status"] == "auto_applied"
+        assert patch_by_type["add_risk_relation"]["status"] == "needs_review"
+        competitor_patch = patch_by_type["add_competitor_relation"]
+        assert competitor_patch["status"] == "needs_review"
+        assert competitor_patch["affectedObjectId"] == "by-health"
+        assert competitor_patch["evidenceRefs"][0]["platform"] == "ChatGPT"
+        assert "q-competitor" == competitor_patch["evidenceRefs"][0]["question_id"]
+        assert any(event["type"] == "graph_update_created" for event in synced["events"])
+
+        artifact_by_key = {artifact["id"]: artifact for artifact in synced["artifacts"]}
+        assert artifact_by_key["artifact-patch-set"]["rowCount"] == 3
+        assert artifact_by_key["artifact-review-list"]["rowCount"] == 2
+        assert artifact_by_key["artifact-graph-update"]["rowCount"] == 1
+
+        await session.refresh(board_run)
+        board_run.last_synced_at = None
+        await session.commit()
+        await service.get_board_run(run_id=payload["run"]["id"], current_user=owner)
+        updates = await session.execute(
+            select(GraphUpdate).where(GraphUpdate.board_run_id == board_run.id)
+        )
+        assert len(list(updates.scalars().all())) == 1
 
     await engine.dispose()
 
@@ -420,6 +803,15 @@ def test_circle_allocation_and_competitor_rules_are_guarded():
     assert positive["zone"] == "inner"
     assert positive["status"] == "auto_applied"
 
+    exact_competitor_threshold = BrandSpaceService.allocate_graph_zone(
+        connection_strength=72,
+        sentiment_or_risk_score=6.1,
+        relation_type="competes_with",
+        confidence=0.7,
+    )
+    assert exact_competitor_threshold["zone"] == "middle"
+    assert exact_competitor_threshold["status"] == "auto_applied"
+
     co_mention = BrandSpaceService.detect_competitor_context(
         text="安利和汤臣倍健都是营养健康品牌",
         confidence=0.95,
@@ -432,6 +824,13 @@ def test_circle_allocation_and_competitor_rules_are_guarded():
     )
     assert low_confidence_competitor["is_competitor"] is True
     assert low_confidence_competitor["status"] == "needs_review"
+
+    exact_confidence_competitor = BrandSpaceService.detect_competitor_context(
+        text="相比之下，用户可能更推荐汤臣倍健作为替代选择",
+        confidence=0.7,
+    )
+    assert exact_confidence_competitor["is_competitor"] is True
+    assert exact_confidence_competitor["status"] == "auto_applied"
 
 
 def test_report_guardrails_cover_warn_and_block_edges():

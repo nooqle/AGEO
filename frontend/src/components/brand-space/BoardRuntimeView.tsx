@@ -41,6 +41,7 @@ interface BoardRuntimeViewProps {
   onRunResume: () => void;
   onRunStop: () => void;
   onPatchDecision: (patchId: string, status: Extract<GraphPatchStatus, 'accepted' | 'rejected' | 'needs_review'>) => void;
+  pendingPatchDecisionIds?: string[];
 }
 
 const nodeAccent: Record<BoardNode['kind'], string> = {
@@ -68,7 +69,7 @@ const boardStage = {
 
 const nodeSize = {
   default: { width: 188, height: 110 },
-  rack: { width: 270, height: 462 },
+  rack: { width: 270, height: 560 },
 };
 
 function classNames(...classes: Array<string | false | undefined>) {
@@ -173,10 +174,12 @@ export function BoardRuntimeView({
   onRunResume,
   onRunStop,
   onPatchDecision,
+  pendingPatchDecisionIds = [],
 }: BoardRuntimeViewProps) {
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0];
   const isRunning = runStatus === 'running';
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const platformRackNode = nodeById.get('platform-rack');
   const platformProgress = Math.round(platforms.reduce((sum, platform) => sum + platform.progress, 0) / platforms.length);
 
   return (
@@ -308,51 +311,61 @@ export function BoardRuntimeView({
               </button>
             ))}
 
-            <section data-brand-space-rack="platform-rack" className={classNames(styles.rack, isRunning && styles.rackRunning, 'rounded-xl p-4')}>
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase text-[var(--brand-text)]">抓取组</p>
-                  <h3 className="mt-1 text-sm font-semibold text-[var(--text-primary)]">AI 平台抓取组</h3>
+            {platformRackNode ? (
+              <section
+                data-brand-space-rack="platform-rack"
+                className={classNames(styles.rack, isRunning && styles.rackRunning, 'rounded-xl p-4')}
+                style={{ left: `${platformRackNode.position.x}%`, top: `${platformRackNode.position.y}%` }}
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase text-[var(--brand-text)]">抓取组</p>
+                    <h3 className="mt-1 text-sm font-semibold text-[var(--text-primary)]">AI 平台抓取组</h3>
+                  </div>
+                  <span className="rounded-lg bg-[var(--brand-bg)] px-2 py-1 text-xs font-semibold text-[var(--brand-text)]">
+                    {platforms.filter((platform) => platform.status === 'running').length} / 4 运行中
+                  </span>
                 </div>
-                <span className="rounded-lg bg-[var(--brand-bg)] px-2 py-1 text-xs font-semibold text-[var(--brand-text)]">
-                  {platforms.filter((platform) => platform.status === 'running').length} / 4 运行中
-                </span>
-              </div>
-              <div className="space-y-3">
-                {platforms.map((platform) => (
-                  <button
-                    key={platform.id}
-                    type="button"
-                    onClick={() => onSelectNode('platform-rack')}
-                    className={classNames(styles.platformCard, platform.status === 'running' && styles.platformRunning, 'w-full rounded-xl p-3 text-left')}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--bg-tertiary)] text-xs font-bold text-[var(--text-primary)]">
-                          {platform.platformKey === 'deepseek' ? 'DS' : platform.platformKey.slice(0, 1).toUpperCase()}
-                        </span>
-                        <span>
-                          <span className="block text-sm font-semibold text-[var(--text-primary)]">{platform.label}</span>
-                          <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">{platform.model}</span>
-                        </span>
+                <div className="space-y-3">
+                  {platforms.map((platform) => (
+                    <button
+                      key={platform.id}
+                      type="button"
+                      onClick={() => onSelectNode('platform-rack')}
+                      className={classNames(styles.platformCard, platform.status === 'running' && styles.platformRunning, 'w-full rounded-xl p-3 text-left')}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--bg-tertiary)] text-xs font-bold text-[var(--text-primary)]">
+                            {platform.platformKey === 'deepseek' ? 'DS' : platform.platformKey.slice(0, 1).toUpperCase()}
+                          </span>
+                          <span>
+                            <span className="block text-sm font-semibold text-[var(--text-primary)]">{platform.label}</span>
+                            <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">{platform.model}</span>
+                          </span>
+                        </div>
+                        <span className="text-xs font-semibold text-[var(--text-primary)]">{platform.progress}%</span>
                       </div>
-                      <span className="text-xs font-semibold text-[var(--text-primary)]">{platform.progress}%</span>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-tertiary)]">
-                      <span>{platform.answers} 条回答</span>
-                      <span>{platform.failures ? `${platform.failures} 个失败` : '无失败'}</span>
-                    </div>
-                    <div className="mt-3 h-1.5 rounded-full bg-[var(--bg-tertiary)]">
-                      <div className="h-full rounded-full bg-[var(--brand-primary)]" style={{ width: `${platform.progress}%` }} />
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </section>
+                      <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-tertiary)]">
+                        <span>{platform.answers} 条回答</span>
+                        <span>{platform.failures ? `${platform.failures} 个失败` : '无失败'}</span>
+                      </div>
+                      <div className="mt-3 h-1.5 rounded-full bg-[var(--bg-tertiary)]">
+                        <div className="h-full rounded-full bg-[var(--brand-primary)]" style={{ width: `${platform.progress}%` }} />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
         </div>
 
-        <GraphUpdateQueue patches={patches} onPatchDecision={onPatchDecision} />
+        <GraphUpdateQueue
+          patches={patches}
+          onPatchDecision={onPatchDecision}
+          pendingPatchDecisionIds={pendingPatchDecisionIds}
+        />
       </div>
 
       <NodeInspector

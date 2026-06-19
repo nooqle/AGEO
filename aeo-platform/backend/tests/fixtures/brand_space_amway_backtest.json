@@ -8,22 +8,38 @@
     {
       "entity_id": "amway",
       "label": "安利",
-      "type": "brand_entity"
+      "type": "CenterBrand",
+      "aliases": ["Amway", "安利品牌", "安利中国"]
     },
     {
       "entity_id": "nutrilite",
       "label": "纽崔莱",
-      "type": "product_line"
+      "type": "SubBrand",
+      "aliases": ["Nutrilite", "纽崔莱营养", "纽崔莱产品"]
+    },
+    {
+      "entity_id": "nutrition-supplement",
+      "label": "营养保健食品",
+      "type": "ProductCategory",
+      "aliases": ["营养品", "膳食补充", "保健食品", "营养补充"]
+    },
+    {
+      "entity_id": "active-health",
+      "label": "主动健康",
+      "type": "BrandStrategy",
+      "aliases": ["健康明白人", "主动预防", "健康管理"]
     },
     {
       "entity_id": "regulatory",
       "label": "监管信息",
-      "type": "risk_signal"
+      "type": "RiskLabel",
+      "aliases": ["监管", "直销监管", "牌照", "合规疑问"]
     },
     {
       "entity_id": "by-health",
       "label": "汤臣倍健",
-      "type": "competitor_candidate"
+      "type": "Competitor",
+      "aliases": ["BY-HEALTH", "汤臣倍健营养品"]
     }
   ],
   "recorded_answers": [

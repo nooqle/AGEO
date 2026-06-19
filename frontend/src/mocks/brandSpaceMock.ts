@@ -92,7 +92,7 @@ export const initialBoardNodes: BoardNode[] = [
     kind: 'fetch',
     status: 'running',
     progress: 61,
-    position: { x: 55, y: 40 },
+    position: { x: 55, y: 36 },
     metrics: [
       { label: '运行中', value: '4 / 4' },
       { label: '回答', value: '984' },
@@ -148,7 +148,7 @@ export const initialBoardNodes: BoardNode[] = [
     kind: 'review',
     status: 'needs_review',
     progress: 100,
-    position: { x: 55, y: 86 },
+    position: { x: 55, y: 88 },
     metrics: [
       { label: '条目', value: '36' },
       { label: '优先级', value: '高' },
@@ -162,7 +162,7 @@ export const initialBoardNodes: BoardNode[] = [
     kind: 'graph_update',
     status: 'running',
     progress: 68,
-    position: { x: 78, y: 86 },
+    position: { x: 78, y: 88 },
     metrics: [
       { label: '已应用', value: '1,251' },
       { label: '待处理', value: '36' },

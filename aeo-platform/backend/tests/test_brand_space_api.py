@@ -23,6 +23,7 @@ from app.api.v1.brand_space import (
     get_board_run_assets,
     get_board_run_events,
     get_brand_graph,
+    get_brand_review_items,
     get_brand_space,
     pause_board_run,
     resume_board_run,
@@ -106,6 +107,27 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
         )
         assert len(assets["artifacts"]) == 8
 
+        review_items = await get_brand_review_items(
+            entity_id=str(entity.id),
+            db=session,
+            current_user=owner,
+        )
+        assert review_items["summary"]["total"] == 3
+        assert {item["category"] for item in review_items["review_items"]} >= {
+            "risk",
+            "competitor",
+            "new_entity",
+        }
+
+        competitor_items = await get_brand_review_items(
+            entity_id=str(entity.id),
+            category="competitor",
+            db=session,
+            current_user=owner,
+        )
+        assert len(competitor_items["review_items"]) == 1
+        assert competitor_items["review_items"][0]["category"] == "competitor"
+
         paused = await pause_board_run(run_id=run_id, db=session, current_user=owner)
         assert paused["run"]["status"] == "paused"
 
@@ -131,14 +153,32 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
 
         duplicate_decision = await decide_graph_patch(
             patch_id=patch["id"],
-            payload=GraphPatchDecision(status="needs_review", reason="继续观察"),
+            payload=GraphPatchDecision(status="accepted", reason="重复提交不应新增事件"),
             db=session,
             current_user=owner,
         )
         duplicate_patch = next(
             item for item in duplicate_decision["patches"] if item["id"] == patch["id"]
         )
-        assert duplicate_patch["status"] == "needs_review"
+        assert duplicate_patch["status"] == "accepted"
+
+        events_after_duplicate = await get_board_run_events(
+            run_id=run_id,
+            db=session,
+            current_user=owner,
+        )
+        assert [
+            event["type"] for event in events_after_duplicate["events"]
+        ].count("graph_patch_accepted") == 1
+
+        with pytest.raises(HTTPException) as terminal_exc:
+            await decide_graph_patch(
+                patch_id=patch["id"],
+                payload=GraphPatchDecision(status="needs_review", reason="不允许反转终态"),
+                db=session,
+                current_user=owner,
+            )
+        assert terminal_exc.value.status_code == 400
 
         report = await generate_graph_update_report(
             graph_update_id=resumed["graph_update"]["id"],
@@ -211,6 +251,14 @@ async def test_brand_space_api_blocks_other_user(tmp_path):
                 current_user=other,
             )
         assert exc_info.value.status_code == 404
+
+        with pytest.raises(HTTPException) as review_exc:
+            await get_brand_review_items(
+                entity_id=str(entity.id),
+                db=session,
+                current_user=other,
+            )
+        assert review_exc.value.status_code == 404
 
     await engine.dispose()
 
