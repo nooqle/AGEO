@@ -647,6 +647,11 @@ class BrandReportVersion(Base):
             name="uq_brand_report_versions_entity_report_version",
         ),
         Index("ix_brand_report_versions_entity_kind", "entity_id", "report_kind"),
+        Index(
+            "ix_brand_report_versions_entity_publication",
+            "entity_id",
+            "publication_status",
+        ),
         Index("ix_brand_report_versions_artifact_id", "artifact_id"),
     )
 
@@ -686,6 +691,11 @@ class BrandReportVersion(Base):
     title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     payload: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
+    publication_status: Mapped[str] = mapped_column(
+        String(40),
+        default="draft",
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

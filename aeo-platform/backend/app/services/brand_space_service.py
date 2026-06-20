@@ -272,6 +272,8 @@ LEXICON_SPLIT_PATTERN = re.compile(r"[、,，/|;；\s]+")
 REAL_EXECUTION_MODE = "real"
 SCAFFOLD_EXECUTION_MODE = "scaffold"
 REAL_SYNC_MIN_INTERVAL_SECONDS = 30
+GRAPH_VERSION_BASE = "v0.0.0"
+GRAPH_VERSION_PATTERN = re.compile(r"^v(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
 
 REVIEWABLE_PATCH_STATUSES = {"needs_review", "blocked"}
 IMMUTABLE_PATCH_STATUSES = {"auto_applied", "accepted", "rejected"}
@@ -1802,7 +1804,17 @@ class BrandSpaceService:
 
         patches = await self._patches(graph_update.id)
         previous_graph_update_status = graph_update.status
-        if all(item.status in IMMUTABLE_PATCH_STATUSES | {"blocked"} for item in patches):
+        all_patches_terminal = all(
+            item.status in IMMUTABLE_PATCH_STATUSES | {"blocked"} for item in patches
+        )
+        version_conflict = (
+            await self._graph_update_apply_conflict(graph_update)
+            if all_patches_terminal
+            else None
+        )
+        if version_conflict:
+            graph_update.status = "failed"
+        elif all_patches_terminal:
             graph_update.status = "applied"
         elif any(item.status == "needs_review" for item in patches):
             graph_update.status = "needs_review"
@@ -1810,6 +1822,11 @@ class BrandSpaceService:
             graph_update.status = "partial"
         entity = await self._entity_by_id(graph_update.entity_id)
         graph_update.summary = self._graph_update_summary(patches)
+        if version_conflict:
+            graph_update.summary = {
+                **(graph_update.summary or {}),
+                "version_conflict": version_conflict,
+            }
         graph_update.graph_snapshot = await self._fallback_graph(
             entity=entity,
             patches=self._patches_for_graph_snapshot(patches),
@@ -1840,7 +1857,21 @@ class BrandSpaceService:
                 "category": self._patch_review_category(patch),
             },
         )
-        if previous_graph_update_status != "applied" and graph_update.status == "applied":
+        if version_conflict:
+            await self.db.flush()
+            await self._append_event(
+                entity_id=patch.entity_id,
+                board_run_id=graph_update.board_run_id,
+                node_id="graph-update",
+                event_type="graph_update_version_conflict",
+                severity="error",
+                message="图谱更新基线已过期，已阻止应用。",
+                payload={
+                    "graph_update_id": str(graph_update.id),
+                    **version_conflict,
+                },
+            )
+        elif previous_graph_update_status != "applied" and graph_update.status == "applied":
             await self.db.flush()
             await self._append_event(
                 entity_id=patch.entity_id,
@@ -1849,7 +1880,11 @@ class BrandSpaceService:
                 event_type="graph_update_applied",
                 severity="success",
                 message="图谱更新已进入已应用状态。",
-                payload={"graph_update_id": str(graph_update.id)},
+                payload={
+                    "graph_update_id": str(graph_update.id),
+                    "before_graph_version": graph_update.before_graph_version,
+                    "after_graph_version": graph_update.after_graph_version,
+                },
             )
         await self.db.commit()
         return await self.get_graph_update(graph_update_id=graph_update.id, current_user=current_user)
@@ -1875,11 +1910,13 @@ class BrandSpaceService:
         blocking_guardrail_keys = [
             item["guardrail_key"] for item in guardrails if item["severity"] == "block"
         ]
-        report_payload["publication_status"] = (
+        publication_status = (
             "needs_review" if has_block else "publishable" if publish_requested else "draft"
         )
+        report_payload["publication_status"] = publication_status
         report_payload["blocking_guardrail_keys"] = blocking_guardrail_keys
 
+        await self._lock_report_version_scope(graph_update.id)
         version = await self._next_report_version(
             entity_id=graph_update.entity_id,
             report_id=f"brand-space-{graph_update.id}",
@@ -1896,6 +1933,7 @@ class BrandSpaceService:
             title=str(report_payload.get("report_title") or f"{entity.name}圈层状态更新"),
             summary=str(report_payload.get("summary") or ""),
             payload=report_payload,
+            publication_status=publication_status,
         )
         self.db.add(report)
         await self.db.flush()
@@ -1993,6 +2031,7 @@ class BrandSpaceService:
             payload["publication_status"] = "needs_review"
             payload["blocking_guardrail_keys"] = blocking_guardrail_keys
             report.payload = payload
+            report.publication_status = "needs_review"
             await self.db.commit()
             raise ValueError("Report has blocking guardrails and cannot be published")
         payload["publication_status"] = "published"
@@ -2000,6 +2039,7 @@ class BrandSpaceService:
         payload["published_at"] = _now().isoformat()
         payload["published_by_user_id"] = str(current_user.id)
         report.payload = payload
+        report.publication_status = "published"
         await self.db.commit()
         return {
             "report": self._report_to_dict(report),
@@ -2796,13 +2836,56 @@ class BrandSpaceService:
         return result.scalar_one_or_none()
 
     async def _latest_graph_update(self, entity_id: UUID) -> GraphUpdate | None:
+        latest_applied = await self._latest_applied_graph_update(entity_id)
+        current_version = (
+            latest_applied.after_graph_version if latest_applied else GRAPH_VERSION_BASE
+        )
         result = await self.db.execute(
             select(GraphUpdate)
-            .where(GraphUpdate.entity_id == entity_id)
+            .where(GraphUpdate.entity_id == entity_id, GraphUpdate.status != "failed")
             .order_by(desc(GraphUpdate.created_at))
+            .limit(50)
+        )
+        updates = list(result.scalars().all())
+        for update in updates:
+            if update.status == "applied":
+                return update
+            if update.before_graph_version == current_version:
+                return update
+        return latest_applied
+
+    async def _latest_applied_graph_update(
+        self,
+        entity_id: UUID,
+        *,
+        exclude_update_id: UUID | None = None,
+    ) -> GraphUpdate | None:
+        conditions = [GraphUpdate.entity_id == entity_id, GraphUpdate.status == "applied"]
+        if exclude_update_id is not None:
+            conditions.append(GraphUpdate.id != exclude_update_id)
+        result = await self.db.execute(
+            select(GraphUpdate)
+            .where(*conditions)
+            .order_by(desc(GraphUpdate.updated_at), desc(GraphUpdate.created_at))
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def _next_graph_version_pair(self, entity_id: UUID) -> tuple[str, str]:
+        latest_applied = await self._latest_applied_graph_update(entity_id)
+        before_version = (
+            latest_applied.after_graph_version if latest_applied else GRAPH_VERSION_BASE
+        )
+        return before_version, self._next_graph_version(before_version)
+
+    @staticmethod
+    def _next_graph_version(version: str | None) -> str:
+        match = GRAPH_VERSION_PATTERN.match(str(version or ""))
+        if not match:
+            return "v0.1.0"
+        major = int(match.group("major"))
+        minor = int(match.group("minor"))
+        return f"v{major}.{minor + 1}.0"
 
     async def _latest_report(self, entity_id: UUID) -> BrandReportVersion | None:
         result = await self.db.execute(
@@ -2825,29 +2908,88 @@ class BrandSpaceService:
         conditions = [BrandReportVersion.entity_id == entity_id]
         if report_kind:
             conditions.append(BrandReportVersion.report_kind == report_kind)
+        if publication_status and publication_status != "pre_graph_update":
+            return await self._reports_for_publication_status(
+                conditions=conditions,
+                publication_status=publication_status,
+                limit=bounded_limit,
+            )
+        if publication_status == "pre_graph_update":
+            result = await self.db.execute(
+                select(BrandReportVersion)
+                .where(
+                    *conditions,
+                    BrandReportVersion.publication_status == "pre_graph_update",
+                )
+                .order_by(desc(BrandReportVersion.created_at), desc(BrandReportVersion.version))
+                .limit(bounded_limit)
+            )
+            filtered = list(result.scalars().all())
+            if len(filtered) >= bounded_limit:
+                return filtered[:bounded_limit]
+            fallback = await self._legacy_pre_graph_update_reports(
+                conditions=conditions,
+                existing_ids={report.id for report in filtered},
+                limit=bounded_limit - len(filtered),
+            )
+            return [*filtered, *fallback][:bounded_limit]
         result = await self.db.execute(
             select(BrandReportVersion)
             .where(*conditions)
             .order_by(desc(BrandReportVersion.created_at), desc(BrandReportVersion.version))
-            .limit(200 if publication_status else bounded_limit)
+            .limit(bounded_limit)
         )
-        reports = list(result.scalars().all())
-        if not publication_status:
-            return reports[:bounded_limit]
+        return list(result.scalars().all())
 
+    async def _reports_for_publication_status(
+        self,
+        *,
+        conditions: list[Any],
+        publication_status: str,
+        limit: int,
+    ) -> list[BrandReportVersion]:
         filtered: list[BrandReportVersion] = []
         scanned = 0
         page_size = 200
         max_scan = 5000
         while True:
+            result = await self.db.execute(
+                select(BrandReportVersion)
+                .where(
+                    *conditions,
+                    BrandReportVersion.publication_status == publication_status,
+                )
+                .order_by(desc(BrandReportVersion.created_at), desc(BrandReportVersion.version))
+                .limit(page_size)
+                .offset(scanned)
+            )
+            reports = list(result.scalars().all())
+            if not reports:
+                break
             scanned += len(reports)
             filtered.extend(
                 report
                 for report in reports
                 if self._report_publication_status(report) == publication_status
             )
-            if len(filtered) >= bounded_limit or len(reports) < page_size or scanned >= max_scan:
+            if len(filtered) >= limit or len(reports) < page_size or scanned >= max_scan:
                 break
+        return filtered[:limit]
+
+    async def _legacy_pre_graph_update_reports(
+        self,
+        *,
+        conditions: list[Any],
+        existing_ids: set[UUID],
+        limit: int,
+    ) -> list[BrandReportVersion]:
+        if limit <= 0:
+            return []
+        filtered: list[BrandReportVersion] = []
+        scanned = 0
+        page_size = 200
+        max_scan = 5000
+        while True:
             result = await self.db.execute(
                 select(BrandReportVersion)
                 .where(*conditions)
@@ -2858,7 +3000,16 @@ class BrandSpaceService:
             reports = list(result.scalars().all())
             if not reports:
                 break
-        return filtered[:bounded_limit]
+            scanned += len(reports)
+            filtered.extend(
+                report
+                for report in reports
+                if report.id not in existing_ids
+                and self._report_source_type(report) == "pre_graph_update"
+            )
+            if len(filtered) >= limit or len(reports) < page_size or scanned >= max_scan:
+                break
+        return filtered[:limit]
 
     async def _space_payload(self, *, entity: Entity, board_run: BoardRun | None) -> dict[str, Any]:
         if board_run is None:
@@ -3057,12 +3208,13 @@ class BrandSpaceService:
         current_user: User,
         intelligence_run: BrandIntelligenceRun | None = None,
     ) -> tuple[GraphUpdate, list[GraphPatch]]:
+        before_graph_version, after_graph_version = await self._next_graph_version_pair(entity.id)
         graph_update = GraphUpdate(
             entity_id=entity.id,
             board_run_id=board_run.id,
             created_by_user_id=current_user.id,
-            before_graph_version="v0.0.0",
-            after_graph_version="v0.1.0",
+            before_graph_version=before_graph_version,
+            after_graph_version=after_graph_version,
             status="needs_review",
         )
         if board_run.is_scaffold or intelligence_run is None:
@@ -3337,6 +3489,28 @@ class BrandSpaceService:
     @staticmethod
     def _patches_for_graph_snapshot(patches: list[GraphPatch]) -> list[GraphPatch]:
         return [patch for patch in patches if patch.status != "rejected"]
+
+    async def _graph_update_apply_conflict(
+        self,
+        graph_update: GraphUpdate,
+    ) -> dict[str, Any] | None:
+        expected_version = graph_update.before_graph_version or GRAPH_VERSION_BASE
+        latest_applied = await self._latest_applied_graph_update(
+            graph_update.entity_id,
+            exclude_update_id=graph_update.id,
+        )
+        current_version = (
+            latest_applied.after_graph_version if latest_applied else GRAPH_VERSION_BASE
+        )
+        if current_version == expected_version:
+            return None
+        return {
+            "expected_before_graph_version": expected_version,
+            "current_graph_version": current_version,
+            "latest_applied_graph_update_id": str(latest_applied.id)
+            if latest_applied
+            else None,
+        }
 
     @staticmethod
     def _patch_review_category(patch: GraphPatch) -> str:
@@ -4021,14 +4195,26 @@ class BrandSpaceService:
         )
         await self.db.flush()
 
+    async def _lock_report_version_scope(self, graph_update_id: UUID) -> None:
+        await self.db.execute(
+            select(GraphUpdate.id)
+            .where(GraphUpdate.id == graph_update_id)
+            .with_for_update()
+        )
+
     async def _next_report_version(self, *, entity_id: UUID, report_id: str) -> int:
         result = await self.db.execute(
-            select(func.max(BrandReportVersion.version)).where(
+            select(BrandReportVersion)
+            .where(
                 BrandReportVersion.entity_id == entity_id,
                 BrandReportVersion.report_id == report_id,
             )
+            .order_by(desc(BrandReportVersion.version))
+            .limit(1)
+            .with_for_update()
         )
-        return int(result.scalar_one_or_none() or 0) + 1
+        latest_report = result.scalar_one_or_none()
+        return int(latest_report.version if latest_report else 0) + 1
 
     def _platforms_for_run(self, board_run: BoardRun) -> list[dict[str, Any]]:
         if not board_run.is_scaffold:
@@ -4263,6 +4449,9 @@ class BrandSpaceService:
     def _report_publication_status(report: BrandReportVersion) -> str:
         if BrandSpaceService._report_source_type(report) == "pre_graph_update":
             return "pre_graph_update"
+        column_status = str(getattr(report, "publication_status", "") or "").strip()
+        if column_status:
+            return column_status
         payload = report.payload or {}
         return str(payload.get("publication_status") or "draft")
 

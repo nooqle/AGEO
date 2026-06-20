@@ -654,6 +654,7 @@ async def test_mcdonalds_report_versions_publish_and_legacy_mapping(tmp_path):
         )
         report = report_payload["report"]
         assert report["source_type"] == "graph_update"
+        assert report["publication_status"] == "draft"
         assert report["payload"]["publication_status"] == "draft"
         report_text = json.dumps(report["payload"], ensure_ascii=False)
         assert "麦辣鸡腿堡" in report_text
@@ -672,9 +673,18 @@ async def test_mcdonalds_report_versions_publish_and_legacy_mapping(tmp_path):
             current_user=owner,
             publication_status="pre_graph_update",
         )
+        draft_filtered = await service.list_reports(
+            entity_id=entity.id,
+            current_user=owner,
+            publication_status="draft",
+            limit=10,
+        )
         assert legacy_filtered["summary"]["pre_graph_update"] == 1
         legacy_item = next(item for item in report_list["reports"] if item["id"] == str(legacy_report.id))
         assert legacy_item["source_type"] == "pre_graph_update"
+        assert all(item["source_type"] == "graph_update" for item in draft_filtered["reports"])
+        assert all(item["publication_status"] == "draft" for item in draft_filtered["reports"])
+        assert str(legacy_report.id) not in {item["id"] for item in draft_filtered["reports"]}
 
         detail = await service.get_report(
             report_version_id=report["id"],
@@ -687,6 +697,7 @@ async def test_mcdonalds_report_versions_publish_and_legacy_mapping(tmp_path):
             report_version_id=report["id"],
             current_user=owner,
         )
+        assert published["report"]["publication_status"] == "published"
         assert published["report"]["payload"]["publication_status"] == "published"
         with pytest.raises(ValueError):
             await service.publish_report(
@@ -747,9 +758,17 @@ async def test_report_status_filter_scans_beyond_first_page(tmp_path):
             publication_status="pre_graph_update",
             limit=1,
         )
+        draft_filtered = await service.list_reports(
+            entity_id=entity.id,
+            current_user=owner,
+            publication_status="draft",
+            limit=2,
+        )
 
         assert legacy_filtered["summary"]["pre_graph_update"] == 1
         assert legacy_filtered["reports"][0]["id"] == str(legacy_report.id)
+        assert len(draft_filtered["reports"]) == 2
+        assert all(item["publication_status"] == "draft" for item in draft_filtered["reports"])
 
     await engine.dispose()
 
@@ -1063,6 +1082,65 @@ async def test_review_items_aggregate_runs_and_rejected_patch_is_removed_from_sn
         }
         assert "by-health" not in snapshot_entity_ids
         assert "workplace-energy" in snapshot_entity_ids
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_graph_update_versioning_blocks_stale_update_apply(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-versioning@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        first = await service.create_board_run(entity_id=entity.id, current_user=owner)
+        second = await service.create_board_run(entity_id=entity.id, current_user=owner)
+
+        assert first["graph_update"]["before_graph_version"] == "v0.0.0"
+        assert first["graph_update"]["after_graph_version"] == "v0.1.0"
+        assert second["graph_update"]["before_graph_version"] == "v0.0.0"
+        assert second["graph_update"]["after_graph_version"] == "v0.1.0"
+
+        async def accept_reviewable_patches(payload: dict, reason: str) -> dict:
+            result: dict | None = None
+            for patch in payload["patches"]:
+                if patch["status"] != "needs_review":
+                    continue
+                result = await service.decide_graph_patch(
+                    patch_id=patch["id"],
+                    current_user=owner,
+                    status="accepted",
+                    reason=reason,
+                )
+            assert result is not None
+            return result
+
+        first_applied = await accept_reviewable_patches(first, "第一轮图谱更新确认")
+        assert first_applied["graph_update"]["status"] == "applied"
+        assert first_applied["graph_update"]["after_graph_version"] == "v0.1.0"
+
+        stale_result = await accept_reviewable_patches(second, "过期图谱更新确认")
+        assert stale_result["graph_update"]["status"] == "failed"
+        version_conflict = stale_result["graph_update"]["summary"]["version_conflict"]
+        assert version_conflict["expected_before_graph_version"] == "v0.0.0"
+        assert version_conflict["current_graph_version"] == "v0.1.0"
+        assert version_conflict["latest_applied_graph_update_id"] == first["graph_update"]["id"]
+
+        stale_events = await service.get_events(run_id=second["run"]["id"], current_user=owner)
+        stale_event_types = [event["type"] for event in stale_events["events"]]
+        assert stale_event_types.count("graph_update_version_conflict") == 1
+        assert "graph_update_applied" not in stale_event_types
+
+        current_graph = await service.get_graph(entity_id=entity.id, current_user=owner)
+        assert current_graph["graph_update"]["id"] == first["graph_update"]["id"]
+        assert current_graph["graph_update"]["after_graph_version"] == "v0.1.0"
+
+        third = await service.create_board_run(entity_id=entity.id, current_user=owner)
+        assert third["graph_update"]["before_graph_version"] == "v0.1.0"
+        assert third["graph_update"]["after_graph_version"] == "v0.2.0"
 
     await engine.dispose()
 
