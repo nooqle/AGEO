@@ -25,7 +25,7 @@ from app.models.brand_intelligence import (
     BrandReportVersion,
 )
 from app.models.brand_intelligence_run import BrandIntelligenceRun
-from app.models.brand_space import BoardRun, GraphPatch, GraphUpdate
+from app.models.brand_space import BoardArtifact, BoardRun, GraphPatch, GraphUpdate
 from app.models.entity import Entity, EntityStatus
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.user import User, UserRole, UserStatus
@@ -296,9 +296,39 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
         )
         assert events_page["pagination"]["total"] >= 2
         assert len(events_page["events"]) == 2
+        second_events_page = await service.get_events(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            limit=2,
+            offset=2,
+        )
+        assert second_events_page["pagination"]["offset"] == 2
+        assert {event["id"] for event in events_page["events"]}.isdisjoint(
+            {event["id"] for event in second_events_page["events"]}
+        )
         assert payload["graph_update"]["status"] == "needs_review"
         assert payload["graph_update"]["summary"]["blocked"] == 1
         assert len(payload["patches"]) == 4
+
+        all_assets = await service.get_assets(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            limit=20,
+        )
+        asset_by_type = {artifact["type"]: artifact for artifact in all_assets["artifacts"]}
+        preview_expectations = {
+            "entity_lexicon": "summary",
+            "question_set": "summary",
+            "raw_answers": "jsonl",
+            "parsed_answers": "summary",
+            "entity_relation_set": "table",
+        }
+        for artifact_type, expected_kind in preview_expectations.items():
+            detail = await service.get_artifact_detail(
+                artifact_id=asset_by_type[artifact_type]["artifactId"],
+                current_user=owner,
+            )
+            assert detail["preview"]["kind"] == expected_kind
 
         events = await service.get_events(run_id=payload["run"]["id"], current_user=owner)
         assert any(event["type"] == "scaffold_data_loaded" for event in events["events"])
@@ -330,6 +360,21 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
         assert guardrail_by_key["competitor_claim_evidence"]["severity"] == "block"
         assert guardrail_by_key["action_platform_specificity"]["severity"] == "pass"
         assert guardrail_by_key["graph_update_scope"]["severity"] == "pass"
+        report_model = await session.get(BrandReportVersion, uuid.UUID(report_payload["report"]["id"]))
+        assert report_model is not None
+        original_report_payload = dict(report_model.payload or {})
+        report_model.payload = {
+            **original_report_payload,
+            "graph_update_id": str(uuid.uuid4()),
+        }
+        await session.flush()
+        latest_report = await service._latest_report_for_graph_update(
+            uuid.UUID(payload["graph_update"]["id"])
+        )
+        assert latest_report is not None
+        assert latest_report.id == report_model.id
+        report_model.payload = original_report_payload
+        await session.flush()
         report_assets = await service.get_assets(
             run_id=payload["run"]["id"],
             current_user=owner,
@@ -349,6 +394,31 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
             and link["id"] == report_payload["report"]["id"]
             for link in report_asset_detail["trace"]["links"]
         )
+        report_artifact_model = await session.get(
+            BoardArtifact,
+            uuid.UUID(report_asset["artifactId"]),
+        )
+        assert report_artifact_model is not None
+        report_artifact_model.extra_metadata = {
+            key: value
+            for key, value in (report_artifact_model.extra_metadata or {}).items()
+            if key != "report_version_id"
+        }
+        await session.flush()
+        unbound_report_asset_detail = await service.get_artifact_detail(
+            artifact_id=report_asset["artifactId"],
+            current_user=owner,
+        )
+        assert unbound_report_asset_detail["trace"]["report"] is None
+        assert not any(
+            link["kind"] == "report_version"
+            for link in unbound_report_asset_detail["trace"]["links"]
+        )
+        report_artifact_model.extra_metadata = {
+            **(report_artifact_model.extra_metadata or {}),
+            "report_version_id": report_payload["report"]["id"],
+        }
+        await session.flush()
 
         risk_result = await session.execute(
             select(GraphPatch).where(
@@ -379,6 +449,62 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
             item["guardrailKey"]: item["severity"]
             for item in published_after_review["guardrails"]
         }["competitor_claim_evidence"] == "pass"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_artifact_preview_handles_missing_graph_update_and_unknown_type(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-artifact-preview@example.com")
+        entity = _entity(owner)
+        board_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            input_scope={},
+        )
+        session.add_all([owner, entity, board_run])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        patch_artifact = BoardArtifact(
+            artifact_key="patches-without-update",
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            artifact_type="graph_patch_set",
+            label="图谱补丁集",
+            path="assets/test/patches.json",
+            mime_type="application/json",
+            row_count=0,
+        )
+        preview = await service._artifact_preview(
+            artifact=patch_artifact,
+            board_run=board_run,
+            graph_update=None,
+            latest_report=None,
+        )
+        assert preview["kind"] == "summary"
+        assert "尚未生成 GraphUpdate" in preview["summary"]
+
+        unknown_artifact = BoardArtifact(
+            artifact_key="unknown-preview",
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            artifact_type="unhandled_blob",
+            label="未知资产",
+            path="assets/test/blob.bin",
+            mime_type="application/octet-stream",
+            row_count=7,
+        )
+        unknown_preview = await service._artifact_preview(
+            artifact=unknown_artifact,
+            board_run=board_run,
+            graph_update=None,
+            latest_report=None,
+        )
+        assert unknown_preview["kind"] == "summary"
+        assert unknown_preview["rowCount"] == 7
 
     await engine.dispose()
 

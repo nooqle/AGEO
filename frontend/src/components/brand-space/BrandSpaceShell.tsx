@@ -571,9 +571,7 @@ export function BrandSpaceShell() {
       return;
     }
     setIsLoadingArtifactDetail(true);
-    setSelectedArtifactDetail((current) => (
-      current?.artifact.id === artifact.id ? current : null
-    ));
+    setSelectedArtifactDetail(buildLocalArtifactDetail(artifact));
     try {
       const response = await api.getBrandSpaceArtifact(artifactId);
       setSelectedArtifactDetail(response);
@@ -607,10 +605,13 @@ export function BrandSpaceShell() {
       offset: 0,
       append: false,
     });
-    const reportAsset = loadedAssets.find((artifact) => artifact.type === 'report') ?? loadedAssets[0];
-    if (reportAsset) {
-      await handleOpenArtifact(reportAsset);
+    const reportAsset = loadedAssets.find((artifact) => artifact.type === 'report');
+    if (!reportAsset) {
+      setSelectedArtifactDetail(null);
+      setBackendNotice('本次运行暂无报告资产；请先生成图谱更新解读报告。');
+      return;
     }
+    await handleOpenArtifact(reportAsset);
   };
 
   const handleTraceTarget = (link: ArtifactTraceLink) => {

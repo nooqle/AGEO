@@ -61,6 +61,7 @@
 | 2026-06-19 | Sprint C: Report From GraphUpdate | 完成 | 报告 payload 已从 GraphUpdate patches 生成 `claims / trace_chains / platform_differences`；每个 trace chain 覆盖 Report claim → GraphPatch → EntityRelation → Answer → Question → Platform；guardrail 新增 `graph_update_scope`；前端 Reports 接真实关键结论、平台差异和追溯链；新增品牌级报告列表、报告版本详情和正式发布 API；旧报告标记为 `pre_graph_update` 且不能作为 GraphUpdate 报告发布；麦当劳餐饮品牌逻辑测试覆盖非营养健康品牌报告 | 后续进入 Sprint D：Assets detail、资产反向追溯、分页和完整浏览器 E2E |
 | 2026-06-20 | Sprint C: Report Review Hardening | Review 修复完成 | 按 `review-brand-space-complete-graph-update-reports-2026-06-20.md` 收口：补齐报告辅助方法/常量；publish 时实时重算 guardrail 并刷新持久化结果；GraphPatchBuilder corpus helper 改为公开方法；报告 status 过滤改为分页扫描；真实 answers 分支补麦当劳品牌逻辑测试；Markdown 输出盲区示例；前端 `source_type` 类型收紧并说明 mock-only guardrail fallback；浏览器 smoke 验证 `/brand-space` 报告页中文、核心判断、AI 盲区、证据样本和报告校验正常渲染 | 后续进入 Sprint D：Assets detail、资产反向追溯、分页和完整浏览器 E2E；`publication_status` 下推到 schema/JSON 查询可作为后续性能 hardening |
 | 2026-06-20 | Sprint D: Assets Detail And Trace Back | 完成 | 新增 artifact detail API；`board-runs/{run_id}/assets` 和 events 支持 limit/offset，assets 支持 artifact_type 筛选；artifact detail 返回安全 preview，不读取任意磁盘路径；trace links 覆盖 BoardRun、NodeRun、GraphUpdate、ReportVersion；报告生成后同步登记 `report` artifact，并绑定具体 `report_version_id`，避免多版本报告在 Assets 里串版本；前端 Assets 增加类型筛选、详情抽屉、JSON/JSONL/table/summary 预览、加载更多和追溯跳转；Reports 增加“查看相关资产”反向入口；补 API/service 测试覆盖分页、筛选、跨用户拦截和 GraphUpdate/Report trace；浏览器 smoke 覆盖 Assets、Reports → Assets 和旧 Dashboard 入口 | 后续进入 Hardening：真实对象存储下载/打开、50 节点性能、生产态 E2E 与可访问性细化 |
+| 2026-06-20 | Sprint D: Review Fix | 完成 | 按 `review-brand-space-sprint-d-assets-trace-back-2026-06-20.md` 收口：`_latest_report_for_graph_update` 改为按确定性 `report_id` 查询，不再拉 200 条报告扫 payload；report artifact 缺 `report_version_id` 时不再 fallback 到 latest report；GraphUpdate 未生成时补丁/审阅资产显示明确空态；问题集无内联内容时改为 summary；Reports → Assets 找不到 report 资产时提示而不是打开第一个资产；补 preview 分支、events offset、report trace 降级测试；浏览器 smoke 复测 report 资产反向入口和旧 Dashboard 隔离 | 进入 Hardening 队列；`publication_status` 下推和报告版本并发分配仍作为后续 schema/队列化议题 |
 
 ## 3. 产品 Section 完成度
 
@@ -459,6 +460,13 @@ Sprint D 验证（2026-06-20）：
 - 前端静态：`npx tsc --noEmit` 通过；`npm run lint` 0 errors，3 个既有 warning。
 - 前端 build：`npm run build` 通过；保留既有 PDF export / Playwright helper 的 Turbopack trace warning，不属于 Brand Space 改动。
 - 浏览器 smoke：`/brand-space` Assets 页可筛选、加载详情抽屉、显示追溯链；Reports 页“查看相关资产”可跳回 Assets；旧 `/dashboard` 入口返回正常页面/登录态保护，没有被 Brand Space 替换。
+
+Sprint D Review Fix 验证（2026-06-20）：
+
+- 后端 targeted：`python -m pytest tests/test_brand_space_service.py -q`，20 passed；`python -m pytest tests/test_brand_space_api.py -q`，3 passed。
+- 仓库验证：`python scripts\validate_change.py --pytest aeo-platform/backend/tests/test_brand_space_service.py --pytest aeo-platform/backend/tests/test_brand_space_api.py`，PASS。
+- 前端静态与构建：`npx tsc --noEmit`、`npm run lint`、`npm run build` 通过；lint 仍只有 3 个既有 warning，build 仍只有既有 PDF export / Playwright helper 的 Turbopack trace warning。
+- 浏览器 smoke：当前 worktree `http://127.0.0.1:3016/brand-space` 验证 Reports → Assets 只打开 report 资产且不 fallback 到实体词表；旧 `/dashboard` 入口保持账号校验/登录保护，没有被 Brand Space 替换，控制台无 error。
 
 第二张具体开发票：
 

@@ -254,7 +254,7 @@ export function AssetsView({
         </div>
       </div>
 
-      <div className={classNames(styles.assetLayout, detail ? styles.assetLayoutWithDrawer : undefined)}>
+      <div className={classNames(styles.assetLayout, detail || isDetailLoading ? styles.assetLayoutWithDrawer : undefined)}>
         <section className={styles.assetList}>
           {filteredArtifacts.length ? (
             filteredArtifacts.map((artifact) => {

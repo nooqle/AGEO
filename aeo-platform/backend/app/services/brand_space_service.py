@@ -3558,6 +3558,12 @@ class BrandSpaceService:
             ]
             if artifact_type == "review_queue":
                 rows = [row for row in rows if row["status"] in {"needs_review", "blocked"}]
+            if graph_update is None:
+                empty_summary = "本次运行尚未生成 GraphUpdate，补丁集资产暂无预览内容。"
+            elif artifact_type == "review_queue":
+                empty_summary = "当前 GraphUpdate 没有需要人工审阅的补丁。"
+            else:
+                empty_summary = "当前 GraphUpdate 尚未产生图谱补丁。"
             return self._table_preview(
                 title=artifact.label,
                 columns=[
@@ -3570,6 +3576,7 @@ class BrandSpaceService:
                 rows=rows,
                 row_count=row_count or len(rows),
                 truncated=len(patches) > len(rows),
+                empty_summary=empty_summary,
             )
         if artifact_type == "graph_update":
             return {
@@ -3621,10 +3628,20 @@ class BrandSpaceService:
                 empty_summary="实体词表来自本次运行的 input_scope；当前资产只有登记信息，没有内联词表内容。",
             )
         if artifact_type == "question_set":
+            questions = board_run.input_scope.get("questions", []) if board_run.input_scope else []
+            if not questions:
+                return {
+                    "kind": "summary",
+                    "title": artifact.label,
+                    "summary": "问题集资产已登记；大批量问题不在列表接口中内联。",
+                    "items": [{"label": "登记问题数", "value": row_count}],
+                    "rowCount": row_count,
+                    "truncated": False,
+                }
             return {
                 "kind": "jsonl",
                 "title": artifact.label,
-                "lines": self._question_preview_lines(board_run),
+                "lines": self._question_preview_lines(questions),
                 "rowCount": row_count,
                 "truncated": row_count > 6,
             }
@@ -3798,13 +3815,8 @@ class BrandSpaceService:
             "emptySummary": "原始答案已登记，但当前运行没有可内联预览的回答样本。",
         }
 
-    def _question_preview_lines(self, board_run: BoardRun) -> list[str]:
-        questions = board_run.input_scope.get("questions", []) if board_run.input_scope else []
-        if not questions:
-            return [
-                json.dumps({"stage": "question_set", "status": "registered"}, ensure_ascii=False),
-                json.dumps({"note": "问题集资产已登记；大批量问题不在列表接口中内联。"}, ensure_ascii=False),
-            ]
+    @staticmethod
+    def _question_preview_lines(questions: list[Any]) -> list[str]:
         return [
             json.dumps({"question": str(question)}, ensure_ascii=False)
             for question in questions[:6]
@@ -3847,15 +3859,14 @@ class BrandSpaceService:
             return None
         result = await self.db.execute(
             select(BrandReportVersion)
-            .where(BrandReportVersion.entity_id == graph_update.entity_id)
-            .order_by(desc(BrandReportVersion.created_at), desc(BrandReportVersion.version))
-            .limit(200)
+            .where(
+                BrandReportVersion.entity_id == graph_update.entity_id,
+                BrandReportVersion.report_id == f"brand-space-{graph_update_id}",
+            )
+            .order_by(desc(BrandReportVersion.version), desc(BrandReportVersion.created_at))
+            .limit(1)
         )
-        for report in result.scalars().all():
-            payload = report.payload or {}
-            if str(payload.get("graph_update_id") or "") == str(graph_update_id):
-                return report
-        return None
+        return result.scalar_one_or_none()
 
     async def _report_for_artifact(
         self,
@@ -3869,14 +3880,28 @@ class BrandSpaceService:
             (artifact.extra_metadata or {}).get("report_version_id") or ""
         ).strip()
         if not report_version_id:
-            return fallback
+            logger.warning(
+                "Report artifact %s is missing report_version_id metadata",
+                artifact.id,
+            )
+            return None
         try:
             report_uuid = UUID(report_version_id)
         except ValueError:
-            return fallback
+            logger.warning(
+                "Report artifact %s has invalid report_version_id metadata: %s",
+                artifact.id,
+                report_version_id,
+            )
+            return None
         report = await self.db.get(BrandReportVersion, report_uuid)
         if report is None or report.entity_id != artifact.entity_id:
-            return fallback
+            logger.warning(
+                "Report artifact %s points to a missing or foreign report version: %s",
+                artifact.id,
+                report_version_id,
+            )
+            return None
         return report
 
     async def _graph_update_for_run(self, board_run_id: UUID) -> GraphUpdate | None:
