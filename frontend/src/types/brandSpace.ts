@@ -272,7 +272,7 @@ export interface BrandSpaceReport {
   title: string;
   summary: string;
   payload: Record<string, unknown>;
-  source_type?: 'graph_update' | 'pre_graph_update' | string;
+  source_type?: 'graph_update' | 'pre_graph_update';
   graph_update_id?: string | null;
   publication_status?: string;
   created_at: string;
@@ -286,7 +286,7 @@ export interface BrandSpaceReportSummary {
   report_kind: string;
   title: string;
   summary: string;
-  source_type: 'graph_update' | 'pre_graph_update' | string;
+  source_type: 'graph_update' | 'pre_graph_update';
   graph_update_id?: string | null;
   publication_status: string;
   created_at: string;

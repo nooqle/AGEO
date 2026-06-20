@@ -59,6 +59,7 @@
 | 2026-06-18 | Sprint B: Real GraphPatchBuilder | 完成 | `GraphPatchBuilderService` 已读取 `input_scope.entity_lexicon`；支持 alias 匹配、产品/子品牌 `supports`、战略/方案 `associated_with`、风险词 `risk_related`、竞品 `competes_with`；patch evidence refs 带 `matched_entity_*`；Graph projection 纳入 builder payload；安利 fixture 真实回测覆盖 GraphUpdate → Review Items；sentiment=3/5 和 competitor confidence=0.7 边界已测试 | 进入 Sprint C：报告必须从 GraphUpdate 生成结构化解读；正式图谱版本写入和并发版本检查放入 Hardening/版本化任务 |
 | 2026-06-19 | Sprint B: Review Hardening | 完成 | `_ensure_real_graph_update` 从 polling read-path 拆出 pending/queued/background build；竞品 confidence 更保守；已接受竞品跨 run 转为 `update_strength`；中文 term 匹配增加否定/粘连保护；connection strength 改为对数衰减；补回归测试并提交 `af79dc2` | 完整 worker/任务表队列化、竞品候选和信号 pattern 配置化进入后续 hardening |
 | 2026-06-19 | Sprint C: Report From GraphUpdate | 完成 | 报告 payload 已从 GraphUpdate patches 生成 `claims / trace_chains / platform_differences`；每个 trace chain 覆盖 Report claim → GraphPatch → EntityRelation → Answer → Question → Platform；guardrail 新增 `graph_update_scope`；前端 Reports 接真实关键结论、平台差异和追溯链；新增品牌级报告列表、报告版本详情和正式发布 API；旧报告标记为 `pre_graph_update` 且不能作为 GraphUpdate 报告发布；麦当劳餐饮品牌逻辑测试覆盖非营养健康品牌报告 | 后续进入 Sprint D：Assets detail、资产反向追溯、分页和完整浏览器 E2E |
+| 2026-06-20 | Sprint C: Report Review Hardening | Review 修复完成 | 按 `review-brand-space-complete-graph-update-reports-2026-06-20.md` 收口：补齐报告辅助方法/常量；publish 时实时重算 guardrail 并刷新持久化结果；GraphPatchBuilder corpus helper 改为公开方法；报告 status 过滤改为分页扫描；真实 answers 分支补麦当劳品牌逻辑测试；Markdown 输出盲区示例；前端 `source_type` 类型收紧并说明 mock-only guardrail fallback；浏览器 smoke 验证 `/brand-space` 报告页中文、核心判断、AI 盲区、证据样本和报告校验正常渲染 | 后续进入 Sprint D：Assets detail、资产反向追溯、分页和完整浏览器 E2E；`publication_status` 下推到 schema/JSON 查询可作为后续性能 hardening |
 
 ## 3. 产品 Section 完成度
 
@@ -441,6 +442,14 @@ Sprint C 第一轮已完成。下一次开发建议有两个可选方向：
 - 前端 build：`npm run build` 通过；保留既有 PDF export / Playwright helper 的 Turbopack trace warning，不属于 Brand Space 改动。
 - 仓库验证：`python scripts/validate_change.py --pytest aeo-platform/backend/tests/test_brand_space_service.py --pytest aeo-platform/backend/tests/test_brand_space_api.py`，PASS。
 - 浏览器 smoke：`/brand-space` 中文 UI、8 节点/8 连接、报告区、校验区、追溯链可渲染；旧 `/dashboard` 未登录状态正常跳转 `/auth?next=/dashboard`，没有被 Brand Space 替换。
+
+Review 修复追加验证（2026-06-20）：
+
+- 后端 targeted：`python -m pytest tests/test_brand_space_service.py -q`，18 passed；覆盖 stale guardrail publish、`publication_status` 超 200 条分页扫描、真实 answers / session scope / question lookup 分支。
+- 后端 API：`python -m pytest tests/test_brand_space_api.py -q`，3 passed。
+- 静态与构建：`python -m ruff check app/services/brand_space_service.py tests/test_brand_space_service.py tests/test_brand_space_api.py`、`npx tsc --noEmit`、`npm run lint`、`npm run build` 通过；lint 仍只有 3 个既有 warning。
+- 仓库验证：`python scripts/validate_change.py --pytest aeo-platform/backend/tests/test_brand_space_service.py --pytest aeo-platform/backend/tests/test_brand_space_api.py`，PASS。
+- 浏览器 smoke：`/brand-space` Reports 页保持中文 UI；核心判断、AI 盲区、证据样本、报告校验均可渲染；未出现旧英文 fallback 或运行时错误。
 
 第二张具体开发票：
 

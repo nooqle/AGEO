@@ -189,7 +189,7 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             db=session,
             current_user=owner,
         )
-        assert report["report"]["title"] == "安利圈层状态更新"
+        assert report["report"]["title"] == "安利品牌 AI 认知图景"
         reports = await get_brand_reports(
             entity_id=str(entity.id),
             db=session,

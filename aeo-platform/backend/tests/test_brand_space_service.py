@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -306,6 +307,16 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
             reason="覆盖未来状态兜底",
         )
         assert partial_payload["graph_update"]["status"] == "partial"
+        published_after_review = await service.publish_report(
+            report_version_id=report_payload["report"]["id"],
+            current_user=owner,
+        )
+        assert published_after_review["report"]["payload"]["publication_status"] == "published"
+        assert published_after_review["report"]["payload"]["blocking_guardrail_keys"] == []
+        assert {
+            item["guardrailKey"]: item["severity"]
+            for item in published_after_review["guardrails"]
+        }["competitor_claim_evidence"] == "pass"
 
     await engine.dispose()
 
@@ -494,6 +505,221 @@ async def test_mcdonalds_report_versions_publish_and_legacy_mapping(tmp_path):
                 report_version_id=legacy_report.id,
                 current_user=owner,
             )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_status_filter_scans_beyond_first_page(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-report-pagination@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.flush()
+
+        legacy_report = BrandReportVersion(
+            entity_id=entity.id,
+            report_id="legacy-old-report",
+            version=1,
+            report_kind="legacy_brand_report",
+            artifact_id="legacy:old",
+            title="旧报告",
+            summary="旧报告没有 GraphUpdate。",
+            payload={"publication_status": "published"},
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        session.add(legacy_report)
+        base_time = datetime(2026, 6, 20, tzinfo=timezone.utc)
+        for index in range(225):
+            session.add(
+                BrandReportVersion(
+                    entity_id=entity.id,
+                    report_id=f"graph-report-{index}",
+                    version=1,
+                    report_kind="graph_update_interpretation",
+                    artifact_id=f"graph-report:{index}",
+                    title=f"Graph Report {index}",
+                    summary="GraphUpdate report",
+                    payload={
+                        "graph_update_id": str(uuid.uuid4()),
+                        "publication_status": "draft",
+                    },
+                    created_at=base_time + timedelta(minutes=index),
+                    updated_at=base_time + timedelta(minutes=index),
+                )
+            )
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        legacy_filtered = await service.list_reports(
+            entity_id=entity.id,
+            current_user=owner,
+            publication_status="pre_graph_update",
+            limit=1,
+        )
+
+        assert legacy_filtered["summary"]["pre_graph_update"] == 1
+        assert legacy_filtered["reports"][0]["id"] == str(legacy_report.id)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_storyline_uses_real_answers_session_scope_and_question_lookup(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-report-answers@example.com")
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="麦当劳",
+            domain="mcdonalds.com.cn",
+            industry="餐饮",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=owner.id,
+        )
+        session_a = uuid.uuid4()
+        session_b = uuid.uuid4()
+        intelligence_run = BrandIntelligenceRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            origin_session_id=session_a,
+            status="completed",
+            stage="generating_recommendations",
+            progress=1.0,
+            message="完成",
+        )
+        session.add_all([owner, entity, intelligence_run])
+        await session.flush()
+
+        board_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            brand_intelligence_run_id=intelligence_run.id,
+            status="completed",
+            is_scaffold=False,
+            progress=1.0,
+            summary="麦当劳真实回答报告",
+            active_node_ids=[],
+            input_scope={
+                "entity_lexicon": [
+                    {
+                        "entity_id": "happy-meal",
+                        "label": "开心乐园餐",
+                        "type": "MenuItem",
+                        "aliases": ["儿童套餐"],
+                    }
+                ]
+            },
+        )
+        session.add(board_run)
+        await session.flush()
+
+        graph_update = GraphUpdate(
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            created_by_user_id=owner.id,
+            before_graph_version="v1.0.0",
+            after_graph_version="v1.1.0",
+            status="needs_review",
+            summary={"total": 1, "needs_review": 0, "auto_applied": 1},
+        )
+        session.add(graph_update)
+        await session.flush()
+
+        open_question = BrandIntelligenceQuestion(
+            entity_id=entity.id,
+            session_id=session_a,
+            question_id="mcd-open-family",
+            question_text="有什么适合带小朋友吃饭的快餐？",
+            category="scenario",
+        )
+        risk_question = BrandIntelligenceQuestion(
+            entity_id=entity.id,
+            session_id=session_a,
+            question_id="mcd-risk",
+            question_text="麦当劳食品安全有哪些顾虑？",
+            category="risk",
+        )
+        session.add_all([open_question, risk_question])
+        await session.flush()
+
+        session.add_all(
+            [
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    session_id=session_a,
+                    question_object_id=open_question.id,
+                    question_id=open_question.question_id,
+                    dedupe_key=f"{entity.id}:mcd:open:chatgpt",
+                    platform="ChatGPT",
+                    fetch_method="test",
+                    status="captured",
+                    success=True,
+                    brand_mentioned=True,
+                    answer_text="开心乐园餐适合亲子用餐，门店覆盖也方便。",
+                ),
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    session_id=session_a,
+                    question_object_id=None,
+                    question_id=risk_question.question_id,
+                    dedupe_key=f"{entity.id}:mcd:risk:kimi",
+                    platform="Kimi",
+                    fetch_method="test",
+                    status="captured",
+                    success=True,
+                    brand_mentioned=False,
+                    answer_text="部分用户会关注食品安全、后厨卫生和配料透明度。",
+                ),
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    session_id=session_b,
+                    question_id="other-session",
+                    dedupe_key=f"{entity.id}:mcd:other:deepseek",
+                    platform="DeepSeek",
+                    fetch_method="test",
+                    status="captured",
+                    success=True,
+                    brand_mentioned=True,
+                    answer_text="不应进入报告的其他会话回答。",
+                ),
+            ]
+        )
+        session.add(
+            GraphPatch(
+                graph_update_id=graph_update.id,
+                entity_id=entity.id,
+                patch_type="update_strength",
+                status="auto_applied",
+                title="开心乐园餐亲子场景增强",
+                description="真实回答把开心乐园餐和亲子用餐场景连接起来。",
+                affected_object_type="menu_item",
+                affected_object_id="happy-meal",
+                relation_type="supports",
+                connection_strength=82,
+                confidence=0.86,
+                sentiment_or_risk_score=7.5,
+                after_payload={"zone": "inner", "label": "开心乐园餐"},
+                evidence_refs=[],
+            )
+        )
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        report_payload = await service.generate_report(
+            graph_update_id=graph_update.id,
+            current_user=owner,
+        )
+        payload = report_payload["report"]["payload"]
+        report_text = json.dumps(payload, ensure_ascii=False)
+
+        assert payload["sample_scope"]["answer_count"] == 2
+        assert payload["sample_scope"]["open_brand_mention_count"] == 1
+        assert "有什么适合带小朋友吃饭的快餐" in report_text
+        assert "麦当劳食品安全有哪些顾虑" in report_text
+        assert "不应进入报告" not in report_text
 
     await engine.dispose()
 
@@ -1195,6 +1421,42 @@ def test_graph_patch_builder_scoring_confidence_and_term_boundaries():
     assert GraphPatchBuilderService._contains_term("安利和纽崔莱经常一起出现", "安利")
     assert not GraphPatchBuilderService._contains_term("这是一段不健康的表达", "健康")
     assert not GraphPatchBuilderService._contains_term("这个句子里是不安利用法", "安利")
+
+
+def test_storyline_risk_context_requires_brand_anchor_and_negative_association():
+    service = BrandSpaceService.__new__(BrandSpaceService)
+    brand_terms = ("安利", "纽崔莱")
+
+    assert (
+        service._classify_brand_risk_context(
+            question="营养品牌长期健康管理有什么区别？",
+            answer_text="Swisse 价格高，部分成分需要谨慎。",
+            brand_terms=brand_terms,
+            question_has_brand=False,
+            answer_has_brand=False,
+        )
+        == "none"
+    )
+    assert (
+        service._classify_brand_risk_context(
+            question="安利是不是传销？",
+            answer_text="安利属于正规直销，持有直销经营许可证，回答会提醒区别于传销。",
+            brand_terms=brand_terms,
+            question_has_brand=True,
+            answer_has_brand=True,
+        )
+        == "clarified"
+    )
+    assert (
+        service._classify_brand_risk_context(
+            question="安利的事业机会靠谱吗？",
+            answer_text="回答认为安利容易被理解为拉人头，也伴随熟人压力。",
+            brand_terms=brand_terms,
+            question_has_brand=True,
+            answer_has_brand=True,
+        )
+        == "negative"
+    )
 
 
 def test_report_guardrails_cover_warn_and_block_edges():

@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FileCheck2, GitBranch, Lock, Route, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, FileCheck2, Lock, Quote, ShieldAlert } from 'lucide-react';
 import styles from './BrandSpace.module.css';
 import { reportGuardrails } from '@/mocks/brandSpaceMock';
 import type {
@@ -20,73 +20,95 @@ interface ReportReviewViewProps {
   selectedReportId?: string | null;
 }
 
+type AnyRecord = Record<string, unknown>;
+
 function classNames(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(' ');
 }
 
-function strategicTerms(report?: BrandSpaceReport | null) {
-  const raw = report?.payload?.strategic_terms;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.map((item) => {
-    const row = item as Record<string, unknown>;
-    return [
-      String(row.word ?? ''),
-      String(row.state ?? ''),
-      String(row.reason ?? ''),
-    ];
-  });
+function asRecord(value: unknown): AnyRecord {
+  return typeof value === 'object' && value !== null ? (value as AnyRecord) : {};
 }
 
-function payloadArray(report: BrandSpaceReport | null | undefined, key: string): Array<Record<string, unknown>> {
-  const raw = report?.payload?.[key];
-  return Array.isArray(raw) ? raw.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null) : [];
+function asArray(value: unknown): AnyRecord[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is AnyRecord => typeof item === 'object' && item !== null)
+    : [];
 }
 
-function reportClaims(report?: BrandSpaceReport | null) {
-  return payloadArray(report, 'claims').map((item) => ({
-    id: String(item.claim_id ?? item.patch_id ?? item.label ?? ''),
-    label: String(item.label ?? ''),
-    state: String(item.state ?? item.status ?? ''),
-    statement: String(item.statement ?? ''),
-    platforms: Array.isArray(item.platforms) ? item.platforms.map(String) : [],
+function text(value: unknown, fallback = '') {
+  return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+function numeric(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function percent(value: unknown) {
+  const ratio = numeric(value);
+  return `${Math.round(ratio * 1000) / 10}%`;
+}
+
+function payloadArray(report: BrandSpaceReport | null | undefined, key: string): AnyRecord[] {
+  return asArray(report?.payload?.[key]);
+}
+
+function legacyClaims(report?: BrandSpaceReport | null): AnyRecord[] {
+  return payloadArray(report, 'claims').map((item, index) => ({
+    id: text(item.claim_id ?? item.patch_id, `legacy-claim-${index}`),
+    title: text(item.label, '图谱结论'),
+    body: text(item.statement),
+    severity: text(item.state, '待解读'),
+    data_points: [],
+    keywords: Array.isArray(item.platforms) ? item.platforms.map(String) : [],
   }));
 }
 
-function traceChains(report?: BrandSpaceReport | null) {
-  return payloadArray(report, 'trace_chains').map((item) => ({
-    id: String(item.trace_chain_id ?? item.patch_id ?? ''),
-    label: String(item.label ?? ''),
-    steps: Array.isArray(item.steps)
-      ? item.steps
-          .filter((step): step is Record<string, unknown> => typeof step === 'object' && step !== null)
-          .map((step) => ({
-            type: String(step.type ?? ''),
-            label: String(step.label ?? ''),
-            value: String(step.value ?? ''),
-          }))
-      : [],
-  }));
-}
-
-function platformDifferences(report?: BrandSpaceReport | null) {
+function legacyPlatformRows(report?: BrandSpaceReport | null) {
   return payloadArray(report, 'platform_differences').map((item) => ({
-    platform: String(item.platform ?? ''),
-    evidenceCount: Number(item.evidence_count ?? 0),
-    patchCount: Number(item.patch_count ?? 0),
-    questionCount: Number(item.question_count ?? 0),
+    platform: text(item.platform, '未记录平台'),
+    answer_count: numeric(item.evidence_count),
+    profile: `${numeric(item.patch_count)} 个图谱变化，覆盖 ${numeric(item.question_count)} 个问题。`,
+    risk_context_rate: 0,
+    active_mentions: 0,
+    transformation_mentions: 0,
+    quote: null,
   }));
+}
+
+function storyPayload(report?: BrandSpaceReport | null) {
+  return asRecord(report?.payload?.storyline_report);
+}
+
+function downloadMarkdown(title: string, markdown: string) {
+  if (!markdown || typeof window === 'undefined') return;
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${title.replace(/[\\/:*?"<>|]/g, '-')}.md`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 function guardrailKey(guardrail: ReportGuardrailResult, index: number) {
   return guardrail.id || guardrail.guardrailKey || guardrail.guardrail_key || `${guardrail.title}-${index}`;
 }
 
+function statusDotClass(severity: string) {
+  if (severity === 'high') return 'bg-[var(--error)]';
+  if (severity === 'medium') return 'bg-[var(--warning)]';
+  return 'bg-[var(--brand-primary)]';
+}
+
 export function ReportReviewView({
   report,
   reports = [],
   graphUpdate,
+  // Mock-only fallback for the no-report demo state; persisted reports must use parent-supplied guardrails.
   guardrails = report ? [] : reportGuardrails,
   onGenerateReport,
   onPublishReport,
@@ -94,18 +116,38 @@ export function ReportReviewView({
   isGenerating = false,
   selectedReportId,
 }: ReportReviewViewProps) {
-  const hasBlock = guardrails.some((guardrail) => guardrail.severity === 'block');
-  const title = report?.title ?? '图谱更新解读草稿';
-  const summary =
+  const story = storyPayload(report);
+  const sampleScope = asRecord(story.sample_scope ?? report?.payload?.sample_scope);
+  const structuralJudgments = asArray(story.structural_judgments ?? report?.payload?.structural_judgments);
+  const valuePillars = asArray(story.value_pillars ?? report?.payload?.value_pillars);
+  const blindSpot = asRecord(story.blind_spot ?? report?.payload?.blind_spot);
+  const platformProfiles = asArray(story.platform_profiles ?? report?.payload?.platform_profiles);
+  const entityRanking = asArray(story.entity_ranking);
+  const evidenceQuotes = asArray(story.evidence_quotes ?? report?.payload?.evidence_quotes);
+  const actionPlan = asArray(story.action_plan ?? report?.payload?.action_plan);
+  const reportMarkdown = text(story.markdown ?? report?.payload?.report_markdown);
+  const hasStory = Boolean(story.title || structuralJudgments.length || valuePillars.length);
+  const title = text(story.title, report?.title ?? '品牌 AI 认知图景');
+  const subtitle = text(
+    story.subtitle,
     report?.summary ??
-    '这份草稿解读一次图谱更新。它可以解释已接受的补丁和待处理风险，但竞品声明仍在审阅时不能发布。';
-  const terms = strategicTerms(report);
-  const claims = reportClaims(report);
-  const chains = traceChains(report);
-  const platformRows = platformDifferences(report);
-  const publicationStatus = String(report?.publication_status ?? report?.payload?.publication_status ?? '');
-  const sourceType = String(report?.source_type ?? report?.payload?.source_type ?? '');
-  const canShowGraphUpdate = Boolean(graphUpdate && sourceType !== 'pre_graph_update');
+      '生成报告后，这里会展示核心裁决、平台证据、价值支柱状态和下一轮验证动作。',
+  );
+  const summary = text(
+    story.summary,
+    report?.summary ?? '报告会从图谱和回答证据中提炼结构性判断，避免逐词填模板。',
+  );
+  const judgments = structuralJudgments.length ? structuralJudgments : legacyClaims(report);
+  const platformRows = platformProfiles.length ? platformProfiles : legacyPlatformRows(report);
+  const hasBlock = guardrails.some((guardrail) => guardrail.severity === 'block');
+  const publicationStatus = text(report?.publication_status ?? report?.payload?.publication_status);
+  const sourceType = text(report?.source_type ?? report?.payload?.source_type);
+  const metrics: Array<[string, string]> = [
+    ['有效回答', String(sampleScope.answer_count ?? '-')],
+    ['问题覆盖', String(sampleScope.question_count ?? '-')],
+    ['平台覆盖', String(sampleScope.platform_count ?? '-')],
+    ['主动提及率', sampleScope.active_mention_rate !== undefined ? percent(sampleScope.active_mention_rate) : '-'],
+  ];
   const publishDisabled =
     isGenerating ||
     (!report && !graphUpdate) ||
@@ -125,17 +167,10 @@ export function ReportReviewView({
             : '发布报告';
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {reports.length ? (
-        <section className={classNames(styles.surface, 'rounded-xl p-4')}>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-[var(--text-primary)]">报告版本</h2>
-              <p className="mt-1 text-xs text-[var(--text-secondary)]">Graph Update 报告和旧报告分开标记，旧报告只可查阅。</p>
-            </div>
-            <span className="text-xs text-[var(--text-tertiary)]">{reports.length} 个版本</span>
-          </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+        <section className={classNames(styles.surface, 'rounded-xl px-4 py-3')}>
+          <div className="flex gap-2 overflow-x-auto pb-1">
             {reports.map((item) => {
               const selected = (selectedReportId ?? report?.id) === item.id;
               return (
@@ -143,7 +178,7 @@ export function ReportReviewView({
                   key={item.id}
                   type="button"
                   onClick={() => onSelectReport?.(item.id)}
-                  className="min-w-[220px] rounded-xl border p-3 text-left transition"
+                  className="min-w-[220px] rounded-xl border px-3 py-2 text-left transition"
                   style={{
                     borderColor: selected ? 'var(--brand-border)' : 'var(--border-subtle)',
                     background: selected ? 'var(--brand-bg)' : 'var(--bg-elevated)',
@@ -155,8 +190,7 @@ export function ReportReviewView({
                       {item.source_type === 'pre_graph_update' ? '旧报告' : item.publication_status}
                     </span>
                   </div>
-                  <p className="mt-2 truncate text-sm font-medium text-[var(--text-primary)]">{item.title}</p>
-                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-secondary)]">{item.summary}</p>
+                  <p className="mt-1 truncate text-sm font-medium text-[var(--text-primary)]">{item.title}</p>
                 </button>
               );
             })}
@@ -164,14 +198,26 @@ export function ReportReviewView({
         </section>
       ) : null}
 
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
-        <article className={classNames(styles.surface, 'rounded-xl p-6')}>
-          <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b pb-5" style={{ borderColor: 'var(--border-subtle)' }}>
-            <div>
-              <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">图谱更新报告</p>
-              <h1 className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">{title}</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">{summary}</p>
-            </div>
+      <article className={classNames(styles.reportReader, styles.surface)}>
+        <header className={styles.reportHero}>
+          <div>
+            <p className="text-xs font-semibold uppercase text-[var(--brand-text)]">Brand Association Report</p>
+            <h1 className="mt-3 max-w-4xl text-[28px] font-semibold leading-tight text-[var(--text-primary)] md:text-[34px]">
+              {title}
+            </h1>
+            <p className="mt-3 max-w-4xl text-[15px] leading-7 text-[var(--text-secondary)]">{subtitle}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={!reportMarkdown}
+              onClick={() => downloadMarkdown(title, reportMarkdown)}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-semibold text-[var(--text-secondary)] disabled:opacity-45"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+            >
+              <Download className="h-4 w-4" />
+              导出 Markdown
+            </button>
             <button
               type="button"
               disabled={publishDisabled}
@@ -186,92 +232,226 @@ export function ReportReviewView({
               {buttonLabel}
             </button>
           </div>
+        </header>
 
-        <div className="space-y-6">
-          <section>
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">图谱变化摘要</h2>
-            <p className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">
-              {canShowGraphUpdate && graphUpdate
-                ? `本次更新从 ${graphUpdate.before_graph_version} 进入 ${graphUpdate.after_graph_version}，状态为 ${graphUpdate.status}。报告只解读这次图谱更新，不改写图谱事实。`
-                : sourceType === 'pre_graph_update'
-                  ? '这是旧报告版本，没有 Graph Update 追溯链，不能作为当前图谱事实源发布。'
-                  : '生成 Graph Update 报告后，这里会显示版本变化、审阅状态和发布边界。'}
-            </p>
-          </section>
-
-          <section className="grid gap-3 md:grid-cols-3">
-            {[
-              ['自动应用', String(canShowGraphUpdate ? graphUpdate?.summary?.auto_applied ?? '0' : '0'), '低风险计数和连接强度更新'],
-              ['待审阅', String(canShowGraphUpdate ? graphUpdate?.summary?.needs_review ?? '0' : '0'), '新实体、风险、竞品候选'],
-              ['阻断结论', String(canShowGraphUpdate ? graphUpdate?.summary?.blocked ?? '0' : '0'), '证据不足或规则阻断'],
-            ].map(([label, value, detail]) => (
-              <div key={label} className="rounded-xl border p-4" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}>
-                <p className="text-xs text-[var(--text-tertiary)]">{label}</p>
-                <p className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">{value}</p>
-                <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">{detail}</p>
+        <section className={styles.verdictBlock}>
+          <p className="text-xs font-semibold uppercase text-[var(--text-tertiary)]">核心判断</p>
+          <p className="mt-3 max-w-4xl text-[20px] font-semibold leading-9 text-[var(--text-primary)]">
+            {summary}
+          </p>
+          <div className="mt-6 grid gap-3 md:grid-cols-4">
+            {metrics.map(([label, value]) => (
+              <div key={label} className={styles.reportMetric}>
+                <p>{label}</p>
+                <strong>{value}</strong>
               </div>
             ))}
-          </section>
+          </div>
+        </section>
 
-          {terms.length ? (
-            <section>
-              <h2 className="text-base font-semibold text-[var(--text-primary)]">战略词分段</h2>
-              <div className="mt-3 overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border-subtle)' }}>
-                {terms.map(([word, state, reason]) => (
-                  <div key={word} className="grid gap-3 border-b p-3 text-sm last:border-b-0 md:grid-cols-[160px_180px_1fr]" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <span className="font-semibold text-[var(--text-primary)]">{word}</span>
-                    <span className="text-[var(--text-secondary)]">{state}</span>
-                    <span className="text-[var(--text-tertiary)]">{reason}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {claims.length ? (
-            <section>
-              <h2 className="text-base font-semibold text-[var(--text-primary)]">关键结论</h2>
-              <div className="mt-3 space-y-3">
-                {claims.slice(0, 6).map((claim) => (
-                  <div key={claim.id} className="rounded-xl border p-4" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-[var(--text-primary)]">{claim.label}</p>
-                      <span className="text-xs text-[var(--text-tertiary)]">{claim.state}</span>
+        <section className={styles.reportSection}>
+          <div className={styles.sectionIntro}>
+            <span>01</span>
+            <div>
+              <h2>这一轮数据先说明什么</h2>
+              <p>先看结构性判断，再进入平台原文和图谱解释。</p>
+            </div>
+          </div>
+          <div className="space-y-4">
+            {judgments.slice(0, 5).map((judgment, index) => (
+              <div key={text(judgment.id, `${judgment.title}-${index}`)} className={styles.judgmentRow}>
+                <span className={classNames('mt-2 h-2.5 w-2.5 rounded-full', statusDotClass(text(judgment.severity)))} />
+                <div>
+                  <h3>{text(judgment.title, '结构性判断')}</h3>
+                  <p>{text(judgment.body)}</p>
+                  {asArray(judgment.data_points).length ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {asArray(judgment.data_points).map((point, pointIndex) => (
+                        <span key={`${text(point.label)}-${pointIndex}`} className={styles.dataChip}>
+                          {text(point.label)}：{String(point.value ?? '-')}
+                        </span>
+                      ))}
                     </div>
-                    <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">{claim.statement}</p>
-                    {claim.platforms.length ? (
-                      <p className="mt-2 text-xs text-[var(--text-tertiary)]">{claim.platforms.join(' / ')}</p>
-                    ) : null}
-                  </div>
-                ))}
+                  ) : null}
+                </div>
               </div>
-            </section>
-          ) : null}
+            ))}
+          </div>
+        </section>
 
-          {platformRows.length ? (
-            <section>
-              <h2 className="text-base font-semibold text-[var(--text-primary)]">平台差异</h2>
-              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {platformRows.map((row) => (
-                  <div key={row.platform} className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}>
-                    <p className="text-sm font-semibold text-[var(--text-primary)]">{row.platform}</p>
-                    <p className="mt-2 text-xs text-[var(--text-secondary)]">{row.evidenceCount} 条证据 · {row.patchCount} 个补丁</p>
-                    <p className="mt-1 text-xs text-[var(--text-tertiary)]">{row.questionCount} 个问题来源</p>
+        <section className={styles.reportSection}>
+          <div className={styles.sectionIntro}>
+            <span>02</span>
+            <div>
+              <h2>AI 档案全景</h2>
+              <p>每个平台给品牌贴的标签不同，报告需要把这种差异讲清楚。</p>
+            </div>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {platformRows.slice(0, 4).map((platform, index) => {
+              const quote = asRecord(platform.quote);
+              return (
+                <div key={`${text(platform.platform, 'platform')}-${index}`} className={styles.platformProfile}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3>{text(platform.platform, '未记录平台')}</h3>
+                      <p>{text(platform.profile, '平台画像待生成。')}</p>
+                    </div>
+                    <strong>{numeric(platform.answer_count)}</strong>
                   </div>
-                ))}
-              </div>
-            </section>
+                  <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
+                    <span>风险语境 {percent(platform.risk_context_rate)}</span>
+                    <span>主动提及 {numeric(platform.active_mentions)}</span>
+                    <span>转型叙事 {numeric(platform.transformation_mentions)}</span>
+                  </div>
+                  {quote.excerpt ? (
+                    <blockquote className={styles.quoteBlock}>
+                      <Quote className="h-4 w-4" />
+                      <p>{text(quote.excerpt)}</p>
+                    </blockquote>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          {entityRanking.length ? (
+            <div className={styles.entityTable}>
+              {entityRanking.slice(0, 8).map((entity, index) => (
+                <div key={`${text(entity.label)}-${index}`}>
+                  <span>{index + 1}</span>
+                  <strong>{text(entity.label, '未命名实体')}</strong>
+                  <em>{numeric(entity.mention_count)} 次 / {numeric(entity.platform_count)} 平台</em>
+                </div>
+              ))}
+            </div>
           ) : null}
-        </div>
-      </article>
+        </section>
 
-      <aside className="space-y-4">
-        <section className={classNames(styles.surface, 'rounded-xl p-4')}>
+        <section className={styles.reportSection}>
+          <div className={styles.sectionIntro}>
+            <span>03</span>
+            <div>
+              <h2>{hasStory ? '价值支柱状态' : '图谱结论状态'}</h2>
+              <p>每一段只讲一个差距故事，避免逐词重复。</p>
+            </div>
+          </div>
+          <div className="space-y-6">
+            {valuePillars.length ? (
+              valuePillars.map((pillar, index) => (
+                <section key={`${text(pillar.name)}-${index}`} className={styles.pillarSection}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-[var(--brand-text)]">{text(pillar.gap_label)}</p>
+                      <h3>{text(pillar.name)}｜{text(pillar.headline)}</h3>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className={styles.dataChip}>可见度 {percent(pillar.visibility)}</span>
+                      <span className={styles.dataChip}>可信度 {percent(pillar.credibility)}</span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-[15px] leading-8 text-[var(--text-secondary)]">{text(pillar.reading)}</p>
+                  <p className="mt-2 text-[14px] leading-7 text-[var(--text-tertiary)]">目标：{text(pillar.target)}</p>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {asArray(pillar.quotes).slice(0, 2).map((quote, quoteIndex) => (
+                      <blockquote key={`${text(quote.platform)}-${quoteIndex}`} className={styles.quoteBlock}>
+                        <Quote className="h-4 w-4" />
+                        <div>
+                          <strong>{text(quote.platform, '未记录平台')}</strong>
+                          <p>{text(quote.excerpt)}</p>
+                        </div>
+                      </blockquote>
+                    ))}
+                  </div>
+                </section>
+              ))
+            ) : (
+              <p className="text-sm leading-7 text-[var(--text-secondary)]">
+                当前报告没有新的价值支柱结构。旧报告仍可查看关键结论和追溯链。
+              </p>
+            )}
+          </div>
+        </section>
+
+        <section className={styles.reportSection}>
+          <div className={styles.sectionIntro}>
+            <span>04</span>
+            <div>
+              <h2>AI 盲区</h2>
+              <p>品牌是否会被主动推荐，要看不含品牌名的问题。</p>
+            </div>
+          </div>
+          <div className={styles.blindSpotPanel}>
+            <div>
+              <strong>{blindSpot.active_mention_rate !== undefined ? percent(blindSpot.active_mention_rate) : '-'}</strong>
+              <p>{text(blindSpot.diagnosis, '主动提及分析待生成。')}</p>
+            </div>
+            <div className="space-y-3">
+              {asArray(blindSpot.examples).slice(0, 3).map((example, index) => (
+                <div key={`${text(example.platform)}-${index}`} className={styles.missedQuestion}>
+                  <p>{text(example.question)}</p>
+                  <span>{text(example.platform)}：{text(example.excerpt)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.reportSection}>
+          <div className={styles.sectionIntro}>
+            <span>05</span>
+            <div>
+              <h2>从数据到行动</h2>
+              <p>行动数量控制在三件以内，并给出下一轮验证口径。</p>
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            {actionPlan.length ? (
+              actionPlan.map((action, index) => (
+                <div key={`${text(action.title)}-${index}`} className={styles.actionCard}>
+                  <span>{index + 1}</span>
+                  <h3>{text(action.title)}</h3>
+                  <p>{text(action.why)}</p>
+                  <strong>做法</strong>
+                  <p>{text(action.do)}</p>
+                  <strong>验证</strong>
+                  <p>{text(action.validation)}</p>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm leading-7 text-[var(--text-secondary)]">生成报告后显示本轮最优先的 3 个动作。</p>
+            )}
+          </div>
+        </section>
+
+        {evidenceQuotes.length ? (
+          <section className={styles.reportSection}>
+            <div className={styles.sectionIntro}>
+              <span>附</span>
+              <div>
+                <h2>证据样本</h2>
+                <p>保留平台原文，让判断可以回到回答本身。</p>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {evidenceQuotes.slice(0, 6).map((quote, index) => (
+                <blockquote key={`${text(quote.platform)}-${index}`} className={styles.quoteBlock}>
+                  <Quote className="h-4 w-4" />
+                  <div>
+                    <strong>{text(quote.platform, '未记录平台')}</strong>
+                    <p>{text(quote.excerpt)}</p>
+                  </div>
+                </blockquote>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        <section className={styles.reportSection}>
           <div className="flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-[var(--error)]" />
-            <h2 className="text-sm font-semibold text-[var(--text-primary)]">报告校验</h2>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">报告校验</h2>
           </div>
-          <div className="mt-3 space-y-3">
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
             {guardrails.length ? (
               guardrails.map((guardrail, index) => (
                 <div
@@ -280,7 +460,10 @@ export function ReportReviewView({
                     guardrail.severity === 'block' && styles.guardrailBlock,
                     'rounded-xl border p-3',
                   )}
-                  style={{ borderColor: guardrail.severity === 'block' ? undefined : 'var(--border-subtle)', background: guardrail.severity === 'block' ? undefined : 'var(--bg-elevated)' }}
+                  style={{
+                    borderColor: guardrail.severity === 'block' ? undefined : 'var(--border-subtle)',
+                    background: guardrail.severity === 'block' ? undefined : 'var(--bg-elevated)',
+                  }}
                 >
                   <div className="flex items-center gap-2">
                     {guardrail.severity === 'pass' ? <CheckCircle2 className="h-4 w-4 text-[var(--success)]" /> : null}
@@ -292,52 +475,11 @@ export function ReportReviewView({
                 </div>
               ))
             ) : (
-              <p className="text-xs leading-5 text-[var(--text-secondary)]">这个版本没有结构化校验记录；旧报告不会作为 Graph Update 事实源发布。</p>
+              <p className="text-sm leading-7 text-[var(--text-secondary)]">这个版本没有结构化校验记录。</p>
             )}
           </div>
         </section>
-
-        <section className={classNames(styles.surface, 'rounded-xl p-4')}>
-          <div className="flex items-center gap-2">
-            <Route className="h-4 w-4 text-[var(--brand-primary)]" />
-            <h2 className="text-sm font-semibold text-[var(--text-primary)]">追溯链</h2>
-          </div>
-          <div className="mt-4 space-y-3">
-            {chains.length ? (
-              chains.slice(0, 3).map((chain) => (
-                <div key={chain.id} className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}>
-                  <p className="text-xs font-semibold text-[var(--text-primary)]">{chain.label}</p>
-                  <div className="mt-3 space-y-3">
-                    {chain.steps.map((step, index) => (
-                      <div key={`${chain.id}-${step.type}-${index}`} className="relative flex gap-3">
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--brand-bg)] text-xs font-semibold text-[var(--brand-text)]">
-                          {index + 1}
-                        </span>
-                        <div>
-                          <p className="text-xs font-medium text-[var(--text-primary)]">{step.label}</p>
-                          <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">{step.value}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="text-xs leading-5 text-[var(--text-secondary)]">生成报告后显示结论到补丁、答案、问题和平台的追溯链。</p>
-            )}
-          </div>
-        </section>
-
-        <section className={classNames(styles.surface, 'rounded-xl p-4')}>
-          <div className="flex items-start gap-3">
-            <GitBranch className="mt-0.5 h-4 w-4 text-[var(--brand-primary)]" />
-            <p className="text-xs leading-5 text-[var(--text-secondary)]">
-              推荐下一张画布：审阅接受或拒绝候选竞品关系后，再运行竞品对比画布。
-            </p>
-          </div>
-        </section>
-      </aside>
-      </div>
+      </article>
     </div>
   );
 }

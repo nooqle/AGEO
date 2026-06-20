@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
@@ -178,6 +178,53 @@ POSITIVE_HEALTH_PATTERNS: tuple[re.Pattern[str], ...] = (
 RISK_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"监管|顾虑|质疑|争议|投诉|价格|直销|安全|副作用|负面|风险"),
 )
+RISK_CONTEXT_TERMS: tuple[str, ...] = (
+    "传销",
+    "拉人头",
+    "过度推销",
+    "夸大",
+    "智商税",
+    "风险",
+    "质疑",
+    "投诉",
+    "失败",
+    "价格高",
+    "熟人压力",
+    "违规",
+    "处罚",
+    "非法",
+    "骗局",
+    "不靠谱",
+)
+RISK_NEGATIVE_CONTEXT_TERMS: tuple[str, ...] = (
+    "涉嫌",
+    "像传销",
+    "容易变成传销",
+    "拉人头",
+    "过度推销",
+    "熟人压力",
+    "不建议",
+    "谨慎",
+    "警惕",
+    "争议",
+    "违规",
+    "处罚",
+    "非法",
+    "骗局",
+)
+RISK_CLARIFICATION_TERMS: tuple[str, ...] = (
+    "不是传销",
+    "并非传销",
+    "不属于传销",
+    "区别于传销",
+    "合法合规",
+    "合规经营",
+    "直销经营许可证",
+    "监管许可",
+    "正规直销",
+    "并不等于传销",
+    "避免夸大",
+)
 
 SCENARIO_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"职场|熬夜|精力|运动|备孕|银发|中老年|家庭"),
@@ -321,16 +368,16 @@ class GraphPatchBuilderService:
         allocate_graph_zone: Callable[..., dict[str, Any]],
         detect_competitor_context: Callable[..., dict[str, Any]],
     ) -> list[GraphPatch]:
-        answers = await self._answers_for_run(
+        answers = await self.answers_for_run(
             entity_id=entity.id,
             intelligence_run=intelligence_run,
         )
-        question_lookup = await self._question_lookup(
+        question_lookup = await self.question_lookup(
             entity_id=entity.id,
             intelligence_run=intelligence_run,
             answers=answers,
         )
-        lexicon_entries = self._lexicon_entries(board_run=board_run, entity=entity)
+        lexicon_entries = self.lexicon_entries(board_run=board_run, entity=entity)
         graph_index = self._graph_projection_index(current_graph_projection or {})
         if not answers:
             return [
@@ -469,11 +516,25 @@ class GraphPatchBuilderService:
             )
         ]
 
+    async def answers_for_run(
+        self,
+        *,
+        entity_id: UUID,
+        intelligence_run: BrandIntelligenceRun,
+        limit: int = 200,
+    ) -> list[BrandPlatformAnswer]:
+        return await self._answers_for_run(
+            entity_id=entity_id,
+            intelligence_run=intelligence_run,
+            limit=limit,
+        )
+
     async def _answers_for_run(
         self,
         *,
         entity_id: UUID,
         intelligence_run: BrandIntelligenceRun,
+        limit: int = 200,
     ) -> list[BrandPlatformAnswer]:
         conditions = [
             BrandPlatformAnswer.entity_id == entity_id,
@@ -487,9 +548,22 @@ class GraphPatchBuilderService:
             select(BrandPlatformAnswer)
             .where(*conditions)
             .order_by(desc(BrandPlatformAnswer.captured_at), desc(BrandPlatformAnswer.created_at))
-            .limit(200)
+            .limit(max(1, int(limit)))
         )
         return list(result.scalars().all())
+
+    async def question_lookup(
+        self,
+        *,
+        entity_id: UUID,
+        intelligence_run: BrandIntelligenceRun,
+        answers: list[BrandPlatformAnswer],
+    ) -> dict[str, str]:
+        return await self._question_lookup(
+            entity_id=entity_id,
+            intelligence_run=intelligence_run,
+            answers=answers,
+        )
 
     async def _question_lookup(
         self,
@@ -579,6 +653,14 @@ class GraphPatchBuilderService:
                 for pattern in patterns
             )
         ]
+
+    def lexicon_entries(
+        self,
+        *,
+        board_run: BoardRun,
+        entity: Entity,
+    ) -> list[EntityLexiconEntry]:
+        return self._lexicon_entries(board_run=board_run, entity=entity)
 
     def _lexicon_entries(
         self,
@@ -699,7 +781,11 @@ class GraphPatchBuilderService:
         entry: EntityLexiconEntry,
     ) -> bool:
         text = self._combined_text(answer, question_lookup)
-        return any(self._contains_term(text, term) for term in entry.terms)
+        return any(self.contains_term(text, term) for term in entry.terms)
+
+    @staticmethod
+    def contains_term(text: str, term: str) -> bool:
+        return GraphPatchBuilderService._contains_term(text, term)
 
     @staticmethod
     def _contains_term(text: str, term: str) -> bool:
@@ -1159,6 +1245,13 @@ class GraphPatchBuilderService:
         return f"{question}\n{answer.answer_text or ''}"
 
     @staticmethod
+    def question_text(
+        answer: BrandPlatformAnswer,
+        question_lookup: dict[str, str],
+    ) -> str:
+        return GraphPatchBuilderService._question_text(answer, question_lookup)
+
+    @staticmethod
     def _question_text(
         answer: BrandPlatformAnswer,
         question_lookup: dict[str, str],
@@ -1168,6 +1261,10 @@ class GraphPatchBuilderService:
             if by_object_id:
                 return by_object_id
         return question_lookup.get(answer.question_id) or answer.question_id or "未记录问题"
+
+    @staticmethod
+    def clip(text: str, limit: int) -> str:
+        return GraphPatchBuilderService._clip(text, limit)
 
     @staticmethod
     def _clip(text: str, limit: int) -> str:
@@ -1736,20 +1833,11 @@ class BrandSpaceService:
         self.db.add(report)
         await self.db.flush()
 
-        guardrail_records: list[ReportGuardrailResult] = []
-        for item in guardrails:
-            guardrail_record = ReportGuardrailResult(
-                graph_update_id=graph_update.id,
-                report_version_id=report.id,
-                guardrail_key=item["guardrail_key"],
-                severity=item["severity"],
-                title=item["title"],
-                message=item["message"],
-                payload=item.get("payload"),
-            )
-            self.db.add(guardrail_record)
-            guardrail_records.append(guardrail_record)
-        await self.db.flush()
+        guardrail_records = await self._replace_report_guardrails(
+            report=report,
+            graph_update_id=graph_update.id,
+            guardrails=guardrails,
+        )
         if graph_update.board_run_id:
             await self._append_event(
                 entity_id=graph_update.entity_id,
@@ -1816,11 +1904,28 @@ class BrandSpaceService:
         payload = dict(report.payload or {})
         if self._report_source_type(report) != "graph_update":
             raise ValueError("Pre-GraphUpdate reports cannot be published from Brand Space")
-        guardrails = await self._guardrails_for_report(report.id)
-        blocking_guardrails = [item for item in guardrails if item.severity == "block"]
-        if blocking_guardrails:
+        graph_update_id = payload.get("graph_update_id")
+        if not graph_update_id:
+            raise ValueError("GraphUpdate-backed report is missing graph_update_id")
+        graph_update_uuid = self._coerce_uuid(graph_update_id, "graph_update_id")
+        patches = await self._patches(graph_update_uuid)
+        live_guardrails = self.validate_report_payload(payload, patches)
+        guardrails = await self._replace_report_guardrails(
+            report=report,
+            graph_update_id=graph_update_uuid,
+            guardrails=live_guardrails,
+        )
+        blocking_guardrail_keys = [
+            item.guardrail_key for item in guardrails if item.severity == "block"
+        ]
+        if blocking_guardrail_keys:
+            payload["publication_status"] = "needs_review"
+            payload["blocking_guardrail_keys"] = blocking_guardrail_keys
+            report.payload = payload
+            await self.db.commit()
             raise ValueError("Report has blocking guardrails and cannot be published")
         payload["publication_status"] = "published"
+        payload["blocking_guardrail_keys"] = []
         payload["published_at"] = _now().isoformat()
         payload["published_by_user_id"] = str(current_user.id)
         report.payload = payload
@@ -2601,11 +2706,33 @@ class BrandSpaceService:
             .limit(200 if publication_status else bounded_limit)
         )
         reports = list(result.scalars().all())
-        if publication_status:
-            reports = [
-                report for report in reports if self._report_publication_status(report) == publication_status
-            ]
-        return reports[:bounded_limit]
+        if not publication_status:
+            return reports[:bounded_limit]
+
+        filtered: list[BrandReportVersion] = []
+        scanned = 0
+        page_size = 200
+        max_scan = 5000
+        while True:
+            scanned += len(reports)
+            filtered.extend(
+                report
+                for report in reports
+                if self._report_publication_status(report) == publication_status
+            )
+            if len(filtered) >= bounded_limit or len(reports) < page_size or scanned >= max_scan:
+                break
+            result = await self.db.execute(
+                select(BrandReportVersion)
+                .where(*conditions)
+                .order_by(desc(BrandReportVersion.created_at), desc(BrandReportVersion.version))
+                .limit(page_size)
+                .offset(scanned)
+            )
+            reports = list(result.scalars().all())
+            if not reports:
+                break
+        return filtered[:bounded_limit]
 
     async def _space_payload(self, *, entity: Entity, board_run: BoardRun | None) -> dict[str, Any]:
         if board_run is None:
@@ -3264,6 +3391,34 @@ class BrandSpaceService:
         )
         return list(result.scalars().all())
 
+    async def _replace_report_guardrails(
+        self,
+        *,
+        report: BrandReportVersion,
+        graph_update_id: UUID,
+        guardrails: list[dict[str, Any]],
+    ) -> list[ReportGuardrailResult]:
+        await self.db.execute(
+            delete(ReportGuardrailResult).where(
+                ReportGuardrailResult.report_version_id == report.id
+            )
+        )
+        records: list[ReportGuardrailResult] = []
+        for item in guardrails:
+            record = ReportGuardrailResult(
+                graph_update_id=graph_update_id,
+                report_version_id=report.id,
+                guardrail_key=item["guardrail_key"],
+                severity=item["severity"],
+                title=item["title"],
+                message=item["message"],
+                payload=item.get("payload"),
+            )
+            self.db.add(record)
+            records.append(record)
+        await self.db.flush()
+        return records
+
     async def _next_report_version(self, *, entity_id: UUID, report_id: str) -> int:
         result = await self.db.execute(
             select(func.max(BrandReportVersion.version)).where(
@@ -3577,7 +3732,7 @@ class BrandSpaceService:
         board_run = await self.db.get(BoardRun, graph_update.board_run_id) if graph_update.board_run_id else None
         builder = GraphPatchBuilderService(self.db)
         lexicon_entries = (
-            builder._lexicon_entries(board_run=board_run, entity=entity)
+            builder.lexicon_entries(board_run=board_run, entity=entity)
             if board_run is not None
             else [EntityLexiconEntry(entity_id=str(entity.id), label=entity.name, entity_type="CenterBrand")]
         )
@@ -3590,36 +3745,17 @@ class BrandSpaceService:
         if intelligence_run is None:
             return board_run, answers, question_lookup, lexicon_entries
 
-        answers = await self._report_answers_for_run(
+        answers = await builder.answers_for_run(
             entity_id=entity.id,
             intelligence_run=intelligence_run,
+            limit=1200,
         )
-        question_lookup = await builder._question_lookup(
+        question_lookup = await builder.question_lookup(
             entity_id=entity.id,
             intelligence_run=intelligence_run,
             answers=answers,
         )
         return board_run, answers, question_lookup, lexicon_entries
-
-    async def _report_answers_for_run(
-        self,
-        *,
-        entity_id: UUID,
-        intelligence_run: BrandIntelligenceRun,
-    ) -> list[BrandPlatformAnswer]:
-        conditions = [
-            BrandPlatformAnswer.entity_id == entity_id,
-            BrandPlatformAnswer.success.is_(True),
-        ]
-        if intelligence_run.origin_session_id is not None:
-            conditions.append(BrandPlatformAnswer.session_id == intelligence_run.origin_session_id)
-        result = await self.db.execute(
-            select(BrandPlatformAnswer)
-            .where(*conditions)
-            .order_by(desc(BrandPlatformAnswer.captured_at), desc(BrandPlatformAnswer.created_at))
-            .limit(1200)
-        )
-        return list(result.scalars().all())
 
     def _build_storyline_report(
         self,
@@ -3711,10 +3847,17 @@ class BrandSpaceService:
         records: list[dict[str, Any]] = []
         if answers:
             for answer in answers:
-                question = GraphPatchBuilderService._question_text(answer, question_lookup)
+                question = GraphPatchBuilderService.question_text(answer, question_lookup)
                 answer_text = answer.answer_text or ""
                 question_has_brand = self._mentions_any(question, brand_terms)
                 answer_has_brand = bool(answer.brand_mentioned) if answer.brand_mentioned is not None else self._mentions_any(answer_text, brand_terms)
+                risk_context_state = self._classify_brand_risk_context(
+                    question=question,
+                    answer_text=answer_text,
+                    brand_terms=brand_terms,
+                    question_has_brand=question_has_brand,
+                    answer_has_brand=answer_has_brand,
+                )
                 records.append(
                     {
                         "answer_id": str(answer.id),
@@ -3724,6 +3867,7 @@ class BrandSpaceService:
                         "text": answer_text,
                         "question_has_brand": question_has_brand,
                         "answer_has_brand": answer_has_brand,
+                        "risk_context_state": risk_context_state,
                         "source": "answer",
                     }
                 )
@@ -3739,6 +3883,15 @@ class BrandSpaceService:
                 seen.add(dedupe_key)
                 question = str(evidence.get("question") or "未记录问题")
                 excerpt = str(evidence.get("excerpt") or "")
+                question_has_brand = self._mentions_any(question, brand_terms)
+                answer_has_brand = self._mentions_any(excerpt, brand_terms)
+                risk_context_state = self._classify_brand_risk_context(
+                    question=question,
+                    answer_text=excerpt,
+                    brand_terms=brand_terms,
+                    question_has_brand=question_has_brand,
+                    answer_has_brand=answer_has_brand,
+                )
                 records.append(
                     {
                         "answer_id": answer_id,
@@ -3746,8 +3899,9 @@ class BrandSpaceService:
                         "question": question,
                         "platform": str(evidence.get("platform") or "未记录平台"),
                         "text": excerpt,
-                        "question_has_brand": self._mentions_any(question, brand_terms),
-                        "answer_has_brand": self._mentions_any(excerpt, brand_terms),
+                        "question_has_brand": question_has_brand,
+                        "answer_has_brand": answer_has_brand,
+                        "risk_context_state": risk_context_state,
                         "source": "patch_evidence",
                     }
                 )
@@ -3818,7 +3972,7 @@ class BrandSpaceService:
             ]
             if not matched:
                 continue
-            risk_count = sum(1 for record in matched if self._has_risk_context(str(record.get("text") or "")))
+            risk_count = sum(1 for record in matched if self._record_has_negative_risk(record))
             question_count = len({str(record.get("question_id") or record.get("question")) for record in matched})
             platforms = sorted({str(record.get("platform") or "") for record in matched if record.get("platform")})
             rows.append(
@@ -3852,22 +4006,25 @@ class BrandSpaceService:
         entity_stats: list[dict[str, Any]],
         patches: list[GraphPatch],
     ) -> list[dict[str, Any]]:
-        risk_records = [record for record in records if self._has_risk_context(str(record.get("text") or ""))]
+        risk_records = [record for record in records if self._record_has_negative_risk(record)]
         risk_rate = len(risk_records) / len(records) if records else 0.0
         active_rate = float(sample_scope.get("active_mention_rate") or 0)
         top_entities = [str(item["label"]) for item in entity_stats[:3]]
         risk_patches = [patch for patch in patches if patch.relation_type == "risk_related"]
         competitor_patches = [patch for patch in patches if patch.relation_type == "competes_with"]
+        archive_body = (
+            f"回答最常带出的标签是{'、'.join(top_entities)}。"
+            "这些标签说明 AI 有材料可用，但品牌战略还没有被组织成一个稳定故事。"
+            if top_entities
+            else "本轮回答还没有形成稳定标签聚类。报告应先把可见事实和缺口分开，避免把零散线索包装成已经稳定的品牌故事。"
+        )
         judgments = [
             {
                 "id": "archive-label-mismatch",
                 "title": f"{brand_name}已经有 AI 档案，核心标签仍需重排",
                 "severity": "high",
                 "gap_type": "archive_label_mismatch",
-                "body": (
-                    f"回答最常带出的标签是{'、'.join(top_entities) if top_entities else '当前图谱节点'}。"
-                    "这些标签说明 AI 有材料可用，但品牌战略还没有被组织成一个稳定故事。"
-                ),
+                "body": archive_body,
                 "data_points": [
                     {"label": "有效回答", "value": sample_scope.get("answer_count", 0)},
                     {"label": "提及品牌", "value": sample_scope.get("brand_mention_count", 0)},
@@ -3999,12 +4156,12 @@ class BrandSpaceService:
             if keywords:
                 matched = [record for record in records if self._mentions_any(str(record.get("text") or ""), keywords)]
             elif config["id"] == "stable-assets":
-                matched = [record for record in records if not self._has_risk_context(str(record.get("text") or ""))]
+                matched = [record for record in records if not self._record_has_negative_risk(record)]
             elif config["id"] == "opportunity":
                 matched = [record for record in records if record.get("answer_has_brand")]
             else:
                 matched = records
-            risk_count = sum(1 for record in matched if self._has_risk_context(str(record.get("text") or "")))
+            risk_count = sum(1 for record in matched if self._record_has_negative_risk(record))
             visibility = len(matched) / total if total else 0.0
             credibility = (len(matched) - risk_count) / len(matched) if matched else 0.0
             gap_type = self._gap_type_for_pillar(visibility=visibility, credibility=credibility, risk_count=risk_count)
@@ -4046,7 +4203,9 @@ class BrandSpaceService:
             {
                 "question": str(record.get("question") or ""),
                 "platform": str(record.get("platform") or ""),
-                "excerpt": self._clip(str(record.get("text") or ""), 180),
+                "excerpt": GraphPatchBuilderService.clip(
+                    str(record.get("text") or ""), 180
+                ),
             }
             for record in open_records
             if not record.get("answer_has_brand")
@@ -4076,7 +4235,7 @@ class BrandSpaceService:
         rows: list[dict[str, Any]] = []
         for platform, total in Counter(str(record["platform"]) for record in records).most_common():
             platform_records = [record for record in records if record["platform"] == platform]
-            risk_count = sum(1 for record in platform_records if self._has_risk_context(str(record.get("text") or "")))
+            risk_count = sum(1 for record in platform_records if self._record_has_negative_risk(record))
             active_mentions = sum(1 for record in platform_records if not record["question_has_brand"] and record["answer_has_brand"])
             transformation_count = sum(
                 1
@@ -4227,9 +4386,17 @@ class BrandSpaceService:
             "",
             str(blind_spot.get("diagnosis") or ""),
             "",
-            "## 本轮行动",
-            "",
         ])
+        examples = blind_spot.get("examples") or []
+        if examples:
+            lines.extend(["### 未提及示例", ""])
+            for example in examples[:4]:
+                lines.extend([
+                    f"- {example.get('platform', '未记录平台')}｜{example.get('question', '未记录问题')}",
+                    f"  - {example.get('excerpt', '')}",
+                ])
+            lines.append("")
+        lines.extend(["## 本轮行动", ""])
         for index, action in enumerate(report.get("action_plan", []), start=1):
             lines.extend([
                 f"{index}. **{action.get('title')}**",
@@ -4237,6 +4404,198 @@ class BrandSpaceService:
                 f"   - 验证：{action.get('validation')}",
             ])
         return "\n".join(lines).strip()
+
+    @staticmethod
+    def _is_amway_brand(brand_name: str) -> bool:
+        normalized = str(brand_name or "").lower()
+        return "安利" in normalized or "amway" in normalized
+
+    @staticmethod
+    def _brand_terms(
+        *,
+        brand_name: str,
+        lexicon_entries: list[EntityLexiconEntry],
+    ) -> tuple[str, ...]:
+        terms: list[str] = [brand_name]
+        for entry in lexicon_entries:
+            if entry.normalized_type == "centerbrand":
+                terms.extend(entry.terms)
+        seen: set[str] = set()
+        unique: list[str] = []
+        for term in terms:
+            normalized = str(term or "").strip()
+            if not normalized:
+                continue
+            lowered = normalized.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            unique.append(normalized)
+        return tuple(unique)
+
+    @staticmethod
+    def _mentions_any(text: str, terms: tuple[str, ...] | list[str]) -> bool:
+        return any(GraphPatchBuilderService.contains_term(text or "", term) for term in terms)
+
+    def _record_mentions_entry(
+        self,
+        record: dict[str, Any],
+        entry: EntityLexiconEntry,
+    ) -> bool:
+        text = f"{record.get('question') or ''}\n{record.get('text') or ''}"
+        return self._mentions_any(text, entry.terms)
+
+    def _classify_brand_risk_context(
+        self,
+        *,
+        question: str,
+        answer_text: str,
+        brand_terms: tuple[str, ...],
+        question_has_brand: bool,
+        answer_has_brand: bool,
+    ) -> str:
+        brand_anchored = question_has_brand or answer_has_brand
+        if not brand_anchored and brand_terms:
+            combined = f"{question}\n{answer_text}"
+            brand_anchored = self._mentions_any(combined, brand_terms)
+        if not brand_anchored:
+            return "none"
+
+        question_has_risk = self._has_risk_context(question)
+        answer_has_risk = self._has_risk_context(answer_text)
+        if not question_has_risk and not answer_has_risk:
+            return "none"
+
+        has_clarification = self._mentions_any(answer_text, RISK_CLARIFICATION_TERMS)
+        has_negative_association = self._mentions_any(
+            answer_text,
+            RISK_NEGATIVE_CONTEXT_TERMS,
+        )
+        if has_clarification and not has_negative_association:
+            return "clarified"
+        if answer_has_risk and has_negative_association:
+            return "negative"
+        if answer_has_risk and not has_clarification:
+            return "negative"
+        return "inquiry"
+
+    @staticmethod
+    def _record_has_negative_risk(record: dict[str, Any]) -> bool:
+        return record.get("risk_context_state") == "negative"
+
+    def _has_risk_context(self, text: str) -> bool:
+        return self._mentions_any(text or "", RISK_CONTEXT_TERMS)
+
+    @staticmethod
+    def _gap_type_for_pillar(
+        *,
+        visibility: float,
+        credibility: float,
+        risk_count: int,
+    ) -> dict[str, str]:
+        if visibility < 0.15:
+            return {"key": "absent", "label": "叙事缺位"}
+        if risk_count and credibility < 0.45:
+            return {"key": "inverted", "label": "叙事被反转"}
+        if risk_count and credibility < 0.7:
+            return {"key": "hijacked", "label": "叙事被牵制"}
+        if visibility >= 0.45:
+            return {"key": "level_gap", "label": "层级待升级"}
+        return {"key": "weak_signal", "label": "弱信号"}
+
+    @staticmethod
+    def _pillar_reading(
+        *,
+        name: str,
+        headline: str,
+        mention_count: int,
+        risk_count: int,
+        visibility: float,
+        credibility: float,
+    ) -> str:
+        if mention_count == 0:
+            return f"{name}在本轮回答中几乎没有形成可见联想，需要先补可被 AI 引用的内容入口。"
+        risk_sentence = (
+            f"其中 {risk_count} 条伴随风险或质疑语境，说明这个方向已经被旧认知牵制。"
+            if risk_count
+            else "回答没有明显风险伴随，可以作为下一轮稳定资产继续放大。"
+        )
+        return (
+            f"{headline}。本轮有 {mention_count} 条回答触达这个方向，"
+            f"可见度 {round(visibility * 100, 1)}%，可信度 {round(credibility * 100, 1)}%。"
+            f"{risk_sentence}"
+        )
+
+    def _select_quotes(
+        self,
+        *,
+        records: list[dict[str, Any]],
+        keywords: tuple[str, ...],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        candidates = [
+            record
+            for record in records
+            if str(record.get("text") or "").strip()
+            and (not keywords or self._mentions_any(str(record.get("text") or ""), keywords))
+        ]
+        if not candidates and keywords:
+            candidates = [record for record in records if str(record.get("text") or "").strip()]
+
+        def quote_from_record(record: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "platform": str(record.get("platform") or "未记录平台"),
+                "question": str(record.get("question") or ""),
+                "excerpt": GraphPatchBuilderService.clip(
+                    str(record.get("text") or ""), 220
+                ),
+                "answer_id": str(record.get("answer_id") or ""),
+                "question_id": str(record.get("question_id") or ""),
+            }
+
+        selected: list[dict[str, Any]] = []
+        selected_keys: set[str] = set()
+        used_platforms: set[str] = set()
+        for record in candidates:
+            platform = str(record.get("platform") or "未记录平台")
+            if platform in used_platforms:
+                continue
+            quote = quote_from_record(record)
+            key = quote["answer_id"] or f"{quote['platform']}:{quote['question']}:{quote['excerpt']}"
+            selected.append(quote)
+            selected_keys.add(key)
+            used_platforms.add(platform)
+            if len(selected) >= limit:
+                return selected
+        for record in candidates:
+            quote = quote_from_record(record)
+            key = quote["answer_id"] or f"{quote['platform']}:{quote['question']}:{quote['excerpt']}"
+            if key in selected_keys:
+                continue
+            selected.append(quote)
+            selected_keys.add(key)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    @staticmethod
+    def _platform_profile_label(
+        *,
+        risk_count: int,
+        total: int,
+        active_mentions: int,
+        transformation_count: int,
+    ) -> str:
+        risk_rate = risk_count / total if total else 0.0
+        if active_mentions:
+            return "主动带出品牌的概率更高"
+        if transformation_count >= max(1, total // 4):
+            return "更容易展开转型和方案叙事"
+        if risk_rate >= 0.45:
+            return "风险提醒更密集"
+        if risk_rate <= 0.15:
+            return "回答更偏正向叙事"
+        return "正反信息并置"
 
     @staticmethod
     def _report_claim_from_patch(patch: GraphPatch) -> dict[str, Any]:
