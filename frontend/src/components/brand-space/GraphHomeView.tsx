@@ -7,6 +7,7 @@ import styles from './BrandSpace.module.css';
 import { evidenceRefs, graphEntities, graphRelations } from '@/mocks/brandSpaceMock';
 import type {
   BrandSpaceGraph,
+  BrandSpaceGraphUpdate,
   EvidenceRef,
   GraphEntity,
   GraphPatch,
@@ -17,6 +18,7 @@ import type {
 interface GraphHomeViewProps {
   patches: GraphPatch[];
   graph?: BrandSpaceGraph;
+  graphUpdate?: BrandSpaceGraphUpdate | null;
   brandName?: string;
   reviewItems?: GraphReviewItem[];
   pendingPatchDecisionIds?: string[];
@@ -124,6 +126,7 @@ function patchIdForEntity(entity: GraphEntity, patches: GraphPatch[], inboxItems
 export function GraphHomeView({
   patches,
   graph,
+  graphUpdate,
   brandName,
   reviewItems = [],
   pendingPatchDecisionIds = [],
@@ -132,6 +135,13 @@ export function GraphHomeView({
   const visibleEntities = graph?.entities?.length ? graph.entities : graphEntities;
   const visibleRelations = graph?.relations?.length ? graph.relations : graphRelations;
   const fallbackEvidence = graph?.evidenceRefs?.length ? graph.evidenceRefs : evidenceRefs;
+  const versionConflict = graphUpdate?.summary?.version_conflict as Record<string, unknown> | undefined;
+  const currentGraphVersion = typeof versionConflict?.current_graph_version === 'string'
+    ? versionConflict.current_graph_version
+    : undefined;
+  const expectedGraphVersion = typeof versionConflict?.expected_before_graph_version === 'string'
+    ? versionConflict.expected_before_graph_version
+    : undefined;
   const inboxItems = reviewItems.length ? reviewItems : reviewItemsFromPatches(patches);
   const [selectedEntityId, setSelectedEntityId] = useState('amway');
   const [selectedPatchId, setSelectedPatchId] = useState(inboxItems[0]?.id ?? patches[0]?.id ?? '');
@@ -174,6 +184,22 @@ export function GraphHomeView({
               </h1>
               {graph?.meta?.message ? (
                 <p className="mt-1 text-xs text-[var(--text-secondary)]">{graph.meta.message}</p>
+              ) : null}
+              {graphUpdate?.status === 'failed' ? (
+                <div
+                  className="mt-3 flex max-w-2xl items-start gap-2 rounded-lg border px-3 py-2 text-xs"
+                  style={{ borderColor: 'var(--error)', background: 'rgba(220, 38, 38, 0.06)', color: 'var(--text-secondary)' }}
+                >
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--error)]" />
+                  <div>
+                    <p className="font-semibold text-[var(--text-primary)]">图谱更新未应用</p>
+                    <p className="mt-1">
+                      这次更新基于旧图谱版本，系统已阻止覆盖正式图谱
+                      {currentGraphVersion ? `。当前版本：${currentGraphVersion}` : ''}
+                      {expectedGraphVersion ? `，更新基线：${expectedGraphVersion}` : ''}。
+                    </p>
+                  </div>
+                </div>
               ) : null}
             </div>
             <div className="flex flex-wrap gap-2">

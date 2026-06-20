@@ -64,6 +64,7 @@
 | 2026-06-20 | Sprint D: Review Fix | 完成 | 按 `review-brand-space-sprint-d-assets-trace-back-2026-06-20.md` 收口：`_latest_report_for_graph_update` 改为按确定性 `report_id` 查询，不再拉 200 条报告扫 payload；report artifact 缺 `report_version_id` 时不再 fallback 到 latest report；GraphUpdate 未生成时补丁/审阅资产显示明确空态；问题集无内联内容时改为 summary；Reports → Assets 找不到 report 资产时提示而不是打开第一个资产；补 preview 分支、events offset、report trace 降级测试；浏览器 smoke 复测 report 资产反向入口和旧 Dashboard 隔离 | 进入 Hardening 队列；`publication_status` 下推和报告版本并发分配仍作为后续 schema/队列化议题 |
 | 2026-06-20 | Sprint E: Graph Versioning And Concurrency | 第一块完成 | GraphUpdate 创建时根据品牌最新已应用版本生成 `before_graph_version / after_graph_version`；GraphPatch 全部终态后先检查版本基线，不一致则标记 GraphUpdate `failed` 并写入 `graph_update_version_conflict` 事件；品牌 Graph 读取会跳过已失败的过期更新，避免 stale update 覆盖正式图谱；补服务层回归覆盖两个并发 GraphUpdate、第一条应用、第二条过期阻断、第三条递增到 `v0.2.0` | 继续 Sprint E：`publication_status` 下推到 schema/查询、报告版本并发分配保护、旧数据映射和 50 节点/可访问性回归 |
 | 2026-06-20 | Sprint E: Report Schema And Version Hardening | 第一块完成 | `BrandReportVersion` 新增 `publication_status` 列和 `ix_brand_report_versions_entity_publication` 索引；新增迁移 `026_add_report_publication_status.py` 回填旧报告和 GraphUpdate 报告状态；GraphUpdate 报告生成/发布同步写 payload 与列，非 GraphUpdate 报告写 `pre_graph_update`；报告列表普通状态过滤优先走 SQL 条件并做 source type 安全过滤，`pre_graph_update` 仅对未迁移旧数据做有限 fallback；报告版本分配前锁定父 GraphUpdate，读取最新 version 时使用 `FOR UPDATE`；补麦当劳报告发布与分页过滤回归 | 继续 Sprint E：旧抓取答案进入 Assets 的数据映射、50 节点画布压力、reduced motion/键盘可达性和 `/dashboard` feature flag 回归 |
+| 2026-06-20 | Sprint E: Review Fix | 完成 | 按 `review-brand-space-harden-trace-back-and-graph-version-2026-06-20.md` 收口：migration 026 改为解析 JSON 精确回填，避免 `LIKE` 误匹配；GraphUpdate apply 前锁品牌实体范围并锁 latest applied 行；report source type 增加 `report_id/artifact_id` 契约判断，payload 丢失 `graph_update_id` 时仍能识别 GraphUpdate 报告；`_reports_for_publication_status` 增加防御注释；Graph 页补 failed/version_conflict 提示；前端 runtime event severity 类型加入 `error`；补 migration helper 与 source type 回归测试 | 继续 Sprint E：旧抓取答案进入 Assets 的数据映射、50 节点画布压力、reduced motion/键盘可达性和 `/dashboard` feature flag 回归 |
 
 ## 3. 产品 Section 完成度
 
@@ -442,4 +443,5 @@ Sprint E 已完成部分：
 - `publication_status` 已下推到 `BrandReportVersion` 列并建立品牌级索引。
 - 报告生成/发布同步写 payload 与列。
 - 报告版本分配前锁定父 GraphUpdate，并对最新 version 行使用 `FOR UPDATE`。
+- Review Fix 已补：migration 精确回填、GraphUpdate apply 实体级锁、Graph failed 冲突提示。
 - 已跑 service/API targeted 回归：`python -m pytest aeo-platform/backend/tests/test_brand_space_service.py -q`，21 passed；`python -m pytest aeo-platform/backend/tests/test_brand_space_api.py -q`，3 passed。

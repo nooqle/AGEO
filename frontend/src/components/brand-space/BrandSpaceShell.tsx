@@ -823,6 +823,7 @@ export function BrandSpaceShell() {
               <GraphHomeView
                 patches={patches}
                 graph={graph}
+                graphUpdate={graphUpdate}
                 brandName={context.brandName.replace('品牌空间', '')}
                 onPatchDecision={handlePatchDecision}
                 reviewItems={reviewItems}

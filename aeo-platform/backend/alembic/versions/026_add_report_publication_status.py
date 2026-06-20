@@ -5,16 +5,47 @@ Revises: 025
 Create Date: 2026-06-20 00:00:00.000000
 """
 
+import json
 from collections.abc import Sequence
+from typing import Any
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "026"
 down_revision: str | None = "025"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
+
+
+GRAPH_REPORT_PUBLICATION_STATUSES = {
+    "draft",
+    "needs_review",
+    "publishable",
+    "published",
+}
+
+
+def _decode_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        decoded = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _publication_status_from_payload(value: Any) -> str:
+    payload = _decode_payload(value)
+    if not payload.get("graph_update_id"):
+        return "pre_graph_update"
+    status = str(payload.get("publication_status") or "draft")
+    return status if status in GRAPH_REPORT_PUBLICATION_STATUSES else "draft"
 
 
 def upgrade() -> None:
@@ -32,22 +63,21 @@ def upgrade() -> None:
         "brand_report_versions",
         ["entity_id", "publication_status"],
     )
-    op.execute(
-        """
-        UPDATE brand_report_versions
-        SET publication_status = 'pre_graph_update'
-        WHERE payload IS NULL OR payload NOT LIKE '%"graph_update_id"%'
-        """
+    bind = op.get_bind()
+    report_versions = sa.table(
+        "brand_report_versions",
+        sa.column("id", postgresql.UUID(as_uuid=True)),
+        sa.column("payload", sa.Text()),
+        sa.column("publication_status", sa.String(length=40)),
     )
-    for status in ("needs_review", "publishable", "published", "draft"):
-        op.execute(
-            f"""
-            UPDATE brand_report_versions
-            SET publication_status = '{status}'
-            WHERE payload LIKE '%"graph_update_id"%'
-              AND payload LIKE '%"publication_status"%'
-              AND payload LIKE '%"{status}"%'
-            """
+    rows = bind.execute(
+        sa.select(report_versions.c.id, report_versions.c.payload)
+    ).mappings()
+    for row in rows:
+        bind.execute(
+            report_versions.update()
+            .where(report_versions.c.id == row["id"])
+            .values(publication_status=_publication_status_from_payload(row["payload"]))
         )
 
 

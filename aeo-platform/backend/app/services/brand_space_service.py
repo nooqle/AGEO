@@ -274,6 +274,12 @@ SCAFFOLD_EXECUTION_MODE = "scaffold"
 REAL_SYNC_MIN_INTERVAL_SECONDS = 30
 GRAPH_VERSION_BASE = "v0.0.0"
 GRAPH_VERSION_PATTERN = re.compile(r"^v(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
+GRAPH_REPORT_PUBLICATION_STATUSES = {
+    "draft",
+    "needs_review",
+    "publishable",
+    "published",
+}
 
 REVIEWABLE_PATCH_STATUSES = {"needs_review", "blocked"}
 IMMUTABLE_PATCH_STATUSES = {"auto_applied", "accepted", "rejected"}
@@ -2840,6 +2846,9 @@ class BrandSpaceService:
         current_version = (
             latest_applied.after_graph_version if latest_applied else GRAPH_VERSION_BASE
         )
+        # Bound the recent-update scan for the UI projection. Older non-failed updates
+        # are still available through direct detail endpoints; this method chooses the
+        # current working update or latest applied version for the brand overview.
         result = await self.db.execute(
             select(GraphUpdate)
             .where(GraphUpdate.entity_id == entity_id, GraphUpdate.status != "failed")
@@ -2859,17 +2868,28 @@ class BrandSpaceService:
         entity_id: UUID,
         *,
         exclude_update_id: UUID | None = None,
+        for_update: bool = False,
     ) -> GraphUpdate | None:
         conditions = [GraphUpdate.entity_id == entity_id, GraphUpdate.status == "applied"]
         if exclude_update_id is not None:
             conditions.append(GraphUpdate.id != exclude_update_id)
-        result = await self.db.execute(
+        query = (
             select(GraphUpdate)
             .where(*conditions)
             .order_by(desc(GraphUpdate.updated_at), desc(GraphUpdate.created_at))
             .limit(1)
         )
+        if for_update:
+            query = query.with_for_update()
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
+
+    async def _lock_graph_update_entity_scope(self, entity_id: UUID) -> None:
+        await self.db.execute(
+            select(Entity.id)
+            .where(Entity.id == entity_id)
+            .with_for_update()
+        )
 
     async def _next_graph_version_pair(self, entity_id: UUID) -> tuple[str, str]:
         latest_applied = await self._latest_applied_graph_update(entity_id)
@@ -2880,6 +2900,8 @@ class BrandSpaceService:
 
     @staticmethod
     def _next_graph_version(version: str | None) -> str:
+        # MVP version policy: each applied GraphUpdate increments the minor version.
+        # Major bumps are reserved for future explicit reset/rebrand flows.
         match = GRAPH_VERSION_PATTERN.match(str(version or ""))
         if not match:
             return "v0.1.0"
@@ -2967,6 +2989,9 @@ class BrandSpaceService:
             if not reports:
                 break
             scanned += len(reports)
+            # SQL narrows by the denormalized status column; this final check
+            # rejects legacy rows whose column default is stale but source type
+            # still resolves to pre_graph_update from report_id/artifact payload.
             filtered.extend(
                 report
                 for report in reports
@@ -3494,10 +3519,12 @@ class BrandSpaceService:
         self,
         graph_update: GraphUpdate,
     ) -> dict[str, Any] | None:
+        await self._lock_graph_update_entity_scope(graph_update.entity_id)
         expected_version = graph_update.before_graph_version or GRAPH_VERSION_BASE
         latest_applied = await self._latest_applied_graph_update(
             graph_update.entity_id,
             exclude_update_id=graph_update.id,
+            for_update=True,
         )
         current_version = (
             latest_applied.after_graph_version if latest_applied else GRAPH_VERSION_BASE
@@ -4443,17 +4470,30 @@ class BrandSpaceService:
     @staticmethod
     def _report_source_type(report: BrandReportVersion) -> str:
         payload = report.payload or {}
-        return "graph_update" if payload.get("graph_update_id") else "pre_graph_update"
+        report_id = str(report.report_id or "")
+        artifact_id = str(report.artifact_id or "")
+        if (
+            payload.get("graph_update_id")
+            or report_id.startswith("brand-space-")
+            or artifact_id.startswith("graph-update-report:")
+        ):
+            return "graph_update"
+        return "pre_graph_update"
 
     @staticmethod
     def _report_publication_status(report: BrandReportVersion) -> str:
         if BrandSpaceService._report_source_type(report) == "pre_graph_update":
             return "pre_graph_update"
         column_status = str(getattr(report, "publication_status", "") or "").strip()
-        if column_status:
+        if column_status and column_status in GRAPH_REPORT_PUBLICATION_STATUSES:
             return column_status
         payload = report.payload or {}
-        return str(payload.get("publication_status") or "draft")
+        payload_status = str(payload.get("publication_status") or "draft")
+        return (
+            payload_status
+            if payload_status in GRAPH_REPORT_PUBLICATION_STATUSES
+            else "draft"
+        )
 
     async def _build_report_payload(
         self,

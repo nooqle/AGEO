@@ -137,7 +137,7 @@ export interface RuntimeEvent {
   id: string;
   timestamp: string;
   type: string;
-  severity: 'info' | 'success' | 'warning' | 'risk';
+  severity: 'info' | 'success' | 'warning' | 'risk' | 'error';
   message: string;
   nodeId?: string;
   payload?: Record<string, unknown>;

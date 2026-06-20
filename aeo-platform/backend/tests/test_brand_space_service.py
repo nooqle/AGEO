@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import json
+import sys
+import types
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +36,12 @@ from app.services.brand_space_service import BrandSpaceService, GraphPatchBuilde
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+MIGRATION_026_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "026_add_report_publication_status.py"
+)
 
 
 async def _build_session(tmp_path):
@@ -78,6 +87,79 @@ def _answer_stub(platform: str) -> BrandPlatformAnswer:
         success=True,
         answer_text="",
     )
+
+
+def test_report_publication_status_migration_parses_payload_precisely():
+    spec = importlib.util.spec_from_file_location("migration_026", MIGRATION_026_PATH)
+    assert spec and spec.loader
+    migration_026 = importlib.util.module_from_spec(spec)
+    previous_alembic = sys.modules.get("alembic")
+    sys.modules["alembic"] = types.SimpleNamespace(op=object())
+    try:
+        spec.loader.exec_module(migration_026)
+    finally:
+        if previous_alembic is None:
+            sys.modules.pop("alembic", None)
+        else:
+            sys.modules["alembic"] = previous_alembic
+
+    payload = json.dumps(
+        {
+            "graph_update_id": str(uuid.uuid4()),
+            "publication_status": "needs_review",
+            "notes": ["draft"],
+        }
+    )
+    assert migration_026._publication_status_from_payload(payload) == "needs_review"
+    assert (
+        migration_026._publication_status_from_payload(
+            json.dumps({"publication_status": "published"})
+        )
+        == "pre_graph_update"
+    )
+    assert (
+        migration_026._publication_status_from_payload(
+            json.dumps(
+                {
+                    "graph_update_id": str(uuid.uuid4()),
+                    "publication_status": "unexpected",
+                }
+            )
+        )
+        == "draft"
+    )
+
+
+def test_report_source_type_uses_contract_when_payload_graph_update_id_is_missing():
+    entity_id = uuid.uuid4()
+    graph_update_id = uuid.uuid4()
+    report = BrandReportVersion(
+        entity_id=entity_id,
+        report_id=f"brand-space-{graph_update_id}",
+        version=1,
+        report_kind="graph_update_interpretation",
+        artifact_id=f"graph-update-report:{graph_update_id}:1",
+        title="Graph report",
+        summary="Payload graph_update_id was lost.",
+        payload={"publication_status": "draft"},
+        publication_status="draft",
+    )
+    legacy_report = BrandReportVersion(
+        entity_id=entity_id,
+        report_id="legacy-report",
+        version=1,
+        report_kind="legacy_brand_report",
+        artifact_id="legacy:1",
+        title="Legacy report",
+        summary="No graph update contract.",
+        payload={"publication_status": "published"},
+        publication_status="draft",
+    )
+
+    assert BrandSpaceService._report_source_type(report) == "graph_update"
+    assert BrandSpaceService._report_publication_status(report) == "draft"
+    assert BrandSpaceService._report_source_type(legacy_report) == "pre_graph_update"
+    assert BrandSpaceService._report_publication_status(legacy_report) == "pre_graph_update"
 
 
 async def _seed_recorded_answers(
