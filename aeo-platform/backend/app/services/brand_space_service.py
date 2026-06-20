@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import logging
 import math
 import re
@@ -1664,22 +1665,88 @@ class BrandSpaceService:
         *,
         run_id: str | UUID,
         current_user: User,
+        limit: int = 100,
+        offset: int = 0,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
         await self._sync_real_board_run(board_run=board_run, current_user=current_user)
-        events = await self._events(board_run.id)
-        return {"events": [self._event_to_dict(event) for event in events]}
+        events = await self._events(board_run.id, limit=limit, offset=offset)
+        total = await self._event_count(board_run.id)
+        return {
+            "events": [self._event_to_dict(event) for event in events],
+            "pagination": self._pagination(limit=limit, offset=offset, total=total, maximum=500),
+        }
 
     async def get_assets(
         self,
         *,
         run_id: str | UUID,
         current_user: User,
+        artifact_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
         await self._sync_real_board_run(board_run=board_run, current_user=current_user)
-        artifacts = await self._artifacts(board_run.id)
-        return {"artifacts": [self._artifact_to_dict(artifact) for artifact in artifacts]}
+        artifacts = await self._artifacts(
+            board_run.id,
+            artifact_type=artifact_type,
+            limit=limit,
+            offset=offset,
+        )
+        total = await self._artifact_count(board_run.id, artifact_type=artifact_type)
+        by_type = await self._artifact_type_counts(board_run.id)
+        return {
+            "artifacts": [self._artifact_to_dict(artifact) for artifact in artifacts],
+            "summary": {
+                "total": total,
+                "returned": len(artifacts),
+                "by_type": by_type,
+            },
+            "pagination": self._pagination(limit=limit, offset=offset, total=total),
+        }
+
+    async def get_artifact_detail(
+        self,
+        *,
+        artifact_id: str | UUID,
+        current_user: User,
+    ) -> dict[str, Any]:
+        artifact = await self._require_artifact(artifact_id, current_user)
+        board_run = await self._require_board_run(artifact.board_run_id, current_user)
+        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        node_run = await self.db.get(BoardNodeRun, artifact.node_run_id) if artifact.node_run_id else None
+        graph_update = await self._graph_update_for_run(board_run.id)
+        latest_report = (
+            await self._latest_report_for_graph_update(graph_update.id)
+            if graph_update is not None
+            else None
+        )
+        report_for_artifact = await self._report_for_artifact(
+            artifact=artifact,
+            fallback=latest_report,
+        )
+        preview = await self._artifact_preview(
+            artifact=artifact,
+            board_run=board_run,
+            graph_update=graph_update,
+            latest_report=report_for_artifact,
+        )
+        return {
+            "artifact": self._artifact_to_dict(artifact),
+            "preview": preview,
+            "trace": self._artifact_trace(
+                artifact=artifact,
+                board_run=board_run,
+                node_run=node_run,
+                graph_update=graph_update,
+                latest_report=report_for_artifact,
+            ),
+            "access": {
+                "canPreview": True,
+                "mode": "metadata_snapshot",
+            },
+        }
 
     async def get_graph_update(
         self,
@@ -1832,6 +1899,10 @@ class BrandSpaceService:
         )
         self.db.add(report)
         await self.db.flush()
+        await self._register_report_artifact(
+            graph_update=graph_update,
+            report=report,
+        )
 
         guardrail_records = await self._replace_report_guardrails(
             report=report,
@@ -2134,6 +2205,28 @@ class BrandSpaceService:
         await self._require_entity(patch.entity_id, current_user)
         return patch
 
+    async def _require_artifact(self, artifact_id: str | UUID, current_user: User) -> BoardArtifact:
+        artifact: BoardArtifact | None = None
+        try:
+            artifact_uuid = self._coerce_uuid(artifact_id, "artifact_id")
+        except ValueError:
+            result = await self.db.execute(
+                select(BoardArtifact)
+                .where(BoardArtifact.artifact_key == str(artifact_id))
+                .order_by(desc(BoardArtifact.created_at))
+                .limit(1)
+            )
+            artifact = result.scalar_one_or_none()
+        else:
+            result = await self.db.execute(
+                select(BoardArtifact).where(BoardArtifact.id == artifact_uuid)
+            )
+            artifact = result.scalar_one_or_none()
+        if artifact is None:
+            raise LookupError("Artifact not found")
+        await self._require_board_run(artifact.board_run_id, current_user)
+        return artifact
+
     async def _require_report(self, report_version_id: str | UUID, current_user: User) -> BrandReportVersion:
         report_uuid = self._coerce_uuid(report_version_id, "report_version_id")
         result = await self.db.execute(
@@ -2151,6 +2244,39 @@ class BrandSpaceService:
             return value if isinstance(value, UUID) else UUID(str(value))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Invalid UUID for {field_name}: {value}") from exc
+
+    @staticmethod
+    def _bounded_limit(limit: int | None, *, default: int = 50, maximum: int = 200) -> int:
+        try:
+            value = int(limit if limit is not None else default)
+        except (TypeError, ValueError):
+            value = default
+        return max(1, min(value, maximum))
+
+    @staticmethod
+    def _bounded_offset(offset: int | None) -> int:
+        try:
+            value = int(offset if offset is not None else 0)
+        except (TypeError, ValueError):
+            value = 0
+        return max(0, value)
+
+    def _pagination(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        total: int,
+        maximum: int = 200,
+    ) -> dict[str, int | bool]:
+        bounded_limit = self._bounded_limit(limit, maximum=maximum)
+        bounded_offset = self._bounded_offset(offset)
+        return {
+            "limit": bounded_limit,
+            "offset": bounded_offset,
+            "total": int(total),
+            "has_more": bounded_offset + bounded_limit < int(total),
+        }
 
     @staticmethod
     def _assign_if_changed(target: Any, field_name: str, value: Any) -> bool:
@@ -3342,21 +3468,416 @@ class BrandSpaceService:
         order = {template["node_id"]: index for index, template in enumerate(NODE_TEMPLATES)}
         return sorted(rows, key=lambda row: order.get(row.node_id, 999))
 
-    async def _artifacts(self, board_run_id: UUID) -> list[BoardArtifact]:
+    async def _artifacts(
+        self,
+        board_run_id: UUID,
+        *,
+        artifact_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[BoardArtifact]:
+        conditions = [BoardArtifact.board_run_id == board_run_id]
+        if artifact_type:
+            conditions.append(BoardArtifact.artifact_type == artifact_type)
         result = await self.db.execute(
             select(BoardArtifact)
-            .where(BoardArtifact.board_run_id == board_run_id)
+            .where(*conditions)
             .order_by(BoardArtifact.created_at)
+            .limit(self._bounded_limit(limit, default=50, maximum=200))
+            .offset(self._bounded_offset(offset))
         )
         return list(result.scalars().all())
 
-    async def _events(self, board_run_id: UUID) -> list[BoardRuntimeEvent]:
+    async def _artifact_count(
+        self,
+        board_run_id: UUID,
+        *,
+        artifact_type: str | None = None,
+    ) -> int:
+        conditions = [BoardArtifact.board_run_id == board_run_id]
+        if artifact_type:
+            conditions.append(BoardArtifact.artifact_type == artifact_type)
+        result = await self.db.execute(
+            select(func.count(BoardArtifact.id)).where(*conditions)
+        )
+        return int(result.scalar_one() or 0)
+
+    async def _artifact_type_counts(self, board_run_id: UUID) -> dict[str, int]:
+        result = await self.db.execute(
+            select(BoardArtifact.artifact_type, func.count(BoardArtifact.id))
+            .where(BoardArtifact.board_run_id == board_run_id)
+            .group_by(BoardArtifact.artifact_type)
+        )
+        return {str(artifact_type): int(count) for artifact_type, count in result.all()}
+
+    async def _events(
+        self,
+        board_run_id: UUID,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[BoardRuntimeEvent]:
         result = await self.db.execute(
             select(BoardRuntimeEvent)
             .where(BoardRuntimeEvent.board_run_id == board_run_id)
             .order_by(BoardRuntimeEvent.sequence)
+            .limit(self._bounded_limit(limit, default=100, maximum=500))
+            .offset(self._bounded_offset(offset))
         )
         return list(result.scalars().all())
+
+    async def _event_count(self, board_run_id: UUID) -> int:
+        result = await self.db.execute(
+            select(func.count(BoardRuntimeEvent.id)).where(
+                BoardRuntimeEvent.board_run_id == board_run_id
+            )
+        )
+        return int(result.scalar_one() or 0)
+
+    async def _artifact_preview(
+        self,
+        *,
+        artifact: BoardArtifact,
+        board_run: BoardRun,
+        graph_update: GraphUpdate | None,
+        latest_report: BrandReportVersion | None,
+    ) -> dict[str, Any]:
+        artifact_type = artifact.artifact_type
+        row_count = int(artifact.row_count or 0)
+        if artifact_type == "graph_patch_set" or artifact_type == "review_queue":
+            patches = await self._patches(graph_update.id) if graph_update is not None else []
+            rows = [
+                {
+                    "title": patch.title,
+                    "status": patch.status,
+                    "relation": patch.relation_type or patch.patch_type,
+                    "score": int(patch.connection_strength or 0),
+                    "evidence": len(patch.evidence_refs or []),
+                }
+                for patch in patches[:12]
+            ]
+            if artifact_type == "review_queue":
+                rows = [row for row in rows if row["status"] in {"needs_review", "blocked"}]
+            return self._table_preview(
+                title=artifact.label,
+                columns=[
+                    {"key": "title", "label": "补丁"},
+                    {"key": "status", "label": "状态"},
+                    {"key": "relation", "label": "关系"},
+                    {"key": "score", "label": "强度"},
+                    {"key": "evidence", "label": "证据"},
+                ],
+                rows=rows,
+                row_count=row_count or len(rows),
+                truncated=len(patches) > len(rows),
+            )
+        if artifact_type == "graph_update":
+            return {
+                "kind": "json",
+                "title": artifact.label,
+                "json": self._graph_update_to_dict(graph_update) if graph_update else {},
+                "rowCount": 1 if graph_update else 0,
+                "truncated": False,
+            }
+        if artifact_type == "report":
+            return {
+                "kind": "summary",
+                "title": artifact.label,
+                "summary": latest_report.summary if latest_report else "当前运行还没有生成图谱解读报告。",
+                "items": (
+                    [
+                        {"label": "报告版本", "value": f"v{latest_report.version}"},
+                        {"label": "发布状态", "value": self._report_publication_status(latest_report)},
+                    ]
+                    if latest_report
+                    else []
+                ),
+                "rowCount": 1 if latest_report else 0,
+                "truncated": False,
+            }
+        if artifact_type == "entity_lexicon":
+            entries = board_run.input_scope.get("entity_lexicon", []) if board_run.input_scope else []
+            rows = [
+                {
+                    "label": str(item.get("label") or item.get("name") or ""),
+                    "type": str(item.get("entity_type") or item.get("type") or ""),
+                    "aliases": ", ".join(str(alias) for alias in item.get("aliases", [])[:4])
+                    if isinstance(item, dict)
+                    else "",
+                }
+                for item in entries[:12]
+                if isinstance(item, dict)
+            ]
+            return self._table_preview(
+                title=artifact.label,
+                columns=[
+                    {"key": "label", "label": "实体"},
+                    {"key": "type", "label": "类型"},
+                    {"key": "aliases", "label": "别名"},
+                ],
+                rows=rows,
+                row_count=row_count or len(entries),
+                truncated=len(entries) > len(rows),
+                empty_summary="实体词表来自本次运行的 input_scope；当前资产只有登记信息，没有内联词表内容。",
+            )
+        if artifact_type == "question_set":
+            return {
+                "kind": "jsonl",
+                "title": artifact.label,
+                "lines": self._question_preview_lines(board_run),
+                "rowCount": row_count,
+                "truncated": row_count > 6,
+            }
+        if artifact_type in {"raw_answers", "parsed_answers"}:
+            return await self._answer_artifact_preview(
+                artifact=artifact,
+                board_run=board_run,
+                parsed=artifact_type == "parsed_answers",
+            )
+        if artifact_type == "entity_relation_set":
+            graph_snapshot = graph_update.graph_snapshot if graph_update is not None else {}
+            rows = [
+                {
+                    "from": relation.get("from"),
+                    "to": relation.get("to"),
+                    "kind": relation.get("kind"),
+                    "strength": relation.get("strength"),
+                }
+                for relation in (graph_snapshot or {}).get("relations", [])[:12]
+            ]
+            return self._table_preview(
+                title=artifact.label,
+                columns=[
+                    {"key": "from", "label": "起点"},
+                    {"key": "to", "label": "终点"},
+                    {"key": "kind", "label": "关系"},
+                    {"key": "strength", "label": "强度"},
+                ],
+                rows=rows,
+                row_count=row_count or len(rows),
+                truncated=len((graph_snapshot or {}).get("relations", [])) > len(rows),
+            )
+        return {
+            "kind": "summary",
+            "title": artifact.label,
+            "summary": "该资产当前只有登记信息。大文件或外部对象不会在详情中直接内联。",
+            "items": [
+                {"label": "类型", "value": artifact.artifact_type},
+                {"label": "MIME", "value": artifact.mime_type},
+                {"label": "记录数", "value": row_count},
+            ],
+            "rowCount": row_count,
+            "truncated": False,
+        }
+
+    def _artifact_trace(
+        self,
+        *,
+        artifact: BoardArtifact,
+        board_run: BoardRun,
+        node_run: BoardNodeRun | None,
+        graph_update: GraphUpdate | None,
+        latest_report: BrandReportVersion | None,
+    ) -> dict[str, Any]:
+        links: list[dict[str, Any]] = [
+            {
+                "kind": "board_run",
+                "id": str(board_run.id),
+                "label": f"画布运行 {board_run.board_id}",
+                "targetView": "boards",
+            }
+        ]
+        if node_run is not None:
+            links.append(
+                {
+                    "kind": "node_run",
+                    "id": str(node_run.id),
+                    "label": node_run.title,
+                    "nodeId": node_run.node_id,
+                    "targetView": "boards",
+                }
+            )
+        if graph_update is not None and artifact.artifact_type in {
+            "entity_relation_set",
+            "graph_patch_set",
+            "review_queue",
+            "graph_update",
+            "report",
+        }:
+            links.append(
+                {
+                    "kind": "graph_update",
+                    "id": str(graph_update.id),
+                    "label": f"{graph_update.before_graph_version} → {graph_update.after_graph_version}",
+                    "targetView": "graph",
+                }
+            )
+        if latest_report is not None and artifact.artifact_type in {"report", "graph_update", "graph_patch_set"}:
+            links.append(
+                {
+                    "kind": "report_version",
+                    "id": str(latest_report.id),
+                    "label": f"{latest_report.title} v{latest_report.version}",
+                    "targetView": "reports",
+                    "reportVersionId": str(latest_report.id),
+                }
+            )
+        return {
+            "links": links,
+            "boardRun": self._board_run_to_dict(board_run),
+            "nodeRun": self._node_to_dict(node_run) if node_run is not None else None,
+            "graphUpdate": self._graph_update_to_dict(graph_update),
+            "report": self._report_summary_to_dict(latest_report) if latest_report else None,
+        }
+
+    async def _answer_artifact_preview(
+        self,
+        *,
+        artifact: BoardArtifact,
+        board_run: BoardRun,
+        parsed: bool,
+    ) -> dict[str, Any]:
+        intelligence_run = (
+            await self.db.get(BrandIntelligenceRun, board_run.brand_intelligence_run_id)
+            if board_run.brand_intelligence_run_id
+            else None
+        )
+        answers: list[BrandPlatformAnswer] = []
+        question_lookup: dict[str, str] = {}
+        if intelligence_run is not None:
+            builder = GraphPatchBuilderService(self.db)
+            answers = await builder.answers_for_run(
+                entity_id=board_run.entity_id,
+                intelligence_run=intelligence_run,
+                limit=8,
+            )
+            question_lookup = await builder.question_lookup(
+                entity_id=board_run.entity_id,
+                intelligence_run=intelligence_run,
+                answers=answers,
+            )
+        rows = [
+            {
+                "platform": answer.platform,
+                "question": GraphPatchBuilderService.question_text(answer, question_lookup),
+                "brand": "是" if answer.brand_mentioned else "否",
+                "excerpt": GraphPatchBuilderService.clip(answer.answer_text or "", 120),
+            }
+            for answer in answers[:8]
+        ]
+        if parsed:
+            return self._table_preview(
+                title=artifact.label,
+                columns=[
+                    {"key": "platform", "label": "平台"},
+                    {"key": "question", "label": "问题"},
+                    {"key": "brand", "label": "提及品牌"},
+                    {"key": "excerpt", "label": "摘要"},
+                ],
+                rows=rows,
+                row_count=int(artifact.row_count or len(rows)),
+                truncated=int(artifact.row_count or 0) > len(rows),
+                empty_summary="标准化答案表已登记，但当前运行没有可内联预览的回答样本。",
+            )
+        return {
+            "kind": "jsonl",
+            "title": artifact.label,
+            "lines": [
+                json.dumps(
+                    {
+                        "platform": row["platform"],
+                        "question": row["question"],
+                        "answer_excerpt": row["excerpt"],
+                    },
+                    ensure_ascii=False,
+                )
+                for row in rows
+            ],
+            "rowCount": int(artifact.row_count or len(rows)),
+            "truncated": int(artifact.row_count or 0) > len(rows),
+            "emptySummary": "原始答案已登记，但当前运行没有可内联预览的回答样本。",
+        }
+
+    def _question_preview_lines(self, board_run: BoardRun) -> list[str]:
+        questions = board_run.input_scope.get("questions", []) if board_run.input_scope else []
+        if not questions:
+            return [
+                json.dumps({"stage": "question_set", "status": "registered"}, ensure_ascii=False),
+                json.dumps({"note": "问题集资产已登记；大批量问题不在列表接口中内联。"}, ensure_ascii=False),
+            ]
+        return [
+            json.dumps({"question": str(question)}, ensure_ascii=False)
+            for question in questions[:6]
+        ]
+
+    @staticmethod
+    def _table_preview(
+        *,
+        title: str,
+        columns: list[dict[str, str]],
+        rows: list[dict[str, Any]],
+        row_count: int,
+        truncated: bool,
+        empty_summary: str | None = None,
+    ) -> dict[str, Any]:
+        if not rows and empty_summary:
+            return {
+                "kind": "summary",
+                "title": title,
+                "summary": empty_summary,
+                "items": [{"label": "记录数", "value": row_count}],
+                "rowCount": row_count,
+                "truncated": False,
+            }
+        return {
+            "kind": "table",
+            "title": title,
+            "columns": columns,
+            "rows": rows,
+            "rowCount": row_count,
+            "truncated": truncated,
+        }
+
+    async def _latest_report_for_graph_update(
+        self,
+        graph_update_id: UUID,
+    ) -> BrandReportVersion | None:
+        graph_update = await self.db.get(GraphUpdate, graph_update_id)
+        if graph_update is None:
+            return None
+        result = await self.db.execute(
+            select(BrandReportVersion)
+            .where(BrandReportVersion.entity_id == graph_update.entity_id)
+            .order_by(desc(BrandReportVersion.created_at), desc(BrandReportVersion.version))
+            .limit(200)
+        )
+        for report in result.scalars().all():
+            payload = report.payload or {}
+            if str(payload.get("graph_update_id") or "") == str(graph_update_id):
+                return report
+        return None
+
+    async def _report_for_artifact(
+        self,
+        *,
+        artifact: BoardArtifact,
+        fallback: BrandReportVersion | None,
+    ) -> BrandReportVersion | None:
+        if artifact.artifact_type != "report":
+            return fallback
+        report_version_id = str(
+            (artifact.extra_metadata or {}).get("report_version_id") or ""
+        ).strip()
+        if not report_version_id:
+            return fallback
+        try:
+            report_uuid = UUID(report_version_id)
+        except ValueError:
+            return fallback
+        report = await self.db.get(BrandReportVersion, report_uuid)
+        if report is None or report.entity_id != artifact.entity_id:
+            return fallback
+        return report
 
     async def _graph_update_for_run(self, board_run_id: UUID) -> GraphUpdate | None:
         result = await self.db.execute(
@@ -3418,6 +3939,62 @@ class BrandSpaceService:
             records.append(record)
         await self.db.flush()
         return records
+
+    async def _register_report_artifact(
+        self,
+        *,
+        graph_update: GraphUpdate,
+        report: BrandReportVersion,
+    ) -> None:
+        if not graph_update.board_run_id:
+            return
+        result = await self.db.execute(
+            select(BoardNodeRun)
+            .where(
+                BoardNodeRun.board_run_id == graph_update.board_run_id,
+                BoardNodeRun.node_id == "graph-update",
+            )
+            .limit(1)
+        )
+        node_run = result.scalar_one_or_none()
+        artifact_key = f"report-{report.id}"
+        existing = await self.db.execute(
+            select(BoardArtifact)
+            .where(
+                BoardArtifact.board_run_id == graph_update.board_run_id,
+                BoardArtifact.artifact_key == artifact_key,
+            )
+            .limit(1)
+        )
+        if existing.scalar_one_or_none() is not None:
+            return
+        payload = report.payload or {}
+        base = f"assets/{graph_update.entity_id}/{graph_update.board_run_id}"
+        self.db.add(
+            BoardArtifact(
+                artifact_key=artifact_key,
+                entity_id=graph_update.entity_id,
+                board_run_id=graph_update.board_run_id,
+                node_run_id=node_run.id if node_run else None,
+                artifact_type="report",
+                label=f"{report.title} v{report.version}",
+                path=f"{base}/reports/{report.id}.md",
+                mime_type="text/markdown",
+                row_count=max(
+                    1,
+                    len(payload.get("claims") or []),
+                    len(payload.get("trace_chains") or []),
+                ),
+                extra_metadata={
+                    "node_id": "graph-update",
+                    "graph_update_id": str(graph_update.id),
+                    "report_version_id": str(report.id),
+                    "report_kind": report.report_kind,
+                    "publication_status": self._report_publication_status(report),
+                },
+            )
+        )
+        await self.db.flush()
 
     async def _next_report_version(self, *, entity_id: UUID, report_id: str) -> int:
         result = await self.db.execute(
@@ -3522,14 +4099,21 @@ class BrandSpaceService:
         }
 
     def _artifact_to_dict(self, artifact: BoardArtifact) -> dict[str, Any]:
+        metadata = artifact.extra_metadata or {}
         return {
             "id": artifact.artifact_key,
+            "artifactId": str(artifact.id),
+            "entityId": str(artifact.entity_id),
+            "boardRunId": str(artifact.board_run_id),
+            "nodeRunId": str(artifact.node_run_id) if artifact.node_run_id else None,
             "type": artifact.artifact_type,
             "label": artifact.label,
             "path": artifact.path,
+            "mimeType": artifact.mime_type,
             "rowCount": artifact.row_count,
             "createdAt": artifact.created_at.isoformat(),
-            "linkedNodeId": (artifact.extra_metadata or {}).get("node_id"),
+            "linkedNodeId": metadata.get("node_id"),
+            "metadata": metadata,
         }
 
     def _event_to_dict(self, event: BoardRuntimeEvent) -> dict[str, Any]:

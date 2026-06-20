@@ -37,6 +37,10 @@ import {
 } from '@/mocks/brandSpaceMock';
 import { api } from '@/services/api';
 import type {
+  ArtifactDetail,
+  ArtifactRef,
+  ArtifactTraceLink,
+  AssetListSummary,
   BoardNode,
   BoardRunStatus,
   BrandSpaceBoardRun,
@@ -51,6 +55,7 @@ import type {
   GraphPatchStatus,
   InspectorTab,
   NodeStatus,
+  PaginationInfo,
   PlatformFetchNode,
 } from '@/types/brandSpace';
 
@@ -106,6 +111,75 @@ const fallbackGraph: BrandSpaceGraph = {
   relations: graphRelations,
   evidenceRefs,
 };
+
+const ASSET_PAGE_SIZE = 6;
+
+function assetSummaryFromList(items: ArtifactRef[]): AssetListSummary {
+  return {
+    total: items.length,
+    returned: items.length,
+    by_type: items.reduce<Record<string, number>>((acc, artifact) => {
+      acc[artifact.type] = (acc[artifact.type] ?? 0) + 1;
+      return acc;
+    }, {}),
+  };
+}
+
+function buildLocalArtifactDetail(artifact: ArtifactRef): ArtifactDetail {
+  return {
+    artifact,
+    preview: {
+      kind: 'summary',
+      title: artifact.label,
+      summary: '当前处于本地演示底版，资产详情使用安全摘要预览；连接后端后会显示真实 Graph Update、回答样本和报告追溯。',
+      items: [
+        { label: '类型', value: artifactTypeLabel(artifact.type) },
+        { label: '记录数', value: artifact.rowCount ?? '-' },
+        { label: '来源节点', value: artifact.linkedNodeId ?? '-' },
+      ],
+      rowCount: artifact.rowCount ?? 0,
+      truncated: false,
+    },
+    trace: {
+      links: [
+        {
+          kind: 'board_run',
+          id: artifact.boardRunId ?? 'local-run',
+          label: '本地演示画布',
+          targetView: 'boards',
+        },
+        ...(artifact.linkedNodeId
+          ? [{
+              kind: 'node_run',
+              id: artifact.linkedNodeId,
+              label: artifact.linkedNodeId,
+              nodeId: artifact.linkedNodeId,
+              targetView: 'boards' as const,
+            }]
+          : []),
+      ],
+    },
+    access: {
+      canPreview: true,
+      mode: 'local_mock_summary',
+    },
+  };
+}
+
+function artifactTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    entity_lexicon: '实体词表',
+    question_set: '问题集',
+    raw_answers: '原始答案',
+    parsed_answers: '标准化回答',
+    entity_relation_set: '实体关系集',
+    graph_patch_set: '图谱补丁集',
+    review_queue: '审阅队列',
+    graph_update: '图谱更新',
+    report: '报告',
+  };
+  return labels[type] ?? type;
+}
 
 function fallbackReviewCategory(patch: GraphPatch) {
   if (patch.category) return patch.category;
@@ -165,6 +239,12 @@ export function BrandSpaceShell() {
   const [guardrails, setGuardrails] = useState(reportGuardrails);
   const [report, setReport] = useState<BrandSpaceReport | null>(null);
   const [reports, setReports] = useState<BrandSpaceReportSummary[]>([]);
+  const [selectedArtifactDetail, setSelectedArtifactDetail] = useState<ArtifactDetail | null>(null);
+  const [isLoadingArtifactDetail, setIsLoadingArtifactDetail] = useState(false);
+  const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  const [assetTypeFilter, setAssetTypeFilter] = useState('all');
+  const [assetSummary, setAssetSummary] = useState<AssetListSummary | null>(() => assetSummaryFromList(artifacts));
+  const [assetPagination, setAssetPagination] = useState<PaginationInfo | null>(null);
   const [pendingPatchDecisionIds, setPendingPatchDecisionIds] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState('platform-rack');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
@@ -183,6 +263,8 @@ export function BrandSpaceShell() {
     setEdges(payload.edges.length ? payload.edges : boardEdges);
     setPatches(payload.patches);
     setArtifactsState(payload.artifacts);
+    setAssetSummary(assetSummaryFromList(payload.artifacts));
+    setAssetPagination(null);
     setEvents(payload.events);
     setGraph(payload.graph ?? fallbackGraph);
     setGraphUpdate(payload.graph_update);
@@ -203,6 +285,52 @@ export function BrandSpaceShell() {
       setBackendNotice(backendNoticeFromError(error, '报告列表刷新失败'));
     }
   }, []);
+
+  const refreshAssets = useCallback(async (
+    options?: {
+      artifactType?: string;
+      offset?: number;
+      append?: boolean;
+    },
+  ): Promise<ArtifactRef[]> => {
+    const artifactType = options?.artifactType ?? assetTypeFilter;
+    const normalizedType = artifactType === 'all' ? undefined : artifactType;
+    const offset = options?.offset ?? 0;
+    const append = Boolean(options?.append);
+    if (!isBackendMode || !spaceRun?.id) {
+      const localAssets = normalizedType
+        ? artifacts.filter((artifact) => artifact.type === normalizedType)
+        : artifacts;
+      setArtifactsState(localAssets);
+      setAssetSummary(assetSummaryFromList(artifacts));
+      setAssetPagination(null);
+      return localAssets;
+    }
+    setIsLoadingAssets(true);
+    try {
+      const response = await api.getBrandSpaceRunAssets(spaceRun.id, {
+        artifactType: normalizedType,
+        limit: ASSET_PAGE_SIZE,
+        offset,
+      });
+      setArtifactsState((current) => {
+        if (!append) return response.artifacts;
+        const seen = new Set(current.map((artifact) => artifact.artifactId ?? artifact.id));
+        return [
+          ...current,
+          ...response.artifacts.filter((artifact) => !seen.has(artifact.artifactId ?? artifact.id)),
+        ];
+      });
+      setAssetSummary(response.summary ?? assetSummaryFromList(response.artifacts));
+      setAssetPagination(response.pagination ?? null);
+      return response.artifacts;
+    } catch (error) {
+      setBackendNotice(backendNoticeFromError(error, '资产列表刷新失败'));
+      return [];
+    } finally {
+      setIsLoadingAssets(false);
+    }
+  }, [assetTypeFilter, isBackendMode, spaceRun?.id]);
 
   const refreshReviewItems = useCallback(async (targetEntityId: string, fallbackPatches: GraphPatch[], fallbackUpdate?: BrandSpaceGraphUpdate | null) => {
     try {
@@ -281,6 +409,11 @@ export function BrandSpaceShell() {
 
     return () => window.clearInterval(intervalId);
   }, [isBackendMode, runStatus]);
+
+  useEffect(() => {
+    if (activeView !== 'assets') return;
+    void refreshAssets({ artifactType: assetTypeFilter, offset: 0, append: false });
+  }, [activeView, assetTypeFilter, refreshAssets]);
 
   const startLocalRun = () => {
     setRunStatus('running');
@@ -428,6 +561,68 @@ export function BrandSpaceShell() {
       setGuardrails(response.guardrails);
     } catch (error) {
       setBackendNotice(backendNoticeFromError(error, '报告读取失败'));
+    }
+  };
+
+  const handleOpenArtifact = async (artifact: ArtifactRef) => {
+    const artifactId = artifact.artifactId ?? artifact.id;
+    if (!isBackendMode) {
+      setSelectedArtifactDetail(buildLocalArtifactDetail(artifact));
+      return;
+    }
+    setIsLoadingArtifactDetail(true);
+    setSelectedArtifactDetail((current) => (
+      current?.artifact.id === artifact.id ? current : null
+    ));
+    try {
+      const response = await api.getBrandSpaceArtifact(artifactId);
+      setSelectedArtifactDetail(response);
+    } catch (error) {
+      setSelectedArtifactDetail(buildLocalArtifactDetail(artifact));
+      setBackendNotice(backendNoticeFromError(error, '资产详情读取失败，已显示本地摘要'));
+    } finally {
+      setIsLoadingArtifactDetail(false);
+    }
+  };
+
+  const handleAssetTypeChange = (artifactType: string) => {
+    setAssetTypeFilter(artifactType);
+    setSelectedArtifactDetail(null);
+  };
+
+  const handleLoadMoreAssets = () => {
+    if (!assetPagination?.has_more) return;
+    void refreshAssets({
+      artifactType: assetTypeFilter,
+      offset: assetPagination.offset + assetPagination.limit,
+      append: true,
+    });
+  };
+
+  const handleOpenReportAsset = async () => {
+    setActiveView('assets');
+    setAssetTypeFilter('report');
+    const loadedAssets = await refreshAssets({
+      artifactType: 'report',
+      offset: 0,
+      append: false,
+    });
+    const reportAsset = loadedAssets.find((artifact) => artifact.type === 'report') ?? loadedAssets[0];
+    if (reportAsset) {
+      await handleOpenArtifact(reportAsset);
+    }
+  };
+
+  const handleTraceTarget = (link: ArtifactTraceLink) => {
+    if (link.targetView) {
+      setActiveView(link.targetView);
+    }
+    if (link.nodeId) {
+      setSelectedNodeId(link.nodeId);
+      setInspectorTab('output');
+    }
+    if (link.reportVersionId) {
+      void handleSelectReport(link.reportVersionId);
     }
   };
 
@@ -634,7 +829,23 @@ export function BrandSpaceShell() {
               />
             ) : null}
 
-            {activeView === 'assets' ? <AssetsView artifacts={artifactsState} /> : null}
+            {activeView === 'assets' ? (
+              <AssetsView
+                artifacts={artifactsState}
+                detail={selectedArtifactDetail}
+                summary={assetSummary}
+                pagination={assetPagination}
+                isDetailLoading={isLoadingArtifactDetail}
+                isLoadingAssets={isLoadingAssets}
+                selectedArtifactId={selectedArtifactDetail?.artifact.artifactId ?? selectedArtifactDetail?.artifact.id ?? null}
+                selectedType={assetTypeFilter}
+                onTypeChange={handleAssetTypeChange}
+                onLoadMore={handleLoadMoreAssets}
+                onOpenArtifact={handleOpenArtifact}
+                onCloseDetail={() => setSelectedArtifactDetail(null)}
+                onTraceTarget={handleTraceTarget}
+              />
+            ) : null}
 
             {activeView === 'reports' ? (
               <ReportReviewView
@@ -645,6 +856,7 @@ export function BrandSpaceShell() {
                 onGenerateReport={() => handleGenerateReport(false)}
                 onPublishReport={handlePublishReport}
                 onSelectReport={handleSelectReport}
+                onOpenAssets={handleOpenReportAsset}
                 isGenerating={isGeneratingReport}
                 selectedReportId={report?.id ?? null}
               />

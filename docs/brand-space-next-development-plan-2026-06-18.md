@@ -60,6 +60,7 @@
 | 2026-06-19 | Sprint B: Review Hardening | 完成 | `_ensure_real_graph_update` 从 polling read-path 拆出 pending/queued/background build；竞品 confidence 更保守；已接受竞品跨 run 转为 `update_strength`；中文 term 匹配增加否定/粘连保护；connection strength 改为对数衰减；补回归测试并提交 `af79dc2` | 完整 worker/任务表队列化、竞品候选和信号 pattern 配置化进入后续 hardening |
 | 2026-06-19 | Sprint C: Report From GraphUpdate | 完成 | 报告 payload 已从 GraphUpdate patches 生成 `claims / trace_chains / platform_differences`；每个 trace chain 覆盖 Report claim → GraphPatch → EntityRelation → Answer → Question → Platform；guardrail 新增 `graph_update_scope`；前端 Reports 接真实关键结论、平台差异和追溯链；新增品牌级报告列表、报告版本详情和正式发布 API；旧报告标记为 `pre_graph_update` 且不能作为 GraphUpdate 报告发布；麦当劳餐饮品牌逻辑测试覆盖非营养健康品牌报告 | 后续进入 Sprint D：Assets detail、资产反向追溯、分页和完整浏览器 E2E |
 | 2026-06-20 | Sprint C: Report Review Hardening | Review 修复完成 | 按 `review-brand-space-complete-graph-update-reports-2026-06-20.md` 收口：补齐报告辅助方法/常量；publish 时实时重算 guardrail 并刷新持久化结果；GraphPatchBuilder corpus helper 改为公开方法；报告 status 过滤改为分页扫描；真实 answers 分支补麦当劳品牌逻辑测试；Markdown 输出盲区示例；前端 `source_type` 类型收紧并说明 mock-only guardrail fallback；浏览器 smoke 验证 `/brand-space` 报告页中文、核心判断、AI 盲区、证据样本和报告校验正常渲染 | 后续进入 Sprint D：Assets detail、资产反向追溯、分页和完整浏览器 E2E；`publication_status` 下推到 schema/JSON 查询可作为后续性能 hardening |
+| 2026-06-20 | Sprint D: Assets Detail And Trace Back | 完成 | 新增 artifact detail API；`board-runs/{run_id}/assets` 和 events 支持 limit/offset，assets 支持 artifact_type 筛选；artifact detail 返回安全 preview，不读取任意磁盘路径；trace links 覆盖 BoardRun、NodeRun、GraphUpdate、ReportVersion；报告生成后同步登记 `report` artifact，并绑定具体 `report_version_id`，避免多版本报告在 Assets 里串版本；前端 Assets 增加类型筛选、详情抽屉、JSON/JSONL/table/summary 预览、加载更多和追溯跳转；Reports 增加“查看相关资产”反向入口；补 API/service 测试覆盖分页、筛选、跨用户拦截和 GraphUpdate/Report trace；浏览器 smoke 覆盖 Assets、Reports → Assets 和旧 Dashboard 入口 | 后续进入 Hardening：真实对象存储下载/打开、50 节点性能、生产态 E2E 与可访问性细化 |
 
 ## 3. 产品 Section 完成度
 
@@ -450,6 +451,14 @@ Review 修复追加验证（2026-06-20）：
 - 静态与构建：`python -m ruff check app/services/brand_space_service.py tests/test_brand_space_service.py tests/test_brand_space_api.py`、`npx tsc --noEmit`、`npm run lint`、`npm run build` 通过；lint 仍只有 3 个既有 warning。
 - 仓库验证：`python scripts/validate_change.py --pytest aeo-platform/backend/tests/test_brand_space_service.py --pytest aeo-platform/backend/tests/test_brand_space_api.py`，PASS。
 - 浏览器 smoke：`/brand-space` Reports 页保持中文 UI；核心判断、AI 盲区、证据样本、报告校验均可渲染；未出现旧英文 fallback 或运行时错误。
+
+Sprint D 验证（2026-06-20）：
+
+- 后端 targeted：`python -m pytest tests/test_brand_space_service.py tests/test_brand_space_api.py -q`，22 passed；覆盖 assets 分页、offset 第二页、type 筛选、artifact detail、GraphUpdate/Report trace links 和跨用户访问拦截。
+- 后端静态：`python -m ruff check app/api/v1/brand_space.py app/services/brand_space_service.py tests/test_brand_space_api.py tests/test_brand_space_service.py`，通过。
+- 前端静态：`npx tsc --noEmit` 通过；`npm run lint` 0 errors，3 个既有 warning。
+- 前端 build：`npm run build` 通过；保留既有 PDF export / Playwright helper 的 Turbopack trace warning，不属于 Brand Space 改动。
+- 浏览器 smoke：`/brand-space` Assets 页可筛选、加载详情抽屉、显示追溯链；Reports 页“查看相关资产”可跳回 Assets；旧 `/dashboard` 入口返回正常页面/登录态保护，没有被 Brand Space 替换。
 
 第二张具体开发票：
 

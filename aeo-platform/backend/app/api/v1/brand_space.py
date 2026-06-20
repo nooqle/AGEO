@@ -233,13 +233,20 @@ async def stop_board_run(
 @router.get("/board-runs/{run_id}/events")
 async def get_board_run_events(
     run_id: str,
+    limit: int = 100,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     _parse_uuid(run_id, "run_id")
     service = BrandSpaceService(db)
     try:
-        return await service.get_events(run_id=run_id, current_user=current_user)
+        return await service.get_events(
+            run_id=run_id,
+            current_user=current_user,
+            limit=limit,
+            offset=offset,
+        )
     except Exception as exc:
         _raise_http(exc)
 
@@ -247,13 +254,38 @@ async def get_board_run_events(
 @router.get("/board-runs/{run_id}/assets")
 async def get_board_run_assets(
     run_id: str,
+    artifact_type: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     _parse_uuid(run_id, "run_id")
     service = BrandSpaceService(db)
     try:
-        return await service.get_assets(run_id=run_id, current_user=current_user)
+        return await service.get_assets(
+            run_id=run_id,
+            current_user=current_user,
+            artifact_type=artifact_type,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception as exc:
+        _raise_http(exc)
+
+
+@router.get("/artifacts/{artifact_id}")
+async def get_artifact_detail(
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    service = BrandSpaceService(db)
+    try:
+        return await service.get_artifact_detail(
+            artifact_id=artifact_id,
+            current_user=current_user,
+        )
     except Exception as exc:
         _raise_http(exc)
 

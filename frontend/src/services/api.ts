@@ -74,10 +74,13 @@ import type {
   CreateBrandIntelligenceRunInput,
 } from '@/types/intelligenceRun';
 import type {
+  ArtifactDetail,
+  AssetListSummary,
   BrandSpacePayload,
   CreateBrandSpaceBoardRunInput,
   GraphPatchStatus,
   GraphReviewItemsResponse,
+  PaginationInfo,
   ReportGuardrailResult,
   BrandSpaceReport,
   BrandSpaceReportSummary,
@@ -1176,15 +1179,40 @@ class ApiService {
     );
   }
 
-  async getBrandSpaceRunEvents(runId: string) {
+  async getBrandSpaceRunEvents(
+    runId: string,
+    params?: { limit?: number; offset?: number },
+  ) {
+    const search = new URLSearchParams();
+    if (params?.limit !== undefined) search.set('limit', String(params.limit));
+    if (params?.offset !== undefined) search.set('offset', String(params.offset));
+    const suffix = search.toString() ? `?${search.toString()}` : '';
     return this.request<{ events: BrandSpacePayload['events'] }>(
-      `/brand-space/board-runs/${runId}/events`,
+      `/brand-space/board-runs/${runId}/events${suffix}`,
     );
   }
 
-  async getBrandSpaceRunAssets(runId: string) {
-    return this.request<{ artifacts: BrandSpacePayload['artifacts'] }>(
-      `/brand-space/board-runs/${runId}/assets`,
+  async getBrandSpaceRunAssets(
+    runId: string,
+    params?: { artifactType?: string; limit?: number; offset?: number },
+  ) {
+    const search = new URLSearchParams();
+    if (params?.artifactType) search.set('artifact_type', params.artifactType);
+    if (params?.limit !== undefined) search.set('limit', String(params.limit));
+    if (params?.offset !== undefined) search.set('offset', String(params.offset));
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<{
+      artifacts: BrandSpacePayload['artifacts'];
+      summary?: AssetListSummary;
+      pagination?: PaginationInfo;
+    }>(
+      `/brand-space/board-runs/${runId}/assets${suffix}`,
+    );
+  }
+
+  async getBrandSpaceArtifact(artifactId: string) {
+    return this.request<ArtifactDetail>(
+      `/brand-space/artifacts/${encodeURIComponent(artifactId)}`,
     );
   }
 

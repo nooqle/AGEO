@@ -253,6 +253,49 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
             "doubao",
         ]
         assert len(payload["artifacts"]) == 8
+        assets_page = await service.get_assets(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            artifact_type="graph_patch_set",
+            limit=1,
+        )
+        assert assets_page["pagination"]["total"] == 1
+        assert assets_page["summary"]["by_type"]["graph_patch_set"] == 1
+        assert assets_page["artifacts"][0]["artifactId"]
+        first_assets_page = await service.get_assets(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            limit=3,
+            offset=0,
+        )
+        second_assets_page = await service.get_assets(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            limit=3,
+            offset=3,
+        )
+        assert first_assets_page["pagination"]["has_more"] is True
+        assert second_assets_page["pagination"]["offset"] == 3
+        assert {
+            artifact["artifactId"] for artifact in first_assets_page["artifacts"]
+        }.isdisjoint({artifact["artifactId"] for artifact in second_assets_page["artifacts"]})
+        patch_asset_detail = await service.get_artifact_detail(
+            artifact_id=assets_page["artifacts"][0]["artifactId"],
+            current_user=owner,
+        )
+        assert patch_asset_detail["preview"]["kind"] == "table"
+        assert patch_asset_detail["preview"]["rowCount"] == 4
+        assert any(
+            link["kind"] == "graph_update"
+            for link in patch_asset_detail["trace"]["links"]
+        )
+        events_page = await service.get_events(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            limit=2,
+        )
+        assert events_page["pagination"]["total"] >= 2
+        assert len(events_page["events"]) == 2
         assert payload["graph_update"]["status"] == "needs_review"
         assert payload["graph_update"]["summary"]["blocked"] == 1
         assert len(payload["patches"]) == 4
@@ -287,6 +330,25 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
         assert guardrail_by_key["competitor_claim_evidence"]["severity"] == "block"
         assert guardrail_by_key["action_platform_specificity"]["severity"] == "pass"
         assert guardrail_by_key["graph_update_scope"]["severity"] == "pass"
+        report_assets = await service.get_assets(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            artifact_type="report",
+        )
+        assert report_assets["pagination"]["total"] == 1
+        report_asset = report_assets["artifacts"][0]
+        assert report_asset["metadata"]["report_version_id"] == report_payload["report"]["id"]
+        report_asset_detail = await service.get_artifact_detail(
+            artifact_id=report_asset["artifactId"],
+            current_user=owner,
+        )
+        assert report_asset_detail["preview"]["kind"] == "summary"
+        assert report_asset_detail["trace"]["report"]["id"] == report_payload["report"]["id"]
+        assert any(
+            link["kind"] == "report_version"
+            and link["id"] == report_payload["report"]["id"]
+            for link in report_asset_detail["trace"]["links"]
+        )
 
         risk_result = await session.execute(
             select(GraphPatch).where(

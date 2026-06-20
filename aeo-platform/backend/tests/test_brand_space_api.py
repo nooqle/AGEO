@@ -22,6 +22,7 @@ from app.api.v1.brand_space import (
     generate_graph_update_report,
     get_board_run_assets,
     get_board_run_events,
+    get_artifact_detail,
     get_brand_graph,
     get_brand_reports,
     get_brand_review_items,
@@ -109,6 +110,27 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert len(assets["artifacts"]) == 8
+        assert assets["pagination"]["total"] == 8
+
+        graph_assets = await get_board_run_assets(
+            run_id=run_id,
+            artifact_type="graph_update",
+            limit=1,
+            db=session,
+            current_user=owner,
+        )
+        assert graph_assets["summary"]["total"] == 1
+        assert graph_assets["artifacts"][0]["type"] == "graph_update"
+        graph_asset_detail = await get_artifact_detail(
+            artifact_id=graph_assets["artifacts"][0]["artifactId"],
+            db=session,
+            current_user=owner,
+        )
+        assert graph_asset_detail["preview"]["kind"] == "json"
+        assert any(
+            link["kind"] == "graph_update"
+            for link in graph_asset_detail["trace"]["links"]
+        )
 
         review_items = await get_brand_review_items(
             entity_id=str(entity.id),
@@ -190,6 +212,19 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert report["report"]["title"] == "安利品牌 AI 认知图景"
+        report_assets = await get_board_run_assets(
+            run_id=run_id,
+            artifact_type="report",
+            db=session,
+            current_user=owner,
+        )
+        assert report_assets["pagination"]["total"] == 1
+        report_asset_detail = await get_artifact_detail(
+            artifact_id=report_assets["artifacts"][0]["artifactId"],
+            db=session,
+            current_user=owner,
+        )
+        assert report_asset_detail["trace"]["report"]["id"] == report["report"]["id"]
         reports = await get_brand_reports(
             entity_id=str(entity.id),
             db=session,
@@ -257,7 +292,7 @@ async def test_brand_space_api_blocks_other_user(tmp_path):
         session.add_all([owner, other, entity])
         await session.commit()
 
-        await create_board_run(
+        created = await create_board_run(
             entity_id=str(entity.id),
             payload=BoardRunCreate(),
             background_tasks=BackgroundTasks(),
@@ -280,6 +315,14 @@ async def test_brand_space_api_blocks_other_user(tmp_path):
                 current_user=other,
             )
         assert review_exc.value.status_code == 404
+
+        with pytest.raises(HTTPException) as artifact_exc:
+            await get_artifact_detail(
+                artifact_id=created["artifacts"][0]["artifactId"],
+                db=session,
+                current_user=other,
+            )
+        assert artifact_exc.value.status_code == 404
 
     await engine.dispose()
 

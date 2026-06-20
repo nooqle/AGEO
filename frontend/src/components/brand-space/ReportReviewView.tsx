@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Download, FileCheck2, Lock, Quote, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Archive, CheckCircle2, Download, FileCheck2, Lock, Quote, ShieldAlert } from 'lucide-react';
 import styles from './BrandSpace.module.css';
 import { reportGuardrails } from '@/mocks/brandSpaceMock';
 import type {
@@ -16,6 +16,7 @@ interface ReportReviewViewProps {
   onGenerateReport?: () => void;
   onPublishReport?: () => void;
   onSelectReport?: (reportId: string) => void;
+  onOpenAssets?: () => void;
   isGenerating?: boolean;
   selectedReportId?: string | null;
 }
@@ -113,6 +114,7 @@ export function ReportReviewView({
   onGenerateReport,
   onPublishReport,
   onSelectReport,
+  onOpenAssets,
   isGenerating = false,
   selectedReportId,
 }: ReportReviewViewProps) {
@@ -217,6 +219,16 @@ export function ReportReviewView({
             >
               <Download className="h-4 w-4" />
               导出 Markdown
+            </button>
+            <button
+              type="button"
+              disabled={!onOpenAssets}
+              onClick={onOpenAssets}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-semibold text-[var(--text-secondary)] disabled:opacity-45"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+            >
+              <Archive className="h-4 w-4" />
+              查看相关资产
             </button>
             <button
               type="button"

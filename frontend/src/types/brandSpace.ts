@@ -66,12 +66,71 @@ export interface BrandSpaceContext {
 
 export interface ArtifactRef {
   id: string;
+  artifactId?: string;
+  entityId?: string;
+  boardRunId?: string;
+  nodeRunId?: string | null;
   type: string;
   label: string;
   path: string;
+  mimeType?: string;
   rowCount?: number;
   createdAt: string;
   linkedNodeId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PaginationInfo {
+  limit: number;
+  offset: number;
+  total: number;
+  has_more: boolean;
+}
+
+export interface AssetListSummary {
+  total: number;
+  returned: number;
+  by_type: Record<string, number>;
+}
+
+export interface ArtifactPreview {
+  kind: 'json' | 'jsonl' | 'table' | 'summary';
+  title: string;
+  rowCount?: number;
+  truncated?: boolean;
+  columns?: Array<{ key: string; label: string }>;
+  rows?: Array<Record<string, unknown>>;
+  lines?: string[];
+  json?: Record<string, unknown> | null;
+  summary?: string;
+  items?: Array<{ label: string; value: unknown }>;
+  emptySummary?: string;
+}
+
+export interface ArtifactTraceLink {
+  kind: 'board_run' | 'node_run' | 'graph_update' | 'report_version' | string;
+  id: string;
+  label: string;
+  targetView?: BrandSpaceView;
+  nodeId?: string;
+  reportVersionId?: string;
+}
+
+export interface ArtifactDetail {
+  artifact: ArtifactRef;
+  preview: ArtifactPreview;
+  trace: {
+    links: ArtifactTraceLink[];
+    boardRun?: BrandSpaceBoardRun;
+    nodeRun?: BoardNode | null;
+    graphUpdate?: BrandSpaceGraphUpdate | null;
+    report?: BrandSpaceReportSummary | null;
+  };
+  access?: {
+    canPreview: boolean;
+    mode?: string;
+    reason?: string;
+  };
 }
 
 export interface RuntimeEvent {
