@@ -67,8 +67,13 @@ const boardStage = {
   height: 720,
 };
 
+const stressBoardStage = {
+  width: 1680,
+  height: 1320,
+};
+
 const nodeSize = {
-  default: { width: 188, height: 110 },
+  default: { width: 188, height: 132 },
   rack: { width: 270, height: 560 },
 };
 
@@ -93,10 +98,14 @@ function getNodeClass(node: BoardNode, selectedNodeId: string) {
   );
 }
 
-function nodeRect(node: BoardNode) {
+function stageSizeForNodes(nodes: BoardNode[]) {
+  return nodes.length > 24 ? stressBoardStage : boardStage;
+}
+
+function nodeRect(node: BoardNode, stageSize = boardStage) {
   const size = node.id === 'platform-rack' ? nodeSize.rack : nodeSize.default;
-  const centerX = (node.position.x / 100) * boardStage.width;
-  const centerY = (node.position.y / 100) * boardStage.height;
+  const centerX = (node.position.x / 100) * stageSize.width;
+  const centerY = (node.position.y / 100) * stageSize.height;
   return {
     centerX,
     centerY,
@@ -105,9 +114,9 @@ function nodeRect(node: BoardNode) {
   };
 }
 
-function edgePoints(from: BoardNode, to: BoardNode) {
-  const source = nodeRect(from);
-  const target = nodeRect(to);
+function edgePoints(from: BoardNode, to: BoardNode, stageSize = boardStage) {
+  const source = nodeRect(from, stageSize);
+  const target = nodeRect(to, stageSize);
   const dx = target.centerX - source.centerX;
   const dy = target.centerY - source.centerY;
 
@@ -140,8 +149,8 @@ function edgePoints(from: BoardNode, to: BoardNode) {
   };
 }
 
-function edgePath(from: BoardNode, to: BoardNode) {
-  const points = edgePoints(from, to);
+function edgePath(from: BoardNode, to: BoardNode, stageSize = boardStage) {
+  const points = edgePoints(from, to, stageSize);
   if (points.axis === 'x') {
     const midX = (points.start.x + points.end.x) / 2;
     return {
@@ -180,7 +189,10 @@ export function BoardRuntimeView({
   const isRunning = runStatus === 'running';
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const platformRackNode = nodeById.get('platform-rack');
-  const platformProgress = Math.round(platforms.reduce((sum, platform) => sum + platform.progress, 0) / platforms.length);
+  const platformProgress = platforms.length
+    ? Math.round(platforms.reduce((sum, platform) => sum + platform.progress, 0) / platforms.length)
+    : 0;
+  const stageSize = stageSizeForNodes(nodes);
 
   return (
     <div className="grid min-h-0 grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -191,6 +203,7 @@ export function BoardRuntimeView({
               type="button"
               onClick={runStatus === 'running' ? onRunPause : runStatus === 'paused' ? onRunResume : onRunStart}
               className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)]"
+              aria-label={runStatus === 'running' ? '暂停画布运行' : runStatus === 'paused' ? '继续画布运行' : '启动画布运行'}
             >
               {runStatus === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
               {runStatus === 'running' ? '暂停' : runStatus === 'paused' ? '继续' : '全部运行'}
@@ -200,25 +213,26 @@ export function BoardRuntimeView({
               onClick={onRunStop}
               className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-secondary)]"
               style={{ borderColor: 'var(--border-subtle)' }}
+              aria-label="停止画布运行"
             >
               <Square className="h-4 w-4" />
               停止
             </button>
-            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="选择">
+            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="选择" aria-label="选择节点工具">
               <MousePointer2 className="h-4 w-4" />
             </button>
-            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="适配视图">
+            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="适配视图" aria-label="适配画布视图">
               <Maximize2 className="h-4 w-4" />
             </button>
-            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="添加节点">
+            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="添加节点" aria-label="添加节点">
               <Plus className="h-4 w-4" />
             </button>
-            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="删除">
+            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="删除" aria-label="删除所选节点">
               <Trash2 className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--text-secondary)]">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--text-secondary)]" aria-live="polite">
             <span className="inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
               <span className={classNames('h-2 w-2 rounded-full', isRunning && 'animate-pulse')} style={{ background: isRunning ? 'var(--brand-primary)' : 'var(--text-tertiary)' }} />
               {statusLabel(runStatus)}
@@ -230,18 +244,22 @@ export function BoardRuntimeView({
         </div>
 
         <div className={classNames(styles.canvas, isRunning && styles.runningCanvas, 'rounded-xl')}>
-          <div className={styles.boardStage}>
+          <div
+            className={styles.boardStage}
+            data-brand-space-node-count={nodes.length}
+            style={{ minWidth: stageSize.width, height: stageSize.height }}
+          >
             <svg
               className={styles.edgeLayer}
               data-brand-space-edges="workflow"
-              viewBox={`0 0 ${boardStage.width} ${boardStage.height}`}
+              viewBox={`0 0 ${stageSize.width} ${stageSize.height}`}
               aria-hidden="true"
             >
               {edges.map((edge, index) => {
                 const from = nodeById.get(edge.from);
                 const to = nodeById.get(edge.to);
                 if (!from || !to) return null;
-                const path = edgePath(from, to);
+                const path = edgePath(from, to, stageSize);
                 return (
                   <g key={edge.id} data-brand-space-edge={edge.id} className={styles.edgeGroup}>
                     <path
@@ -289,6 +307,8 @@ export function BoardRuntimeView({
                 onClick={() => onSelectNode(node.id)}
                 className={getNodeClass(node, selectedNodeId)}
                 style={{ left: `${node.position.x}%`, top: `${node.position.y}%` }}
+                aria-label={`选择节点：${node.title}，状态${node.status}，进度${node.progress}%`}
+                aria-pressed={selectedNodeId === node.id}
               >
                 <span className="absolute left-0 top-0 h-1 w-full rounded-t-xl" style={{ background: nodeAccent[node.kind] }} />
                 <span className="flex items-start justify-between gap-2 text-left">
@@ -333,6 +353,7 @@ export function BoardRuntimeView({
                       type="button"
                       onClick={() => onSelectNode('platform-rack')}
                       className={classNames(styles.platformCard, platform.status === 'running' && styles.platformRunning, 'w-full rounded-xl p-3 text-left')}
+                      aria-label={`查看${platform.label}，进度${platform.progress}%，回答${platform.answers}条`}
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3">

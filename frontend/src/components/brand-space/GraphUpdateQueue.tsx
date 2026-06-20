@@ -108,6 +108,7 @@ export function GraphUpdateQueue({
                         type="button"
                         onClick={() => onPatchSelect?.(patch.id)}
                         className="block w-full text-left"
+                        aria-label={`查看图谱补丁：${patch.title}，状态${statusLabels[patch.status]}`}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -149,6 +150,7 @@ export function GraphUpdateQueue({
                             disabled={isPending}
                             onClick={() => onPatchDecision(patch.id, 'accepted')}
                             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--brand-primary)] px-2.5 text-xs font-medium text-[var(--brand-contrast)] disabled:opacity-55"
+                            aria-label={`接受补丁：${patch.title}`}
                           >
                             <Check className="h-3.5 w-3.5" />
                             {isPending ? '处理中' : '接受'}
@@ -158,6 +160,7 @@ export function GraphUpdateQueue({
                             disabled={isPending}
                             onClick={() => onPatchDecision(patch.id, 'needs_review')}
                             className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium text-[var(--text-secondary)] disabled:opacity-55"
+                            aria-label={`保留审阅补丁：${patch.title}`}
                           >
                             <RotateCcw className="h-3.5 w-3.5" />
                             保留
@@ -167,6 +170,7 @@ export function GraphUpdateQueue({
                             disabled={isPending}
                             onClick={() => onPatchDecision(patch.id, 'rejected')}
                             className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium text-[var(--error)] disabled:opacity-55"
+                            aria-label={`拒绝补丁：${patch.title}`}
                           >
                             <X className="h-3.5 w-3.5" />
                             拒绝

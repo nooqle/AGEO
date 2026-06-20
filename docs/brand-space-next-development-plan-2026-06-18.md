@@ -47,7 +47,7 @@
 - Review Loop 已接通并完成第二轮收口；真实 A4 答案进入 GraphPatchBuilder 的服务层回归已补，安利词表 fixture 已完成真实 BoardRun → GraphUpdate → Review Items 回测。
 - Reports 第一轮已接入 GraphUpdate 解读：报告 payload 已从 GraphPatch / evidence refs 生成 `claims / trace_chains / platform_differences`，guardrail 会阻断越界 claim、缺证据竞品声明和缺平台行动建议；前端 Reports 已显示真实关键结论、平台差异和追溯链。
 - Assets 第一轮闭环已完成：已有 artifact registry、详情预览、筛选、分页、报告反向入口和 trace links；真实对象存储下载/打开仍留作后续增强。
-- Hardening 仍在推进：Graph 正式版本写入/并发保护、报告 `publication_status` schema 下推和报告版本分配保护已完成第一轮；仍需要旧数据 Assets 映射、50 节点画布性能、旧 Dashboard 回归、可访问性和完整回测。
+- Hardening 尾项已收口：Graph 正式版本写入/并发保护、报告 `publication_status` schema 下推、报告版本分配保护、旧数据 Assets 映射、50 节点画布压力入口、reduced motion 和键盘可达性补强均已完成；剩余工作转入真实对象存储下载/打开、生产态 E2E 和后续性能队列化。
 
 ### 2.3 开发进度记录
 
@@ -65,6 +65,7 @@
 | 2026-06-20 | Sprint E: Graph Versioning And Concurrency | 第一块完成 | GraphUpdate 创建时根据品牌最新已应用版本生成 `before_graph_version / after_graph_version`；GraphPatch 全部终态后先检查版本基线，不一致则标记 GraphUpdate `failed` 并写入 `graph_update_version_conflict` 事件；品牌 Graph 读取会跳过已失败的过期更新，避免 stale update 覆盖正式图谱；补服务层回归覆盖两个并发 GraphUpdate、第一条应用、第二条过期阻断、第三条递增到 `v0.2.0` | 继续 Sprint E：`publication_status` 下推到 schema/查询、报告版本并发分配保护、旧数据映射和 50 节点/可访问性回归 |
 | 2026-06-20 | Sprint E: Report Schema And Version Hardening | 第一块完成 | `BrandReportVersion` 新增 `publication_status` 列和 `ix_brand_report_versions_entity_publication` 索引；新增迁移 `026_add_report_publication_status.py` 回填旧报告和 GraphUpdate 报告状态；GraphUpdate 报告生成/发布同步写 payload 与列，非 GraphUpdate 报告写 `pre_graph_update`；报告列表普通状态过滤优先走 SQL 条件并做 source type 安全过滤，`pre_graph_update` 仅对未迁移旧数据做有限 fallback；报告版本分配前锁定父 GraphUpdate，读取最新 version 时使用 `FOR UPDATE`；补麦当劳报告发布与分页过滤回归 | 继续 Sprint E：旧抓取答案进入 Assets 的数据映射、50 节点画布压力、reduced motion/键盘可达性和 `/dashboard` feature flag 回归 |
 | 2026-06-20 | Sprint E: Review Fix | 完成 | 按 `review-brand-space-harden-trace-back-and-graph-version-2026-06-20.md` 收口：migration 026 改为解析 JSON 精确回填，避免 `LIKE` 误匹配；GraphUpdate apply 前锁品牌实体范围并锁 latest applied 行；report source type 增加 `report_id/artifact_id` 契约判断，payload 丢失 `graph_update_id` 时仍能识别 GraphUpdate 报告；`_reports_for_publication_status` 增加防御注释；Graph 页补 failed/version_conflict 提示；前端 runtime event severity 类型加入 `error`；补 migration helper 与 source type 回归测试 | 继续 Sprint E：旧抓取答案进入 Assets 的数据映射、50 节点画布压力、reduced motion/键盘可达性和 `/dashboard` feature flag 回归 |
+| 2026-06-20 | Sprint E: Legacy Assets And Canvas Hardening | 完成 | 旧 `BrandPlatformAnswer` 可映射到 raw/parsed Assets，按 run session 或品牌最近成功回答取样并同步行数；旧答案资产 detail 返回安全 JSONL/table 预览，trace 仅保留 BoardRun/NodeRun，不伪造 GraphUpdate/Report；前端新增 `?canvasFixture=50-nodes` 压力底版，画布 stage 按节点数扩展并用扩展坐标计算连线端点；补主导航、画布工具条、节点、平台卡、Review 操作、Assets drawer、Reports 版本选择的可访问标签；reduced motion 下禁用扫光、流动包和脉冲视觉 | 后续增强：真实对象存储下载/打开、生产态长跑 E2E、WebSocket/SSE 或任务队列化性能优化 |
 
 ## 3. 产品 Section 完成度
 
@@ -75,7 +76,7 @@
 | Reports | 完成 | 报告只从某次 Graph Update 生成，guardrail 能阻断发布，关键结论能追溯到 patch / relation / answer / question / platform；支持报告版本列表、版本详情、正式发布状态和旧报告 `pre_graph_update` 隔离。 |
 | Assets | 完成第一轮 | 用户能按 run/type 查看中间产物，安全预览 JSON/JSONL/table，能跳回对应 Graph Update 和 Report；真实对象存储下载/打开后续增强。 |
 
-按产品主 Section 口径，`Boards / Reports / Assets` 已进入稳定和回归阶段；`Graph` 已完成正式版本写入与过期更新阻断的第一块，后续重点转向 schema/查询性能、旧数据映射、画布压力和可访问性回归。
+按产品主 Section 口径，`Boards / Graph / Reports / Assets` 已完成 MVP 闭环并进入稳定和回归阶段。后续重点不再是补主链路，而是对象存储下载/打开、生产态 E2E、队列化/事件流性能和更完整的可访问性审计。
 
 ## 4. 开发路线
 
@@ -444,4 +445,7 @@ Sprint E 已完成部分：
 - 报告生成/发布同步写 payload 与列。
 - 报告版本分配前锁定父 GraphUpdate，并对最新 version 行使用 `FOR UPDATE`。
 - Review Fix 已补：migration 精确回填、GraphUpdate apply 实体级锁、Graph failed 冲突提示。
-- 已跑 service/API targeted 回归：`python -m pytest aeo-platform/backend/tests/test_brand_space_service.py -q`，21 passed；`python -m pytest aeo-platform/backend/tests/test_brand_space_api.py -q`，3 passed。
+- 旧答案 Assets 映射已补：raw/parsed 可从历史 `BrandPlatformAnswer` 回填安全预览和行数，但不伪造 GraphUpdate trace chain。
+- 50 节点画布压力入口已补：`/brand-space?canvasFixture=50-nodes` 使用独立 fixture，stage 自动放大并重新计算连线端点。
+- reduced motion 和键盘可达性第一轮已补：动态扫光/流动包/脉冲可降级，主导航、画布工具条、节点、Review 操作、Assets drawer 和 Reports 版本选择具备明确标签。
+- 已跑 service targeted 回归：`python -m pytest aeo-platform/backend/tests/test_brand_space_service.py -q`，24 passed；API、lint/build 和浏览器 smoke 见本轮提交记录。

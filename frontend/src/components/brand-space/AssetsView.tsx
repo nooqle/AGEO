@@ -246,6 +246,8 @@ export function AssetsView({
                 styles.assetTypeButton,
                 selectedType === option.type && styles.assetTypeButtonActive,
               )}
+              aria-pressed={selectedType === option.type}
+              aria-label={`筛选资产类型：${option.label}`}
             >
               {option.label}
               <span>{option.count}</span>
@@ -288,6 +290,7 @@ export function AssetsView({
                       onClick={() => onOpenArtifact?.(artifact)}
                       className={styles.assetOpenButton}
                       title="打开资产详情"
+                      aria-label={`打开资产详情：${artifact.label}`}
                     >
                       {isDetailLoading && active ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -319,7 +322,7 @@ export function AssetsView({
                 <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">资产详情</p>
                 <h2>{detail?.artifact.label ?? '加载中'}</h2>
               </div>
-              <button type="button" onClick={onCloseDetail} className={styles.assetOpenButton} title="关闭详情">
+              <button type="button" onClick={onCloseDetail} className={styles.assetOpenButton} title="关闭详情" aria-label="关闭资产详情">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -365,6 +368,7 @@ export function AssetsView({
                           type="button"
                           onClick={() => onTraceTarget?.(link)}
                           className={styles.traceLink}
+                          aria-label={`跳转到${traceKindLabels[link.kind] ?? link.kind}：${link.label}`}
                         >
                           <span>{traceKindLabels[link.kind] ?? link.kind}</span>
                           <strong>{link.label}</strong>
@@ -391,6 +395,7 @@ export function AssetsView({
             onClick={onLoadMore}
             disabled={isLoadingAssets}
             className={styles.assetLoadMoreButton}
+            aria-label="加载更多资产"
           >
             {isLoadingAssets ? (
               <>

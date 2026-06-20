@@ -141,6 +141,16 @@
   border-color: var(--border-hover);
 }
 
+.node:focus-visible,
+.platformCard:focus-visible,
+.assetTypeButton:focus-visible,
+.assetOpenButton:focus-visible,
+.traceLink:focus-visible,
+.assetLoadMoreButton:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 3px;
+}
+
 .nodeActive {
   border-color: var(--brand-border);
   background: color-mix(in srgb, var(--brand-bg) 24%, var(--bg-elevated) 76%);
@@ -1070,5 +1080,25 @@
   .entityPending .entityPoint,
   .guardrailBlock {
     animation: none;
+  }
+
+  .edgePacket {
+    display: none;
+  }
+
+  .edgePathPulse {
+    stroke-dasharray: none;
+  }
+
+  .node,
+  .platformCard,
+  .queueItem,
+  .assetCard,
+  .reportReader {
+    transition: none;
+  }
+
+  .node:hover {
+    transform: translate(-50%, -50%);
   }
 }

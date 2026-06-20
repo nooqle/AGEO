@@ -208,6 +208,8 @@ export function GraphHomeView({
                   key={lens}
                   type="button"
                   className="rounded-lg border px-3 py-2 text-xs font-medium"
+                  aria-pressed={index === 0}
+                  aria-label={`切换图谱视角：${lens}`}
                   style={{
                     borderColor: index === 0 ? 'var(--brand-border)' : 'var(--border-subtle)',
                     background: index === 0 ? 'var(--brand-bg)' : 'transparent',
@@ -237,6 +239,7 @@ export function GraphHomeView({
                 onClick={() => selectGraphEntity(entity)}
                 className={entityClass(entity)}
                 style={{ left: `${entity.x}%`, top: `${entity.y}%` }}
+                aria-label={`查看实体：${entity.label}，圈层${zoneLabels[entity.zone]}，连接强度${entity.strength}`}
               >
                 <span className={entity.zone === 'center' ? styles.entityCenter : styles.entityPoint} />
                 <span className="mt-2 block rounded-md bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)] shadow-sm">
@@ -274,6 +277,8 @@ export function GraphHomeView({
                 type="button"
                 onClick={() => setCategoryFilter(category)}
                 className="rounded-lg border px-2.5 py-1.5 text-xs font-medium"
+                aria-pressed={categoryFilter === category}
+                aria-label={`筛选审阅项：${categoryLabels[category] ?? category}`}
                 style={{
                   borderColor: categoryFilter === category ? 'var(--brand-border)' : 'var(--border-subtle)',
                   background: categoryFilter === category ? 'var(--brand-bg)' : 'transparent',
@@ -295,6 +300,7 @@ export function GraphHomeView({
                   'w-full rounded-xl border p-3 text-left transition-colors',
                   selectedPatch?.id === item.id && styles.queueSelected,
                 )}
+                aria-label={`查看待审阅补丁：${item.title}`}
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -359,6 +365,7 @@ export function GraphHomeView({
                   disabled={selectedPatchPending}
                   onClick={() => onPatchDecision(selectedPatch.id, 'accepted')}
                   className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--brand-primary)] px-2.5 text-xs font-medium text-[var(--brand-contrast)] disabled:opacity-55"
+                  aria-label={`接受补丁：${selectedPatch.title}`}
                 >
                   <Check className="h-3.5 w-3.5" />
                   {selectedPatchPending ? '处理中' : '接受'}
@@ -368,6 +375,7 @@ export function GraphHomeView({
                   disabled={selectedPatchPending}
                   onClick={() => onPatchDecision(selectedPatch.id, 'needs_review')}
                   className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium text-[var(--text-secondary)] disabled:opacity-55"
+                  aria-label={`保留审阅补丁：${selectedPatch.title}`}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   保留
@@ -377,6 +385,7 @@ export function GraphHomeView({
                   disabled={selectedPatchPending}
                   onClick={() => onPatchDecision(selectedPatch.id, 'rejected')}
                   className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium text-[var(--error)] disabled:opacity-55"
+                  aria-label={`拒绝补丁：${selectedPatch.title}`}
                 >
                   <X className="h-3.5 w-3.5" />
                   拒绝

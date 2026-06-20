@@ -181,6 +181,8 @@ export function ReportReviewView({
                   type="button"
                   onClick={() => onSelectReport?.(item.id)}
                   className="min-w-[220px] rounded-xl border px-3 py-2 text-left transition"
+                  aria-pressed={selected}
+                  aria-label={`查看报告版本 v${item.version}：${item.title}`}
                   style={{
                     borderColor: selected ? 'var(--brand-border)' : 'var(--border-subtle)',
                     background: selected ? 'var(--brand-bg)' : 'var(--bg-elevated)',

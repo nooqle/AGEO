@@ -592,6 +592,132 @@ async def test_artifact_preview_handles_missing_graph_update_and_unknown_type(tm
 
 
 @pytest.mark.asyncio
+async def test_legacy_platform_answers_map_to_assets_without_graph_trace(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-legacy-answer-owner@example.com")
+        other = _user("brand-space-legacy-answer-other@example.com")
+        entity = _entity(owner, "麦当劳")
+        other_entity = _entity(other, "其它品牌")
+        board_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            status="completed",
+            is_scaffold=False,
+            input_scope={},
+            output_refs={},
+        )
+        session.add_all([owner, other, entity, other_entity, board_run])
+        await session.flush()
+
+        raw_artifact = BoardArtifact(
+            artifact_key="legacy-raw-answers",
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            artifact_type="raw_answers",
+            label="平台原始回答",
+            path=f"assets/{entity.id}/{board_run.id}/raw_answers/",
+            mime_type="application/json",
+            row_count=0,
+        )
+        parsed_artifact = BoardArtifact(
+            artifact_key="legacy-parsed-answers",
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            artifact_type="parsed_answers",
+            label="标准化回答表",
+            path=f"assets/{entity.id}/{board_run.id}/parsed_answers/answers.parquet",
+            mime_type="application/json",
+            row_count=0,
+        )
+        question = BrandIntelligenceQuestion(
+            entity_id=entity.id,
+            question_id="mcd-legacy-family",
+            question_text="麦当劳适合家庭用餐吗？",
+            category="scenario",
+        )
+        session.add_all([raw_artifact, parsed_artifact, question])
+        await session.flush()
+        session.add_all(
+            [
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    question_object_id=question.id,
+                    question_id=question.question_id,
+                    dedupe_key=f"{entity.id}:legacy:chatgpt",
+                    platform="ChatGPT",
+                    fetch_method="legacy",
+                    status="captured",
+                    success=True,
+                    brand_mentioned=True,
+                    answer_text="麦当劳在家庭用餐和儿童套餐场景中经常被提及。",
+                ),
+                BrandPlatformAnswer(
+                    entity_id=entity.id,
+                    question_object_id=question.id,
+                    question_id=question.question_id,
+                    dedupe_key=f"{entity.id}:legacy:kimi",
+                    platform="Kimi",
+                    fetch_method="legacy",
+                    status="captured",
+                    success=True,
+                    brand_mentioned=True,
+                    answer_text="Kimi 回答把麦当劳和开心乐园餐关联到亲子用餐。",
+                ),
+                BrandPlatformAnswer(
+                    entity_id=other_entity.id,
+                    question_id="other-q",
+                    dedupe_key=f"{other_entity.id}:legacy:chatgpt",
+                    platform="ChatGPT",
+                    fetch_method="legacy",
+                    status="captured",
+                    success=True,
+                    answer_text="其它品牌回答不能进入麦当劳资产。",
+                ),
+            ]
+        )
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        assets_page = await service.get_assets(
+            run_id=board_run.id,
+            current_user=owner,
+            artifact_type="raw_answers",
+        )
+        assert assets_page["pagination"]["total"] == 1
+        assert assets_page["artifacts"][0]["rowCount"] == 2
+        assert assets_page["artifacts"][0]["metadata"]["legacy_answer_mapping"] is True
+
+        raw_detail = await service.get_artifact_detail(
+            artifact_id=raw_artifact.id,
+            current_user=owner,
+        )
+        assert raw_detail["preview"]["kind"] == "jsonl"
+        assert raw_detail["preview"]["rowCount"] == 2
+        assert any("麦当劳适合家庭用餐吗" in line for line in raw_detail["preview"]["lines"])
+        assert not any(link["kind"] == "graph_update" for link in raw_detail["trace"]["links"])
+        assert not any(link["kind"] == "report_version" for link in raw_detail["trace"]["links"])
+        assert raw_detail["trace"]["graphUpdate"] is None
+        assert raw_detail["trace"]["report"] is None
+
+        parsed_detail = await service.get_artifact_detail(
+            artifact_id=parsed_artifact.id,
+            current_user=owner,
+        )
+        assert parsed_detail["preview"]["kind"] == "table"
+        assert parsed_detail["preview"]["rowCount"] == 2
+        assert {
+            row["platform"] for row in parsed_detail["preview"]["rows"]
+        } == {"ChatGPT", "Kimi"}
+        assert all(
+            row["question"] == "麦当劳适合家庭用餐吗？"
+            for row in parsed_detail["preview"]["rows"]
+        )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_mcdonalds_report_versions_publish_and_legacy_mapping(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:

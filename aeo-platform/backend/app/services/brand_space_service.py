@@ -91,7 +91,7 @@ NODE_TEMPLATES: list[dict[str, Any]] = [
         "node_type": "extract",
         "title": "回答标准化",
         "subtitle": "去重、清洗、结构化",
-        "position": {"x": 78, "y": 31},
+        "position": {"x": 78, "y": 24},
         "artifact_keys": ["artifact-parsed-answers"],
     },
     {
@@ -99,7 +99,7 @@ NODE_TEMPLATES: list[dict[str, Any]] = [
         "node_type": "extract",
         "title": "实体匹配",
         "subtitle": "匹配实体词表",
-        "position": {"x": 78, "y": 49},
+        "position": {"x": 78, "y": 45},
         "artifact_keys": ["artifact-relation-set"],
     },
     {
@@ -107,7 +107,7 @@ NODE_TEMPLATES: list[dict[str, Any]] = [
         "node_type": "extract",
         "title": "图谱补丁",
         "subtitle": "新增、更新、连接",
-        "position": {"x": 78, "y": 67},
+        "position": {"x": 78, "y": 66},
         "artifact_keys": ["artifact-patch-set"],
     },
     {
@@ -1696,6 +1696,7 @@ class BrandSpaceService:
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
         await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        await self._sync_answer_artifacts(board_run=board_run)
         artifacts = await self._artifacts(
             board_run.id,
             artifact_type=artifact_type,
@@ -1723,6 +1724,8 @@ class BrandSpaceService:
         artifact = await self._require_artifact(artifact_id, current_user)
         board_run = await self._require_board_run(artifact.board_run_id, current_user)
         await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        await self._sync_answer_artifacts(board_run=board_run)
+        await self.db.refresh(artifact)
         node_run = await self.db.get(BoardNodeRun, artifact.node_run_id) if artifact.node_run_id else None
         graph_update = await self._graph_update_for_run(board_run.id)
         latest_report = (
@@ -2727,6 +2730,139 @@ class BrandSpaceService:
                 },
             )
         return changed
+
+    async def _sync_answer_artifacts(self, *, board_run: BoardRun) -> bool:
+        count = await self._answer_count_for_board_run(board_run)
+        if count <= 0:
+            return False
+
+        result = await self.db.execute(
+            select(BoardArtifact).where(
+                BoardArtifact.board_run_id == board_run.id,
+                BoardArtifact.artifact_type.in_(["raw_answers", "parsed_answers"]),
+            )
+        )
+        changed = False
+        scope = await self._answer_asset_scope(board_run)
+        for artifact in result.scalars().all():
+            changed |= self._assign_if_changed(artifact, "row_count", count)
+            changed |= self._assign_if_changed(
+                artifact,
+                "extra_metadata",
+                {
+                    **(artifact.extra_metadata or {}),
+                    "answer_asset_scope": scope["mode"],
+                    "session_id": scope.get("session_id"),
+                    "brand_intelligence_run_id": scope.get("brand_intelligence_run_id"),
+                    "legacy_answer_mapping": scope["mode"] == "brand_recent_answers",
+                },
+            )
+        if changed:
+            await self.db.commit()
+        return changed
+
+    async def _answer_asset_scope(self, board_run: BoardRun) -> dict[str, str | None]:
+        output_refs = dict(board_run.output_refs or {})
+        session_id = output_refs.get("session_id")
+        brand_intelligence_run_id = (
+            str(board_run.brand_intelligence_run_id)
+            if board_run.brand_intelligence_run_id
+            else output_refs.get("brand_intelligence_run_id")
+        )
+        if board_run.brand_intelligence_run_id:
+            intelligence_run = await self.db.get(
+                BrandIntelligenceRun,
+                board_run.brand_intelligence_run_id,
+            )
+            if intelligence_run is not None and intelligence_run.origin_session_id is not None:
+                session_id = str(intelligence_run.origin_session_id)
+        mode = "run_session_answers" if session_id else "brand_recent_answers"
+        return {
+            "mode": mode,
+            "session_id": str(session_id) if session_id else None,
+            "brand_intelligence_run_id": brand_intelligence_run_id,
+        }
+
+    async def _answer_conditions_for_board_run(self, board_run: BoardRun) -> list[Any]:
+        conditions: list[Any] = [
+            BrandPlatformAnswer.entity_id == board_run.entity_id,
+            BrandPlatformAnswer.success.is_(True),
+        ]
+        scope = await self._answer_asset_scope(board_run)
+        if scope.get("session_id"):
+            try:
+                session_uuid = UUID(str(scope["session_id"]))
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid answer asset session_id %s for board run %s",
+                    scope["session_id"],
+                    board_run.id,
+                )
+            else:
+                conditions.append(BrandPlatformAnswer.session_id == session_uuid)
+        return conditions
+
+    async def _answer_count_for_board_run(self, board_run: BoardRun) -> int:
+        result = await self.db.execute(
+            select(func.count(BrandPlatformAnswer.id)).where(
+                *(await self._answer_conditions_for_board_run(board_run))
+            )
+        )
+        return int(result.scalar_one() or 0)
+
+    async def _answers_for_board_run(
+        self,
+        *,
+        board_run: BoardRun,
+        limit: int = 8,
+    ) -> list[BrandPlatformAnswer]:
+        result = await self.db.execute(
+            select(BrandPlatformAnswer)
+            .where(*(await self._answer_conditions_for_board_run(board_run)))
+            .order_by(desc(BrandPlatformAnswer.captured_at), desc(BrandPlatformAnswer.created_at))
+            .limit(max(1, int(limit)))
+        )
+        return list(result.scalars().all())
+
+    async def _question_lookup_for_answers(
+        self,
+        *,
+        board_run: BoardRun,
+        answers: list[BrandPlatformAnswer],
+    ) -> dict[str, str]:
+        lookup: dict[str, str] = {}
+        object_ids = {
+            answer.question_object_id
+            for answer in answers
+            if answer.question_object_id is not None
+        }
+        if object_ids:
+            result = await self.db.execute(
+                select(BrandIntelligenceQuestion).where(
+                    BrandIntelligenceQuestion.entity_id == board_run.entity_id,
+                    BrandIntelligenceQuestion.id.in_(object_ids),
+                )
+            )
+            for question in result.scalars().all():
+                lookup[str(question.id)] = question.question_text
+                lookup[question.question_id] = question.question_text
+
+        missing_question_ids = {
+            answer.question_id
+            for answer in answers
+            if answer.question_id and answer.question_id not in lookup
+        }
+        if missing_question_ids:
+            result = await self.db.execute(
+                select(BrandIntelligenceQuestion).where(
+                    BrandIntelligenceQuestion.entity_id == board_run.entity_id,
+                    BrandIntelligenceQuestion.question_id.in_(missing_question_ids),
+                )
+            )
+            for question in result.scalars().all():
+                lookup[str(question.id)] = question.question_text
+                lookup[question.question_id] = question.question_text
+        return lookup
 
     def _real_node_state_map(self, intelligence_run: BrandIntelligenceRun) -> dict[str, dict[str, Any]]:
         status = intelligence_run.status
@@ -3955,25 +4091,11 @@ class BrandSpaceService:
         board_run: BoardRun,
         parsed: bool,
     ) -> dict[str, Any]:
-        intelligence_run = (
-            await self.db.get(BrandIntelligenceRun, board_run.brand_intelligence_run_id)
-            if board_run.brand_intelligence_run_id
-            else None
+        answers = await self._answers_for_board_run(board_run=board_run, limit=8)
+        question_lookup = await self._question_lookup_for_answers(
+            board_run=board_run,
+            answers=answers,
         )
-        answers: list[BrandPlatformAnswer] = []
-        question_lookup: dict[str, str] = {}
-        if intelligence_run is not None:
-            builder = GraphPatchBuilderService(self.db)
-            answers = await builder.answers_for_run(
-                entity_id=board_run.entity_id,
-                intelligence_run=intelligence_run,
-                limit=8,
-            )
-            question_lookup = await builder.question_lookup(
-                entity_id=board_run.entity_id,
-                intelligence_run=intelligence_run,
-                answers=answers,
-            )
         rows = [
             {
                 "platform": answer.platform,

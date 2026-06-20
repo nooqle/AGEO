@@ -106,7 +106,7 @@ export const initialBoardNodes: BoardNode[] = [
     kind: 'extract',
     status: 'completed',
     progress: 100,
-    position: { x: 78, y: 31 },
+    position: { x: 78, y: 24 },
     metrics: [
       { label: '回答', value: '1,248' },
       { label: '失败', value: '3' },
@@ -120,7 +120,7 @@ export const initialBoardNodes: BoardNode[] = [
     kind: 'extract',
     status: 'completed',
     progress: 100,
-    position: { x: 78, y: 49 },
+    position: { x: 78, y: 45 },
     metrics: [
       { label: '已映射', value: '2,193' },
       { label: '新实体', value: '36' },
@@ -134,7 +134,7 @@ export const initialBoardNodes: BoardNode[] = [
     kind: 'extract',
     status: 'running',
     progress: 74,
-    position: { x: 78, y: 67 },
+    position: { x: 78, y: 66 },
     metrics: [
       { label: '变更', value: '1,287' },
       { label: '待审阅', value: '36' },
@@ -181,6 +181,43 @@ export const boardEdges: BoardEdge[] = [
   { id: 'edge-patch-update', from: 'graph-patch', to: 'graph-update', active: true },
   { id: 'edge-review-update', from: 'anomaly-review', to: 'graph-update', active: false, dashed: true },
 ];
+
+export function buildStressBoardFixture(count = 50): { nodes: BoardNode[]; edges: BoardEdge[] } {
+  const kinds: BoardNode['kind'][] = ['input', 'prepare', 'fetch', 'extract', 'review', 'graph_update'];
+  const columns = 7;
+  const nodes = Array.from({ length: count }, (_, index): BoardNode => {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const id = `stress-node-${String(index + 1).padStart(2, '0')}`;
+    const kind = kinds[index % kinds.length];
+    const progress = index < 8 ? 100 : Math.min(96, 18 + ((index * 7) % 78));
+    return {
+      id,
+      title: `压力节点 ${index + 1}`,
+      subtitle: kind === 'fetch' ? '并行抓取验证' : '画布恢复态验证',
+      kind,
+      status: index < 8 ? 'completed' : index % 9 === 0 ? 'needs_review' : index % 4 === 0 ? 'queued' : 'running',
+      progress,
+      position: {
+        x: 8 + column * 14,
+        y: 8 + row * 12,
+      },
+      metrics: [
+        { label: '序号', value: String(index + 1) },
+        { label: '进度', value: `${progress}%` },
+      ],
+      outputArtifactIds: [`stress-artifact-${index + 1}`],
+    };
+  });
+  const edges = nodes.slice(1).map((node, index): BoardEdge => ({
+    id: `stress-edge-${index + 1}`,
+    from: nodes[index].id,
+    to: node.id,
+    active: index % 3 !== 0,
+    dashed: index % 7 === 0,
+  }));
+  return { nodes, edges };
+}
 
 export const initialPlatforms: PlatformFetchNode[] = [
   {

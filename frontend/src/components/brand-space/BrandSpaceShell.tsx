@@ -26,6 +26,7 @@ import {
   boardEdges,
   brandSpaceContext,
   brandSpaceNavItems,
+  buildStressBoardFixture,
   evidenceRefs,
   graphEntities,
   graphRelations,
@@ -217,6 +218,12 @@ function backendNoticeFromError(error: unknown, fallback: string) {
   return error.message || fallback;
 }
 
+function shouldUseCanvasStressFixture() {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('canvasFixture') === '50-nodes';
+}
+
 export function BrandSpaceShell() {
   const [activeView, setActiveView] = useState<BrandSpaceView>('boards');
   const [context, setContext] = useState(brandSpaceContext);
@@ -348,6 +355,17 @@ export function BrandSpaceShell() {
     async function loadBrandSpace() {
       setIsLoadingSpace(true);
       try {
+        if (shouldUseCanvasStressFixture()) {
+          const fixture = buildStressBoardFixture(50);
+          setIsBackendMode(false);
+          setRunStatus('running');
+          setNodes(fixture.nodes);
+          setEdges(fixture.edges);
+          setSelectedNodeId(fixture.nodes[0]?.id ?? 'platform-rack');
+          setReviewItems(reviewItemsFromPatches(initialGraphPatches));
+          setBackendNotice('50 节点压力验证底版已启用。');
+          return;
+        }
         const entities = await api.listEntities();
         const entity = entities.find((item) => !item.isInternalTestData) ?? entities[0];
         if (!entity) {
@@ -668,6 +686,8 @@ export function BrandSpaceShell() {
                   type="button"
                   onClick={() => setActiveView(item.id)}
                   className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors"
+                  aria-current={active ? 'page' : undefined}
+                  aria-label={`打开${item.label}视图：${item.description}`}
                   style={{
                     background: active ? 'var(--brand-bg)' : 'transparent',
                     color: active ? 'var(--brand-text)' : 'var(--text-secondary)',
@@ -690,6 +710,7 @@ export function BrandSpaceShell() {
                 key={label}
                 type="button"
                 className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                aria-label={`打开${label}`}
               >
                 <Icon className="h-4 w-4" />
                 {label}
@@ -713,7 +734,7 @@ export function BrandSpaceShell() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}>
+              <span className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }} aria-live="polite">
                 <span className={classNames('h-2 w-2 rounded-full', runStatus === 'running' && 'animate-pulse')} style={{ background: runStatus === 'running' ? 'var(--brand-primary)' : 'var(--text-tertiary)' }} />
                 {runStatusLabel(runStatus)}
               </span>
@@ -722,6 +743,7 @@ export function BrandSpaceShell() {
                 onClick={runStatus === 'running' ? handleRunPause : runStatus === 'paused' ? handleRunResume : handleRunStart}
                 className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+                aria-label={runStatus === 'running' ? '暂停当前画布运行' : runStatus === 'paused' ? '继续当前画布运行' : '启动当前画布运行'}
               >
                 {runStatus === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                 {runStatus === 'running' ? '暂停' : runStatus === 'paused' ? '继续' : '运行'}
@@ -731,18 +753,19 @@ export function BrandSpaceShell() {
                 onClick={handleRunStop}
                 className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+                aria-label="停止当前画布运行"
               >
                 <Square className="h-4 w-4" />
                 停止
               </button>
-              <button type="button" className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)]">
+              <button type="button" className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)]" aria-label="分享当前品牌空间">
                 <Share2 className="h-4 w-4" />
                 分享
               </button>
-              <button type="button" className="grid h-10 w-10 place-items-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="帮助">
+              <button type="button" className="grid h-10 w-10 place-items-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="帮助" aria-label="打开帮助">
                 <CircleHelp className="h-4 w-4" />
               </button>
-              <button type="button" className="grid h-10 w-10 place-items-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="通知">
+              <button type="button" className="grid h-10 w-10 place-items-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="通知" aria-label="查看通知">
                 <Bell className="h-4 w-4" />
               </button>
               <span className="grid h-10 w-10 place-items-center rounded-full bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
@@ -759,6 +782,8 @@ export function BrandSpaceShell() {
                   type="button"
                   onClick={() => setActiveView(item.id)}
                   className="rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+                  aria-current={activeView === item.id ? 'page' : undefined}
+                  aria-pressed={activeView === item.id}
                   style={{
                     background: activeView === item.id ? 'var(--bg-elevated)' : 'transparent',
                     color: activeView === item.id ? 'var(--brand-text)' : 'var(--text-secondary)',
