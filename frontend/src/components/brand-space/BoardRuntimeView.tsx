@@ -72,6 +72,9 @@ const stressBoardStage = {
   height: 1320,
 };
 
+// More than three rows of eight workflow nodes need the expanded QA canvas.
+const STRESS_STAGE_NODE_THRESHOLD = 24;
+
 const nodeSize = {
   default: { width: 188, height: 132 },
   rack: { width: 270, height: 560 },
@@ -99,7 +102,7 @@ function getNodeClass(node: BoardNode, selectedNodeId: string) {
 }
 
 function stageSizeForNodes(nodes: BoardNode[]) {
-  return nodes.length > 24 ? stressBoardStage : boardStage;
+  return nodes.length > STRESS_STAGE_NODE_THRESHOLD ? stressBoardStage : boardStage;
 }
 
 function nodeRect(node: BoardNode, stageSize = boardStage) {
@@ -232,8 +235,8 @@ export function BoardRuntimeView({
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--text-secondary)]" aria-live="polite">
-            <span className="inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--text-secondary)]">
+            <span className="inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5" style={{ borderColor: 'var(--border-subtle)' }} aria-live="polite">
               <span className={classNames('h-2 w-2 rounded-full', isRunning && 'animate-pulse')} style={{ background: isRunning ? 'var(--brand-primary)' : 'var(--text-tertiary)' }} />
               {statusLabel(runStatus)}
             </span>

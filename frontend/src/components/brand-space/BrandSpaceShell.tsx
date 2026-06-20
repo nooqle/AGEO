@@ -218,10 +218,15 @@ function backendNoticeFromError(error: unknown, fallback: string) {
   return error.message || fallback;
 }
 
-function shouldUseCanvasStressFixture() {
-  if (typeof window === 'undefined') return false;
+function canvasStressFixtureCount() {
+  if (typeof window === 'undefined') return null;
   const params = new URLSearchParams(window.location.search);
-  return params.get('canvasFixture') === '50-nodes';
+  const value = params.get('canvasFixture');
+  const match = value?.match(/^(\d+)-nodes$/);
+  if (!match) return null;
+  const count = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(count) || count < 1) return null;
+  return Math.min(count, 120);
 }
 
 export function BrandSpaceShell() {
@@ -355,15 +360,16 @@ export function BrandSpaceShell() {
     async function loadBrandSpace() {
       setIsLoadingSpace(true);
       try {
-        if (shouldUseCanvasStressFixture()) {
-          const fixture = buildStressBoardFixture(50);
+        const stressFixtureCount = canvasStressFixtureCount();
+        if (stressFixtureCount) {
+          const fixture = buildStressBoardFixture(stressFixtureCount);
           setIsBackendMode(false);
           setRunStatus('running');
           setNodes(fixture.nodes);
           setEdges(fixture.edges);
           setSelectedNodeId(fixture.nodes[0]?.id ?? 'platform-rack');
           setReviewItems(reviewItemsFromPatches(initialGraphPatches));
-          setBackendNotice('50 节点压力验证底版已启用。');
+          setBackendNotice(`${stressFixtureCount} 节点压力验证底版已启用。`);
           return;
         }
         const entities = await api.listEntities();

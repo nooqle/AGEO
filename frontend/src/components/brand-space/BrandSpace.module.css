@@ -1098,6 +1098,7 @@
     transition: none;
   }
 
+  /* Reset hover lift so reduced-motion users keep stable node positions. */
   .node:hover {
     transform: translate(-50%, -50%);
   }
