@@ -8,6 +8,7 @@ import type { ReportCanvasContent } from '@/types/canvas';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ConfidenceSignalContent } from './ConfidenceSignalContent';
+import { BrandAssociationCircleContent } from './BrandAssociationCircleContent';
 import { ReportPage } from './ReportScaffold';
 import { SiteConfidenceReportContent } from './SiteConfidenceReportContent';
 
@@ -36,6 +37,15 @@ function looksLikeSiteConfidenceFallback(content: ReportCanvasContent): boolean 
   }
 
   return Boolean(data.root_domain || data.site_root_url);
+}
+
+function isBrandAssociationCircleReport(content: ReportCanvasContent): boolean {
+  const reportKind = String(content.data.report_kind || '').trim();
+  const artifactKind = String(content.data.artifact_kind || '').trim();
+  return (
+    reportKind === 'brand_association_circle' ||
+    artifactKind === 'brand_association_circle'
+  );
 }
 
 function formatUpdatedAt(value?: string) {
@@ -258,6 +268,10 @@ function MissingCanonicalReport({
 export function ReportContent({ content, printMode = false }: { content: ReportCanvasContent; printMode?: boolean }) {
   if (isConfidenceCanvasReport(content)) {
     return <ConfidenceSignalContent content={content} printMode={printMode} />;
+  }
+
+  if (isBrandAssociationCircleReport(content)) {
+    return <BrandAssociationCircleContent content={content} printMode={printMode} />;
   }
 
   if (isSiteConfidenceCanvasReport(content) || looksLikeSiteConfidenceFallback(content)) {
