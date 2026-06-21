@@ -2,7 +2,7 @@
 
 import { AlertTriangle, Check, Eye, RotateCcw, X } from 'lucide-react';
 import styles from './BrandSpace.module.css';
-import type { GraphPatch, GraphPatchStatus } from '@/types/brandSpace';
+import type { BrandSpaceGraphUpdate, GraphPatch, GraphPatchStatus } from '@/types/brandSpace';
 
 const statusLabels: Record<GraphPatchStatus, string> = {
   auto_applied: '自动应用',
@@ -29,6 +29,8 @@ const patchTypeLabels: Record<string, string> = {
 
 interface GraphUpdateQueueProps {
   patches: GraphPatch[];
+  graphUpdate?: BrandSpaceGraphUpdate | null;
+  graphVersion?: string;
   onPatchDecision?: (patchId: string, status: Extract<GraphPatchStatus, 'accepted' | 'rejected' | 'needs_review'>) => void;
   onPatchSelect?: (patchId: string) => void;
   selectedPatchId?: string;
@@ -44,6 +46,8 @@ const statusOrder: GraphPatchStatus[] = ['needs_review', 'blocked', 'accepted', 
 
 export function GraphUpdateQueue({
   patches,
+  graphUpdate,
+  graphVersion,
   onPatchDecision,
   onPatchSelect,
   selectedPatchId,
@@ -63,6 +67,7 @@ export function GraphUpdateQueue({
       blocked: [],
     },
   );
+  const versionLabel = graphUpdate?.after_graph_version ?? graphVersion ?? null;
 
   return (
     <section className={classNames(styles.surface, 'rounded-xl p-4')}>
@@ -74,7 +79,7 @@ export function GraphUpdateQueue({
           </p>
         </div>
         <span className="rounded-lg border px-2.5 py-1 text-xs text-[var(--brand-text)]" style={{ borderColor: 'var(--brand-border)', background: 'var(--brand-bg)' }}>
-          图谱 v3.2.1
+          {versionLabel ? `图谱 ${versionLabel}` : '图谱待更新'}
         </span>
       </div>
 

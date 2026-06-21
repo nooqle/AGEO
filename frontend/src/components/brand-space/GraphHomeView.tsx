@@ -73,6 +73,15 @@ const priorityLabels: Record<string, string> = {
   low: '低',
 };
 
+const graphUpdateStatusLabels: Record<string, string> = {
+  pending: '待处理',
+  needs_review: '待审阅',
+  partial: '部分应用',
+  accepted: '已接受',
+  applied: '已应用',
+  failed: '未应用',
+};
+
 const emptyEntity: GraphEntity = {
   id: 'empty-brand',
   label: '品牌中心',
@@ -123,6 +132,18 @@ function patchIdForEntity(entity: GraphEntity, patches: GraphPatch[], inboxItems
   return match?.id;
 }
 
+function formatTimelineTime(value?: string | null) {
+  if (!value) return '时间待记录';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
 export function GraphHomeView({
   patches,
   graph,
@@ -164,6 +185,13 @@ export function GraphHomeView({
     return acc;
   }, {});
   const categoryOptions = ['all', ...Object.keys(categoryCounts)];
+  const timelineItems = graphUpdate
+    ? [
+        `本次更新：${graphUpdate.before_graph_version} → ${graphUpdate.after_graph_version}`,
+        `状态：${graphUpdateStatusLabels[graphUpdate.status] ?? graphUpdate.status}`,
+        `记录时间：${formatTimelineTime(graphUpdate.updated_at ?? graphUpdate.created_at)}`,
+      ]
+    : ['尚未生成 Graph Update，当前只展示品牌实体库基础状态。'];
   const selectGraphEntity = (entity: GraphEntity) => {
     setSelectedEntityId(entity.id);
     const linkedPatchId = patchIdForEntity(entity, patches, inboxItems);
@@ -252,6 +280,7 @@ export function GraphHomeView({
 
         <GraphUpdateQueue
           patches={patches}
+          graphUpdate={graphUpdate}
           onPatchDecision={onPatchDecision}
           onPatchSelect={setSelectedPatchId}
           selectedPatchId={selectedPatch?.id}
@@ -463,9 +492,9 @@ export function GraphHomeView({
             <h2 className="text-sm font-semibold text-[var(--text-primary)]">更新时间线</h2>
           </div>
           <div className="mt-3 space-y-2 text-xs text-[var(--text-secondary)]">
-            <p>v3.2.1 · 当前运行正在应用低风险补丁</p>
-            <p>v3.2.0 · 上一次 AI 能见度监测</p>
-            <p>v3.1.8 · 手动问题源导入</p>
+            {timelineItems.map((item) => (
+              <p key={item}>{item}</p>
+            ))}
           </div>
         </section>
       </aside>

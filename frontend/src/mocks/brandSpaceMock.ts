@@ -22,7 +22,7 @@ import type {
 
 export const brandSpaceContext: BrandSpaceContext = {
   brandName: '安利品牌空间',
-  graphVersion: 'v3.2.1',
+  graphVersion: '演示版本',
   boardName: 'AI 能见度监测画布',
   runId: 'run_2026-06-17_1023',
   startedAt: '2026-06-17 10:23:14',
@@ -158,7 +158,7 @@ export const initialBoardNodes: BoardNode[] = [
   {
     id: 'graph-update',
     title: '品牌图谱更新',
-    subtitle: '安利品牌图谱 v3.2.1',
+    subtitle: '安利品牌图谱演示更新',
     kind: 'graph_update',
     status: 'running',
     progress: 68,
@@ -494,7 +494,7 @@ export const reportGuardrails: ReportGuardrailResult[] = [
 
 export const traceSteps: TraceStep[] = [
   { id: 'trace-1', label: '报告结论', value: '汤臣倍健作为竞品候选出现。' },
-  { id: 'trace-2', label: '图谱更新', value: 'run_2026-06-17_1023 / graph v3.2.1' },
+  { id: 'trace-2', label: '图谱更新', value: 'run_2026-06-17_1023 / graph demo' },
   { id: 'trace-3', label: '图谱补丁', value: 'patch-003 新增竞品关系' },
   { id: 'trace-4', label: '实体关系', value: '竞品关系置信度 0.72' },
   { id: 'trace-5', label: '证据', value: 'DeepSeek 对营养补充品比较问题的回答' },

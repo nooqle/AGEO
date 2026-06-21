@@ -3228,7 +3228,7 @@ class BrandSpaceService:
             return self._empty_space_payload(entity)
         nodes = await self._node_runs(board_run.id)
         artifacts = await self._artifacts(board_run.id)
-        events = await self._events(board_run.id)
+        events = await self._latest_events(board_run.id, limit=240)
         graph_update = await self._graph_update_for_run(board_run.id)
         patches = await self._patches(graph_update.id) if graph_update else []
         graph = (
@@ -3916,6 +3916,20 @@ class BrandSpaceService:
             .offset(self._bounded_offset(offset))
         )
         return list(result.scalars().all())
+
+    async def _latest_events(
+        self,
+        board_run_id: UUID,
+        *,
+        limit: int = 100,
+    ) -> list[BoardRuntimeEvent]:
+        result = await self.db.execute(
+            select(BoardRuntimeEvent)
+            .where(BoardRuntimeEvent.board_run_id == board_run_id)
+            .order_by(desc(BoardRuntimeEvent.sequence))
+            .limit(self._bounded_limit(limit, default=100, maximum=500))
+        )
+        return list(reversed(list(result.scalars().all())))
 
     async def _events_after(
         self,

@@ -290,7 +290,7 @@ function canvasStressFixtureCount() {
 }
 
 export function BrandSpaceShell() {
-  const [activeView, setActiveView] = useState<BrandSpaceView>('boards');
+  const [activeView, setActiveView] = useState<BrandSpaceView>('graph');
   const [context, setContext] = useState(brandSpaceContext);
   const [spaceRun, setSpaceRun] = useState<BrandSpaceBoardRun | null>(null);
   const [entityId, setEntityId] = useState<string | null>(null);
@@ -440,10 +440,7 @@ export function BrandSpaceShell() {
         if (!entity) {
           throw new Error('当前账号还没有可用品牌');
         }
-        let payload = await api.getBrandSpace(entity.id);
-        if (!payload.run) {
-          payload = await api.createBrandSpaceBoardRun(entity.id);
-        }
+        const payload = await api.getBrandSpace(entity.id);
         if (cancelled) return;
         setEntityId(entity.id);
         setIsBackendMode(true);
@@ -941,6 +938,7 @@ export function BrandSpaceShell() {
                 platforms={platforms}
                 edges={edges}
                 patches={patches}
+                graphUpdate={graphUpdate}
                 artifacts={artifactsState}
                 events={events}
                 selectedNodeId={selectedNodeId}

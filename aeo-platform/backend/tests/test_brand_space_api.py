@@ -24,6 +24,7 @@ from app.api.v1.brand_space import (
     get_board_run_assets,
     get_board_run_events,
     get_artifact_detail,
+    download_artifact,
     get_brand_graph,
     get_brand_reports,
     get_brand_review_items,
@@ -68,6 +69,7 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:
         owner = _user("brand-space-api-owner@example.com")
+        other_user = _user("brand-space-api-other@example.com")
         entity = Entity(
             id=uuid.uuid4(),
             name="安利",
@@ -76,7 +78,7 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             status=EntityStatus.ACTIVE,
             owner_user_id=owner.id,
         )
-        session.add_all([owner, entity])
+        session.add_all([owner, other_user, entity])
         await session.commit()
 
         created = await create_board_run(
@@ -143,6 +145,20 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert graph_asset_access["access"]["mode"] == "object_storage"
+        with pytest.raises(HTTPException) as access_exc:
+            await get_artifact_access(
+                artifact_id=graph_assets["artifacts"][0]["artifactId"],
+                db=session,
+                current_user=other_user,
+            )
+        assert access_exc.value.status_code == 404
+        with pytest.raises(HTTPException) as download_exc:
+            await download_artifact(
+                artifact_id=graph_assets["artifacts"][0]["artifactId"],
+                db=session,
+                current_user=other_user,
+            )
+        assert download_exc.value.status_code == 404
         assert any(
             link["kind"] == "graph_update"
             for link in graph_asset_detail["trace"]["links"]

@@ -17,6 +17,7 @@ import type {
   BoardEdge,
   BoardNode,
   BoardRunStatus,
+  BrandSpaceGraphUpdate,
   GraphPatch,
   GraphPatchStatus,
   InspectorTab,
@@ -30,6 +31,7 @@ interface BoardRuntimeViewProps {
   platforms: PlatformFetchNode[];
   edges: BoardEdge[];
   patches: GraphPatch[];
+  graphUpdate?: BrandSpaceGraphUpdate | null;
   artifacts: ArtifactRef[];
   events: RuntimeEvent[];
   selectedNodeId: string;
@@ -175,6 +177,7 @@ export function BoardRuntimeView({
   platforms,
   edges,
   patches,
+  graphUpdate,
   artifacts,
   events,
   selectedNodeId,
@@ -387,6 +390,7 @@ export function BoardRuntimeView({
 
         <GraphUpdateQueue
           patches={patches}
+          graphUpdate={graphUpdate}
           onPatchDecision={onPatchDecision}
           pendingPatchDecisionIds={pendingPatchDecisionIds}
         />

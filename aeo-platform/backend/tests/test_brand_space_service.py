@@ -1979,6 +1979,45 @@ async def test_confirmed_competitor_patch_becomes_strength_update_on_later_run(t
 
 
 @pytest.mark.asyncio
+async def test_space_payload_uses_latest_runtime_event_window(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-latest-events@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+        )
+        board_run_id = uuid.UUID(payload["run"]["id"])
+        for index in range(260):
+            await service._append_event(
+                entity_id=entity.id,
+                board_run_id=board_run_id,
+                event_type="long_run_tick",
+                severity="info",
+                message=f"长运行日志 {index + 1}",
+            )
+        await session.commit()
+
+        refreshed = await service.get_board_run(
+            run_id=board_run_id,
+            current_user=owner,
+        )
+        sequences = [event["sequence"] for event in refreshed["events"]]
+        assert len(sequences) == 240
+        assert sequences == sorted(sequences)
+        assert sequences[0] > 1
+        assert sequences[-1] >= 260
+        assert all(sequence is not None for sequence in sequences)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_real_board_run_sync_is_throttled_for_repeated_reads(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:
