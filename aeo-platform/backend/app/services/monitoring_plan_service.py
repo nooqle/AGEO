@@ -35,6 +35,27 @@ from app.services.monitoring_service import MonitoringService
 
 logger = logging.getLogger(__name__)
 
+QUESTION_ANALYSIS_METADATA_KEYS = (
+    "source",
+    "source_persona",
+    "audience_segment",
+    "core_anxiety",
+    "life_scene",
+    "opportunity_point",
+    "probe_type",
+    "mother_theme",
+    "question_type",
+    "mentions_amway",
+    "life_stage",
+    "four_have",
+    "touchpoint",
+    "monitoring_purpose",
+    "center_terms",
+    "question_set_version",
+    "metadata_status",
+    "metadata_missing_fields",
+)
+
 
 MONITOR_MODE_ALIASES = {
     "panorama": "panorama",
@@ -239,21 +260,24 @@ class MonitoringPlanService:
             question_id = str(
                 raw.get("question_id") or raw.get("id") or f"q_{index:03d}"
             ).strip()
-            normalized.append(
-                {
-                    "question_id": question_id,
-                    "question_text": text,
-                    "scene": str(
-                        raw.get("scene") or raw.get("category") or ""
-                    ).strip(),
-                    "intent": str(
-                        raw.get("intent") or raw.get("user_intent") or ""
-                    ).strip(),
-                    "stage": str(
-                        raw.get("stage") or raw.get("decision_stage") or ""
-                    ).strip(),
-                }
-            )
+            question_payload = {
+                "question_id": question_id,
+                "question_text": text,
+                "scene": str(
+                    raw.get("scene") or raw.get("category") or ""
+                ).strip(),
+                "intent": str(
+                    raw.get("intent") or raw.get("user_intent") or ""
+                ).strip(),
+                "stage": str(
+                    raw.get("stage") or raw.get("decision_stage") or ""
+                ).strip(),
+            }
+            for key in QUESTION_ANALYSIS_METADATA_KEYS:
+                value = raw.get(key)
+                if value not in (None, ""):
+                    question_payload[key] = value
+            normalized.append(question_payload)
         return normalized
 
     def _enforce_question_limit(self, questions: list[dict[str, Any]]) -> None:

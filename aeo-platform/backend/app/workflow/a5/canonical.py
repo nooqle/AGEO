@@ -44,6 +44,7 @@ CANONICAL_REPORT_KIND_ALIASES = {
     "persona": "scenario",
     "panorama": "panorama",
     "scenario": "scenario",
+    "brand_association_circle": "brand_association_circle",
 }
 
 INTENT_ALIASES = {
@@ -313,9 +314,9 @@ def normalize_platform(value: Any) -> str:
     return CANONICAL_PLATFORM_ALIASES.get(normalized, normalized)
 
 
-def normalize_report_kind(value: Any) -> Literal["panorama", "scenario"]:
+def normalize_report_kind(value: Any) -> str:
     normalized = str(value or "").strip().lower()
-    return CANONICAL_REPORT_KIND_ALIASES.get(normalized, "scenario")  # type: ignore[return-value]
+    return CANONICAL_REPORT_KIND_ALIASES.get(normalized, "scenario")
 
 
 def safe_ratio(numerator: int | float, denominator: int | float) -> float | None:

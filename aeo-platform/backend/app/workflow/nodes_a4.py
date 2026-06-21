@@ -53,6 +53,7 @@ from app.workflow.events import (
     send_reply_event,
     send_error_event,
     send_browser_state_event,
+    send_stage_result,
 )
 from app.workflow.harness_validation import (
     build_harness_decision,
@@ -235,6 +236,244 @@ async def _persist_brand_intelligence_fetch_results(
         logger.info("[A4] Brand intelligence fetch projection: %s", counts)
     except Exception as exc:
         logger.warning("[A4] Brand intelligence fetch projection failed: %s", exc)
+
+
+_ASSOCIATION_CIRCLE_MODES = {
+    "brand_association_circle",
+    "association_circle",
+    "brand-association-circle",
+    "amway_association_circle",
+    "amway-brand-association-circle",
+}
+
+
+def _is_association_circle_context(state: AgentState) -> bool:
+    candidates: list[Any] = [
+        state.get("analysis_mode"),
+        state.get("report_kind"),
+        state.get("a3_mode"),
+    ]
+    for container_key in (
+        "dashboard_context",
+        "input_scope",
+        "tool_call_args",
+        "user_decisions",
+    ):
+        container = state.get(container_key)
+        if isinstance(container, dict):
+            candidates.extend(
+                [
+                    container.get("analysis_mode"),
+                    container.get("report_kind"),
+                    container.get("a3_mode"),
+                ]
+            )
+    return any(
+        str(candidate or "").strip().lower() in _ASSOCIATION_CIRCLE_MODES
+        for candidate in candidates
+    )
+
+
+def _association_center_terms_from_a4_state(state: AgentState) -> list[str] | None:
+    for key in ("active_center_term", "center_term"):
+        text = str(state.get(key) or "").strip()
+        if text:
+            return [text]
+
+    for key in ("center_terms", "brand_center_terms"):
+        value = state.get(key)
+        if isinstance(value, list):
+            terms = [str(item).strip() for item in value if str(item).strip()]
+            if terms:
+                return terms[:1]
+
+    for container_key in ("dashboard_context", "input_scope", "tool_call_args"):
+        container = state.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        for key in ("active_center_term", "center_term"):
+            text = str(container.get(key) or "").strip()
+            if text:
+                return [text]
+        value = container.get("center_terms")
+        if isinstance(value, list):
+            terms = [str(item).strip() for item in value if str(item).strip()]
+            if terms:
+                return terms[:1]
+    return None
+
+
+async def _persist_a4_stage_result(
+    state: AgentState,
+    *,
+    task_id: str | None = None,
+    stage: str,
+    stage_name: str,
+    result_type: str,
+    data: dict[str, Any],
+) -> None:
+    resolved_task_id = (
+        task_id
+        or state.get("task_id")
+        or state.get("analysis_task_id")
+        or state.get("active_task_id")
+    )
+    if not resolved_task_id:
+        return
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.task_service import TaskService
+
+        async with AsyncSessionLocal() as db:
+            task_service = TaskService(db)
+            await task_service.append_stage_result(
+                UUID(str(resolved_task_id)),
+                {
+                    "stage": stage,
+                    "stage_name": stage_name,
+                    "result_type": result_type,
+                    "data": data,
+                },
+            )
+    except Exception as exc:
+        logger.warning("[A4] Failed to persist stage_result: %s", exc)
+
+
+async def _build_amway_entity_pipeline_update(
+    state: AgentState,
+    *,
+    session_id: str,
+    fetch_results: list[dict[str, Any]],
+    realtime_extraction_result: dict[str, Any] | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """Run A4->Extraction->Calibration before A5 report generation."""
+
+    if not _is_association_circle_context(state) or not fetch_results:
+        return {}
+
+    from app.services.amway_entity_calibration_service import (
+        AmwayEntityCalibrationService,
+    )
+    from app.services.amway_entity_extraction_service import (
+        AmwayEntityExtractionService,
+    )
+
+    extraction_service = AmwayEntityExtractionService()
+    extraction_result = extraction_service.extract_from_fetch_results(fetch_results)
+    realtime_signal_count = 0
+    if isinstance(realtime_extraction_result, dict):
+        realtime_signal_count = int(
+            realtime_extraction_result.get("signal_count") or 0
+        )
+        extraction_result["realtime_extraction_enabled"] = bool(
+            realtime_extraction_result.get("realtime_extraction_enabled")
+        )
+        extraction_result["realtime_signal_count"] = realtime_signal_count
+        extraction_result["realtime_answer_signal_count"] = int(
+            realtime_extraction_result.get("answer_signal_count") or 0
+        )
+        extraction_result["realtime_answer_ids"] = list(
+            realtime_extraction_result.get("realtime_answer_ids") or []
+        )[:200]
+
+    if realtime_signal_count <= 0:
+        for answer_record in extraction_result.get("answer_signals", [])[:160]:
+            if not isinstance(answer_record, dict):
+                continue
+            signals = [
+                signal
+                for signal in answer_record.get("signals") or []
+                if isinstance(signal, dict)
+            ]
+            if not signals:
+                continue
+            stage_result_data = {
+                "answer_id": answer_record.get("answer_id"),
+                "question_id": answer_record.get("question_id"),
+                "question": answer_record.get("question"),
+                "platform": answer_record.get("platform"),
+                "signal_count": len(signals),
+                "is_realtime": False,
+                "signals": [
+                    {
+                        "entity_name": signal.get("entity_name"),
+                        "entity_type": signal.get("entity_type"),
+                        "matched_text": signal.get("matched_text"),
+                        "relation_type": signal.get("relation_type"),
+                        "term_origin": signal.get("term_origin"),
+                        "evidence_text": signal.get("evidence_text"),
+                        "answer_position": signal.get("answer_position"),
+                    }
+                    for signal in signals[:12]
+                ],
+            }
+            await send_stage_result(
+                session_id=session_id,
+                stage="EntityExtraction",
+                stage_name="实体关系抽取",
+                result_type="entity_extraction_signal",
+                data=stage_result_data,
+            )
+            await _persist_a4_stage_result(
+                state,
+                task_id=task_id,
+                stage="EntityExtraction",
+                stage_name="实体关系抽取",
+                result_type="entity_extraction_signal",
+                data=stage_result_data,
+            )
+
+    calibration_service = AmwayEntityCalibrationService(
+        extraction_service=extraction_service
+    )
+    calibration_result = calibration_service.calibrate(
+        fetch_results=fetch_results,
+        extraction_result=extraction_result,
+        center_terms=_association_center_terms_from_a4_state(state),
+    )
+    projection = calibration_result.get("association_circle_projection")
+    sample_scope = calibration_result.get("sample_scope")
+    platform_summary = calibration_result.get("platform_summary")
+    calibration_stage_data = {
+        "node_count": (
+            len(projection.get("nodes") or []) if isinstance(projection, dict) else 0
+        ),
+        "risk_count": (
+            calibration_result.get("risk_map", {}).get("risk_count", 0)
+            if isinstance(calibration_result.get("risk_map"), dict)
+            else 0
+        ),
+        "signal_count": extraction_result.get("signal_count", 0),
+        "sample_scope": sample_scope if isinstance(sample_scope, dict) else {},
+        "platform_summary": (
+            platform_summary if isinstance(platform_summary, dict) else {}
+        ),
+        "generated_from": (
+            projection.get("generated_from") if isinstance(projection, dict) else None
+        ),
+    }
+    await send_stage_result(
+        session_id=session_id,
+        stage="EntityCalibration",
+        stage_name="实体校准汇总",
+        result_type="entity_calibration_summary",
+        data=calibration_stage_data,
+    )
+    await _persist_a4_stage_result(
+        state,
+        task_id=task_id,
+        stage="EntityCalibration",
+        stage_name="实体校准汇总",
+        result_type="entity_calibration_summary",
+        data=calibration_stage_data,
+    )
+    return {
+        "entity_extraction_result": extraction_result,
+        "entity_calibration_result": calibration_result,
+        "brand_association_report_input": calibration_result.get("report_input"),
+        "association_circle_projection": projection,
+    }
 
 
 def _action_question_ids_from_fetch_results(
@@ -829,6 +1068,46 @@ def _question_id_from_state_question(question: dict[str, Any]) -> str:
     ).strip()
 
 
+_QUESTION_METADATA_KEYS = (
+    "category",
+    "intent",
+    "stage",
+    "source",
+    "source_persona",
+    "audience_segment",
+    "core_anxiety",
+    "life_scene",
+    "opportunity_point",
+    "probe_type",
+    "mother_theme",
+    "question_type",
+    "mentions_amway",
+    "life_stage",
+    "four_have",
+    "touchpoint",
+    "monitoring_purpose",
+    "center_terms",
+    "question_set_version",
+)
+
+
+def _question_metadata_for_fetch_result(question: dict[str, Any]) -> dict[str, Any]:
+    """Copy analysis metadata from A3 question rows into A4 fetch rows."""
+
+    metadata: dict[str, Any] = {}
+    if not isinstance(question, dict):
+        return metadata
+    for key in _QUESTION_METADATA_KEYS:
+        value = question.get(key)
+        if value not in (None, ""):
+            metadata[key] = value
+    if "intent" in metadata and "user_intent" not in metadata:
+        metadata["user_intent"] = metadata["intent"]
+    if "stage" in metadata and "decision_stage" not in metadata:
+        metadata["decision_stage"] = metadata["stage"]
+    return metadata
+
+
 def _derive_preserved_fetch_results(
     *,
     current_questions: list[dict[str, Any]],
@@ -877,6 +1156,17 @@ def _derive_preserved_fetch_results(
                 {
                     "question_id": question_id,
                     "question_text": existing_entry.get("question_text", ""),
+                    **_question_metadata_for_fetch_result(
+                        next(
+                            (
+                                question
+                                for question in current_questions
+                                if _question_id_from_state_question(question)
+                                == question_id
+                            ),
+                            {},
+                        )
+                    ),
                     "platform_results": kept_platform_results,
                     "aio_platform_packets": _collect_aio_platform_packets_for_platforms(
                         existing_entry,
@@ -1338,6 +1628,21 @@ async def _tracked_api_fetch(
         return result
     finally:
         await tracker.record_completion(platform)
+
+
+async def _tracked_api_fetch_with_context(
+    q_idx: int,
+    platform: str,
+    coro: Coroutine[Any, Any, dict[str, Any]],
+    tracker: _ProgressTracker,
+) -> tuple[int, str, dict[str, Any] | None, Exception | None]:
+    """Return question/platform context with each completed API answer."""
+
+    try:
+        result = await _tracked_api_fetch(coro, platform, tracker)
+    except Exception as exc:
+        return q_idx, platform, None, exc
+    return q_idx, platform, result, None
 
 
 def _get_browser_timeout(platform: str) -> float:
@@ -2194,6 +2499,27 @@ async def a4_fetch_node(state: AgentState) -> Command:
     )
 
     fetch_results: list[dict[str, Any]] = []
+    realtime_entity_extraction_service: Any | None = None
+    realtime_entity_extraction_result: dict[str, Any] | None = None
+    if _is_association_circle_context(state):
+        try:
+            from app.services.amway_entity_extraction_service import (
+                AmwayEntityExtractionService,
+            )
+
+            realtime_entity_extraction_service = AmwayEntityExtractionService()
+            realtime_entity_extraction_result = (
+                realtime_entity_extraction_service.extract_from_fetch_results([])
+            )
+            realtime_entity_extraction_result["realtime_extraction_enabled"] = True
+            realtime_entity_extraction_result["realtime_answer_ids"] = []
+        except Exception as extraction_init_err:
+            logger.warning(
+                "[A4] Realtime Amway entity extraction init failed: %s",
+                extraction_init_err,
+            )
+            realtime_entity_extraction_service = None
+            realtime_entity_extraction_result = None
 
     try:
         # Initialize fetchers based on fetch_mode
@@ -2342,16 +2668,169 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 i: [] for i in range(total)
             }
 
-            async def _persist_incremental_browser_result(
+            def _single_answer_fetch_result(
                 q_idx: int,
-                raw_result: dict[str, Any],
+                enriched_result: dict[str, Any],
+            ) -> dict[str, Any]:
+                question = questions[q_idx]
+                return {
+                    "question_id": question.get("id", f"Q{q_idx}"),
+                    "question_text": question.get("text", ""),
+                    **_question_metadata_for_fetch_result(question),
+                    "platform_results": [enriched_result],
+                    "aio_platform_packets": _collect_aio_platform_packets(
+                        [enriched_result]
+                    ),
+                }
+
+            async def _extract_incremental_entity_signals(
+                fetch_result: dict[str, Any],
+                *,
+                event_source: str,
             ) -> None:
-                """Persist one completed browser answer before the platform finishes."""
+                if (
+                    realtime_entity_extraction_service is None
+                    or realtime_entity_extraction_result is None
+                ):
+                    return
+                try:
+                    incremental = (
+                        realtime_entity_extraction_service.extract_from_fetch_results(
+                            [fetch_result]
+                        )
+                    )
+                except Exception as extraction_err:
+                    logger.warning(
+                        "[A4] Realtime Amway entity extraction failed: %s",
+                        extraction_err,
+                    )
+                    return
+
+                existing_keys = {
+                    (
+                        str(signal.get("answer_id") or ""),
+                        str(signal.get("entity_id") or ""),
+                        str(signal.get("matched_text") or ""),
+                    )
+                    for signal in realtime_entity_extraction_result.get("signals")
+                    or []
+                    if isinstance(signal, dict)
+                }
+                answer_signals = realtime_entity_extraction_result.setdefault(
+                    "answer_signals", []
+                )
+                flat_signals = realtime_entity_extraction_result.setdefault(
+                    "signals", []
+                )
+                known_answer_ids = {
+                    str(answer_id)
+                    for answer_id in realtime_entity_extraction_result.setdefault(
+                        "realtime_answer_ids", []
+                    )
+                }
+
+                for answer_record in incremental.get("answer_signals") or []:
+                    if not isinstance(answer_record, dict):
+                        continue
+                    new_signals: list[dict[str, Any]] = []
+                    for signal in answer_record.get("signals") or []:
+                        if not isinstance(signal, dict):
+                            continue
+                        key = (
+                            str(signal.get("answer_id") or ""),
+                            str(signal.get("entity_id") or ""),
+                            str(signal.get("matched_text") or ""),
+                        )
+                        if key in existing_keys:
+                            continue
+                        existing_keys.add(key)
+                        new_signals.append(signal)
+                    if not new_signals:
+                        continue
+
+                    answer_id = str(answer_record.get("answer_id") or "")
+                    existing_record = next(
+                        (
+                            record
+                            for record in answer_signals
+                            if isinstance(record, dict)
+                            and str(record.get("answer_id") or "") == answer_id
+                        ),
+                        None,
+                    )
+                    if existing_record is None:
+                        existing_record = dict(answer_record)
+                        existing_record["signals"] = []
+                        answer_signals.append(existing_record)
+                    existing_record["signals"].extend(new_signals)
+                    flat_signals.extend(new_signals)
+                    if answer_id and answer_id not in known_answer_ids:
+                        known_answer_ids.add(answer_id)
+                        realtime_entity_extraction_result[
+                            "realtime_answer_ids"
+                        ].append(answer_id)
+
+                    stage_result_data = {
+                        "answer_id": answer_id,
+                        "question_id": answer_record.get("question_id"),
+                        "question": answer_record.get("question"),
+                        "platform": answer_record.get("platform"),
+                        "event_source": event_source,
+                        "signal_count": len(new_signals),
+                        "is_realtime": True,
+                        "signals": [
+                            {
+                                "entity_name": signal.get("entity_name"),
+                                "entity_type": signal.get("entity_type"),
+                                "matched_text": signal.get("matched_text"),
+                                "relation_type": signal.get("relation_type"),
+                                "term_origin": signal.get("term_origin"),
+                                "evidence_text": signal.get("evidence_text"),
+                                "answer_position": signal.get("answer_position"),
+                            }
+                            for signal in new_signals[:12]
+                        ],
+                    }
+                    await send_stage_result(
+                        session_id=session_id,
+                        stage="EntityExtraction",
+                        stage_name="实体关系抽取",
+                        result_type="entity_extraction_signal",
+                        data=stage_result_data,
+                    )
+                    await _persist_a4_stage_result(
+                        state,
+                        task_id=task_id,
+                        stage="EntityExtraction",
+                        stage_name="实体关系抽取",
+                        result_type="entity_extraction_signal",
+                        data=stage_result_data,
+                    )
+
+                realtime_entity_extraction_result["signal_count"] = len(flat_signals)
+                realtime_entity_extraction_result["answer_signal_count"] = sum(
+                    1
+                    for record in answer_signals
+                    if isinstance(record, dict) and record.get("signals")
+                )
+
+            async def _persist_incremental_fetch_result(
+                q_idx: int,
+                enriched_result: dict[str, Any],
+                *,
+                event_source: str,
+            ) -> None:
+                """Persist one completed answer before the full A4 batch finishes."""
 
                 task_run_id = state.get("run_id")
                 entity_id = state.get("entity_id")
                 user_id = state.get("user_id")
+                fetch_result = _single_answer_fetch_result(q_idx, enriched_result)
                 if not (task_id and task_run_id and user_id):
+                    await _extract_incremental_entity_signals(
+                        fetch_result,
+                        event_source=f"{event_source}_memory_result",
+                    )
                     return
 
                 try:
@@ -2362,20 +2841,6 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         FetchRunPlatformStateService,
                     )
 
-                    question = questions[q_idx]
-                    enriched_result = _attach_aio_platform_packet(
-                        raw_result,
-                        question=question,
-                        request=aio_fetch_request,
-                    )
-                    fetch_result = {
-                        "question_id": question.get("id", f"Q{q_idx}"),
-                        "question_text": question.get("text", ""),
-                        "platform_results": [enriched_result],
-                        "aio_platform_packets": _collect_aio_platform_packets(
-                            [enriched_result]
-                        ),
-                    }
                     async with AsyncSessionLocal() as db:
                         state_service = FetchRunPlatformStateService(db)
                         await state_service.sync_fetch_results(
@@ -2387,12 +2852,39 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             fetch_results=[fetch_result],
                         )
                         await db.commit()
+                    await _extract_incremental_entity_signals(
+                        fetch_result,
+                        event_source=f"{event_source}_persisted_answer",
+                    )
                 except Exception as incremental_err:
                     logger.warning(
-                        "[A4] Incremental browser result persist failed for Q%d: %s",
+                        "[A4] Incremental %s result persist failed for Q%d: %s",
+                        event_source,
                         q_idx + 1,
                         incremental_err,
                     )
+                    await _extract_incremental_entity_signals(
+                        fetch_result,
+                        event_source=f"{event_source}_memory_result",
+                    )
+
+            async def _persist_incremental_browser_result(
+                q_idx: int,
+                raw_result: dict[str, Any],
+            ) -> None:
+                """Persist one completed browser answer before the platform finishes."""
+
+                question = questions[q_idx]
+                enriched_result = _attach_aio_platform_packet(
+                    raw_result,
+                    question=question,
+                    request=aio_fetch_request,
+                )
+                await _persist_incremental_fetch_result(
+                    q_idx,
+                    enriched_result,
+                    event_source="browser",
+                )
 
             # =============================================================
             # Phase 1: API calls (fast mode only)
@@ -2470,44 +2962,58 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     task_id=task_id,
                 )
 
-                # Wrap each task to report progress on completion
-                tracked_tasks = [
-                    _tracked_api_fetch(task, platform, tracker)
-                    for task, (_q_idx, platform) in zip(api_tasks, api_task_map)
-                ]
-                api_all_results = await asyncio.gather(
-                    *tracked_tasks, return_exceptions=True
-                )
-
-                # Organize API results by question index
                 api_success_total = 0
-                for (q_idx, platform), result in zip(api_task_map, api_all_results):
-                    if isinstance(result, BaseException):
+                tracked_tasks = [
+                    asyncio.create_task(
+                        _tracked_api_fetch_with_context(q_idx, platform, task, tracker)
+                    )
+                    for task, (q_idx, platform) in zip(api_tasks, api_task_map)
+                ]
+
+                # Persist and extract each answer as soon as it completes so the
+                # console can show a live graph instead of waiting for all APIs.
+                for completed_task in asyncio.as_completed(tracked_tasks):
+                    q_idx, platform, result, result_err = await completed_task
+                    if result_err is not None:
                         logger.error(
-                            "[A4] API %s Q%d exception: %s", platform, q_idx + 1, result
+                            "[A4] API %s Q%d exception: %s",
+                            platform,
+                            q_idx + 1,
+                            result_err,
                         )
-                        question_results[q_idx].append(
-                            _attach_aio_platform_packet(
-                                {
-                                    "platform": platform,
-                                    "fetch_method": "api",
-                                    "success": False,
-                                    "error": str(result),
-                                },
-                                question=questions[q_idx],
-                                request=aio_fetch_request,
-                            )
+                        enriched_result = _attach_aio_platform_packet(
+                            {
+                                "platform": platform,
+                                "fetch_method": "api",
+                                "success": False,
+                                "error": str(result_err),
+                            },
+                            question=questions[q_idx],
+                            request=aio_fetch_request,
                         )
-                    else:
-                        question_results[q_idx].append(
-                            _attach_aio_platform_packet(
-                                result,
-                                question=questions[q_idx],
-                                request=aio_fetch_request,
-                            )
+                        question_results[q_idx].append(enriched_result)
+                        await _persist_incremental_fetch_result(
+                            q_idx,
+                            enriched_result,
+                            event_source="api",
                         )
-                        if result.get("success"):
-                            api_success_total += 1
+                        continue
+
+                    if result is None:
+                        continue
+                    enriched_result = _attach_aio_platform_packet(
+                        result,
+                        question=questions[q_idx],
+                        request=aio_fetch_request,
+                    )
+                    question_results[q_idx].append(enriched_result)
+                    await _persist_incremental_fetch_result(
+                        q_idx,
+                        enriched_result,
+                        event_source="api",
+                    )
+                    if result.get("success"):
+                        api_success_total += 1
 
                 logger.info(
                     "[A4] Phase 1 (API) done: %d/%d succeeded",
@@ -3056,6 +3562,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     {
                         "question_id": question_id,
                         "question_text": question_text,
+                        **_question_metadata_for_fetch_result(question),
                         "platform_results": platform_results,
                         "aio_platform_packets": _collect_aio_platform_packets(
                             platform_results
@@ -3415,7 +3922,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
         if not artifact_validation.passed:
             artifact_failure_message = (
-                "答案抓取结果已生成，但官方结果写回失败，当前不能继续生成分析报告。"
+                "答案抓取结果已生成，但官方结果写回失败，当前需要先修复写回后再生成分析报告。"
             )
             await send_error_event(
                 session_id,
@@ -3467,6 +3974,15 @@ async def a4_fetch_node(state: AgentState) -> Command:
             state,
             fetch_results=canonical_result["fetch_results"],
         )
+        entity_pipeline_update = await _build_amway_entity_pipeline_update(
+            state,
+            session_id=session_id,
+            fetch_results=canonical_result["fetch_results"],
+            realtime_extraction_result=realtime_entity_extraction_result,
+            task_id=str(task_id) if task_id else None,
+        )
+        if entity_pipeline_update:
+            canonical_result.update(entity_pipeline_update)
 
         # Write A4 materials into Knowledge Workspace for future retrieval.
         try:
@@ -3530,6 +4046,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             "a4_completion_observation": observation,
             "fetch_recovery_plan": dict(observation.get("recovery_plan") or {}),
             "fetch_results": canonical_result["fetch_results"],
+            **entity_pipeline_update,
             "current_step": "A4",
             "progress": 0.6,
             "progress_message": completion_progress_message,

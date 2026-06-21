@@ -34,6 +34,19 @@ _LINK_HEADER_KEYWORDS = ("链接", "link", "url", "网址", "来源", "source", 
 _INDUSTRY_HEADER_KEYWORDS = ("行业", "industry", "赛道", "品类")
 _KEYWORD_HEADER_KEYWORDS = ("关键词", "keyword", "核心词")
 _PRODUCT_HEADER_KEYWORDS = ("产品", "product", "品类", "产品线")
+_QUESTION_ID_HEADER_ALIASES = ("qid", "question_id", "id", "编号", "题号", "序号")
+_MOTHER_THEME_HEADER_ALIASES = ("母题", "主题", "topic", "theme", "mother_theme")
+_QUESTION_TYPE_HEADER_ALIASES = ("问题类型", "question_type", "探针类型", "probe_type")
+_MENTIONS_AMWAY_HEADER_ALIASES = ("是否点名安利", "是否点名", "mentions_amway")
+_LIFE_STAGE_HEADER_ALIASES = ("年龄/人生阶段", "人生阶段", "年龄阶段", "life_stage")
+_FOUR_HAVE_HEADER_ALIASES = ("对应四有", "四有", "four_have")
+_TOUCHPOINT_HEADER_ALIASES = ("对应触点", "触点", "touchpoint")
+_MONITORING_PURPOSE_HEADER_ALIASES = (
+    "主要监测目的",
+    "监测目的",
+    "monitoring_purpose",
+)
+_QUESTION_SET_VERSION_HEADER_ALIASES = ("question_set_version", "题库版本", "问题版本")
 
 
 @dataclass
@@ -107,21 +120,34 @@ class TableIntakeService:
 
     def _parse_xlsx(self, file_meta: FileMetadata) -> ParsedTable:
         workbook = load_workbook(file_meta.path, read_only=True, data_only=True)
-        for worksheet in workbook.worksheets:
-            matrix: list[list[str]] = []
-            for row in worksheet.iter_rows(values_only=True):
-                matrix.append(
-                    ["" if cell is None else str(cell).strip() for cell in row]
-                )
-            if any(any(cell for cell in row) for row in matrix):
-                return self._build_parsed_table(
-                    file_name=file_meta.name,
-                    file_id=str(file_meta.id),
-                    mime_type=file_meta.content_type,
-                    sheet_name=worksheet.title,
-                    matrix=matrix,
-                )
-        raise ValueError("表格为空，未解析到有效数据")
+        try:
+            first_non_empty: ParsedTable | None = None
+            for worksheet in workbook.worksheets:
+                matrix: list[list[str]] = []
+                for row in worksheet.iter_rows(values_only=True):
+                    matrix.append(
+                        ["" if cell is None else str(cell).strip() for cell in row]
+                    )
+                if any(any(cell for cell in row) for row in matrix):
+                    try:
+                        parsed = self._build_parsed_table(
+                            file_name=file_meta.name,
+                            file_id=str(file_meta.id),
+                            mime_type=file_meta.content_type,
+                            sheet_name=worksheet.title,
+                            matrix=matrix,
+                        )
+                    except ValueError:
+                        continue
+                    if first_non_empty is None:
+                        first_non_empty = parsed
+                    if self._resolve_question_header(parsed.headers, parsed.rows):
+                        return parsed
+            if first_non_empty is not None:
+                return first_non_empty
+            raise ValueError("表格为空，未解析到有效数据")
+        finally:
+            workbook.close()
 
     def _build_parsed_table(
         self,
@@ -196,7 +222,7 @@ class TableIntakeService:
 
         if question_header:
             questions, skipped_count = self._normalize_question_rows(
-                parsed.rows, question_header, category_header
+                parsed.rows, question_header, category_header, parsed.headers
             )
             return {
                 "table_kind": "question_list",
@@ -240,7 +266,7 @@ class TableIntakeService:
         single_col_header = parsed.headers[0] if len(parsed.headers) == 1 else None
         if single_col_header and self._looks_like_freeform_question_rows(parsed.rows, single_col_header):
             questions, skipped_count = self._normalize_question_rows(
-                parsed.rows, single_col_header, None
+                parsed.rows, single_col_header, None, parsed.headers
             )
             return {
                 "table_kind": "question_list",
@@ -388,6 +414,7 @@ class TableIntakeService:
                     parsed.rows,
                     question_header,
                     category_header if category_header in parsed.headers else None,
+                    parsed.headers,
                 )
                 final["normalized_payload"] = {"questions": questions}
                 final["warnings"] = self._build_warnings(
@@ -400,25 +427,119 @@ class TableIntakeService:
         rows: list[dict[str, str]],
         question_header: str,
         category_header: str | None,
+        headers: list[str] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         normalized: list[dict[str, Any]] = []
         skipped_count = 0
+        resolved_headers = headers or (list(rows[0].keys()) if rows else [])
+        id_header = self._match_header_alias(resolved_headers, _QUESTION_ID_HEADER_ALIASES)
+        mother_theme_header = self._match_header_alias(
+            resolved_headers, _MOTHER_THEME_HEADER_ALIASES
+        )
+        question_type_header = self._match_header_alias(
+            resolved_headers, _QUESTION_TYPE_HEADER_ALIASES
+        )
+        mentions_amway_header = self._match_header_alias(
+            resolved_headers, _MENTIONS_AMWAY_HEADER_ALIASES
+        )
+        life_stage_header = self._match_header_alias(
+            resolved_headers, _LIFE_STAGE_HEADER_ALIASES
+        )
+        four_have_header = self._match_header_alias(
+            resolved_headers, _FOUR_HAVE_HEADER_ALIASES
+        )
+        touchpoint_header = self._match_header_alias(
+            resolved_headers, _TOUCHPOINT_HEADER_ALIASES
+        )
+        monitoring_purpose_header = self._match_header_alias(
+            resolved_headers, _MONITORING_PURPOSE_HEADER_ALIASES
+        )
+        question_set_version_header = self._match_header_alias(
+            resolved_headers, _QUESTION_SET_VERSION_HEADER_ALIASES
+        )
+
         for index, row in enumerate(rows, start=1):
             text = str(row.get(question_header, "")).strip()
             if not text:
                 skipped_count += 1
                 continue
+            mother_theme = (
+                str(row.get(mother_theme_header, "")).strip()
+                if mother_theme_header
+                else ""
+            )
+            question_type = (
+                str(row.get(question_type_header, "")).strip()
+                if question_type_header
+                else ""
+            )
+            life_stage = (
+                str(row.get(life_stage_header, "")).strip()
+                if life_stage_header
+                else ""
+            )
+            touchpoint = (
+                str(row.get(touchpoint_header, "")).strip()
+                if touchpoint_header
+                else ""
+            )
+            monitoring_purpose = (
+                str(row.get(monitoring_purpose_header, "")).strip()
+                if monitoring_purpose_header
+                else ""
+            )
+            question_id = (
+                str(row.get(id_header, "")).strip() if id_header else ""
+            ) or f"upload_q_{index:03d}"
             normalized.append(
                 {
-                    "id": f"upload_q_{index:03d}",
+                    "id": question_id,
                     "text": text,
-                    "category": str(row.get(category_header, "")).strip() if category_header else "",
-                    "intent": "",
+                    "category": str(row.get(category_header, "")).strip()
+                    if category_header
+                    else mother_theme,
+                    "intent": monitoring_purpose,
                     "stage": "",
                     "source": "uploaded_table",
+                    "mother_theme": mother_theme,
+                    "question_type": question_type,
+                    "mentions_amway": str(row.get(mentions_amway_header, "")).strip()
+                    if mentions_amway_header
+                    else "",
+                    "life_stage": life_stage,
+                    "four_have": str(row.get(four_have_header, "")).strip()
+                    if four_have_header
+                    else "",
+                    "touchpoint": touchpoint,
+                    "monitoring_purpose": monitoring_purpose,
+                    "audience_segment": life_stage,
+                    "life_scene": touchpoint or mother_theme,
+                    "opportunity_point": monitoring_purpose or mother_theme,
+                    "probe_type": question_type,
+                    "question_set_version": (
+                        str(row.get(question_set_version_header, "")).strip()
+                        if question_set_version_header
+                        else ""
+                    )
+                    or "uploaded_amway_gravity_circle_v1",
                 }
             )
         return normalized, skipped_count
+
+    def _match_header_alias(
+        self,
+        headers: list[str],
+        aliases: tuple[str, ...],
+    ) -> str | None:
+        compact_aliases = {
+            alias.lower().strip().replace(" ", "").replace("_", "")
+            for alias in aliases
+        }
+        for header in headers:
+            compact = header.lower().strip().replace(" ", "").replace("_", "")
+            if compact in compact_aliases:
+                return header
+        return self._match_header(headers, aliases)
 
     def _normalize_link_rows(
         self,

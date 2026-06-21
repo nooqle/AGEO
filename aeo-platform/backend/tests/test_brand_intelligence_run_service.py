@@ -33,6 +33,7 @@ from app.services.brand_intelligence_run_service import (
     BrandIntelligenceRunService,
     _build_brand_run_initial_state,
 )
+from app.services.snapshot_service import SnapshotService
 
 
 async def _build_session(tmp_path):
@@ -239,6 +240,53 @@ async def test_resolve_snapshot_id_falls_back_to_latest_session_snapshot(tmp_pat
         )
 
         assert resolved == snapshot.id
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_service_keeps_association_circle_report_kind(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("run-association-snapshot-owner@example.com")
+        entity = Entity(
+            id=uuid.uuid4(),
+            name="安利",
+            domain="amway.com.cn",
+            industry="健康生活",
+            status=EntityStatus.ACTIVE,
+            owner_user_id=owner.id,
+        )
+        session.add_all([owner, entity])
+        await session.commit()
+
+        snapshot = await SnapshotService(session).create_completed_snapshot(
+            entity_id=entity.id,
+            session_id=uuid.uuid4(),
+            metrics={
+                "summary_metrics": [],
+                "total_questions": 32,
+                "total_mentions": 64,
+                "platform_breakdown": {
+                    "doubao": {"success": 32},
+                    "yuanbao": {"success": 32},
+                },
+            },
+            report_data={
+                "artifact_kind": "brand_association_circle",
+                "report_kind": "brand_association_circle",
+                "dashboard_projection": {
+                    "association_circle_projection": {"nodes": [{"term": "营养健康"}]}
+                },
+            },
+            snapshot_type="brand_association_circle",
+        )
+
+        assert snapshot.snapshot_type == "brand_association_circle"
+        assert snapshot.raw_data["artifact_kind"] == "brand_association_circle"
+        assert snapshot.raw_data["report_kind"] == "brand_association_circle"
+        assert snapshot.total_questions == 32
+        assert snapshot.platforms_success == 2
 
     await engine.dispose()
 

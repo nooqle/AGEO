@@ -18,6 +18,12 @@ from app.workflow.brand_mentions import content_mentions_brand, extract_brand_al
 # user-facing sanitization, and persistence are kept in dedicated modules.
 from app.workflow.a5 import metrics as a5_metrics
 from app.workflow.a5 import keywords as a5_keywords
+from app.workflow.a5.association_circle import (
+    ARTIFACT_KIND as ASSOCIATION_CIRCLE_ARTIFACT_KIND,
+    REPORT_KIND as ASSOCIATION_CIRCLE_REPORT_KIND,
+    build_brand_association_circle_report_artifact,
+    is_association_circle_mode,
+)
 from app.workflow.a5.canonical import (
     build_canonical_report_artifact,
     normalize_report_kind,
@@ -126,6 +132,93 @@ def _pick_latest_panorama_baseline_report(
     if latest_payload:
         return latest_payload, latest_id
     return resolved_existing_report, resolved_existing_id
+
+
+def _association_center_terms_from_state(state: AgentState) -> list[str] | None:
+    """Resolve optional center terms from run input without creating a side channel."""
+
+    for key in ("active_center_term", "center_term"):
+        value = state.get(key)
+        text = str(value or "").strip()
+        if text:
+            return [text]
+
+    for key in ("center_terms", "brand_center_terms"):
+        value = state.get(key)
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+
+    dashboard_context = state.get("dashboard_context")
+    if isinstance(dashboard_context, dict):
+        for key in ("active_center_term", "center_term"):
+            text = str(dashboard_context.get(key) or "").strip()
+            if text:
+                return [text]
+        value = dashboard_context.get("center_terms")
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+
+    input_scope = state.get("input_scope")
+    if isinstance(input_scope, dict):
+        for key in ("active_center_term", "center_term"):
+            text = str(input_scope.get(key) or "").strip()
+            if text:
+                return [text]
+        value = input_scope.get("center_terms")
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+    return None
+
+
+def _association_entity_calibration_from_state(
+    state: AgentState,
+) -> dict[str, Any] | None:
+    value = state.get("entity_calibration_result")
+    if isinstance(value, dict):
+        return value
+
+    canonical = state.get("a4_canonical_result")
+    if isinstance(canonical, dict):
+        value = canonical.get("entity_calibration_result")
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _resolve_a5_analysis_mode(state: AgentState, facts_mode: Any) -> str:
+    """Resolve A5 report routing from the official run context first."""
+
+    candidates: list[Any] = []
+    for container_key in ("dashboard_context", "input_scope", "tool_call_args"):
+        container = state.get(container_key)
+        if isinstance(container, dict):
+            candidates.extend(
+                [
+                    container.get("analysis_mode"),
+                    container.get("report_kind"),
+                    container.get("a3_mode"),
+                ]
+            )
+
+    user_decisions = state.get("user_decisions")
+    if isinstance(user_decisions, dict):
+        candidates.extend(
+            [
+                user_decisions.get("analysis_mode"),
+                user_decisions.get("report_kind"),
+                user_decisions.get("a3_mode"),
+            ]
+        )
+
+    for candidate in candidates:
+        if is_association_circle_mode(candidate):
+            return ASSOCIATION_CIRCLE_REPORT_KIND
+
+    for candidate in (facts_mode, state.get("analysis_mode")):
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return "scenario"
 
 
 async def _resolve_scenario_baseline_context(
@@ -255,6 +348,309 @@ async def _persist_brand_intelligence_report(
         logger.warning("[A5] Brand intelligence report projection failed: %s", exc)
 
 
+async def _run_association_circle_report(
+    *,
+    state: AgentState,
+    session_id: str,
+    entity_id: str | None,
+    brand_profile: dict[str, Any],
+    fetch_results: list[dict[str, Any]],
+    analysis_mode: str,
+    report_kind: str,
+) -> Command:
+    await send_progress_event(
+        session_id=session_id,
+        step="data_analytics",
+        step_name="品牌联想圈层分析",
+        progress=0.65,
+        message="开始解析多平台回答中的品牌联想节点...",
+    )
+    try:
+        report_data = build_brand_association_circle_report_artifact(
+            session_id=session_id,
+            entity_id=entity_id,
+            brand_profile=brand_profile,
+            fetch_results=fetch_results,
+            simulated_questions=state.get("simulated_questions"),
+            center_terms=_association_center_terms_from_state(state),
+            entity_calibration_result=_association_entity_calibration_from_state(
+                state
+            ),
+        )
+        association_circle = (
+            report_data.get("association_circle")
+            if isinstance(report_data.get("association_circle"), dict)
+            else {}
+        )
+        nodes = (
+            association_circle.get("nodes")
+            if isinstance(association_circle, dict)
+            else []
+        )
+        sample_scope = (
+            report_data.get("sample_scope")
+            if isinstance(report_data.get("sample_scope"), dict)
+            else {}
+        )
+        await send_progress_event(
+            session_id=session_id,
+            step="data_analytics",
+            step_name="品牌联想圈层分析",
+            progress=0.85,
+            message=(
+                f"已解析 {len(nodes or [])} 个联想节点，"
+                f"有效回答 {sample_scope.get('valid_answer_count', 0)} 条。"
+            ),
+        )
+
+        from app.workflow.events import save_and_send_artifact
+
+        report_output_type = "report"
+        report_title = str(report_data.get("title") or "品牌联想圈层报告")
+        artifact_key = f"{session_id}_{report_output_type}_{report_kind}"
+        artifact_message_id = await save_and_send_artifact(
+            session_id=session_id,
+            output_type=report_output_type,
+            title=report_title,
+            category=report_kind,
+            data=report_data,
+            artifact_key=artifact_key,
+        )
+        artifact_validation = validate_artifact_writeback(
+            gate_name="artifact_writeback_gate",
+            artifact_message_id=artifact_message_id,
+            artifact_key=artifact_key,
+            artifact_kind=ASSOCIATION_CIRCLE_ARTIFACT_KIND,
+            metadata={
+                "analysis_mode": analysis_mode,
+                "report_kind": report_kind,
+                "node_count": len(nodes or []),
+            },
+        )
+        if not artifact_validation.passed:
+            raise RuntimeError(artifact_validation.reason)
+        await _persist_brand_intelligence_report(
+            state=state,
+            report_kind=report_kind,
+            title=report_title,
+            artifact_key=artifact_key,
+            artifact_message_id=artifact_message_id,
+            payload=report_data,
+        )
+        fetch_results_summary: list[dict[str, Any]] = []
+        platform_breakdown: dict[str, dict[str, int]] = {}
+        for fetch_result in fetch_results or []:
+            if not isinstance(fetch_result, dict):
+                continue
+            question_text = str(
+                fetch_result.get("question")
+                or fetch_result.get("question_text")
+                or ""
+            ).strip()
+            platform_results = fetch_result.get("platform_results")
+            if not isinstance(platform_results, list):
+                continue
+            for platform_result in platform_results:
+                if not isinstance(platform_result, dict):
+                    continue
+                platform = str(platform_result.get("platform") or "unknown").strip()
+                platform_stats = platform_breakdown.setdefault(
+                    platform,
+                    {"success": 0, "failed": 0, "empty": 0, "total": 0},
+                )
+                platform_stats["total"] += 1
+                answer_payload = (
+                    platform_result.get("answer")
+                    if isinstance(platform_result.get("answer"), dict)
+                    else {}
+                )
+                answer_content = str(
+                    answer_payload.get("content")
+                    or platform_result.get("answer_text")
+                    or platform_result.get("content")
+                    or ""
+                ).strip()
+                has_content = bool(answer_content)
+                is_success = bool(platform_result.get("success"))
+                if is_success and has_content:
+                    platform_stats["success"] += 1
+                elif is_success:
+                    platform_stats["empty"] += 1
+                else:
+                    platform_stats["failed"] += 1
+                fetch_results_summary.append(
+                    {
+                        "platform": platform,
+                        "success": is_success,
+                        "has_content": has_content,
+                        "question": question_text,
+                        "citations": platform_result.get("citations", []),
+                    }
+                )
+        executive_summary = (
+            report_data.get("executive_summary")
+            if isinstance(report_data.get("executive_summary"), dict)
+            else {}
+        )
+        summary = str(
+            executive_summary.get("one_line_judgment") or "品牌联想圈层分析已完成。"
+        )
+        metrics_for_state = {
+            "summary_metrics": report_data.get("summary_metrics") or [],
+            "sample_scope": sample_scope,
+            "association_node_count": len(nodes or []),
+            "bwvs_index": None,
+            "mention_rate": (
+                round(
+                    float(sample_scope.get("valid_answer_count") or 0)
+                    / float(sample_scope.get("total_answer_count") or 1),
+                    4,
+                )
+                if sample_scope.get("total_answer_count")
+                else 0.0
+            ),
+            "total_questions": int(sample_scope.get("question_count") or 0),
+            "total_mentions": int(sample_scope.get("valid_answer_count") or 0),
+            "platform_breakdown": platform_breakdown,
+        }
+        triggered_by = (
+            "scheduled"
+            if state.get("headless_mode") or state.get("monitoring_schedule_id")
+            else "manual"
+        )
+        monitoring_metadata = {
+            "monitoring_schedule_id": state.get("monitoring_schedule_id"),
+            "monitoring_plan_id": state.get("monitoring_plan_id"),
+            "question_set_ids": state.get("question_set_ids") or [],
+            "endpoint_ids": state.get("endpoint_ids") or [],
+            "run_policy": state.get("run_policy"),
+        }
+        monitoring_metadata = {
+            key: value for key, value in monitoring_metadata.items() if value
+        }
+        snapshot = None
+        if entity_id:
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.services.snapshot_service import SnapshotService
+
+                async with AsyncSessionLocal() as db:
+                    snap_service = SnapshotService(db)
+                    snapshot = await snap_service.create_completed_snapshot(
+                        entity_id=entity_id,
+                        session_id=session_id,
+                        metrics=metrics_for_state,
+                        report_data=report_data,
+                        competitor_metrics=None,
+                        fetch_results_summary=fetch_results_summary,
+                        is_degraded=not nodes,
+                        triggered_by=triggered_by,
+                        snapshot_type=report_kind,
+                        monitoring_metadata=monitoring_metadata or None,
+                    )
+                    logger.info(
+                        "[A5] Association circle snapshot created: id=%s, nodes=%s",
+                        snapshot.id,
+                        len(nodes or []),
+                    )
+            except Exception as snap_err:
+                logger.error(
+                    "[A5] Failed to create association circle snapshot: %s",
+                    snap_err,
+                    exc_info=True,
+                )
+        update_dict: dict[str, Any] = {
+            "metrics": metrics_for_state,
+            "report": report_data,
+            "snapshot_id": str(snapshot.id) if snapshot else None,
+            "current_step": "A5",
+            "progress": 1.0,
+        }
+        skill_update = build_skill_result_update(
+            state,
+            skill_key=state.get("current_skill"),
+            tool_name="analysis_report_skill",
+            status="completed",
+            summary="品牌联想圈层报告 Skill 已完成，报告与节点证据已更新。",
+            executor_ref="a5_data_analytics",
+            metadata={
+                "analysis_mode": analysis_mode,
+                "report_type": report_kind,
+                "association_node_count": len(nodes or []),
+            },
+        )
+        update_dict.update(skill_update)
+        artifact_validation_update = build_validation_result_update(
+            state, artifact_validation
+        )
+        validation_state = {**state, **update_dict, **artifact_validation_update}
+        postcondition_result = evaluate_skill_postconditions(
+            state=state,
+            contract_payload=state.get("current_skill_contract"),
+            pending_update=update_dict,
+            artifact_validation=artifact_validation,
+        )
+        if not postcondition_result.passed:
+            raise RuntimeError(postcondition_result.reason)
+        postcondition_validation_update = build_validation_result_update(
+            validation_state,
+            postcondition_result,
+        )
+        decision_update = build_harness_decision_update(
+            {**validation_state, **postcondition_validation_update},
+            build_harness_decision(
+                decision_type="complete_skill",
+                reason="A5 association circle harness gates passed.",
+                recoverable=False,
+                metadata={"step": "A5", "analysis_mode": analysis_mode},
+            ),
+        )
+        update_dict.update(artifact_validation_update)
+        update_dict.update(postcondition_validation_update)
+        update_dict.update(decision_update)
+        await send_progress_event(
+            session_id=session_id,
+            step="data_analytics",
+            step_name="品牌联想圈层分析",
+            progress=1.0,
+            message="品牌联想圈层分析完成",
+            status="completed",
+        )
+        return Command(
+            update={
+                **update_dict,
+                "execution_status": "completed",
+                "awaiting_user": False,
+                "pending_confirmation": None,
+                "orchestrator_reply": summary,
+            },
+        )
+    except Exception as e:
+        error_text = str(e)
+        await send_error_event(session_id, "A5", error_text, recoverable=True)
+        await send_progress_event(
+            session_id=session_id,
+            step="data_analytics",
+            step_name="品牌联想圈层分析",
+            progress=1.0,
+            message=f"品牌联想圈层分析出错: {error_text}",
+            status="error",
+        )
+        return Command(
+            update={
+                "current_step": "A5",
+                "error_info": {
+                    "step": "A5",
+                    "error": error_text,
+                    "category": "system",
+                    "timestamp": datetime.now().isoformat(),
+                },
+                "execution_status": "error",
+                "awaiting_user": False,
+            }
+        )
+
+
 async def a5_analytics_node(state: AgentState) -> Command:
     """A5: Analyze fetch results and generate comprehensive report.
 
@@ -306,8 +702,18 @@ async def a5_analytics_node(state: AgentState) -> Command:
     brand_profile = facts.brand_profile
     fetch_results = facts.fetch_results
     competitors = facts.competitors
-    report_kind = normalize_report_kind(facts.analysis_mode or "scenario")
-    analysis_mode = "baseline" if report_kind == "panorama" else "persona"
+    raw_analysis_mode = _resolve_a5_analysis_mode(state, facts.analysis_mode)
+    is_association_circle = is_association_circle_mode(raw_analysis_mode)
+    report_kind = (
+        ASSOCIATION_CIRCLE_REPORT_KIND
+        if is_association_circle
+        else normalize_report_kind(raw_analysis_mode)
+    )
+    analysis_mode = (
+        ASSOCIATION_CIRCLE_REPORT_KIND
+        if is_association_circle
+        else "baseline" if report_kind == "panorama" else "persona"
+    )
     is_baseline = report_kind == "panorama"
     precondition_result = evaluate_skill_preconditions(
         state, state.get("current_skill_contract")
@@ -338,6 +744,17 @@ async def a5_analytics_node(state: AgentState) -> Command:
                 **validation_update,
                 **decision_update,
             }
+        )
+
+    if is_association_circle:
+        return await _run_association_circle_report(
+            state=state,
+            session_id=session_id,
+            entity_id=entity_id,
+            brand_profile=brand_profile,
+            fetch_results=fetch_results,
+            analysis_mode=analysis_mode,
+            report_kind=report_kind,
         )
 
     step_message = "开始品牌全景分析..." if is_baseline else "开始分析抓取数据..."
@@ -987,10 +1404,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                     ) or _clean_source_value(
                         citation.get("site_name") if isinstance(citation, dict) else ""
                     )
-                    if (
-                        not display_name
-                        and isinstance(url_intelligence, dict)
-                    ):
+                    if not display_name and isinstance(url_intelligence, dict):
                         display_name = _clean_source_value(
                             url_intelligence.get("site_name")
                         )
@@ -1029,9 +1443,7 @@ def _calculate_metrics(fetch_results: list, brand_profile: dict) -> dict[str, An
                                 display_names.get(display_name, 0) + 1
                             )
                         if source_type:
-                            source_types = domain_stats[citation_domain][
-                                "source_types"
-                            ]
+                            source_types = domain_stats[citation_domain]["source_types"]
                             source_types[source_type] = (
                                 source_types.get(source_type, 0) + 1
                             )
