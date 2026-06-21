@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import json
 import logging
@@ -1698,14 +1699,21 @@ class BrandSpaceService:
                 limit=bounded_limit,
             )
             next_sequence = max(
-                [bounded_after_sequence, *[int(event.sequence or 0) for event in events]]
+                [
+                    bounded_after_sequence,
+                    *[
+                        sequence
+                        for sequence in (self._event_sequence_value(event) for event in events)
+                        if sequence is not None
+                    ],
+                ]
             )
             return {
                 "events": [self._event_to_dict(event) for event in events],
                 "pagination": {
                     "limit": bounded_limit,
                     "offset": 0,
-                    "total": bounded_after_sequence + len(events),
+                    "total": None,
                     "has_more": has_more,
                 },
                 "cursor": {
@@ -1716,7 +1724,16 @@ class BrandSpaceService:
             }
         events = await self._events(board_run.id, limit=bounded_limit, offset=offset)
         total = await self._event_count(board_run.id)
-        next_sequence = max([0, *[int(event.sequence or 0) for event in events]])
+        next_sequence = max(
+            [
+                0,
+                *[
+                    sequence
+                    for sequence in (self._event_sequence_value(event) for event in events)
+                    if sequence is not None
+                ],
+            ]
+        )
         return {
             "events": [self._event_to_dict(event) for event in events],
             "pagination": self._pagination(limit=bounded_limit, offset=offset, total=total, maximum=500),
@@ -1805,7 +1822,9 @@ class BrandSpaceService:
                 graph_update=graph_update,
                 latest_report=report_for_artifact,
             ),
-            "access": self._artifact_access_descriptor(artifact),
+            "access": self._public_artifact_access_descriptor(
+                self._artifact_access_descriptor(artifact)
+            ),
         }
 
     async def get_artifact_access(
@@ -1818,7 +1837,9 @@ class BrandSpaceService:
         return {
             "artifact_id": str(artifact.id),
             "artifact_key": artifact.artifact_key,
-            "access": self._artifact_access_descriptor(artifact),
+            "access": self._public_artifact_access_descriptor(
+                self._artifact_access_descriptor(artifact)
+            ),
         }
 
     async def resolve_artifact_download(
@@ -4398,11 +4419,11 @@ class BrandSpaceService:
                 "object_key": f"{base}/reports/{report.id}.md",
             },
         )
+        await self._materialize_report_artifact_object(artifact=artifact, report=report)
         self.db.add(artifact)
         await self.db.flush()
-        self._materialize_report_artifact_object(artifact=artifact, report=report)
 
-    def _materialize_report_artifact_object(
+    async def _materialize_report_artifact_object(
         self,
         *,
         artifact: BoardArtifact,
@@ -4410,18 +4431,21 @@ class BrandSpaceService:
     ) -> None:
         object_key, reason = self._artifact_object_key(artifact)
         if reason or object_key is None:
-            logger.warning(
-                "Cannot materialize report artifact %s: %s",
-                artifact.id,
-                reason,
+            raise ValueError(
+                f"Cannot materialize report artifact {artifact.id}: "
+                f"{reason or 'missing_object_key'}"
             )
-            return
         object_path = self._artifact_storage_path(object_key)
-        object_path.parent.mkdir(parents=True, exist_ok=True)
-        object_path.write_text(
+        await asyncio.to_thread(
+            self._write_text_object,
+            object_path,
             self._report_artifact_markdown(report),
-            encoding="utf-8",
         )
+
+    @staticmethod
+    def _write_text_object(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
 
     @staticmethod
     def _report_artifact_markdown(report: BrandReportVersion) -> str:
@@ -4688,10 +4712,22 @@ class BrandSpaceService:
         )
         return descriptor
 
+    @staticmethod
+    def _public_artifact_access_descriptor(descriptor: dict[str, Any]) -> dict[str, Any]:
+        public_descriptor = dict(descriptor)
+        public_descriptor.pop("_local_path", None)
+        return public_descriptor
+
+    @staticmethod
+    def _event_sequence_value(event: BoardRuntimeEvent) -> int | None:
+        if event.sequence is None:
+            return None
+        return int(event.sequence)
+
     def _event_to_dict(self, event: BoardRuntimeEvent) -> dict[str, Any]:
         return {
             "id": str(event.id),
-            "sequence": int(event.sequence or 0),
+            "sequence": self._event_sequence_value(event),
             "timestamp": event.created_at.isoformat(),
             "type": event.event_type,
             "severity": event.severity,

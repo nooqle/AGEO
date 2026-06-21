@@ -143,7 +143,7 @@ export interface ArtifactDetail {
 
 export interface RuntimeEvent {
   id: string;
-  sequence?: number;
+  sequence?: number | null;
   timestamp: string;
   type: string;
   severity: 'info' | 'success' | 'warning' | 'risk' | 'error';
@@ -155,6 +155,13 @@ export interface RuntimeEvent {
 export interface RuntimeEventCursor {
   after_sequence?: number | null;
   next_sequence: number;
+  has_more: boolean;
+}
+
+export interface RuntimeEventPagination {
+  limit: number;
+  offset: number;
+  total: number | null;
   has_more: boolean;
 }
 

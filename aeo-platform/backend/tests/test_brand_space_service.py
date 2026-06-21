@@ -28,7 +28,13 @@ from app.models.brand_intelligence import (
     BrandReportVersion,
 )
 from app.models.brand_intelligence_run import BrandIntelligenceRun
-from app.models.brand_space import BoardArtifact, BoardRun, GraphPatch, GraphUpdate
+from app.models.brand_space import (
+    BoardArtifact,
+    BoardRun,
+    BoardRuntimeEvent,
+    GraphPatch,
+    GraphUpdate,
+)
 from app.models.entity import Entity, EntityStatus
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.user import User, UserRole, UserStatus
@@ -395,6 +401,7 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
             limit=4,
             after_sequence=events_page["events"][0]["sequence"],
         )
+        assert cursor_events_page["pagination"]["total"] is None
         assert cursor_events_page["cursor"]["next_sequence"] >= 2
         assert all(
             event["sequence"] > events_page["events"][0]["sequence"]
@@ -631,6 +638,113 @@ async def test_artifact_preview_handles_missing_graph_update_and_unknown_type(tm
                 artifact_id=unsafe_artifact.id,
                 current_user=owner,
             )
+
+        external_artifact = BoardArtifact(
+            artifact_key="external-download",
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            artifact_type="unhandled_blob",
+            label="外部对象",
+            path="https://example.com/brand-space/report.md",
+            mime_type="text/markdown",
+            row_count=1,
+        )
+        session.add(external_artifact)
+        await session.flush()
+        external_access = await service.get_artifact_access(
+            artifact_id=external_artifact.id,
+            current_user=owner,
+        )
+        assert external_access["access"]["available"] is False
+        assert external_access["access"]["reason"] == "external_url_not_supported"
+        assert "_local_path" not in external_access["access"]
+        with pytest.raises(LookupError):
+            await service.resolve_artifact_download(
+                artifact_id=external_artifact.id,
+                current_user=owner,
+            )
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_artifact_materialize_failure_does_not_register_asset(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-report-storage-failure@example.com")
+        entity = _entity(owner)
+        board_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            status="completed",
+            is_scaffold=False,
+            progress=1.0,
+        )
+        session.add_all([owner, entity, board_run])
+        await session.flush()
+
+        graph_update = GraphUpdate(
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            created_by_user_id=owner.id,
+            before_graph_version="v1.0.0",
+            after_graph_version="v1.1.0",
+            status="accepted",
+            summary={"total": 1},
+        )
+        report = BrandReportVersion(
+            entity_id=entity.id,
+            report_id="brand-space-storage-failure",
+            version=1,
+            report_kind="graph_update_interpretation",
+            artifact_id="brand-space-storage-failure:1",
+            title="对象写入失败报告",
+            summary="对象存储根路径是文件而不是目录。",
+            payload={"report_markdown": "# 对象写入失败报告\n"},
+            publication_status="draft",
+        )
+        session.add_all([graph_update, report])
+        await session.flush()
+
+        storage_root_file = tmp_path / "object-root"
+        storage_root_file.write_text("not a directory", encoding="utf-8")
+        service = BrandSpaceService(session, asset_storage_root=storage_root_file)
+
+        with pytest.raises(OSError):
+            await service._register_report_artifact(
+                graph_update=graph_update,
+                report=report,
+            )
+
+        result = await session.execute(
+            select(BoardArtifact).where(
+                BoardArtifact.board_run_id == board_run.id,
+                BoardArtifact.artifact_type == "report",
+            )
+        )
+        assert result.scalars().all() == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_event_sequence_none_stays_null(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        service = BrandSpaceService(session)
+        event = BoardRuntimeEvent(
+            id=uuid.uuid4(),
+            entity_id=uuid.uuid4(),
+            board_run_id=uuid.uuid4(),
+            event_type="legacy_event",
+            severity="info",
+            message="旧事件缺少 sequence",
+            sequence=None,
+            payload={},
+            created_at=datetime.now(timezone.utc),
+        )
+
+        assert service._event_to_dict(event)["sequence"] is None
 
     await engine.dispose()
 

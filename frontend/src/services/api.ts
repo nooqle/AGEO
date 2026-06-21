@@ -83,6 +83,7 @@ import type {
   GraphReviewItemsResponse,
   PaginationInfo,
   ReportGuardrailResult,
+  RuntimeEventPagination,
   BrandSpaceReport,
   BrandSpaceReportSummary,
 } from '@/types/brandSpace';
@@ -140,6 +141,35 @@ class ApiService {
     } as HeadersInit;
   }
 
+  private async responseErrorMessage(response: Response): Promise<string> {
+    try {
+      const error = await response.clone().json();
+      const detail = error?.detail ?? error?.message;
+      if (typeof detail === 'string' && detail.trim()) {
+        return detail;
+      }
+    } catch {
+      // Fall back to text for file/HTML error responses.
+    }
+
+    try {
+      const text = await response.text();
+      if (text.trim()) return text.trim();
+    } catch {
+      // Ignore body parsing failures and use the status code below.
+    }
+
+    return `Request failed: ${response.status}`;
+  }
+
+  private async ensureSuccessfulResponse(response: Response): Promise<void> {
+    if (response.ok) return;
+    if (response.status === 401) {
+      this.handleUnauthorized();
+    }
+    throw new Error(await this.responseErrorMessage(response));
+  }
+
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -150,13 +180,7 @@ class ApiService {
       headers: this.buildHeaders(options),
     });
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.handleUnauthorized();
-      }
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || `Request failed: ${response.status}`);
-    }
+    await this.ensureSuccessfulResponse(response);
 
     // Handle 204 No Content (e.g. DELETE responses)
     if (response.status === 204) {
@@ -175,19 +199,25 @@ class ApiService {
       headers: this.buildHeaders(options),
     });
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.handleUnauthorized();
-      }
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || `Request failed: ${response.status}`);
-    }
+    await this.ensureSuccessfulResponse(response);
 
     if (response.status === 204) {
       return undefined as T;
     }
 
     return response.json();
+  }
+
+  private async requestBlob(
+    endpoint: string,
+    options: RequestInit = {},
+  ): Promise<{ blob: Blob; response: Response }> {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+      ...options,
+      headers: this.buildHeaders(options),
+    });
+    await this.ensureSuccessfulResponse(response);
+    return { blob: await response.blob(), response };
   }
 
   // Auth
@@ -1193,7 +1223,7 @@ class ApiService {
     return this.request<{
       events: BrandSpacePayload['events'];
       cursor?: { after_sequence?: number | null; next_sequence: number; has_more: boolean };
-      pagination?: PaginationInfo;
+      pagination?: RuntimeEventPagination;
     }>(
       `/brand-space/board-runs/${runId}/events${suffix}`,
     );
@@ -1231,23 +1261,13 @@ class ApiService {
   }
 
   async downloadBrandSpaceArtifact(artifactId: string): Promise<{ blob: Blob; filename: string }> {
-    const response = await fetch(
-      `${API_URL}/brand-space/artifacts/${encodeURIComponent(artifactId)}/download`,
-      {
-        headers: this.buildHeaders(),
-      },
+    const { blob, response } = await this.requestBlob(
+      `/brand-space/artifacts/${encodeURIComponent(artifactId)}/download`,
     );
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.handleUnauthorized();
-      }
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || `Request failed: ${response.status}`);
-    }
     const disposition = response.headers.get('content-disposition') ?? '';
     const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
     const filename = decodeURIComponent(filenameMatch?.[1] ?? filenameMatch?.[2] ?? 'brand-space-artifact');
-    return { blob: await response.blob(), filename };
+    return { blob, filename };
   }
 
   async decideBrandSpaceGraphPatch(

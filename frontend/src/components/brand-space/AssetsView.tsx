@@ -89,10 +89,11 @@ function formatBytes(value: number | null | undefined) {
   if (!value || value <= 0) return '-';
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value < 1024 ** 3) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-function accessReasonLabel(reason?: string | null) {
+function accessReasonLabel(reason?: string | null, available?: boolean) {
   const labels: Record<string, string> = {
     object_not_materialized: '对象尚未物化',
     object_is_directory: '对象为目录',
@@ -102,7 +103,8 @@ function accessReasonLabel(reason?: string | null) {
     unsafe_or_unsupported_object_key: '对象 key 不受支持',
     object_key_escapes_storage_root: '对象 key 越界',
   };
-  return reason ? labels[reason] ?? reason : '可下载';
+  if (reason) return labels[reason] ?? reason;
+  return available ? '可下载' : '暂不可用';
 }
 
 function PreviewBlock({ preview }: { preview?: ArtifactPreview }) {
@@ -385,7 +387,7 @@ export function AssetsView({
                   <section className={styles.assetAccessPanel}>
                     <div>
                       <p>对象存储</p>
-                      <strong>{accessReasonLabel(detail.access.reason)}</strong>
+                      <strong>{accessReasonLabel(detail.access.reason, detail.access.available)}</strong>
                     </div>
                     <div>
                       <p>对象 key</p>

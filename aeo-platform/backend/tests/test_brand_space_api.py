@@ -110,6 +110,7 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             db=session,
             current_user=owner,
         )
+        assert cursor_events["pagination"]["total"] is None
         assert cursor_events["cursor"]["next_sequence"] >= 1
         assert all(event["sequence"] > 0 for event in cursor_events["events"])
 

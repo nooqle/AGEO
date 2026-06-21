@@ -189,17 +189,46 @@ function artifactTypeLabel(type: string) {
 }
 
 function runtimeEventSequence(event: RuntimeEvent) {
-  return typeof event.sequence === 'number' ? event.sequence : 0;
+  return typeof event.sequence === 'number' ? event.sequence : -1;
+}
+
+const RUNTIME_EVENT_WINDOW_LIMIT = 240;
+const RUNTIME_EVENT_TRUNCATION_TYPE = 'event_window_truncated';
+
+function limitRuntimeEvents(events: RuntimeEvent[]) {
+  const source = [...events]
+    .filter((event) => event.type !== RUNTIME_EVENT_TRUNCATION_TYPE)
+    .sort((left, right) => runtimeEventSequence(left) - runtimeEventSequence(right));
+  if (source.length <= RUNTIME_EVENT_WINDOW_LIMIT) return source;
+
+  const retained = source.slice(-(RUNTIME_EVENT_WINDOW_LIMIT - 1));
+  const firstRetained = retained[0];
+  const firstSequence = firstRetained ? runtimeEventSequence(firstRetained) : -1;
+  const droppedCount = source.length - retained.length;
+  const marker: RuntimeEvent = {
+    id: `runtime-event-window-truncated-${droppedCount}-${firstSequence}`,
+    sequence: firstSequence > 0 ? firstSequence - 1 : null,
+    timestamp: firstRetained?.timestamp ?? new Date(0).toISOString(),
+    type: RUNTIME_EVENT_TRUNCATION_TYPE,
+    severity: 'info',
+    message: `已折叠 ${droppedCount} 条较早运行日志，当前保留最近 ${retained.length} 条。`,
+    payload: {
+      droppedCount,
+      retainedCount: retained.length,
+      windowLimit: RUNTIME_EVENT_WINDOW_LIMIT,
+    },
+  };
+  return [marker, ...retained];
 }
 
 function mergeRuntimeEvents(current: RuntimeEvent[], incoming: RuntimeEvent[]) {
-  if (!incoming.length) return current;
-  const seen = new Set(current.map((event) => event.id));
-  const merged = [
-    ...current,
-    ...incoming.filter((event) => !seen.has(event.id)),
-  ].sort((left, right) => runtimeEventSequence(left) - runtimeEventSequence(right));
-  return merged.slice(-240);
+  if (!incoming.length) return limitRuntimeEvents(current);
+  const byId = new Map<string, RuntimeEvent>();
+  [...current, ...incoming].forEach((event) => {
+    if (event.type === RUNTIME_EVENT_TRUNCATION_TYPE) return;
+    byId.set(event.id, event);
+  });
+  return limitRuntimeEvents([...byId.values()]);
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -276,7 +305,7 @@ export function BrandSpaceShell() {
   const [patches, setPatches] = useState<GraphPatch[]>(initialGraphPatches);
   const [reviewItems, setReviewItems] = useState<GraphReviewItem[]>(() => reviewItemsFromPatches(initialGraphPatches));
   const [artifactsState, setArtifactsState] = useState(artifacts);
-  const [events, setEvents] = useState<RuntimeEvent[]>(runtimeEvents);
+  const [events, setEvents] = useState<RuntimeEvent[]>(() => limitRuntimeEvents(runtimeEvents));
   const [graph, setGraph] = useState<BrandSpaceGraph>(fallbackGraph);
   const [graphUpdate, setGraphUpdate] = useState<BrandSpaceGraphUpdate | null>(null);
   const [guardrails, setGuardrails] = useState(reportGuardrails);
@@ -310,7 +339,7 @@ export function BrandSpaceShell() {
     setArtifactsState(payload.artifacts);
     setAssetSummary(assetSummaryFromList(payload.artifacts));
     setAssetPagination(null);
-    setEvents(payload.events);
+    setEvents(limitRuntimeEvents(payload.events));
     lastEventSequenceRef.current = Math.max(0, ...payload.events.map(runtimeEventSequence));
     setGraph(payload.graph ?? fallbackGraph);
     setGraphUpdate(payload.graph_update);
