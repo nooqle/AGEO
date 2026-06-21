@@ -1337,7 +1337,7 @@ class BrandSpaceService:
 
     async def get_space(self, *, entity_id: str | UUID, current_user: User) -> dict[str, Any]:
         entity = await self._require_entity(entity_id, current_user)
-        board_run = await self._latest_board_run(entity.id)
+        board_run = await self._default_board_run_for_space(entity.id)
         if board_run is not None:
             await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         return await self._space_payload(entity=entity, board_run=board_run)
@@ -1379,10 +1379,22 @@ class BrandSpaceService:
         if normalized_status and normalized_status not in allowed_statuses:
             raise ValueError(f"Unsupported review item status: {status}")
 
+        current_run = await self._default_board_run_for_space(entity.id)
+        current_graph_update = (
+            await self._graph_update_for_run(current_run.id)
+            if current_run is not None
+            else None
+        )
+        if current_graph_update is None:
+            return {
+                "review_items": [],
+                "summary": self._review_items_summary([]),
+            }
+
         query = (
             select(GraphPatch, GraphUpdate)
             .join(GraphUpdate, GraphPatch.graph_update_id == GraphUpdate.id)
-            .where(GraphUpdate.entity_id == entity.id)
+            .where(GraphUpdate.id == current_graph_update.id)
             .order_by(desc(GraphPatch.updated_at), desc(GraphPatch.created_at))
         )
         if not normalized_status:
@@ -1428,6 +1440,7 @@ class BrandSpaceService:
             origin_surface="brand_space",
             origin_event_id=f"brand-space:scaffold:{entity.id}" if is_scaffold else None,
             start_immediately=not is_scaffold,
+            commit=False,
         )
 
         board_run = BoardRun(
@@ -1517,8 +1530,14 @@ class BrandSpaceService:
             scaffold=is_scaffold,
         )
         self.db.add_all(events)
+        await self.db.flush()
+        try:
+            payload = await self._space_payload(entity=entity, board_run=board_run)
+        except Exception:
+            await self.db.rollback()
+            raise
         await self.db.commit()
-        return await self._space_payload(entity=entity, board_run=board_run)
+        return payload
 
     async def submit_board_run_runtime(
         self,
@@ -1638,6 +1657,7 @@ class BrandSpaceService:
         board_run = await self._require_board_run(run_id, current_user)
         if not board_run.is_scaffold:
             await self._sync_real_board_run(board_run=board_run, current_user=current_user, force=True)
+        intelligence_run_to_cancel: UUID | None = None
         if status == "pause_requested":
             board_run.status = "paused"
             board_run.active_node_ids = []
@@ -1655,10 +1675,7 @@ class BrandSpaceService:
             message = "画布运行已停止，已保留当前图谱更新草稿。"
             node_status = "paused"
             if not board_run.is_scaffold and board_run.brand_intelligence_run_id:
-                await BrandIntelligenceRunService(self.db).cancel_run(
-                    run_id=board_run.brand_intelligence_run_id,
-                    current_user=current_user,
-                )
+                intelligence_run_to_cancel = board_run.brand_intelligence_run_id
         else:
             raise ValueError(f"Unsupported board run status: {status}")
 
@@ -1673,9 +1690,20 @@ class BrandSpaceService:
             severity="info",
             message=message,
         )
-        await self.db.commit()
         entity = await self._entity_by_id(board_run.entity_id)
-        return await self._space_payload(entity=entity, board_run=board_run)
+        await self.db.flush()
+        try:
+            payload = await self._space_payload(entity=entity, board_run=board_run)
+        except Exception:
+            await self.db.rollback()
+            raise
+        if intelligence_run_to_cancel is not None:
+            await BrandIntelligenceRunService(self.db).cancel_run(
+                run_id=intelligence_run_to_cancel,
+                current_user=current_user,
+            )
+        await self.db.commit()
+        return payload
 
     async def get_events(
         self,
@@ -2085,12 +2113,32 @@ class BrandSpaceService:
         limit: int = 50,
     ) -> dict[str, Any]:
         entity = await self._require_entity(entity_id, current_user)
-        reports = await self._reports_for_entity(
-            entity_id=entity.id,
-            report_kind=report_kind,
-            publication_status=publication_status,
-            limit=limit,
-        )
+        should_scope_to_current_update = report_kind is None and publication_status is None
+        if publication_status == "pre_graph_update" or not should_scope_to_current_update:
+            reports = await self._reports_for_entity(
+                entity_id=entity.id,
+                report_kind=report_kind,
+                publication_status=publication_status,
+                limit=limit,
+            )
+        else:
+            current_graph_update = await self._default_graph_update_for_entity(entity.id)
+            reports = (
+                await self._reports_for_entity(
+                    entity_id=entity.id,
+                    report_kind=report_kind,
+                    publication_status=publication_status,
+                    limit=limit,
+                )
+                if current_graph_update is not None
+                else []
+            )
+            if current_graph_update is not None:
+                reports = [
+                    report
+                    for report in reports
+                    if self._report_matches_graph_update(report, current_graph_update.id)
+                ]
         return {
             "reports": [self._report_summary_to_dict(report) for report in reports],
             "summary": {
@@ -3023,10 +3071,42 @@ class BrandSpaceService:
         result = await self.db.execute(
             select(BoardRun)
             .where(BoardRun.entity_id == entity_id)
-            .order_by(desc(BoardRun.updated_at))
+            .order_by(desc(BoardRun.created_at), desc(BoardRun.updated_at))
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def _default_board_run_for_space(self, entity_id: UUID) -> BoardRun | None:
+        latest_run = await self._latest_board_run(entity_id)
+        if latest_run is None:
+            return None
+        if latest_run.status in {"running", "paused", "pause_requested"}:
+            return latest_run
+        if await self._graph_update_for_run(latest_run.id):
+            return latest_run
+
+        latest_update = (
+            await self._latest_graph_update(entity_id)
+            or await self._latest_non_failed_graph_update(entity_id)
+        )
+        if latest_update is None or latest_update.board_run_id == latest_run.id:
+            return latest_run
+        result = await self.db.execute(
+            select(BoardRun).where(
+                BoardRun.id == latest_update.board_run_id,
+                BoardRun.entity_id == entity_id,
+            )
+        )
+        fallback_run = result.scalar_one_or_none()
+        if fallback_run is not None and not fallback_run.is_scaffold:
+            return fallback_run
+        return latest_run
+
+    async def _default_graph_update_for_entity(self, entity_id: UUID) -> GraphUpdate | None:
+        board_run = await self._default_board_run_for_space(entity_id)
+        if board_run is None:
+            return None
+        return await self._graph_update_for_run(board_run.id)
 
     async def _latest_graph_update(self, entity_id: UUID) -> GraphUpdate | None:
         latest_applied = await self._latest_applied_graph_update(entity_id)
@@ -3049,6 +3129,15 @@ class BrandSpaceService:
             if update.before_graph_version == current_version:
                 return update
         return latest_applied
+
+    async def _latest_non_failed_graph_update(self, entity_id: UUID) -> GraphUpdate | None:
+        result = await self.db.execute(
+            select(GraphUpdate)
+            .where(GraphUpdate.entity_id == entity_id, GraphUpdate.status != "failed")
+            .order_by(desc(GraphUpdate.updated_at), desc(GraphUpdate.created_at))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def _latest_applied_graph_update(
         self,
@@ -3105,6 +3194,10 @@ class BrandSpaceService:
         )
         return result.scalar_one_or_none()
 
+    async def _latest_graph_update_report(self, entity_id: UUID) -> BrandReportVersion | None:
+        reports = await self._reports_for_entity(entity_id=entity_id, limit=1)
+        return reports[0] if reports else None
+
     async def _reports_for_entity(
         self,
         *,
@@ -3142,13 +3235,39 @@ class BrandSpaceService:
                 limit=bounded_limit - len(filtered),
             )
             return [*filtered, *fallback][:bounded_limit]
-        result = await self.db.execute(
-            select(BrandReportVersion)
-            .where(*conditions)
-            .order_by(desc(BrandReportVersion.created_at), desc(BrandReportVersion.version))
-            .limit(bounded_limit)
+        return await self._graph_update_reports(
+            conditions=conditions,
+            limit=bounded_limit,
         )
-        return list(result.scalars().all())
+
+    async def _graph_update_reports(
+        self,
+        *,
+        conditions: list[Any],
+        limit: int,
+    ) -> list[BrandReportVersion]:
+        filtered: list[BrandReportVersion] = []
+        scanned = 0
+        page_size = 200
+        max_scan = 5000
+        while True:
+            result = await self.db.execute(
+                select(BrandReportVersion)
+                .where(*conditions)
+                .order_by(desc(BrandReportVersion.created_at), desc(BrandReportVersion.version))
+                .limit(page_size)
+                .offset(scanned)
+            )
+            reports = list(result.scalars().all())
+            if not reports:
+                break
+            scanned += len(reports)
+            filtered.extend(
+                report for report in reports if self._report_source_type(report) == "graph_update"
+            )
+            if len(filtered) >= limit or len(reports) < page_size or scanned >= max_scan:
+                break
+        return filtered[:limit]
 
     async def _reports_for_publication_status(
         self,
@@ -3237,10 +3356,18 @@ class BrandSpaceService:
             else await self._fallback_graph(
                 entity=entity,
                 patches=patches,
-                runtime_pending=not board_run.is_scaffold and graph_update is None,
+                runtime_pending=(
+                    not board_run.is_scaffold
+                    and graph_update is None
+                    and board_run.status in {"running", "pause_requested"}
+                ),
             )
         )
-        latest_report = await self._latest_report(entity.id)
+        latest_report = (
+            await self._latest_report_for_graph_update(graph_update.id)
+            if graph_update
+            else None
+        )
         if latest_report:
             guardrails = await self._guardrails_for_report(latest_report.id)
         elif graph_update:
@@ -3248,6 +3375,11 @@ class BrandSpaceService:
         else:
             guardrails = []
         reports = await self._reports_for_entity(entity_id=entity.id, limit=20)
+        reports = (
+            [report for report in reports if self._report_matches_graph_update(report, graph_update.id)]
+            if graph_update
+            else []
+        )
         return {
             "context": self._context_to_dict(entity=entity, board_run=board_run, graph_update=graph_update),
             "run": self._board_run_to_dict(board_run),
@@ -4864,6 +4996,21 @@ class BrandSpaceService:
         ):
             return "graph_update"
         return "pre_graph_update"
+
+    @staticmethod
+    def _report_matches_graph_update(
+        report: BrandReportVersion,
+        graph_update_id: UUID,
+    ) -> bool:
+        payload = report.payload or {}
+        graph_update_key = str(graph_update_id)
+        return (
+            str(payload.get("graph_update_id") or "") == graph_update_key
+            or str(report.report_id or "") == f"brand-space-{graph_update_key}"
+            or str(report.artifact_id or "").startswith(
+                f"graph-update-report:{graph_update_key}:"
+            )
+        )
 
     @staticmethod
     def _report_publication_status(report: BrandReportVersion) -> str:

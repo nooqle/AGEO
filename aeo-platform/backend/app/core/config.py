@@ -160,6 +160,16 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3010",
         "http://localhost:3011",
         "http://127.0.0.1:3011",
+        "http://localhost:3012",
+        "http://127.0.0.1:3012",
+        "http://localhost:3013",
+        "http://127.0.0.1:3013",
+        "http://localhost:3014",
+        "http://127.0.0.1:3014",
+        "http://localhost:3015",
+        "http://127.0.0.1:3015",
+        "http://localhost:3016",
+        "http://127.0.0.1:3016",
     ]
 
     # Browser

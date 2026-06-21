@@ -563,6 +563,170 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
 
 
 @pytest.mark.asyncio
+async def test_create_board_run_rolls_back_when_payload_projection_fails(tmp_path, monkeypatch):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-create-rollback@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+        entity_id = entity.id
+
+        service = BrandSpaceService(session)
+
+        async def fail_payload(**_kwargs):
+            raise RuntimeError("projection failed")
+
+        monkeypatch.setattr(service, "_space_payload", fail_payload)
+        with pytest.raises(RuntimeError):
+            await service.create_board_run(
+                entity_id=entity_id,
+                current_user=owner,
+            )
+
+        result = await session.execute(
+            select(BoardRun).where(BoardRun.entity_id == entity_id)
+        )
+        assert result.scalars().all() == []
+        intelligence_result = await session.execute(
+            select(BrandIntelligenceRun).where(BrandIntelligenceRun.entity_id == entity_id)
+        )
+        assert intelligence_result.scalars().all() == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_update_board_run_status_rolls_back_when_payload_projection_fails(tmp_path, monkeypatch):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-update-rollback@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+        entity_id = entity.id
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity_id,
+            current_user=owner,
+            execution_mode="real",
+        )
+        board_run_id = uuid.UUID(payload["run"]["id"])
+
+        async def fail_payload(**_kwargs):
+            raise RuntimeError("projection failed")
+
+        monkeypatch.setattr(service, "_space_payload", fail_payload)
+        with pytest.raises(RuntimeError):
+            await service.update_board_run_status(
+                run_id=board_run_id,
+                current_user=owner,
+                status="stopped",
+            )
+
+        board_run = await session.get(BoardRun, board_run_id)
+        assert board_run is not None
+        assert board_run.status == "running"
+        assert board_run.completed_at is None
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_get_space_does_not_fallback_to_scaffold_graph_update_for_real_empty_run(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-no-scaffold-fallback@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        scaffold_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            status="running",
+            is_scaffold=True,
+        )
+        session.add(scaffold_run)
+        await session.flush()
+        scaffold_update = GraphUpdate(
+            entity_id=entity.id,
+            board_run_id=scaffold_run.id,
+            created_by_user_id=owner.id,
+            before_graph_version="v0.0.0",
+            after_graph_version="v0.1.0",
+            status="applied",
+            summary={"total": 1},
+        )
+        session.add(scaffold_update)
+        await session.flush()
+        session.add_all(
+            [
+                GraphPatch(
+                    graph_update_id=scaffold_update.id,
+                    entity_id=entity.id,
+                    patch_type="new_entity",
+                    relation_type="associated_with",
+                    status="needs_review",
+                    title="旧脚手架补丁",
+                    description="旧脚手架图谱补丁不应进入当前真实空运行。",
+                    confidence=0.7,
+                    before_payload={},
+                    after_payload={"label": "脚手架实体"},
+                ),
+                BrandReportVersion(
+                    entity_id=entity.id,
+                    report_id=f"brand-space-{scaffold_update.id}",
+                    version=1,
+                    report_kind="graph_update_interpretation",
+                    artifact_id=f"graph-update-report:{scaffold_update.id}:v1",
+                    title="旧脚手架报告",
+                    summary="旧脚手架报告不应进入当前真实空运行。",
+                    payload={
+                        "graph_update_id": str(scaffold_update.id),
+                        "publication_status": "needs_review",
+                    },
+                    publication_status="needs_review",
+                ),
+            ]
+        )
+        await session.flush()
+        real_empty_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            status="stopped",
+            is_scaffold=False,
+        )
+        session.add(real_empty_run)
+        await session.commit()
+
+        payload = await BrandSpaceService(session).get_space(
+            entity_id=entity.id,
+            current_user=owner,
+        )
+
+        assert payload["run"]["id"] == str(real_empty_run.id)
+        assert payload["run"]["is_scaffold"] is False
+        assert payload["graph_update"] is None
+        assert payload["report"] is None
+        assert payload["reports"] == []
+
+        review_items = await BrandSpaceService(session).get_review_items(
+            entity_id=entity.id,
+            current_user=owner,
+        )
+        assert review_items["review_items"] == []
+        report_list = await BrandSpaceService(session).list_reports(
+            entity_id=entity.id,
+            current_user=owner,
+        )
+        assert report_list["reports"] == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_artifact_preview_handles_missing_graph_update_and_unknown_type(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:
@@ -1205,7 +1369,29 @@ async def test_mcdonalds_report_versions_publish_and_legacy_mapping(tmp_path):
 
         report_list = await service.list_reports(entity_id=entity.id, current_user=owner)
         assert report_list["summary"]["graph_update"] == 1
-        assert report_list["summary"]["pre_graph_update"] == 1
+        assert report_list["summary"]["pre_graph_update"] == 0
+        assert str(legacy_report.id) not in {item["id"] for item in report_list["reports"]}
+        later_real_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            status="stopped",
+            is_scaffold=False,
+            input_scope={"platforms": ["chatgpt", "deepseek", "kimi", "doubao"]},
+        )
+        session.add(later_real_run)
+        await session.commit()
+        space_payload = await service.get_space(entity_id=entity.id, current_user=owner)
+        assert space_payload["run"]["id"] == str(board_run.id)
+        assert space_payload["graph_update"]["id"] == str(graph_update.id)
+        assert space_payload["graph"]["meta"]["state"] != "runtime_pending"
+        assert space_payload["report"]["source_type"] == "graph_update"
+        direct_empty_run = await service.get_board_run(
+            run_id=later_real_run.id,
+            current_user=owner,
+        )
+        assert direct_empty_run["run"]["id"] == str(later_real_run.id)
+        assert direct_empty_run["graph_update"] is None
+        assert direct_empty_run["report"] is None
         legacy_filtered = await service.list_reports(
             entity_id=entity.id,
             current_user=owner,
@@ -1218,7 +1404,7 @@ async def test_mcdonalds_report_versions_publish_and_legacy_mapping(tmp_path):
             limit=10,
         )
         assert legacy_filtered["summary"]["pre_graph_update"] == 1
-        legacy_item = next(item for item in report_list["reports"] if item["id"] == str(legacy_report.id))
+        legacy_item = legacy_filtered["reports"][0]
         assert legacy_item["source_type"] == "pre_graph_update"
         assert all(item["source_type"] == "graph_update" for item in draft_filtered["reports"])
         assert all(item["publication_status"] == "draft" for item in draft_filtered["reports"])
@@ -1569,7 +1755,7 @@ async def test_review_items_and_patch_decision_are_idempotent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_review_items_aggregate_runs_and_rejected_patch_is_removed_from_snapshot(tmp_path):
+async def test_review_items_use_current_graph_update_and_rejected_patch_is_removed_from_snapshot(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:
         owner = _user("brand-space-review-multi-run@example.com")
@@ -1585,13 +1771,13 @@ async def test_review_items_aggregate_runs_and_rejected_patch_is_removed_from_sn
             entity_id=entity.id,
             current_user=owner,
         )
-        assert review_items["summary"]["total"] == 6
+        assert review_items["summary"]["total"] == 3
         competitor_items = await service.get_review_items(
             entity_id=entity.id,
             current_user=owner,
             category="competitor",
         )
-        assert len(competitor_items["review_items"]) == 2
+        assert len(competitor_items["review_items"]) == 1
 
         first_competitor_patch = next(
             patch for patch in first["patches"] if patch["patchType"] == "add_competitor_relation"

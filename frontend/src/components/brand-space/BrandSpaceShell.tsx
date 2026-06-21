@@ -24,17 +24,12 @@ import styles from './BrandSpace.module.css';
 import {
   artifacts,
   boardEdges,
-  brandSpaceContext,
   brandSpaceNavItems,
   buildStressBoardFixture,
-  evidenceRefs,
-  graphEntities,
-  graphRelations,
   initialBoardNodes,
   initialGraphPatches,
   initialPlatforms,
   reportGuardrails,
-  runtimeEvents,
 } from '@/mocks/brandSpaceMock';
 import { api } from '@/services/api';
 import type {
@@ -60,6 +55,7 @@ import type {
   PlatformFetchNode,
   RuntimeEvent,
 } from '@/types/brandSpace';
+import type { Entity } from '@/types/entity';
 
 function classNames(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(' ');
@@ -73,6 +69,15 @@ function runStatusLabel(status: BoardRunStatus) {
   if (status === 'completed') return '已完成';
   if (status === 'failed') return '失败';
   return '就绪';
+}
+
+function runModeLabel(isBackendMode: boolean, spaceRun: BrandSpaceBoardRun | null) {
+  if (!isBackendMode) return '底版演示运行';
+  if (spaceRun?.is_scaffold) return '脚手架预览运行';
+  if (spaceRun?.status === 'stopped' || spaceRun?.status === 'completed' || spaceRun?.status === 'failed') {
+    return `真实运行记录 · ${runStatusLabel(spaceRun.status)}`;
+  }
+  return '真实运行态';
 }
 
 function advanceStatus(status: NodeStatus): NodeStatus {
@@ -108,10 +113,19 @@ const workspaceItems: Array<{ label: string; icon: LucideIcon }> = [
   { label: '设置', icon: Settings },
 ];
 
-const fallbackGraph: BrandSpaceGraph = {
-  entities: graphEntities,
-  relations: graphRelations,
-  evidenceRefs,
+const emptyBrandSpaceContext = {
+  brandName: '品牌空间',
+  graphVersion: '未连接',
+  boardName: 'AI 能见度监测画布',
+  runId: '',
+  startedAt: '',
+  duration: '00:00:00',
+};
+
+const emptyGraph: BrandSpaceGraph = {
+  entities: [],
+  relations: [],
+  evidenceRefs: [],
 };
 
 const ASSET_PAGE_SIZE = 6;
@@ -133,7 +147,7 @@ function buildLocalArtifactDetail(artifact: ArtifactRef): ArtifactDetail {
     preview: {
       kind: 'summary',
       title: artifact.label,
-      summary: '当前处于本地演示底版，资产详情使用安全摘要预览；连接后端后会显示真实 Graph Update、回答样本和报告追溯。',
+      summary: '当前处于本地演示底版，资产详情使用安全摘要预览；连接后端后会显示真实图谱更新、回答样本和报告追溯。',
       items: [
         { label: '类型', value: artifactTypeLabel(artifact.type) },
         { label: '记录数', value: artifact.rowCount ?? '-' },
@@ -289,12 +303,48 @@ function canvasStressFixtureCount() {
   return Math.min(count, 120);
 }
 
+function requestedEntityIdFromLocation() {
+  if (typeof window === 'undefined') return '';
+  const params = new URLSearchParams(window.location.search);
+  return (params.get('entity_id') || params.get('entityId') || '').trim();
+}
+
+async function loadInitialBrandSpacePayload(entities: Entity[]) {
+  const requestedEntityId = requestedEntityIdFromLocation();
+  if (requestedEntityId) {
+    return {
+      entityId: requestedEntityId,
+      payload: await api.getBrandSpace(requestedEntityId),
+    };
+  }
+
+  const candidates = entities.filter((item) => !item.isInternalTestData);
+  const orderedEntities = candidates.length ? candidates : entities;
+  let fallback: { entityId: string; payload: BrandSpacePayload } | null = null;
+  for (const entity of orderedEntities.slice(0, 50)) {
+    const payload = await api.getBrandSpace(entity.id);
+    const candidate = { entityId: entity.id, payload };
+    fallback ??= candidate;
+    const hasGraphUpdate = Boolean(
+      payload.graph_update || payload.reports?.some((item) => item.source_type === 'graph_update'),
+    );
+    if (hasGraphUpdate) {
+      if (payload.run?.is_scaffold === false) {
+        return candidate;
+      }
+    }
+  }
+  if (fallback) return fallback;
+  throw new Error('当前账号还没有可用品牌');
+}
+
 export function BrandSpaceShell() {
   const [activeView, setActiveView] = useState<BrandSpaceView>('graph');
-  const [context, setContext] = useState(brandSpaceContext);
+  const [context, setContext] = useState(emptyBrandSpaceContext);
   const [spaceRun, setSpaceRun] = useState<BrandSpaceBoardRun | null>(null);
   const [entityId, setEntityId] = useState<string | null>(null);
   const [isBackendMode, setIsBackendMode] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState(false);
   const [isLoadingSpace, setIsLoadingSpace] = useState(true);
   const [backendNotice, setBackendNotice] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
@@ -302,11 +352,11 @@ export function BrandSpaceShell() {
   const [nodes, setNodes] = useState<BoardNode[]>(initialBoardNodes);
   const [platforms, setPlatforms] = useState<PlatformFetchNode[]>(initialPlatforms);
   const [edges, setEdges] = useState(boardEdges);
-  const [patches, setPatches] = useState<GraphPatch[]>(initialGraphPatches);
-  const [reviewItems, setReviewItems] = useState<GraphReviewItem[]>(() => reviewItemsFromPatches(initialGraphPatches));
-  const [artifactsState, setArtifactsState] = useState(artifacts);
-  const [events, setEvents] = useState<RuntimeEvent[]>(() => limitRuntimeEvents(runtimeEvents));
-  const [graph, setGraph] = useState<BrandSpaceGraph>(fallbackGraph);
+  const [patches, setPatches] = useState<GraphPatch[]>([]);
+  const [reviewItems, setReviewItems] = useState<GraphReviewItem[]>([]);
+  const [artifactsState, setArtifactsState] = useState<ArtifactRef[]>([]);
+  const [events, setEvents] = useState<RuntimeEvent[]>([]);
+  const [graph, setGraph] = useState<BrandSpaceGraph>(emptyGraph);
   const [graphUpdate, setGraphUpdate] = useState<BrandSpaceGraphUpdate | null>(null);
   const [guardrails, setGuardrails] = useState(reportGuardrails);
   const [report, setReport] = useState<BrandSpaceReport | null>(null);
@@ -315,7 +365,7 @@ export function BrandSpaceShell() {
   const [isLoadingArtifactDetail, setIsLoadingArtifactDetail] = useState(false);
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
   const [assetTypeFilter, setAssetTypeFilter] = useState('all');
-  const [assetSummary, setAssetSummary] = useState<AssetListSummary | null>(() => assetSummaryFromList(artifacts));
+  const [assetSummary, setAssetSummary] = useState<AssetListSummary | null>(() => assetSummaryFromList([]));
   const [assetPagination, setAssetPagination] = useState<PaginationInfo | null>(null);
   const [pendingPatchDecisionIds, setPendingPatchDecisionIds] = useState<string[]>([]);
   const [downloadingArtifactIds, setDownloadingArtifactIds] = useState<string[]>([]);
@@ -341,7 +391,7 @@ export function BrandSpaceShell() {
     setAssetPagination(null);
     setEvents(limitRuntimeEvents(payload.events));
     lastEventSequenceRef.current = Math.max(0, ...payload.events.map(runtimeEventSequence));
-    setGraph(payload.graph ?? fallbackGraph);
+    setGraph(payload.graph ?? emptyGraph);
     setGraphUpdate(payload.graph_update);
     setGuardrails(payload.guardrails);
     if (payload.report !== undefined) {
@@ -373,6 +423,12 @@ export function BrandSpaceShell() {
     const offset = options?.offset ?? 0;
     const append = Boolean(options?.append);
     if (!isBackendMode || !spaceRun?.id) {
+      if (!isDemoMode) {
+        setArtifactsState([]);
+        setAssetSummary(assetSummaryFromList([]));
+        setAssetPagination(null);
+        return [];
+      }
       const localAssets = normalizedType
         ? artifacts.filter((artifact) => artifact.type === normalizedType)
         : artifacts;
@@ -405,7 +461,7 @@ export function BrandSpaceShell() {
     } finally {
       setIsLoadingAssets(false);
     }
-  }, [assetTypeFilter, isBackendMode, spaceRun?.id]);
+  }, [assetTypeFilter, isBackendMode, isDemoMode, spaceRun?.id]);
 
   const refreshReviewItems = useCallback(async (targetEntityId: string, fallbackPatches: GraphPatch[], fallbackUpdate?: BrandSpaceGraphUpdate | null) => {
     try {
@@ -427,6 +483,7 @@ export function BrandSpaceShell() {
         if (stressFixtureCount) {
           const fixture = buildStressBoardFixture(stressFixtureCount);
           setIsBackendMode(false);
+          setIsDemoMode(true);
           setRunStatus('running');
           setNodes(fixture.nodes);
           setEdges(fixture.edges);
@@ -436,23 +493,44 @@ export function BrandSpaceShell() {
           return;
         }
         const entities = await api.listEntities();
-        const entity = entities.find((item) => !item.isInternalTestData) ?? entities[0];
-        if (!entity) {
-          throw new Error('当前账号还没有可用品牌');
-        }
-        const payload = await api.getBrandSpace(entity.id);
+        const { entityId: loadedEntityId, payload } = await loadInitialBrandSpacePayload(entities);
         if (cancelled) return;
-        setEntityId(entity.id);
+        setEntityId(loadedEntityId);
         setIsBackendMode(true);
+        setIsDemoMode(false);
         setBackendNotice('');
         applySpacePayload(payload);
         setReviewItems(reviewItemsFromPatches(payload.patches, payload.graph_update));
-        await refreshReviewItems(entity.id, payload.patches, payload.graph_update);
+        await refreshReviewItems(loadedEntityId, payload.patches, payload.graph_update);
       } catch (error) {
         if (cancelled) return;
         setIsBackendMode(false);
-        setReviewItems(reviewItemsFromPatches(initialGraphPatches));
-        setBackendNotice(backendNoticeFromError(error, '后端不可用，正在使用本地演示底版'));
+        setIsDemoMode(false);
+        setSpaceRun(null);
+        setEntityId(null);
+        setContext(emptyBrandSpaceContext);
+        setRunStatus('idle');
+        setNodes(initialBoardNodes.map((node) => ({ ...node, status: 'idle', progress: 0 })));
+        setPlatforms(initialPlatforms.map((platform) => ({
+          ...platform,
+          status: 'idle',
+          progress: 0,
+          answers: 0,
+          failures: 0,
+        })));
+        setEdges(boardEdges);
+        setPatches([]);
+        setReviewItems([]);
+        setArtifactsState([]);
+        setAssetSummary(assetSummaryFromList([]));
+        setAssetPagination(null);
+        setEvents([]);
+        setGraph(emptyGraph);
+        setGraphUpdate(null);
+        setGuardrails([]);
+        setReport(null);
+        setReports([]);
+        setBackendNotice(backendNoticeFromError(error, 'Brand Space 真实后端不可用'));
       } finally {
         if (!cancelled) {
           setIsLoadingSpace(false);
@@ -512,7 +590,7 @@ export function BrandSpaceShell() {
   }, [applySpacePayload, isBackendMode, runStatus, spaceRun?.id]);
 
   useEffect(() => {
-    if (isBackendMode) return undefined;
+    if (isBackendMode || !isDemoMode) return undefined;
     if (runStatus !== 'running') return undefined;
 
     const intervalId = window.setInterval(() => {
@@ -521,7 +599,7 @@ export function BrandSpaceShell() {
     }, 1400);
 
     return () => window.clearInterval(intervalId);
-  }, [isBackendMode, runStatus]);
+  }, [isBackendMode, isDemoMode, runStatus]);
 
   useEffect(() => {
     if (activeView !== 'assets') return;
@@ -554,6 +632,10 @@ export function BrandSpaceShell() {
 
   const handleRunStart = async () => {
     if (!isBackendMode || !entityId) {
+      if (!isDemoMode) {
+        setBackendNotice('Brand Space 真实后端不可用，无法启动画布运行。');
+        return;
+      }
       startLocalRun();
       return;
     }
@@ -564,13 +646,16 @@ export function BrandSpaceShell() {
       applySpacePayload(payload);
       await refreshReviewItems(entityId, payload.patches, payload.graph_update);
     } catch (error) {
-      setBackendNotice(backendNoticeFromError(error, '启动画布失败，已切回本地动态'));
-      startLocalRun();
+      setBackendNotice(backendNoticeFromError(error, '启动画布失败'));
     }
   };
 
   const handleRunPause = async () => {
     if (!isBackendMode || !spaceRun?.id) {
+      if (!isDemoMode) {
+        setBackendNotice('Brand Space 真实后端不可用，无法暂停画布运行。');
+        return;
+      }
       pauseLocalRun();
       return;
     }
@@ -578,13 +663,16 @@ export function BrandSpaceShell() {
       const payload = await api.pauseBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
-      setBackendNotice(backendNoticeFromError(error, '暂停失败，已使用本地状态'));
-      pauseLocalRun();
+      setBackendNotice(backendNoticeFromError(error, '暂停失败'));
     }
   };
 
   const handleRunResume = async () => {
     if (!isBackendMode || !spaceRun?.id) {
+      if (!isDemoMode) {
+        setBackendNotice('Brand Space 真实后端不可用，无法继续画布运行。');
+        return;
+      }
       resumeLocalRun();
       return;
     }
@@ -592,13 +680,16 @@ export function BrandSpaceShell() {
       const payload = await api.resumeBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
-      setBackendNotice(backendNoticeFromError(error, '继续失败，已使用本地状态'));
-      resumeLocalRun();
+      setBackendNotice(backendNoticeFromError(error, '继续失败'));
     }
   };
 
   const handleRunStop = async () => {
     if (!isBackendMode || !spaceRun?.id) {
+      if (!isDemoMode) {
+        setBackendNotice('Brand Space 真实后端不可用，无法停止画布运行。');
+        return;
+      }
       stopLocalRun();
       return;
     }
@@ -606,8 +697,7 @@ export function BrandSpaceShell() {
       const payload = await api.stopBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
-      setBackendNotice(backendNoticeFromError(error, '停止失败，已使用本地状态'));
-      stopLocalRun();
+      setBackendNotice(backendNoticeFromError(error, '停止失败'));
     }
   };
 
@@ -634,7 +724,8 @@ export function BrandSpaceShell() {
         }
         return;
       } catch (error) {
-        setBackendNotice(backendNoticeFromError(error, '审阅提交失败，已使用本地状态'));
+        setBackendNotice(backendNoticeFromError(error, '审阅提交失败'));
+        return;
       } finally {
         setPendingPatchDecisionIds((current) => current.filter((id) => id !== patchId));
       }
@@ -684,7 +775,7 @@ export function BrandSpaceShell() {
       return;
     }
     setIsLoadingArtifactDetail(true);
-    setSelectedArtifactDetail(buildLocalArtifactDetail(artifact));
+    setSelectedArtifactDetail(null);
     try {
       const response = await api.getBrandSpaceArtifact(artifactId);
       setSelectedArtifactDetail(response);
@@ -913,7 +1004,7 @@ export function BrandSpaceShell() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">
-                  {isBackendMode ? (spaceRun?.is_scaffold ? '脚手架预览运行' : '真实运行态') : '底版演示运行'}
+                  {runModeLabel(isBackendMode, spaceRun)}
                   {isLoadingSpace ? ' · 加载中' : ''}
                 </p>
                 <h2 className="mt-1 text-xl font-semibold text-[var(--text-primary)]">{selectedView.label}</h2>
@@ -989,7 +1080,7 @@ export function BrandSpaceShell() {
             {activeView === 'reports' ? (
               <ReportReviewView
                 report={report}
-                reports={reports}
+                reports={graphUpdate ? reports : []}
                 graphUpdate={graphUpdate}
                 guardrails={guardrails}
                 onGenerateReport={() => handleGenerateReport(false)}

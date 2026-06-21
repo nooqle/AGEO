@@ -105,6 +105,14 @@ function statusDotClass(severity: string) {
   return 'bg-[var(--brand-primary)]';
 }
 
+const publicationStatusLabels: Record<string, string> = {
+  draft: '草稿',
+  needs_review: '待审阅',
+  publishable: '可发布',
+  published: '已发布',
+  pre_graph_update: '非图谱报告',
+};
+
 export function ReportReviewView({
   report,
   reports = [],
@@ -141,9 +149,11 @@ export function ReportReviewView({
   );
   const judgments = structuralJudgments.length ? structuralJudgments : legacyClaims(report);
   const platformRows = platformProfiles.length ? platformProfiles : legacyPlatformRows(report);
+  const blockingGuardrails = guardrails.filter((guardrail) => guardrail.severity === 'block');
   const hasBlock = guardrails.some((guardrail) => guardrail.severity === 'block');
   const publicationStatus = text(report?.publication_status ?? report?.payload?.publication_status);
   const sourceType = text(report?.source_type ?? report?.payload?.source_type);
+  const missingGraphUpdateForReport = !report && !graphUpdate;
   const metrics: Array<[string, string]> = [
     ['有效回答', String(sampleScope.answer_count ?? '-')],
     ['问题覆盖', String(sampleScope.question_count ?? '-')],
@@ -152,16 +162,18 @@ export function ReportReviewView({
   ];
   const publishDisabled =
     isGenerating ||
-    (!report && !graphUpdate) ||
+    missingGraphUpdateForReport ||
     (Boolean(report) && (hasBlock || publicationStatus === 'published' || sourceType === 'pre_graph_update' || !onPublishReport));
   const buttonLabel = !report
     ? isGenerating
       ? '生成中'
-      : '生成报告'
+      : missingGraphUpdateForReport
+        ? '等待图谱更新'
+        : '生成报告'
     : hasBlock
       ? '无法发布'
       : sourceType === 'pre_graph_update'
-        ? '历史报告'
+        ? '非图谱报告'
         : publicationStatus === 'published'
           ? '已发布'
           : isGenerating
@@ -191,7 +203,7 @@ export function ReportReviewView({
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-[var(--text-primary)]">v{item.version}</span>
                     <span className="text-[11px] text-[var(--text-tertiary)]">
-                      {item.source_type === 'pre_graph_update' ? '旧报告' : item.publication_status}
+                      {publicationStatusLabels[item.publication_status] ?? item.publication_status}
                     </span>
                   </div>
                   <p className="mt-1 truncate text-sm font-medium text-[var(--text-primary)]">{item.title}</p>
@@ -205,11 +217,37 @@ export function ReportReviewView({
       <article className={classNames(styles.reportReader, styles.surface)}>
         <header className={styles.reportHero}>
           <div>
-            <p className="text-xs font-semibold uppercase text-[var(--brand-text)]">Brand Association Report</p>
+            <p className="text-xs font-semibold uppercase text-[var(--brand-text)]">图谱更新解读报告</p>
             <h1 className="mt-3 max-w-4xl text-[28px] font-semibold leading-tight text-[var(--text-primary)] md:text-[34px]">
               {title}
             </h1>
             <p className="mt-3 max-w-4xl text-[15px] leading-7 text-[var(--text-secondary)]">{subtitle}</p>
+            {missingGraphUpdateForReport ? (
+              <p className="mt-2 text-sm font-medium text-[var(--warning)]">
+                需要先完成一次图谱更新，才能生成图谱解读报告。
+              </p>
+            ) : null}
+            {blockingGuardrails.length ? (
+              <div
+                className="mt-4 rounded-xl border p-3"
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--error) 42%, var(--border-subtle) 58%)',
+                  background: 'color-mix(in srgb, var(--error) 8%, var(--bg-elevated) 92%)',
+                }}
+              >
+                <div className="flex items-center gap-2 text-sm font-semibold text-[var(--error)]">
+                  <Lock className="h-4 w-4" />
+                  <span>发布护栏阻断</span>
+                </div>
+                <ul className="mt-2 space-y-1 text-sm leading-6 text-[var(--text-secondary)]">
+                  {blockingGuardrails.slice(0, 3).map((guardrail, index) => (
+                    <li key={guardrailKey(guardrail, index)}>
+                      {guardrail.title}：{guardrail.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -248,6 +286,19 @@ export function ReportReviewView({
           </div>
         </header>
 
+        {missingGraphUpdateForReport ? (
+          <section className={styles.verdictBlock}>
+            <p className="text-xs font-semibold uppercase text-[var(--text-tertiary)]">等待图谱更新</p>
+            <p className="mt-3 max-w-3xl text-[20px] font-semibold leading-9 text-[var(--text-primary)]">
+              当前运行还没有可解读的图谱更新，报告不会复用其他运行或脚手架数据。
+            </p>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--text-secondary)]">
+              完成一次画布运行并生成 Graph Update 后，这里才会展示报告版本、发布护栏、证据链和行动建议。
+            </p>
+          </section>
+        ) : null}
+
+        <div className={missingGraphUpdateForReport ? 'hidden' : undefined}>
         <section className={styles.verdictBlock}>
           <p className="text-xs font-semibold uppercase text-[var(--text-tertiary)]">核心判断</p>
           <p className="mt-3 max-w-4xl text-[20px] font-semibold leading-9 text-[var(--text-primary)]">
@@ -380,7 +431,7 @@ export function ReportReviewView({
               ))
             ) : (
               <p className="text-sm leading-7 text-[var(--text-secondary)]">
-                当前报告没有新的价值支柱结构。旧报告仍可查看关键结论和追溯链。
+                当前报告没有新的价值支柱结构。请从本次图谱更新重新生成图谱解读报告。
               </p>
             )}
           </div>
@@ -493,6 +544,7 @@ export function ReportReviewView({
             )}
           </div>
         </section>
+        </div>
       </article>
     </div>
   );

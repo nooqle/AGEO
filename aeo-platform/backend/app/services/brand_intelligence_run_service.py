@@ -252,6 +252,7 @@ class BrandIntelligenceRunService:
         origin_session_id: str | UUID | None = None,
         origin_event_id: str | None = None,
         start_immediately: bool = True,
+        commit: bool = True,
     ) -> BrandIntelligenceRun:
         entity = await self._require_entity(entity_id, current_user)
         normalized_event_id = str(origin_event_id or "").strip() or None
@@ -282,8 +283,11 @@ class BrandIntelligenceRunService:
                 ]
                 active.message = "正在生成问题和样本范围"
                 active.started_at = active.started_at or active.last_activity_at
-            await self.db.commit()
-            await self.db.refresh(active)
+            if commit:
+                await self.db.commit()
+                await self.db.refresh(active)
+            else:
+                await self.db.flush()
             return active
 
         now = _now()
@@ -315,8 +319,11 @@ class BrandIntelligenceRunService:
             updated_at=now,
         )
         self.db.add(run)
-        await self.db.commit()
-        await self.db.refresh(run)
+        if commit:
+            await self.db.commit()
+            await self.db.refresh(run)
+        else:
+            await self.db.flush()
         return run
 
     async def ensure_runtime_submitted(

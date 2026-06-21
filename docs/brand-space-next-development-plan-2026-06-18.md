@@ -70,6 +70,7 @@
 | 2026-06-21 | Sprint F: Performance And Object Storage | 完成 | `GET /events` 新增 `after_sequence` cursor 和 `sync=false` 默认轻量读，前端运行日志改为 2.5 秒增量事件轮询、15 秒全量 run 刷新；`get_assets/get_artifact_detail` 默认不触发真实运行同步；新增本地对象仓配置 `BRAND_SPACE_ASSET_STORAGE_ROOT`，artifact access/download API 只解析受控 `assets/...` object key；GraphUpdate 报告资产生成时物化 Markdown，可在 Assets drawer 下载；补危险 key、对象下载、event cursor 和轻量读不同步回归；验证通过 `validate_change.py`、targeted pytest、lint、build | 后续增强：生产态长跑 E2E、SSE/WebSocket 事件通道、对象仓云端 provider 抽象和真实大文件资产物化 |
 | 2026-06-21 | Sprint F: Runtime Polling And Artifact Storage Review Fix | Review 修复完成 | 按 `review-brand-space-runtime-polling-artifact-storage-2026-06-21.md` 收口：增量事件页 `pagination.total` 改为 `null`，避免伪造总数；报告 artifact 改为异步文件写入且对象物化成功后才登记 DB；前端下载改走统一 response error helper；运行日志 240 条窗口改为显式折叠提示；artifact access 返回前防御性剥离 `_local_path`；`sequence=None` 保持 `null`；补写入失败、外部 URL、cursor total 和 sequence 空值回归；验证通过 `validate_change.py`、targeted pytest、lint、build | 后续确认是否进入生产态长跑 E2E、SSE/WebSocket 事件通道或云端对象仓 provider 抽象 |
 | 2026-06-21 | Sprint F: QA/PM Pre-production Gate Fix | 验收修复完成 | QA Agent 未发现 blocking；PM Agent 发现两个上线前 blocking 并已收口：Brand Space 默认入口改为 Graph，首次读取不再自动创建 scaffold run；Graph 版本标签和更新时间线改为读取真实 `GraphUpdate` / context，不再展示硬编码假版本；后端全量空间 payload 改取最新 240 条 runtime events，避免 15 秒 full refresh 把运行日志倒回旧窗口；补 access/download 跨用户 404 测试和长日志窗口回归；验证通过 `validate_change.py`、targeted pytest、lint、build | 上生产前仍建议补一次真实后端浏览器 smoke：`/brand-space` Graph 首屏、手动启动运行、Graph Update 审阅、Report 生成/发布阻断、Assets 详情与下载、旧 `/dashboard` 隔离 |
+| 2026-06-21 | Sprint F: Final QA/PM Real Runtime Gate | 验收修复完成 | 独立 QA/产品 Agent 做最终只读验收后发现 release gate 问题并已收口：报告页首屏新增“发布护栏阻断”摘要，block guardrail 不再藏在页面底部；品牌空间默认 run 改按 `created_at` 选择，避免读端同步 `updated_at` 把旧 scaffold run 顶到首屏；非 scaffold 的终态空运行不再回退展示 scaffold GraphUpdate/report；Review Inbox 和默认 Reports API 改为当前有效 GraphUpdate 范围，无当前 GraphUpdate 时不泄漏旧 scaffold patch/report；无 GraphUpdate 的 Reports 页面隐藏历史版本列表和报告正文模板，只显示“等待图谱更新”空态；补服务层回归测试。验证通过 `validate_change.py`、`npm run lint`、`npm run build` 和浏览器 smoke | 当前共享 DB 没有非 scaffold GraphUpdate；上生产前仍需用真实 A4 凭据保留一条非 scaffold 完整样本，覆盖真实抓取 → GraphUpdate → Review → Report → Assets 下载 |
 
 ## 3. 产品 Section 完成度
 
@@ -425,7 +426,7 @@ UI 变更必须额外做：
 
 ## 9. 下一步建议
 
-当前建议继续 Sprint F 的 review/hardening，不再回头扩展新概念。本轮已按用户要求先完成性能改造和对象存储基础能力，生产态 E2E 暂不作为本轮阻塞项。
+当前建议继续 Sprint F 的 release gate 收口，不再回头扩展新概念。本轮已完成性能改造、对象存储基础能力和最终 QA/PM 发现的交互可信边界问题。剩余最大前置条件不是 UI 组件，而是生产态数据样本：当前共享 DB 没有非 scaffold 的 GraphUpdate，所以上生产前必须跑出并保留一条真实 A4 全链路样本。
 
 下一张具体开发票：
 
@@ -433,7 +434,7 @@ UI 变更必须额外做：
 
 范围：
 
-1. 补生产态长跑 E2E：真实 A4 凭据可用时跑一次完整 Brand Space run，从运行、GraphUpdate、Review、Report 到 Assets 下载。
+1. 补生产态长跑 E2E：真实 A4 凭据可用时跑一次完整 Brand Space run，从运行、GraphUpdate、Review、Report 到 Assets 下载，并确认样本 `BoardRun.is_scaffold=false`。
 2. 评估 polling 到 SSE/WebSocket 的切换边界：事件流可先替代 logs，节点状态仍由周期性 run snapshot 保底。
 3. 把对象仓 provider 抽象从 local 扩展为 cloud adapter，但保持当前 `objectKey/access/download` API 不变。
 4. 补大文件资产物化策略：raw answers / parsed answers 优先写对象仓，列表只返回 metadata 与 bounded preview。

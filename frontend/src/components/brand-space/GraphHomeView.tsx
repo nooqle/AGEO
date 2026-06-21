@@ -153,9 +153,17 @@ export function GraphHomeView({
   pendingPatchDecisionIds = [],
   onPatchDecision,
 }: GraphHomeViewProps) {
-  const visibleEntities = graph?.entities?.length ? graph.entities : graphEntities;
-  const visibleRelations = graph?.relations?.length ? graph.relations : graphRelations;
-  const fallbackEvidence = graph?.evidenceRefs?.length ? graph.evidenceRefs : evidenceRefs;
+  const emptyCenterEntity = {
+    ...emptyEntity,
+    label: brandName || emptyEntity.label,
+  };
+  const visibleEntities = graph
+    ? (graph.entities.length ? graph.entities : [emptyCenterEntity])
+    : graphEntities;
+  const visibleRelations = graph ? graph.relations : graphRelations;
+  const fallbackEvidence = graph
+    ? (graph.evidenceRefs.length ? graph.evidenceRefs : [])
+    : evidenceRefs;
   const versionConflict = graphUpdate?.summary?.version_conflict as Record<string, unknown> | undefined;
   const currentGraphVersion = typeof versionConflict?.current_graph_version === 'string'
     ? versionConflict.current_graph_version
@@ -164,7 +172,7 @@ export function GraphHomeView({
     ? versionConflict.expected_before_graph_version
     : undefined;
   const inboxItems = reviewItems.length ? reviewItems : reviewItemsFromPatches(patches);
-  const [selectedEntityId, setSelectedEntityId] = useState('amway');
+  const [selectedEntityId, setSelectedEntityId] = useState('');
   const [selectedPatchId, setSelectedPatchId] = useState(inboxItems[0]?.id ?? patches[0]?.id ?? '');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const selectedEntity = visibleEntities.find((entity) => entity.id === selectedEntityId) ?? visibleEntities[0] ?? emptyEntity;
@@ -191,7 +199,7 @@ export function GraphHomeView({
         `状态：${graphUpdateStatusLabels[graphUpdate.status] ?? graphUpdate.status}`,
         `记录时间：${formatTimelineTime(graphUpdate.updated_at ?? graphUpdate.created_at)}`,
       ]
-    : ['尚未生成 Graph Update，当前只展示品牌实体库基础状态。'];
+    : ['尚未生成图谱更新，当前只展示品牌实体库基础状态。'];
   const selectGraphEntity = (entity: GraphEntity) => {
     setSelectedEntityId(entity.id);
     const linkedPatchId = patchIdForEntity(entity, patches, inboxItems);
@@ -292,7 +300,7 @@ export function GraphHomeView({
         <section className={classNames(styles.surface, 'rounded-xl p-4')}>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">Review Inbox</p>
+              <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">审阅队列</p>
               <h2 className="mt-1 text-base font-semibold text-[var(--text-primary)]">待审阅图谱变化</h2>
             </div>
             <span className="rounded-lg border px-2.5 py-1 text-xs text-[var(--brand-text)]" style={{ borderColor: 'var(--brand-border)', background: 'var(--brand-bg)' }}>
