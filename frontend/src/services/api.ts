@@ -75,6 +75,7 @@ import type {
 } from '@/types/intelligenceRun';
 import type {
   ArtifactDetail,
+  ArtifactAccess,
   AssetListSummary,
   BrandSpacePayload,
   CreateBrandSpaceBoardRunInput,
@@ -1181,25 +1182,32 @@ class ApiService {
 
   async getBrandSpaceRunEvents(
     runId: string,
-    params?: { limit?: number; offset?: number },
+    params?: { limit?: number; offset?: number; afterSequence?: number; sync?: boolean },
   ) {
     const search = new URLSearchParams();
     if (params?.limit !== undefined) search.set('limit', String(params.limit));
     if (params?.offset !== undefined) search.set('offset', String(params.offset));
+    if (params?.afterSequence !== undefined) search.set('after_sequence', String(params.afterSequence));
+    if (params?.sync !== undefined) search.set('sync', String(params.sync));
     const suffix = search.toString() ? `?${search.toString()}` : '';
-    return this.request<{ events: BrandSpacePayload['events'] }>(
+    return this.request<{
+      events: BrandSpacePayload['events'];
+      cursor?: { after_sequence?: number | null; next_sequence: number; has_more: boolean };
+      pagination?: PaginationInfo;
+    }>(
       `/brand-space/board-runs/${runId}/events${suffix}`,
     );
   }
 
   async getBrandSpaceRunAssets(
     runId: string,
-    params?: { artifactType?: string; limit?: number; offset?: number },
+    params?: { artifactType?: string; limit?: number; offset?: number; sync?: boolean },
   ) {
     const search = new URLSearchParams();
     if (params?.artifactType) search.set('artifact_type', params.artifactType);
     if (params?.limit !== undefined) search.set('limit', String(params.limit));
     if (params?.offset !== undefined) search.set('offset', String(params.offset));
+    if (params?.sync !== undefined) search.set('sync', String(params.sync));
     const suffix = search.toString() ? `?${search.toString()}` : '';
     return this.request<{
       artifacts: BrandSpacePayload['artifacts'];
@@ -1214,6 +1222,32 @@ class ApiService {
     return this.request<ArtifactDetail>(
       `/brand-space/artifacts/${encodeURIComponent(artifactId)}`,
     );
+  }
+
+  async getBrandSpaceArtifactAccess(artifactId: string) {
+    return this.request<{ artifact_id: string; artifact_key: string; access: ArtifactAccess }>(
+      `/brand-space/artifacts/${encodeURIComponent(artifactId)}/access`,
+    );
+  }
+
+  async downloadBrandSpaceArtifact(artifactId: string): Promise<{ blob: Blob; filename: string }> {
+    const response = await fetch(
+      `${API_URL}/brand-space/artifacts/${encodeURIComponent(artifactId)}/download`,
+      {
+        headers: this.buildHeaders(),
+      },
+    );
+    if (!response.ok) {
+      if (response.status === 401) {
+        this.handleUnauthorized();
+      }
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `Request failed: ${response.status}`);
+    }
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+    const filename = decodeURIComponent(filenameMatch?.[1] ?? filenameMatch?.[2] ?? 'brand-space-artifact');
+    return { blob: await response.blob(), filename };
   }
 
   async decideBrandSpaceGraphPatch(

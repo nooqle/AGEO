@@ -146,7 +146,8 @@
 .assetTypeButton:focus-visible,
 .assetOpenButton:focus-visible,
 .traceLink:focus-visible,
-.assetLoadMoreButton:focus-visible {
+.assetLoadMoreButton:focus-visible,
+.assetDownloadButton:focus-visible {
   outline: 2px solid var(--brand-primary);
   outline-offset: 3px;
 }
@@ -801,6 +802,54 @@
   word-break: break-word;
 }
 
+.assetAccessPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr) minmax(0, 0.7fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand-bg) 28%, var(--bg-secondary) 72%);
+}
+
+.assetAccessPanel p {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.assetAccessPanel strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.assetDownloadButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--brand-border);
+  border-radius: 9px;
+  background: var(--brand-primary);
+  color: var(--brand-contrast);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.assetDownloadButton:disabled {
+  border-color: var(--border-subtle);
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
 .assetPreview {
   padding: 14px;
   border: 1px solid var(--border-subtle);
@@ -1057,6 +1106,10 @@
   }
 
   .assetMetaGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .assetAccessPanel {
     grid-template-columns: 1fr;
   }
 

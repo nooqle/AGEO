@@ -3,6 +3,7 @@ import {
   Archive,
   ArrowRight,
   Database,
+  Download,
   ExternalLink,
   FileJson,
   FileText,
@@ -35,6 +36,8 @@ interface AssetsViewProps {
   onOpenArtifact?: (artifact: ArtifactRef) => void;
   onCloseDetail?: () => void;
   onTraceTarget?: (link: ArtifactTraceLink) => void;
+  onDownloadArtifact?: (artifact: ArtifactRef) => void;
+  downloadingArtifactIds?: string[];
 }
 
 function classNames(...classes: Array<string | false | undefined>) {
@@ -80,6 +83,26 @@ function formatDate(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function formatBytes(value: number | null | undefined) {
+  if (!value || value <= 0) return '-';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function accessReasonLabel(reason?: string | null) {
+  const labels: Record<string, string> = {
+    object_not_materialized: '对象尚未物化',
+    object_is_directory: '对象为目录',
+    missing_object_key: '缺少对象 key',
+    external_url_not_supported: '暂不支持外部 URL',
+    absolute_path_not_allowed: '不允许绝对路径',
+    unsafe_or_unsupported_object_key: '对象 key 不受支持',
+    object_key_escapes_storage_root: '对象 key 越界',
+  };
+  return reason ? labels[reason] ?? reason : '可下载';
 }
 
 function PreviewBlock({ preview }: { preview?: ArtifactPreview }) {
@@ -197,6 +220,8 @@ export function AssetsView({
   onOpenArtifact,
   onCloseDetail,
   onTraceTarget,
+  onDownloadArtifact,
+  downloadingArtifactIds = [],
 }: AssetsViewProps) {
   const typeOptions = useMemo(() => {
     const counts = summary?.by_type ?? artifacts.reduce<Record<string, number>>((acc, artifact) => {
@@ -216,6 +241,9 @@ export function AssetsView({
   const activeDetailId = detail ? artifactStableId(detail.artifact) : selectedArtifactId;
   const displayedCount = pagination ? Math.min(pagination.offset + artifacts.length, pagination.total) : filteredArtifacts.length;
   const totalCount = pagination?.total ?? summary?.total ?? filteredArtifacts.length;
+  const activeDownloadId = detail?.artifact ? artifactStableId(detail.artifact) : null;
+  const isDownloadingActive = activeDownloadId ? downloadingArtifactIds.includes(activeDownloadId) : false;
+  const canDownloadActive = Boolean(detail?.access?.available && detail.access.downloadUrl);
 
   return (
     <div className="space-y-4">
@@ -352,6 +380,37 @@ export function AssetsView({
                     <strong>{detail?.artifact.linkedNodeId ?? '-'}</strong>
                   </div>
                 </div>
+
+                {detail?.access ? (
+                  <section className={styles.assetAccessPanel}>
+                    <div>
+                      <p>对象存储</p>
+                      <strong>{accessReasonLabel(detail.access.reason)}</strong>
+                    </div>
+                    <div>
+                      <p>对象 key</p>
+                      <strong>{detail.access.objectKey ?? '-'}</strong>
+                    </div>
+                    <div>
+                      <p>大小</p>
+                      <strong>{formatBytes(detail.access.sizeBytes)}</strong>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => detail?.artifact && onDownloadArtifact?.(detail.artifact)}
+                      disabled={!canDownloadActive || isDownloadingActive}
+                      className={styles.assetDownloadButton}
+                      aria-label={`下载资产对象：${detail.artifact.label}`}
+                    >
+                      {isDownloadingActive ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Download className="h-4 w-4" />
+                      )}
+                      下载对象
+                    </button>
+                  </section>
+                ) : null}
 
                 <PreviewBlock preview={detail?.preview} />
 

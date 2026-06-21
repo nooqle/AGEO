@@ -116,6 +116,18 @@ export interface ArtifactTraceLink {
   reportVersionId?: string;
 }
 
+export interface ArtifactAccess {
+  canPreview: boolean;
+  mode?: string;
+  provider?: 'local' | string;
+  objectKey?: string | null;
+  available?: boolean;
+  downloadUrl?: string | null;
+  filename?: string | null;
+  sizeBytes?: number | null;
+  reason?: string | null;
+}
+
 export interface ArtifactDetail {
   artifact: ArtifactRef;
   preview: ArtifactPreview;
@@ -126,21 +138,24 @@ export interface ArtifactDetail {
     graphUpdate?: BrandSpaceGraphUpdate | null;
     report?: BrandSpaceReportSummary | null;
   };
-  access?: {
-    canPreview: boolean;
-    mode?: string;
-    reason?: string;
-  };
+  access?: ArtifactAccess;
 }
 
 export interface RuntimeEvent {
   id: string;
+  sequence?: number;
   timestamp: string;
   type: string;
   severity: 'info' | 'success' | 'warning' | 'risk' | 'error';
   message: string;
   nodeId?: string;
   payload?: Record<string, unknown>;
+}
+
+export interface RuntimeEventCursor {
+  after_sequence?: number | null;
+  next_sequence: number;
+  has_more: boolean;
 }
 
 export interface BoardNode {

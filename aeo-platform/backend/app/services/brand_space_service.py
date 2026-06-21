@@ -11,12 +11,14 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.brand_intelligence import (
     BrandReportVersion,
@@ -44,6 +46,8 @@ from app.services.entity_service import EntityService
 
 
 logger = logging.getLogger(__name__)
+
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 def _now() -> datetime:
@@ -1321,8 +1325,14 @@ class GraphPatchBuilderService:
 class BrandSpaceService:
     """Persistent state source for the Brand Space MVP."""
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        asset_storage_root: str | Path | None = None,
+    ) -> None:
         self.db = db
+        self.asset_storage_root = Path(asset_storage_root) if asset_storage_root else None
 
     async def get_space(self, *, entity_id: str | UUID, current_user: User) -> dict[str, Any]:
         entity = await self._require_entity(entity_id, current_user)
@@ -1673,14 +1683,48 @@ class BrandSpaceService:
         current_user: User,
         limit: int = 100,
         offset: int = 0,
+        after_sequence: int | None = None,
+        sync: bool = False,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
-        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
-        events = await self._events(board_run.id, limit=limit, offset=offset)
+        if sync:
+            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        bounded_limit = self._bounded_limit(limit, default=100, maximum=500)
+        if after_sequence is not None:
+            bounded_after_sequence = self._bounded_offset(after_sequence)
+            events, has_more = await self._events_after(
+                board_run.id,
+                after_sequence=bounded_after_sequence,
+                limit=bounded_limit,
+            )
+            next_sequence = max(
+                [bounded_after_sequence, *[int(event.sequence or 0) for event in events]]
+            )
+            return {
+                "events": [self._event_to_dict(event) for event in events],
+                "pagination": {
+                    "limit": bounded_limit,
+                    "offset": 0,
+                    "total": bounded_after_sequence + len(events),
+                    "has_more": has_more,
+                },
+                "cursor": {
+                    "after_sequence": bounded_after_sequence,
+                    "next_sequence": next_sequence,
+                    "has_more": has_more,
+                },
+            }
+        events = await self._events(board_run.id, limit=bounded_limit, offset=offset)
         total = await self._event_count(board_run.id)
+        next_sequence = max([0, *[int(event.sequence or 0) for event in events]])
         return {
             "events": [self._event_to_dict(event) for event in events],
-            "pagination": self._pagination(limit=limit, offset=offset, total=total, maximum=500),
+            "pagination": self._pagination(limit=bounded_limit, offset=offset, total=total, maximum=500),
+            "cursor": {
+                "after_sequence": None,
+                "next_sequence": next_sequence,
+                "has_more": self._bounded_offset(offset) + bounded_limit < total,
+            },
         }
 
     async def get_assets(
@@ -1691,9 +1735,11 @@ class BrandSpaceService:
         artifact_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        sync: bool = False,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
-        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        if sync:
+            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         artifacts = await self._artifacts(
             board_run.id,
             artifact_type=artifact_type,
@@ -1720,10 +1766,12 @@ class BrandSpaceService:
         *,
         artifact_id: str | UUID,
         current_user: User,
+        sync: bool = False,
     ) -> dict[str, Any]:
         artifact = await self._require_artifact(artifact_id, current_user)
         board_run = await self._require_board_run(artifact.board_run_id, current_user)
-        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        if sync:
+            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
         node_run = await self.db.get(BoardNodeRun, artifact.node_run_id) if artifact.node_run_id else None
         graph_update = await self._graph_update_for_run(board_run.id)
         latest_report = (
@@ -1757,10 +1805,40 @@ class BrandSpaceService:
                 graph_update=graph_update,
                 latest_report=report_for_artifact,
             ),
-            "access": {
-                "canPreview": True,
-                "mode": "metadata_snapshot",
-            },
+            "access": self._artifact_access_descriptor(artifact),
+        }
+
+    async def get_artifact_access(
+        self,
+        *,
+        artifact_id: str | UUID,
+        current_user: User,
+    ) -> dict[str, Any]:
+        artifact = await self._require_artifact(artifact_id, current_user)
+        return {
+            "artifact_id": str(artifact.id),
+            "artifact_key": artifact.artifact_key,
+            "access": self._artifact_access_descriptor(artifact),
+        }
+
+    async def resolve_artifact_download(
+        self,
+        *,
+        artifact_id: str | UUID,
+        current_user: User,
+    ) -> dict[str, Any]:
+        artifact = await self._require_artifact(artifact_id, current_user)
+        descriptor = self._artifact_access_descriptor(artifact, include_local_path=True)
+        if not descriptor.get("available"):
+            reason = descriptor.get("reason") or "object_not_available"
+            raise LookupError(f"Artifact object is not available: {reason}")
+        object_path = descriptor.get("_local_path")
+        if not isinstance(object_path, Path) or not object_path.is_file():
+            raise LookupError("Artifact object file not found")
+        return {
+            "path": object_path,
+            "filename": descriptor.get("filename") or object_path.name,
+            "media_type": artifact.mime_type or "application/octet-stream",
         }
 
     async def get_graph_update(
@@ -3818,6 +3896,26 @@ class BrandSpaceService:
         )
         return list(result.scalars().all())
 
+    async def _events_after(
+        self,
+        board_run_id: UUID,
+        *,
+        after_sequence: int,
+        limit: int = 100,
+    ) -> tuple[list[BoardRuntimeEvent], bool]:
+        bounded_limit = self._bounded_limit(limit, default=100, maximum=500)
+        result = await self.db.execute(
+            select(BoardRuntimeEvent)
+            .where(
+                BoardRuntimeEvent.board_run_id == board_run_id,
+                BoardRuntimeEvent.sequence > self._bounded_offset(after_sequence),
+            )
+            .order_by(BoardRuntimeEvent.sequence)
+            .limit(bounded_limit + 1)
+        )
+        rows = list(result.scalars().all())
+        return rows[:bounded_limit], len(rows) > bounded_limit
+
     async def _event_count(self, board_run_id: UUID) -> int:
         result = await self.db.execute(
             select(func.count(BoardRuntimeEvent.id)).where(
@@ -4276,31 +4374,76 @@ class BrandSpaceService:
             return
         payload = report.payload or {}
         base = f"assets/{graph_update.entity_id}/{graph_update.board_run_id}"
-        self.db.add(
-            BoardArtifact(
-                artifact_key=artifact_key,
-                entity_id=graph_update.entity_id,
-                board_run_id=graph_update.board_run_id,
-                node_run_id=node_run.id if node_run else None,
-                artifact_type="report",
-                label=f"{report.title} v{report.version}",
-                path=f"{base}/reports/{report.id}.md",
-                mime_type="text/markdown",
-                row_count=max(
-                    1,
-                    len(payload.get("claims") or []),
-                    len(payload.get("trace_chains") or []),
-                ),
-                extra_metadata={
-                    "node_id": "graph-update",
-                    "graph_update_id": str(graph_update.id),
-                    "report_version_id": str(report.id),
-                    "report_kind": report.report_kind,
-                    "publication_status": self._report_publication_status(report),
-                },
-            )
+        artifact = BoardArtifact(
+            artifact_key=artifact_key,
+            entity_id=graph_update.entity_id,
+            board_run_id=graph_update.board_run_id,
+            node_run_id=node_run.id if node_run else None,
+            artifact_type="report",
+            label=f"{report.title} v{report.version}",
+            path=f"{base}/reports/{report.id}.md",
+            mime_type="text/markdown",
+            row_count=max(
+                1,
+                len(payload.get("claims") or []),
+                len(payload.get("trace_chains") or []),
+            ),
+            extra_metadata={
+                "node_id": "graph-update",
+                "graph_update_id": str(graph_update.id),
+                "report_version_id": str(report.id),
+                "report_kind": report.report_kind,
+                "publication_status": self._report_publication_status(report),
+                "storage_provider": "local",
+                "object_key": f"{base}/reports/{report.id}.md",
+            },
         )
+        self.db.add(artifact)
         await self.db.flush()
+        self._materialize_report_artifact_object(artifact=artifact, report=report)
+
+    def _materialize_report_artifact_object(
+        self,
+        *,
+        artifact: BoardArtifact,
+        report: BrandReportVersion,
+    ) -> None:
+        object_key, reason = self._artifact_object_key(artifact)
+        if reason or object_key is None:
+            logger.warning(
+                "Cannot materialize report artifact %s: %s",
+                artifact.id,
+                reason,
+            )
+            return
+        object_path = self._artifact_storage_path(object_key)
+        object_path.parent.mkdir(parents=True, exist_ok=True)
+        object_path.write_text(
+            self._report_artifact_markdown(report),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _report_artifact_markdown(report: BrandReportVersion) -> str:
+        payload = report.payload or {}
+        markdown = str(payload.get("report_markdown") or "").strip()
+        if markdown:
+            return markdown
+        summary = str(report.summary or payload.get("summary") or "").strip()
+        lines = [
+            f"# {report.title}",
+            "",
+            summary or "该报告尚未生成可读正文。",
+            "",
+            "## 版本信息",
+            "",
+            f"- 报告版本：v{report.version}",
+            f"- 发布状态：{BrandSpaceService._report_publication_status(report)}",
+        ]
+        graph_update_id = payload.get("graph_update_id")
+        if graph_update_id:
+            lines.append(f"- 图谱更新：{graph_update_id}")
+        return "\n".join(lines).strip() + "\n"
 
     async def _lock_report_version_scope(self, graph_update_id: UUID) -> None:
         await self.db.execute(
@@ -4457,9 +4600,98 @@ class BrandSpaceService:
             payload["rowCount"] = row_count_hint
         return payload
 
+    def _asset_storage_root(self) -> Path:
+        root = self.asset_storage_root
+        if root is None:
+            root = Path(settings.BRAND_SPACE_ASSET_STORAGE_ROOT)
+        if not root.is_absolute():
+            root = _BACKEND_DIR / root
+        return root.resolve()
+
+    @staticmethod
+    def _artifact_object_key(artifact: BoardArtifact) -> tuple[str | None, str | None]:
+        raw_path = str(artifact.path or "").strip()
+        if not raw_path:
+            return None, "missing_object_key"
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", raw_path):
+            return None, "external_url_not_supported"
+        if re.match(r"^[A-Za-z]:", raw_path) or raw_path.startswith(("/", "\\")):
+            return None, "absolute_path_not_allowed"
+
+        normalized = raw_path.replace("\\", "/").strip("/")
+        parts = PurePosixPath(normalized).parts
+        if not parts or parts[0] != "assets" or any(part in {"", ".", ".."} for part in parts):
+            return None, "unsafe_or_unsupported_object_key"
+        return PurePosixPath(*parts).as_posix(), None
+
+    def _artifact_storage_path(self, object_key: str) -> Path:
+        root = self._asset_storage_root()
+        candidate = root.joinpath(*PurePosixPath(object_key).parts).resolve()
+        if not candidate.is_relative_to(root):
+            raise ValueError("Artifact object key escapes the configured storage root")
+        return candidate
+
+    @staticmethod
+    def _artifact_download_filename(
+        *,
+        artifact: BoardArtifact,
+        object_key: str | None,
+    ) -> str:
+        candidate = PurePosixPath(object_key or "").name or artifact.artifact_key or str(artifact.id)
+        return re.sub(r'[\\/:*?"<>|]+', "-", candidate)
+
+    def _artifact_access_descriptor(
+        self,
+        artifact: BoardArtifact,
+        *,
+        include_local_path: bool = False,
+    ) -> dict[str, Any]:
+        object_key, reason = self._artifact_object_key(artifact)
+        descriptor: dict[str, Any] = {
+            "canPreview": True,
+            "mode": "object_storage",
+            "provider": "local",
+            "objectKey": object_key,
+            "available": False,
+            "downloadUrl": None,
+            "filename": self._artifact_download_filename(
+                artifact=artifact,
+                object_key=object_key,
+            ),
+            "sizeBytes": None,
+            "reason": reason,
+        }
+        if reason or object_key is None:
+            return descriptor
+
+        try:
+            object_path = self._artifact_storage_path(object_key)
+        except ValueError:
+            descriptor["reason"] = "object_key_escapes_storage_root"
+            return descriptor
+
+        if object_path.is_file():
+            descriptor.update(
+                {
+                    "available": True,
+                    "downloadUrl": f"/api/v1/brand-space/artifacts/{artifact.id}/download",
+                    "sizeBytes": object_path.stat().st_size,
+                    "reason": None,
+                }
+            )
+            if include_local_path:
+                descriptor["_local_path"] = object_path
+            return descriptor
+
+        descriptor["reason"] = (
+            "object_is_directory" if object_path.exists() else "object_not_materialized"
+        )
+        return descriptor
+
     def _event_to_dict(self, event: BoardRuntimeEvent) -> dict[str, Any]:
         return {
             "id": str(event.id),
+            "sequence": int(event.sequence or 0),
             "timestamp": event.created_at.isoformat(),
             "type": event.event_type,
             "severity": event.severity,

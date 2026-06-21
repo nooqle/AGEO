@@ -67,6 +67,7 @@
 | 2026-06-20 | Sprint E: Review Fix | 完成 | 按 `review-brand-space-harden-trace-back-and-graph-version-2026-06-20.md` 收口：migration 026 改为解析 JSON 精确回填，避免 `LIKE` 误匹配；GraphUpdate apply 前锁品牌实体范围并锁 latest applied 行；report source type 增加 `report_id/artifact_id` 契约判断，payload 丢失 `graph_update_id` 时仍能识别 GraphUpdate 报告；`_reports_for_publication_status` 增加防御注释；Graph 页补 failed/version_conflict 提示；前端 runtime event severity 类型加入 `error`；补 migration helper 与 source type 回归测试 | 继续 Sprint E：旧抓取答案进入 Assets 的数据映射、50 节点画布压力、reduced motion/键盘可达性和 `/dashboard` feature flag 回归 |
 | 2026-06-20 | Sprint E: Legacy Assets And Canvas Hardening | 完成 | 旧 `BrandPlatformAnswer` 可映射到 raw/parsed Assets，按 run session 或品牌最近成功回答只读取样并展示行数；旧答案资产 detail 返回安全 JSONL/table 预览，trace 仅保留 BoardRun/NodeRun，不伪造 GraphUpdate/Report；前端新增 `?canvasFixture=50-nodes` 压力底版，画布 stage 按节点数扩展并用扩展坐标计算连线端点；补主导航、画布工具条、节点、平台卡、Review 操作、Assets drawer、Reports 版本选择的可访问标签；reduced motion 下禁用扫光、流动包和脉冲视觉 | 后续增强：真实对象存储下载/打开、生产态长跑 E2E、WebSocket/SSE 或任务队列化性能优化 |
 | 2026-06-20 | Sprint E: Legacy Assets Review Fix | 完成 | 按 `review-brand-space-legacy-assets-canvas-hardening-2026-06-20.md` 收口：移除 `get_assets/get_artifact_detail` 中 legacy answer artifact 的读端写入与 `commit()`；列表/详情改为只读 projection，不再每次读 COUNT；非法 `session_id` 在 scope 阶段降级为 `brand_recent_answers`，metadata 与查询行为一致；问题 lookup 抽到 `GraphPatchBuilderService.question_lookup_for_answers` 复用；补 `run_session_answers` 主路径和非法 session 回归测试；压力 fixture URL 支持 `N-nodes` 并给 24 节点阈值加注释 | 等待下一轮 review 或进入真实对象存储下载/打开增强 |
+| 2026-06-21 | Sprint F: Performance And Object Storage | 完成 | `GET /events` 新增 `after_sequence` cursor 和 `sync=false` 默认轻量读，前端运行日志改为 2.5 秒增量事件轮询、15 秒全量 run 刷新；`get_assets/get_artifact_detail` 默认不触发真实运行同步；新增本地对象仓配置 `BRAND_SPACE_ASSET_STORAGE_ROOT`，artifact access/download API 只解析受控 `assets/...` object key；GraphUpdate 报告资产生成时物化 Markdown，可在 Assets drawer 下载；补危险 key、对象下载、event cursor 和轻量读不同步回归；验证通过 `validate_change.py`、targeted pytest、lint、build | 后续增强：生产态长跑 E2E、SSE/WebSocket 事件通道、对象仓云端 provider 抽象和真实大文件资产物化 |
 
 ## 3. 产品 Section 完成度
 
@@ -422,19 +423,19 @@ UI 变更必须额外做：
 
 ## 9. 下一步建议
 
-当前建议继续 Sprint E，不再回头扩展新概念。
+当前建议继续 Sprint F 的 review/hardening，不再回头扩展新概念。本轮已按用户要求先完成性能改造和对象存储基础能力，生产态 E2E 暂不作为本轮阻塞项。
 
 下一张具体开发票：
 
-标题：`Brand Space Legacy Assets And Canvas Hardening`
+标题：`Brand Space Production Runtime And Event Stream Hardening`
 
 范围：
 
-1. 补旧抓取答案到 Assets 的数据映射：能登记 raw answers / parsed answers，但不能伪造 GraphUpdate trace chain。
-2. 补 50 节点画布数据 fixture 和前端恢复态验证，确认节点不堆叠、连线端点贴合节点。
-3. 补 reduced motion 验证，确认动态光带、流动包、节点脉冲可降级。
-4. 补键盘可达性验证：主导航、画布工具条、Review 操作、Assets drawer 和 Reports 操作可聚焦。
-5. 补 `/dashboard` 与 `NEXT_PUBLIC_BRAND_SPACE_ENABLED=false` 回归，确保旧 Dashboard 不被替换。
+1. 补生产态长跑 E2E：真实 A4 凭据可用时跑一次完整 Brand Space run，从运行、GraphUpdate、Review、Report 到 Assets 下载。
+2. 评估 polling 到 SSE/WebSocket 的切换边界：事件流可先替代 logs，节点状态仍由周期性 run snapshot 保底。
+3. 把对象仓 provider 抽象从 local 扩展为 cloud adapter，但保持当前 `objectKey/access/download` API 不变。
+4. 补大文件资产物化策略：raw answers / parsed answers 优先写对象仓，列表只返回 metadata 与 bounded preview。
+5. 对 50 节点压力底版做浏览器回归：确认增量事件轮询不会造成画布抖动、日志重复或 Inspector 过度刷新。
 
 Sprint E 已完成部分：
 
@@ -450,4 +451,5 @@ Sprint E 已完成部分：
 - 50 节点画布压力入口已补：`/brand-space?canvasFixture=50-nodes` 使用独立 fixture，stage 自动放大并重新计算连线端点。
 - reduced motion 和键盘可达性第一轮已补：动态扫光/流动包/脉冲可降级，主导航、画布工具条、节点、Review 操作、Assets drawer 和 Reports 版本选择具备明确标签。
 - Review Fix 已补：legacy answer assets 不再在 GET 读端点写库或提交事务；legacy 降级只读展示 bounded sample，run session 主路径继续使用精确 session 过滤。
-- 已跑 service targeted 回归：`python -m pytest aeo-platform/backend/tests/test_brand_space_service.py -q`，24 passed；API、lint/build 和浏览器 smoke 见本轮提交记录。
+- 性能与对象存储增强已补：events 支持 cursor 增量读取，前端 2.5 秒只拉新增事件、15 秒全量刷新；assets/detail 默认轻量读；报告资产可物化 Markdown 并通过受控 download API 下载。
+- 已跑回归：`python scripts/validate_change.py --pytest "aeo-platform/backend/tests/test_brand_space_service.py aeo-platform/backend/tests/test_brand_space_api.py"` PASS；`npm run build` PASS；`npm run lint` PASS 但保留 3 个既有 warning。

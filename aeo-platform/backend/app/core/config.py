@@ -207,6 +207,7 @@ class Settings(BaseSettings):
 
     # Outputs
     OUTPUT_DIR: str = "outputs"
+    BRAND_SPACE_ASSET_STORAGE_ROOT: str = "storage/brand-space-assets"
 
     # Auth
     JWT_SECRET: str = "dev-secret-change-me"

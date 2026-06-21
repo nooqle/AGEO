@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Cable,
@@ -58,6 +58,7 @@ import type {
   NodeStatus,
   PaginationInfo,
   PlatformFetchNode,
+  RuntimeEvent,
 } from '@/types/brandSpace';
 
 function classNames(...classes: Array<string | false | undefined>) {
@@ -163,6 +164,11 @@ function buildLocalArtifactDetail(artifact: ArtifactRef): ArtifactDetail {
     access: {
       canPreview: true,
       mode: 'local_mock_summary',
+      provider: 'local',
+      objectKey: artifact.path,
+      available: false,
+      downloadUrl: null,
+      reason: 'object_not_materialized',
     },
   };
 }
@@ -180,6 +186,31 @@ function artifactTypeLabel(type: string) {
     report: '报告',
   };
   return labels[type] ?? type;
+}
+
+function runtimeEventSequence(event: RuntimeEvent) {
+  return typeof event.sequence === 'number' ? event.sequence : 0;
+}
+
+function mergeRuntimeEvents(current: RuntimeEvent[], incoming: RuntimeEvent[]) {
+  if (!incoming.length) return current;
+  const seen = new Set(current.map((event) => event.id));
+  const merged = [
+    ...current,
+    ...incoming.filter((event) => !seen.has(event.id)),
+  ].sort((left, right) => runtimeEventSequence(left) - runtimeEventSequence(right));
+  return merged.slice(-240);
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 function fallbackReviewCategory(patch: GraphPatch) {
@@ -245,7 +276,7 @@ export function BrandSpaceShell() {
   const [patches, setPatches] = useState<GraphPatch[]>(initialGraphPatches);
   const [reviewItems, setReviewItems] = useState<GraphReviewItem[]>(() => reviewItemsFromPatches(initialGraphPatches));
   const [artifactsState, setArtifactsState] = useState(artifacts);
-  const [events, setEvents] = useState(runtimeEvents);
+  const [events, setEvents] = useState<RuntimeEvent[]>(runtimeEvents);
   const [graph, setGraph] = useState<BrandSpaceGraph>(fallbackGraph);
   const [graphUpdate, setGraphUpdate] = useState<BrandSpaceGraphUpdate | null>(null);
   const [guardrails, setGuardrails] = useState(reportGuardrails);
@@ -258,8 +289,10 @@ export function BrandSpaceShell() {
   const [assetSummary, setAssetSummary] = useState<AssetListSummary | null>(() => assetSummaryFromList(artifacts));
   const [assetPagination, setAssetPagination] = useState<PaginationInfo | null>(null);
   const [pendingPatchDecisionIds, setPendingPatchDecisionIds] = useState<string[]>([]);
+  const [downloadingArtifactIds, setDownloadingArtifactIds] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState('platform-rack');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
+  const lastEventSequenceRef = useRef(0);
 
   const selectedView = useMemo(
     () => brandSpaceNavItems.find((item) => item.id === activeView) ?? brandSpaceNavItems[0],
@@ -278,6 +311,7 @@ export function BrandSpaceShell() {
     setAssetSummary(assetSummaryFromList(payload.artifacts));
     setAssetPagination(null);
     setEvents(payload.events);
+    lastEventSequenceRef.current = Math.max(0, ...payload.events.map(runtimeEventSequence));
     setGraph(payload.graph ?? fallbackGraph);
     setGraphUpdate(payload.graph_update);
     setGuardrails(payload.guardrails);
@@ -410,16 +444,45 @@ export function BrandSpaceShell() {
   useEffect(() => {
     if (!isBackendMode || !spaceRun?.id || runStatus !== 'running') return undefined;
 
-    const intervalId = window.setInterval(() => {
+    let cancelled = false;
+    const pollEvents = () => {
+      void api
+        .getBrandSpaceRunEvents(spaceRun.id, {
+          limit: 120,
+          afterSequence: lastEventSequenceRef.current,
+          sync: false,
+        })
+        .then((response) => {
+          if (cancelled) return;
+          if (response.events.length) {
+            setEvents((current) => mergeRuntimeEvents(current, response.events));
+          }
+          const nextSequence = response.cursor?.next_sequence
+            ?? Math.max(lastEventSequenceRef.current, ...response.events.map(runtimeEventSequence));
+          lastEventSequenceRef.current = Math.max(lastEventSequenceRef.current, nextSequence);
+        })
+        .catch((error) => {
+          setBackendNotice(backendNoticeFromError(error, '运行日志刷新失败'));
+        });
+    };
+
+    pollEvents();
+
+    const eventIntervalId = window.setInterval(pollEvents, 2500);
+    const fullRefreshIntervalId = window.setInterval(() => {
       void api
         .getBrandSpaceBoardRun(spaceRun.id)
         .then(applySpacePayload)
         .catch((error) => {
           setBackendNotice(backendNoticeFromError(error, '运行态刷新失败'));
         });
-    }, 2500);
+    }, 15000);
 
-    return () => window.clearInterval(intervalId);
+    return () => {
+      cancelled = true;
+      window.clearInterval(eventIntervalId);
+      window.clearInterval(fullRefreshIntervalId);
+    };
   }, [applySpacePayload, isBackendMode, runStatus, spaceRun?.id]);
 
   useEffect(() => {
@@ -604,6 +667,20 @@ export function BrandSpaceShell() {
       setBackendNotice(backendNoticeFromError(error, '资产详情读取失败，已显示本地摘要'));
     } finally {
       setIsLoadingArtifactDetail(false);
+    }
+  };
+
+  const handleDownloadArtifact = async (artifact: ArtifactRef) => {
+    const artifactId = artifact.artifactId ?? artifact.id;
+    if (!isBackendMode || downloadingArtifactIds.includes(artifactId)) return;
+    setDownloadingArtifactIds((current) => [...current, artifactId]);
+    try {
+      const response = await api.downloadBrandSpaceArtifact(artifactId);
+      downloadBlob(response.blob, response.filename);
+    } catch (error) {
+      setBackendNotice(backendNoticeFromError(error, '资产对象下载失败'));
+    } finally {
+      setDownloadingArtifactIds((current) => current.filter((id) => id !== artifactId));
     }
   };
 
@@ -872,9 +949,11 @@ export function BrandSpaceShell() {
                 isLoadingAssets={isLoadingAssets}
                 selectedArtifactId={selectedArtifactDetail?.artifact.artifactId ?? selectedArtifactDetail?.artifact.id ?? null}
                 selectedType={assetTypeFilter}
+                downloadingArtifactIds={downloadingArtifactIds}
                 onTypeChange={handleAssetTypeChange}
                 onLoadMore={handleLoadMoreAssets}
                 onOpenArtifact={handleOpenArtifact}
+                onDownloadArtifact={handleDownloadArtifact}
                 onCloseDetail={() => setSelectedArtifactDetail(null)}
                 onTraceTarget={handleTraceTarget}
               />

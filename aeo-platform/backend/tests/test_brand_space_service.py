@@ -202,7 +202,7 @@ async def test_amway_recorded_backtest_fixture_reaches_graph_update_and_report(t
         session.add_all([owner, entity])
         await session.commit()
 
-        service = BrandSpaceService(session)
+        service = BrandSpaceService(session, asset_storage_root=tmp_path / "objects")
         payload = await service.create_board_run(
             entity_id=entity.id,
             current_user=owner,
@@ -237,7 +237,7 @@ async def test_amway_real_fixture_builds_lexicon_backed_graph_update_and_review_
         session.add_all([owner, entity])
         await session.commit()
 
-        service = BrandSpaceService(session)
+        service = BrandSpaceService(session, asset_storage_root=tmp_path / "objects")
         payload = await service.create_board_run(
             entity_id=entity.id,
             current_user=owner,
@@ -317,7 +317,7 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
         session.add_all([owner, entity])
         await session.commit()
 
-        service = BrandSpaceService(session)
+        service = BrandSpaceService(session, asset_storage_root=tmp_path / "objects")
         payload = await service.create_board_run(
             entity_id=entity.id,
             current_user=owner,
@@ -378,6 +378,7 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
         )
         assert events_page["pagination"]["total"] >= 2
         assert len(events_page["events"]) == 2
+        assert events_page["events"][0]["sequence"] == 1
         second_events_page = await service.get_events(
             run_id=payload["run"]["id"],
             current_user=owner,
@@ -387,6 +388,17 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
         assert second_events_page["pagination"]["offset"] == 2
         assert {event["id"] for event in events_page["events"]}.isdisjoint(
             {event["id"] for event in second_events_page["events"]}
+        )
+        cursor_events_page = await service.get_events(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            limit=4,
+            after_sequence=events_page["events"][0]["sequence"],
+        )
+        assert cursor_events_page["cursor"]["next_sequence"] >= 2
+        assert all(
+            event["sequence"] > events_page["events"][0]["sequence"]
+            for event in cursor_events_page["events"]
         )
         assert payload["graph_update"]["status"] == "needs_review"
         assert payload["graph_update"]["summary"]["blocked"] == 1
@@ -471,6 +483,14 @@ async def test_create_board_run_builds_graph_update_assets_and_report_guardrails
         )
         assert report_asset_detail["preview"]["kind"] == "summary"
         assert report_asset_detail["trace"]["report"]["id"] == report_payload["report"]["id"]
+        assert report_asset_detail["access"]["available"] is True
+        assert report_asset_detail["access"]["downloadUrl"].endswith("/download")
+        report_download = await service.resolve_artifact_download(
+            artifact_id=report_asset["artifactId"],
+            current_user=owner,
+        )
+        assert report_download["filename"].endswith(".md")
+        assert "安利品牌 AI 认知图景" in report_download["path"].read_text(encoding="utf-8")
         assert any(
             link["kind"] == "report_version"
             and link["id"] == report_payload["report"]["id"]
@@ -549,7 +569,7 @@ async def test_artifact_preview_handles_missing_graph_update_and_unknown_type(tm
         session.add_all([owner, entity, board_run])
         await session.commit()
 
-        service = BrandSpaceService(session)
+        service = BrandSpaceService(session, asset_storage_root=tmp_path / "objects")
         patch_artifact = BoardArtifact(
             artifact_key="patches-without-update",
             entity_id=entity.id,
@@ -587,6 +607,30 @@ async def test_artifact_preview_handles_missing_graph_update_and_unknown_type(tm
         )
         assert unknown_preview["kind"] == "summary"
         assert unknown_preview["rowCount"] == 7
+
+        unsafe_artifact = BoardArtifact(
+            artifact_key="unsafe-download",
+            entity_id=entity.id,
+            board_run_id=board_run.id,
+            artifact_type="unhandled_blob",
+            label="越界对象",
+            path="../secrets.txt",
+            mime_type="text/plain",
+            row_count=1,
+        )
+        session.add(unsafe_artifact)
+        await session.flush()
+        unsafe_access = await service.get_artifact_access(
+            artifact_id=unsafe_artifact.id,
+            current_user=owner,
+        )
+        assert unsafe_access["access"]["available"] is False
+        assert unsafe_access["access"]["reason"] == "unsafe_or_unsupported_object_key"
+        with pytest.raises(LookupError):
+            await service.resolve_artifact_download(
+                artifact_id=unsafe_artifact.id,
+                current_user=owner,
+            )
 
     await engine.dispose()
 
@@ -1835,6 +1879,19 @@ async def test_real_board_run_sync_is_throttled_for_repeated_reads(tmp_path):
             current_user=owner,
             execution_mode="real",
         )
+        board_run = await session.get(BoardRun, uuid.UUID(payload["run"]["id"]))
+        assert board_run is not None
+        assert board_run.last_synced_at is None
+        lightweight_events = await service.get_events(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            sync=False,
+            after_sequence=0,
+        )
+        assert lightweight_events["events"]
+        await session.refresh(board_run)
+        assert board_run.last_synced_at is None
+
         first = await service.get_board_run(
             run_id=payload["run"]["id"],
             current_user=owner,
@@ -1861,7 +1918,9 @@ async def test_real_board_run_sync_is_throttled_for_repeated_reads(tmp_path):
 
         assert second["run"]["summary"] == first["run"]["summary"]
         assert second["run"]["progress"] == first["run"]["progress"]
-        assert board_run.last_synced_at == first_synced_at
+        assert board_run.last_synced_at is not None
+        assert first_synced_at is not None
+        assert board_run.last_synced_at.replace(tzinfo=None) == first_synced_at.replace(tzinfo=None)
 
     await engine.dispose()
 

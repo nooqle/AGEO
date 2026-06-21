@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
@@ -235,6 +236,8 @@ async def get_board_run_events(
     run_id: str,
     limit: int = 100,
     offset: int = 0,
+    after_sequence: int | None = None,
+    sync: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -246,6 +249,8 @@ async def get_board_run_events(
             current_user=current_user,
             limit=limit,
             offset=offset,
+            after_sequence=after_sequence,
+            sync=sync,
         )
     except Exception as exc:
         _raise_http(exc)
@@ -257,6 +262,7 @@ async def get_board_run_assets(
     artifact_type: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    sync: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -269,6 +275,7 @@ async def get_board_run_assets(
             artifact_type=artifact_type,
             limit=limit,
             offset=offset,
+            sync=sync,
         )
     except Exception as exc:
         _raise_http(exc)
@@ -277,6 +284,7 @@ async def get_board_run_assets(
 @router.get("/artifacts/{artifact_id}")
 async def get_artifact_detail(
     artifact_id: str,
+    sync: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -285,6 +293,44 @@ async def get_artifact_detail(
         return await service.get_artifact_detail(
             artifact_id=artifact_id,
             current_user=current_user,
+            sync=sync,
+        )
+    except Exception as exc:
+        _raise_http(exc)
+
+
+@router.get("/artifacts/{artifact_id}/access")
+async def get_artifact_access(
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    service = BrandSpaceService(db)
+    try:
+        return await service.get_artifact_access(
+            artifact_id=artifact_id,
+            current_user=current_user,
+        )
+    except Exception as exc:
+        _raise_http(exc)
+
+
+@router.get("/artifacts/{artifact_id}/download")
+async def download_artifact(
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    service = BrandSpaceService(db)
+    try:
+        download = await service.resolve_artifact_download(
+            artifact_id=artifact_id,
+            current_user=current_user,
+        )
+        return FileResponse(
+            path=download["path"],
+            media_type=download["media_type"],
+            filename=download["filename"],
         )
     except Exception as exc:
         _raise_http(exc)

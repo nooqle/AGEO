@@ -20,6 +20,7 @@ from app.api.v1.brand_space import (
     create_board_run,
     decide_graph_patch,
     generate_graph_update_report,
+    get_artifact_access,
     get_board_run_assets,
     get_board_run_events,
     get_artifact_detail,
@@ -103,6 +104,14 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert any(event["type"] == "scaffold_data_loaded" for event in events["events"])
+        cursor_events = await get_board_run_events(
+            run_id=run_id,
+            after_sequence=0,
+            db=session,
+            current_user=owner,
+        )
+        assert cursor_events["cursor"]["next_sequence"] >= 1
+        assert all(event["sequence"] > 0 for event in cursor_events["events"])
 
         assets = await get_board_run_assets(
             run_id=run_id,
@@ -127,6 +136,12 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert graph_asset_detail["preview"]["kind"] == "json"
+        graph_asset_access = await get_artifact_access(
+            artifact_id=graph_assets["artifacts"][0]["artifactId"],
+            db=session,
+            current_user=owner,
+        )
+        assert graph_asset_access["access"]["mode"] == "object_storage"
         assert any(
             link["kind"] == "graph_update"
             for link in graph_asset_detail["trace"]["links"]
@@ -225,6 +240,7 @@ async def test_brand_space_api_run_controls_patch_decision_and_report(tmp_path):
             current_user=owner,
         )
         assert report_asset_detail["trace"]["report"]["id"] == report["report"]["id"]
+        assert report_asset_detail["access"]["available"] is True
         reports = await get_brand_reports(
             entity_id=str(entity.id),
             db=session,
