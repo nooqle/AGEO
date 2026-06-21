@@ -1,5 +1,17 @@
 import type { Entity } from '@/types/entity';
 
+const AMWAY_ASSOCIATION_ALIASES = new Set([
+  '安利',
+  '安利中国',
+  '纽崔莱',
+  'amway',
+  'amway china',
+  'amwaychina',
+  'nutrilite',
+]);
+
+const AMWAY_ASSOCIATION_CENTER_OPTIONS = ['安利', '安利中国', '纽崔莱'];
+
 const INTERNAL_ENTITY_PATTERNS = [
   /(^|\s)(codex|smoke|e2e|debug|validation|postfix|cleanup)(\s|$)/i,
   /(^|\s)(test|testing)(\s|$)/i,
@@ -70,16 +82,58 @@ export function splitDashboardEntities(
     primary.push(entity);
   });
 
-  return { primary, internal, duplicates };
+  return {
+    primary: sortPrimaryDashboardEntities(primary),
+    internal,
+    duplicates,
+  };
 }
 
 export function preferredDashboardEntity(entities: Entity[]): Entity | undefined {
   const { primary } = splitDashboardEntities(entities);
-  return primary[0] || entities[0];
+  return primary.find(isAmwayAssociationEntity) || primary[0] || entities[0];
 }
 
 export function primaryBrandEntities(entities: Entity[]): Entity[] {
   return splitDashboardEntities(entities).primary;
+}
+
+export function isAmwayAssociationEntity(entity: Entity): boolean {
+  if (entity.dashboardVariant === 'amway_association_circle') return true;
+  if (process.env.NEXT_PUBLIC_ENABLE_AMWAY_ENTITY_FALLBACK !== 'true') {
+    return false;
+  }
+  const candidates = [
+    entity.name,
+    entity.domain,
+    ...(entity.aliases || []),
+    ...(entity.centerTerms || []),
+    ...(entity.associationBrandCluster || []),
+  ].map((value) => normalizeIdentityPart(value));
+  return candidates.some((value) => {
+    const compact = value.replace(/\s+/g, '');
+    return (
+      AMWAY_ASSOCIATION_ALIASES.has(value) ||
+      AMWAY_ASSOCIATION_ALIASES.has(compact) ||
+      value.includes('amway') ||
+      value.includes('nutrilite')
+    );
+  });
+}
+
+export function associationCenterOptionsForEntity(entity?: Entity | null): string[] {
+  if (!entity || !isAmwayAssociationEntity(entity)) return [];
+  const sourceTerms = entity.associationBrandCluster?.length
+    ? entity.associationBrandCluster
+    : entity.centerTerms;
+  const terms = (sourceTerms?.length ? sourceTerms : AMWAY_ASSOCIATION_CENTER_OPTIONS)
+    .map((value) => String(value || '').trim())
+    .filter((value) => AMWAY_ASSOCIATION_CENTER_OPTIONS.includes(value));
+  const uniqueTerms: string[] = [];
+  terms.forEach((term) => {
+    if (!uniqueTerms.includes(term)) uniqueTerms.push(term);
+  });
+  return uniqueTerms.length ? uniqueTerms.slice(0, 3) : AMWAY_ASSOCIATION_CENTER_OPTIONS;
 }
 
 export function cleanEntityDisplayText(
@@ -112,6 +166,11 @@ function normalizeDomain(value: string | null | undefined): string {
 }
 
 function compareEntityPriority(left: Entity, right: Entity): number {
+  const leftAssociation = isAmwayAssociationEntity(left) ? 1 : 0;
+  const rightAssociation = isAmwayAssociationEntity(right) ? 1 : 0;
+  if (leftAssociation !== rightAssociation) {
+    return leftAssociation - rightAssociation;
+  }
   const leftStatus = left.status === 'active' ? 1 : 0;
   const rightStatus = right.status === 'active' ? 1 : 0;
   if (leftStatus !== rightStatus) return leftStatus - rightStatus;
@@ -124,4 +183,8 @@ function compareEntityPriority(left: Entity, right: Entity): number {
 function parseEntityTime(value: string | null | undefined): number {
   const time = Date.parse(String(value || ''));
   return Number.isFinite(time) ? time : 0;
+}
+
+function sortPrimaryDashboardEntities(entities: Entity[]): Entity[] {
+  return [...entities].sort((left, right) => compareEntityPriority(right, left));
 }

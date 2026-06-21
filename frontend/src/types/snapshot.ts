@@ -40,10 +40,12 @@ export interface SnapshotCompare {
 
 export interface StageResult {
   stage: string;
-  stageName: string;
-  resultType: 'brand_profile' | 'personas' | 'questions' | 'platform_status' | 'metrics_preview';
+  stageName?: string;
+  stage_name?: string;
+  resultType?: 'brand_profile' | 'personas' | 'questions' | 'platform_status' | 'metrics_preview' | 'entity_extraction_signal' | 'entity_calibration_summary';
+  result_type?: 'brand_profile' | 'personas' | 'questions' | 'platform_status' | 'metrics_preview' | 'entity_extraction_signal' | 'entity_calibration_summary';
   data: Record<string, unknown>;
-  timestamp: string;
+  timestamp?: string;
   /** Cycle 3: Quality level from A1 validation (only on brand_profile) */
   qualityLevel?: 'high' | 'good' | 'adequate' | 'partial';
   /** Cycle 3: Quality description message */

@@ -545,6 +545,11 @@ export function buildDashboardHomeData(value: unknown): DashboardHomeData | unde
     summary: {
       headline: toStringValue(summary.headline) ?? '',
     },
+    dashboard_variant: toStringValue(pick(row, 'dashboardVariant', 'dashboard_variant')) ?? null,
+    analysis_mode: toStringValue(pick(row, 'analysisMode', 'analysis_mode')) ?? null,
+    report_kind: toStringValue(pick(row, 'reportKind', 'report_kind')) ?? null,
+    center_terms: normalizeStringArray(pick(row, 'centerTerms', 'center_terms')) ?? [],
+    enabled_surfaces: normalizeStringArray(pick(row, 'enabledSurfaces', 'enabled_surfaces')) ?? [],
     latest_report: normalizeLatestReport(pick(row, 'latestReport', 'latest_report')),
     monitoring_plan: normalizeMonitoringPlan(pick(row, 'monitoringPlan', 'monitoring_plan')),
     has_active_monitoring_schedule: Boolean(
