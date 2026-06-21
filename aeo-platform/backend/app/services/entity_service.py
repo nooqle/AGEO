@@ -52,6 +52,9 @@ from app.models.task_run import TaskRun
 from app.models.task_run_child_attempt import TaskRunChildAttempt
 from app.models.user import User
 from app.services.access_scope_service import AccessScopeService
+from app.services.brand_association_circle_variant import (
+    build_amway_association_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,37 +147,38 @@ class EntityService:
             except (json.JSONDecodeError, TypeError):
                 aliases = [entity.aliases] if entity.aliases else []
 
-        return _with_entity_hygiene(
-            {
-                "id": str(entity.id),
-                "name": entity.name,
-                "aliases": aliases,
-                "domain": entity.domain or "",
-                "industry": entity.industry or "",
-                "description": entity.description or "",
-                "visibility_scope": (
-                    entity.visibility_scope.value
-                    if entity.visibility_scope
-                    else "personal"
-                ),
-                "owner_user_id": (
-                    str(entity.owner_user_id) if entity.owner_user_id else None
-                ),
-                "organization_id": (
-                    str(entity.organization_id) if entity.organization_id else None
-                ),
-                "last_analyzed": (
-                    entity.last_analyzed.isoformat() if entity.last_analyzed else None
-                ),
-                "status": entity.status.value if entity.status else "pending",
-                "created_at": (
-                    entity.created_at.isoformat() if entity.created_at else None
-                ),
-                "updated_at": (
-                    entity.updated_at.isoformat() if entity.updated_at else None
-                ),
-            }
+        payload = {
+            "id": str(entity.id),
+            "name": entity.name,
+            "aliases": aliases,
+            "domain": entity.domain or "",
+            "industry": entity.industry or "",
+            "description": entity.description or "",
+            "visibility_scope": (
+                entity.visibility_scope.value if entity.visibility_scope else "personal"
+            ),
+            "owner_user_id": str(entity.owner_user_id) if entity.owner_user_id else None,
+            "organization_id": (
+                str(entity.organization_id) if entity.organization_id else None
+            ),
+            "last_analyzed": (
+                entity.last_analyzed.isoformat() if entity.last_analyzed else None
+            ),
+            "status": entity.status.value if entity.status else "pending",
+            "created_at": entity.created_at.isoformat() if entity.created_at else None,
+            "updated_at": entity.updated_at.isoformat() if entity.updated_at else None,
+        }
+        association_context = build_amway_association_context(
+            name=entity.name,
+            domain=entity.domain,
+            aliases=aliases,
         )
+        if association_context:
+            payload.update(association_context)
+            payload["association_brand_cluster"] = association_context[
+                "center_terms"
+            ][:3]
+        return _with_entity_hygiene(payload)
 
     def _lightweight_entity_select(self):
         return select(Entity).options(
