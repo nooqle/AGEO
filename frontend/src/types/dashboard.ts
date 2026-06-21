@@ -539,6 +539,11 @@ export interface DashboardHomeData {
   summary: {
     headline: string;
   };
+  dashboard_variant?: string | null;
+  analysis_mode?: string | null;
+  report_kind?: string | null;
+  center_terms?: string[];
+  enabled_surfaces?: string[];
   latest_report?: DashboardLatestReport;
   monitoring_plan?: DashboardMonitoringPlanSummary;
   has_active_monitoring_schedule?: boolean;

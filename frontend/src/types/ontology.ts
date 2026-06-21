@@ -599,6 +599,349 @@ export interface OntologyRecommendationTaskResponse {
   world: OntologyWorldSummary;
 }
 
+  export interface OntologyAssociationCircleNode {
+    node_id: string;
+    entity_id?: string;
+    entity_type?: string;
+    term: string;
+  orbit: 'core_near' | 'strong' | 'contestable' | 'weak' | 'blank' | 'risk_shadow' | 'R1' | 'R2' | 'R3' | string;
+  orbit_label?: string;
+  business_tag?: string;
+  maturity_tier?: string;
+  maturity_label?: string;
+  priority_rank?: number;
+  association_score?: number;
+  gravity_score?: number;
+  closeness_score?: number;
+  distance_score?: number;
+  frequency_score?: number;
+  position_score?: number;
+  relation_type_score?: number;
+  scene_coverage_score?: number;
+  model_consistency_score?: number;
+  semantic_direction?: string;
+  theme?: string;
+  planet_group?: string;
+  is_risk_term?: boolean;
+  is_target_term?: boolean;
+  answer_count?: number;
+  platform_count?: number;
+  platform_distribution?: Record<string, number>;
+  primary_audience_segments?: string[];
+  primary_mother_themes?: string[];
+  primary_life_stages?: string[];
+  primary_opportunity_points?: string[];
+  relation_type_distribution?: Record<string, number>;
+  trigger_questions?: string[];
+  evidence_samples?: string[];
+  evidence_count?: number;
+    evidence_strength?: string;
+    orbit_reason?: string;
+    source?: string;
+    term_origin?: 'strategy' | 'answer' | string;
+    origin_label?: string;
+    source_policy?: Record<string, unknown>;
+    graph_policy?: Record<string, unknown>;
+    review_status?: string;
+  }
+
+export interface OntologyAssociationCircleEvidence {
+  evidence_id: string;
+  node_id?: string;
+  node_term?: string;
+  platform?: string;
+  question_id?: string;
+  question?: string;
+  audience_segment?: string | null;
+  core_anxiety?: string | null;
+  life_scene?: string | null;
+  opportunity_point?: string | null;
+  probe_type?: string | null;
+  mother_theme?: string | null;
+  question_type?: string | null;
+  mentions_amway?: string | null;
+  life_stage?: string | null;
+  four_have?: string | null;
+  touchpoint?: string | null;
+  monitoring_purpose?: string | null;
+  answer_excerpt?: string;
+  answer_position?: string;
+  relation_type?: string;
+  evidence_strength?: string;
+}
+
+export interface OntologyAssociationCircleQuestion {
+  id?: string;
+  text?: string;
+  question?: string;
+  question_text?: string;
+  category?: string;
+  intent?: string;
+  stage?: string;
+  audience_segment?: string | null;
+  core_anxiety?: string | null;
+  life_scene?: string | null;
+  opportunity_point?: string | null;
+  probe_type?: string | null;
+  mother_theme?: string | null;
+  question_type?: string | null;
+  mentions_amway?: string | null;
+  life_stage?: string | null;
+  four_have?: string | null;
+  touchpoint?: string | null;
+  monitoring_purpose?: string | null;
+  center_terms?: string[];
+  question_set_version?: string;
+  metadata_status?: string;
+  metadata_missing_fields?: string[];
+  source?: string;
+}
+
+export interface OntologyAssociationCirclePlatformComparison {
+  platform: string;
+  valid_answer_count?: number;
+  answer_preference?: string;
+  dominant_orbit?: string;
+  preferred_nodes?: string[];
+  competition_nodes?: string[];
+  risk_nodes?: string[];
+  risk_bias?: string;
+  opportunity_bias?: string;
+  recommendation?: string;
+}
+
+export interface OntologyAssociationCircleAction {
+  id: string;
+  action_type?: 'amplify' | 'translate' | 'build_path' | 'build_evidence' | string;
+  action_label?: string;
+  title?: string;
+  node_id?: string;
+  node_term?: string;
+  orbit?: string;
+  business_tag?: string;
+  priority?: 'high' | 'medium' | 'low' | string;
+  priority_reason?: string;
+  target_platforms?: string[];
+  target_audience?: string;
+  target_scene?: string;
+  goal_metric?: string;
+  reason?: string;
+  expected_impact?: string;
+  review_criteria?: string;
+  execution_steps?: string[];
+  evidence_refs?: string[];
+  next_question_suggestion?: string;
+}
+
+export interface OntologyAssociationCircleNarrativeSection {
+  section_id?: string;
+  role?: string;
+  title: string;
+  reader_question?: string;
+  takeaway?: string;
+  claims?: string[];
+  so_what?: string;
+  paragraphs: string[];
+  supporting_facts?: string[];
+  evidence_refs?: string[];
+  next_probe?: string;
+}
+
+export interface OntologyAssociationCircleQuestionDefinition {
+  center_term?: string;
+  center_terms?: string[];
+  question_count?: number;
+  question_bank_count?: number;
+  question_set_version?: string | null;
+  question_sources?: Record<string, number>;
+  audience_segments?: string[];
+  probe_types?: string[];
+  opportunity_points?: string[];
+  life_scenes?: string[];
+  sample_questions?: Array<{
+    id?: string;
+    text?: string;
+    audience_segment?: string;
+    life_scene?: string;
+    opportunity_point?: string;
+    probe_type?: string;
+    metadata_status?: string;
+  }>;
+  definition_sentence?: string;
+}
+
+export interface OntologyAssociationCirclePlatformSourceRow {
+  platform?: string;
+  total_answer_count?: number;
+  valid_answer_count?: number;
+  failed_answer_count?: number;
+  empty_answer_count?: number;
+  question_ids?: string[];
+  answer_preference?: string;
+  preferred_nodes?: string[];
+  competition_nodes?: string[];
+  risk_nodes?: string[];
+  dominant_orbit?: string;
+  risk_bias?: string;
+  opportunity_bias?: string;
+  recommendation?: string;
+}
+
+export interface OntologyAssociationCirclePlatformSourceSummary {
+  total_answer_count?: number;
+  valid_answer_count?: number;
+  failed_answer_count?: number;
+  empty_answer_count?: number;
+  platform_count?: number;
+  platform_names?: string[];
+  platforms?: OntologyAssociationCirclePlatformSourceRow[];
+}
+
+export interface OntologyAssociationCircleEvidenceFinding {
+  node_id?: string;
+  node_term?: string;
+  claim?: string;
+  orbit?: string;
+  orbit_label?: string;
+  business_tag?: string;
+  supporting_facts?: string[];
+  evidence_refs?: string[];
+  sample_platform?: string;
+  sample_question?: string;
+  sample_excerpt?: string;
+  implication?: string;
+}
+
+export interface OntologyAssociationCircleReportOutlineItem {
+  chapter_id?: string;
+  title?: string;
+  reader_question?: string;
+  required_evidence?: string[];
+}
+
+export interface OntologyAssociationCircleStrategyValidation {
+  strategy_id?: string;
+  strategy_term?: string;
+  entity_type?: string;
+  status?: 'validated' | 'partial' | 'missing' | 'risk' | string;
+  validation_label?: string;
+  decision_tier?: string;
+  evidence_band?: string;
+  node_score?: number;
+  stance_summary?: {
+    supportive?: number;
+    neutral?: number;
+    skeptical?: number;
+    risk?: number;
+    competitive?: number;
+  };
+  question_count?: number;
+  question_refs?: string[];
+  answer_mention_count?: number;
+  platform_count?: number;
+  platform_distribution?: Record<string, number>;
+  related_node_ids?: string[];
+  evidence_refs?: string[];
+  platform_outcomes?: Array<{
+    platform?: string;
+    answer_count?: number;
+    status?: string;
+    sample_excerpt?: string;
+    stance?: string;
+    stance_summary?: {
+      supportive?: number;
+      neutral?: number;
+      skeptical?: number;
+      risk?: number;
+      competitive?: number;
+    };
+  }>;
+  interpretation?: string;
+  action_recommendation?: string;
+  review_status?: string;
+}
+
+export interface OntologyAssociationCirclePriorityItem {
+  rank?: number;
+  node_id?: string;
+  term?: string;
+  focus_type?: 'risk' | 'competitor' | 'opportunity' | 'asset' | string;
+  business_tag?: string;
+  maturity_tier?: string;
+  score?: number;
+  evidence_count?: number;
+  platform_count?: number;
+  scene_hint?: string;
+  reason?: string;
+  recommended_action?: string;
+  evidence_refs?: string[];
+  platform_distribution?: Record<string, number>;
+  question_refs?: string[];
+  sample_excerpt?: string;
+}
+
+export interface OntologyAssociationCirclePrioritySummary {
+  top_risks?: OntologyAssociationCirclePriorityItem[];
+  top_competitors?: OntologyAssociationCirclePriorityItem[];
+  top_opportunities?: OntologyAssociationCirclePriorityItem[];
+  top_assets?: OntologyAssociationCirclePriorityItem[];
+  next_focus?: OntologyAssociationCirclePriorityItem[];
+  reading?: string;
+}
+
+export interface OntologyAssociationCircleAnalysisTraceItem {
+  step?: string;
+  title?: string;
+  summary?: string;
+  outputs?: string[];
+}
+
+export interface OntologyAssociationCircleSourceAppendixItem {
+  evidence_id?: string;
+  node_term?: string;
+  platform?: string;
+  question_id?: string;
+  question?: string;
+  answer_excerpt?: string;
+  audience_segment?: string;
+  life_scene?: string;
+  opportunity_point?: string;
+  probe_type?: string;
+  platform_valid_answer_count?: number;
+}
+
+export interface OntologyAssociationCircleProjection {
+  dashboard_variant?: string | null;
+  analysis_mode?: string;
+  report_kind?: string;
+  status?: 'not_generated' | 'sample_limited' | 'ready' | string;
+  center_terms: string[];
+  nodes: OntologyAssociationCircleNode[];
+  evidence_samples?: OntologyAssociationCircleEvidence[];
+  question_bank?: OntologyAssociationCircleQuestion[];
+  platform_comparison?: OntologyAssociationCirclePlatformComparison[];
+  association_actions?: OntologyAssociationCircleAction[];
+  report_narrative_sections?: OntologyAssociationCircleNarrativeSection[];
+  report_quality_checks?: Record<string, unknown>;
+  question_definition?: OntologyAssociationCircleQuestionDefinition;
+  platform_source_summary?: OntologyAssociationCirclePlatformSourceSummary;
+  evidence_findings?: OntologyAssociationCircleEvidenceFinding[];
+  report_outline?: OntologyAssociationCircleReportOutlineItem[];
+  strategy_validation?: OntologyAssociationCircleStrategyValidation[];
+  strategy_storyline?: Record<string, unknown>;
+  analysis_tool_trace?: OntologyAssociationCircleAnalysisTraceItem[];
+  source_appendix?: OntologyAssociationCircleSourceAppendixItem[];
+  copy_constraints?: Record<string, unknown>;
+  sample_scope?: Record<string, unknown>;
+  tracking_projection?: Record<string, unknown>;
+  executive_summary?: Record<string, unknown>;
+  priority_summary?: OntologyAssociationCirclePrioritySummary;
+  generated_from?: string | null;
+  report_id?: string | null;
+  artifact_id?: string | null;
+  updated_at?: string | null;
+}
+
 export interface OntologyWorldSummary {
   entity_id: string;
   projection_version?: number;
@@ -627,6 +970,10 @@ export interface OntologyWorldSummary {
   evidence_projection?: OntologyEvidenceProjection;
   graph_projection?: OntologyGraphProjection;
   recommendation_projection?: OntologyRecommendationProjection;
+  dashboard_variant?: string | null;
+  analysis_mode?: string | null;
+  center_terms?: string[];
+  association_circle_projection?: OntologyAssociationCircleProjection;
   action_queue: OntologyActionQueueItem[];
   task_flow?: OntologyTaskFlow;
   world_phase?: string | null;

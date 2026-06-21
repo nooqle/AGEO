@@ -18,6 +18,7 @@ import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { uniqueAiSourceDisplayNames } from '@/lib/aiSourceDisplay';
 import {
+  isAmwayAssociationEntity,
   preferredDashboardEntity,
   splitDashboardEntities,
 } from '@/lib/brandEntityHygiene';
@@ -186,8 +187,9 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     if (selectedBrandId) {
       void fetchHome();
       void fetchActiveRun(selectedBrandId);
+      void fetchWorld(selectedBrandId);
     }
-  }, [fetchActiveRun, fetchHome, selectedBrandId, selectedMonitorMode]);
+  }, [fetchActiveRun, fetchHome, fetchWorld, selectedBrandId, selectedMonitorMode]);
 
   useEffect(() => {
     if (entities.length === 0) {
@@ -239,6 +241,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const hasLoadError = Boolean(entityError);
   const hasData = entities.length > 0;
   const isInitialLoading = entitiesLoading;
+  const shouldOpenAmwayConsole = Boolean(selectedBrand && isAmwayAssociationEntity(selectedBrand));
 
   useEffect(() => {
     if (!selectedBrandId || !isSelectedRunActive) return;
@@ -248,6 +251,13 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     }, 6000);
     return () => window.clearInterval(timer);
   }, [fetchActiveRun, fetchWorld, isSelectedRunActive, selectedBrandId, selectedRun?.id, selectedRun?.status]);
+
+  useEffect(() => {
+    if (!shouldOpenAmwayConsole || !selectedBrand?.id) return;
+    const params = new URLSearchParams();
+    params.set('entity_id', selectedBrand.id);
+    router.replace(`/amway-console?${params.toString()}`);
+  }, [router, selectedBrand?.id, shouldOpenAmwayConsole]);
 
   const openDashboardChat = async (
     input: string,
@@ -556,6 +566,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
             }}
           />
           <BrandOntologyHome
+            key={selectedBrand.id}
             entityId={selectedBrand.id}
             brandName={selectedBrand.name}
             brandDomain={selectedBrand.domain}

@@ -91,6 +91,23 @@ export function getApiBaseUrl(): string {
 
 type RequestOptions = Pick<RequestInit, 'signal'>;
 
+export interface QuestionTableIntakeResult {
+  table_kind?: string;
+  confidence?: number;
+  summary?: string;
+  warnings?: string[];
+  source_file?: {
+    file_id?: string;
+    name?: string;
+    mime_type?: string;
+    sheet_name?: string | null;
+  };
+  stats?: Record<string, unknown>;
+  normalized_payload?: {
+    questions?: Array<Record<string, unknown>>;
+  };
+}
+
 class ApiService {
   private outputDetailCache = new Map<string, { expiresAt: number; promise: Promise<Output> }>();
 
@@ -1547,6 +1564,29 @@ class ApiService {
       throw new Error(error.detail || `Upload failed: ${response.status}`);
     }
 
+    return response.json();
+  }
+
+  async analyzeQuestionTable(fileId: string): Promise<QuestionTableIntakeResult> {
+    const url = `${API_URL}/files/${fileId}/question-table`;
+    const token = this.getAuthToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        this.handleUnauthorized();
+      }
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || '问题表格解析失败');
+    }
     return response.json();
   }
 

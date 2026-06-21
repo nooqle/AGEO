@@ -10,6 +10,12 @@ export interface Entity {
   organizationId: string | null;
   lastAnalyzed: string | null;
   status: 'active' | 'pending' | 'inactive';
+  dashboardVariant?: string | null;
+  analysisMode?: string | null;
+  reportKind?: string | null;
+  centerTerms?: string[];
+  enabledSurfaces?: string[];
+  associationBrandCluster?: string[];
   isInternalTestData: boolean;
   hygieneLabels: string[];
   createdAt: string;
@@ -50,6 +56,18 @@ export function normalizeEntity(raw: Record<string, unknown>): Entity {
     organizationId: (raw.organization_id ?? raw.organizationId ?? null) as string | null,
     lastAnalyzed: (raw.last_analyzed ?? raw.lastAnalyzed ?? null) as string | null,
     status: (raw.status || 'pending') as Entity['status'],
+    dashboardVariant: (raw.dashboard_variant ?? raw.dashboardVariant ?? null) as string | null,
+    analysisMode: (raw.analysis_mode ?? raw.analysisMode ?? null) as string | null,
+    reportKind: (raw.report_kind ?? raw.reportKind ?? null) as string | null,
+    centerTerms: Array.isArray(raw.center_terms ?? raw.centerTerms)
+      ? ((raw.center_terms ?? raw.centerTerms) as unknown[]).map(String)
+      : [],
+    enabledSurfaces: Array.isArray(raw.enabled_surfaces ?? raw.enabledSurfaces)
+      ? ((raw.enabled_surfaces ?? raw.enabledSurfaces) as unknown[]).map(String)
+      : [],
+    associationBrandCluster: Array.isArray(raw.association_brand_cluster ?? raw.associationBrandCluster)
+      ? ((raw.association_brand_cluster ?? raw.associationBrandCluster) as unknown[]).map(String)
+      : [],
     isInternalTestData: Boolean(
       raw.is_internal_test_data ?? raw.isInternalTestData ?? false,
     ),

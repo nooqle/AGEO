@@ -26,6 +26,9 @@ export interface BrandIntelligenceRun {
   message: string;
   run_goal: string;
   analysis_mode: string;
+  dashboard_variant?: string | null;
+  center_terms?: string[] | null;
+  enabled_surfaces?: string[] | null;
   input_scope?: Record<string, unknown> | null;
   sample_scope?: Record<string, unknown> | null;
   output_refs?: Record<string, unknown> | null;
