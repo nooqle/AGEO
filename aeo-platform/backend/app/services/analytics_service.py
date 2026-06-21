@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 
 from app.models.message import Message, MessageType, MessageRole
+from app.models.entity import Entity
 from app.models.monitoring_plan import (
     MonitoringEvidenceRecord,
     MonitoringPlan,
@@ -32,6 +33,9 @@ from app.models.session import Session
 from app.models.user import User
 from app.core.utils import extract_domain
 from app.services.access_scope_service import AccessScopeService
+from app.services.brand_association_circle_variant import (
+    build_amway_association_context,
+)
 from app.services.monitoring_plan_service import (
     ENDPOINT_REGISTRY,
     MonitoringPlanService,
@@ -60,6 +64,7 @@ SOURCE_TYPE_LABELS = {
 REPORT_KIND_LABELS = {
     "panorama": "品牌全景分析报告",
     "scenario": "用户场景分析报告",
+    "brand_association_circle": "品牌联想圈层报告",
 }
 
 QUESTION_SCOPE_LABELS = {
@@ -82,6 +87,7 @@ DASHBOARD_MONITOR_MODE_ALIASES = {
     "scenario": "scenario",
     "scenario_monitoring": "scenario",
     "persona": "scenario",
+    "brand_association_circle": "brand_association_circle",
 }
 
 PLATFORM_LABELS = {
@@ -314,6 +320,11 @@ class AnalyticsService:
         }:
             return False
         if artifact_kind == "geo_report" and report_kind in {"panorama", "scenario"}:
+            return True
+        if (
+            artifact_kind == "brand_association_circle"
+            or report_kind == "brand_association_circle"
+        ):
             return True
         if output_type != "report":
             return False
@@ -1046,7 +1057,10 @@ class AnalyticsService:
         period_summary: dict[str, Any],
         recent_issue: dict[str, Any] | None,
         period_rollup: dict[str, Any] | None = None,
+        dashboard_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if dashboard_context:
+            home.update(dashboard_context)
         home["monitoringPlan"] = monitoring_plan
         home["hasActiveMonitoringSchedule"] = bool(has_active_monitoring_schedule)
         home["periodSummary"] = period_summary
@@ -3732,6 +3746,33 @@ class AnalyticsService:
             and len(endpoint_ids) > 0
         )
 
+    async def _dashboard_variant_context(
+        self,
+        brand_id: str | None,
+    ) -> dict[str, Any] | None:
+        if not brand_id:
+            return None
+        try:
+            brand_uuid = UUID(brand_id)
+        except (TypeError, ValueError):
+            return None
+        entity = await self.db.get(Entity, brand_uuid)
+        if entity is None:
+            return None
+        aliases: list[Any] = []
+        if entity.aliases:
+            try:
+                parsed_aliases = json.loads(entity.aliases)
+                if isinstance(parsed_aliases, list):
+                    aliases = parsed_aliases
+            except (TypeError, json.JSONDecodeError):
+                aliases = []
+        return build_amway_association_context(
+            name=entity.name,
+            domain=entity.domain,
+            aliases=aliases,
+        )
+
     @staticmethod
     def _dashboard_endpoint_ids_from_schedule(
         schedule: MonitoringSchedule,
@@ -3829,6 +3870,7 @@ class AnalyticsService:
         """Get Dashboard homepage summary data with period Snapshot aggregation."""
         normalized_monitor_mode = self._normalize_dashboard_monitor_mode(monitor_mode)
         date_range_days = self._dashboard_date_range_days(date_range)
+        dashboard_context = await self._dashboard_variant_context(brand_id)
         monitoring_plan = await self._get_dashboard_monitoring_plan(
             brand_id=brand_id,
             monitor_mode=normalized_monitor_mode,
@@ -3922,6 +3964,7 @@ class AnalyticsService:
                 period_summary=period_summary,
                 recent_issue=recent_issue,
                 period_rollup=period_rollup,
+                dashboard_context=dashboard_context,
             )
 
         projection_home = self._build_dashboard_home_from_projection(current)
@@ -3933,6 +3976,7 @@ class AnalyticsService:
                 period_summary=period_summary,
                 recent_issue=recent_issue,
                 period_rollup=period_rollup,
+                dashboard_context=dashboard_context,
             )
 
         payload = self._extract_v2_payload(current)
@@ -4512,4 +4556,5 @@ class AnalyticsService:
             period_summary=period_summary,
             recent_issue=recent_issue,
             period_rollup=period_rollup,
+            dashboard_context=dashboard_context,
         )

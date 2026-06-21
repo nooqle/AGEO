@@ -108,8 +108,8 @@ class AnalysisSnapshot(Base):
 
     # --- 元数据 ---
     snapshot_type: Mapped[str] = mapped_column(
-        String(20), default="legacy", nullable=False, index=True
-    )  # Values: "baseline" / "persona" / "legacy"
+        String(64), default="legacy", nullable=False, index=True
+    )  # Values include "panorama", "scenario", "brand_association_circle", "legacy"
     triggered_by: Mapped[str] = mapped_column(
         String(50), default="manual", nullable=False
     )

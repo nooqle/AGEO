@@ -26,6 +26,13 @@ from app.models.task import AnalysisTask, TaskStatus
 from app.models.task_run import TaskTriggerSource
 from app.models.user import User
 from app.services.brand_ontology_world_service import BrandOntologyWorldService
+from app.services.brand_association_circle_variant import (
+    AMWAY_ASSOCIATION_DASHBOARD_VARIANT,
+    AMWAY_ASSOCIATION_CENTER_TERMS,
+    AMWAY_ASSOCIATION_ENABLED_SURFACES,
+    BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+    build_amway_association_context,
+)
 from app.services.entity_service import EntityService
 from app.services.job_submission_service import JobSubmissionService
 from app.services.runtime_coordinator import runtime_coordinator
@@ -77,6 +84,12 @@ def _coerce_uuid(value: str | UUID | None, field_name: str) -> UUID | None:
 
 def _normalize_mode(value: str | None) -> str:
     normalized = str(value or "panorama").strip().lower()
+    if normalized in {
+        BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+        "association_circle",
+        "amway_association_circle",
+    }:
+        return BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE
     if normalized in {"scenario", "persona", "scenario_monitoring"}:
         return "scenario"
     return "panorama"
@@ -108,6 +121,86 @@ def _build_minimal_brand_profile(entity: Entity) -> dict[str, Any]:
     return profile
 
 
+def _association_context_from_scope(
+    input_scope: dict[str, Any]
+) -> dict[str, Any] | None:
+    if input_scope.get("dashboard_variant") != AMWAY_ASSOCIATION_DASHBOARD_VARIANT:
+        return None
+    return {
+        "dashboard_variant": AMWAY_ASSOCIATION_DASHBOARD_VARIANT,
+        "analysis_mode": BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+        "report_kind": BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+        "center_terms": input_scope.get("center_terms")
+        or list(AMWAY_ASSOCIATION_CENTER_TERMS),
+        "enabled_surfaces": input_scope.get("enabled_surfaces")
+        or list(AMWAY_ASSOCIATION_ENABLED_SURFACES),
+    }
+
+
+def _association_context_for_run(
+    *,
+    entity: Entity,
+    input_scope: dict[str, Any],
+) -> dict[str, Any] | None:
+    return _association_context_from_scope(
+        input_scope
+    ) or build_amway_association_context(
+        name=entity.name,
+        domain=entity.domain,
+    )
+
+
+def _uploaded_question_payload_from_scope(
+    input_scope: dict[str, Any],
+) -> dict[str, Any] | None:
+    raw_questions = input_scope.get("uploaded_questions")
+    if not isinstance(raw_questions, list):
+        return None
+
+    questions: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_questions, start=1):
+        if isinstance(item, str):
+            text = item.strip()
+            question = {"id": f"dashboard_upload_{index:03d}", "text": text}
+        elif isinstance(item, dict):
+            text = str(
+                item.get("text")
+                or item.get("core_question")
+                or item.get("question")
+                or ""
+            ).strip()
+            question = dict(item)
+            question["text"] = text
+            question.setdefault("id", f"dashboard_upload_{index:03d}")
+        else:
+            continue
+        if not text:
+            continue
+        question.setdefault("source", "uploaded_table")
+        questions.append(question)
+
+    if not questions:
+        return None
+
+    source_file_name = str(
+        input_scope.get("uploaded_question_source") or "dashboard_upload"
+    ).strip()
+    source_file_id = str(input_scope.get("uploaded_question_file_id") or "").strip()
+
+    return {
+        "table_kind": "question_list",
+        "source_file": {
+            "file_id": source_file_id or None,
+            "name": source_file_name or "dashboard_upload",
+        },
+        "normalized_payload": {"questions": questions},
+        "import_intent": {
+            "mode": str(input_scope.get("question_import_mode") or "replace"),
+        },
+        "warnings": [],
+    }
+
+
 def _build_brand_run_initial_state(
     *,
     run: BrandIntelligenceRun,
@@ -117,11 +210,61 @@ def _build_brand_run_initial_state(
     task_run_uuid: UUID,
 ) -> dict[str, Any]:
     input_scope = dict(run.input_scope or {})
+    association_context = _association_context_for_run(
+        entity=entity,
+        input_scope=input_scope,
+    )
     platform_filter = _string_list(input_scope.get("platforms"))
+    uploaded_question_payload = _uploaded_question_payload_from_scope(input_scope)
     fetch_mode = str(input_scope.get("fetch_mode") or "fast").strip().lower()
     if fetch_mode not in {"fast", "full"}:
         fetch_mode = "fast"
     run_policy = "full_browser" if fetch_mode == "full" else "quick"
+
+    resolved_analysis_mode = (
+        BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE
+        if association_context
+        else "persona" if run.analysis_mode == "scenario" else "baseline"
+    )
+    dashboard_context = {
+        "source": "brand_intelligence_run",
+        "run_id": str(run.id),
+        "analysis_mode": run.analysis_mode,
+    }
+    if association_context:
+        dashboard_context.update(association_context)
+        input_scope = _merge_json(input_scope, association_context) or input_scope
+
+    user_decisions = {
+        "fetch_mode": fetch_mode,
+        "fetch_mode_confirmed": True,
+        "fetch_mode_pending": False,
+    }
+    if association_context:
+        user_decisions["a3_mode"] = BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE
+    if uploaded_question_payload:
+        user_decisions.update(
+            {
+                "a3_mode": "uploaded_list",
+                "table_import_confirmed": True,
+                "confirmed_table_kind": "question_list",
+                "question_import_mode": uploaded_question_payload["import_intent"][
+                    "mode"
+                ],
+            }
+        )
+
+    next_tool_args = {"mode": "baseline_dynamic"}
+    if association_context:
+        next_tool_args.update(
+            {
+                "analysis_mode": BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+                "report_kind": BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+                "center_terms": association_context.get("center_terms"),
+            }
+        )
+    if uploaded_question_payload:
+        next_tool_args["mode"] = "uploaded_list"
 
     return {
         "session_id": str(session_uuid),
@@ -146,11 +289,7 @@ def _build_brand_run_initial_state(
         "progress": 0.0,
         "progress_message": "",
         "pending_confirmation": None,
-        "user_decisions": {
-            "fetch_mode": fetch_mode,
-            "fetch_mode_confirmed": True,
-            "fetch_mode_pending": False,
-        },
+        "user_decisions": user_decisions,
         "error_info": None,
         "orchestrator_history": [],
         "orchestrator_reply": None,
@@ -161,16 +300,16 @@ def _build_brand_run_initial_state(
         "agent_retry_counts": {},
         "selected_tool_mode": None,
         "latest_user_input": run.run_goal or DEFAULT_RUN_GOAL,
-        "dashboard_context": {
-            "source": "brand_intelligence_run",
-            "run_id": str(run.id),
-            "analysis_mode": run.analysis_mode,
-        },
+        "dashboard_context": dashboard_context,
+        "table_intake_result": uploaded_question_payload,
+        "confirmed_import_action": (
+            {"import_mode": uploaded_question_payload["import_intent"]["mode"]}
+            if uploaded_question_payload
+            else None
+        ),
         "task_id": str(task_id),
         "run_id": str(task_run_uuid),
-        "analysis_mode": "persona"
-        if run.analysis_mode == "scenario"
-        else "baseline",
+        "analysis_mode": resolved_analysis_mode,
         "headless_mode": True,
         "fetch_mode": fetch_mode,
         "run_policy": run_policy,
@@ -184,12 +323,18 @@ def _build_brand_run_initial_state(
             tool_name="question_simulation",
             authority="authoritative_resume",
             reason="Dashboard started a background brand intelligence run.",
-            tool_args={"mode": "baseline_dynamic"},
+            tool_args=next_tool_args,
             source_step="brand_intelligence_run",
             metadata={
                 "brand_intelligence_run_id": str(run.id),
                 "headless_mode": True,
                 "preselected_fetch_mode": fetch_mode,
+                "uploaded_question_count": len(
+                    (
+                        uploaded_question_payload
+                        or {"normalized_payload": {"questions": []}}
+                    )["normalized_payload"]["questions"]
+                ),
             },
         ),
     }
@@ -255,6 +400,20 @@ class BrandIntelligenceRunService:
         commit: bool = True,
     ) -> BrandIntelligenceRun:
         entity = await self._require_entity(entity_id, current_user)
+        association_context = build_amway_association_context(
+            name=entity.name,
+            domain=entity.domain,
+        )
+        normalized_input_scope = (
+            _merge_json(input_scope, association_context)
+            if association_context
+            else input_scope
+        )
+        normalized_analysis_mode = (
+            BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE
+            if association_context
+            else _normalize_mode(analysis_mode)
+        )
         normalized_event_id = str(origin_event_id or "").strip() or None
         if normalized_event_id:
             existing_by_event = await self._find_by_origin_event(
@@ -269,7 +428,8 @@ class BrandIntelligenceRunService:
             current_user=current_user,
         )
         if active is not None:
-            active.input_scope = _merge_json(active.input_scope, input_scope)
+            active.input_scope = _merge_json(active.input_scope, normalized_input_scope)
+            active.analysis_mode = normalized_analysis_mode
             active.last_activity_at = _now()
             active.updated_at = active.last_activity_at
             if (
@@ -306,12 +466,10 @@ class BrandIntelligenceRunService:
             status=initial_status,
             stage=initial_stage,
             progress=RUN_STAGE_PROGRESS[initial_status],
-            message=(
-                "正在生成问题和样本范围" if start_immediately else "等待开始分析"
-            ),
+            message=("正在生成问题和样本范围" if start_immediately else "等待开始分析"),
             run_goal=(run_goal or DEFAULT_RUN_GOAL).strip() or DEFAULT_RUN_GOAL,
-            analysis_mode=_normalize_mode(analysis_mode),
-            input_scope=input_scope or {},
+            analysis_mode=normalized_analysis_mode,
+            input_scope=normalized_input_scope or {},
             output_refs={},
             started_at=now if start_immediately else None,
             last_activity_at=now,
@@ -706,6 +864,7 @@ class BrandIntelligenceRunService:
         def dt(value: datetime | None) -> str | None:
             return value.isoformat() if value else None
 
+        input_scope = run.input_scope if isinstance(run.input_scope, dict) else {}
         return {
             "id": str(run.id),
             "entity_id": str(run.entity_id),
@@ -726,6 +885,9 @@ class BrandIntelligenceRunService:
             "message": run.message,
             "run_goal": run.run_goal,
             "analysis_mode": run.analysis_mode,
+            "dashboard_variant": input_scope.get("dashboard_variant"),
+            "center_terms": input_scope.get("center_terms"),
+            "enabled_surfaces": input_scope.get("enabled_surfaces"),
             "input_scope": run.input_scope,
             "sample_scope": run.sample_scope,
             "output_refs": run.output_refs,
@@ -812,7 +974,9 @@ async def dispatch_brand_intelligence_run(run_id: str) -> None:
 
         final_state = await workflow.ainvoke(
             initial_state,
-            config={"configurable": {"thread_id": f"brand-intelligence-run:{run_uuid}"}},
+            config={
+                "configurable": {"thread_id": f"brand-intelligence-run:{run_uuid}"}
+            },
         )
 
         async with AsyncSessionLocal() as db:
@@ -820,7 +984,9 @@ async def dispatch_brand_intelligence_run(run_id: str) -> None:
             reloaded = await service._get_run_unscoped(run_uuid)
             if reloaded is None:
                 return
-            if final_state.get("awaiting_user") or final_state.get("pending_confirmation"):
+            if final_state.get("awaiting_user") or final_state.get(
+                "pending_confirmation"
+            ):
                 await TaskService(db).mark_waiting_for_input(
                     task_id,
                     run_id=task_run_uuid,
@@ -837,7 +1003,9 @@ async def dispatch_brand_intelligence_run(run_id: str) -> None:
                     requires_user_action=True,
                     user_action_type="workflow_confirmation",
                     blocking_reason="需要用户确认或接管",
-                    output_refs={"pending_confirmation": final_state.get("pending_confirmation")},
+                    output_refs={
+                        "pending_confirmation": final_state.get("pending_confirmation")
+                    },
                 )
                 return
 

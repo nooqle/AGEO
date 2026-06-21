@@ -11,7 +11,10 @@ from uuid import UUID
 
 from app.models.brand_intelligence import (
     BrandActionRecord,
+    BrandIntelligenceQuestion,
     BrandObjectLink,
+    BrandPlatformAnswer,
+    BrandReportVersion,
     BrandUserDecision,
 )
 from app.ontology import OntologyRegistry, load_default_ontology
@@ -28,6 +31,14 @@ from app.services.brand_ontology_object_service import BrandOntologyObjectServic
 from app.services.brand_knowledge_graph_projection_service import (
     BrandKnowledgeGraphProjectionService,
 )
+from app.services.brand_association_circle_variant import (
+    AMWAY_ASSOCIATION_CENTER_TERMS,
+    AMWAY_ASSOCIATION_DASHBOARD_VARIANT,
+    BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+    BRAND_ASSOCIATION_CIRCLE_REPORT_KIND,
+    build_amway_association_context,
+)
+from app.tools.question_generation import complete_association_question_metadata
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,7 +67,7 @@ WORLD_OBJECT_TYPES: tuple[str, ...] = (
 DEFAULT_SAMPLE_LIMIT = 3
 WORLD_SUMMARY_CACHE_TTL_SECONDS = 20
 WORLD_SUMMARY_CACHE_MAX_ENTRIES = 64
-DASHBOARD_WORLD_PROJECTION_VERSION = 6
+DASHBOARD_WORLD_PROJECTION_VERSION = 8
 REQUIRED_DASHBOARD_WORLD_PROJECTION_KEYS = (
     "summary_projection",
     "evidence_projection",
@@ -97,11 +108,131 @@ CORE_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
         "report_uses_evidence_set",
     }
 )
+LEGACY_ASSOCIATION_REPORT_TITLES: frozenset[str] = frozenset(
+    {
+        "Executive Summary｜先给结论",
+        "这张圈层图怎么看",
+        "战略词证据明细",
+        "安利战略词逐项验证",
+        "综合战略判断",
+        "下一轮追踪建议",
+    }
+)
 _world_summary_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 
 
 def _relationship_visibility(link_type: str) -> str:
     return "core" if link_type in CORE_RELATIONSHIP_TYPES else "supporting"
+
+
+def _association_report_sections_are_legacy(
+    sections: list[dict[str, Any]],
+) -> bool:
+    titles = {
+        str(section.get("title") or "").strip()
+        for section in sections
+        if isinstance(section, dict)
+    }
+    return bool(titles & LEGACY_ASSOCIATION_REPORT_TITLES)
+
+
+def _upgrade_legacy_association_report_projection(
+    *,
+    entity_id: UUID,
+    latest_report: BrandReportVersion,
+    brand_payload: dict[str, Any],
+    center_terms: list[str],
+    nodes: list[dict[str, Any]],
+    evidence_samples: list[dict[str, Any]],
+    question_bank: list[dict[str, Any]],
+    platform_comparison: list[dict[str, Any]],
+    association_actions: list[dict[str, Any]],
+    sample_scope: dict[str, Any],
+    question_definition: dict[str, Any],
+    platform_source_summary: dict[str, Any],
+    evidence_findings: list[dict[str, Any]],
+    report_outline: list[dict[str, Any]],
+    analysis_tool_trace: list[dict[str, Any]],
+    source_appendix: list[dict[str, Any]],
+    strategy_validation: list[dict[str, Any]],
+    risk_map: dict[str, Any],
+    fetch_results: list[dict[str, Any]] | None = None,
+    tracking_projection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a current report projection from an old stored report payload.
+
+    The stored evidence remains unchanged. This only prevents old report
+    narrative sections from leaking into the Amway console when historical
+    artifacts predate the storyline report contract.
+    """
+
+    from app.workflow.a5.association_circle import (
+        build_brand_association_circle_report_artifact,
+    )
+
+    association_map = {
+        "center_terms": center_terms,
+        "nodes": nodes,
+        "evidence_samples": evidence_samples,
+        "question_bank": question_bank,
+    }
+    projection_payload = {
+        "center_terms": center_terms,
+        "nodes": nodes,
+        "evidence_samples": evidence_samples,
+        "question_bank": question_bank,
+        "platform_comparison": platform_comparison,
+        "association_actions": association_actions,
+        "sample_scope": sample_scope,
+        "question_definition": question_definition,
+        "platform_source_summary": platform_source_summary,
+        "evidence_findings": evidence_findings,
+        "report_outline": report_outline,
+        "analysis_tool_trace": analysis_tool_trace,
+        "source_appendix": source_appendix,
+        "strategy_validation": strategy_validation,
+        "risk_map": risk_map,
+        "tracking_projection": tracking_projection or {},
+    }
+    calibration_result = {
+        "sample_scope": sample_scope,
+        "association_map": association_map,
+        "association_circle_projection": projection_payload,
+        "report_input": {
+            "question_scope": question_definition,
+            "platform_scope": platform_source_summary,
+            "association_map": association_map,
+            "strategy_validation": strategy_validation,
+            "risk_summary": risk_map,
+            "evidence_findings": evidence_findings,
+            "source_appendix": source_appendix,
+            "association_actions": association_actions,
+            "tracking_projection": tracking_projection or {},
+        },
+    }
+    brand_name = str(
+        brand_payload.get("label")
+        or brand_payload.get("name")
+        or (center_terms[0] if center_terms else "安利")
+    )
+    upgraded = build_brand_association_circle_report_artifact(
+        session_id=str(getattr(latest_report, "session_id", None) or "dashboard"),
+        entity_id=str(entity_id),
+        brand_profile={
+            "brand_name": brand_name,
+            "official_website": brand_payload.get("domain"),
+        },
+        fetch_results=fetch_results or [],
+        simulated_questions=question_bank,
+        center_terms=center_terms,
+        entity_calibration_result=calibration_result,
+    )
+    dashboard_projection = upgraded.get("dashboard_projection")
+    dashboard_projection = (
+        dashboard_projection if isinstance(dashboard_projection, dict) else {}
+    )
+    association_projection = dashboard_projection.get("association_circle_projection")
+    return association_projection if isinstance(association_projection, dict) else {}
 
 
 class BrandOntologyWorldService:
@@ -382,6 +513,10 @@ class BrandOntologyWorldService:
             entity_id=entity_id,
             action_queue=action_queue,
         )
+        association_circle_projection = await self._association_circle_projection(
+            entity_id=entity_id,
+            snapshot=snapshot,
+        )
         dashboard_summary = {
             **snapshot,
             "projection_version": DASHBOARD_WORLD_PROJECTION_VERSION,
@@ -400,9 +535,544 @@ class BrandOntologyWorldService:
                 world_phase=world_phase,
             ),
         }
+        if association_circle_projection:
+            dashboard_summary["dashboard_variant"] = association_circle_projection.get(
+                "dashboard_variant"
+            )
+            dashboard_summary["analysis_mode"] = association_circle_projection.get(
+                "analysis_mode"
+            )
+            dashboard_summary["center_terms"] = association_circle_projection.get(
+                "center_terms"
+            )
+            dashboard_summary["association_circle_projection"] = (
+                association_circle_projection
+            )
+            dashboard_summary["recommendation_projection"] = (
+                _merge_association_actions_into_recommendations(
+                    dashboard_summary.get("recommendation_projection"),
+                    association_circle_projection.get("association_actions"),
+                )
+            )
         self._dashboard_summary_cache[cache_key] = deepcopy(dashboard_summary)
         _write_world_summary_cache(cache_key, dashboard_summary)
         return dashboard_summary
+
+    async def build_association_circle_dashboard_summary(
+        self,
+        *,
+        entity_id: UUID,
+        entity_name: str | None = None,
+        entity_domain: str | None = None,
+        entity_aliases: list[Any] | tuple[Any, ...] | None = None,
+    ) -> dict[str, Any] | None:
+        """Build the light Dashboard world payload needed by the Amway Console."""
+
+        variant_context = build_amway_association_context(
+            name=entity_name,
+            domain=entity_domain,
+            aliases=entity_aliases,
+        )
+        if not variant_context:
+            return None
+
+        brand = {
+            "id": str(entity_id),
+            "label": entity_name or "Amway",
+            "domain": entity_domain,
+            "aliases": list(entity_aliases or []),
+        }
+        projection = await self._association_circle_projection(
+            entity_id=entity_id,
+            snapshot={"brand": brand},
+        )
+        if projection is None:
+            return None
+
+        recommendation_projection = _merge_association_actions_into_recommendations(
+            {
+                "recommendations": [],
+                "sample_status": {"status": projection.get("status")},
+            },
+            projection.get("association_actions"),
+        )
+        sample_scope = projection.get("sample_scope")
+        sample_scope = sample_scope if isinstance(sample_scope, dict) else {}
+        return {
+            "projection_version": DASHBOARD_WORLD_PROJECTION_VERSION,
+            "brand": brand,
+            "dashboard_variant": projection.get("dashboard_variant")
+            or AMWAY_ASSOCIATION_DASHBOARD_VARIANT,
+            "analysis_mode": projection.get("analysis_mode")
+            or BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+            "report_kind": projection.get("report_kind")
+            or BRAND_ASSOCIATION_CIRCLE_REPORT_KIND,
+            "center_terms": projection.get("center_terms")
+            or variant_context.get("center_terms")
+            or list(AMWAY_ASSOCIATION_CENTER_TERMS),
+            "enabled_surfaces": variant_context.get("enabled_surfaces") or [],
+            "association_circle_projection": projection,
+            "summary_projection": {
+                "brand": brand,
+                "sample_scope": sample_scope,
+            },
+            "evidence_projection": {
+                "samples": projection.get("evidence_samples") or [],
+            },
+            "graph_projection": {
+                "nodes": projection.get("nodes") or [],
+            },
+            "recommendation_projection": recommendation_projection,
+            "action_queue": [],
+            "task_flow": {
+                "stage": projection.get("status") or "not_generated",
+            },
+        }
+
+    async def _fetch_results_for_association_report(
+        self,
+        *,
+        entity_id: UUID,
+        latest_report: BrandReportVersion,
+        question_bank: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        session_id = getattr(latest_report, "session_id", None)
+        question_lookup: dict[str, dict[str, Any]] = {}
+        for index, item in enumerate(question_bank, start=1):
+            if not isinstance(item, dict):
+                continue
+            question_id = str(item.get("id") or item.get("question_id") or "").strip()
+            if not question_id:
+                question_id = f"q_{index:03d}"
+            question_lookup[question_id] = item
+
+        async def load_answers(use_session: bool) -> list[BrandPlatformAnswer]:
+            query = select(BrandPlatformAnswer).where(
+                BrandPlatformAnswer.entity_id == entity_id
+            )
+            if use_session and session_id is not None:
+                query = query.where(BrandPlatformAnswer.session_id == session_id)
+            query = query.order_by(
+                BrandPlatformAnswer.question_id,
+                BrandPlatformAnswer.platform,
+                BrandPlatformAnswer.captured_at,
+            )
+            result = await self.db.execute(query)
+            return list(result.scalars().all())
+
+        try:
+            answers = await load_answers(use_session=True)
+            if not answers and session_id is not None:
+                answers = await load_answers(use_session=False)
+        except Exception:
+            await self._recover_read_failure()
+            return []
+
+        grouped: dict[str, dict[str, Any]] = {}
+        for answer in answers:
+            question_id = str(getattr(answer, "question_id", "") or "").strip()
+            if not question_id:
+                question_id = f"answer_question_{len(grouped) + 1:03d}"
+            question_payload = question_lookup.get(question_id, {})
+            question_text = str(
+                question_payload.get("text")
+                or question_payload.get("question")
+                or question_payload.get("question_text")
+                or question_id
+            ).strip()
+            row = grouped.setdefault(
+                question_id,
+                {
+                    "question_id": question_id,
+                    "question_text": question_text,
+                    "question": question_text,
+                    "platform_results": [],
+                    "audience_segment": question_payload.get("audience_segment"),
+                    "core_anxiety": question_payload.get("core_anxiety"),
+                    "life_scene": question_payload.get("life_scene"),
+                    "opportunity_point": question_payload.get("opportunity_point"),
+                    "probe_type": question_payload.get("probe_type"),
+                    "mother_theme": question_payload.get("mother_theme"),
+                    "question_type": question_payload.get("question_type"),
+                },
+            )
+            answer_text = str(getattr(answer, "answer_text", "") or "").strip()
+            row["platform_results"].append(
+                {
+                    "platform": str(getattr(answer, "platform", "") or "").strip(),
+                    "success": bool(getattr(answer, "success", False))
+                    and bool(answer_text),
+                    "answer": {"content": answer_text},
+                    "answer_text": answer_text,
+                }
+            )
+        return list(grouped.values())
+
+    async def _association_circle_projection(
+        self,
+        *,
+        entity_id: UUID,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        brand_payload = snapshot.get("brand") if isinstance(snapshot, dict) else {}
+        brand_payload = brand_payload if isinstance(brand_payload, dict) else {}
+        variant_context = build_amway_association_context(
+            name=brand_payload.get("label"),
+        )
+        latest_report: BrandReportVersion | None = None
+        try:
+            latest_report = (
+                await self.db.execute(
+                    select(BrandReportVersion)
+                    .where(
+                        BrandReportVersion.entity_id == entity_id,
+                        BrandReportVersion.report_kind
+                        == BRAND_ASSOCIATION_CIRCLE_REPORT_KIND,
+                    )
+                    .order_by(
+                        desc(BrandReportVersion.updated_at),
+                        desc(BrandReportVersion.version),
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        except Exception:
+            await self._recover_read_failure()
+            latest_report = None
+
+        if latest_report is None and not variant_context:
+            return None
+
+        payload = (
+            latest_report.payload
+            if latest_report is not None and isinstance(latest_report.payload, dict)
+            else {}
+        )
+        dashboard_projection = payload.get("dashboard_projection")
+        dashboard_projection = (
+            dashboard_projection if isinstance(dashboard_projection, dict) else {}
+        )
+        raw_circle_projection = dashboard_projection.get(
+            "association_circle_projection"
+        )
+        raw_circle_projection = (
+            raw_circle_projection if isinstance(raw_circle_projection, dict) else {}
+        )
+        association_circle = payload.get("association_circle")
+        association_circle = (
+            association_circle if isinstance(association_circle, dict) else {}
+        )
+        nodes = raw_circle_projection.get("nodes")
+        if not isinstance(nodes, list):
+            nodes = association_circle.get("nodes")
+        evidence_samples = raw_circle_projection.get("evidence_samples")
+        if not isinstance(evidence_samples, list):
+            evidence_samples = association_circle.get("evidence_samples")
+        association_evidence_samples = association_circle.get("evidence_samples")
+        if isinstance(association_evidence_samples, list) and (
+            not isinstance(evidence_samples, list)
+            or len(association_evidence_samples) > len(evidence_samples)
+        ):
+            evidence_samples = association_evidence_samples
+        question_bank = raw_circle_projection.get("question_bank")
+        if not isinstance(question_bank, list):
+            question_bank = payload.get("question_bank")
+        if not isinstance(question_bank, list):
+            question_bank = association_circle.get("question_bank")
+        platform_comparison = payload.get("platform_comparison")
+        if not isinstance(platform_comparison, list):
+            platform_comparison = []
+        association_actions = payload.get("association_actions")
+        if not isinstance(association_actions, list):
+            association_actions = raw_circle_projection.get("association_actions")
+        if not isinstance(association_actions, list):
+            association_actions = []
+        sample_scope = payload.get("sample_scope")
+        sample_scope = sample_scope if isinstance(sample_scope, dict) else {}
+        executive_summary = payload.get("executive_summary")
+        executive_summary = (
+            executive_summary if isinstance(executive_summary, dict) else {}
+        )
+        report_narrative_sections = raw_circle_projection.get(
+            "report_narrative_sections"
+        )
+        if not isinstance(report_narrative_sections, list):
+            report_narrative_sections = payload.get("report_narrative_sections")
+        if not isinstance(report_narrative_sections, list):
+            report_narrative_sections = []
+        question_definition = raw_circle_projection.get("question_definition")
+        if not isinstance(question_definition, dict):
+            question_definition = payload.get("question_definition")
+        question_definition = (
+            question_definition if isinstance(question_definition, dict) else {}
+        )
+        platform_source_summary = raw_circle_projection.get(
+            "platform_source_summary"
+        )
+        if not isinstance(platform_source_summary, dict):
+            platform_source_summary = payload.get("platform_source_summary")
+        platform_source_summary = (
+            platform_source_summary
+            if isinstance(platform_source_summary, dict)
+            else {}
+        )
+        evidence_findings = raw_circle_projection.get("evidence_findings")
+        if not isinstance(evidence_findings, list):
+            evidence_findings = payload.get("evidence_findings")
+        payload_evidence_findings = payload.get("evidence_findings")
+        if isinstance(payload_evidence_findings, list) and (
+            not isinstance(evidence_findings, list)
+            or len(payload_evidence_findings) > len(evidence_findings)
+        ):
+            evidence_findings = payload_evidence_findings
+        if not isinstance(evidence_findings, list):
+            evidence_findings = []
+        report_outline = raw_circle_projection.get("report_outline")
+        if not isinstance(report_outline, list):
+            report_outline = payload.get("report_outline")
+        if not isinstance(report_outline, list):
+            report_outline = []
+        analysis_tool_trace = raw_circle_projection.get("analysis_tool_trace")
+        if not isinstance(analysis_tool_trace, list):
+            analysis_tool_trace = payload.get("analysis_tool_trace")
+        if not isinstance(analysis_tool_trace, list):
+            analysis_tool_trace = []
+        source_appendix = raw_circle_projection.get("source_appendix")
+        if not isinstance(source_appendix, list):
+            source_appendix = payload.get("source_appendix")
+        payload_source_appendix = payload.get("source_appendix")
+        if isinstance(payload_source_appendix, list) and (
+            not isinstance(source_appendix, list)
+            or len(payload_source_appendix) > len(source_appendix)
+        ):
+            source_appendix = payload_source_appendix
+        if not isinstance(source_appendix, list):
+            source_appendix = []
+        report_quality_checks = raw_circle_projection.get("report_quality_checks")
+        if not isinstance(report_quality_checks, dict):
+            report_quality_checks = payload.get("report_quality_checks")
+        report_quality_checks = (
+            report_quality_checks if isinstance(report_quality_checks, dict) else {}
+        )
+        copy_constraints = raw_circle_projection.get("copy_constraints")
+        if not isinstance(copy_constraints, dict):
+            copy_constraints = payload.get("copy_constraints")
+        copy_constraints = (
+            copy_constraints if isinstance(copy_constraints, dict) else {}
+        )
+        strategy_validation = raw_circle_projection.get("strategy_validation")
+        if not isinstance(strategy_validation, list):
+            strategy_validation = payload.get("strategy_validation")
+        strategy_validation = (
+            strategy_validation if isinstance(strategy_validation, list) else []
+        )
+        risk_map = raw_circle_projection.get("risk_map")
+        if not isinstance(risk_map, dict):
+            risk_map = payload.get("risk_summary")
+        risk_map = risk_map if isinstance(risk_map, dict) else {}
+        generated_from = raw_circle_projection.get("generated_from")
+        if not isinstance(generated_from, str) or not generated_from.strip():
+            generated_from = payload.get("generated_from")
+        generated_from = (
+            generated_from
+            if isinstance(generated_from, str) and generated_from.strip()
+            else None
+        )
+        center_terms = (
+            (variant_context or {}).get("center_terms")
+            or payload.get("center_terms")
+            or raw_circle_projection.get("center_terms")
+            or list(AMWAY_ASSOCIATION_CENTER_TERMS)
+        )
+        if not isinstance(center_terms, list):
+            center_terms = list(AMWAY_ASSOCIATION_CENTER_TERMS)
+        nodes = nodes if isinstance(nodes, list) else []
+        evidence_samples = (
+            evidence_samples if isinstance(evidence_samples, list) else []
+        )
+        question_bank = question_bank if isinstance(question_bank, list) else []
+        if not question_bank and evidence_samples:
+            question_bank = await self._latest_question_bank_for_entity(entity_id)
+        if not question_bank and evidence_samples:
+            question_bank = _question_bank_from_evidence_samples(evidence_samples)
+        if latest_report is not None and nodes and (
+            not report_narrative_sections
+            or _association_report_sections_are_legacy(report_narrative_sections)
+        ):
+            try:
+                full_fetch_results = await self._fetch_results_for_association_report(
+                    entity_id=entity_id,
+                    latest_report=latest_report,
+                    question_bank=question_bank,
+                )
+                upgraded_projection = _upgrade_legacy_association_report_projection(
+                    entity_id=entity_id,
+                    latest_report=latest_report,
+                    brand_payload=brand_payload,
+                    center_terms=center_terms,
+                    nodes=nodes,
+                    evidence_samples=evidence_samples,
+                    question_bank=question_bank,
+                    platform_comparison=platform_comparison,
+                    association_actions=association_actions,
+                    sample_scope=sample_scope,
+                    question_definition=question_definition,
+                    platform_source_summary=platform_source_summary,
+                    evidence_findings=evidence_findings,
+                    report_outline=report_outline,
+                    analysis_tool_trace=analysis_tool_trace,
+                    source_appendix=source_appendix,
+                    strategy_validation=strategy_validation,
+                    risk_map=risk_map,
+                    fetch_results=full_fetch_results,
+                    tracking_projection=raw_circle_projection.get(
+                        "tracking_projection"
+                    )
+                    if isinstance(
+                        raw_circle_projection.get("tracking_projection"),
+                        dict,
+                    )
+                    else payload.get("tracking_projection")
+                    if isinstance(payload.get("tracking_projection"), dict)
+                    else {},
+                )
+            except Exception:
+                upgraded_projection = {}
+            if upgraded_projection:
+                report_narrative_sections = (
+                    upgraded_projection.get("report_narrative_sections")
+                    if isinstance(
+                        upgraded_projection.get("report_narrative_sections"),
+                        list,
+                    )
+                    else report_narrative_sections
+                )
+                question_definition = (
+                    upgraded_projection.get("question_definition")
+                    if isinstance(upgraded_projection.get("question_definition"), dict)
+                    else question_definition
+                )
+                platform_source_summary = (
+                    upgraded_projection.get("platform_source_summary")
+                    if isinstance(
+                        upgraded_projection.get("platform_source_summary"),
+                        dict,
+                    )
+                    else platform_source_summary
+                )
+                evidence_findings = (
+                    upgraded_projection.get("evidence_findings")
+                    if isinstance(upgraded_projection.get("evidence_findings"), list)
+                    else evidence_findings
+                )
+                report_outline = (
+                    upgraded_projection.get("report_outline")
+                    if isinstance(upgraded_projection.get("report_outline"), list)
+                    else report_outline
+                )
+                analysis_tool_trace = (
+                    upgraded_projection.get("analysis_tool_trace")
+                    if isinstance(upgraded_projection.get("analysis_tool_trace"), list)
+                    else analysis_tool_trace
+                )
+                source_appendix = (
+                    upgraded_projection.get("source_appendix")
+                    if isinstance(upgraded_projection.get("source_appendix"), list)
+                    else source_appendix
+                )
+                report_quality_checks = (
+                    upgraded_projection.get("report_quality_checks")
+                    if isinstance(
+                        upgraded_projection.get("report_quality_checks"),
+                        dict,
+                    )
+                    else report_quality_checks
+                )
+                copy_constraints = (
+                    upgraded_projection.get("copy_constraints")
+                    if isinstance(upgraded_projection.get("copy_constraints"), dict)
+                    else copy_constraints
+                )
+        status = "not_generated"
+        if latest_report is not None:
+            status = "sample_limited" if len(nodes) == 0 else "ready"
+        projection_nodes = _association_projection_nodes_with_risk(
+            nodes=nodes,
+            risk_map=risk_map,
+            non_risk_limit=80,
+            total_limit=110,
+        )
+        return {
+            "dashboard_variant": (
+                (variant_context or {}).get("dashboard_variant")
+                or AMWAY_ASSOCIATION_DASHBOARD_VARIANT
+            ),
+            "analysis_mode": BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
+            "report_kind": BRAND_ASSOCIATION_CIRCLE_REPORT_KIND,
+            "status": status,
+            "center_terms": center_terms,
+            "nodes": projection_nodes,
+            "evidence_samples": _prioritize_association_evidence_for_nodes(
+                projection_nodes,
+                evidence_samples,
+                limit=80,
+            ),
+            "question_bank": question_bank[:200],
+            "platform_comparison": platform_comparison[:20],
+            "association_actions": association_actions[:20],
+            "strategy_validation": strategy_validation[:80],
+            "risk_map": risk_map,
+            "generated_from": generated_from,
+            "report_narrative_sections": report_narrative_sections[:20],
+            "question_definition": question_definition,
+            "platform_source_summary": platform_source_summary,
+            "evidence_findings": _prioritize_association_findings_for_nodes(
+                projection_nodes,
+                evidence_findings,
+                limit=50,
+            ),
+            "report_outline": report_outline[:20],
+            "analysis_tool_trace": analysis_tool_trace[:20],
+            "source_appendix": _diversify_association_source_appendix(
+                source_appendix,
+                limit=80,
+            ),
+            "report_quality_checks": report_quality_checks,
+            "copy_constraints": copy_constraints,
+            "sample_scope": sample_scope,
+            "executive_summary": executive_summary,
+            "report_id": latest_report.report_id if latest_report else None,
+            "artifact_id": latest_report.artifact_id if latest_report else None,
+            "updated_at": (
+                latest_report.updated_at.isoformat() if latest_report else None
+            ),
+        }
+
+    async def _latest_question_bank_for_entity(
+        self,
+        entity_id: UUID,
+    ) -> list[dict[str, Any]]:
+        try:
+            result = await self.db.execute(
+                select(BrandIntelligenceQuestion)
+                .where(BrandIntelligenceQuestion.entity_id == entity_id)
+                .order_by(
+                    desc(BrandIntelligenceQuestion.updated_at),
+                    desc(BrandIntelligenceQuestion.created_at),
+                )
+                .limit(200)
+            )
+            rows = list(result.scalars().all())
+        except Exception:
+            await self._recover_read_failure()
+            return []
+        if not rows:
+            return []
+        latest_session_id = rows[0].session_id
+        if latest_session_id is not None:
+            rows = [row for row in rows if row.session_id == latest_session_id]
+        rows.sort(key=lambda row: str(row.question_id or ""))
+        return _question_bank_from_brand_questions(rows)
 
     def _relationship_summary(
         self,
@@ -697,6 +1367,118 @@ def _write_world_summary_cache(
     _world_summary_cache[cache_key] = (time.time(), deepcopy(payload))
 
 
+def _association_action_to_recommendation(action: dict[str, Any]) -> dict[str, Any]:
+    node_term = str(action.get("node_term") or "圈层节点")
+    action_label = str(action.get("action_label") or "圈层行动")
+    return {
+        "id": str(action.get("id") or f"association_action_{node_term}"),
+        "title": str(action.get("title") or f"{action_label}：{node_term}"),
+        "target_metric": "brand_association_circle",
+        "reason": str(action.get("reason") or ""),
+        "impact": str(action.get("expected_impact") or ""),
+        "expected_impact": str(action.get("expected_impact") or ""),
+        "review_criteria": str(action.get("review_criteria") or ""),
+        "priority": str(action.get("priority") or "medium"),
+        "next_action": "ask_chat",
+        "cta_label": "生成追问",
+        "content_brief": str(action.get("next_question_suggestion") or ""),
+        "content_format": "圈层行动",
+        "execution_steps": list(action.get("execution_steps") or [])[:5],
+        "evidence_refs": list(action.get("evidence_refs") or [])[:8],
+        "content_directions": [
+            {
+                "title": action_label,
+                "angle": node_term,
+                "evidence": str(action.get("business_tag") or ""),
+            }
+        ],
+    }
+
+
+def _merge_association_actions_into_recommendations(
+    recommendation_projection: Any,
+    association_actions: Any,
+) -> dict[str, Any]:
+    projection = (
+        deepcopy(recommendation_projection)
+        if isinstance(recommendation_projection, dict)
+        else {}
+    )
+    recommendations = projection.get("recommendations")
+    if not isinstance(recommendations, list):
+        recommendations = []
+    if not isinstance(projection.get("sample_status"), dict):
+        projection["sample_status"] = {
+            "is_ready": bool(association_actions),
+            "status": "ready" if association_actions else "needs_answer_samples",
+            "status_label": "圈层行动可跟进" if association_actions else "等待圈层样本",
+            "reason": (
+                "已根据品牌联想圈层生成跟进行动。"
+                if association_actions
+                else "需要先抓取回答并生成圈层报告。"
+            ),
+        }
+
+    seen_ids = {
+        str(item.get("id")) for item in recommendations if isinstance(item, dict)
+    }
+    for action in association_actions or []:
+        if not isinstance(action, dict):
+            continue
+        item = _association_action_to_recommendation(action)
+        if item["id"] in seen_ids:
+            continue
+        recommendations.append(item)
+        seen_ids.add(item["id"])
+    projection["recommendations"] = recommendations
+    return projection
+
+
+def _association_projection_nodes_with_risk(
+    *,
+    nodes: list[dict[str, Any]],
+    risk_map: dict[str, Any],
+    non_risk_limit: int,
+    total_limit: int,
+) -> list[dict[str, Any]]:
+    """Keep risk and competition nodes visible in the Amway Console projection."""
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_node(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        node_id = str(node.get("node_id") or "").strip()
+        if not node_id or node_id in seen:
+            return
+        seen.add(node_id)
+        result.append(node)
+
+    normal_nodes = [
+        node
+        for node in nodes
+        if not node.get("is_risk_term") and node.get("orbit") != "risk_shadow"
+    ]
+    for node in normal_nodes[:non_risk_limit]:
+        add_node(node)
+
+    if isinstance(risk_map, dict):
+        for key in ("risk_nodes", "competition_nodes", "nodes"):
+            risk_nodes = risk_map.get(key)
+            if not isinstance(risk_nodes, list):
+                continue
+            for node in risk_nodes:
+                add_node(node)
+
+    if len(result) < total_limit:
+        for node in nodes:
+            add_node(node)
+            if len(result) >= total_limit:
+                break
+    return result[:total_limit]
+
+
 def _dashboard_summary_cache_is_current(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -717,6 +1499,18 @@ def _dashboard_summary_cache_is_current(payload: Any) -> bool:
     sample_scope = (payload.get("summary_projection") or {}).get("sample_scope")
     if not isinstance(sample_scope, dict):
         return False
+    association_circle_projection = payload.get("association_circle_projection")
+    if isinstance(association_circle_projection, dict) and (
+        association_circle_projection.get("status") == "ready"
+    ):
+        if not association_circle_projection.get("generated_from"):
+            return False
+        if not isinstance(
+            association_circle_projection.get("strategy_validation"), list
+        ):
+            return False
+        if not isinstance(association_circle_projection.get("risk_map"), dict):
+            return False
     return True
 
 
@@ -926,6 +1720,104 @@ def _summary_total(snapshot: dict[str, Any], object_type: str) -> int:
     return 0
 
 
+def _question_bank_from_evidence_samples(
+    evidence_samples: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    question_bank: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(evidence_samples, start=1):
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question") or "").strip()
+        if not question:
+            continue
+        question_id = str(item.get("question_id") or f"evidence_question_{index:03d}")
+        key = question_id or question
+        if key in seen:
+            continue
+        seen.add(key)
+        question_bank.append(
+            {
+                "id": question_id,
+                "text": question,
+                "audience_segment": item.get("audience_segment"),
+                "core_anxiety": item.get("core_anxiety"),
+                "life_scene": item.get("life_scene"),
+                "opportunity_point": item.get("opportunity_point"),
+                "probe_type": item.get("probe_type"),
+                "mother_theme": item.get("mother_theme"),
+                "question_type": item.get("question_type"),
+                "mentions_amway": item.get("mentions_amway"),
+                "life_stage": item.get("life_stage"),
+                "four_have": item.get("four_have"),
+                "touchpoint": item.get("touchpoint"),
+                "monitoring_purpose": item.get("monitoring_purpose"),
+                "metadata_status": "from_evidence_sample",
+                "source": "evidence_sample",
+            }
+        )
+    return question_bank
+
+
+def _question_bank_from_brand_questions(
+    rows: list[BrandIntelligenceQuestion],
+) -> list[dict[str, Any]]:
+    question_bank: list[dict[str, Any]] = []
+    for row in rows:
+        payload = row.source_payload if isinstance(row.source_payload, dict) else {}
+        item = {
+            "id": row.question_id,
+            "text": row.question_text,
+            "category": row.category or payload.get("category"),
+            "intent": row.user_intent or payload.get("intent"),
+            "stage": row.decision_stage or payload.get("stage"),
+            "audience_segment": payload.get("audience_segment")
+            or payload.get("life_stage"),
+            "core_anxiety": payload.get("core_anxiety"),
+            "life_scene": payload.get("life_scene")
+            or payload.get("touchpoint")
+            or payload.get("mother_theme"),
+            "opportunity_point": payload.get("opportunity_point")
+            or payload.get("monitoring_purpose")
+            or payload.get("mother_theme"),
+            "probe_type": payload.get("probe_type") or payload.get("question_type"),
+            "mother_theme": payload.get("mother_theme"),
+            "question_type": payload.get("question_type"),
+            "mentions_amway": payload.get("mentions_amway"),
+            "life_stage": payload.get("life_stage"),
+            "four_have": payload.get("four_have"),
+            "touchpoint": payload.get("touchpoint"),
+            "monitoring_purpose": payload.get("monitoring_purpose"),
+            "center_terms": payload.get("center_terms"),
+            "question_set_version": payload.get("question_set_version"),
+            "metadata_status": payload.get("metadata_status")
+            or "from_question_projection",
+            "source": "brand_intelligence_question",
+        }
+        missing_core = not all(
+            item.get(key)
+            for key in (
+                "audience_segment",
+                "core_anxiety",
+                "life_scene",
+                "opportunity_point",
+                "probe_type",
+            )
+        )
+        if missing_core:
+            inferred = complete_association_question_metadata(
+                {**payload, "text": row.question_text},
+                center_terms=payload.get("center_terms")
+                or list(AMWAY_ASSOCIATION_CENTER_TERMS),
+            )
+            for key, value in inferred.items():
+                if item.get(key) in (None, "", []):
+                    item[key] = value
+            item["metadata_status"] = "inferred_needs_review"
+        question_bank.append(item)
+    return question_bank
+
+
 def _evidence_readiness_label(
     *,
     question_count: int,
@@ -956,7 +1848,7 @@ def _resolve_task_stage(
     if not questions:
         return {
             "title": "先建立可执行的问题池",
-            "objective": "品牌情报不是先写报告，而是先确定用户会问什么。问题池会决定后续抓取回答、追溯来源和形成判断的边界。",
+            "objective": "品牌情报先确定用户会问什么，再进入报告写作。问题池会决定后续抓取回答、追溯来源和形成判断的边界。",
             "expected_output": "一组可执行问题",
             "risk_label": "没有问题池就无法验证品牌表现",
             "owner": "shared",
@@ -1018,7 +1910,7 @@ def _task_flow_prompt(
     return (
         f"请基于当前品牌情报推进「{stage['title']}」。"
         f"{action_text}先说明缺口、需要我反馈什么、系统会通过哪个处理步骤继续，"
-        "不要直接跳过需要确认的步骤。"
+        "所有需要确认的步骤都要先获得明确反馈。"
     )
 
 
@@ -1218,6 +2110,206 @@ def _public_action_source(value: Any) -> str:
     if not source or source == "ontology_world":
         return "brand_world"
     return _public_source_text(source)
+
+
+def _prioritize_association_evidence_for_nodes(
+    nodes: list[dict[str, Any]],
+    evidence_items: list[Any],
+    *,
+    limit: int,
+) -> list[Any]:
+    if not evidence_items:
+        return []
+    refs: list[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        for ref in node.get("evidence_samples") or []:
+            ref_text = str(ref or "").strip()
+            if ref_text and ref_text not in refs:
+                refs.append(ref_text)
+    by_id = {
+        str(item.get("evidence_id") or "").strip(): item
+        for item in evidence_items
+        if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
+    }
+    selected: list[Any] = []
+    selected_ids: set[int] = set()
+    selected_evidence_ids: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        for ref in node.get("evidence_samples") or []:
+            ref_text = str(ref or "").strip()
+            if not ref_text or ref_text in selected_evidence_ids:
+                continue
+            item = by_id.get(ref_text)
+            if item is None:
+                continue
+            selected.append(item)
+            selected_ids.add(id(item))
+            selected_evidence_ids.add(ref_text)
+            break
+        if len(selected) >= limit:
+            return selected
+    for ref in refs:
+        if ref in selected_evidence_ids:
+            continue
+        item = by_id.get(ref)
+        if item is None:
+            continue
+        selected.append(item)
+        selected_ids.add(id(item))
+        selected_evidence_ids.add(ref)
+        if len(selected) >= limit:
+            return selected
+    for item in evidence_items:
+        if id(item) in selected_ids:
+            continue
+        selected.append(item)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _diversify_association_source_appendix(
+    evidence_items: list[Any],
+    *,
+    limit: int,
+) -> list[Any]:
+    if not evidence_items:
+        return []
+    selected: list[Any] = []
+    selected_ids: set[int] = set()
+    selected_keys: set[str] = set()
+
+    def item_key(item: Any) -> str:
+        if not isinstance(item, dict):
+            return ""
+        key_parts = [
+            str(item.get("evidence_id") or "").strip(),
+            str(item.get("question_id") or "").strip(),
+            str(item.get("platform") or item.get("source_platform") or "").strip(),
+            str(item.get("node_term") or "").strip(),
+        ]
+        return "|".join(key_parts)
+
+    def add(item: Any) -> None:
+        if len(selected) >= limit:
+            return
+        item_identity = id(item)
+        if item_identity in selected_ids:
+            return
+        key = item_key(item)
+        if key and key in selected_keys:
+            return
+        selected.append(item)
+        selected_ids.add(item_identity)
+        if key:
+            selected_keys.add(key)
+
+    seen_platforms: set[str] = set()
+    seen_questions: set[str] = set()
+    platforms = []
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            continue
+        platform = str(item.get("platform") or item.get("source_platform") or "").strip()
+        if platform and platform not in platforms:
+            platforms.append(platform)
+
+    for platform in platforms:
+        platform_items = [
+            item
+            for item in evidence_items
+            if isinstance(item, dict)
+            and str(
+                item.get("platform") or item.get("source_platform") or ""
+            ).strip()
+            == platform
+        ]
+        item = next(
+            (
+                candidate
+                for candidate in platform_items
+                if str(candidate.get("question_id") or "").strip()
+                and str(candidate.get("question_id") or "").strip()
+                not in seen_questions
+            ),
+            platform_items[0] if platform_items else None,
+        )
+        if item is None or platform in seen_platforms:
+            continue
+        add(item)
+        seen_platforms.add(platform)
+        question_id = str(item.get("question_id") or "").strip()
+        if question_id:
+            seen_questions.add(question_id)
+        if len(selected) >= limit:
+            return selected
+
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            continue
+        question_id = str(item.get("question_id") or "").strip()
+        if not question_id or question_id in seen_questions:
+            continue
+        add(item)
+        seen_questions.add(question_id)
+        if len(selected) >= limit:
+            return selected
+
+    for item in evidence_items:
+        add(item)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _prioritize_association_findings_for_nodes(
+    nodes: list[dict[str, Any]],
+    findings: list[Any],
+    *,
+    limit: int,
+) -> list[Any]:
+    if not findings:
+        return []
+    node_ids = {
+        str(node.get("node_id") or "").strip()
+        for node in nodes
+        if isinstance(node, dict) and str(node.get("node_id") or "").strip()
+    }
+    terms = {
+        str(node.get("term") or "").strip()
+        for node in nodes
+        if isinstance(node, dict) and str(node.get("term") or "").strip()
+    }
+    selected: list[Any] = []
+    rest: list[Any] = []
+    seen_keys: set[str] = set()
+    for item in findings:
+        if not isinstance(item, dict):
+            rest.append(item)
+            continue
+        key = "|".join(
+            [
+                str(item.get("node_id") or "").strip(),
+                str(item.get("node_term") or "").strip(),
+                str(item.get("claim") or "").strip(),
+            ]
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        matches_node = (
+            str(item.get("node_id") or "").strip() in node_ids
+            or str(item.get("node_term") or "").strip() in terms
+        )
+        if matches_node:
+            selected.append(item)
+        else:
+            rest.append(item)
+    return (selected + rest)[:limit]
 
 
 def _public_defaulted_inputs(raw_inputs: Any) -> list[dict[str, Any]]:

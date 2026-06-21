@@ -64,8 +64,13 @@ class SnapshotService:
         breakdown = metrics.get("bwvs_breakdown", {})
 
         normalized_snapshot_type = normalize_report_kind(snapshot_type)
+        artifact_kind = (
+            report_data.get("artifact_kind")
+            if isinstance(report_data, dict) and report_data.get("artifact_kind")
+            else "geo_report"
+        )
         raw_data = {
-            "artifact_kind": "geo_report",
+            "artifact_kind": artifact_kind,
             "report_kind": normalized_snapshot_type,
             "metrics": metrics,
             "report_data": report_data,

@@ -93,6 +93,21 @@ async def get_ontology_world(
         current_user=current_user,
     )
     world_service = BrandOntologyWorldService(db)
+    entity_model = await EntityService(db).get_entity_model(
+        str(entity_uuid),
+        current_user,
+        allow_internal_admin_bypass=False,
+    )
+    if entity_model is not None:
+        fast_payload = await world_service.build_association_circle_dashboard_summary(
+            entity_id=entity_uuid,
+            entity_name=getattr(entity_model, "name", None),
+            entity_domain=getattr(entity_model, "domain", None),
+            entity_aliases=getattr(entity_model, "aliases", None),
+        )
+        if fast_payload is not None:
+            return fast_payload
+
     backfill_result = await world_service.ensure_legacy_backfill(entity_id=entity_uuid)
     if isinstance(backfill_result, dict) and backfill_result.get("changed"):
         BrandOntologyWorldService.invalidate_cache(entity_uuid)

@@ -25,10 +25,13 @@ from app.core.llm import BaseLLMModel
 from app.core.llm.task_routing import get_a3_llm_model
 from app.core.utils import extract_json_from_content
 from app.tools.question_generation import (
+    ASSOCIATION_CIRCLE_METADATA_KEYS,
     QuestionGenerationTool,
+    build_association_circle_question_matrix,
     extract_brand_name as generate_brand_name,
     fix_persona_categories as normalize_persona_questions,
     merge_uploaded_questions as merge_uploaded_question_payload,
+    normalize_association_center_terms,
     normalize_topic_keywords,
     normalize_uploaded_question_payload as normalize_uploaded_questions,
     sanitize_panorama_questions as sanitize_generated_panorama_questions,
@@ -65,8 +68,15 @@ def _normalize_uploaded_question_payload(
     questions: list[dict],
     *,
     start_index: int = 1,
+    association_mode: bool = False,
+    center_terms: object = None,
 ) -> tuple[list[dict], list[dict]]:
-    return normalize_uploaded_questions(questions, start_index=start_index)
+    return normalize_uploaded_questions(
+        questions,
+        start_index=start_index,
+        association_mode=association_mode,
+        center_terms=center_terms,
+    )
 
 
 def _merge_uploaded_questions(
@@ -147,6 +157,69 @@ def _build_generation_context(
     return context
 
 
+def _is_association_circle_mode(value: object) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {
+        "brand_association_circle",
+        "association_circle",
+        "amway_association_circle",
+        "brand-association-circle",
+        "amway-brand-association-circle",
+    }
+
+
+def _association_circle_requested(state: AgentState) -> bool:
+    user_decisions = state.get("user_decisions") or {}
+    tool_args = state.get("tool_call_args") or {}
+    dashboard_context = state.get("dashboard_context") or {}
+    input_scope = state.get("input_scope") or {}
+    candidates = [
+        user_decisions.get("a3_mode") if isinstance(user_decisions, dict) else None,
+        state.get("analysis_mode"),
+        tool_args.get("analysis_mode") if isinstance(tool_args, dict) else None,
+        tool_args.get("report_kind") if isinstance(tool_args, dict) else None,
+        (
+            dashboard_context.get("analysis_mode")
+            if isinstance(dashboard_context, dict)
+            else None
+        ),
+        input_scope.get("analysis_mode") if isinstance(input_scope, dict) else None,
+        input_scope.get("report_kind") if isinstance(input_scope, dict) else None,
+    ]
+    return any(_is_association_circle_mode(value) for value in candidates)
+
+
+def _association_center_terms_from_state(state: AgentState) -> list[str]:
+    tool_args = state.get("tool_call_args") or {}
+    dashboard_context = state.get("dashboard_context") or {}
+    input_scope = state.get("input_scope") or {}
+    for value in (
+        tool_args.get("center_terms") if isinstance(tool_args, dict) else None,
+        state.get("center_terms"),
+        (
+            dashboard_context.get("center_terms")
+            if isinstance(dashboard_context, dict)
+            else None
+        ),
+        input_scope.get("center_terms") if isinstance(input_scope, dict) else None,
+    ):
+        if value in (None, ""):
+            continue
+        if isinstance(value, (list, tuple)) and not value:
+            continue
+        return normalize_association_center_terms(value)
+    return normalize_association_center_terms()
+
+
+def _copy_association_metadata(question: dict) -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    for key in ASSOCIATION_CIRCLE_METADATA_KEYS:
+        value = question.get(key)
+        if value not in (None, ""):
+            metadata[key] = value
+    return metadata
+
+
 def _identity_suffix(identity: str | None) -> str:
     return f"（以“{identity}”身份视角）" if identity else ""
 
@@ -190,6 +263,12 @@ async def _persist_draft_question_set(
     entity_id = state.get("entity_id")
     if not user_id or not entity_id or not flattened_questions:
         return None
+    user_decisions = state.get("user_decisions") or {}
+    if (
+        _association_circle_requested(state)
+        or _is_association_circle_mode(user_decisions.get("a3_mode"))
+    ) and len(flattened_questions) > 30:
+        return None
     try:
         from app.core.database import AsyncSessionLocal
         from app.services.monitoring_plan_service import MonitoringPlanService
@@ -208,7 +287,7 @@ async def _persist_draft_question_set(
                     UUID(str(state["task_id"])) if state.get("task_id") else None
                 ),
                 extra_metadata={
-                    "a3_mode": (state.get("user_decisions") or {}).get("a3_mode"),
+                    "a3_mode": user_decisions.get("a3_mode"),
                 },
             )
             return str(question_set.id)
@@ -404,6 +483,8 @@ async def a3_question_node(state: AgentState) -> Command:
 
     if a3_mode == "uploaded_list":
         return await _a3_uploaded_list_mode(state)
+    if a3_mode == "brand_association_circle" or _association_circle_requested(state):
+        return await _a3_association_circle_mode(state)
     if a3_mode == "baseline_dynamic":
         return await _a3_baseline_dynamic_mode(state)
     elif a3_mode == "persona":
@@ -498,6 +579,8 @@ async def _a3_uploaded_list_mode(state: AgentState) -> Command:
     simulated_questions, flattened_questions = _normalize_uploaded_question_payload(
         uploaded_questions,
         start_index=1,
+        association_mode=_association_circle_requested(state),
+        center_terms=_association_center_terms_from_state(state),
     )
 
     import_mode_label = {
@@ -589,6 +672,166 @@ async def _a3_uploaded_list_mode(state: AgentState) -> Command:
             "error_info": None,
             "user_decisions": user_decisions,
             "confirmed_import_action": None,
+            **confirmation_update,
+        }
+    )
+
+
+async def _a3_association_circle_mode(state: AgentState) -> Command:
+    """A3 association-circle mode: build tagged Amway question matrix."""
+
+    session_id = state["session_id"]
+    center_terms = _association_center_terms_from_state(state)
+    question_only = _is_question_generation_only(state)
+
+    await send_progress_event(
+        session_id=session_id,
+        step="question_simulation",
+        step_name="品牌联想圈层问题矩阵",
+        progress=0.45,
+        message="正在生成品牌联想圈层问题矩阵，覆盖人群、机会点和探针类型...",
+    )
+    await send_tpaor_event(
+        session_id,
+        "thought",
+        "正在按人群阶段、核心焦虑、机会点和探针类型生成安利母品牌联想圈层问题矩阵。",
+    )
+
+    raw_questions = build_association_circle_question_matrix(
+        center_terms=center_terms,
+        limit=_MAX_QUESTIONS,
+    )
+    simulated_questions: list[dict] = []
+    flattened_questions: list[dict] = []
+    platform_idx = 0
+    for question in raw_questions:
+        q_id = str(question.get("question_id") or f"ac_{platform_idx + 1:03d}")
+        core_question = str(question.get("core_question") or "").strip()
+        if not core_question:
+            continue
+        platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
+        platform_idx += 1
+        metadata = _copy_association_metadata(question)
+        simulated_questions.append(
+            {
+                "question_id": q_id,
+                "category": question.get("category", "品牌联想圈层"),
+                "core_question": core_question,
+                "user_intent": question.get(
+                    "user_intent", "识别 AI 回答中的品牌联想距离和连接路径"
+                ),
+                "decision_stage": question.get("decision_stage", "认知"),
+                "platform": platform,
+                "source": "association_circle_matrix",
+                **metadata,
+            }
+        )
+        flattened_questions.append(
+            {
+                "id": q_id,
+                "text": core_question,
+                "category": question.get("category", "品牌联想圈层"),
+                "intent": question.get(
+                    "user_intent", "识别 AI 回答中的品牌联想距离和连接路径"
+                ),
+                "stage": question.get("decision_stage", "认知"),
+                "platform": platform,
+                "source": "association_circle_matrix",
+                **metadata,
+            }
+        )
+
+    question_count = len(simulated_questions)
+    generated_payload = {
+        "simulated_questions": simulated_questions,
+        "generation_mode": "brand_association_circle",
+        "generation_context": {
+            "analysis_mode": "brand_association_circle",
+            "center_terms": center_terms,
+            "question_only": question_only,
+            "matrix_dimensions": [
+                "audience_segment",
+                "core_anxiety",
+                "life_scene",
+                "opportunity_point",
+                "probe_type",
+            ],
+        },
+    }
+    await save_and_send_artifact(
+        session_id=session_id,
+        output_type="questionList",
+        title="品牌联想圈层问题矩阵",
+        data={
+            "simulatedQuestions": generated_payload,
+            "questions": flattened_questions,
+            "generationMode": "品牌联想圈层问题矩阵",
+        },
+    )
+    stage_result_data = {
+        "count": question_count,
+        "categories": ["品牌联想圈层"],
+        "examples": [q.get("core_question", "")[:50] for q in simulated_questions[:3]],
+        "center_terms": center_terms,
+        "probe_types": sorted(
+            {
+                str(q.get("probe_type") or "")
+                for q in simulated_questions
+                if q.get("probe_type")
+            }
+        ),
+    }
+    await send_stage_result(
+        session_id,
+        "A3",
+        "问题生成",
+        result_type="questions",
+        data=stage_result_data,
+    )
+    await send_progress_event(
+        session_id=session_id,
+        step="question_simulation",
+        step_name="品牌联想圈层问题矩阵",
+        progress=1.0,
+        message=f"已生成 {question_count} 个品牌联想圈层问题",
+        status="completed",
+    )
+    await send_action_log_event(
+        session_id,
+        "agent_summary",
+        f"已生成 {question_count} 个品牌联想圈层问题，后续抓取将保留人群、机会点和探针类型标签。",
+        step="question_simulation",
+        is_complete=True,
+    )
+    user_decisions = dict(state.get("user_decisions", {}))
+    user_decisions["a3_mode"] = "brand_association_circle"
+    latest_question_set_id = await _persist_draft_question_set(
+        state,
+        flattened_questions=flattened_questions,
+        title="品牌联想圈层问题矩阵",
+        monitor_mode="panorama",
+    )
+    confirmation_update = await _question_set_confirmation_update(
+        state,
+        question_set_id=latest_question_set_id,
+        monitor_mode="panorama",
+        question_count=len(flattened_questions),
+    )
+    await _persist_brand_intelligence_questions(state, payload=generated_payload)
+
+    return Command(
+        update={
+            "simulated_questions": generated_payload,
+            "questions": flattened_questions,
+            "latest_question_set_id": latest_question_set_id,
+            "question_set_ids": (
+                [latest_question_set_id] if latest_question_set_id else []
+            ),
+            "current_step": "A3",
+            "progress": 0.5,
+            "error_info": None,
+            "analysis_mode": "brand_association_circle",
+            "user_decisions": user_decisions,
             **confirmation_update,
         }
     )

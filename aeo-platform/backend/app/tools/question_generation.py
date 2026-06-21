@@ -38,12 +38,185 @@ _PANORAMA_COMPARE_CUES = (
     "vs",
     "VS",
 )
+ASSOCIATION_CIRCLE_CENTER_TERMS = (
+    "安利",
+    "安利中国",
+    "纽崔莱",
+    "Amway China",
+    "Nutrilite",
+)
+ASSOCIATION_CIRCLE_METADATA_KEYS = (
+    "audience_segment",
+    "core_anxiety",
+    "life_scene",
+    "opportunity_point",
+    "probe_type",
+    "mother_theme",
+    "question_type",
+    "mentions_amway",
+    "life_stage",
+    "four_have",
+    "touchpoint",
+    "monitoring_purpose",
+    "center_terms",
+    "question_set_version",
+    "metadata_status",
+    "metadata_missing_fields",
+)
+ASSOCIATION_CIRCLE_REQUIRED_METADATA_KEYS = (
+    "audience_segment",
+    "core_anxiety",
+    "life_scene",
+    "opportunity_point",
+    "probe_type",
+)
+
+
+def _association_metadata_from_question(question: dict) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for key in ASSOCIATION_CIRCLE_METADATA_KEYS:
+        value = question.get(key)
+        if value is None or value == "":
+            continue
+        metadata[key] = value
+    return metadata
+
+
+def infer_association_question_metadata(
+    question_text: str,
+    *,
+    center_terms: Any = None,
+) -> dict[str, Any]:
+    """Infer first-pass Amway association metadata for uploaded questions."""
+
+    text = str(question_text or "")
+    normalized = text.lower()
+    metadata: dict[str, Any] = {
+        "center_terms": normalize_association_center_terms(center_terms),
+        "question_set_version": "uploaded_association_circle_v1",
+    }
+
+    if any(keyword in text for keyword in ("退休后", "银发", "老年", "孤独", "长寿")):
+        metadata.update(
+            {
+                "audience_segment": "活力银发",
+                "core_anxiety": "慢病预防、孤独感、被需要感、生活质量",
+                "life_scene": "退休后健康维护与社交关系重建",
+            }
+        )
+    elif any(
+        keyword in text for keyword in ("50", "退休", "第二事业", "再出发", "转型")
+    ):
+        metadata.update(
+            {
+                "audience_segment": "50-65 人生转换期",
+                "core_anxiety": "退休准备、收入安全感、关系变化、价值感",
+                "life_scene": "职业后半程和家庭角色变化",
+            }
+        )
+    elif any(keyword in text for keyword in ("中年", "40", "35", "抗衰", "家庭责任")):
+        metadata.update(
+            {
+                "audience_segment": "35-50 初老期",
+                "core_anxiety": "抗衰焦虑、家庭责任、长期健康掌控感",
+                "life_scene": "身体状态变化和家庭责任叠加",
+            }
+        )
+    else:
+        metadata.update(
+            {
+                "audience_segment": "25-35 健康预防期",
+                "core_anxiety": "精力不足、饮食不规律、早期健康管理",
+                "life_scene": "工作压力和轻健康习惯建立",
+            }
+        )
+
+    if any(keyword in text for keyword in ("安利人", "abo", "koc")):
+        metadata["opportunity_point"] = "安利人品牌表达"
+    elif any(
+        keyword in text for keyword in ("第二事业", "事业", "副业", "收入", "再出发")
+    ):
+        metadata["opportunity_point"] = "事业机会作为多段人生再出发平台"
+    elif any(keyword in text for keyword in ("社群", "陪伴", "孤独", "关系")):
+        metadata["opportunity_point"] = "安利社群外显"
+    elif any(keyword in text for keyword in ("科技", "抗衰", "营养科学")):
+        metadata["opportunity_point"] = "科技安利"
+    elif any(keyword in text for keyword in ("长寿", "银发", "退休后")):
+        metadata["opportunity_point"] = "长寿时代"
+    else:
+        metadata["opportunity_point"] = "健康习惯"
+
+    if any(keyword in text for keyword in ("安利", "纽崔莱", "amway", "nutrilite")):
+        metadata["probe_type"] = "品牌锚定探针"
+    elif any(
+        keyword in text for keyword in ("如何", "怎样", "怎么", "关系", "路径", "连接")
+    ):
+        metadata["probe_type"] = "路径探针"
+    elif any(keyword in text for keyword in ("需要", "能不能", "机会", "应该")):
+        metadata["probe_type"] = "机会探针"
+    elif any(keyword in normalized for keyword in ("why", "how", "amway", "nutrilite")):
+        metadata["probe_type"] = "路径探针"
+    else:
+        metadata["probe_type"] = "无品牌自然探针"
+
+    return metadata
+
+
+def complete_association_question_metadata(
+    question: dict[str, Any],
+    *,
+    center_terms: Any = None,
+) -> dict[str, Any]:
+    """Preserve uploaded tags and infer missing association-circle metadata."""
+
+    metadata = _association_metadata_from_question(question)
+    inferred = infer_association_question_metadata(
+        str(
+            question.get("text")
+            or question.get("core_question")
+            or question.get("question")
+            or ""
+        ),
+        center_terms=metadata.get("center_terms") or center_terms,
+    )
+    inferred_keys: list[str] = []
+    for key in ASSOCIATION_CIRCLE_REQUIRED_METADATA_KEYS:
+        if metadata.get(key):
+            continue
+        inferred_value = inferred.get(key)
+        if inferred_value:
+            metadata[key] = inferred_value
+            inferred_keys.append(key)
+    if not metadata.get("center_terms"):
+        metadata["center_terms"] = inferred.get("center_terms")
+        inferred_keys.append("center_terms")
+    if not metadata.get("question_set_version"):
+        metadata["question_set_version"] = inferred.get("question_set_version")
+        inferred_keys.append("question_set_version")
+
+    missing_fields = [
+        key
+        for key in ASSOCIATION_CIRCLE_REQUIRED_METADATA_KEYS
+        if not metadata.get(key)
+    ]
+    if missing_fields:
+        metadata["metadata_status"] = "needs_review"
+        metadata["metadata_missing_fields"] = missing_fields
+    elif inferred_keys:
+        metadata["metadata_status"] = "inferred_needs_review"
+        metadata["metadata_missing_fields"] = []
+    else:
+        metadata["metadata_status"] = "complete"
+        metadata["metadata_missing_fields"] = []
+    return metadata
 
 
 def normalize_uploaded_question_payload(
     questions: list[dict],
     *,
     start_index: int = 1,
+    association_mode: bool = False,
+    center_terms: Any = None,
 ) -> tuple[list[dict], list[dict]]:
     simulated_questions = []
     flattened_questions = []
@@ -60,6 +233,11 @@ def normalize_uploaded_question_payload(
             continue
         intent = question.get("intent") or question.get("user_intent") or ""
         stage = question.get("stage") or question.get("decision_stage") or ""
+        association_metadata = (
+            complete_association_question_metadata(question, center_terms=center_terms)
+            if association_mode
+            else _association_metadata_from_question(question)
+        )
 
         simulated_questions.append(
             {
@@ -69,6 +247,7 @@ def normalize_uploaded_question_payload(
                 "user_intent": intent,
                 "decision_stage": stage,
                 "source": "uploaded_table",
+                **association_metadata,
             }
         )
         flattened_questions.append(
@@ -79,6 +258,7 @@ def normalize_uploaded_question_payload(
                 "intent": intent,
                 "stage": stage,
                 "source": "uploaded_table",
+                **association_metadata,
             }
         )
 
@@ -103,6 +283,130 @@ def merge_uploaded_questions(
         merged_questions.append(question)
 
     return merged_questions
+
+
+def normalize_association_center_terms(value: Any = None) -> list[str]:
+    raw_values: list[Any] = []
+    if isinstance(value, str):
+        raw_values = re_split_keywords(value)
+    elif isinstance(value, (list, tuple)):
+        raw_values = list(value)
+    elif value:
+        raw_values = [value]
+
+    terms: list[str] = []
+    for item in [*raw_values, *ASSOCIATION_CIRCLE_CENTER_TERMS]:
+        text = " ".join(str(item or "").strip().split())
+        if text and text not in terms:
+            terms.append(text)
+    return terms
+
+
+def build_association_circle_question_matrix(
+    *,
+    center_terms: list[str] | tuple[str, ...] | str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Build the first deterministic Amway association-circle question matrix."""
+
+    resolved_center_terms = normalize_association_center_terms(center_terms)
+    brand_label = resolved_center_terms[0]
+    rows = [
+        {
+            "audience_segment": "25-35 健康预防期",
+            "core_anxiety": "精力不足、饮食不规律、早期健康管理",
+            "life_scene": "工作压力和轻健康习惯建立",
+            "opportunity_point": "健康习惯",
+            "questions": {
+                "无品牌自然探针": "年轻上班族想改善精力和饮食不规律，通常会想到哪些营养或生活方式方案？",
+                "路径探针": "从营养补充到长期健康习惯，中间最关键的支持是什么？",
+                "品牌锚定探针": f"提到{brand_label}和年轻人的健康管理，你会想到哪些产品或服务？",
+                "机会探针": {
+                    "text": "年轻人为什么会需要一个能陪伴建立健康习惯的生活方式社群？",
+                    "opportunity_point": "安利社群外显",
+                },
+            },
+        },
+        {
+            "audience_segment": "35-50 初老期",
+            "core_anxiety": "抗衰焦虑、家庭责任、长期健康掌控感",
+            "life_scene": "身体状态变化和家庭责任叠加",
+            "opportunity_point": "科技抗衰",
+            "questions": {
+                "无品牌自然探针": "中年人开始关注抗衰和长期健康管理时，通常会先想到哪些方案？",
+                "路径探针": "中年抗衰除了产品，还需要哪些营养、运动和生活方式支持？",
+                "品牌锚定探针": f"如果把{brand_label}、纽崔莱和抗衰管理放在一起，你会如何理解它们的关系？",
+                "机会探针": {
+                    "text": "科技抗衰怎样才能从单个产品变成持续健康管理方案？",
+                    "opportunity_point": "科技安利",
+                },
+            },
+        },
+        {
+            "audience_segment": "50-65 人生转换期",
+            "core_anxiety": "退休准备、收入安全感、关系变化、价值感",
+            "life_scene": "职业后半程和家庭角色变化",
+            "opportunity_point": "人生再出发",
+            "questions": {
+                "无品牌自然探针": "50 岁以后想重新规划人生和健康，通常会寻找哪些支持？",
+                "路径探针": {
+                    "text": "健康产品、社群关系和第二事业之间，怎样可能形成互相支持？",
+                    "opportunity_point": "事业机会作为多段人生再出发平台",
+                },
+                "品牌锚定探针": {
+                    "text": f"提到{brand_label}和安利人，它们和中年人的第二事业或人生再出发有什么关系？",
+                    "opportunity_point": "安利人品牌表达",
+                },
+                "机会探针": "人生再出发需要什么样的社群、能力和长期陪伴？",
+            },
+        },
+        {
+            "audience_segment": "活力银发",
+            "core_anxiety": "慢病预防、孤独感、被需要感、生活质量",
+            "life_scene": "退休后健康维护与社交关系重建",
+            "opportunity_point": "长寿时代",
+            "questions": {
+                "无品牌自然探针": "长寿时代下，退休人群最需要哪些健康、陪伴和价值支持？",
+                "路径探针": "营养健康、关系陪伴和美好生活社群如何帮助银发人群提升生活质量？",
+                "品牌锚定探针": f"如果从长寿时代看{brand_label}和纽崔莱，它们能提供什么支持？",
+                "机会探针": "一个面向长寿时代的美好生活社群，应该解决哪些真实问题？",
+            },
+        },
+    ]
+
+    questions: list[dict[str, Any]] = []
+    sequence = 1
+    for row in rows:
+        for probe_type, question_spec in row["questions"].items():
+            if isinstance(question_spec, dict):
+                question = str(question_spec.get("text") or "")
+                opportunity_point = str(
+                    question_spec.get("opportunity_point") or row["opportunity_point"]
+                )
+            else:
+                question = str(question_spec)
+                opportunity_point = str(row["opportunity_point"])
+            questions.append(
+                {
+                    "question_id": f"ac_{sequence:03d}",
+                    "category": "品牌联想圈层",
+                    "core_question": question,
+                    "user_intent": "识别 AI 回答中的品牌联想距离和连接路径",
+                    "decision_stage": "认知",
+                    "audience_segment": row["audience_segment"],
+                    "core_anxiety": row["core_anxiety"],
+                    "life_scene": row["life_scene"],
+                    "opportunity_point": opportunity_point,
+                    "probe_type": probe_type,
+                    "center_terms": resolved_center_terms,
+                    "source": "association_circle_matrix",
+                }
+            )
+            sequence += 1
+
+    if limit is not None:
+        return questions[: max(0, int(limit))]
+    return questions
 
 
 def extract_brand_name(
