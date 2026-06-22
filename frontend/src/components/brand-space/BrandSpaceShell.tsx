@@ -21,6 +21,7 @@ import { BoardRuntimeView } from './BoardRuntimeView';
 import { GraphHomeView } from './GraphHomeView';
 import { ReportReviewView } from './ReportReviewView';
 import styles from './BrandSpace.module.css';
+import { ThemedLogo } from '@/components/ui/ThemedLogo';
 import {
   artifacts,
   boardEdges,
@@ -867,11 +868,9 @@ export function BrandSpaceShell() {
       <div className={styles.shell}>
         <aside className={styles.sidebar}>
           <div className="flex h-16 items-center gap-3 border-b px-5" style={{ borderColor: 'var(--border-subtle)' }}>
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--brand-primary)] text-sm font-bold text-[var(--brand-contrast)]">
-              S
-            </span>
+            <ThemedLogo size={36} className="shrink-0" />
             <div>
-              <p className="text-base font-semibold text-[var(--text-primary)]">specta</p>
+              <p className="text-base font-semibold text-[var(--text-primary)]">Specta AI</p>
               <p className="text-[11px] uppercase text-[var(--text-tertiary)]">品牌空间</p>
             </div>
           </div>
