@@ -99,7 +99,7 @@
       "type_id": "BusinessModel",
       "label": "事业模式",
       "definition": "安利事业机会、直销、ABO、KOC 等经营参与机制。",
-      "default_graph_role": "business_or_risk_node",
+      "default_graph_role": "business_path_node",
       "extractable_from": ["question", "answer"],
       "allowed_relation_types": ["MENTIONED_IN_QUESTION", "MENTIONED_IN_ANSWER", "LINKED_TO_CENTER_BRAND", "MAPS_TO_STRATEGY", "RISKS_AS", "NOT_CONNECTED"],
       "review_required": false
@@ -999,7 +999,7 @@
       "aliases": ["事业平台", "创业机会", "副业", "第二收入"],
       "description": "安利商业参与机制的正向表达。",
       "related_terms": ["人生再出发", "有价值"],
-      "graph_policy": {"main_orbit": "allowed_with_answer_evidence", "risk_view": "allowed", "target_gap_view": "allowed"},
+      "graph_policy": {"main_orbit": "allowed_with_answer_evidence", "risk_view": "not_allowed", "target_gap_view": "allowed"},
       "source_policy": {"source_kind": "lexicon", "source_document_section": "11. 事业模式实体", "user_confirmed": true},
       "review_status": "approved"
     },
@@ -1008,9 +1008,9 @@
       "canonical_name": "直销",
       "entity_type": "BusinessModel",
       "aliases": ["直销模式", "直销牌照", "直销企业"],
-      "description": "基础事实，也可能引发风险混淆。",
-      "related_terms": ["传销/拉人头", "安利事业机会"],
-      "graph_policy": {"main_orbit": "allowed_with_answer_evidence", "risk_view": "allowed", "target_gap_view": "allowed"},
+      "description": "安利体系内部的基础业务事实，不作为风险词本身。",
+      "related_terms": ["安利事业机会"],
+      "graph_policy": {"main_orbit": "allowed_with_answer_evidence", "risk_view": "not_allowed", "target_gap_view": "allowed"},
       "source_policy": {"source_kind": "lexicon", "source_document_section": "11. 事业模式实体", "user_confirmed": true},
       "review_status": "pending_review"
     },
@@ -1021,7 +1021,7 @@
       "aliases": ["安利营销人员", "安利伙伴", "创业伙伴"],
       "description": "安利人和事业机会的主体。",
       "related_terms": ["安利人", "KOC"],
-      "graph_policy": {"main_orbit": "allowed_with_answer_evidence", "risk_view": "allowed", "target_gap_view": "allowed"},
+      "graph_policy": {"main_orbit": "allowed_with_answer_evidence", "risk_view": "not_allowed", "target_gap_view": "allowed"},
       "source_policy": {"source_kind": "lexicon", "source_document_section": "11. 事业模式实体", "user_confirmed": true},
       "review_status": "approved"
     },
@@ -1032,7 +1032,7 @@
       "aliases": ["关键意见消费者", "安利 KOC", "健康生活顾问"],
       "description": "品牌共创和口碑传播角色。",
       "related_terms": ["安利人", "社群陪伴"],
-      "graph_policy": {"main_orbit": "allowed_with_answer_evidence", "risk_view": "allowed", "target_gap_view": "allowed"},
+      "graph_policy": {"main_orbit": "allowed_with_answer_evidence", "risk_view": "not_allowed", "target_gap_view": "allowed"},
       "source_policy": {"source_kind": "lexicon", "source_document_section": "11. 事业模式实体", "user_confirmed": true},
       "review_status": "approved"
     },
@@ -1656,8 +1656,8 @@
     },
     {
       "issue_id": "direct_selling_risk_boundary",
-      "description": "直销和熟人推荐同时具有事实路径和风险路径。",
-      "recommended_resolution": "配置中允许进入主图和风险图，并标记 pending_review。"
+      "description": "直销、ABO、KOC 和安利事业机会是体系内业务词，只作为事业模式路径。",
+      "recommended_resolution": "业务词不进入风险图；传销/拉人头、熟人销售压力等显式风险词单独承接风险关系。"
     },
     {
       "issue_id": "evidence_asset_object_boundary",

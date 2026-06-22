@@ -6,6 +6,7 @@ from app.api.v1 import (
     aio,
     account_admin,
     alerts,
+    amwaychina,
     analytics,
     auth,
     brand_space,
@@ -35,6 +36,7 @@ api_router.include_router(messages.router)
 api_router.include_router(outputs.router)
 api_router.include_router(auth.router)
 api_router.include_router(account_admin.router)
+api_router.include_router(amwaychina.router)
 api_router.include_router(analytics.router)
 api_router.include_router(entities.router)
 api_router.include_router(favicons.router)

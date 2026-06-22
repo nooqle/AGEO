@@ -490,6 +490,22 @@ export function AmwayAssociationCircleConsolePage({
       const uploadedQuestions =
         payload?.uploadedQuestions?.filter((question) => question.text.trim()) || [];
       try {
+        let uploadedQuestionSetId: string | null = null;
+        if (uploadedQuestions.length) {
+          const savedQuestionSet = await api.saveAmwayQuestionHistory({
+            entity_id: selectedEntityId,
+            title: payload?.uploadedQuestionSource || `安利上传题库 ${new Date().toLocaleDateString('zh-CN')}`,
+            source_file_name: payload?.uploadedQuestionSource || null,
+            center_term: effectiveCenterTerm,
+            center_terms: effectiveCenterTerm ? [effectiveCenterTerm] : centerOptions,
+            questions: uploadedQuestions.map((question) => ({
+              ...question,
+              question_text: question.text,
+              center_terms: effectiveCenterTerm ? [effectiveCenterTerm] : question.center_terms,
+            })),
+          });
+          uploadedQuestionSetId = savedQuestionSet.id;
+        }
         await createRun(selectedEntityId, {
           run_goal: '生成安利品牌联想圈层报告',
           analysis_mode: ASSOCIATION_ANALYSIS_MODE,
@@ -509,6 +525,7 @@ export function AmwayAssociationCircleConsolePage({
             ...(uploadedQuestions.length
               ? {
                   uploaded_question_source: payload?.uploadedQuestionSource || 'amwaychina_upload',
+                  uploaded_question_set_id: uploadedQuestionSetId,
                   uploaded_question_count: uploadedQuestions.length,
                   uploaded_questions: uploadedQuestions.map((question) => ({
                     ...question,

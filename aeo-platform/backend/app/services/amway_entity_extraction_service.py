@@ -91,7 +91,7 @@ COMPARISON_CONTEXT_CUES = (
     "会被拿来和",
     "vs",
 )
-NEGATIVE_CONTEXT_RISK_TYPES = {"BusinessModel"}
+NEGATIVE_CONTEXT_RISK_TYPES: set[str] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,9 +122,7 @@ class AmwayEntityExtractionService:
             if not isinstance(row, dict):
                 continue
             question_id = _question_id(row, question_index)
-            question_text = _clean_text(
-                row.get("question_text") or row.get("question")
-            )
+            question_text = _clean_text(row.get("question_text") or row.get("question"))
             platform_results = row.get("platform_results")
             if not isinstance(platform_results, list):
                 continue
@@ -249,9 +247,7 @@ class AmwayEntityExtractionService:
                 local_negative_context=local_negative_context,
             )
             matched_entities[candidate.entity.entity_id] = {
-                "signal_id": (
-                    f"sig_{answer_id}_{candidate.entity.entity_id}"
-                ),
+                "signal_id": (f"sig_{answer_id}_{candidate.entity.entity_id}"),
                 "answer_id": answer_id,
                 "question_id": question_id,
                 "question": question,
@@ -341,7 +337,10 @@ class AmwayEntityExtractionService:
                     and match_source == "related_term"
                 ):
                     continue
-                if entity.entity_type == "Competitor" and match_source == "related_term":
+                if (
+                    entity.entity_type == "Competitor"
+                    and match_source == "related_term"
+                ):
                     continue
                 text = _clean_text(term)
                 if not text or len(text) <= 1:
@@ -589,7 +588,7 @@ def _risk_attribution_for_signal(
     match_index: int,
     center_context_positions: list[int],
 ) -> str:
-    if entity.entity_type not in {"RiskLabel", "BusinessModel"} and entity.entity_id != "evidence_regulation":
+    if entity.entity_type != "RiskLabel" and entity.entity_id != "evidence_regulation":
         return "none"
     connected_by_answer = answer_mentions_center and _is_near_center_context(
         match_index=match_index,
@@ -602,7 +601,9 @@ def _risk_attribution_for_signal(
     compact_term = _compact(matched_text)
     if _has_risk_denial_context(compact_context, compact_term):
         return "denied"
-    if entity.entity_id == "evidence_regulation" and _has_positive_regulation_context(compact_context):
+    if entity.entity_id == "evidence_regulation" and _has_positive_regulation_context(
+        compact_context
+    ):
         return "denied"
     if _has_local_risk_attribution(compact_context, compact_term, entity):
         return "attributed"
@@ -626,16 +627,31 @@ def _has_risk_denial_context(compact_context: str, compact_term: str) -> bool:
         )
     ):
         return True
-    if "不能" in compact_context and "等同" in compact_context and compact_term in compact_context:
+    if (
+        "不能" in compact_context
+        and "等同" in compact_context
+        and compact_term in compact_context
+    ):
         return True
     return False
 
 
 def _has_positive_regulation_context(compact_context: str) -> bool:
-    has_positive = any(_compact(cue) in compact_context for cue in REGULATION_POSITIVE_CUES)
+    has_positive = any(
+        _compact(cue) in compact_context for cue in REGULATION_POSITIVE_CUES
+    )
     has_negative = any(
         _compact(cue) in compact_context
-        for cue in ("风险", "处罚", "违规", "非法", "质疑", "争议", "监管风险", "合规风险")
+        for cue in (
+            "风险",
+            "处罚",
+            "违规",
+            "非法",
+            "质疑",
+            "争议",
+            "监管风险",
+            "合规风险",
+        )
     )
     return has_positive and not has_negative
 
@@ -661,16 +677,22 @@ def _has_local_risk_attribution(
                 "巨大影响",
             )
         )
-    if entity.entity_type == "BusinessModel":
-        return any(
-            _compact(cue) in compact_context
-            for cue in ("风险", "质疑", "争议", "警惕", "谨慎", "熟人压力", "变现难")
-        )
     if entity.entity_type == "RiskLabel":
         if compact_term and compact_term in compact_context:
             return any(
                 _compact(cue) in compact_context
-                for cue in ("涉嫌", "质疑", "争议", "风险", "警惕", "谨慎", "像", "类似", "有关", "关联")
+                for cue in (
+                    "涉嫌",
+                    "质疑",
+                    "争议",
+                    "风险",
+                    "警惕",
+                    "谨慎",
+                    "像",
+                    "类似",
+                    "有关",
+                    "关联",
+                )
             )
         return False
     return False

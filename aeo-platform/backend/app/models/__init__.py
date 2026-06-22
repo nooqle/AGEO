@@ -6,6 +6,7 @@ from app.models.aio_runtime_session import (
     AioRuntimeTakeover,
 )
 from app.models.brand import BrandProfile
+from app.models.amway_entity_lexicon import AmwayEntityLexiconOverride
 from app.models.brand_intelligence import (
     BrandActionRecord,
     BrandAudiencePersona,
@@ -106,6 +107,7 @@ __all__ = [
     "Session",
     "Message",
     "BrandProfile",
+    "AmwayEntityLexiconOverride",
     "BrandActionRecord",
     "BrandAudiencePersona",
     "BrandCitationSource",

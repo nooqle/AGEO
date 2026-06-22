@@ -63,14 +63,9 @@ def test_answer_extraction_does_not_use_related_terms_as_answer_evidence():
     )
     signals = extraction["signals"]
 
-    assert not [
-        signal
-        for signal in signals
-        if signal["entity_name"] == "传销/拉人头"
-    ]
+    assert not [signal for signal in signals if signal["entity_name"] == "传销/拉人头"]
     assert any(
-        signal["entity_name"] == "直销"
-        and signal["matched_text"] == "直销"
+        signal["entity_name"] == "直销" and signal["matched_text"] == "直销"
         for signal in signals
     )
 
@@ -107,9 +102,7 @@ def test_direct_pyramid_risk_word_still_enters_risk_evidence():
     )
 
     nodes = calibration["association_circle_projection"]["nodes"]
-    risk_node = next(
-        node for node in nodes if node["term"] == "传销/拉人头"
-    )
+    risk_node = next(node for node in nodes if node["term"] == "传销/拉人头")
     evidence_index = calibration["evidence_index"]
     excerpts = [
         evidence_index[evidence_id]["answer_excerpt"]
@@ -118,6 +111,65 @@ def test_direct_pyramid_risk_word_still_enters_risk_evidence():
 
     assert risk_node["is_risk_term"] is True
     assert any("传销" in excerpt or "拉人" in excerpt for excerpt in excerpts)
+
+
+def test_internal_business_terms_do_not_become_risk_nodes():
+    fetch_results = [
+        {
+            "question_id": "q_internal_business_terms",
+            "question_text": "安利事业机会、直销、ABO、KOC 这些角色和模式怎么理解？",
+            "opportunity_point": "事业机会",
+            "probe_type": "品牌锚定风险探针",
+            "platform_results": [
+                {
+                    "platform": "Kimi",
+                    "success": True,
+                    "answer": {
+                        "content": (
+                            "安利事业机会会涉及直销、ABO 和 KOC，"
+                            "外界有时会讨论风险和争议，但这些词本身是安利体系内的业务角色与参与方式。"
+                        )
+                    },
+                }
+            ],
+        }
+    ]
+    extraction_service = AmwayEntityExtractionService()
+    extraction = extraction_service.extract_from_fetch_results(fetch_results)
+
+    business_signals = [
+        signal
+        for signal in extraction["signals"]
+        if signal["entity_name"] in {"安利事业机会", "直销", "ABO", "KOC"}
+    ]
+    assert business_signals
+    assert all(signal["relation_type"] != "RISKS_AS" for signal in business_signals)
+
+    calibration = AmwayEntityCalibrationService(
+        extraction_service=extraction_service
+    ).calibrate(
+        fetch_results=fetch_results,
+        extraction_result=extraction,
+        center_terms=["安利"],
+    )
+    nodes = calibration["association_circle_projection"]["nodes"]
+    business_nodes = [
+        node for node in nodes if node["term"] in {"安利事业机会", "直销", "ABO", "KOC"}
+    ]
+    assert business_nodes
+    assert all(node["is_risk_term"] is False for node in business_nodes)
+    assert not (
+        {"安利事业机会", "直销", "ABO", "KOC"}
+        & {node["term"] for node in calibration["risk_map"]["risk_nodes"]}
+    )
+    security_pillar = next(
+        pillar
+        for pillar in calibration["strategy_storyline"]["pillars"]
+        if pillar["key"] == "have_security"
+    )
+    assert not (
+        {"安利事业机会", "直销", "ABO", "KOC"} & set(security_pillar["risk_terms"])
+    )
 
 
 def test_calibration_drops_legacy_related_term_answer_signal():
@@ -132,9 +184,7 @@ def test_calibration_drops_legacy_related_term_answer_signal():
                     "platform": "豆包",
                     "success": True,
                     "answer": {
-                        "content": (
-                            "纽崔莱价格偏高，采用直销+线上，有专业营养指导。"
-                        )
+                        "content": ("纽崔莱价格偏高，采用直销+线上，有专业营养指导。")
                     },
                 }
             ],
@@ -184,8 +234,7 @@ def test_calibration_drops_legacy_related_term_answer_signal():
     )
 
     terms = {
-        node["term"]
-        for node in calibration["association_circle_projection"]["nodes"]
+        node["term"] for node in calibration["association_circle_projection"]["nodes"]
     }
     assert "传销/拉人头" not in terms
 
@@ -239,9 +288,7 @@ def test_calibration_splits_opportunity_maturity_and_structured_actions():
 
     nodes = calibration["association_circle_projection"]["nodes"]
     non_risk_tiers = {
-        node["maturity_tier"]
-        for node in nodes
-        if not node.get("is_risk_term")
+        node["maturity_tier"] for node in nodes if not node.get("is_risk_term")
     }
     actions = calibration["association_circle_projection"]["association_actions"]
 
@@ -295,7 +342,9 @@ def test_non_amway_market_context_does_not_enter_brand_graph():
     ]
 
     assert market_only
-    assert all(signal["relation_type"] == "MARKET_CONTEXT_ONLY" for signal in market_only)
+    assert all(
+        signal["relation_type"] == "MARKET_CONTEXT_ONLY" for signal in market_only
+    )
 
     calibration = AmwayEntityCalibrationService(
         extraction_service=extraction_service
@@ -305,13 +354,14 @@ def test_non_amway_market_context_does_not_enter_brand_graph():
         center_terms=["安利"],
     )
     node_terms = {
-        node["term"]
-        for node in calibration["association_circle_projection"]["nodes"]
+        node["term"] for node in calibration["association_circle_projection"]["nodes"]
     }
 
     assert "康宝莱" not in node_terms
     assert "Swisse" not in node_terms
-    assert calibration["sample_scope"]["market_context_signal_count"] >= len(market_only)
+    assert calibration["sample_scope"]["market_context_signal_count"] >= len(
+        market_only
+    )
 
 
 def test_non_named_question_metadata_cannot_force_brand_link():
@@ -387,7 +437,9 @@ def test_non_named_question_only_links_entities_near_answer_center_context():
 
     assert linked
     assert all(signal["question_mentions_center"] is False for signal in linked)
-    assert any(signal["center_connection_basis"] == "answer_near_center" for signal in linked)
+    assert any(
+        signal["center_connection_basis"] == "answer_near_center" for signal in linked
+    )
     assert any(signal["relation_type"] != "MARKET_CONTEXT_ONLY" for signal in linked)
 
 
@@ -427,8 +479,7 @@ def test_non_named_question_does_not_link_entities_far_from_answer_center():
         for signal in entity_signals
     )
     assert all(
-        signal["relation_type"] == "MARKET_CONTEXT_ONLY"
-        for signal in entity_signals
+        signal["relation_type"] == "MARKET_CONTEXT_ONLY" for signal in entity_signals
     )
 
     calibration = AmwayEntityCalibrationService(
@@ -440,8 +491,7 @@ def test_non_named_question_does_not_link_entities_far_from_answer_center():
     )
 
     node_terms = {
-        node["term"]
-        for node in calibration["association_circle_projection"]["nodes"]
+        node["term"] for node in calibration["association_circle_projection"]["nodes"]
     }
 
     assert "体重管理" not in node_terms
@@ -578,7 +628,9 @@ def test_strategy_validation_selects_evidence_from_multiple_questions():
         center_terms=["安利"],
     )
     relationship_row = next(
-        row for row in calibration["strategy_validation"] if row["strategy_term"] == "良好关系"
+        row
+        for row in calibration["strategy_validation"]
+        if row["strategy_term"] == "良好关系"
     )
 
     assert relationship_row["question_count"] >= 3
@@ -616,8 +668,7 @@ def test_competitor_in_amway_context_is_competition_relation():
     extraction = extraction_service.extract_from_fetch_results(fetch_results)
 
     assert any(
-        signal["entity_name"] == "康宝莱"
-        and signal["relation_type"] == "COMPETES_WITH"
+        signal["entity_name"] == "康宝莱" and signal["relation_type"] == "COMPETES_WITH"
         for signal in extraction["signals"]
     )
 
@@ -635,9 +686,9 @@ def test_competitor_in_amway_context_is_competition_relation():
     assert competitor_node["orbit_label"] == "竞争关系"
     assert competitor_node["is_risk_term"] is True
     assert "康宝莱" in calibration["risk_map"]["nodes"][0]["term"]
-    assert "康宝莱" in calibration["platform_summary"]["platforms"][0][
-        "competition_nodes"
-    ]
+    assert (
+        "康宝莱" in calibration["platform_summary"]["platforms"][0]["competition_nodes"]
+    )
 
 
 def test_single_answer_competitor_stays_far_signal():
@@ -763,7 +814,9 @@ def test_positive_regulation_context_does_not_become_amway_risk():
     extraction_service = AmwayEntityExtractionService()
     extraction = extraction_service.extract_from_fetch_results(fetch_results)
     regulation_signals = [
-        signal for signal in extraction["signals"] if signal["entity_name"] == "监管信息"
+        signal
+        for signal in extraction["signals"]
+        if signal["entity_name"] == "监管信息"
     ]
     assert regulation_signals
     assert all(signal["relation_type"] != "RISKS_AS" for signal in regulation_signals)
@@ -985,11 +1038,15 @@ def test_review_regression_negative_context_does_not_become_positive_validation(
     extraction = extraction_service.extract_from_fetch_results(fetch_results)
 
     regulation_signals = [
-        signal for signal in extraction["signals"] if signal["entity_name"] == "监管信息"
+        signal
+        for signal in extraction["signals"]
+        if signal["entity_name"] == "监管信息"
     ]
     assert regulation_signals
     assert any(signal["relation_type"] == "RISKS_AS" for signal in regulation_signals)
-    assert all(signal["context_polarity"] == "negative" for signal in regulation_signals)
+    assert all(
+        signal["context_polarity"] == "negative" for signal in regulation_signals
+    )
 
     calibration = AmwayEntityCalibrationService(
         extraction_service=extraction_service
@@ -1001,10 +1058,14 @@ def test_review_regression_negative_context_does_not_become_positive_validation(
     nodes = calibration["association_circle_projection"]["nodes"]
     regulation_node = next(node for node in nodes if node["term"] == "监管信息")
     relationship_row = next(
-        row for row in calibration["strategy_validation"] if row["strategy_term"] == "良好关系"
+        row
+        for row in calibration["strategy_validation"]
+        if row["strategy_term"] == "良好关系"
     )
     financial_row = next(
-        row for row in calibration["strategy_validation"] if row["strategy_term"] == "财务保障"
+        row
+        for row in calibration["strategy_validation"]
+        if row["strategy_term"] == "财务保障"
     )
     evidence_index = calibration["evidence_index"]
     relationship_platforms = {
@@ -1112,8 +1173,14 @@ def test_strategy_scores_keep_separation_under_caution_context():
 
     assert rows["良好关系"]["node_score"] != rows["财务保障"]["node_score"]
     assert {rows["良好关系"]["node_score"], rows["财务保障"]["node_score"]} != {44}
-    assert rows["良好关系"]["answer_mention_count"] > rows["财务保障"]["answer_mention_count"]
-    assert rows["良好关系"]["action_recommendation"] != rows["财务保障"]["action_recommendation"]
+    assert (
+        rows["良好关系"]["answer_mention_count"]
+        > rows["财务保障"]["answer_mention_count"]
+    )
+    assert (
+        rows["良好关系"]["action_recommendation"]
+        != rows["财务保障"]["action_recommendation"]
+    )
     assert "社群" in rows["良好关系"]["action_recommendation"]
     assert "收入" in rows["财务保障"]["action_recommendation"]
 
@@ -1246,9 +1313,7 @@ def test_brand_asset_risk_view_policy_blocks_risk_relation_override():
 
     assert nodes["科学研究"]["is_risk_term"] is False
     assert nodes["美好生活共创空间"]["is_risk_term"] is False
-    assert "科学研究" not in {
-        node["term"] for node in calibration["risk_map"]["nodes"]
-    }
+    assert "科学研究" not in {node["term"] for node in calibration["risk_map"]["nodes"]}
     assert "美好生活共创空间" not in {
         node["term"] for node in calibration["risk_map"]["nodes"]
     }
@@ -1352,9 +1417,10 @@ def test_a5_consumes_calibrated_report_input_without_reextracting_nodes():
         for section in artifact["report_narrative_sections"]
     )
 
-    assert artifact["association_circle"]["nodes"] == calibration[
-        "association_circle_projection"
-    ]["nodes"]
+    assert (
+        artifact["association_circle"]["nodes"]
+        == calibration["association_circle_projection"]["nodes"]
+    )
     assert projection["generated_from"] == "entity_calibration"
     assert artifact["report_input"] == calibration["report_input"]
     assert "核心判断" in artifact["report_markdown"]
@@ -1390,9 +1456,10 @@ async def test_a4_entity_pipeline_outputs_a5_ready_report_input():
 
     assert update["entity_extraction_result"]["signals"]
     assert update["entity_calibration_result"]["report_input"]
-    assert update["brand_association_report_input"] == update[
-        "entity_calibration_result"
-    ]["report_input"]
+    assert (
+        update["brand_association_report_input"]
+        == update["entity_calibration_result"]["report_input"]
+    )
     assert update["association_circle_projection"]["generated_from"] == (
         "entity_calibration"
     )
@@ -1459,9 +1526,7 @@ async def test_a4_entity_pipeline_keeps_realtime_extraction_observability():
     extraction = update["entity_extraction_result"]
     assert extraction["realtime_extraction_enabled"] is True
     assert extraction["realtime_signal_count"] == realtime["signal_count"]
-    assert extraction["realtime_answer_signal_count"] == realtime[
-        "answer_signal_count"
-    ]
+    assert extraction["realtime_answer_signal_count"] == realtime["answer_signal_count"]
 
 
 @pytest.mark.asyncio

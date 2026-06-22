@@ -22,8 +22,12 @@ def test_amway_entity_ontology_keeps_risk_labels_out_of_main_orbit():
 
     risk_entities = registry.entities_by_type("RiskLabel")
     assert risk_entities
-    assert all(entity.graph_policy.main_orbit == "not_allowed" for entity in risk_entities)
-    assert all(entity.graph_policy.risk_view == "aggregate_only" for entity in risk_entities)
+    assert all(
+        entity.graph_policy.main_orbit == "not_allowed" for entity in risk_entities
+    )
+    assert all(
+        entity.graph_policy.risk_view == "aggregate_only" for entity in risk_entities
+    )
 
 
 def test_amway_entity_ontology_merges_cloud_shop_duplicate_source_rows():
@@ -47,4 +51,4 @@ def test_amway_entity_ontology_preserves_review_boundaries():
 
     direct_selling = registry.require_entity("business_direct_selling")
     assert direct_selling.review_status == "pending_review"
-    assert direct_selling.graph_policy.risk_view == "allowed"
+    assert direct_selling.graph_policy.risk_view == "not_allowed"

@@ -138,7 +138,16 @@ FOUR_HAVE_STORYLINE_RULES: tuple[dict[str, Any], ...] = (
             "监管",
             "认证",
         ),
-        "risk_terms": ("传销", "拉人头", "发展下线", "直销", "监管", "合规", "囤货", "收入"),
+        "risk_terms": (
+            "传销",
+            "拉人头",
+            "发展下线",
+            "熟人压力",
+            "合规风险",
+            "监管风险",
+            "囤货",
+            "收入不稳定",
+        ),
         "strategic_reading": "保障感先受到信任、合规和收入边界影响，必须先把参与机制讲清楚。",
     },
     {
@@ -317,9 +326,7 @@ class AmwayEntityCalibrationService:
             "platform_summary": platform_summary,
             "strategy_validation": strategy_validation,
             "strategy_storyline": strategy_storyline,
-            "evidence_index": {
-                item["evidence_id"]: item for item in evidence_samples
-            },
+            "evidence_index": {item["evidence_id"]: item for item in evidence_samples},
             "report_input": report_input,
             "association_circle_projection": projection,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -445,10 +452,7 @@ class AmwayEntityCalibrationService:
                 "risk_evidence_count": stance_summary["risk"],
                 "competitive_evidence_count": stance_summary["competitive"],
             }
-            if (
-                not is_risk
-                and entity.graph_policy.main_orbit == "not_allowed"
-            ):
+            if not is_risk and entity.graph_policy.main_orbit == "not_allowed":
                 continue
             if score < 12 and not is_risk and acc.term_origin != "strategy":
                 continue
@@ -479,9 +483,7 @@ class AmwayEntityCalibrationService:
                 "entity_type": acc.entity_type,
                 "term": acc.entity_name,
                 "normalized_expressions": [
-                    item
-                    for item, _count in acc.matched_texts.most_common(8)
-                    if item
+                    item for item, _count in acc.matched_texts.most_common(8) if item
                 ],
                 "term_origin": acc.term_origin,
                 "origin_label": "战略词" if acc.term_origin == "strategy" else "回答词",
@@ -507,16 +509,14 @@ class AmwayEntityCalibrationService:
                 "platform_count": len([item for item in acc.platforms if item]),
                 "platform_distribution": dict(acc.platforms),
                 "stance_summary": stance_summary,
-                "primary_audience_segments": _top_counter_values(
-                    acc.audience_segments
-                ),
+                "primary_audience_segments": _top_counter_values(acc.audience_segments),
                 "primary_opportunity_points": _top_counter_values(
                     acc.opportunity_points
                 ),
                 "relation_type_distribution": dict(acc.relation_types),
-                "trigger_questions": sorted(
-                    item for item in acc.question_ids if item
-                )[:8],
+                "trigger_questions": sorted(item for item in acc.question_ids if item)[
+                    :8
+                ],
                 "evidence_samples": node_evidence_ids,
                 "evidence_count": len(acc.signals),
                 "evidence_strength": _evidence_strength(acc),
@@ -607,7 +607,11 @@ class AmwayEntityCalibrationService:
                 stance_summary=stance_summary,
             )
             validation_label = _strategy_validation_label(status, stance_summary)
-            node_score = int(node.get("gravity_score") or node.get("closeness_score") or 0) if node else 0
+            node_score = (
+                int(node.get("gravity_score") or node.get("closeness_score") or 0)
+                if node
+                else 0
+            )
             evidence_band = _strategy_evidence_band(
                 status=status,
                 answer_mentions=answer_mentions,
@@ -778,7 +782,9 @@ def _score_accumulator(
     position_score = _position_score(acc.answer_positions)
     relation_type_score = _relation_score(acc.relation_types)
     scene_coverage_score = round(min(question_count / max(total_questions, 1), 1) * 100)
-    model_consistency_score = round(min(platform_count / max(total_platforms, 1), 1) * 100)
+    model_consistency_score = round(
+        min(platform_count / max(total_platforms, 1), 1) * 100
+    )
     gravity_score = round(
         frequency_score * 0.30
         + position_score * 0.20
@@ -877,9 +883,8 @@ def _context_adjusted_score(
         return raw_score
     supportive = int(stance_summary.get("supportive") or 0)
     skeptical = int(stance_summary.get("skeptical") or 0)
-    risk_like = (
-        int(stance_summary.get("risk") or 0)
-        + int(stance_summary.get("competitive") or 0)
+    risk_like = int(stance_summary.get("risk") or 0) + int(
+        stance_summary.get("competitive") or 0
     )
     caution_like = skeptical + risk_like
     if caution_like >= max(supportive, 1) and caution_like >= 2:
@@ -904,7 +909,9 @@ def _position_score(counter: Counter[str]) -> int:
     total = sum(counter.values())
     if not total:
         return 34
-    score = sum(weights.get(position, 34) * count for position, count in counter.items())
+    score = sum(
+        weights.get(position, 34) * count for position, count in counter.items()
+    )
     return round(score / total)
 
 
@@ -1068,7 +1075,9 @@ def _relation_score(counter: Counter[str]) -> int:
     total = sum(counter.values())
     if not total:
         return 50
-    score = sum(weights.get(relation, 58) * count for relation, count in counter.items())
+    score = sum(
+        weights.get(relation, 58) * count for relation, count in counter.items()
+    )
     return round(score / total)
 
 
@@ -1542,9 +1551,7 @@ def _build_priority_summary(
     risk_map: dict[str, Any],
 ) -> dict[str, Any]:
     risk_nodes = [
-        node
-        for node in risk_map.get("risk_nodes") or []
-        if isinstance(node, dict)
+        node for node in risk_map.get("risk_nodes") or [] if isinstance(node, dict)
     ]
     competition_nodes = [
         node
@@ -1555,7 +1562,8 @@ def _build_priority_summary(
         node
         for node in nodes
         if not node.get("is_risk_term")
-        and str(node.get("maturity_tier") or "") in {
+        and str(node.get("maturity_tier") or "")
+        in {
             "near_opportunity",
             "far_opportunity",
             "watch_signal",
@@ -1570,7 +1578,9 @@ def _build_priority_summary(
     ]
     top_risks = [
         _priority_node_card(node, rank=index + 1, focus_type="risk")
-        for index, node in enumerate(sorted(risk_nodes, key=_priority_node_sort_key)[:3])
+        for index, node in enumerate(
+            sorted(risk_nodes, key=_priority_node_sort_key)[:3]
+        )
     ]
     top_competitors = [
         _priority_competitor_card(node, risk_map, rank=index + 1)
@@ -1586,7 +1596,9 @@ def _build_priority_summary(
     ]
     top_assets = [
         _priority_node_card(node, rank=index + 1, focus_type="asset")
-        for index, node in enumerate(sorted(stable_nodes, key=_priority_node_sort_key)[:3])
+        for index, node in enumerate(
+            sorted(stable_nodes, key=_priority_node_sort_key)[:3]
+        )
     ]
     return {
         "top_risks": top_risks,
@@ -1680,8 +1692,12 @@ def _priority_competitor_card(
                 [str(item) for item in scene.get("scenes") or [] if str(item).strip()],
                 base.get("scene_hint") or "竞品替代场景",
             ),
-            "platform_distribution": scene.get("platform_distribution") or node.get("platform_distribution") or {},
-            "question_refs": scene.get("question_refs") or node.get("trigger_questions") or [],
+            "platform_distribution": scene.get("platform_distribution")
+            or node.get("platform_distribution")
+            or {},
+            "question_refs": scene.get("question_refs")
+            or node.get("trigger_questions")
+            or [],
             "sample_excerpt": scene.get("sample_excerpt") or "",
             "recommended_action": "拆清替代场景并补差异化证据",
         }
@@ -1697,7 +1713,8 @@ def _risk_scene_rows(
     rows: list[dict[str, Any]] = []
     for node in nodes:
         evidence_ids = [
-            _clean_text(item) for item in node.get("evidence_samples") or []
+            _clean_text(item)
+            for item in node.get("evidence_samples") or []
             if _clean_text(item)
         ]
         samples = [
@@ -1798,7 +1815,9 @@ def _finding_claim(node: dict[str, Any]) -> str:
 
 
 def _finding_node_is_risk(node: dict[str, Any]) -> bool:
-    graph_policy = node.get("graph_policy") if isinstance(node.get("graph_policy"), dict) else {}
+    graph_policy = (
+        node.get("graph_policy") if isinstance(node.get("graph_policy"), dict) else {}
+    )
     return (
         bool(node.get("is_risk_term"))
         and node.get("business_tag") == "风险认知"
@@ -1812,9 +1831,7 @@ def _build_source_appendix(
     question_bank: list[dict[str, Any]],
     evidence_samples: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    question_by_id = {
-        _clean_text(item.get("id")): item for item in question_bank
-    }
+    question_by_id = {_clean_text(item.get("id")): item for item in question_bank}
     rows: list[dict[str, Any]] = []
     for evidence in _select_diverse_evidence_samples(evidence_samples, limit=120):
         question_id = _clean_text(evidence.get("question_id"))
@@ -1914,9 +1931,7 @@ def _build_four_have_strategy_storyline(
         "pillars": pillars,
         "weekly_actions": weekly_actions,
         "platform_scope": {
-            "requested_platform_names": platform_summary.get(
-                "requested_platform_names"
-            )
+            "requested_platform_names": platform_summary.get("requested_platform_names")
             or platform_summary.get("platform_names")
             or [],
             "valid_platform_names": platform_summary.get("platform_names") or [],
@@ -1938,7 +1953,9 @@ def _build_four_have_pillar(
     risk_map: dict[str, Any],
     source_appendix: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    terms = tuple(_clean_text(item) for item in rule.get("terms", ()) if _clean_text(item))
+    terms = tuple(
+        _clean_text(item) for item in rule.get("terms", ()) if _clean_text(item)
+    )
     risk_terms = tuple(
         _clean_text(item) for item in rule.get("risk_terms", ()) if _clean_text(item)
     )
@@ -1999,7 +2016,10 @@ def _build_four_have_pillar(
     )
     source_samples = _source_samples_for_terms(
         source_appendix=source_appendix,
-        terms=[node.get("term") for node in [*positive_nodes, *matched_risk_nodes, *competition_nodes]],
+        terms=[
+            node.get("term")
+            for node in [*positive_nodes, *matched_risk_nodes, *competition_nodes]
+        ],
         limit=4,
     )
     return {
@@ -2011,7 +2031,9 @@ def _build_four_have_pillar(
         "status": status,
         "status_label": status_label,
         "node_terms": [_clean_text(node.get("term")) for node in positive_nodes[:8]],
-        "risk_terms": [_clean_text(node.get("term")) for node in matched_risk_nodes[:8]],
+        "risk_terms": [
+            _clean_text(node.get("term")) for node in matched_risk_nodes[:8]
+        ],
         "competition_terms": [
             _clean_text(node.get("term")) for node in competition_nodes[:6]
         ],
@@ -2020,8 +2042,7 @@ def _build_four_have_pillar(
         ],
         "sample_questions": sample_questions,
         "answer_mention_count": sum(
-            int(row.get("answer_mention_count") or 0)
-            for row in matched_strategy_rows
+            int(row.get("answer_mention_count") or 0) for row in matched_strategy_rows
         )
         or sum(int(node.get("answer_count") or 0) for node in positive_nodes),
         "platform_count": len(platform_distribution),
@@ -2407,7 +2428,9 @@ def _execution_steps(
 def _build_question_scope(question_bank: list[dict[str, Any]]) -> dict[str, Any]:
     audience_segments = _counter_values_from_records(question_bank, "audience_segment")
     probe_types = _counter_values_from_records(question_bank, "probe_type")
-    opportunity_points = _counter_values_from_records(question_bank, "opportunity_point")
+    opportunity_points = _counter_values_from_records(
+        question_bank, "opportunity_point"
+    )
     life_scenes = _counter_values_from_records(question_bank, "life_scene")
     return {
         "center_term": "安利",
@@ -2416,7 +2439,10 @@ def _build_question_scope(question_bank: list[dict[str, Any]]) -> dict[str, Any]
         "question_bank_count": len(question_bank),
         "question_set_version": _question_set_version(question_bank),
         "question_sources": dict(
-            Counter(_clean_text(item.get("source")) or "fetch_result" for item in question_bank)
+            Counter(
+                _clean_text(item.get("source")) or "fetch_result"
+                for item in question_bank
+            )
         ),
         "audience_segments": audience_segments,
         "probe_types": probe_types,
@@ -2436,7 +2462,9 @@ def _build_question_bank(fetch_results: list[dict[str, Any]]) -> list[dict[str, 
     for index, row in enumerate(fetch_results or [], start=1):
         if not isinstance(row, dict):
             continue
-        question_id = _clean_text(row.get("question_id") or row.get("id")) or f"q_{index:03d}"
+        question_id = (
+            _clean_text(row.get("question_id") or row.get("id")) or f"q_{index:03d}"
+        )
         if question_id in seen:
             continue
         seen.add(question_id)
@@ -2679,7 +2707,9 @@ def _platform_outcomes(
             "platform": platform,
             "answer_count": len(rows),
             "status": "mentioned" if rows else "not_mentioned",
-            "sample_excerpt": _clean_text(rows[0].get("answer_excerpt")) if rows else "",
+            "sample_excerpt": (
+                _clean_text(rows[0].get("answer_excerpt")) if rows else ""
+            ),
             "stance": _dominant_stance(_stance_summary(rows)),
             "stance_summary": _stance_summary(rows),
         }
@@ -2737,9 +2767,11 @@ def _strategy_validation_label(status: str, stance_summary: dict[str, int]) -> s
         return "已被回答接住"
     if status == "risk":
         return "风险遮蔽"
-    if int(stance_summary.get("skeptical") or 0) or int(
-        stance_summary.get("risk") or 0
-    ) or int(stance_summary.get("competitive") or 0):
+    if (
+        int(stance_summary.get("skeptical") or 0)
+        or int(stance_summary.get("risk") or 0)
+        or int(stance_summary.get("competitive") or 0)
+    ):
         return "部分验证，伴随质疑"
     if status == "partial":
         return "部分验证"
@@ -2821,13 +2853,19 @@ def _strategy_action_recommendation(
 
 
 def _strategy_lane(term: str) -> str:
-    if any(cue in term for cue in ("财务", "保障", "事业", "安利人", "价值", "再出发", "成长")):
+    if any(
+        cue in term
+        for cue in ("财务", "保障", "事业", "安利人", "价值", "再出发", "成长")
+    ):
         return "career"
     if any(cue in term for cue in ("关系", "陪伴", "社群", "一起")):
         return "relationship"
     if any(cue in term for cue in ("绿色", "和谐", "环境")):
         return "green"
-    if any(cue in term for cue in ("健康", "抗衰", "长寿", "活力", "营养", "身体", "情绪", "大健康")):
+    if any(
+        cue in term
+        for cue in ("健康", "抗衰", "长寿", "活力", "营养", "身体", "情绪", "大健康")
+    ):
         return "health"
     return "general"
 
@@ -2933,7 +2971,7 @@ def _is_risk_entity(entity: AmwayEntityDefinition, acc: _EntityAccumulator) -> b
         return _has_risk_relation(acc)
     return any(
         cue in entity.canonical_name
-        for cue in ("风险", "传销", "夸大", "压力", "智商税", "直销")
+        for cue in ("风险", "传销", "夸大", "压力", "智商税")
     ) and _has_risk_relation(acc)
 
 
@@ -2945,20 +2983,19 @@ def _is_contextual_risk_entity(
     entity: AmwayEntityDefinition,
     acc: _EntityAccumulator,
 ) -> bool:
-    graph_policy = entity.graph_policy.model_dump() if hasattr(entity.graph_policy, "model_dump") else entity.graph_policy
+    graph_policy = (
+        entity.graph_policy.model_dump()
+        if hasattr(entity.graph_policy, "model_dump")
+        else entity.graph_policy
+    )
     if (
         isinstance(graph_policy, dict)
         and graph_policy.get("risk_view") == "not_allowed"
         and entity.entity_id not in RISK_CONTEXT_ENTITY_IDS
     ):
         return False
-    has_negative_context = _has_accumulator_negative_context(acc)
     if entity.entity_id in RISK_CONTEXT_ENTITY_IDS:
         return _has_risk_relation(acc)
-    if entity.entity_type == "BusinessModel" and (
-        _has_risk_relation(acc) or has_negative_context
-    ):
-        return True
     if entity.entity_type == "Touchpoint" and _has_risk_relation(acc):
         return True
     return False

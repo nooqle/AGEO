@@ -155,14 +155,14 @@ TERM_THEMES: dict[str, str] = {
     "长寿时代": "母品牌叙事",
     "丰盛人生支持体系": "母品牌叙事",
     "美好生活": "母品牌叙事",
-    "直销模式": "信任与争议",
+    "直销模式": "事业与再出发",
     "传销/拉人风险": "信任与争议",
     "熟人销售压力": "信任与争议",
     "智商税/夸大功效": "信任与争议",
 }
 
-RISK_TERMS = {"直销模式", "传销/拉人风险", "熟人销售压力", "智商税/夸大功效"}
-SENSITIVE_TERMS = {"事业机会"}
+RISK_TERMS = {"传销/拉人风险", "熟人销售压力", "智商税/夸大功效"}
+SENSITIVE_TERMS = {"事业机会", "直销模式"}
 TARGET_TERMS = {
     "健康管理",
     "整体抗衰",
@@ -550,7 +550,10 @@ def _relation_type_for_evidence(term: str, observation: AnswerObservation) -> st
         for cue in ("风险", "争议", "合规", "传销", "拉人", "压力", "质疑")
     ):
         return "风险关系"
-    if any(cue in answer_text[:ANSWER_START_CHARS] for cue in ("是", "属于", "被理解为", "常被理解为")):
+    if any(
+        cue in answer_text[:ANSWER_START_CHARS]
+        for cue in ("是", "属于", "被理解为", "常被理解为")
+    ):
         return "定义关系"
     if any(cue in answer_text for cue in ("推荐", "建议", "可以考虑", "适合", "优先")):
         return "推荐关系"
@@ -595,7 +598,9 @@ def _position_score(positions: Counter[str]) -> int:
     if not total:
         return 0
     return round(
-        sum(weights.get(position, 20.0) * count for position, count in positions.items())
+        sum(
+            weights.get(position, 20.0) * count for position, count in positions.items()
+        )
         / total
     )
 
@@ -627,8 +632,10 @@ def _frequency_score(acc: TermAccumulator, total_observations: int) -> int:
 
 
 def _scene_coverage_score(acc: TermAccumulator, total_scene_count: int) -> int:
-    scene_count = len(acc.mother_themes) or len(acc.opportunity_points) or len(
-        acc.audience_segments
+    scene_count = (
+        len(acc.mother_themes)
+        or len(acc.opportunity_points)
+        or len(acc.audience_segments)
     )
     denominator = max(total_scene_count, 1)
     return max(0, min(100, round(scene_count / denominator * 100)))
@@ -692,7 +699,12 @@ def _business_tag(term: str, orbit: str, score: int) -> str:
         return "风险认知"
     if term in SENSITIVE_TERMS:
         return "敏感资产"
-    if term in ASSET_TERMS and orbit in {"core_near", "strong", "near_opportunity", "contestable"}:
+    if term in ASSET_TERMS and orbit in {
+        "core_near",
+        "strong",
+        "near_opportunity",
+        "contestable",
+    }:
         return "当前资产"
     if term in PATH_TERMS and orbit in {"strong", "near_opportunity", "contestable"}:
         return "可借力路径"
@@ -1083,7 +1095,7 @@ def _build_association_actions(nodes: list[dict[str, Any]]) -> list[dict[str, An
         key=lambda item: (
             {"high": 0, "medium": 1, "low": 2}.get(str(item.get("priority")), 3),
             {"translate": 0, "amplify": 1, "build_path": 2, "build_evidence": 3}.get(
-            str(item.get("action_type")),
+                str(item.get("action_type")),
                 9,
             ),
         )
@@ -1188,17 +1200,24 @@ def _is_risk_report_node(node: dict[str, Any]) -> bool:
 
 
 def _is_strong_report_node(node: dict[str, Any]) -> bool:
-    return (
-        str(node.get("orbit") or "") in {"core_near", "strong"}
-        and not _is_risk_report_node(node)
-    )
+    return str(node.get("orbit") or "") in {
+        "core_near",
+        "strong",
+    } and not _is_risk_report_node(node)
 
 
 def _is_growth_report_node(node: dict[str, Any]) -> bool:
     return (
         str(node.get("orbit") or "") in {"near_opportunity", "contestable"}
         or str(node.get("business_tag") or "")
-        in {"战略机会", "可借力路径", "可拉近机会", "近端机会", "战略近端机会", "战略接住"}
+        in {
+            "战略机会",
+            "可借力路径",
+            "可拉近机会",
+            "近端机会",
+            "战略近端机会",
+            "战略接住",
+        }
         or str(node.get("maturity_tier") or "") == "near_opportunity"
     ) and not _is_risk_report_node(node)
 
@@ -1206,8 +1225,10 @@ def _is_growth_report_node(node: dict[str, Any]) -> bool:
 def _is_story_report_node(node: dict[str, Any]) -> bool:
     return (
         str(node.get("orbit") or "") in {"far_opportunity", "weak", "blank"}
-        or str(node.get("business_tag") or "") in {"证据不足", "远端机会", "战略远端机会", "弱信号", "战略待验证"}
-        or str(node.get("maturity_tier") or "") in {"far_opportunity", "watch_signal", "evidence_gap"}
+        or str(node.get("business_tag") or "")
+        in {"证据不足", "远端机会", "战略远端机会", "弱信号", "战略待验证"}
+        or str(node.get("maturity_tier") or "")
+        in {"far_opportunity", "watch_signal", "evidence_gap"}
     ) and not _is_risk_report_node(node)
 
 
@@ -1263,9 +1284,7 @@ def _build_question_definition(
                 "metadata_status": _clean_text(item.get("metadata_status")),
             }
         )
-    audience_segments = _counter_values_from_records(
-        question_bank, "audience_segment"
-    )
+    audience_segments = _counter_values_from_records(question_bank, "audience_segment")
     probe_types = _counter_values_from_records(question_bank, "probe_type")
     opportunity_points = _counter_values_from_records(
         question_bank, "opportunity_point"
@@ -1276,17 +1295,11 @@ def _build_question_definition(
         f"题目数：{question_count}",
     ]
     if audience_segments:
-        definition_parts.append(
-            "人群：" + "、".join(audience_segments[:4])
-        )
+        definition_parts.append("人群：" + "、".join(audience_segments[:4]))
     if probe_types:
-        definition_parts.append(
-            "探针：" + "、".join(probe_types[:4])
-        )
+        definition_parts.append("探针：" + "、".join(probe_types[:4]))
     if opportunity_points:
-        definition_parts.append(
-            "机会点：" + "、".join(opportunity_points[:4])
-        )
+        definition_parts.append("机会点：" + "、".join(opportunity_points[:4]))
     return {
         "center_term": center_term,
         "center_terms": center_terms,
@@ -1366,9 +1379,7 @@ def _build_platform_source_summary(
             {
                 **platform_row,
                 "question_ids": sorted(set(platform_row["question_ids"])),
-                "answer_preference": _clean_text(
-                    comparison.get("answer_preference")
-                ),
+                "answer_preference": _clean_text(comparison.get("answer_preference")),
                 "preferred_nodes": comparison.get("preferred_nodes") or [],
                 "dominant_orbit": _clean_text(comparison.get("dominant_orbit")),
                 "risk_bias": _clean_text(comparison.get("risk_bias")),
@@ -1454,9 +1465,7 @@ def _build_evidence_findings(
             supporting_facts.append(platform_text + "。")
         if first_sample:
             supporting_facts.append(
-                "代表问题："
-                + _clean_text(first_sample.get("question"))
-                + "。"
+                "代表问题：" + _clean_text(first_sample.get("question")) + "。"
             )
         findings.append(
             {
@@ -1629,15 +1638,13 @@ def _build_source_appendix(
                 "question": _clean_text(sample.get("question")),
                 "answer_excerpt": _preserve_answer_text(sample.get("answer_excerpt")),
                 "audience_segment": _clean_text(
-                    sample.get("audience_segment")
-                    or question.get("audience_segment")
+                    sample.get("audience_segment") or question.get("audience_segment")
                 ),
                 "life_scene": _clean_text(
                     sample.get("life_scene") or question.get("life_scene")
                 ),
                 "opportunity_point": _clean_text(
-                    sample.get("opportunity_point")
-                    or question.get("opportunity_point")
+                    sample.get("opportunity_point") or question.get("opportunity_point")
                 ),
                 "probe_type": _clean_text(
                     sample.get("probe_type") or question.get("probe_type")
@@ -1719,7 +1726,9 @@ def _build_report_narrative_sections(
         else f"{center_term}暂时还缺少稳定外围联想。"
     )
     platform_name = _clean_text(first_platform.get("platform")) or "平台样本"
-    platform_preference = _clean_text(first_platform.get("answer_preference")) or "偏好待观察"
+    platform_preference = (
+        _clean_text(first_platform.get("answer_preference")) or "偏好待观察"
+    )
     evidence_platform = _clean_text(first_evidence.get("platform")) or "某个平台"
     evidence_question = _clean_text(first_evidence.get("question"))
     evidence_term = _clean_text(first_evidence.get("node_term")) or "相关联想"
@@ -1927,7 +1936,7 @@ def _build_report_narrative_sections(
                 "图谱要把回答里的稳定绑定、连接路径、机会方向和风险关系拆开看，避免停留在关键词罗列。"
             ),
             "claims": [
-                    "稳定回到品牌的词代表回答会主动把用户带回品牌。",
+                "稳定回到品牌的词代表回答会主动把用户带回品牌。",
                 "已有路径的词代表连接已经出现，但仍需要更多回答和平台共识。",
                 "风险词用单独关系图查看，不放在普通机会轨道上。",
             ],
@@ -1968,9 +1977,7 @@ def _build_report_narrative_sections(
                 f"近端资产：{_join_report_terms(strong_terms, '暂未形成')}。",
                 "这些资产需要继续用产品事实、场景证据和权威背书巩固。",
             ],
-            "so_what": (
-                "稳定资产要看平台是否已经会引用；品牌内容应优先服务这些入口。"
-            ),
+            "so_what": ("稳定资产要看平台是否已经会引用；品牌内容应优先服务这些入口。"),
             "paragraphs": [
                 (
                     f"{_join_report_terms(strong_terms, '近端资产')}目前离{center_term}最近。"
@@ -2005,9 +2012,7 @@ def _build_report_narrative_sections(
                 f"可拉近机会：{_join_report_terms(growth_terms, '暂未形成')}。",
                 f"长期观察词：{_join_report_terms(story_terms, '暂未形成')}。",
             ],
-            "so_what": (
-                "机会词需要通过问题、内容和回答证据反复带回中心品牌。"
-            ),
+            "so_what": ("机会词需要通过问题、内容和回答证据反复带回中心品牌。"),
             "paragraphs": [
                 (
                     f"{_join_report_terms(growth_terms, '机会词')}已经能通向{center_term}，"
@@ -2023,7 +2028,9 @@ def _build_report_narrative_sections(
                 ),
             ],
             "supporting_facts": facts_from_finding(growth_finding)
-            or [f"机会词：{_join_report_terms(growth_terms + story_terms, '暂未形成')}。"],
+            or [
+                f"机会词：{_join_report_terms(growth_terms + story_terms, '暂未形成')}。"
+            ],
             "evidence_refs": refs_from_finding(growth_finding),
             "next_probe": "把机会词拆成自然提问、路径提问和品牌锚定提问，分别看平台是否会主动连回品牌。",
         },
@@ -2098,12 +2105,14 @@ def _build_report_narrative_sections(
             ],
             "supporting_facts": [
                 (
-                    f"{platform_name}有效回答 "
-                    f"{int(first_platform.get('valid_answer_count') or 0)} 条，"
-                    f"代表节点：{_join_report_terms(first_platform.get('preferred_nodes') or [], '待观察')}。"
-                )
-                if first_platform
-                else "平台样本不足，暂不形成平台偏好判断。",
+                    (
+                        f"{platform_name}有效回答 "
+                        f"{int(first_platform.get('valid_answer_count') or 0)} 条，"
+                        f"代表节点：{_join_report_terms(first_platform.get('preferred_nodes') or [], '待观察')}。"
+                    )
+                    if first_platform
+                    else "平台样本不足，暂不形成平台偏好判断。"
+                ),
             ],
             "evidence_refs": [],
             "next_probe": "下一轮按平台分别补材料，比较它们是否仍沿同一入口组织回答。",
@@ -2145,17 +2154,19 @@ def _build_report_narrative_sections(
             ],
             "supporting_facts": [
                 (
-                    f"证据样本：{_clean_text(first_evidence.get('evidence_id'))}；"
-                    f"节点：{evidence_term}；平台：{evidence_platform}。"
-                )
-                if first_evidence
-                else "暂未形成可引用证据样本。",
+                    (
+                        f"证据样本：{_clean_text(first_evidence.get('evidence_id'))}；"
+                        f"节点：{evidence_term}；平台：{evidence_platform}。"
+                    )
+                    if first_evidence
+                    else "暂未形成可引用证据样本。"
+                ),
             ],
-            "evidence_refs": [
-                _clean_text(first_evidence.get("evidence_id"))
-            ]
-            if first_evidence
-            else [],
+            "evidence_refs": (
+                [_clean_text(first_evidence.get("evidence_id"))]
+                if first_evidence
+                else []
+            ),
             "next_probe": (
                 _clean_text(first_action.get("next_question_suggestion"))
                 if first_action
@@ -2310,7 +2321,9 @@ def _build_report_quality_checks(
     if not available_questions:
         available_questions = len(question_definition.get("sample_questions") or [])
     minimum_platforms = min(max(expected_platforms, 1), 2)
-    minimum_questions = min(max(available_questions, 1), 2) if len(source_appendix) >= 6 else 1
+    minimum_questions = (
+        min(max(available_questions, 1), 2) if len(source_appendix) >= 6 else 1
+    )
     required_checks = [
         {
             "key": "question_definition",
@@ -2518,7 +2531,9 @@ def _build_report_markdown(
         ]
     )
     for trace in analysis_tool_trace:
-        lines.extend([f"### {trace.get('title')}", "", _clean_text(trace.get("summary")), ""])
+        lines.extend(
+            [f"### {trace.get('title')}", "", _clean_text(trace.get("summary")), ""]
+        )
         outputs = trace.get("outputs")
         if isinstance(outputs, list):
             for output in outputs[:8]:
@@ -2717,7 +2732,9 @@ def _normalize_question_bank_item(value: Any, index: int) -> dict[str, Any] | No
         if source:
             item["source"] = source
     missing = [
-        key for key in QUESTION_BANK_REQUIRED_METADATA_KEYS if not _clean_text(item.get(key))
+        key
+        for key in QUESTION_BANK_REQUIRED_METADATA_KEYS
+        if not _clean_text(item.get(key))
     ]
     if "metadata_status" not in item:
         item["metadata_status"] = "ready" if not missing else "inferred_needs_review"
@@ -2726,7 +2743,9 @@ def _normalize_question_bank_item(value: Any, index: int) -> dict[str, Any] | No
     return item
 
 
-def _question_bank_from_fetch_results(fetch_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _question_bank_from_fetch_results(
+    fetch_results: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     questions: list[dict[str, Any]] = []
     for index, row in enumerate(fetch_results or [], start=1):
         if not isinstance(row, dict):
@@ -2781,10 +2800,15 @@ def _build_question_bank(
             ordered_keys.append(key)
             by_key[key] = item
             return
-        merged = {**by_key[key], **{k: v for k, v in item.items() if v not in (None, "", [])}}
+        merged = {
+            **by_key[key],
+            **{k: v for k, v in item.items() if v not in (None, "", [])},
+        }
         by_key[key] = merged
 
-    for index, value in enumerate(_iter_question_payloads(simulated_questions), start=1):
+    for index, value in enumerate(
+        _iter_question_payloads(simulated_questions), start=1
+    ):
         add_item(_normalize_question_bank_item(value, index))
 
     for item in _question_bank_from_fetch_results(fetch_results):
@@ -2815,13 +2839,9 @@ def _extract_calibrated_report_input(
             "evidence_findings": entity_calibration_result.get("evidence_findings")
             or [],
             "source_appendix": entity_calibration_result.get("source_appendix") or [],
-            "association_actions": entity_calibration_result.get(
-                "association_actions"
-            )
+            "association_actions": entity_calibration_result.get("association_actions")
             or [],
-            "tracking_projection": entity_calibration_result.get(
-                "tracking_projection"
-            )
+            "tracking_projection": entity_calibration_result.get("tracking_projection")
             or {},
         }
     return None
@@ -2837,14 +2857,10 @@ def _build_calibrated_executive_summary(
 ) -> dict[str, Any]:
     center_term = _first_center_term(center_terms)
     strong_terms = [
-        _clean_text(node.get("term"))
-        for node in nodes
-        if _is_strong_report_node(node)
+        _clean_text(node.get("term")) for node in nodes if _is_strong_report_node(node)
     ][:3]
     growth_terms = [
-        _clean_text(node.get("term"))
-        for node in nodes
-        if _is_growth_report_node(node)
+        _clean_text(node.get("term")) for node in nodes if _is_growth_report_node(node)
     ][:3]
     far_terms = _top_far_terms_for_report(nodes, limit=3)
     competition_terms = _top_competition_terms_for_report(nodes, limit=3)
@@ -2886,7 +2902,9 @@ def _build_calibrated_executive_summary(
     )
     return {
         "one_line_judgment": one_line,
-        "current_default_identity": _join_report_terms(strong_terms, "暂无稳定外围联想"),
+        "current_default_identity": _join_report_terms(
+            strong_terms, "暂无稳定外围联想"
+        ),
         "primary_opportunity": _join_report_terms(
             growth_terms or partial_strategies,
             "继续补战略证据",
@@ -2947,10 +2965,16 @@ def _platform_strategy_sentence(row: dict[str, Any]) -> str:
         return "平台暂未形成稳定提及。"
     parts = [
         f"{platform}{count}"
-        for platform, count in sorted(distribution.items(), key=lambda item: str(item[0]))
+        for platform, count in sorted(
+            distribution.items(), key=lambda item: str(item[0])
+        )
         if int(count or 0) > 0
     ]
-    return "平台提及：" + "、".join(parts[:6]) + "。" if parts else "平台暂未形成稳定提及。"
+    return (
+        "平台提及：" + "、".join(parts[:6]) + "。"
+        if parts
+        else "平台暂未形成稳定提及。"
+    )
 
 
 def _strategy_platform_comparison_lines(
@@ -2977,7 +3001,9 @@ def _strategy_platform_comparison_lines(
             if count <= 0:
                 platform_parts.append(f"{platform}未提及")
             elif sample:
-                platform_parts.append(f"{platform}提及 {count} 次，样本指向“{sample[:40]}”")
+                platform_parts.append(
+                    f"{platform}提及 {count} 次，样本指向“{sample[:40]}”"
+                )
             else:
                 platform_parts.append(f"{platform}提及 {count} 次")
         if not platform_parts:
@@ -3022,9 +3048,7 @@ def _risk_scene_lines_for_report(
         sample = _clean_text(row.get("sample_excerpt"))
         sample_text = f"样本原文指向“{sample[:72]}”。" if sample else ""
         if term:
-            lines.append(
-                f"{term}主要出现在{scenes}，{platform_text}{sample_text}"
-            )
+            lines.append(f"{term}主要出现在{scenes}，{platform_text}{sample_text}")
     return lines
 
 
@@ -3195,7 +3219,9 @@ def _strategy_graph_sentence(
     parts = []
     for node in nodes[:3]:
         distance = int(node.get("distance_score") or 0)
-        evidence_count = int(node.get("evidence_count") or node.get("answer_count") or 0)
+        evidence_count = int(
+            node.get("evidence_count") or node.get("answer_count") or 0
+        )
         platform_count = int(node.get("platform_count") or 0)
         parts.append(
             f"{node.get('term')}位于{node.get('orbit_label') or node.get('orbit')}，"
@@ -3208,7 +3234,9 @@ def _strategy_brand_meaning(row: dict[str, Any]) -> str:
     term = _clean_text(row.get("strategy_term"))
     status = str(row.get("status") or "")
     tier = _clean_text(row.get("decision_tier"))
-    stance = row.get("stance_summary") if isinstance(row.get("stance_summary"), dict) else {}
+    stance = (
+        row.get("stance_summary") if isinstance(row.get("stance_summary"), dict) else {}
+    )
     supportive = int(stance.get("supportive") or 0)
     skeptical = int(stance.get("skeptical") or 0)
     risk_like = int(stance.get("risk") or 0) + int(stance.get("competitive") or 0)
@@ -3252,13 +3280,19 @@ def _strategy_brand_meaning(row: dict[str, Any]) -> str:
 
 
 def _strategy_lane_for_report(term: str) -> str:
-    if any(cue in term for cue in ("财务", "保障", "事业", "安利人", "价值", "再出发", "成长")):
+    if any(
+        cue in term
+        for cue in ("财务", "保障", "事业", "安利人", "价值", "再出发", "成长")
+    ):
         return "career"
     if any(cue in term for cue in ("关系", "陪伴", "社群", "一起")):
         return "relationship"
     if any(cue in term for cue in ("绿色", "和谐", "环境")):
         return "green"
-    if any(cue in term for cue in ("健康", "抗衰", "长寿", "活力", "营养", "身体", "情绪", "大健康")):
+    if any(
+        cue in term
+        for cue in ("健康", "抗衰", "长寿", "活力", "营养", "身体", "情绪", "大健康")
+    ):
         return "health"
     return "general"
 
@@ -3323,9 +3357,10 @@ def _build_four_have_report_narrative_sections(
     companionship = pillars.get("have_companionship", {})
     security = pillars.get("have_security", {})
     value = pillars.get("have_value", {})
-    companionship_has_risk = bool(companionship.get("risk_terms")) or _clean_text(
-        companionship.get("status")
-    ) == "emerging_hijacked"
+    companionship_has_risk = (
+        bool(companionship.get("risk_terms"))
+        or _clean_text(companionship.get("status")) == "emerging_hijacked"
+    )
     weekly_actions = [
         item
         for item in strategy_storyline.get("weekly_actions", [])
@@ -3347,10 +3382,13 @@ def _build_four_have_report_narrative_sections(
     valid_answers = int(sample_scope.get("valid_answer_count") or 0)
     question_count = int(sample_scope.get("question_count") or 0)
     platform_count = int(sample_scope.get("platform_count") or 0)
-    tracking_label = _clean_text(
-        tracking_projection.get("status_label")
-        or sample_scope.get("tracking_status_label")
-    ) or "首期基线"
+    tracking_label = (
+        _clean_text(
+            tracking_projection.get("status_label")
+            or sample_scope.get("tracking_status_label")
+        )
+        or "首期基线"
+    )
     platforms = _join_report_terms(
         platform_source_summary.get("platform_names") or [],
         "平台样本待补",
@@ -3369,7 +3407,9 @@ def _build_four_have_report_narrative_sections(
         if _clean_text(item.get("title")) and _clean_text(item.get("action"))
     ]
     if not action_lines:
-        action_lines = _association_action_lines_for_report(association_actions, limit=3)
+        action_lines = _association_action_lines_for_report(
+            association_actions, limit=3
+        )
     rendered_source_quote_lines: set[str] = set()
 
     def source_quote_lines(*pillar_items: dict[str, Any], limit: int = 2) -> list[str]:
@@ -3552,7 +3592,8 @@ def _build_four_have_report_narrative_sections(
             "title": "本周 3 件事",
             "reader_question": "品牌团队这周先做什么？",
             "takeaway": "行动直接对齐三条年度抓手：科技抗衰、安利社群外显、透明事业边界与人生再出发。",
-            "claims": action_lines[:3] or ["本周先补健康方案、社群证据和事业边界三类材料。"],
+            "claims": action_lines[:3]
+            or ["本周先补健康方案、社群证据和事业边界三类材料。"],
             "paragraphs": [
                 "这周先收拢概念，补可以进入 AI 回答的证据。",
                 *action_lines[:3],
@@ -3573,11 +3614,7 @@ def _build_four_have_report_narrative_sections(
 
 
 def _story_terms(pillar: dict[str, Any], key: str, fallback: str) -> str:
-    values = [
-        _clean_text(item)
-        for item in pillar.get(key, [])
-        if _clean_text(item)
-    ]
+    values = [_clean_text(item) for item in pillar.get(key, []) if _clean_text(item)]
     return _join_report_terms(values[:5], fallback)
 
 
@@ -3611,7 +3648,9 @@ def _combined_pillar_source_quote_lines(
                 continue
             seen.add(signature)
             question_part = f"问题：{question}；" if question else ""
-            lines.append(f"平台原文样本：{platform}；{question_part}回答摘录：{excerpt}")
+            lines.append(
+                f"平台原文样本：{platform}；{question_part}回答摘录：{excerpt}"
+            )
             if len(lines) >= limit:
                 return lines
     return lines
@@ -3685,7 +3724,11 @@ def _report_mentions_any(text: str, terms: tuple[str, ...] | list[str]) -> bool:
     normalized = _clean_text(text)
     if not normalized:
         return False
-    return any(_contains_alias(normalized, _clean_text(term)) for term in terms if _clean_text(term))
+    return any(
+        _contains_alias(normalized, _clean_text(term))
+        for term in terms
+        if _clean_text(term)
+    )
 
 
 def _report_center_terms(center_terms: list[str]) -> list[str]:
@@ -3757,9 +3800,7 @@ def _build_story_answer_records_from_source_appendix(
         platform = _clean_text(item.get("platform"))
         question = _clean_text(item.get("question"))
         text = _clean_text(
-            item.get("answer_excerpt")
-            or item.get("answer_text")
-            or item.get("excerpt")
+            item.get("answer_excerpt") or item.get("answer_text") or item.get("excerpt")
         )
         if not (platform and question and text):
             continue
@@ -3800,7 +3841,9 @@ def _build_story_sample_profile(
 ) -> dict[str, Any]:
     answer_count = len(records) or int(sample_scope.get("valid_answer_count") or 0)
     platform_counts = Counter(
-        _clean_text(record.get("platform")) for record in records if _clean_text(record.get("platform"))
+        _clean_text(record.get("platform"))
+        for record in records
+        if _clean_text(record.get("platform"))
     )
     question_ids = {
         _clean_text(record.get("question_id") or record.get("question"))
@@ -3808,9 +3851,13 @@ def _build_story_sample_profile(
         if _clean_text(record.get("question_id") or record.get("question"))
     }
     brand_named = [record for record in records if record.get("question_has_center")]
-    open_records = [record for record in records if not record.get("question_has_center")]
+    open_records = [
+        record for record in records if not record.get("question_has_center")
+    ]
     brand_mentions = [record for record in records if record.get("answer_has_center")]
-    open_mentions = [record for record in open_records if record.get("answer_has_center")]
+    open_mentions = [
+        record for record in open_records if record.get("answer_has_center")
+    ]
     risk_records = [
         record
         for record in records
@@ -3818,24 +3865,34 @@ def _build_story_sample_profile(
     ]
     return {
         "answer_count": answer_count,
-        "question_count": len(question_ids) or int(sample_scope.get("question_count") or 0),
-        "platform_count": len(platform_counts) or int(sample_scope.get("platform_count") or 0),
+        "question_count": len(question_ids)
+        or int(sample_scope.get("question_count") or 0),
+        "platform_count": len(platform_counts)
+        or int(sample_scope.get("platform_count") or 0),
         "platform_distribution": [
             {"platform": platform, "count": count}
             for platform, count in platform_counts.most_common()
         ],
         "brand_mention_count": len(brand_mentions),
-        "brand_mention_rate": round(len(brand_mentions) / len(records), 4) if records else 0.0,
+        "brand_mention_rate": (
+            round(len(brand_mentions) / len(records), 4) if records else 0.0
+        ),
         "brand_named_answer_count": len(brand_named),
         "open_answer_count": len(open_records),
         "open_brand_mention_count": len(open_mentions),
-        "active_mention_rate": round(len(open_mentions) / len(open_records), 4) if open_records else 0.0,
+        "active_mention_rate": (
+            round(len(open_mentions) / len(open_records), 4) if open_records else 0.0
+        ),
         "risk_context_count": len(risk_records),
-        "risk_context_rate": round(len(risk_records) / len(brand_mentions), 4) if brand_mentions else 0.0,
+        "risk_context_rate": (
+            round(len(risk_records) / len(brand_mentions), 4) if brand_mentions else 0.0
+        ),
     }
 
 
-def _story_entity_ranking(nodes: list[dict[str, Any]], *, limit: int = 12) -> list[dict[str, Any]]:
+def _story_entity_ranking(
+    nodes: list[dict[str, Any]], *, limit: int = 12
+) -> list[dict[str, Any]]:
     rows = [
         {
             "term": _clean_text(node.get("term")),
@@ -3843,7 +3900,9 @@ def _story_entity_ranking(nodes: list[dict[str, Any]], *, limit: int = 12) -> li
             "orbit_label": _clean_text(node.get("orbit_label")),
             "answer_count": int(node.get("answer_count") or 0),
             "platform_count": int(node.get("platform_count") or 0),
-            "gravity_score": int(node.get("gravity_score") or node.get("association_score") or 0),
+            "gravity_score": int(
+                node.get("gravity_score") or node.get("association_score") or 0
+            ),
             "risk_context_count": int(node.get("risk_evidence_count") or 0),
         }
         for node in nodes
@@ -3867,7 +3926,9 @@ def _story_platform_profiles(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if records:
-        for platform, count in Counter(_clean_text(record.get("platform")) for record in records).most_common():
+        for platform, count in Counter(
+            _clean_text(record.get("platform")) for record in records
+        ).most_common():
             platform_records = [
                 record
                 for record in records
@@ -3875,14 +3936,21 @@ def _story_platform_profiles(
             ]
             if not platform_records:
                 continue
-            risk_count = sum(1 for record in platform_records if record.get("has_negative_risk_context"))
+            risk_count = sum(
+                1
+                for record in platform_records
+                if record.get("has_negative_risk_context")
+            )
             active_mentions = sum(
                 1
                 for record in platform_records
-                if not record.get("question_has_center") and record.get("answer_has_center")
+                if not record.get("question_has_center")
+                and record.get("answer_has_center")
             )
             transformation_count = sum(
-                1 for record in platform_records if record.get("has_transformation_context")
+                1
+                for record in platform_records
+                if record.get("has_transformation_context")
             )
             risk_rate = risk_count / len(platform_records)
             if risk_rate >= 0.45:
@@ -3893,11 +3961,19 @@ def _story_platform_profiles(
                 profile = "开放问题更容易带出品牌"
             else:
                 profile = "样本口吻待继续观察"
-            centered_records = [record for record in platform_records if record.get("answer_has_center")]
+            centered_records = [
+                record for record in platform_records if record.get("answer_has_center")
+            ]
             if centered_records:
-                quote_record = max(centered_records, key=lambda r: len(str(r.get("text") or "")))
+                quote_record = max(
+                    centered_records, key=lambda r: len(str(r.get("text") or ""))
+                )
             else:
-                quote_record = max(platform_records, key=lambda r: len(str(r.get("text") or ""))) if platform_records else {}
+                quote_record = (
+                    max(platform_records, key=lambda r: len(str(r.get("text") or "")))
+                    if platform_records
+                    else {}
+                )
             rows.append(
                 {
                     "platform": platform,
@@ -3909,7 +3985,8 @@ def _story_platform_profiles(
                     "quote": {
                         "platform": platform,
                         "question": quote_record.get("question"),
-                        "excerpt": _preserve_answer_text(quote_record.get("text")) or "",
+                        "excerpt": _preserve_answer_text(quote_record.get("text"))
+                        or "",
                     },
                 }
             )
@@ -3925,7 +4002,8 @@ def _story_platform_profiles(
                 "risk_context_count": len(row.get("risk_nodes") or []),
                 "active_mentions": 0,
                 "transformation_mentions": len(row.get("preferred_nodes") or []),
-                "profile": _clean_text(row.get("answer_preference")) or "样本口吻待继续观察",
+                "profile": _clean_text(row.get("answer_preference"))
+                or "样本口吻待继续观察",
                 "quote": None,
             }
         )
@@ -3958,8 +4036,12 @@ def _story_blind_spot(
         "diagnosis": diagnosis,
         "active_mention_rate": active_rate,
         "open_answer_count": int(sample_profile.get("open_answer_count") or 0),
-        "open_brand_mention_count": int(sample_profile.get("open_brand_mention_count") or 0),
-        "brand_named_answer_count": int(sample_profile.get("brand_named_answer_count") or 0),
+        "open_brand_mention_count": int(
+            sample_profile.get("open_brand_mention_count") or 0
+        ),
+        "brand_named_answer_count": int(
+            sample_profile.get("brand_named_answer_count") or 0
+        ),
         "missed_examples": missed_examples,
     }
 
@@ -4007,11 +4089,15 @@ def _story_platform_distribution_line(sample_profile: dict[str, Any]) -> str:
     rows = sample_profile.get("platform_distribution") or []
     if not rows:
         return "平台分布待补。"
-    return "平台分布：" + "、".join(
-        f"{row.get('platform')} {row.get('count')}"
-        for row in rows[:4]
-        if row.get("platform")
-    ) + "。"
+    return (
+        "平台分布："
+        + "、".join(
+            f"{row.get('platform')} {row.get('count')}"
+            for row in rows[:4]
+            if row.get("platform")
+        )
+        + "。"
+    )
 
 
 def _story_entity_line(rows: list[dict[str, Any]], *, limit: int = 5) -> str:
@@ -4046,7 +4132,13 @@ def _story_quote_lines_from_samples(
         q = question[:40]
         plat = _normalize_platform(sample.get("platform"))
         full_text = record_index.get(f"{q}|{plat}") if q and plat else ""
-        excerpt = _preserve_answer_text(full_text) if full_text else _preserve_answer_text(sample.get("answer_excerpt") or sample.get("excerpt"))
+        excerpt = (
+            _preserve_answer_text(full_text)
+            if full_text
+            else _preserve_answer_text(
+                sample.get("answer_excerpt") or sample.get("excerpt")
+            )
+        )
         if not excerpt:
             continue
         key = f"{platform}:{question}:{excerpt[:80]}"
@@ -4087,11 +4179,19 @@ def _story_gap_label(pillar_key: str, pillar: dict[str, Any]) -> str:
     if pillar_key == "have_health":
         return "叙事层级差距"
     if pillar_key == "have_companionship":
-        return "叙事被劫持" if pillar.get("risk_terms") or "hijacked" in status else "弱信号待确认"
+        return (
+            "叙事被劫持"
+            if pillar.get("risk_terms") or "hijacked" in status
+            else "弱信号待确认"
+        )
     if pillar_key == "have_security":
         return "叙事被反转"
     if pillar_key == "have_value":
-        return "叙事缺位" if int(pillar.get("answer_mention_count") or 0) <= 1 else "弱信号待确认"
+        return (
+            "叙事缺位"
+            if int(pillar.get("answer_mention_count") or 0) <= 1
+            else "弱信号待确认"
+        )
     return "待判断"
 
 
@@ -4254,11 +4354,21 @@ def _build_storyline_report_sections(
     security = pillars.get("have_security", {})
     value = pillars.get("have_value", {})
     weekly_actions = [
-        item for item in strategy_storyline.get("weekly_actions", []) if isinstance(item, dict)
+        item
+        for item in strategy_storyline.get("weekly_actions", [])
+        if isinstance(item, dict)
     ]
-    valid_answers = int(sample_profile.get("answer_count") or sample_scope.get("valid_answer_count") or 0)
-    question_count = int(sample_profile.get("question_count") or sample_scope.get("question_count") or 0)
-    platform_count = int(sample_profile.get("platform_count") or sample_scope.get("platform_count") or 0)
+    valid_answers = int(
+        sample_profile.get("answer_count")
+        or sample_scope.get("valid_answer_count")
+        or 0
+    )
+    question_count = int(
+        sample_profile.get("question_count") or sample_scope.get("question_count") or 0
+    )
+    platform_count = int(
+        sample_profile.get("platform_count") or sample_scope.get("platform_count") or 0
+    )
     active_rate = float(blind_spot.get("active_mention_rate") or 0)
     risk_rate = float(sample_profile.get("risk_context_rate") or 0)
     asset_rows = _story_entities_by_tag(
@@ -4276,11 +4386,11 @@ def _build_storyline_report_sections(
         _clean_text(node.get("term"))
         for node in risk_summary.get("risk_nodes", [])
         if isinstance(node, dict) and _clean_text(node.get("term"))
-    ][:4] or [
-        _clean_text(row.get("term")) for row in risk_rows[:4] if row.get("term")
-    ]
+    ][:4] or [_clean_text(row.get("term")) for row in risk_rows[:4] if row.get("term")]
     story_records = storyline_analysis.get("records") or []
-    health_quotes = _story_quote_lines_from_samples(health.get("source_samples") or [], limit=3, records=story_records)
+    health_quotes = _story_quote_lines_from_samples(
+        health.get("source_samples") or [], limit=3, records=story_records
+    )
     companionship_quotes = _story_quote_lines_from_samples(
         companionship.get("source_samples") or [],
         limit=2,
@@ -4320,7 +4430,11 @@ def _build_storyline_report_sections(
     security_gap = _story_gap_label("have_security", security)
     value_gap = _story_gap_label("have_value", value)
     platform_focus = _join_report_terms(
-        [profile.get("platform") for profile in platform_profiles[:4] if profile.get("platform")],
+        [
+            profile.get("platform")
+            for profile in platform_profiles[:4]
+            if profile.get("platform")
+        ],
         "平台样本待补",
     )
     risk_terms_text = _join_report_terms(risk_terms, "风险语境待继续确认")
@@ -4494,7 +4608,8 @@ def _build_storyline_report_sections(
                 ),
             ],
             "so_what": "盲区需要靠开放场景内容解决，把安利嵌进用户原本会问的健康、社群和人生阶段问题。",
-            "supporting_facts": blind_examples[:3] or [
+            "supporting_facts": blind_examples[:3]
+            or [
                 f"开放问题主动提及 {blind_spot.get('open_brand_mention_count', 0)} 条。"
             ],
             "evidence_refs": [],
@@ -4540,7 +4655,7 @@ def _build_storyline_report_sections(
             "reader_question": "品牌团队这周先做哪三件事？",
             "takeaway": "先修档案，再开盲区，最后解死结——本周只做这三件事。",
             "claims": [
-                "问题一：高可见度 ≠ 高认可度。健康、社群、抗衰被提及很多，但 AI 提到时总带\"但是\"。",
+                '问题一：高可见度 ≠ 高认可度。健康、社群、抗衰被提及很多，但 AI 提到时总带"但是"。',
                 f"问题二：{center_term}不在 AI 的默认推荐列表里。开放问题主动提及率只有 {round(active_rate * 100, 1)}%。",
                 f"问题三：品牌故事被拆成碎片。三个平台讲三个版本的{center_term}。",
             ],
@@ -4641,10 +4756,13 @@ def _build_calibrated_report_narrative_sections(
         )
     center_term = _first_center_term(center_terms)
     tracking_projection = tracking_projection or {}
-    tracking_label = _clean_text(
-        tracking_projection.get("status_label")
-        or sample_scope.get("tracking_status_label")
-    ) or "首期基线"
+    tracking_label = (
+        _clean_text(
+            tracking_projection.get("status_label")
+            or sample_scope.get("tracking_status_label")
+        )
+        or "首期基线"
+    )
     strong_terms = _top_terms_for_report(nodes, _is_strong_report_node, 4)
     growth_terms = _top_terms_for_report(nodes, _is_growth_report_node, 4)
     far_terms = _top_far_terms_for_report(nodes, limit=4)
@@ -4680,8 +4798,7 @@ def _build_calibrated_report_narrative_sections(
     )
     if failed_platforms:
         platform_scope_sentence += (
-            f"{failed_platforms}本轮抓取失败，已进入平台状态记录，"
-            "不计入有效平台。"
+            f"{failed_platforms}本轮抓取失败，已进入平台状态记录，" "不计入有效平台。"
         )
     platform_next_probe = (
         "下一轮先恢复失败平台的抓取，再按战略词比较各平台的提及方式、原文摘录和图谱位置。"
@@ -4731,9 +4848,9 @@ def _build_calibrated_report_narrative_sections(
         for row in strategy_validation
         if row.get("status") == "missing" and _clean_text(row.get("strategy_term"))
     ][:5]
-    overall_status = _clean_text(
-        executive_summary.get("overall_strategy_status")
-    ) or "部分验证"
+    overall_status = (
+        _clean_text(executive_summary.get("overall_strategy_status")) or "部分验证"
+    )
     action_lines = _association_action_lines_for_report(association_actions, limit=4)
     return [
         {
@@ -4836,9 +4953,7 @@ def _build_calibrated_report_narrative_sections(
                 f"回答接住 {sum(1 for row in strategy_validation if row.get('status') == 'validated')} 个；部分接住 {sum(1 for row in strategy_validation if row.get('status') == 'partial')} 个。",
             ],
             "evidence_refs": [
-                ref
-                for row in strategy_rows
-                for ref in row.get("evidence_refs", [])[:2]
+                ref for row in strategy_rows for ref in row.get("evidence_refs", [])[:2]
             ][:8],
             "next_probe": "对部分验证和缺少证据的战略词，补充人群、场景、产品证据和品牌锚定问题。",
         },
@@ -4889,8 +5004,7 @@ def _build_calibrated_report_narrative_sections(
                 f"竞品参照 {competition_count} 个；这部分必须回到问题场景和平台原文判断。"
             ),
             "claims": (
-                risk_scene_lines[:2]
-                + competition_scene_lines[:2]
+                risk_scene_lines[:2] + competition_scene_lines[:2]
                 or ["本轮风险语境和竞品参照较弱，仍应保留为首期基线。"]
             ),
             "paragraphs": [
@@ -5062,9 +5176,7 @@ def _build_calibrated_report_markdown(
             linked_terms = "、".join(term_values[:8]) + f"等 {len(term_values)} 个节点"
         else:
             linked_terms = "、".join(term_values) or "相关节点"
-        lines.append(
-            f"- [{platform}] {question} => {linked_terms}：{excerpt}"
-        )
+        lines.append(f"- [{platform}] {question} => {linked_terms}：{excerpt}")
     return "\n".join(lines).strip() + "\n"
 
 
@@ -5116,20 +5228,26 @@ def _build_report_from_calibrated_input(
     )
     projection = (
         entity_calibration_result.get("association_circle_projection")
-        if isinstance(entity_calibration_result.get("association_circle_projection"), dict)
+        if isinstance(
+            entity_calibration_result.get("association_circle_projection"), dict
+        )
         else {}
     )
     nodes = (
         association_map.get("nodes")
         if isinstance(association_map.get("nodes"), list)
-        else projection.get("nodes") if isinstance(projection.get("nodes"), list) else []
+        else (
+            projection.get("nodes") if isinstance(projection.get("nodes"), list) else []
+        )
     )
     evidence_samples = (
         association_map.get("evidence_samples")
         if isinstance(association_map.get("evidence_samples"), list)
-        else projection.get("evidence_samples")
-        if isinstance(projection.get("evidence_samples"), list)
-        else []
+        else (
+            projection.get("evidence_samples")
+            if isinstance(projection.get("evidence_samples"), list)
+            else []
+        )
     )
     resolved_center_terms = _normalize_center_terms(
         brand_profile,
@@ -5145,77 +5263,97 @@ def _build_report_from_calibrated_input(
     sample_scope = (
         entity_calibration_result.get("sample_scope")
         if isinstance(entity_calibration_result.get("sample_scope"), dict)
-        else projection.get("sample_scope")
-        if isinstance(projection.get("sample_scope"), dict)
-        else {
-            "question_count": len(fetch_results or []),
-            "valid_answer_count": 0,
-            "normalized_node_count": len(nodes),
-        }
+        else (
+            projection.get("sample_scope")
+            if isinstance(projection.get("sample_scope"), dict)
+            else {
+                "question_count": len(fetch_results or []),
+                "valid_answer_count": 0,
+                "normalized_node_count": len(nodes),
+            }
+        )
     )
     sample_scope = {**sample_scope, "normalized_node_count": len(nodes)}
     platform_source_summary = (
         report_input.get("platform_scope")
         if isinstance(report_input.get("platform_scope"), dict)
-        else projection.get("platform_source_summary")
-        if isinstance(projection.get("platform_source_summary"), dict)
-        else {}
+        else (
+            projection.get("platform_source_summary")
+            if isinstance(projection.get("platform_source_summary"), dict)
+            else {}
+        )
     )
     platform_comparison = (
         platform_source_summary.get("platforms")
         if isinstance(platform_source_summary.get("platforms"), list)
-        else projection.get("platform_comparison")
-        if isinstance(projection.get("platform_comparison"), list)
-        else []
+        else (
+            projection.get("platform_comparison")
+            if isinstance(projection.get("platform_comparison"), list)
+            else []
+        )
     )
     strategy_validation = (
         report_input.get("strategy_validation")
         if isinstance(report_input.get("strategy_validation"), list)
-        else projection.get("strategy_validation")
-        if isinstance(projection.get("strategy_validation"), list)
-        else []
+        else (
+            projection.get("strategy_validation")
+            if isinstance(projection.get("strategy_validation"), list)
+            else []
+        )
     )
     strategy_storyline = (
         report_input.get("strategy_storyline")
         if isinstance(report_input.get("strategy_storyline"), dict)
-        else projection.get("strategy_storyline")
-        if isinstance(projection.get("strategy_storyline"), dict)
-        else {}
+        else (
+            projection.get("strategy_storyline")
+            if isinstance(projection.get("strategy_storyline"), dict)
+            else {}
+        )
     )
     risk_summary = (
         report_input.get("risk_summary")
         if isinstance(report_input.get("risk_summary"), dict)
-        else projection.get("risk_map")
-        if isinstance(projection.get("risk_map"), dict)
-        else {}
+        else (
+            projection.get("risk_map")
+            if isinstance(projection.get("risk_map"), dict)
+            else {}
+        )
     )
     evidence_findings = (
         report_input.get("evidence_findings")
         if isinstance(report_input.get("evidence_findings"), list)
-        else projection.get("evidence_findings")
-        if isinstance(projection.get("evidence_findings"), list)
-        else []
+        else (
+            projection.get("evidence_findings")
+            if isinstance(projection.get("evidence_findings"), list)
+            else []
+        )
     )
     source_appendix = (
         report_input.get("source_appendix")
         if isinstance(report_input.get("source_appendix"), list)
-        else projection.get("source_appendix")
-        if isinstance(projection.get("source_appendix"), list)
-        else []
+        else (
+            projection.get("source_appendix")
+            if isinstance(projection.get("source_appendix"), list)
+            else []
+        )
     )
     association_actions = (
         report_input.get("association_actions")
         if isinstance(report_input.get("association_actions"), list)
-        else projection.get("association_actions")
-        if isinstance(projection.get("association_actions"), list)
-        else _build_association_actions(nodes)
+        else (
+            projection.get("association_actions")
+            if isinstance(projection.get("association_actions"), list)
+            else _build_association_actions(nodes)
+        )
     )
     tracking_projection = (
         report_input.get("tracking_projection")
         if isinstance(report_input.get("tracking_projection"), dict)
-        else projection.get("tracking_projection")
-        if isinstance(projection.get("tracking_projection"), dict)
-        else {}
+        else (
+            projection.get("tracking_projection")
+            if isinstance(projection.get("tracking_projection"), dict)
+            else {}
+        )
     )
     if tracking_projection:
         sample_scope = {
@@ -5227,12 +5365,14 @@ def _build_report_from_calibrated_input(
     question_definition = (
         report_input.get("question_scope")
         if isinstance(report_input.get("question_scope"), dict)
-        else projection.get("question_definition")
-        if isinstance(projection.get("question_definition"), dict)
-        else _build_question_definition(
-            center_terms=resolved_center_terms,
-            question_bank=question_bank,
-            sample_scope=sample_scope,
+        else (
+            projection.get("question_definition")
+            if isinstance(projection.get("question_definition"), dict)
+            else _build_question_definition(
+                center_terms=resolved_center_terms,
+                question_bank=question_bank,
+                sample_scope=sample_scope,
+            )
         )
     )
     strategy_storyline = _ensure_report_strategy_storyline(
@@ -5377,9 +5517,7 @@ def _build_report_from_calibrated_input(
             "forbidden_phrases": list(REPORT_COPY_FORBIDDEN_PHRASES),
             "forbidden_patterns": list(REPORT_COPY_FORBIDDEN_PATTERNS),
             "required_spine": list(REPORT_REQUIRED_EVIDENCE_SPINE),
-            "required_section_fields": list(
-                REPORT_NARRATIVE_SECTION_REQUIRED_FIELDS
-            ),
+            "required_section_fields": list(REPORT_NARRATIVE_SECTION_REQUIRED_FIELDS),
         },
         "generated_from": "entity_calibration",
     }
@@ -5426,9 +5564,11 @@ def _build_report_from_calibrated_input(
         "dashboard_projection": {
             "brief_card": {
                 "title": "母品牌联想圈层",
-                "status": "样本不足"
-                if int(sample_scope.get("valid_answer_count") or 0) < 4
-                else "已生成",
+                "status": (
+                    "样本不足"
+                    if int(sample_scope.get("valid_answer_count") or 0) < 4
+                    else "已生成"
+                ),
             },
             "brand_world_view_mode": "association_circle",
             "association_circle_views": ["flat", "spatial"],
@@ -5496,9 +5636,7 @@ def _build_missing_calibration_artifact(
         "copy_constraints": {
             "version": REPORT_COPY_CONSTRAINT_VERSION,
             "required_spine": list(REPORT_REQUIRED_EVIDENCE_SPINE),
-            "required_section_fields": list(
-                REPORT_NARRATIVE_SECTION_REQUIRED_FIELDS
-            ),
+            "required_section_fields": list(REPORT_NARRATIVE_SECTION_REQUIRED_FIELDS),
         },
     }
     report_markdown = (

@@ -91,6 +91,12 @@ import type {
   BrandSpaceReportSummary,
 } from '@/types/brandSpace';
 import type {
+  AmwayEntityLexiconMutationInput,
+  AmwayEntityLexiconResponse,
+  AmwayQuestionHistoryResponse,
+  AmwayQuestionHistorySet,
+} from '@/types/amwayChina';
+import type {
   AioCanvasConfig,
   AioTakeoverMode,
   AioTakeoverRecord,
@@ -1531,6 +1537,72 @@ class ApiService {
     const resp = await this.request<{ question_set: MonitoringQuestionSet }>(
       `/monitoring/question-sets/${questionSetId}/confirm`,
       { method: 'POST' }
+    );
+    return resp.question_set;
+  }
+
+  async getAmwayEntityLexicon(entityId: string): Promise<AmwayEntityLexiconResponse> {
+    return this.request(`/amwaychina/entities/${entityId}/entity-lexicon`);
+  }
+
+  async createAmwayEntityLexiconEntry(
+    entityId: string,
+    data: AmwayEntityLexiconMutationInput,
+  ): Promise<{ entry_id: string }> {
+    return this.request(`/amwaychina/entities/${entityId}/entity-lexicon`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateAmwayEntityLexiconEntry(
+    entityId: string,
+    entryId: string,
+    data: AmwayEntityLexiconMutationInput,
+  ): Promise<{ entry_id: string }> {
+    return this.request(`/amwaychina/entities/${entityId}/entity-lexicon/${entryId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteAmwayEntityLexiconEntry(
+    entityId: string,
+    entryId: string,
+  ): Promise<{ entry_id: string; deleted: boolean }> {
+    return this.request(`/amwaychina/entities/${entityId}/entity-lexicon/${entryId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async listAmwayQuestionHistory(
+    entityId: string,
+    limit = 50,
+  ): Promise<AmwayQuestionHistoryResponse> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    return this.request(`/amwaychina/entities/${entityId}/question-sets?${query}`);
+  }
+
+  async saveAmwayQuestionHistory(data: {
+    entity_id: string;
+    title?: string;
+    source_file_name?: string | null;
+    center_term?: string | null;
+    center_terms?: string[];
+    questions: Array<Record<string, unknown> | string>;
+  }): Promise<AmwayQuestionHistorySet> {
+    const resp = await this.request<{ question_set: AmwayQuestionHistorySet }>(
+      `/amwaychina/entities/${data.entity_id}/question-sets`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          title: data.title,
+          source_file_name: data.source_file_name,
+          center_term: data.center_term,
+          center_terms: data.center_terms,
+          questions: data.questions,
+        }),
+      },
     );
     return resp.question_set;
   }

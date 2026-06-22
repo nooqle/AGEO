@@ -287,7 +287,10 @@ def test_association_circle_report_generation_enforces_human_copy_contract():
 
     assert sections
     assert projection_sections == sections
-    assert any(section["section_name"] == "narrative" for section in artifact["report_sections"])
+    assert any(
+        section["section_name"] == "narrative"
+        for section in artifact["report_sections"]
+    )
     assert "## 核心判断" in artifact["report_markdown"]
     assert "## 安利的 AI 档案里写了什么" in artifact["report_markdown"]
     assert "## 四个价值支柱，在 AI 叙事里是什么状态" in artifact["report_markdown"]
@@ -322,9 +325,12 @@ def test_association_circle_report_generation_enforces_human_copy_contract():
     assert "有保障" in narrative_text
     assert "有价值" in narrative_text
     assert artifact["strategy_storyline"]["framework"] == "amway_four_have_storyline_v2"
-    assert artifact["dashboard_projection"]["association_circle_projection"][
-        "strategy_storyline"
-    ]["framework"] == "amway_four_have_storyline_v2"
+    assert (
+        artifact["dashboard_projection"]["association_circle_projection"][
+            "strategy_storyline"
+        ]["framework"]
+        == "amway_four_have_storyline_v2"
+    )
     assert all(section.get("takeaway") for section in sections)
     assert all(section.get("claims") for section in sections)
     assert all(section.get("so_what") for section in sections)
@@ -334,15 +340,21 @@ def test_association_circle_report_generation_enforces_human_copy_contract():
     assert "下一轮先恢复失败平台" not in artifact["report_markdown"]
     assert "下一轮固定同一题库" in artifact["report_markdown"]
     assert artifact["report_quality_checks"]["passed"] is True
-    assert artifact["dashboard_projection"]["association_circle_projection"][
-        "report_quality_checks"
-    ]["passed"] is True
+    assert (
+        artifact["dashboard_projection"]["association_circle_projection"][
+            "report_quality_checks"
+        ]["passed"]
+        is True
+    )
     assert artifact["copy_constraints"]["version"]
     assert artifact["copy_constraints"]["required_spine"]
     assert "required_section_fields" in artifact["copy_constraints"]
-    assert "required_section_fields" in artifact["dashboard_projection"][
-        "association_circle_projection"
-    ]["copy_constraints"]
+    assert (
+        "required_section_fields"
+        in artifact["dashboard_projection"]["association_circle_projection"][
+            "copy_constraints"
+        ]
+    )
     for phrase in REPORT_COPY_FORBIDDEN_PHRASES:
         assert phrase not in narrative_text
     for pattern in REPORT_COPY_FORBIDDEN_PATTERNS:
@@ -402,11 +414,11 @@ def test_association_circle_report_includes_question_platform_and_evidence_spine
 
     assert platform_source_summary["valid_answer_count"] == 6
     assert platform_source_summary["total_answer_count"] == 6
-    platform_names = {
-        row["platform"] for row in platform_source_summary["platforms"]
-    }
+    platform_names = {row["platform"] for row in platform_source_summary["platforms"]}
     assert {"DeepSeek", "Kimi", "豆包", "元宝", "ChatGPT"}.issubset(platform_names)
-    assert all("valid_answer_count" in row for row in platform_source_summary["platforms"])
+    assert all(
+        "valid_answer_count" in row for row in platform_source_summary["platforms"]
+    )
 
     assert evidence_findings
     assert all(finding["supporting_facts"] for finding in evidence_findings)
@@ -441,7 +453,9 @@ def test_association_circle_report_includes_question_platform_and_evidence_spine
     platform_pos = markdown.index("## 平台差异")
     action_pos = markdown.index("## 从数据到行动")
     story_text = markdown[verdict_pos:action_pos]
-    assert verdict_pos < archive_pos < pillars_pos < blind_pos < platform_pos < action_pos
+    assert (
+        verdict_pos < archive_pos < pillars_pos < blind_pos < platform_pos < action_pos
+    )
     assert "战略词证据" not in story_text
     assert ("平台原文" in story_text) or ("AI 原文" in story_text)
     assert "## 战略词逐项明细" not in markdown
@@ -552,7 +566,10 @@ def test_report_keeps_brand_evidence_assets_out_of_risk_language():
     assert "风险" not in findings["科学研究"]["claim"]
     if "美好生活共创空间" in findings:
         assert "风险" not in findings["美好生活共创空间"]["claim"]
-    assert "科学研究会把回答带向信任、合规或销售关系风险" not in artifact["report_markdown"]
+    assert (
+        "科学研究会把回答带向信任、合规或销售关系风险"
+        not in artifact["report_markdown"]
+    )
 
 
 def test_association_circle_smoke_distinguishes_valid_failed_and_empty_answers():
@@ -596,9 +613,13 @@ def test_association_circle_smoke_distinguishes_valid_failed_and_empty_answers()
     assert sample_scope["question_bank_count"] == len(question_bank)
     assert all(node["source"] == "answer_parsed" for node in nodes)
     assert all(node["evidence_samples"] for node in nodes)
-    assert artifact["dashboard_projection"]["association_circle_projection"][
-        "nodes"
-    ] == nodes
-    assert artifact["dashboard_projection"]["association_circle_projection"][
-        "question_bank"
-    ] == question_bank[:200]
+    assert (
+        artifact["dashboard_projection"]["association_circle_projection"]["nodes"]
+        == nodes
+    )
+    assert (
+        artifact["dashboard_projection"]["association_circle_projection"][
+            "question_bank"
+        ]
+        == question_bank[:200]
+    )

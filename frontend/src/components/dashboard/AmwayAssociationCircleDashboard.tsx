@@ -1,5 +1,5 @@
 import { useMemo, useState, type ChangeEvent } from 'react';
-import { RefreshCw, Upload } from 'lucide-react';
+import { Database, FileText, RefreshCw, Upload } from 'lucide-react';
 import type { DashboardHomeData } from '@/types/dashboard';
 import type { Entity } from '@/types/entity';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
@@ -28,8 +28,13 @@ import {
   normalizeCenterTerms,
   sampleAnswerCount,
 } from './AmwayAssociationCircleDashboardViews';
+import {
+  AmwayEntityLexiconPanel,
+  AmwayQuestionHistoryPanel,
+} from './AmwayConsoleAssetPanels';
 
 type CircleStatus = 'empty' | 'loading' | 'ready';
+type ConsoleWorkspace = 'map' | 'lexicon' | 'questions';
 
 export interface UploadedAssociationQuestion {
   id: string;
@@ -82,6 +87,8 @@ interface AmwayAssociationCircleDashboardProps {
 }
 
 export function AmwayAssociationCircleDashboard({
+  selectedEntity,
+  selectedEntityId,
   centerOptions,
   selectedCenterTerm,
   home,
@@ -97,6 +104,7 @@ export function AmwayAssociationCircleDashboard({
   onStart,
 }: AmwayAssociationCircleDashboardProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState<ConsoleWorkspace>('map');
   const [uploadedQuestions, setUploadedQuestions] = useState<UploadedAssociationQuestion[]>([]);
   const [uploadedQuestionSource, setUploadedQuestionSource] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -191,6 +199,15 @@ export function AmwayAssociationCircleDashboard({
 
   const isModeling = Boolean(isRunSubmitting || isRunActive);
   const runButtonLabel = isModeling ? '运行中' : status === 'loading' ? '读取中' : status === 'ready' ? '重新生成图谱' : '生成图谱';
+  const workspaceItems: Array<{
+    id: ConsoleWorkspace;
+    label: string;
+    icon: typeof Database;
+  }> = [
+    { id: 'map', label: '品牌图谱', icon: RefreshCw },
+    { id: 'lexicon', label: '实体词库', icon: Database },
+    { id: 'questions', label: '历史题库', icon: FileText },
+  ];
 
   return (
     <div className="min-h-screen bg-[var(--bg-secondary)] text-[var(--text-primary)]">
@@ -205,6 +222,28 @@ export function AmwayAssociationCircleDashboard({
               <div className="truncate text-xs text-[var(--text-tertiary)]">安利品牌圈层</div>
             </div>
           </div>
+          <nav className="hidden items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-1 lg:flex">
+            {workspaceItems.map((item) => {
+              const Icon = item.icon;
+              const active = workspace === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setWorkspace(item.id)}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm transition"
+                  style={{
+                    background: active ? 'var(--bg-primary)' : 'transparent',
+                    color: active ? 'var(--brand-primary)' : 'var(--text-secondary)',
+                    boxShadow: active ? 'var(--shadow-sm)' : 'none',
+                  }}
+                >
+                  <Icon size={14} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
           <div className="flex items-center gap-2">
             <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-secondary)]">
               <span className="font-medium text-[var(--brand-primary)]">{headerStatusLabel}</span>
@@ -219,6 +258,31 @@ export function AmwayAssociationCircleDashboard({
       </header>
 
       <main className="mx-auto max-w-[1920px] min-w-0 px-5 py-4 lg:px-7 2xl:px-10">
+        <div className="mb-4 flex gap-2 overflow-x-auto lg:hidden">
+          {workspaceItems.map((item) => {
+            const active = workspace === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setWorkspace(item.id)}
+                className="h-10 shrink-0 rounded-xl border px-3 text-sm"
+                style={{
+                  borderColor: active ? 'var(--brand-primary)' : 'var(--border-subtle)',
+                  background: active ? 'var(--brand-bg)' : 'var(--bg-primary)',
+                  color: active ? 'var(--brand-primary)' : 'var(--text-secondary)',
+                }}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+        {workspace === 'lexicon' ? (
+          <AmwayEntityLexiconPanel entityId={selectedEntityId} entityName={selectedEntity.name} />
+        ) : workspace === 'questions' ? (
+          <AmwayQuestionHistoryPanel entityId={selectedEntityId} entityName={selectedEntity.name} />
+        ) : (
         <section className="min-w-0 space-y-4">
           {runError ? (
             <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-5 py-4 text-sm text-[var(--text-secondary)]">
@@ -341,6 +405,7 @@ export function AmwayAssociationCircleDashboard({
             </div>
           )}
         </section>
+        )}
       </main>
     </div>
   );

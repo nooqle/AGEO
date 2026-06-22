@@ -359,13 +359,27 @@ async def _build_amway_entity_pipeline_update(
         AmwayEntityExtractionService,
     )
 
-    extraction_service = AmwayEntityExtractionService()
+    registry = None
+    entity_uuid = _uuid_or_none(state.get("entity_id"))
+    if entity_uuid is not None:
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.services.amway_entity_lexicon_service import (
+                AmwayEntityLexiconService,
+            )
+
+            async with AsyncSessionLocal() as db:
+                registry = await AmwayEntityLexiconService(db).registry_for_entity(
+                    entity_uuid
+                )
+        except Exception as exc:
+            logger.warning("[A4] Failed to load Amway editable lexicon: %s", exc)
+
+    extraction_service = AmwayEntityExtractionService(registry=registry)
     extraction_result = extraction_service.extract_from_fetch_results(fetch_results)
     realtime_signal_count = 0
     if isinstance(realtime_extraction_result, dict):
-        realtime_signal_count = int(
-            realtime_extraction_result.get("signal_count") or 0
-        )
+        realtime_signal_count = int(realtime_extraction_result.get("signal_count") or 0)
         extraction_result["realtime_extraction_enabled"] = bool(
             realtime_extraction_result.get("realtime_extraction_enabled")
         )
@@ -2507,7 +2521,28 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 AmwayEntityExtractionService,
             )
 
-            realtime_entity_extraction_service = AmwayEntityExtractionService()
+            registry = None
+            entity_uuid = _uuid_or_none(state.get("entity_id"))
+            if entity_uuid is not None:
+                try:
+                    from app.core.database import AsyncSessionLocal
+                    from app.services.amway_entity_lexicon_service import (
+                        AmwayEntityLexiconService,
+                    )
+
+                    async with AsyncSessionLocal() as db:
+                        registry = await AmwayEntityLexiconService(
+                            db
+                        ).registry_for_entity(entity_uuid)
+                except Exception as lexicon_err:
+                    logger.warning(
+                        "[A4] Failed to load realtime Amway editable lexicon: %s",
+                        lexicon_err,
+                    )
+
+            realtime_entity_extraction_service = AmwayEntityExtractionService(
+                registry=registry
+            )
             realtime_entity_extraction_result = (
                 realtime_entity_extraction_service.extract_from_fetch_results([])
             )
@@ -2712,8 +2747,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         str(signal.get("entity_id") or ""),
                         str(signal.get("matched_text") or ""),
                     )
-                    for signal in realtime_entity_extraction_result.get("signals")
-                    or []
+                    for signal in realtime_entity_extraction_result.get("signals") or []
                     if isinstance(signal, dict)
                 }
                 answer_signals = realtime_entity_extraction_result.setdefault(
@@ -2766,9 +2800,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     flat_signals.extend(new_signals)
                     if answer_id and answer_id not in known_answer_ids:
                         known_answer_ids.add(answer_id)
-                        realtime_entity_extraction_result[
-                            "realtime_answer_ids"
-                        ].append(answer_id)
+                        realtime_entity_extraction_result["realtime_answer_ids"].append(
+                            answer_id
+                        )
 
                     stage_result_data = {
                         "answer_id": answer_id,
@@ -3921,9 +3955,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         )
 
         if not artifact_validation.passed:
-            artifact_failure_message = (
-                "答案抓取结果已生成，但官方结果写回失败，当前需要先修复写回后再生成分析报告。"
-            )
+            artifact_failure_message = "答案抓取结果已生成，但官方结果写回失败，当前需要先修复写回后再生成分析报告。"
             await send_error_event(
                 session_id,
                 "A4",
