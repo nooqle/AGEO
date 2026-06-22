@@ -197,9 +197,12 @@ export function CommercialOrbitView({
   const showDefaultRiskNodes = mapMode === 'associations' && activeNodeFilters.length === 0;
   const filterOptions = buildAssociationNodeFilterOptions(associationGroups);
   const activeTrackFilter = activeNodeFilters[0] || null;
+  const activeTrackGroupKey = trackFilterToGroupKey(activeTrackFilter);
   const visibleGroups = mapMode === 'risk'
     ? (riskGroup ? [riskGroup] : [])
-    : associationGroups;
+    : activeTrackGroupKey
+      ? associationGroups.filter((group) => group.key === activeTrackGroupKey)
+      : associationGroups;
   const strongest = visibleGroups.find((group) => group.key === 'strong')?.nodes[0] || null;
   const opportunity = visibleGroups.find((group) => group.key === 'growth')?.nodes[0] || visibleGroups.find((group) => group.key === 'story')?.nodes[0] || null;
   const selectedGroupKey = selectedNode ? classifyAssociationNode(selectedNode) : null;
@@ -1026,14 +1029,14 @@ function CommercialOrbitMap({
             }}
             className={`group absolute z-30 h-11 w-11 -translate-x-1/2 -translate-y-1/2 rounded-full transition duration-200 hover:z-40 hover:scale-105 ${
               selected ? 'ring-2 ring-[var(--brand-border)] ring-offset-2 ring-offset-[var(--bg-secondary)]' : ''
-            } ${mutedByTrack ? 'pointer-events-none blur-[1.5px]' : ''} ${isLivePreview ? 'amway-orbit-live-node' : ''}`}
+            } ${mutedByTrack ? 'pointer-events-none' : ''} ${isLivePreview ? 'amway-orbit-live-node' : ''}`}
             style={{
               left: `${entry.left}%`,
               top: `${entry.top}%`,
               zIndex: mutedByTrack ? 18 : isSpatialMode ? Math.round(20 + entry.top) : undefined,
               transform: `translate(-50%, -50%) scale(${depth})`,
               animationDelay: isLivePreview ? `${nodeAnimationDelay(entry.node.node_id)}ms` : undefined,
-              opacity: mutedByTrack ? 0.035 : 1,
+              opacity: mutedByTrack ? 0 : 1,
             }}
             title={`${entry.node.term}：${relationshipRead(entry.node).headline}`}
           >
@@ -1554,8 +1557,8 @@ function buildCommercialOrbitEntries(
       node,
       groupKey,
       distanceBand,
-      left: clampNumber(50 + Math.cos(radians) * radius, 9, 91),
-      top: clampNumber(50 + Math.sin(radians) * radius * 0.72, 10, 90),
+      left: clampNumber(50 + Math.cos(radians) * radius, 2, 98),
+      top: clampNumber(50 + Math.sin(radians) * radius * 0.72, 8, 92),
       angle,
       radius,
       size,
@@ -1567,7 +1570,7 @@ function buildCommercialOrbitEntries(
   return separateOrbitEntries(entries, {
     minGap: 6.2,
     maxIterations: 10,
-    leftBounds: [7, 93],
+    leftBounds: [2, 98],
     topBounds: [8, 92],
   });
 }
@@ -1628,14 +1631,15 @@ function orbitAngleNudge(groupKey: AssociationMapGroupKey, index: number) {
 
 function orbitDistanceBandForNode(groupKey: AssociationMapGroupKey, node: OntologyAssociationCircleNode): OrbitDistanceBand {
   if (groupKey === 'risk') return 'risk';
+  if (groupKey === 'strong') return 'near';
+  if (groupKey === 'growth') return 'bridge';
+  if (groupKey === 'story') return 'far';
   const distance = nodeVisualDistanceValue(node);
   if (distance > 0) {
     if (distance <= 35) return 'near';
     if (distance <= 65) return 'bridge';
     return 'far';
   }
-  if (groupKey === 'strong') return 'near';
-  if (groupKey === 'growth') return 'bridge';
   return 'far';
 }
 
@@ -1658,21 +1662,21 @@ function orbitRadiusForNode(distanceBand: OrbitDistanceBand, node: OntologyAssoc
     return clampNumber(45 + lane + sampleWeakOffset - evidencePull, 40, 52);
   }
   if (distanceBand === 'near') {
-    return clampNumber(scaleDistanceToRadius(distance, 0, 35, 15.2, 23.8) + lane, 14.2, 25.5);
+    return clampNumber(scaleDistanceToRadius(distance, 0, 35, 22.8, 24.8) + lane, 21.4, 26.4);
   }
   if (distanceBand === 'bridge') {
-    return clampNumber(scaleDistanceToRadius(distance, 36, 65, 28.5, 36.5) + lane, 27.5, 38.5);
+    return clampNumber(scaleDistanceToRadius(distance, 36, 65, 33.5, 36.2) + lane, 32.2, 37.8);
   }
   if (distanceBand === 'far') {
-    return clampNumber(scaleDistanceToRadius(distance, 66, 100, 40, 47.5) + lane, 38.5, 49);
+    return clampNumber(scaleDistanceToRadius(distance, 66, 100, 44.5, 47.2) + lane, 43, 49.4);
   }
   return 31;
 }
 
 function orbitRadiusLane(distanceBand: OrbitDistanceBand, index: number) {
-  if (distanceBand === 'near') return [-1.8, 1.8, 0, -3, 3][index % 5];
-  if (distanceBand === 'bridge') return [-2.8, 2.8, 0, -4.4, 4.4][index % 5];
-  if (distanceBand === 'far') return [-3.4, 3.4, 0, -5.2, 5.2][index % 5];
+  if (distanceBand === 'near') return [-1.2, 1.2, 0, -2, 2][index % 5];
+  if (distanceBand === 'bridge') return [-1.4, 1.4, 0, -2.2, 2.2][index % 5];
+  if (distanceBand === 'far') return [-1.7, 1.7, 0, -2.6, 2.6][index % 5];
   return [-2.5, 2.5, 0, -4, 4][index % 5];
 }
 
@@ -1687,7 +1691,7 @@ function separateOrbitEntries(
 ) {
   const placed: CommercialOrbitEntry[] = [];
   entries.forEach((entry) => {
-    let next = { ...entry };
+    let next = constrainOrbitEntryToBand({ ...entry }, options.leftBounds, options.topBounds);
     for (let attempt = 0; attempt < options.maxIterations; attempt += 1) {
       let adjusted = false;
       placed.forEach((previous) => {
@@ -1710,6 +1714,7 @@ function separateOrbitEntries(
           left: nextLeft,
           top: clampNumber(nextTop + tangentPush, options.topBounds[0], options.topBounds[1]),
         };
+        next = constrainOrbitEntryToBand(next, options.leftBounds, options.topBounds);
         adjusted = true;
       });
       if (!adjusted) break;
@@ -1738,16 +1743,17 @@ function findOpenOrbitPosition(
   angleOffsets.forEach((angleOffset) => {
     radiusOffsets.forEach((radiusOffset) => {
       const angle = entry.angle + angleOffset;
-      const radius = clampNumber(entry.radius + radiusOffset, 12, 51);
+      const [minRadius, maxRadius] = orbitRadiusBoundsForBand(entry.distanceBand);
+      const radius = clampNumber(entry.radius + radiusOffset, minRadius, maxRadius);
       const radians = (angle * Math.PI) / 180;
       const centerTop = entry.distanceBand === 'risk' ? 57 : 50;
-      const candidate = {
+      const candidate = constrainOrbitEntryToBand({
         ...entry,
         angle,
         radius,
         left: clampNumber(50 + Math.cos(radians) * radius, options.leftBounds[0], options.leftBounds[1]),
         top: clampNumber(centerTop + Math.sin(radians) * radius * 0.72, options.topBounds[0], options.topBounds[1]),
-      };
+      }, options.leftBounds, options.topBounds);
       const score = orbitPositionScore(candidate, placed, options.minGap);
       if (score > bestScore) {
         best = candidate;
@@ -1759,10 +1765,39 @@ function findOpenOrbitPosition(
 }
 
 function orbitFallbackRadiusOffsets(distanceBand: OrbitDistanceBand) {
-  if (distanceBand === 'near') return [0, -2.5, 2.5, -4.5, 4.5];
-  if (distanceBand === 'bridge') return [0, -3.5, 3.5, -6, 6];
-  if (distanceBand === 'far') return [0, -4, 4, -7, 7];
+  if (distanceBand === 'near') return [0, -1.8, 1.8, -3, 3];
+  if (distanceBand === 'bridge') return [0, -2, 2, -3.2, 3.2];
+  if (distanceBand === 'far') return [0, -2.2, 2.2, -3.6, 3.6];
   return [0, -3, 3, -5, 5];
+}
+
+function orbitRadiusBoundsForBand(distanceBand: OrbitDistanceBand): [number, number] {
+  if (distanceBand === 'near') return [21.4, 26.4];
+  if (distanceBand === 'bridge') return [32.2, 37.8];
+  if (distanceBand === 'far') return [43, 49.4];
+  if (distanceBand === 'risk') return [40, 52];
+  return [12, 51];
+}
+
+function constrainOrbitEntryToBand(
+  entry: CommercialOrbitEntry,
+  leftBounds: [number, number],
+  topBounds: [number, number],
+): CommercialOrbitEntry {
+  const centerTop = entry.distanceBand === 'risk' ? 57 : 50;
+  const dx = entry.left - 50;
+  const dy = (entry.top - centerTop) / 0.72;
+  const currentRadius = Math.sqrt(dx * dx + dy * dy);
+  const [minRadius, maxRadius] = orbitRadiusBoundsForBand(entry.distanceBand);
+  const radius = clampNumber(currentRadius || entry.radius, minRadius, maxRadius);
+  const radians = currentRadius > 0 ? Math.atan2(dy, dx) : (entry.angle * Math.PI) / 180;
+  return {
+    ...entry,
+    angle: (radians * 180) / Math.PI,
+    radius,
+    left: clampNumber(50 + Math.cos(radians) * radius, leftBounds[0], leftBounds[1]),
+    top: clampNumber(centerTop + Math.sin(radians) * radius * 0.72, topBounds[0], topBounds[1]),
+  };
 }
 
 function orbitPositionScore(entry: CommercialOrbitEntry, placed: CommercialOrbitEntry[], minGap: number) {
