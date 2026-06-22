@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -156,10 +158,14 @@ function selectInitialAmwayEntity(
   return amwayEntities[0] || null;
 }
 
-export function AmwayAssociationCircleConsolePage() {
+export function AmwayAssociationCircleConsolePage({
+  lockedEntityId = null,
+}: {
+  lockedEntityId?: string | null;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const requestedEntityId = searchParams.get('entity_id');
+  const requestedEntityId = lockedEntityId || searchParams.get('entity_id');
   const entities = useEntityStore((state) => state.entities);
   const entitiesLoading = useEntityStore((state) => state.isLoading);
   const entityError = useEntityStore((state) => state.error);
@@ -178,7 +184,6 @@ export function AmwayAssociationCircleConsolePage() {
   const [isHomeLoading, setIsHomeLoading] = useState(false);
   const [homeLoadedEntityId, setHomeLoadedEntityId] = useState<string | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
-  const [isOpeningChat, setIsOpeningChat] = useState(false);
   const [activeTask, setActiveTask] = useState<AnalysisTask | null>(null);
   const [directEntity, setDirectEntity] = useState<Entity | null>(null);
   const [directEntityError, setDirectEntityError] = useState<string | null>(null);
@@ -253,8 +258,12 @@ export function AmwayAssociationCircleConsolePage() {
   );
 
   const amwayEntities = useMemo(
-    () => consoleEntities.filter(isAmwayAssociationEntity),
-    [consoleEntities],
+    () => {
+      const candidates = consoleEntities.filter(isAmwayAssociationEntity);
+      if (!lockedEntityId) return candidates;
+      return candidates.filter((entity) => entity.id === lockedEntityId);
+    },
+    [consoleEntities, lockedEntityId],
   );
 
   useEffect(() => {
@@ -484,8 +493,8 @@ export function AmwayAssociationCircleConsolePage() {
         await createRun(selectedEntityId, {
           run_goal: '生成安利品牌联想圈层报告',
           analysis_mode: ASSOCIATION_ANALYSIS_MODE,
-          origin_surface: 'amway_association_console',
-          origin_event_id: `amway-console-start:${selectedEntityId}:${createHandoffId()}`,
+          origin_surface: 'amwaychina_console',
+          origin_event_id: `amwaychina-start:${selectedEntityId}:${createHandoffId()}`,
           auto_dispatch: true,
           input_scope: {
             dashboard_variant: ASSOCIATION_DASHBOARD_VARIANT,
@@ -495,11 +504,11 @@ export function AmwayAssociationCircleConsolePage() {
             center_terms: effectiveCenterTerm ? [effectiveCenterTerm] : centerOptions,
             brand_cluster_terms: centerOptions.length ? centerOptions : DEFAULT_CENTER_TERMS,
             platforms: DEFAULT_ASSOCIATION_PLATFORMS,
-            enabled_surfaces: ['amway_console', 'chat', 'canvas', 'brand_world'],
+            enabled_surfaces: ['amwaychina_console', 'chat', 'canvas', 'brand_world'],
             question_input_mode: uploadedQuestions.length ? 'uploaded_list' : 'default_matrix',
             ...(uploadedQuestions.length
               ? {
-                  uploaded_question_source: payload?.uploadedQuestionSource || 'amway_console_upload',
+                  uploaded_question_source: payload?.uploadedQuestionSource || 'amwaychina_upload',
                   uploaded_question_count: uploadedQuestions.length,
                   uploaded_questions: uploadedQuestions.map((question) => ({
                     ...question,
@@ -551,34 +560,7 @@ export function AmwayAssociationCircleConsolePage() {
         Object.fromEntries(params.entries()),
       ),
     );
-  }, [home?.latest_report, router, selectedEntity, selectedEntityId]);
-
-  const handleOpenChat = useCallback(async () => {
-    if (!selectedEntity || isOpeningChat) return;
-    setIsOpeningChat(true);
-    try {
-      const session = await api.createSession(selectedEntity.id);
-      const params = new URLSearchParams();
-      params.set('entity_id', selectedEntity.id);
-      params.set('brand', selectedEntity.name);
-      params.set('entry_source', 'amway_association_console');
-      params.set('analysis_mode', ASSOCIATION_ANALYSIS_MODE);
-      params.set('dashboard_variant', ASSOCIATION_DASHBOARD_VARIANT);
-      params.set('active_center_term', effectiveCenterTerm || selectedEntity.name);
-      params.set('clean_handoff', '1');
-      params.set('draft', '请基于当前安利品牌联想圈层解释重点、证据和下一步建议。');
-      router.push(
-        buildDashboardChatUrlWithHandoff(
-          session.id,
-          Object.fromEntries(params.entries()),
-        ),
-      );
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '打开安利圈层对话失败');
-    } finally {
-      setIsOpeningChat(false);
-    }
-  }, [effectiveCenterTerm, isOpeningChat, router, selectedEntity]);
+  }, [home, router, selectedEntity, selectedEntityId]);
 
   if (entitiesLoading && !consoleEntities.length) {
     return (
@@ -634,15 +616,11 @@ export function AmwayAssociationCircleConsolePage() {
       isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
       isProjectionLoading={isProjectionLoading}
       runError={errorByEntity[selectedEntity.id]}
-      isOpeningChat={isOpeningChat}
       liveStageResults={streamedStageResults}
       onSelectEntity={setSelectedEntityId}
       onSelectCenterTerm={setSelectedCenterTerm}
       onStart={(payload) => {
         void handleStart(payload);
-      }}
-      onOpenChat={() => {
-        void handleOpenChat();
       }}
       onOpenLatestReport={handleOpenLatestReport}
     />

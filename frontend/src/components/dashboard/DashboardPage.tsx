@@ -254,9 +254,7 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
 
   useEffect(() => {
     if (!shouldOpenAmwayConsole || !selectedBrand?.id) return;
-    const params = new URLSearchParams();
-    params.set('entity_id', selectedBrand.id);
-    router.replace(`/amway-console?${params.toString()}`);
+    router.replace('/amwaychina');
   }, [router, selectedBrand?.id, shouldOpenAmwayConsole]);
 
   const openDashboardChat = async (

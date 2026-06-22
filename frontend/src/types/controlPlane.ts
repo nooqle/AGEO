@@ -46,6 +46,7 @@ export interface ControlPlaneCustomerDetail {
     id: string;
     legal_name: string;
     status: string;
+    feature_flags: Record<string, boolean>;
     primary_account: string | null;
     member_count: number;
     entity_count: number;
@@ -56,6 +57,15 @@ export interface ControlPlaneCustomerDetail {
   users: import('./accountAdmin').AdminUserRecord[];
   entities: ControlPlaneEntitySummary[];
   recent_tasks: ControlPlaneTaskSummary[];
+}
+
+export interface AmwayChinaEntitlement {
+  enabled: boolean;
+  reason: string;
+  entity_id: string | null;
+  entity_name: string | null;
+  dashboard_variant: string;
+  center_terms: string[];
 }
 
 export interface ControlPlaneObservabilitySummary {

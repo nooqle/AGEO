@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.entity import Entity, EntityStatus, EntityVisibilityScope
 from app.models.organization import Organization, OrganizationStatus
 from app.models.user import User, UserRole, UserStatus
+from app.services.brand_association_circle_variant import is_amway_association_entity
 from app.services.identity_normalization_service import normalize_email, normalize_phone
+from app.services.organization_feature_service import (
+    FEATURE_AMWAYCHINA_CONSOLE,
+    normalize_organization_feature_flags,
+    organization_feature_enabled,
+)
 
 
 class AccountAdminService:
@@ -168,9 +176,61 @@ class AccountAdminService:
             else:
                 organization.status = OrganizationStatus(str(raw_status))
 
+        if "feature_flags" in changes:
+            organization.feature_flags = normalize_organization_feature_flags(
+                changes["feature_flags"]
+            )
+            if organization_feature_enabled(
+                organization.feature_flags,
+                FEATURE_AMWAYCHINA_CONSOLE,
+            ):
+                await self._ensure_amwaychina_console_entity(organization)
+
         await self.db.commit()
         await self.db.refresh(organization)
         return organization
+
+    async def _ensure_amwaychina_console_entity(
+        self,
+        organization: Organization,
+    ) -> Entity:
+        for entity in organization.entities:
+            aliases = []
+            if entity.aliases:
+                try:
+                    aliases = json.loads(entity.aliases)
+                except (TypeError, json.JSONDecodeError):
+                    aliases = [entity.aliases]
+            if is_amway_association_entity(
+                name=entity.name,
+                domain=entity.domain,
+                aliases=aliases,
+            ):
+                if entity.status != EntityStatus.ACTIVE:
+                    entity.status = EntityStatus.ACTIVE
+                entity.visibility_scope = EntityVisibilityScope.ORGANIZATION
+                entity.organization_id = organization.id
+                entity.owner_user_id = None
+                await self.db.flush()
+                return entity
+
+        entity = Entity(
+            name="安利",
+            aliases=json.dumps(
+                ["安利", "安利中国", "纽崔莱", "Amway", "Amway China", "Nutrilite"],
+                ensure_ascii=False,
+            ),
+            domain="https://www.amway.com.cn",
+            industry="健康生活",
+            description="安利中国专属品牌联想圈层 Console 中心品牌组",
+            status=EntityStatus.ACTIVE,
+            visibility_scope=EntityVisibilityScope.ORGANIZATION,
+            owner_user_id=None,
+            organization_id=organization.id,
+        )
+        self.db.add(entity)
+        await self.db.flush()
+        return entity
 
     @staticmethod
     def build_organization_stats(

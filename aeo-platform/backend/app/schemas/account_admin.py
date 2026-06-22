@@ -40,6 +40,7 @@ class OrganizationResponse(BaseModel):
     id: UUID
     legal_name: str
     status: OrganizationStatus
+    feature_flags: dict[str, bool] = Field(default_factory=dict)
     primary_account: str | None = None
     member_count: int = 0
     entity_count: int = 0
@@ -50,6 +51,7 @@ class OrganizationResponse(BaseModel):
 class OrganizationUpdateRequest(BaseModel):
     legal_name: str | None = Field(default=None, min_length=2, max_length=255)
     status: OrganizationStatus | None = None
+    feature_flags: dict[str, bool] | None = None
 
 
 class ControlPlaneCustomerSummary(BaseModel):
