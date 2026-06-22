@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.snapshot import JSONText
 
 if TYPE_CHECKING:
     from app.models.entity import Entity
@@ -43,6 +44,7 @@ class Organization(Base):
         default=OrganizationStatus.ACTIVE,
         nullable=False,
     )
+    feature_flags: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=datetime.utcnow,

@@ -29,6 +29,7 @@ import type {
 import type {
   ControlPlaneCustomerDetail,
   ControlPlaneCustomerSummary,
+  AmwayChinaEntitlement,
   ControlPlaneObservabilitySnapshot,
   ControlPlaneTaskSummary,
 } from '@/types/controlPlane';
@@ -272,6 +273,10 @@ class ApiService {
       method: 'PATCH',
       body: JSON.stringify(payload),
     });
+  }
+
+  async getAmwayChinaEntitlement() {
+    return this.request<AmwayChinaEntitlement>('/feature-entitlements/amwaychina');
   }
 
   async getControlPlaneCustomers(days: number = 7) {

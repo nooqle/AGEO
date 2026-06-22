@@ -25,6 +25,7 @@ export interface OrganizationRecord {
   id: string;
   legal_name: string;
   status: string;
+  feature_flags: Record<string, boolean>;
   primary_account: string | null;
   member_count: number;
   entity_count: number;
@@ -35,4 +36,5 @@ export interface OrganizationRecord {
 export interface OrganizationUpdateInput {
   legal_name?: string;
   status?: string;
+  feature_flags?: Record<string, boolean>;
 }

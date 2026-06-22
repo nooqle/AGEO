@@ -11,6 +11,7 @@ from app.api.v1 import (
     control_plane,
     entities,
     favicons,
+    feature_entitlements,
     files,
     intelligence_runs,
     messages,
@@ -37,6 +38,7 @@ api_router.include_router(analytics.router)
 api_router.include_router(entities.router)
 api_router.include_router(favicons.router)
 api_router.include_router(touchpoints.router)
+api_router.include_router(feature_entitlements.router)
 api_router.include_router(files.router)
 api_router.include_router(intelligence_runs.router)
 api_router.include_router(snapshots.router)

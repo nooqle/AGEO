@@ -22,6 +22,7 @@ from app.schemas.account_admin import (
 )
 from app.schemas.user import UserResponse
 from app.services.control_plane_service import ControlPlaneService
+from app.services.organization_feature_service import normalize_organization_feature_flags
 
 router = APIRouter(prefix="/control-plane", tags=["control-plane"])
 
@@ -34,6 +35,9 @@ def _serialize_org(organization) -> OrganizationResponse:
     return OrganizationResponse.model_validate(
         {
             **organization.__dict__,
+            "feature_flags": normalize_organization_feature_flags(
+                getattr(organization, "feature_flags", None)
+            ),
             "primary_account": primary_account,
             "member_count": len(organization.users),
             "entity_count": len(organization.entities),

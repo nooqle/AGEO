@@ -36,7 +36,7 @@ function formatCost(value: number, currency = 'CNY') {
   return formatControlPlaneCost(value, currency);
 }
 
-type DetailTab = 'overview' | 'accounts' | 'brands' | 'tasks';
+type DetailTab = 'overview' | 'accounts' | 'brands' | 'access' | 'tasks';
 
 type EditableUserState = {
   email: string;
@@ -66,6 +66,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [orgNameDraft, setOrgNameDraft] = useState('');
   const [orgStatusDraft, setOrgStatusDraft] = useState('active');
+  const [amwayChinaEnabledDraft, setAmwayChinaEnabledDraft] = useState(false);
   const [userDrafts, setUserDrafts] = useState<Record<string, EditableUserState>>({});
 
   useEffect(() => {
@@ -85,6 +86,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
         setDetail(payload);
         setOrgNameDraft(payload.organization.legal_name);
         setOrgStatusDraft(payload.organization.status);
+        setAmwayChinaEnabledDraft(Boolean(payload.organization.feature_flags?.amwaychina_console));
         const drafts: Record<string, EditableUserState> = {};
         payload.users.forEach((item) => {
           drafts[item.id] = {
@@ -125,6 +127,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
     id: customerId,
     legal_name: '客户详情',
     status: 'active',
+    feature_flags: {},
     primary_account: null,
     member_count: 0,
     entity_count: 0,
@@ -180,6 +183,10 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
       const updated = await api.updateOrganization(organization.id, {
         legal_name: orgNameDraft.trim(),
         status: orgStatusDraft,
+        feature_flags: {
+          ...(organization.feature_flags || {}),
+          amwaychina_console: amwayChinaEnabledDraft,
+        },
       });
       setDetail((current) =>
         current
@@ -190,6 +197,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
             }
           : current
       );
+      setAmwayChinaEnabledDraft(Boolean(updated.feature_flags?.amwaychina_console));
       toast.success('组织信息已更新');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '更新组织信息失败');
@@ -326,6 +334,12 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
               onClick={() => setActiveTab('brands')}
               icon={<RiBuildingLine className="h-4 w-4" />}
               label="品牌"
+            />
+            <TabButton
+              active={activeTab === 'access'}
+              onClick={() => setActiveTab('access')}
+              icon={<RiUserSettingsLine className="h-4 w-4" />}
+              label="权限"
             />
             <TabButton
               active={activeTab === 'tasks'}
@@ -532,6 +546,53 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                 />
               </ControlPlanePanel>
             </div>
+          ) : null}
+
+          {activeTab === 'access' ? (
+            <ControlPlanePanel
+              title="专属功能权限"
+              actions={
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={() => void handleSaveOrganization()}
+                  isLoading={savingOrg}
+                >
+                  保存权限
+                </Button>
+              }
+            >
+              <div
+                className="rounded-xl border px-4 py-4"
+                style={{ borderColor: palette.border, background: palette.panelMuted }}
+              >
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold" style={{ color: palette.text }}>
+                      安利中国专属 Console
+                    </div>
+                    <p className="mt-2 max-w-2xl text-sm leading-6" style={{ color: palette.muted }}>
+                      打开后，该组织成员可以访问 /amwaychina。系统会准备组织空间的安利中心品牌，用于上传问题、抓取平台答案、生成圈层图谱和报告。
+                    </p>
+                    <div className="mt-3 text-xs leading-5" style={{ color: palette.subtle }}>
+                      当前状态：{organization.feature_flags?.amwaychina_console ? '已开通' : '未开通'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAmwayChinaEnabledDraft((current) => !current)}
+                    className="inline-flex min-h-10 items-center justify-center rounded-lg border px-4 text-sm font-semibold transition-colors"
+                    style={{
+                      borderColor: amwayChinaEnabledDraft ? palette.accent : palette.borderStrong,
+                      background: amwayChinaEnabledDraft ? palette.accentSoft : palette.panel,
+                      color: amwayChinaEnabledDraft ? palette.accentText : palette.muted,
+                    }}
+                  >
+                    {amwayChinaEnabledDraft ? '已允许访问' : '未允许访问'}
+                  </button>
+                </div>
+              </div>
+            </ControlPlanePanel>
           ) : null}
 
           {activeTab === 'tasks' ? (
