@@ -22,7 +22,10 @@ from app.schemas.account_admin import (
 )
 from app.schemas.user import UserResponse
 from app.services.control_plane_service import ControlPlaneService
-from app.services.organization_feature_service import normalize_organization_feature_flags
+from app.services.organization_feature_service import (
+    normalize_organization_feature_flags,
+    normalize_user_feature_flags,
+)
 
 router = APIRouter(prefix="/control-plane", tags=["control-plane"])
 
@@ -49,6 +52,9 @@ def _serialize_user(user) -> AdminUserResponse:
     return AdminUserResponse.model_validate(
         {
             **user.__dict__,
+            "feature_flags": normalize_user_feature_flags(
+                getattr(user, "feature_flags", None)
+            ),
             "organization_name": (
                 user.organization.legal_name if user.organization is not None else None
             ),

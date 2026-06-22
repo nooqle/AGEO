@@ -1,23 +1,30 @@
 from __future__ import annotations
 
 from collections import defaultdict
-import json
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.entity import Entity, EntityStatus, EntityVisibilityScope
 from app.models.organization import Organization, OrganizationStatus
+from app.models.registration_application import (
+    RegistrationApplication,
+    RegistrationApplicationStatus,
+)
 from app.models.user import User, UserRole, UserStatus
-from app.services.brand_association_circle_variant import is_amway_association_entity
+from app.models.verification_challenge import VerificationChannel, VerificationPurpose
 from app.services.identity_normalization_service import normalize_email, normalize_phone
 from app.services.organization_feature_service import (
     FEATURE_AMWAYCHINA_CONSOLE,
+    ensure_amwaychina_console_entity,
     normalize_organization_feature_flags,
+    normalize_user_feature_flags,
     organization_feature_enabled,
+    user_feature_enabled,
 )
+from app.services.verification_service import VerificationService
 
 
 class AccountAdminService:
@@ -120,6 +127,19 @@ class AccountAdminService:
             if is_active and user.status != UserStatus.ACTIVE:
                 user.status = UserStatus.ACTIVE
 
+        if "feature_flags" in changes:
+            user.feature_flags = normalize_user_feature_flags(changes["feature_flags"])
+            if (
+                user.organization_id is not None
+                and user_feature_enabled(
+                    user.feature_flags,
+                    FEATURE_AMWAYCHINA_CONSOLE,
+                )
+            ):
+                organization = await self.get_organization(user.organization_id)
+                if organization is not None:
+                    await ensure_amwaychina_console_entity(self.db, organization)
+
         await self.db.commit()
         await self.db.refresh(user)
         return user
@@ -184,53 +204,128 @@ class AccountAdminService:
                 organization.feature_flags,
                 FEATURE_AMWAYCHINA_CONSOLE,
             ):
-                await self._ensure_amwaychina_console_entity(organization)
+                await ensure_amwaychina_console_entity(self.db, organization)
 
         await self.db.commit()
         await self.db.refresh(organization)
         return organization
 
-    async def _ensure_amwaychina_console_entity(
+    async def create_invitation(
         self,
-        organization: Organization,
-    ) -> Entity:
-        for entity in organization.entities:
-            aliases = []
-            if entity.aliases:
-                try:
-                    aliases = json.loads(entity.aliases)
-                except (TypeError, json.JSONDecodeError):
-                    aliases = [entity.aliases]
-            if is_amway_association_entity(
-                name=entity.name,
-                domain=entity.domain,
-                aliases=aliases,
-            ):
-                if entity.status != EntityStatus.ACTIVE:
-                    entity.status = EntityStatus.ACTIVE
-                entity.visibility_scope = EntityVisibilityScope.ORGANIZATION
-                entity.organization_id = organization.id
-                entity.owner_user_id = None
-                await self.db.flush()
-                return entity
+        *,
+        email: str,
+        organization_id: UUID,
+        reviewer_user_id: UUID,
+        applicant_name: str | None = None,
+        job_title: str | None = None,
+        feature_flags: dict[str, bool] | None = None,
+    ) -> dict[str, object]:
+        normalized_email = normalize_email(email)
+        if not normalized_email:
+            raise ValueError("请输入有效的邮箱地址")
 
-        entity = Entity(
-            name="安利",
-            aliases=json.dumps(
-                ["安利", "安利中国", "纽崔莱", "Amway", "Amway China", "Nutrilite"],
-                ensure_ascii=False,
-            ),
-            domain="https://www.amway.com.cn",
-            industry="健康生活",
-            description="安利中国专属品牌联想圈层 Console 中心品牌组",
-            status=EntityStatus.ACTIVE,
-            visibility_scope=EntityVisibilityScope.ORGANIZATION,
-            owner_user_id=None,
-            organization_id=organization.id,
+        organization = await self.get_organization(organization_id)
+        if organization is None:
+            raise ValueError("组织不存在")
+        if organization.status != OrganizationStatus.ACTIVE:
+            raise ValueError("只能向启用状态的组织发放邀请")
+
+        normalized_flags = normalize_user_feature_flags(feature_flags)
+        if user_feature_enabled(normalized_flags, FEATURE_AMWAYCHINA_CONSOLE):
+            await ensure_amwaychina_console_entity(self.db, organization)
+
+        existing_user = await self._get_user_by_email(normalized_email)
+        if existing_user is not None:
+            if existing_user.organization_id != organization.id:
+                raise ValueError("该邮箱已属于其他组织，不能直接发放本组织权限")
+            if not existing_user.is_active or existing_user.status != UserStatus.ACTIVE:
+                raise ValueError("该邮箱账号当前未启用，请先处理账号状态")
+            existing_user.feature_flags = self._merge_feature_flags(
+                existing_user.feature_flags,
+                normalized_flags,
+            )
+            await self.db.commit()
+            await self.db.refresh(existing_user)
+            return {
+                "status": "existing_user_granted",
+                "email": normalized_email,
+                "feature_flags": normalize_user_feature_flags(
+                    existing_user.feature_flags
+                ),
+                "user": existing_user,
+                "application": None,
+            }
+
+        application = await self._get_latest_application_by_email(normalized_email)
+        if application is None:
+            application = RegistrationApplication(
+                email=normalized_email,
+                phone=None,
+                organization_name=organization.legal_name,
+                job_title=(job_title or "团队成员").strip(),
+                applicant_name=applicant_name.strip() if applicant_name else None,
+            )
+            self.db.add(application)
+
+        now = datetime.now(timezone.utc)
+        application.email = normalized_email
+        application.organization_name = organization.legal_name
+        application.job_title = (job_title or application.job_title or "团队成员").strip()
+        application.applicant_name = (
+            applicant_name.strip() if applicant_name else application.applicant_name
         )
-        self.db.add(entity)
-        await self.db.flush()
-        return entity
+        application.status = RegistrationApplicationStatus.PENDING_REVIEW
+        application.review_note = None
+        application.reviewed_by_user_id = reviewer_user_id
+        application.approved_user_id = None
+        application.assigned_organization_id = organization.id
+        application.invite_code_issued_by_user_id = reviewer_user_id
+        application.invite_code_sent_at = now
+        application.invite_redeemed_at = None
+        application.reviewed_at = now
+        application.feature_flags = normalized_flags
+
+        verification = VerificationService(self.db)
+        await verification.send_code(
+            channel=VerificationChannel.EMAIL,
+            target=normalized_email,
+            purpose=VerificationPurpose.INVITE_ACCESS,
+        )
+        await self.db.refresh(application)
+        return {
+            "status": "invited",
+            "email": normalized_email,
+            "feature_flags": normalize_user_feature_flags(application.feature_flags),
+            "user": None,
+            "application": application,
+        }
+
+    async def _get_user_by_email(self, email: str) -> User | None:
+        result = await self.db.execute(
+            select(User)
+            .options(selectinload(User.organization))
+            .where(User.email == email)
+        )
+        return result.scalar_one_or_none()
+
+    async def _get_latest_application_by_email(
+        self,
+        email: str,
+    ) -> RegistrationApplication | None:
+        result = await self.db.execute(
+            select(RegistrationApplication)
+            .where(RegistrationApplication.email == email)
+            .order_by(RegistrationApplication.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    def _merge_feature_flags(existing: object, changes: object) -> dict[str, bool]:
+        merged = normalize_user_feature_flags(existing)
+        for key, enabled in normalize_user_feature_flags(changes).items():
+            merged[key] = enabled
+        return merged
 
     @staticmethod
     def build_organization_stats(

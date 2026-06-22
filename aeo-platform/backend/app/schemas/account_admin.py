@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.organization import OrganizationStatus
 from app.models.user import UserRole, UserStatus
+from app.schemas.auth import RegistrationApplicationResponse
 
 
 class AdminUserResponse(BaseModel):
@@ -19,6 +20,7 @@ class AdminUserResponse(BaseModel):
     status: UserStatus
     role: UserRole
     job_title: str | None
+    feature_flags: dict[str, bool] = Field(default_factory=dict)
     organization_id: UUID | None
     organization_name: str | None = None
     created_at: datetime
@@ -32,6 +34,23 @@ class AdminUserUpdateRequest(BaseModel):
     is_active: bool | None = None
     status: UserStatus | None = None
     organization_id: UUID | None = None
+    feature_flags: dict[str, bool] | None = None
+
+
+class AccountInvitationCreateRequest(BaseModel):
+    email: EmailStr
+    organization_id: UUID
+    applicant_name: str | None = Field(default=None, max_length=255)
+    job_title: str | None = Field(default="团队成员", max_length=255)
+    feature_flags: dict[str, bool] = Field(default_factory=dict)
+
+
+class AccountInvitationResponse(BaseModel):
+    status: str
+    email: EmailStr
+    feature_flags: dict[str, bool] = Field(default_factory=dict)
+    user: AdminUserResponse | None = None
+    application: RegistrationApplicationResponse | None = None
 
 
 class OrganizationResponse(BaseModel):

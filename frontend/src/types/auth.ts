@@ -60,6 +60,7 @@ export interface RegistrationApplication {
   applicant_name: string | null;
   company_size: string | null;
   is_agency: boolean;
+  feature_flags?: Record<string, boolean> | null;
   status: string;
   review_note: string | null;
   reviewed_by_user_id: string | null;

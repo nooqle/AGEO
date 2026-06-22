@@ -6,6 +6,7 @@ export interface AdminUserRecord {
   status: string;
   role: string;
   job_title: string | null;
+  feature_flags: Record<string, boolean>;
   organization_id: string | null;
   organization_name: string | null;
   created_at: string;
@@ -19,6 +20,7 @@ export interface AdminUserUpdateInput {
   is_active?: boolean;
   status?: string;
   organization_id?: string | null;
+  feature_flags?: Record<string, boolean>;
 }
 
 export interface OrganizationRecord {
@@ -37,4 +39,20 @@ export interface OrganizationUpdateInput {
   legal_name?: string;
   status?: string;
   feature_flags?: Record<string, boolean>;
+}
+
+export interface AccountInvitationCreateInput {
+  email: string;
+  organization_id: string;
+  applicant_name?: string | null;
+  job_title?: string | null;
+  feature_flags?: Record<string, boolean>;
+}
+
+export interface AccountInvitationResponse {
+  status: string;
+  email: string;
+  feature_flags: Record<string, boolean>;
+  user: AdminUserRecord | null;
+  application: import('./auth').RegistrationApplication | null;
 }
