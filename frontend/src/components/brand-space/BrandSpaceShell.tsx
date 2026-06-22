@@ -2,26 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bell,
-  Cable,
-  ChevronDown,
-  CircleHelp,
-  CircleUserRound,
   FileText,
-  LayoutGrid,
   Pause,
   Play,
-  Share2,
   Square,
-  Settings,
-  type LucideIcon,
 } from 'lucide-react';
 import { AssetsView } from './AssetsView';
 import { BoardRuntimeView } from './BoardRuntimeView';
 import { GraphHomeView } from './GraphHomeView';
 import { ReportReviewView } from './ReportReviewView';
 import styles from './BrandSpace.module.css';
-import { ThemedLogo } from '@/components/ui/ThemedLogo';
+import {
+  DashboardBrandSidebar,
+  DashboardMobileBrandSwitcher,
+} from '@/components/dashboard/DashboardBrandSidebar';
 import {
   artifacts,
   boardEdges,
@@ -58,6 +52,16 @@ import type {
 } from '@/types/brandSpace';
 import type { Entity } from '@/types/entity';
 
+interface BrandSpaceShellProps {
+  entities: Entity[];
+  selectedEntityId: string | null;
+  entitiesLoading: boolean;
+  hasFetchedEntities: boolean;
+  entityError: string | null;
+  onSelectBrand: (brandId: string) => void;
+  onAddBrand: () => void;
+}
+
 function classNames(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(' ');
 }
@@ -72,8 +76,9 @@ function runStatusLabel(status: BoardRunStatus) {
   return '就绪';
 }
 
-function runModeLabel(isBackendMode: boolean, spaceRun: BrandSpaceBoardRun | null) {
-  if (!isBackendMode) return '底版演示运行';
+function runModeLabel(isBackendMode: boolean, isDemoMode: boolean, spaceRun: BrandSpaceBoardRun | null) {
+  if (isDemoMode) return '底版演示运行';
+  if (!isBackendMode) return '品牌空间状态';
   if (spaceRun?.is_scaffold) return '脚手架预览运行';
   if (spaceRun?.status === 'stopped' || spaceRun?.status === 'completed' || spaceRun?.status === 'failed') {
     return `真实运行记录 · ${runStatusLabel(spaceRun.status)}`;
@@ -107,12 +112,6 @@ function progressNode(node: BoardNode, index: number): BoardNode {
     progress: Math.min(96, node.progress + 1 + (index % 3)),
   };
 }
-
-const workspaceItems: Array<{ label: string; icon: LucideIcon }> = [
-  { label: '模板', icon: LayoutGrid },
-  { label: '连接', icon: Cable },
-  { label: '设置', icon: Settings },
-];
 
 const emptyBrandSpaceContext = {
   brandName: '品牌空间',
@@ -284,13 +283,39 @@ function reviewItemsFromPatches(patches: GraphPatch[], graphUpdate?: BrandSpaceG
 
 function backendNoticeFromError(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback;
+  if (/not authenticated|unauthorized|forbidden|401|403/i.test(error.message)) {
+    return `${fallback}（请重新登录，或确认当前账号有该品牌的访问权限）`;
+  }
+  if (/internal server error|request failed:\s*5\d\d/i.test(error.message)) {
+    return `${fallback}（服务暂时异常，已保留当前页面状态）`;
+  }
   if (/failed to fetch|fetch failed|load failed|networkerror/i.test(error.message)) {
     return `${fallback}（后端连接不可用）`;
   }
   if (/request failed:\s*\d+/i.test(error.message)) {
     return `${fallback}（接口返回异常）`;
   }
-  return error.message || fallback;
+  return fallback;
+}
+
+function idleBoardNodes() {
+  return initialBoardNodes.map((node) => ({
+    ...node,
+    status: 'idle' as NodeStatus,
+    progress: 0,
+    metrics: [],
+    outputArtifactIds: [],
+  }));
+}
+
+function idlePlatforms() {
+  return initialPlatforms.map((platform) => ({
+    ...platform,
+    status: 'idle' as NodeStatus,
+    progress: 0,
+    answers: 0,
+    failures: 0,
+  }));
 }
 
 function canvasStressFixtureCount() {
@@ -304,42 +329,22 @@ function canvasStressFixtureCount() {
   return Math.min(count, 120);
 }
 
-function requestedEntityIdFromLocation() {
-  if (typeof window === 'undefined') return '';
-  const params = new URLSearchParams(window.location.search);
-  return (params.get('entity_id') || params.get('entityId') || '').trim();
+async function loadBrandSpacePayloadForEntity(entityId: string) {
+  return {
+    entityId,
+    payload: await api.getBrandSpace(entityId),
+  };
 }
 
-async function loadInitialBrandSpacePayload(entities: Entity[]) {
-  const requestedEntityId = requestedEntityIdFromLocation();
-  if (requestedEntityId) {
-    return {
-      entityId: requestedEntityId,
-      payload: await api.getBrandSpace(requestedEntityId),
-    };
-  }
-
-  const candidates = entities.filter((item) => !item.isInternalTestData);
-  const orderedEntities = candidates.length ? candidates : entities;
-  let fallback: { entityId: string; payload: BrandSpacePayload } | null = null;
-  for (const entity of orderedEntities.slice(0, 50)) {
-    const payload = await api.getBrandSpace(entity.id);
-    const candidate = { entityId: entity.id, payload };
-    fallback ??= candidate;
-    const hasGraphUpdate = Boolean(
-      payload.graph_update || payload.reports?.some((item) => item.source_type === 'graph_update'),
-    );
-    if (hasGraphUpdate) {
-      if (payload.run?.is_scaffold === false) {
-        return candidate;
-      }
-    }
-  }
-  if (fallback) return fallback;
-  throw new Error('当前账号还没有可用品牌');
-}
-
-export function BrandSpaceShell() {
+export function BrandSpaceShell({
+  entities,
+  selectedEntityId,
+  entitiesLoading,
+  hasFetchedEntities,
+  entityError,
+  onSelectBrand,
+  onAddBrand,
+}: BrandSpaceShellProps) {
   const [activeView, setActiveView] = useState<BrandSpaceView>('graph');
   const [context, setContext] = useState(emptyBrandSpaceContext);
   const [spaceRun, setSpaceRun] = useState<BrandSpaceBoardRun | null>(null);
@@ -349,9 +354,9 @@ export function BrandSpaceShell() {
   const [isLoadingSpace, setIsLoadingSpace] = useState(true);
   const [backendNotice, setBackendNotice] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-  const [runStatus, setRunStatus] = useState<BoardRunStatus>('running');
-  const [nodes, setNodes] = useState<BoardNode[]>(initialBoardNodes);
-  const [platforms, setPlatforms] = useState<PlatformFetchNode[]>(initialPlatforms);
+  const [runStatus, setRunStatus] = useState<BoardRunStatus>('idle');
+  const [nodes, setNodes] = useState<BoardNode[]>(() => idleBoardNodes());
+  const [platforms, setPlatforms] = useState<PlatformFetchNode[]>(() => idlePlatforms());
   const [edges, setEdges] = useState(boardEdges);
   const [patches, setPatches] = useState<GraphPatch[]>([]);
   const [reviewItems, setReviewItems] = useState<GraphReviewItem[]>([]);
@@ -378,6 +383,38 @@ export function BrandSpaceShell() {
     () => brandSpaceNavItems.find((item) => item.id === activeView) ?? brandSpaceNavItems[0],
     [activeView],
   );
+  const selectedEntity = useMemo(
+    () => entities.find((entity) => entity.id === selectedEntityId) ?? null,
+    [entities, selectedEntityId],
+  );
+
+  const resetSpaceState = useCallback((notice = '', brandName?: string) => {
+    setIsBackendMode(false);
+    setIsDemoMode(false);
+    setSpaceRun(null);
+    setEntityId(null);
+    setContext({
+      ...emptyBrandSpaceContext,
+      brandName: brandName ? `${brandName}品牌空间` : emptyBrandSpaceContext.brandName,
+    });
+    setRunStatus('idle');
+    setNodes(idleBoardNodes());
+    setPlatforms(idlePlatforms());
+    setEdges(boardEdges);
+    setPatches([]);
+    setReviewItems([]);
+    setArtifactsState([]);
+    setAssetSummary(assetSummaryFromList([]));
+    setAssetPagination(null);
+    setEvents([]);
+    setGraph(emptyGraph);
+    setGraphUpdate(null);
+    setGuardrails([]);
+    setReport(null);
+    setReports([]);
+    setBackendNotice(notice);
+    lastEventSequenceRef.current = 0;
+  }, []);
 
   const applySpacePayload = useCallback((payload: BrandSpacePayload) => {
     setContext(payload.context);
@@ -478,10 +515,10 @@ export function BrandSpaceShell() {
     let cancelled = false;
 
     async function loadBrandSpace() {
-      setIsLoadingSpace(true);
       try {
         const stressFixtureCount = canvasStressFixtureCount();
         if (stressFixtureCount) {
+          setIsLoadingSpace(true);
           const fixture = buildStressBoardFixture(stressFixtureCount);
           setIsBackendMode(false);
           setIsDemoMode(true);
@@ -493,8 +530,25 @@ export function BrandSpaceShell() {
           setBackendNotice(`${stressFixtureCount} 节点压力验证底版已启用。`);
           return;
         }
-        const entities = await api.listEntities();
-        const { entityId: loadedEntityId, payload } = await loadInitialBrandSpacePayload(entities);
+
+        if (entityError) {
+          resetSpaceState('品牌列表加载失败，请刷新页面或回到品牌情报页重试。');
+          return;
+        }
+
+        if (!hasFetchedEntities || entitiesLoading) {
+          setIsLoadingSpace(true);
+          resetSpaceState('', selectedEntity?.name);
+          return;
+        }
+
+        if (!selectedEntityId) {
+          resetSpaceState('', selectedEntity?.name);
+          return;
+        }
+
+        setIsLoadingSpace(true);
+        const { entityId: loadedEntityId, payload } = await loadBrandSpacePayloadForEntity(selectedEntityId);
         if (cancelled) return;
         setEntityId(loadedEntityId);
         setIsBackendMode(true);
@@ -505,35 +559,9 @@ export function BrandSpaceShell() {
         await refreshReviewItems(loadedEntityId, payload.patches, payload.graph_update);
       } catch (error) {
         if (cancelled) return;
-        setIsBackendMode(false);
-        setIsDemoMode(false);
-        setSpaceRun(null);
-        setEntityId(null);
-        setContext(emptyBrandSpaceContext);
-        setRunStatus('idle');
-        setNodes(initialBoardNodes.map((node) => ({ ...node, status: 'idle', progress: 0 })));
-        setPlatforms(initialPlatforms.map((platform) => ({
-          ...platform,
-          status: 'idle',
-          progress: 0,
-          answers: 0,
-          failures: 0,
-        })));
-        setEdges(boardEdges);
-        setPatches([]);
-        setReviewItems([]);
-        setArtifactsState([]);
-        setAssetSummary(assetSummaryFromList([]));
-        setAssetPagination(null);
-        setEvents([]);
-        setGraph(emptyGraph);
-        setGraphUpdate(null);
-        setGuardrails([]);
-        setReport(null);
-        setReports([]);
-        setBackendNotice(backendNoticeFromError(error, 'Brand Space 真实后端不可用'));
+        resetSpaceState(backendNoticeFromError(error, '品牌空间数据加载失败'), selectedEntity?.name);
       } finally {
-        if (!cancelled) {
+        if (!cancelled && hasFetchedEntities && !entitiesLoading) {
           setIsLoadingSpace(false);
         }
       }
@@ -544,7 +572,16 @@ export function BrandSpaceShell() {
     return () => {
       cancelled = true;
     };
-  }, [applySpacePayload, refreshReviewItems]);
+  }, [
+    applySpacePayload,
+    hasFetchedEntities,
+    entitiesLoading,
+    entityError,
+    refreshReviewItems,
+    resetSpaceState,
+    selectedEntity?.name,
+    selectedEntityId,
+  ]);
 
   useEffect(() => {
     if (!isBackendMode || !spaceRun?.id || runStatus !== 'running') return undefined;
@@ -634,7 +671,7 @@ export function BrandSpaceShell() {
   const handleRunStart = async () => {
     if (!isBackendMode || !entityId) {
       if (!isDemoMode) {
-        setBackendNotice('Brand Space 真实后端不可用，无法启动画布运行。');
+        setBackendNotice('品牌空间真实后端不可用，无法启动画布运行。');
         return;
       }
       startLocalRun();
@@ -654,7 +691,7 @@ export function BrandSpaceShell() {
   const handleRunPause = async () => {
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
-        setBackendNotice('Brand Space 真实后端不可用，无法暂停画布运行。');
+        setBackendNotice('品牌空间真实后端不可用，无法暂停画布运行。');
         return;
       }
       pauseLocalRun();
@@ -671,7 +708,7 @@ export function BrandSpaceShell() {
   const handleRunResume = async () => {
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
-        setBackendNotice('Brand Space 真实后端不可用，无法继续画布运行。');
+        setBackendNotice('品牌空间真实后端不可用，无法继续画布运行。');
         return;
       }
       resumeLocalRun();
@@ -688,7 +725,7 @@ export function BrandSpaceShell() {
   const handleRunStop = async () => {
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
-        setBackendNotice('Brand Space 真实后端不可用，无法停止画布运行。');
+        setBackendNotice('品牌空间真实后端不可用，无法停止画布运行。');
         return;
       }
       stopLocalRun();
@@ -863,69 +900,43 @@ export function BrandSpaceShell() {
     }
   };
 
+  const hasSelectedBrand = Boolean(selectedEntityId && selectedEntity);
+  const runControlsDisabled = !hasSelectedBrand || Boolean(entityError) || isLoadingSpace;
+  const showSetupEmptyState = !isDemoMode && (Boolean(entityError) || (hasFetchedEntities && !hasSelectedBrand));
+  const showLoadingState = !isDemoMode && !showSetupEmptyState && isLoadingSpace;
+  const showWorkspaceViews = !showSetupEmptyState && !showLoadingState;
+  const setupTitle = entityError ? '品牌列表暂时不可用' : '先创建或选择一个品牌';
+  const setupDescription = entityError
+    ? '当前无法读取账号下的品牌列表。你可以刷新页面，或返回品牌情报页检查账号和品牌数据。'
+    : '品牌空间围绕一个品牌的实体关系库运行。请选择左侧已有品牌，或新建品牌后再启动图谱更新画布。';
+
   return (
     <div className={styles.root}>
       <div className={styles.shell}>
         <aside className={styles.sidebar}>
-          <div className="flex h-16 items-center gap-3 border-b px-5" style={{ borderColor: 'var(--border-subtle)' }}>
-            <ThemedLogo size={36} className="shrink-0" />
-            <div>
-              <p className="text-base font-semibold text-[var(--text-primary)]">Specta AI</p>
-              <p className="text-[11px] uppercase text-[var(--text-tertiary)]">品牌空间</p>
-            </div>
-          </div>
-
-          <nav className="space-y-1 px-3 py-5">
-            {brandSpaceNavItems.map((item) => {
-              const Icon = item.icon;
-              const active = activeView === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setActiveView(item.id)}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors"
-                  aria-current={active ? 'page' : undefined}
-                  aria-label={`打开${item.label}视图：${item.description}`}
-                  style={{
-                    background: active ? 'var(--brand-bg)' : 'transparent',
-                    color: active ? 'var(--brand-text)' : 'var(--text-secondary)',
-                  }}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span>
-                    <span className="block text-sm font-semibold">{item.label}</span>
-                    <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">{item.description}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
-
-          <div className="mt-4 border-t px-3 py-5" style={{ borderColor: 'var(--border-subtle)' }}>
-            <p className="mb-2 px-3 text-[11px] font-semibold uppercase text-[var(--text-tertiary)]">工作区</p>
-            {workspaceItems.map(({ label, icon: Icon }) => (
-              <button
-                key={label}
-                type="button"
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
-                aria-label={`打开${label}`}
-              >
-                <Icon className="h-4 w-4" />
-                {label}
-              </button>
-            ))}
-          </div>
+          <DashboardBrandSidebar
+            entities={entities}
+            selectedBrandId={selectedEntityId}
+            onSelectBrand={onSelectBrand}
+            onAddBrand={onAddBrand}
+            showBrandSpaceLink={false}
+          />
         </aside>
 
         <main className={styles.main}>
+          <div className="px-4 pt-4 lg:hidden">
+            <DashboardMobileBrandSwitcher
+              entities={entities}
+              selectedBrandId={selectedEntityId}
+              onSelectBrand={onSelectBrand}
+              onAddBrand={onAddBrand}
+              showBrandSpaceLink={false}
+            />
+          </div>
           <header className={classNames(styles.topbar, 'flex min-h-16 flex-wrap items-center justify-between gap-3 px-4 py-3 lg:px-6')}>
             <div className="flex min-w-0 items-center gap-3">
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="truncate text-lg font-semibold text-[var(--text-primary)]">{context.brandName}</h1>
-                  <ChevronDown className="h-4 w-4 text-[var(--text-tertiary)]" />
-                </div>
+                <h1 className="truncate text-lg font-semibold text-[var(--text-primary)]">{context.brandName}</h1>
                 <p className="mt-1 text-xs text-[var(--text-secondary)]">
                   {context.boardName} · {context.graphVersion}
                 </p>
@@ -940,7 +951,8 @@ export function BrandSpaceShell() {
               <button
                 type="button"
                 onClick={runStatus === 'running' ? handleRunPause : runStatus === 'paused' ? handleRunResume : handleRunStart}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)]"
+                disabled={runControlsDisabled}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-55"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
                 aria-label={runStatus === 'running' ? '暂停当前画布运行' : runStatus === 'paused' ? '继续当前画布运行' : '启动当前画布运行'}
               >
@@ -950,26 +962,14 @@ export function BrandSpaceShell() {
               <button
                 type="button"
                 onClick={handleRunStop}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)]"
+                disabled={runControlsDisabled || (!spaceRun?.id && !isDemoMode)}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-55"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
                 aria-label="停止当前画布运行"
               >
                 <Square className="h-4 w-4" />
                 停止
               </button>
-              <button type="button" className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)]" aria-label="分享当前品牌空间">
-                <Share2 className="h-4 w-4" />
-                分享
-              </button>
-              <button type="button" className="grid h-10 w-10 place-items-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="帮助" aria-label="打开帮助">
-                <CircleHelp className="h-4 w-4" />
-              </button>
-              <button type="button" className="grid h-10 w-10 place-items-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="通知" aria-label="查看通知">
-                <Bell className="h-4 w-4" />
-              </button>
-              <span className="grid h-10 w-10 place-items-center rounded-full bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
-                <CircleUserRound className="h-5 w-5" />
-              </span>
             </div>
           </header>
 
@@ -1003,7 +1003,7 @@ export function BrandSpaceShell() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">
-                  {runModeLabel(isBackendMode, spaceRun)}
+                  {runModeLabel(isBackendMode, isDemoMode, spaceRun)}
                   {isLoadingSpace ? ' · 加载中' : ''}
                 </p>
                 <h2 className="mt-1 text-xl font-semibold text-[var(--text-primary)]">{selectedView.label}</h2>
@@ -1021,7 +1021,49 @@ export function BrandSpaceShell() {
               </div>
             </div>
 
-            {activeView === 'boards' ? (
+            {showSetupEmptyState ? (
+              <section className={classNames(styles.surface, 'rounded-xl p-6')}>
+                <div className="max-w-2xl">
+                  <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">品牌空间设置</p>
+                  <h2 className="mt-2 text-xl font-semibold text-[var(--text-primary)]">{setupTitle}</h2>
+                  <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">{setupDescription}</p>
+                  {backendNotice ? (
+                    <p className="mt-3 rounded-lg border px-3 py-2 text-xs text-[var(--warning)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                      {backendNotice}
+                    </p>
+                  ) : null}
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={onAddBrand}
+                      className="inline-flex h-10 items-center rounded-lg bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)]"
+                    >
+                      新建品牌
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => window.location.assign('/dashboard')}
+                      className="inline-flex h-10 items-center rounded-lg border px-4 text-sm font-medium text-[var(--text-secondary)]"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+                    >
+                      返回品牌情报
+                    </button>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            {showLoadingState ? (
+              <section className={classNames(styles.surface, 'rounded-xl p-6')}>
+                <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">品牌空间</p>
+                <h2 className="mt-2 text-xl font-semibold text-[var(--text-primary)]">正在加载品牌空间</h2>
+                <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
+                  系统正在读取当前品牌的图谱、画布运行、资产和报告状态。
+                </p>
+              </section>
+            ) : null}
+
+            {showWorkspaceViews && activeView === 'boards' ? (
               <BoardRuntimeView
                 runStatus={runStatus}
                 nodes={nodes}
@@ -1044,7 +1086,7 @@ export function BrandSpaceShell() {
               />
             ) : null}
 
-            {activeView === 'graph' ? (
+            {showWorkspaceViews && activeView === 'graph' ? (
               <GraphHomeView
                 patches={patches}
                 graph={graph}
@@ -1056,7 +1098,7 @@ export function BrandSpaceShell() {
               />
             ) : null}
 
-            {activeView === 'assets' ? (
+            {showWorkspaceViews && activeView === 'assets' ? (
               <AssetsView
                 artifacts={artifactsState}
                 detail={selectedArtifactDetail}
@@ -1073,10 +1115,11 @@ export function BrandSpaceShell() {
                 onDownloadArtifact={handleDownloadArtifact}
                 onCloseDetail={() => setSelectedArtifactDetail(null)}
                 onTraceTarget={handleTraceTarget}
+                onOpenBoard={() => setActiveView('boards')}
               />
             ) : null}
 
-            {activeView === 'reports' ? (
+            {showWorkspaceViews && activeView === 'reports' ? (
               <ReportReviewView
                 report={report}
                 reports={graphUpdate ? reports : []}
@@ -1086,6 +1129,7 @@ export function BrandSpaceShell() {
                 onPublishReport={handlePublishReport}
                 onSelectReport={handleSelectReport}
                 onOpenAssets={handleOpenReportAsset}
+                onOpenBoard={() => setActiveView('boards')}
                 isGenerating={isGeneratingReport}
                 selectedReportId={report?.id ?? null}
               />

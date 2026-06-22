@@ -1,13 +1,9 @@
 'use client';
 
 import {
-  Maximize2,
-  MousePointer2,
   Pause,
   Play,
-  Plus,
   Square,
-  Trash2,
 } from 'lucide-react';
 import { GraphUpdateQueue } from './GraphUpdateQueue';
 import { NodeInspector } from './NodeInspector';
@@ -236,18 +232,6 @@ export function BoardRuntimeView({
             >
               <Square className="h-4 w-4" />
               停止
-            </button>
-            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="选择" aria-label="选择节点工具">
-              <MousePointer2 className="h-4 w-4" />
-            </button>
-            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="适配视图" aria-label="适配画布视图">
-              <Maximize2 className="h-4 w-4" />
-            </button>
-            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="添加节点" aria-label="添加节点">
-              <Plus className="h-4 w-4" />
-            </button>
-            <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-tertiary)]" style={{ borderColor: 'var(--border-subtle)' }} title="删除" aria-label="删除所选节点">
-              <Trash2 className="h-4 w-4" />
             </button>
           </div>
 

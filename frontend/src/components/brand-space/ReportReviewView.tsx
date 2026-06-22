@@ -17,6 +17,7 @@ interface ReportReviewViewProps {
   onPublishReport?: () => void;
   onSelectReport?: (reportId: string) => void;
   onOpenAssets?: () => void;
+  onOpenBoard?: () => void;
   isGenerating?: boolean;
   selectedReportId?: string | null;
 }
@@ -123,6 +124,7 @@ export function ReportReviewView({
   onPublishReport,
   onSelectReport,
   onOpenAssets,
+  onOpenBoard,
   isGenerating = false,
   selectedReportId,
 }: ReportReviewViewProps) {
@@ -293,8 +295,17 @@ export function ReportReviewView({
               当前运行还没有可解读的图谱更新，报告不会复用其他运行或脚手架数据。
             </p>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--text-secondary)]">
-              完成一次画布运行并生成 Graph Update 后，这里才会展示报告版本、发布护栏、证据链和行动建议。
+              完成一次画布运行并生成图谱更新后，这里才会展示报告版本、发布护栏、证据链和行动建议。
             </p>
+            {onOpenBoard ? (
+              <button
+                type="button"
+                onClick={onOpenBoard}
+                className="mt-5 inline-flex h-10 items-center rounded-lg bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)]"
+              >
+                去画布运行
+              </button>
+            ) : null}
           </section>
         ) : null}
 
