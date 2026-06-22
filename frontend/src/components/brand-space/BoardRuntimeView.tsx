@@ -93,6 +93,19 @@ function statusLabel(status: BoardRunStatus) {
   return '就绪';
 }
 
+function platformAbbreviation(platformKey: string) {
+  const key = platformKey.toLowerCase();
+  const labels: Record<string, string> = {
+    chatgpt: 'GPT',
+    deepseek: 'DS',
+    kimi: 'K',
+    doubao: '豆',
+    yuanbao: '元',
+    hunyuan: '元',
+  };
+  return labels[key] ?? platformKey.slice(0, 2).toUpperCase();
+}
+
 function getNodeClass(node: BoardNode, selectedNodeId: string) {
   return classNames(
     styles.node,
@@ -349,7 +362,7 @@ export function BoardRuntimeView({
                     <h3 className="mt-1 text-sm font-semibold text-[var(--text-primary)]">AI 平台抓取组</h3>
                   </div>
                   <span className="rounded-lg bg-[var(--brand-bg)] px-2 py-1 text-xs font-semibold text-[var(--brand-text)]">
-                    {platforms.filter((platform) => platform.status === 'running').length} / 4 运行中
+                    {platforms.filter((platform) => platform.status === 'running').length} / {platforms.length} 运行中
                   </span>
                 </div>
                 <div className="space-y-3">
@@ -364,7 +377,7 @@ export function BoardRuntimeView({
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
                           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--bg-tertiary)] text-xs font-bold text-[var(--text-primary)]">
-                            {platform.platformKey === 'deepseek' ? 'DS' : platform.platformKey.slice(0, 1).toUpperCase()}
+                            {platformAbbreviation(platform.platformKey)}
                           </span>
                           <span>
                             <span className="block text-sm font-semibold text-[var(--text-primary)]">{platform.label}</span>

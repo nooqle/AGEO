@@ -9,7 +9,7 @@ import logging
 import math
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -87,7 +87,7 @@ NODE_TEMPLATES: list[dict[str, Any]] = [
         "node_id": "platform-rack",
         "node_type": "fetch",
         "title": "AI 平台抓取组",
-        "subtitle": "四个平台并行抓取",
+        "subtitle": "多平台并行抓取",
         "position": {"x": 55, "y": 36},
         "artifact_keys": ["artifact-raw-answers"],
     },
@@ -171,6 +171,52 @@ PLATFORM_TEMPLATES: list[dict[str, Any]] = [
         "failures": 1,
     },
 ]
+
+BRAND_SPACE_DEFAULT_REAL_PLATFORMS: tuple[str, ...] = ("doubao", "kimi", "yuanbao")
+BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS: tuple[str, ...] = (
+    "chatgpt",
+    "deepseek",
+    "kimi",
+    "doubao",
+)
+
+PLATFORM_TEMPLATE_BY_KEY: dict[str, dict[str, Any]] = {
+    str(platform["platformKey"]).lower(): platform for platform in PLATFORM_TEMPLATES
+}
+
+PLATFORM_TEMPLATE_BY_KEY.update(
+    {
+        "yuanbao": {
+            "id": "fetch-yuanbao",
+            "platformKey": "yuanbao",
+            "label": "元宝抓取",
+            "model": "hunyuan · API",
+            "progress": 0,
+            "answers": 0,
+            "failures": 0,
+        },
+        "hunyuan": {
+            "id": "fetch-yuanbao",
+            "platformKey": "yuanbao",
+            "label": "元宝抓取",
+            "model": "hunyuan · API",
+            "progress": 0,
+            "answers": 0,
+            "failures": 0,
+        },
+    }
+)
+
+PLATFORM_KEY_ALIASES: dict[str, str] = {
+    "豆包": "doubao",
+    "抖音豆包": "doubao",
+    "元宝": "yuanbao",
+    "腾讯元宝": "yuanbao",
+    "混元": "yuanbao",
+    "hunyuan": "yuanbao",
+    "gpt": "chatgpt",
+    "openai": "chatgpt",
+}
 
 EXPLICIT_COMPETITOR_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"替代|替换|可选|不如选|更推荐|相比之下|对比.*(选择|推荐)|竞品|竞争"),
@@ -312,7 +358,7 @@ REAL_RUN_STATUS_EVENT_MESSAGES = {
     "not_started": ("runtime_waiting", "info", "真实运行已创建，等待启动后台执行器。"),
     "planning_questions": ("runtime_stage_changed", "info", "正在生成问题集与样本范围。"),
     "waiting_scope_confirmation": ("runtime_waiting_user", "warning", "运行需要用户确认问题范围。"),
-    "fetching_answers": ("runtime_stage_changed", "info", "四个平台抓取正在执行。"),
+    "fetching_answers": ("runtime_stage_changed", "info", "AI 平台抓取正在执行。"),
     "waiting_takeover": ("runtime_waiting_user", "warning", "运行等待平台接管或登录确认。"),
     "analyzing_metrics": ("runtime_stage_changed", "info", "正在清洗回答并计算指标。"),
     "building_world": ("runtime_stage_changed", "info", "正在写入品牌对象图谱。"),
@@ -1430,7 +1476,12 @@ class BrandSpaceService:
         entity = await self._require_entity(entity_id, current_user)
         normalized_execution_mode = str(execution_mode or SCAFFOLD_EXECUTION_MODE).strip().lower()
         is_scaffold = normalized_execution_mode != REAL_EXECUTION_MODE
-        effective_input_scope = input_scope or {"platforms": ["chatgpt", "deepseek", "kimi", "doubao"]}
+        default_platforms = (
+            BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS
+            if is_scaffold
+            else BRAND_SPACE_DEFAULT_REAL_PLATFORMS
+        )
+        effective_input_scope = input_scope or {"platforms": list(default_platforms)}
         intelligence_run = await BrandIntelligenceRunService(self.db).create_or_reuse_run(
             entity_id=entity.id,
             current_user=current_user,
@@ -2319,7 +2370,7 @@ class BrandSpaceService:
             }
         )
 
-        platform_names = ("ChatGPT", "DeepSeek", "Kimi", "豆包", "Doubao")
+        platform_names = BrandSpaceService._report_known_platform_names(patches)
         actions = [str(item) for item in report_payload.get("recommended_actions") or []]
         missing_platform = bool(actions) and any(
             not any(platform in action for platform in platform_names) for action in actions
@@ -2755,7 +2806,7 @@ class BrandSpaceService:
         *,
         entity_id: UUID,
         intelligence_run: BrandIntelligenceRun,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         session_id = intelligence_run.origin_session_id
         question_conditions = [BrandIntelligenceQuestion.entity_id == entity_id]
         answer_conditions = [BrandPlatformAnswer.entity_id == entity_id]
@@ -2773,10 +2824,47 @@ class BrandSpaceService:
         snapshot_count = await self.db.scalar(
             select(func.count(AnalysisSnapshot.id)).where(*snapshot_conditions)
         )
+        successful_answer_count = await self.db.scalar(
+            select(func.count(BrandPlatformAnswer.id)).where(
+                *answer_conditions,
+                BrandPlatformAnswer.success.is_(True),
+            )
+        )
+        platform_rows = (
+            await self.db.execute(
+                select(
+                    BrandPlatformAnswer.platform,
+                    BrandPlatformAnswer.success,
+                    func.count(BrandPlatformAnswer.id),
+                )
+                .where(*answer_conditions)
+                .group_by(BrandPlatformAnswer.platform, BrandPlatformAnswer.success)
+            )
+        ).all()
+        platform_counts: dict[str, dict[str, int | str]] = {}
+        for raw_platform, success, count in platform_rows:
+            key = self._platform_key(raw_platform)
+            item = platform_counts.setdefault(
+                key,
+                {
+                    "platform": key,
+                    "answers": 0,
+                    "failures": 0,
+                    "total": 0,
+                },
+            )
+            row_count = int(count or 0)
+            item["total"] = int(item["total"]) + row_count
+            if success is True:
+                item["answers"] = int(item["answers"]) + row_count
+            else:
+                item["failures"] = int(item["failures"]) + row_count
         return {
             "questions": int(question_count or 0),
             "answers": int(answer_count or 0),
+            "successful_answers": int(successful_answer_count or 0),
             "snapshots": int(snapshot_count or 0),
+            "platforms": platform_counts,
         }
 
     async def _sync_real_nodes(
@@ -2784,7 +2872,7 @@ class BrandSpaceService:
         *,
         board_run: BoardRun,
         intelligence_run: BrandIntelligenceRun,
-        counts: dict[str, int],
+        counts: dict[str, Any],
     ) -> bool:
         changed = False
         node_states = self._real_node_state_map(intelligence_run)
@@ -2819,7 +2907,7 @@ class BrandSpaceService:
         *,
         board_run: BoardRun,
         intelligence_run: BrandIntelligenceRun,
-        counts: dict[str, int],
+        counts: dict[str, Any],
     ) -> bool:
         changed = False
         row_counts = {
@@ -3031,14 +3119,15 @@ class BrandSpaceService:
         self,
         node_id: str,
         intelligence_run: BrandIntelligenceRun,
-        counts: dict[str, int],
+        counts: dict[str, Any],
     ) -> list[dict[str, str]]:
         if node_id == "brand-seed":
             return [{"label": "模式", "value": "真实"}, {"label": "状态", "value": intelligence_run.status}]
         if node_id == "question-set":
             return [{"label": "问题", "value": str(counts["questions"])}, {"label": "阶段", "value": intelligence_run.stage or "-"}]
         if node_id == "platform-rack":
-            return [{"label": "平台", "value": "4"}, {"label": "回答", "value": str(counts["answers"])}]
+            platform_count = len(counts.get("platforms") or {})
+            return [{"label": "平台", "value": str(platform_count or "-")}, {"label": "回答", "value": str(counts["answers"])}]
         if node_id in {"answer-normalize", "entity-match"}:
             return [{"label": "回答", "value": str(counts["answers"])}, {"label": "状态", "value": intelligence_run.status}]
         if node_id == "graph-update":
@@ -3466,7 +3555,7 @@ class BrandSpaceService:
             metrics_by_id = {
                 "brand-seed": [{"label": "实体", "value": "126"}, {"label": "别名", "value": "342"}],
                 "question-set": [{"label": "问题", "value": "1,248"}, {"label": "场景", "value": "42"}],
-                "platform-rack": [{"label": "运行中", "value": "4 / 4"}, {"label": "回答", "value": "994"}],
+                "platform-rack": [{"label": "运行中", "value": "多平台"}, {"label": "回答", "value": "994"}],
                 "answer-normalize": [{"label": "回答", "value": "1,248"}, {"label": "失败", "value": "3"}],
                 "entity-match": [{"label": "已映射", "value": "2,193"}, {"label": "新实体", "value": "36"}],
                 "graph-patch": [{"label": "变更", "value": "4"}, {"label": "待审阅", "value": "2"}],
@@ -3928,7 +4017,7 @@ class BrandSpaceService:
                 ("run_started", "info", "已从 AI 能见度监测模板启动画布运行。", None),
                 ("scaffold_data_loaded", "warning", "当前运行使用脚手架数据预览，尚未触发真实 AI 抓取。", None),
                 ("artifact_written", "success", "问题集资产已写入，共 1,248 条问题。", "question-set"),
-                ("node_progress", "info", "ChatGPT、DeepSeek、Kimi、豆包正在并行抓取。", "platform-rack"),
+                ("node_progress", "info", "AI 平台正在并行抓取。", "platform-rack"),
                 ("artifact_written", "success", "标准化回答表已生成，可以进入实体抽取。", "answer-normalize"),
                 ("graph_patch_needs_review", "warning", f"{review_count} 个图谱补丁需要审阅。", "graph-patch"),
             ]
@@ -4636,6 +4725,80 @@ class BrandSpaceService:
         latest_report = result.scalar_one_or_none()
         return int(latest_report.version if latest_report else 0) + 1
 
+    @staticmethod
+    def _platform_key(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "unknown"
+        lower = raw.lower()
+        alias = PLATFORM_KEY_ALIASES.get(raw) or PLATFORM_KEY_ALIASES.get(lower)
+        if alias:
+            return alias
+        if lower in PLATFORM_TEMPLATE_BY_KEY:
+            return str(PLATFORM_TEMPLATE_BY_KEY[lower]["platformKey"])
+        for known_key, template in PLATFORM_TEMPLATE_BY_KEY.items():
+            if known_key in lower:
+                return str(template["platformKey"])
+        ascii_key = re.sub(r"[^a-z0-9]+", "-", lower).strip("-")
+        return ascii_key or raw
+
+    @classmethod
+    def _platform_template_for_key(cls, key: str) -> dict[str, Any]:
+        normalized = cls._platform_key(key)
+        template = PLATFORM_TEMPLATE_BY_KEY.get(normalized)
+        if template:
+            return dict(template)
+        safe_id = re.sub(r"[^a-z0-9]+", "-", normalized.lower()).strip("-") or "custom"
+        label = str(key or normalized).strip() or "未知平台"
+        if "抓取" not in label:
+            label = f"{label} 抓取"
+        return {
+            "id": f"fetch-{safe_id}",
+            "platformKey": normalized,
+            "label": label,
+            "model": "API",
+            "progress": 0,
+            "answers": 0,
+            "failures": 0,
+        }
+
+    @classmethod
+    def _platform_keys_for_run(cls, board_run: BoardRun) -> list[str]:
+        input_scope = board_run.input_scope or {}
+        raw_platforms = (
+            input_scope.get("platforms")
+            or input_scope.get("platform_keys")
+            or input_scope.get("target_platforms")
+        )
+        if isinstance(raw_platforms, str):
+            platform_items: Iterable[Any] = [
+                item for item in re.split(r"[,，;；\s]+", raw_platforms) if item
+            ]
+        elif isinstance(raw_platforms, dict):
+            platform_items = [raw_platforms]
+        elif isinstance(raw_platforms, Iterable):
+            platform_items = raw_platforms
+        else:
+            platform_items = []
+
+        keys: list[str] = []
+        seen: set[str] = set()
+        for item in platform_items:
+            if isinstance(item, dict):
+                raw_value = (
+                    item.get("platformKey")
+                    or item.get("platform")
+                    or item.get("key")
+                    or item.get("name")
+                )
+            else:
+                raw_value = item
+            key = cls._platform_key(raw_value)
+            if key and key not in seen:
+                seen.add(key)
+                keys.append(key)
+        return keys
+
     def _platforms_for_run(self, board_run: BoardRun) -> list[dict[str, Any]]:
         if not board_run.is_scaffold:
             if board_run.status == "completed":
@@ -4648,18 +4811,52 @@ class BrandSpaceService:
                 status = "queued"
             progress = int(max(0.0, min(1.0, float(board_run.progress or 0.0))) * 100)
             real_counts = (board_run.output_refs or {}).get("real_counts") or {}
+            platform_counts = real_counts.get("platforms") or {}
+            if not isinstance(platform_counts, dict):
+                platform_counts = {}
             total_answers = int(real_counts.get("answers") or 0)
-            base_answers, remainder = divmod(total_answers, len(PLATFORM_TEMPLATES))
-            return [
-                {
-                    **platform,
-                    "status": status,
-                    "progress": 100 if status == "completed" else progress,
-                    "answers": base_answers + (1 if index < remainder else 0),
-                    "failures": 0,
+            question_count = int(real_counts.get("questions") or 0)
+            platform_keys = self._platform_keys_for_run(board_run)
+            if not platform_keys:
+                platform_keys = [str(key) for key in platform_counts.keys()]
+            for raw_key in platform_counts.keys():
+                key = self._platform_key(raw_key)
+                if key not in platform_keys:
+                    platform_keys.append(key)
+            if not platform_keys:
+                platform_keys = [str(platform["platformKey"]) for platform in PLATFORM_TEMPLATES]
+
+            fallback_answers: dict[str, int] = {}
+            if total_answers and not platform_counts and platform_keys:
+                base_answers, remainder = divmod(total_answers, len(platform_keys))
+                fallback_answers = {
+                    key: base_answers + (1 if index < remainder else 0)
+                    for index, key in enumerate(platform_keys)
                 }
-                for index, platform in enumerate(PLATFORM_TEMPLATES)
-            ]
+
+            platforms: list[dict[str, Any]] = []
+            for key in platform_keys:
+                template = self._platform_template_for_key(key)
+                normalized_key = str(template["platformKey"])
+                counts = platform_counts.get(normalized_key) or platform_counts.get(key) or {}
+                answers = int(counts.get("answers") or fallback_answers.get(key, 0))
+                failures = int(counts.get("failures") or 0)
+                observed_total = int(counts.get("total") or answers + failures)
+                platform_progress = progress
+                if status == "completed":
+                    platform_progress = 100
+                elif question_count > 0 and observed_total > 0:
+                    platform_progress = min(100, int((observed_total / question_count) * 100))
+                platforms.append(
+                    {
+                        **template,
+                        "status": status,
+                        "progress": platform_progress,
+                        "answers": answers,
+                        "failures": failures,
+                    }
+                )
+            return platforms
         status = "paused" if board_run.status in {"paused", "stopped"} else "running"
         return [{**platform, "status": status} for platform in PLATFORM_TEMPLATES]
 
@@ -6090,14 +6287,22 @@ class BrandSpaceService:
     def _report_recommended_actions(patches: list[GraphPatch]) -> list[str]:
         reviewable = [patch for patch in patches if patch.status in REVIEWABLE_PATCH_STATUSES]
         if not reviewable:
+            platforms = BrandSpaceService._report_platforms_from_patches(patches)
+            if not platforms:
+                platforms = [
+                    BrandSpaceService._platform_display_name(platform)
+                    for platform in BRAND_SPACE_DEFAULT_REAL_PLATFORMS[:2]
+                ]
+            first_platform = platforms[0]
+            second_platform = platforms[1] if len(platforms) > 1 else first_platform
             return [
-                "在 ChatGPT 上复测已接受关系，确认核心圈层表述稳定。",
-                "在 DeepSeek 上复测风险问题，确认没有新的质疑语境。",
+                f"在 {first_platform} 上复测已接受关系，确认核心圈层表述稳定。",
+                f"在 {second_platform} 上复测风险问题，确认没有新的质疑语境。",
             ]
         actions: list[str] = []
         for patch in reviewable[:3]:
             platforms = BrandSpaceService._patch_platforms(patch)
-            platform = platforms[0] if platforms else "ChatGPT"
+            platform = platforms[0] if platforms else BrandSpaceService._platform_display_name(BRAND_SPACE_DEFAULT_REAL_PLATFORMS[0])
             label = BrandSpaceService._patch_label(patch)
             if patch.relation_type == "competes_with":
                 actions.append(f"在 {platform} 上补充{label}对比澄清问题，确认是否保留竞品关系。")
@@ -6119,6 +6324,39 @@ class BrandSpaceService:
             if str(evidence.get("platform") or "").strip()
         }
         return sorted(platforms)
+
+    @staticmethod
+    def _platform_display_name(platform: Any) -> str:
+        key = BrandSpaceService._platform_key(platform)
+        template = PLATFORM_TEMPLATE_BY_KEY.get(key)
+        if template:
+            return str(template["label"]).replace(" 抓取", "").replace("抓取", "").strip()
+        raw = str(platform or "").strip()
+        return raw or "AI 平台"
+
+    @staticmethod
+    def _report_platforms_from_patches(patches: list[GraphPatch]) -> list[str]:
+        display_by_key: dict[str, str] = {}
+        for patch in patches:
+            for platform in BrandSpaceService._patch_platforms(patch):
+                key = BrandSpaceService._platform_key(platform)
+                display_by_key.setdefault(key, BrandSpaceService._platform_display_name(platform))
+        return [
+            display_by_key[key]
+            for key in sorted(display_by_key.keys())
+            if display_by_key.get(key)
+        ]
+
+    @staticmethod
+    def _report_known_platform_names(patches: list[GraphPatch]) -> tuple[str, ...]:
+        names: set[str] = set()
+        for key in PLATFORM_TEMPLATE_BY_KEY:
+            names.add(key)
+            names.add(BrandSpaceService._platform_display_name(key))
+        names.update(PLATFORM_KEY_ALIASES.keys())
+        names.update(PLATFORM_KEY_ALIASES.values())
+        names.update(BrandSpaceService._report_platforms_from_patches(patches))
+        return tuple(sorted({name for name in names if name}, key=len, reverse=True))
 
     @staticmethod
     def _decision_label(status: str) -> str:

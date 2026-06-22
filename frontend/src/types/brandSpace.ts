@@ -185,7 +185,7 @@ export interface BoardNode {
 
 export interface PlatformFetchNode {
   id: string;
-  platformKey: 'chatgpt' | 'doubao' | 'kimi' | 'deepseek';
+  platformKey: string;
   label: string;
   model: string;
   status: NodeStatus;

@@ -634,6 +634,38 @@ async def test_update_board_run_status_rolls_back_when_payload_projection_fails(
 
 
 @pytest.mark.asyncio
+async def test_real_board_run_defaults_to_real_a4_platform_scope(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-real-default-platforms@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            execution_mode="real",
+        )
+
+        assert payload["run"]["input_scope"]["platforms"] == ["doubao", "kimi", "yuanbao"]
+        assert [platform["platformKey"] for platform in payload["platforms"]] == [
+            "doubao",
+            "kimi",
+            "yuanbao",
+        ]
+        intelligence_run = await session.get(
+            BrandIntelligenceRun,
+            uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
+        )
+        assert intelligence_run is not None
+        assert intelligence_run.input_scope["platforms"] == ["doubao", "kimi", "yuanbao"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_get_space_does_not_fallback_to_scaffold_graph_update_for_real_empty_run(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:
@@ -1945,6 +1977,89 @@ async def test_real_board_run_syncs_brand_intelligence_stage_to_canvas(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_real_board_run_platforms_follow_scope_and_answer_counts(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-real-platforms@example.com")
+        entity = _entity(owner, name="麦当劳中国")
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        payload = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            input_scope={"platforms": ["doubao", "kimi", "yuanbao"]},
+            execution_mode="real",
+        )
+
+        intelligence_run = await session.get(
+            BrandIntelligenceRun,
+            uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
+        )
+        assert intelligence_run is not None
+        task = AnalysisTask(
+            id=uuid.uuid4(),
+            user_id=owner.id,
+            session_id=None,
+            entity_id=entity.id,
+            brand_name=entity.name,
+            status=TaskStatus.RUNNING,
+            current_stage="A4",
+            progress=0.7,
+            progress_message="正在采集麦当劳中国 AI 回答",
+        )
+        session.add(task)
+        platform_rows = [
+            ("豆包", "doubao"),
+            ("Kimi", "kimi"),
+            ("腾讯元宝", "yuanbao"),
+        ]
+        answers: list[BrandPlatformAnswer] = []
+        for raw_platform, key in platform_rows:
+            for index in range(13):
+                answers.append(
+                    BrandPlatformAnswer(
+                        entity_id=entity.id,
+                        question_id=f"mcd-q-{index}",
+                        dedupe_key=f"{entity.id}:answer:{key}:{index}",
+                        platform=raw_platform,
+                        fetch_method="test",
+                        status="captured",
+                        success=True,
+                        answer_text="麦当劳中国在便利、家庭用餐和新品场景中被提及。",
+                    )
+                )
+        session.add_all(answers)
+        intelligence_run.analysis_task_id = task.id
+        await session.commit()
+
+        synced = await service.get_board_run(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+        )
+
+        platform_keys = [platform["platformKey"] for platform in synced["platforms"]]
+        assert platform_keys == ["doubao", "kimi", "yuanbao"]
+        assert "chatgpt" not in platform_keys
+        assert "deepseek" not in platform_keys
+        assert {platform["platformKey"]: platform["answers"] for platform in synced["platforms"]} == {
+            "doubao": 13,
+            "kimi": 13,
+            "yuanbao": 13,
+        }
+        node_by_id = {node["id"]: node for node in synced["nodes"]}
+        platform_metrics = {
+            metric["label"]: metric["value"]
+            for metric in node_by_id["platform-rack"]["metrics"]
+        }
+        assert platform_metrics["平台"] == "3"
+        assert platform_metrics["回答"] == "39"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_real_completed_run_builds_graph_update_from_answers(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:
@@ -2532,6 +2647,48 @@ def test_report_guardrails_cover_warn_and_block_edges():
     guardrails = BrandSpaceService.validate_report_payload(report_payload, concentrated_patches)
     guardrail_by_key = {item["guardrail_key"]: item for item in guardrails}
     assert guardrail_by_key["evidence_concentration"]["severity"] == "warn"
+
+    yuanbao_payload = {
+        **report_payload,
+        "recommended_actions": ["在 元宝 上补充家庭健康场景。", "在 hunyuan 上复测核心圈层。"],
+    }
+    guardrails = BrandSpaceService.validate_report_payload(
+        yuanbao_payload,
+        [
+            GraphPatch(
+                graph_update_id=update_id,
+                entity_id=entity_id,
+                patch_type="add_entity_relation",
+                status="auto_applied",
+                evidence_refs=[
+                    {"question": "麦当劳外送体验如何？", "platform": "腾讯元宝"},
+                    {"question": "麦当劳家庭用餐场景如何？", "platform": "豆包"},
+                ],
+            )
+        ],
+    )
+    guardrail_by_key = {item["guardrail_key"]: item for item in guardrails}
+    assert guardrail_by_key["action_platform_specificity"]["severity"] == "pass"
+
+    recommendations = BrandSpaceService._report_recommended_actions(
+        [
+            GraphPatch(
+                graph_update_id=update_id,
+                entity_id=entity_id,
+                patch_type="add_entity_relation",
+                status="auto_applied",
+                evidence_refs=[
+                    {"question": "麦当劳外送体验如何？", "platform": "腾讯元宝"},
+                    {"question": "麦当劳家庭用餐场景如何？", "platform": "豆包"},
+                ],
+            )
+        ]
+    )
+    recommendation_text = "\n".join(recommendations)
+    assert "元宝" in recommendation_text
+    assert "豆包" in recommendation_text
+    assert "ChatGPT" not in recommendation_text
+    assert "DeepSeek" not in recommendation_text
 
     missing_platform_payload = {
         "strategic_terms": [{"reason": "安利与营养健康场景连接增强。"}],

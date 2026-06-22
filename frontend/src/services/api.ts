@@ -99,6 +99,9 @@ import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
 
+const BRAND_SPACE_DEFAULT_REAL_PLATFORMS = ['doubao', 'kimi', 'yuanbao'];
+const BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS = ['chatgpt', 'deepseek', 'kimi', 'doubao'];
+
 export function getApiBaseUrl(): string {
   return API_URL;
 }
@@ -1169,6 +1172,10 @@ class ApiService {
     entityId: string,
     payload: CreateBrandSpaceBoardRunInput = {},
   ): Promise<BrandSpacePayload> {
+    const executionMode = payload.execution_mode ?? 'scaffold';
+    const defaultPlatforms = executionMode === 'real'
+      ? BRAND_SPACE_DEFAULT_REAL_PLATFORMS
+      : BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS;
     return this.request<BrandSpacePayload>(
       `/brand-space/brands/${entityId}/board-runs`,
       {
@@ -1177,9 +1184,9 @@ class ApiService {
           board_id: payload.board_id ?? 'ai_visibility_monitor',
           template_id: payload.template_id ?? 'ai_visibility_monitor:v0.1',
           input_scope: payload.input_scope ?? {
-            platforms: ['chatgpt', 'deepseek', 'kimi', 'doubao'],
+            platforms: defaultPlatforms,
           },
-          execution_mode: payload.execution_mode ?? 'scaffold',
+          execution_mode: executionMode,
         }),
       },
     );
