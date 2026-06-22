@@ -4933,13 +4933,13 @@ function ReportBlindSpotTable({ claims }: { claims: string[] }) {
         </thead>
         <tbody>
           <tr className="border-t border-[var(--border-subtle)]">
-            <td className="py-2">问题中包含"安利"</td>
+            <td className="py-2">问题中包含「安利」</td>
             <td className="py-2 text-right tabular-nums">{brandNamed}</td>
             <td className="py-2 text-right tabular-nums text-[var(--brand-primary)]">{brandNamed}</td>
             <td className="py-2 text-right tabular-nums text-[var(--brand-primary)]">100%</td>
           </tr>
           <tr className="border-t border-[var(--border-subtle)]">
-            <td className="py-2">问题中不含"安利"</td>
+            <td className="py-2">问题中不含「安利」</td>
             <td className="py-2 text-right tabular-nums">{openAnswers}</td>
             <td className="py-2 text-right tabular-nums text-[var(--error)]">{openMentions}</td>
             <td className="py-2 text-right tabular-nums text-[var(--error)]">{activeRate}%</td>
@@ -5794,4 +5794,3 @@ function platformLabel(platform: string) {
   if (normalized.includes('deepseek')) return 'DeepSeek';
   return platform || '未知平台';
 }
-

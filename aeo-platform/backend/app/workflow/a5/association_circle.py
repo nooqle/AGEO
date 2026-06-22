@@ -4215,7 +4215,6 @@ def _story_clean_action_lines(
     for item in weekly_actions:
         title = _clean_text(item.get("title"))
         action = _clean_text(item.get("action"))
-        validation = _clean_text(item.get("validation"))
         if not title or title in seen_titles:
             continue
         seen_titles.add(title)
@@ -4280,11 +4279,6 @@ def _build_storyline_report_sections(
     ][:4] or [
         _clean_text(row.get("term")) for row in risk_rows[:4] if row.get("term")
     ]
-    competition_terms = [
-        _clean_text(node.get("term"))
-        for node in risk_summary.get("competition_nodes", [])
-        if isinstance(node, dict) and _clean_text(node.get("term"))
-    ][:4]
     story_records = storyline_analysis.get("records") or []
     health_quotes = _story_quote_lines_from_samples(health.get("source_samples") or [], limit=3, records=story_records)
     companionship_quotes = _story_quote_lines_from_samples(
@@ -4325,16 +4319,11 @@ def _build_storyline_report_sections(
     companionship_gap = _story_gap_label("have_companionship", companionship)
     security_gap = _story_gap_label("have_security", security)
     value_gap = _story_gap_label("have_value", value)
-    companionship_summary = (
-        "高可见低可信" if companionship_gap == "叙事被劫持" else "仍需外显证据"
-    )
-    value_summary = "叙事缺位" if value_gap == "叙事缺位" else "仍缺少稳定入口"
     platform_focus = _join_report_terms(
         [profile.get("platform") for profile in platform_profiles[:4] if profile.get("platform")],
         "平台样本待补",
     )
     risk_terms_text = _join_report_terms(risk_terms, "风险语境待继续确认")
-    competition_terms_text = _join_report_terms(competition_terms, "竞品参照待继续确认")
     return [
         {
             "section_id": "core_verdict",
@@ -4364,7 +4353,7 @@ def _build_storyline_report_sections(
                 ),
                 (
                     f"第二层，{center_term}＝直销＋社群。"
-                    f"AI 知道安利有社群和事业机会，但紧跟的不是陪伴和保障，而是{risk_terms_text}。"
+                    f"AI 知道安利有社群和事业机会，随后接上的高频风险词是{risk_terms_text}。"
                 ),
                 (
                     f"第三层，{center_term}＝争议品牌。"
@@ -4421,8 +4410,8 @@ def _build_storyline_report_sections(
             "title": "四个价值支柱，在 AI 叙事里是什么状态",
             "reader_question": "四有分别被接住、牵制、反转还是缺席？",
             "takeaway": (
-                f"四有里只有有健康进了 AI 档案，"
-                f"有陪伴、有保障、有价值都还卡在档案外面。"
+                "四有里只有有健康进了 AI 档案，"
+                "有陪伴、有保障、有价值都还卡在档案外面。"
             ),
             "claims": [
                 f"有健康：差距类型为{health_gap}；{_story_metric_phrase(health_count, valid_answers)}；代表节点为{_story_terms(health, 'node_terms', '健康相关节点')}。",
