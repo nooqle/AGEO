@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
 import Link from 'next/link';
 import {
   RiArrowLeftLine,
@@ -19,6 +20,7 @@ import {
 } from '@/components/control-plane/ControlPlaneShell';
 import { formatControlPlaneCost } from '@/components/control-plane/ControlPlaneDataPanels';
 import { Button } from '@/components/ui/button';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import { toast } from '@/components/ui/toast';
 import { api } from '@/services/api';
 import type { AdminUserUpdateInput } from '@/types/accountAdmin';
@@ -43,6 +45,14 @@ type EditableUserState = {
   phone: string;
   job_title: string;
   status: string;
+  amwaychina_console: boolean;
+};
+
+type InviteAccountDraft = {
+  email: string;
+  applicant_name: string;
+  job_title: string;
+  amwaychina_console: boolean;
 };
 
 export function ControlPlaneCustomerDetailView({
@@ -64,10 +74,36 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
   const [loading, setLoading] = useState(true);
   const [savingOrg, setSavingOrg] = useState(false);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [sendingInvite, setSendingInvite] = useState(false);
   const [orgNameDraft, setOrgNameDraft] = useState('');
   const [orgStatusDraft, setOrgStatusDraft] = useState('active');
   const [amwayChinaEnabledDraft, setAmwayChinaEnabledDraft] = useState(false);
   const [userDrafts, setUserDrafts] = useState<Record<string, EditableUserState>>({});
+  const [inviteDraft, setInviteDraft] = useState<InviteAccountDraft>({
+    email: '',
+    applicant_name: '',
+    job_title: '团队成员',
+    amwaychina_console: true,
+  });
+
+  const hydrateDetail = useCallback((payload: ControlPlaneCustomerDetail) => {
+    setDetail(payload);
+    setOrgNameDraft(payload.organization.legal_name);
+    setOrgStatusDraft(payload.organization.status);
+    setAmwayChinaEnabledDraft(Boolean(payload.organization.feature_flags?.amwaychina_console));
+    const drafts: Record<string, EditableUserState> = {};
+    payload.users.forEach((item) => {
+      drafts[item.id] = {
+        email: item.email || '',
+        phone: item.phone || '',
+        job_title: item.job_title || '',
+        status: item.status,
+        amwaychina_console: Boolean(item.feature_flags?.amwaychina_console),
+      };
+    });
+    setUserDrafts(drafts);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -83,20 +119,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
         }
         const payload = await api.getControlPlaneCustomerDetail(customerId);
         if (!active) return;
-        setDetail(payload);
-        setOrgNameDraft(payload.organization.legal_name);
-        setOrgStatusDraft(payload.organization.status);
-        setAmwayChinaEnabledDraft(Boolean(payload.organization.feature_flags?.amwaychina_console));
-        const drafts: Record<string, EditableUserState> = {};
-        payload.users.forEach((item) => {
-          drafts[item.id] = {
-            email: item.email || '',
-            phone: item.phone || '',
-            job_title: item.job_title || '',
-            status: item.status,
-          };
-        });
-        setUserDrafts(drafts);
+        hydrateDetail(payload);
       } catch (error) {
         if (!active) return;
         toast.error(error instanceof Error ? error.message : '加载客户详情失败');
@@ -108,7 +131,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
     return () => {
       active = false;
     };
-  }, [customerId]);
+  }, [customerId, hydrateDetail]);
 
   const isAdmin = currentUser?.role === 'internal_admin';
   const detailUsers = useMemo(
@@ -217,6 +240,10 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
         job_title: draft.job_title.trim() || null,
         status: draft.status,
         is_active: draft.status === 'active',
+        feature_flags: {
+          ...(detailUsers.find((item) => item.id === userId)?.feature_flags || {}),
+          amwaychina_console: draft.amwaychina_console,
+        },
       };
       const updated = await api.updateAdminUser(userId, payload);
       setDetail((current) =>
@@ -234,6 +261,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
           phone: updated.phone || '',
           job_title: updated.job_title || '',
           status: updated.status,
+          amwaychina_console: Boolean(updated.feature_flags?.amwaychina_console),
         },
       }));
       toast.success('账号信息已更新');
@@ -241,6 +269,45 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
       toast.error(error instanceof Error ? error.message : '更新账号信息失败');
     } finally {
       setSavingUserId(null);
+    }
+  }
+
+  async function handleCreateInvitation() {
+    if (!detail) return;
+    const email = inviteDraft.email.trim();
+    if (!email) {
+      toast.error('请输入邀请邮箱');
+      return;
+    }
+    setSendingInvite(true);
+    try {
+      const response = await api.createAccountInvitation({
+        email,
+        organization_id: organization.id,
+        applicant_name: inviteDraft.applicant_name.trim() || null,
+        job_title: inviteDraft.job_title.trim() || '团队成员',
+        feature_flags: {
+          amwaychina_console: inviteDraft.amwaychina_console,
+        },
+      });
+      const refreshed = await api.getControlPlaneCustomerDetail(customerId);
+      hydrateDetail(refreshed);
+      setInviteOpen(false);
+      setInviteDraft({
+        email: '',
+        applicant_name: '',
+        job_title: '团队成员',
+        amwaychina_console: true,
+      });
+      toast.success(
+        response.status === 'existing_user_granted'
+          ? '账号权限已开通'
+          : '邀请已发送'
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '邀请发送失败');
+    } finally {
+      setSendingInvite(false);
     }
   }
 
@@ -428,6 +495,15 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
           {activeTab === 'accounts' ? (
             <ControlPlanePanel
               title="组织账号"
+              actions={
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={() => setInviteOpen(true)}
+                >
+                  邀请账号
+                </Button>
+              }
             >
               <div className="space-y-4">
                 {detailUsers.map((user) => {
@@ -436,6 +512,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                     phone: '',
                     job_title: '',
                     status: 'active',
+                    amwaychina_console: false,
                   };
                   return (
                     <div
@@ -443,7 +520,7 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                       className="rounded-xl border px-4 py-4"
                       style={{ borderColor: palette.border, background: palette.panelMuted }}
                     >
-                      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_220px_180px_auto]">
+                      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_220px_180px_190px_auto]">
                         <input
                           value={draft.email}
                           onChange={(event) =>
@@ -513,6 +590,21 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                           <option value="pending_review">pending_review</option>
                         </select>
                         <Button
+                          variant="secondary"
+                          size="md"
+                          onClick={() =>
+                            setUserDrafts((current) => ({
+                              ...current,
+                              [user.id]: {
+                                ...draft,
+                                amwaychina_console: !draft.amwaychina_console,
+                              },
+                            }))
+                          }
+                        >
+                          {draft.amwaychina_console ? 'Console 已开通' : 'Console 未开通'}
+                        </Button>
+                        <Button
                           variant="primary"
                           size="md"
                           onClick={() => void handleSaveUser(user.id)}
@@ -523,6 +615,12 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
                       </div>
                       <div className="mt-3 text-sm leading-6" style={{ color: palette.muted }}>
                         角色：{user.role} · 创建时间：{formatDateTime(user.created_at)}
+                        {organization.feature_flags?.amwaychina_console ? (
+                          <>
+                            <br />
+                            组织级权限已开通，账号级开关只记录该账号的独立授权状态。
+                          </>
+                        ) : null}
                       </div>
                     </div>
                   );
@@ -602,9 +700,161 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
               <TaskTable rows={detailRecentTasks} />
             </ControlPlanePanel>
           ) : null}
+
+          <InviteAccountDialog
+            open={inviteOpen}
+            draft={inviteDraft}
+            organizationName={organization.legal_name}
+            isSubmitting={sendingInvite}
+            onDraftChange={setInviteDraft}
+            onClose={() => setInviteOpen(false)}
+            onSubmit={() => void handleCreateInvitation()}
+          />
         </div>
       )}
     </ControlPlaneShell>
+  );
+}
+
+function InviteAccountDialog({
+  open,
+  draft,
+  organizationName,
+  isSubmitting,
+  onDraftChange,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  draft: InviteAccountDraft;
+  organizationName: string;
+  isSubmitting: boolean;
+  onDraftChange: (draft: InviteAccountDraft) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className={modalScrimClassName('z-50')} />
+        <Dialog.Content className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-6">
+          <div
+            className="w-full max-w-[560px] rounded-2xl border p-6 shadow-[var(--shadow-lg)]"
+            style={{ borderColor: palette.borderStrong, background: palette.panel }}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Dialog.Title className="text-[22px] font-semibold" style={{ color: palette.text }}>
+                  邀请账号
+                </Dialog.Title>
+                <Dialog.Description className="mt-2 text-sm leading-6" style={{ color: palette.muted }}>
+                  邀请对象会加入 {organizationName}。如果邮箱已在该组织内启用，系统会直接开通所选权限。
+                </Dialog.Description>
+              </div>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="rounded-lg border px-3 py-2 text-sm font-semibold"
+                  style={{ borderColor: palette.borderStrong, color: palette.muted }}
+                >
+                  关闭
+                </button>
+              </Dialog.Close>
+            </div>
+
+            <div className="mt-6 space-y-4">
+              <label className="block">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: palette.subtle }}>
+                  邮箱
+                </div>
+                <input
+                  value={draft.email}
+                  onChange={(event) =>
+                    onDraftChange({ ...draft, email: event.target.value })
+                  }
+                  placeholder="name@company.com"
+                  className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
+                  style={{
+                    background: palette.panelMuted,
+                    borderColor: palette.borderStrong,
+                    color: palette.text,
+                  }}
+                />
+              </label>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: palette.subtle }}>
+                    姓名
+                  </div>
+                  <input
+                    value={draft.applicant_name}
+                    onChange={(event) =>
+                      onDraftChange({ ...draft, applicant_name: event.target.value })
+                    }
+                    placeholder="可选"
+                    className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
+                    style={{
+                      background: palette.panelMuted,
+                      borderColor: palette.borderStrong,
+                      color: palette.text,
+                    }}
+                  />
+                </label>
+                <label className="block">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: palette.subtle }}>
+                    职位
+                  </div>
+                  <input
+                    value={draft.job_title}
+                    onChange={(event) =>
+                      onDraftChange({ ...draft, job_title: event.target.value })
+                    }
+                    className="h-11 w-full rounded-lg border px-3 text-sm outline-none"
+                    style={{
+                      background: palette.panelMuted,
+                      borderColor: palette.borderStrong,
+                      color: palette.text,
+                    }}
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  onDraftChange({
+                    ...draft,
+                    amwaychina_console: !draft.amwaychina_console,
+                  })
+                }
+                className="flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left text-sm"
+                style={{
+                  borderColor: draft.amwaychina_console ? palette.accent : palette.borderStrong,
+                  background: draft.amwaychina_console ? palette.accentSoft : palette.panelMuted,
+                  color: draft.amwaychina_console ? palette.accentText : palette.muted,
+                }}
+              >
+                <span className="font-semibold">同时开通安利中国 Console</span>
+                <span>{draft.amwaychina_console ? '已选择' : '未选择'}</span>
+              </button>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <Button variant="secondary" size="md" onClick={onClose}>
+                取消
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                onClick={onSubmit}
+                isLoading={isSubmitting}
+              >
+                发送邀请
+              </Button>
+            </div>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

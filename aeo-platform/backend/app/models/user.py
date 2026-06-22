@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.snapshot import JSONText
 
 if TYPE_CHECKING:
     from app.models.entity import Entity
@@ -59,6 +60,7 @@ class User(Base):
         nullable=False,
     )
     job_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    feature_flags: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("organizations.id", ondelete="SET NULL"),

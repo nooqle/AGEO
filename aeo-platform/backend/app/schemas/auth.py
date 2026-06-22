@@ -80,6 +80,7 @@ class RegistrationApplicationResponse(BaseModel):
     applicant_name: str | None
     company_size: str | None
     is_agency: bool
+    feature_flags: dict[str, bool] | None = Field(default_factory=dict)
     status: RegistrationApplicationStatus
     review_note: str | None
     reviewed_by_user_id: UUID | None

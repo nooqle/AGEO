@@ -19,6 +19,12 @@ from app.services.account_notification_service import (
     AccountNotificationService,
 )
 from app.services.identity_normalization_service import normalize_email, normalize_phone
+from app.services.organization_feature_service import (
+    FEATURE_AMWAYCHINA_CONSOLE,
+    ensure_amwaychina_console_entity,
+    normalize_user_feature_flags,
+    user_feature_enabled,
+)
 from app.services.user_service import UserService
 from app.services.verification_service import VerificationService
 
@@ -90,6 +96,7 @@ class RegistrationApplicationService:
             application.invite_code_issued_by_user_id = None
             application.invite_redeemed_at = None
             application.assigned_organization_id = None
+            application.feature_flags = None
         else:
             application = RegistrationApplication(
                 email=normalized_email,
@@ -263,9 +270,12 @@ class RegistrationApplicationService:
             role=UserRole.CUSTOMER_USER,
             job_title=application.job_title,
             organization_id=organization.id,
+            feature_flags=normalize_user_feature_flags(application.feature_flags),
         )
         self.db.add(user)
         await self.db.flush()
+        if user_feature_enabled(user.feature_flags, FEATURE_AMWAYCHINA_CONSOLE):
+            await ensure_amwaychina_console_entity(self.db, organization)
 
         application.status = RegistrationApplicationStatus.APPROVED
         application.organization_name = organization.legal_name
@@ -369,9 +379,12 @@ class RegistrationApplicationService:
             role=UserRole.CUSTOMER_USER,
             job_title=application.job_title,
             organization_id=organization.id,
+            feature_flags=normalize_user_feature_flags(application.feature_flags),
         )
         self.db.add(user)
         await self.db.flush()
+        if user_feature_enabled(user.feature_flags, FEATURE_AMWAYCHINA_CONSOLE):
+            await ensure_amwaychina_console_entity(self.db, organization)
 
         now = datetime.now(timezone.utc)
         application.status = RegistrationApplicationStatus.APPROVED

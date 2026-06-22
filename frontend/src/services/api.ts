@@ -21,6 +21,8 @@ import type {
   VerificationSendCodeResponse,
 } from '@/types/auth';
 import type {
+  AccountInvitationCreateInput,
+  AccountInvitationResponse,
   AdminUserRecord,
   AdminUserUpdateInput,
   OrganizationRecord,
@@ -306,6 +308,13 @@ class ApiService {
   async updateAdminUser(userId: string, payload: AdminUserUpdateInput) {
     return this.request<AdminUserRecord>(`/account-admin/users/${userId}`, {
       method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async createAccountInvitation(payload: AccountInvitationCreateInput) {
+    return this.request<AccountInvitationResponse>('/account-admin/invitations', {
+      method: 'POST',
       body: JSON.stringify(payload),
     });
   }

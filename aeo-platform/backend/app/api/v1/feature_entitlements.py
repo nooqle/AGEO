@@ -18,7 +18,7 @@ from app.services.brand_association_circle_variant import (
 )
 from app.services.organization_feature_service import (
     FEATURE_AMWAYCHINA_CONSOLE,
-    organization_feature_enabled,
+    feature_enabled_for_account,
 )
 
 router = APIRouter(prefix="/feature-entitlements", tags=["feature-entitlements"])
@@ -62,9 +62,10 @@ async def get_amwaychina_entitlement(
     if organization is None or organization.status != OrganizationStatus.ACTIVE:
         return _disabled_payload("organization_inactive")
 
-    if not organization_feature_enabled(
-        organization.feature_flags,
-        FEATURE_AMWAYCHINA_CONSOLE,
+    if not feature_enabled_for_account(
+        user_flags=getattr(current_user, "feature_flags", None),
+        organization_flags=organization.feature_flags,
+        feature_key=FEATURE_AMWAYCHINA_CONSOLE,
     ):
         return _disabled_payload("feature_not_enabled")
 
