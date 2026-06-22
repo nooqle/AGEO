@@ -38,8 +38,6 @@ function entityClass(entity: GraphEntity) {
   );
 }
 
-const lensLabels = ['圈层状态', '本次更新', '风险认知', '竞品压力'];
-
 const zoneLabels: Record<GraphEntity['zone'], string> = {
   center: '品牌中心',
   inner: '内圈',
@@ -237,24 +235,6 @@ export function GraphHomeView({
                   </div>
                 </div>
               ) : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {lensLabels.map((lens, index) => (
-                <button
-                  key={lens}
-                  type="button"
-                  className="rounded-lg border px-3 py-2 text-xs font-medium"
-                  aria-pressed={index === 0}
-                  aria-label={`切换图谱视角：${lens}`}
-                  style={{
-                    borderColor: index === 0 ? 'var(--brand-border)' : 'var(--border-subtle)',
-                    background: index === 0 ? 'var(--brand-bg)' : 'transparent',
-                    color: index === 0 ? 'var(--brand-text)' : 'var(--text-secondary)',
-                  }}
-                >
-                  {lens}
-                </button>
-              ))}
             </div>
           </div>
 
