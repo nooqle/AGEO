@@ -1,7 +1,7 @@
 """add organization feature flags
 
-Revision ID: 025
-Revises: 024
+Revision ID: 029
+Revises: 028
 Create Date: 2026-06-22 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "025"
-down_revision: str | None = "024"
+revision: str = "029"
+down_revision: str | None = "028"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

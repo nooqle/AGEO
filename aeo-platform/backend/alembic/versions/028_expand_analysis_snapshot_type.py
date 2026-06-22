@@ -1,7 +1,7 @@
 """expand analysis snapshot type length
 
-Revision ID: 024
-Revises: 023
+Revision ID: 028
+Revises: 027
 Create Date: 2026-06-11 00:00:00.000000
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "024"
-down_revision: str | None = "023"
+revision: str = "028"
+down_revision: str | None = "027"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

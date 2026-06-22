@@ -1,7 +1,7 @@
 """add account feature flags
 
-Revision ID: 026
-Revises: 025
+Revision ID: 030
+Revises: 029
 Create Date: 2026-06-22 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "026"
-down_revision: str | None = "025"
+revision: str = "030"
+down_revision: str | None = "029"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
