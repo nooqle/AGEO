@@ -352,6 +352,8 @@ export function BrandSpaceShell({
   const [isBackendMode, setIsBackendMode] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [isLoadingSpace, setIsLoadingSpace] = useState(true);
+  const [spaceLoadError, setSpaceLoadError] = useState('');
+  const [spaceReloadKey, setSpaceReloadKey] = useState(0);
   const [backendNotice, setBackendNotice] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [runStatus, setRunStatus] = useState<BoardRunStatus>('idle');
@@ -391,6 +393,7 @@ export function BrandSpaceShell({
   const resetSpaceState = useCallback((notice = '', brandName?: string) => {
     setIsBackendMode(false);
     setIsDemoMode(false);
+    setSpaceLoadError('');
     setSpaceRun(null);
     setEntityId(null);
     setContext({
@@ -548,18 +551,21 @@ export function BrandSpaceShell({
         }
 
         setIsLoadingSpace(true);
+        setSpaceLoadError('');
         const { entityId: loadedEntityId, payload } = await loadBrandSpacePayloadForEntity(selectedEntityId);
         if (cancelled) return;
         setEntityId(loadedEntityId);
         setIsBackendMode(true);
         setIsDemoMode(false);
+        setSpaceLoadError('');
         setBackendNotice('');
         applySpacePayload(payload);
         setReviewItems(reviewItemsFromPatches(payload.patches, payload.graph_update));
         await refreshReviewItems(loadedEntityId, payload.patches, payload.graph_update);
       } catch (error) {
         if (cancelled) return;
-        resetSpaceState(backendNoticeFromError(error, '品牌空间数据加载失败'), selectedEntity?.name);
+        resetSpaceState('', selectedEntity?.name);
+        setSpaceLoadError(backendNoticeFromError(error, '品牌空间数据加载失败'));
       } finally {
         if (!cancelled && hasFetchedEntities && !entitiesLoading) {
           setIsLoadingSpace(false);
@@ -581,6 +587,7 @@ export function BrandSpaceShell({
     resetSpaceState,
     selectedEntity?.name,
     selectedEntityId,
+    spaceReloadKey,
   ]);
 
   useEffect(() => {
@@ -671,7 +678,7 @@ export function BrandSpaceShell({
   const handleRunStart = async () => {
     if (!isBackendMode || !entityId) {
       if (!isDemoMode) {
-        setBackendNotice('品牌空间真实后端不可用，无法启动画布运行。');
+        setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
         return;
       }
       startLocalRun();
@@ -691,7 +698,7 @@ export function BrandSpaceShell({
   const handleRunPause = async () => {
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
-        setBackendNotice('品牌空间真实后端不可用，无法暂停画布运行。');
+        setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
         return;
       }
       pauseLocalRun();
@@ -708,7 +715,7 @@ export function BrandSpaceShell({
   const handleRunResume = async () => {
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
-        setBackendNotice('品牌空间真实后端不可用，无法继续画布运行。');
+        setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
         return;
       }
       resumeLocalRun();
@@ -725,7 +732,7 @@ export function BrandSpaceShell({
   const handleRunStop = async () => {
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
-        setBackendNotice('品牌空间真实后端不可用，无法停止画布运行。');
+        setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
         return;
       }
       stopLocalRun();
@@ -901,10 +908,18 @@ export function BrandSpaceShell({
   };
 
   const hasSelectedBrand = Boolean(selectedEntityId && selectedEntity);
-  const runControlsDisabled = !hasSelectedBrand || Boolean(entityError) || isLoadingSpace;
-  const showSetupEmptyState = !isDemoMode && (Boolean(entityError) || (hasFetchedEntities && !hasSelectedBrand));
+  const showBackendErrorState = !isDemoMode
+    && hasSelectedBrand
+    && !isLoadingSpace
+    && !isBackendMode
+    && Boolean(spaceLoadError);
+  const runControlsDisabled = !hasSelectedBrand
+    || Boolean(entityError)
+    || isLoadingSpace
+    || (!isBackendMode && !isDemoMode);
+  const showSetupEmptyState = !isDemoMode && !showBackendErrorState && (Boolean(entityError) || (hasFetchedEntities && !hasSelectedBrand));
   const showLoadingState = !isDemoMode && !showSetupEmptyState && isLoadingSpace;
-  const showWorkspaceViews = !showSetupEmptyState && !showLoadingState;
+  const showWorkspaceViews = !showSetupEmptyState && !showLoadingState && !showBackendErrorState;
   const setupTitle = entityError ? '品牌列表暂时不可用' : '先创建或选择一个品牌';
   const setupDescription = entityError
     ? '当前无法读取账号下的品牌列表。你可以刷新页面，或返回品牌情报页检查账号和品牌数据。'
@@ -1060,6 +1075,38 @@ export function BrandSpaceShell({
                 <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
                   系统正在读取当前品牌的图谱、画布运行、资产和报告状态。
                 </p>
+              </section>
+            ) : null}
+
+            {showBackendErrorState ? (
+              <section className={classNames(styles.surface, 'rounded-xl p-6')}>
+                <div className="max-w-2xl">
+                  <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">品牌空间连接</p>
+                  <h2 className="mt-2 text-xl font-semibold text-[var(--text-primary)]">当前品牌空间未连接成功</h2>
+                  <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
+                    画布运行必须先读取该品牌的图谱、节点和运行状态。当前读取失败，系统已禁用运行按钮，避免创建不可追踪的运行。
+                  </p>
+                  <p className="mt-3 rounded-lg border px-3 py-2 text-xs text-[var(--warning)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                    {spaceLoadError}
+                  </p>
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSpaceReloadKey((value) => value + 1)}
+                      className="inline-flex h-10 items-center rounded-lg bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)]"
+                    >
+                      重新加载品牌空间
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => window.location.assign('/dashboard')}
+                      className="inline-flex h-10 items-center rounded-lg border px-4 text-sm font-medium text-[var(--text-secondary)]"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+                    >
+                      返回品牌情报
+                    </button>
+                  </div>
+                </div>
               </section>
             ) : null}
 
