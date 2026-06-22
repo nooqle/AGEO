@@ -71,6 +71,7 @@ alembic/versions/*.py
 .cache/
 /output/
 aeo-platform/backend/runtime/
+aeo-platform/backend/storage/
 
 # Claude Code local files
 .claude/settings.local.json

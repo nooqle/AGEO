@@ -704,6 +704,7 @@ class BrandIntelligenceProjectionService:
             title=title,
             summary=self._report_summary(payload),
             payload=payload,
+            publication_status="pre_graph_update",
         )
         self.db.add(report_version)
         await self.db.flush()

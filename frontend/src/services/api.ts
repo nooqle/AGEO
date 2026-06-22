@@ -74,6 +74,20 @@ import type {
   CreateBrandIntelligenceRunInput,
 } from '@/types/intelligenceRun';
 import type {
+  ArtifactDetail,
+  ArtifactAccess,
+  AssetListSummary,
+  BrandSpacePayload,
+  CreateBrandSpaceBoardRunInput,
+  GraphPatchStatus,
+  GraphReviewItemsResponse,
+  PaginationInfo,
+  ReportGuardrailResult,
+  RuntimeEventPagination,
+  BrandSpaceReport,
+  BrandSpaceReportSummary,
+} from '@/types/brandSpace';
+import type {
   AioCanvasConfig,
   AioTakeoverMode,
   AioTakeoverRecord,
@@ -84,6 +98,9 @@ import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
+
+const BRAND_SPACE_DEFAULT_REAL_PLATFORMS = ['doubao', 'kimi', 'yuanbao'];
+const BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS = ['chatgpt', 'deepseek', 'kimi', 'doubao'];
 
 export function getApiBaseUrl(): string {
   return API_URL;
@@ -127,6 +144,35 @@ class ApiService {
     } as HeadersInit;
   }
 
+  private async responseErrorMessage(response: Response): Promise<string> {
+    try {
+      const error = await response.clone().json();
+      const detail = error?.detail ?? error?.message;
+      if (typeof detail === 'string' && detail.trim()) {
+        return detail;
+      }
+    } catch {
+      // Fall back to text for file/HTML error responses.
+    }
+
+    try {
+      const text = await response.text();
+      if (text.trim()) return text.trim();
+    } catch {
+      // Ignore body parsing failures and use the status code below.
+    }
+
+    return `Request failed: ${response.status}`;
+  }
+
+  private async ensureSuccessfulResponse(response: Response): Promise<void> {
+    if (response.ok) return;
+    if (response.status === 401) {
+      this.handleUnauthorized();
+    }
+    throw new Error(await this.responseErrorMessage(response));
+  }
+
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -137,13 +183,7 @@ class ApiService {
       headers: this.buildHeaders(options),
     });
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.handleUnauthorized();
-      }
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || `Request failed: ${response.status}`);
-    }
+    await this.ensureSuccessfulResponse(response);
 
     // Handle 204 No Content (e.g. DELETE responses)
     if (response.status === 204) {
@@ -162,19 +202,25 @@ class ApiService {
       headers: this.buildHeaders(options),
     });
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.handleUnauthorized();
-      }
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || `Request failed: ${response.status}`);
-    }
+    await this.ensureSuccessfulResponse(response);
 
     if (response.status === 204) {
       return undefined as T;
     }
 
     return response.json();
+  }
+
+  private async requestBlob(
+    endpoint: string,
+    options: RequestInit = {},
+  ): Promise<{ blob: Blob; response: Response }> {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+      ...options,
+      headers: this.buildHeaders(options),
+    });
+    await this.ensureSuccessfulResponse(response);
+    return { blob: await response.blob(), response };
   }
 
   // Auth
@@ -1092,6 +1138,209 @@ class ApiService {
     );
     if (!response.run) throw new Error('确认提交失败');
     return response.run;
+  }
+
+  // =========================================================================
+  // Brand Space API
+  // =========================================================================
+
+  async getBrandSpace(entityId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(`/brand-space/brands/${entityId}/space`);
+  }
+
+  async getBrandSpaceGraph(entityId: string) {
+    return this.request<{ graph: BrandSpacePayload['graph']; graph_update: BrandSpacePayload['graph_update'] }>(
+      `/brand-space/brands/${entityId}/graph`,
+    );
+  }
+
+  async getBrandSpaceReviewItems(
+    entityId: string,
+    params: { reviewStatus?: string; category?: string; limit?: number } = {},
+  ): Promise<GraphReviewItemsResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.reviewStatus) searchParams.set('review_status', params.reviewStatus);
+    if (params.category) searchParams.set('category', params.category);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    const query = searchParams.toString();
+    return this.request<GraphReviewItemsResponse>(
+      `/brand-space/brands/${entityId}/review-items${query ? `?${query}` : ''}`,
+    );
+  }
+
+  async createBrandSpaceBoardRun(
+    entityId: string,
+    payload: CreateBrandSpaceBoardRunInput = {},
+  ): Promise<BrandSpacePayload> {
+    const executionMode = payload.execution_mode ?? 'scaffold';
+    const defaultPlatforms = executionMode === 'real'
+      ? BRAND_SPACE_DEFAULT_REAL_PLATFORMS
+      : BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS;
+    return this.request<BrandSpacePayload>(
+      `/brand-space/brands/${entityId}/board-runs`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          board_id: payload.board_id ?? 'ai_visibility_monitor',
+          template_id: payload.template_id ?? 'ai_visibility_monitor:v0.1',
+          input_scope: payload.input_scope ?? {
+            platforms: defaultPlatforms,
+          },
+          execution_mode: executionMode,
+        }),
+      },
+    );
+  }
+
+  async getBrandSpaceBoardRun(runId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(`/brand-space/board-runs/${runId}`);
+  }
+
+  async pauseBrandSpaceBoardRun(runId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(
+      `/brand-space/board-runs/${runId}/pause`,
+      { method: 'POST' },
+    );
+  }
+
+  async resumeBrandSpaceBoardRun(runId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(
+      `/brand-space/board-runs/${runId}/resume`,
+      { method: 'POST' },
+    );
+  }
+
+  async stopBrandSpaceBoardRun(runId: string): Promise<BrandSpacePayload> {
+    return this.request<BrandSpacePayload>(
+      `/brand-space/board-runs/${runId}/stop`,
+      { method: 'POST' },
+    );
+  }
+
+  async getBrandSpaceRunEvents(
+    runId: string,
+    params?: { limit?: number; offset?: number; afterSequence?: number; sync?: boolean },
+  ) {
+    const search = new URLSearchParams();
+    if (params?.limit !== undefined) search.set('limit', String(params.limit));
+    if (params?.offset !== undefined) search.set('offset', String(params.offset));
+    if (params?.afterSequence !== undefined) search.set('after_sequence', String(params.afterSequence));
+    if (params?.sync !== undefined) search.set('sync', String(params.sync));
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<{
+      events: BrandSpacePayload['events'];
+      cursor?: { after_sequence?: number | null; next_sequence: number; has_more: boolean };
+      pagination?: RuntimeEventPagination;
+    }>(
+      `/brand-space/board-runs/${runId}/events${suffix}`,
+    );
+  }
+
+  async getBrandSpaceRunAssets(
+    runId: string,
+    params?: { artifactType?: string; limit?: number; offset?: number; sync?: boolean },
+  ) {
+    const search = new URLSearchParams();
+    if (params?.artifactType) search.set('artifact_type', params.artifactType);
+    if (params?.limit !== undefined) search.set('limit', String(params.limit));
+    if (params?.offset !== undefined) search.set('offset', String(params.offset));
+    if (params?.sync !== undefined) search.set('sync', String(params.sync));
+    const suffix = search.toString() ? `?${search.toString()}` : '';
+    return this.request<{
+      artifacts: BrandSpacePayload['artifacts'];
+      summary?: AssetListSummary;
+      pagination?: PaginationInfo;
+    }>(
+      `/brand-space/board-runs/${runId}/assets${suffix}`,
+    );
+  }
+
+  async getBrandSpaceArtifact(artifactId: string) {
+    return this.request<ArtifactDetail>(
+      `/brand-space/artifacts/${encodeURIComponent(artifactId)}`,
+    );
+  }
+
+  async getBrandSpaceArtifactAccess(artifactId: string) {
+    return this.request<{ artifact_id: string; artifact_key: string; access: ArtifactAccess }>(
+      `/brand-space/artifacts/${encodeURIComponent(artifactId)}/access`,
+    );
+  }
+
+  async downloadBrandSpaceArtifact(artifactId: string): Promise<{ blob: Blob; filename: string }> {
+    const { blob, response } = await this.requestBlob(
+      `/brand-space/artifacts/${encodeURIComponent(artifactId)}/download`,
+    );
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const filenameMatch = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+    const filename = decodeURIComponent(filenameMatch?.[1] ?? filenameMatch?.[2] ?? 'brand-space-artifact');
+    return { blob, filename };
+  }
+
+  async decideBrandSpaceGraphPatch(
+    patchId: string,
+    payload: {
+      status: Extract<GraphPatchStatus, 'accepted' | 'rejected' | 'needs_review'>;
+      reason?: string | null;
+    },
+  ) {
+    return this.request<{
+      graph_update: BrandSpacePayload['graph_update'];
+      patches: BrandSpacePayload['patches'];
+      guardrails: ReportGuardrailResult[];
+    }>(
+      `/brand-space/graph-patches/${patchId}/decision`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          status: payload.status,
+          reason: payload.reason ?? null,
+        }),
+      },
+    );
+  }
+
+  async generateBrandSpaceReport(
+    graphUpdateId: string,
+    payload: { publishRequested?: boolean } = {},
+  ): Promise<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }> {
+    return this.request<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }>(
+      `/brand-space/graph-updates/${graphUpdateId}/reports`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          report_kind: 'graph_update_interpretation',
+          publish_requested: payload.publishRequested ?? false,
+        }),
+      },
+    );
+  }
+
+  async getBrandSpaceReports(
+    entityId: string,
+    params: { reportKind?: string; publicationStatus?: string; limit?: number } = {},
+  ): Promise<{ reports: BrandSpaceReportSummary[]; summary: Record<string, number> }> {
+    const searchParams = new URLSearchParams();
+    if (params.reportKind) searchParams.set('report_kind', params.reportKind);
+    if (params.publicationStatus) searchParams.set('publication_status', params.publicationStatus);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    const query = searchParams.toString();
+    return this.request<{ reports: BrandSpaceReportSummary[]; summary: Record<string, number> }>(
+      `/brand-space/brands/${entityId}/reports${query ? `?${query}` : ''}`,
+    );
+  }
+
+  async getBrandSpaceReport(reportVersionId: string): Promise<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }> {
+    return this.request<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }>(
+      `/brand-space/reports/${reportVersionId}`,
+    );
+  }
+
+  async publishBrandSpaceReport(reportVersionId: string): Promise<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }> {
+    return this.request<{ report: BrandSpaceReport; guardrails: ReportGuardrailResult[] }>(
+      `/brand-space/reports/${reportVersionId}/publish`,
+      { method: 'POST' },
+    );
   }
 
   // =========================================================================

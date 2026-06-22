@@ -130,7 +130,7 @@ PY
 
 sync_public_domain_env() {
   log "Synchronizing public domain environment"
-  python3 - "$FRONTEND_ENV" "$BACKEND_ENV" "$EXTERNAL_URL" "$DOMAIN_REDIRECT_HOSTS" <<'PY'
+  python3 - "$FRONTEND_ENV" "$BACKEND_ENV" "$EXTERNAL_URL" "$DOMAIN_REDIRECT_HOSTS" "$RUNTIME_DIR" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -140,6 +140,7 @@ frontend_env = Path(sys.argv[1])
 backend_env = Path(sys.argv[2])
 external_url = sys.argv[3].strip().rstrip("/")
 redirect_hosts = [host.strip() for host in sys.argv[4].split() if host.strip()]
+runtime_dir = Path(sys.argv[5])
 
 parsed = urlparse(external_url if "://" in external_url else f"https://{external_url}")
 scheme = parsed.scheme or "https"
@@ -197,6 +198,12 @@ def parse_origins(raw: str) -> list[str]:
 
 upsert(frontend_env, "NEXT_PUBLIC_API_URL", api_url)
 upsert(frontend_env, "NEXT_PUBLIC_WS_URL", ws_url)
+upsert(frontend_env, "NEXT_PUBLIC_BRAND_SPACE_ENABLED", "true")
+upsert(
+    backend_env,
+    "BRAND_SPACE_ASSET_STORAGE_ROOT",
+    str(runtime_dir / "brand-space-assets"),
+)
 
 origins = parse_origins(current_env_value(backend_env, "CORS_ORIGINS"))
 for item in [
@@ -263,6 +270,7 @@ ensure_base_dirs() {
     "$PIP_CACHE_DIR" \
     "$NPM_CACHE_DIR" \
     "$RUNTIME_DIR" \
+    "$RUNTIME_DIR/brand-space-assets" \
     "$UPLOAD_DIR" \
     "$FAILURE_EVIDENCE_DIR"
 }

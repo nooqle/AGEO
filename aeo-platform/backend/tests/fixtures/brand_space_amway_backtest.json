@@ -1,0 +1,65 @@
+{
+  "brand": {
+    "name": "安利",
+    "domain": "amway.com.cn",
+    "industry": "营养健康"
+  },
+  "lexicon": [
+    {
+      "entity_id": "amway",
+      "label": "安利",
+      "type": "CenterBrand",
+      "aliases": ["Amway", "安利品牌", "安利中国"]
+    },
+    {
+      "entity_id": "nutrilite",
+      "label": "纽崔莱",
+      "type": "SubBrand",
+      "aliases": ["Nutrilite", "纽崔莱营养", "纽崔莱产品"]
+    },
+    {
+      "entity_id": "nutrition-supplement",
+      "label": "营养保健食品",
+      "type": "ProductCategory",
+      "aliases": ["营养品", "膳食补充", "保健食品", "营养补充"]
+    },
+    {
+      "entity_id": "active-health",
+      "label": "主动健康",
+      "type": "BrandStrategy",
+      "aliases": ["健康明白人", "主动预防", "健康管理"]
+    },
+    {
+      "entity_id": "regulatory",
+      "label": "监管信息",
+      "type": "RiskLabel",
+      "aliases": ["监管", "直销监管", "牌照", "合规疑问"]
+    },
+    {
+      "entity_id": "by-health",
+      "label": "汤臣倍健",
+      "type": "Competitor",
+      "aliases": ["BY-HEALTH", "汤臣倍健营养品"]
+    }
+  ],
+  "recorded_answers": [
+    {
+      "platform": "Kimi",
+      "question": "哪些营养品牌适合日常健康管理？",
+      "answer_excerpt": "安利和纽崔莱经常在营养补充和健康管理语境中被提及。",
+      "polarity": "positive"
+    },
+    {
+      "platform": "DeepSeek",
+      "question": "直销类营养品牌是否存在用户顾虑？",
+      "answer_excerpt": "回答提到价格和监管相关疑问，需要更多澄清证据。",
+      "polarity": "questioning"
+    },
+    {
+      "platform": "ChatGPT",
+      "question": "用户购买营养补充品前通常会比较什么？",
+      "answer_excerpt": "用户会把安利与汤臣倍健进行对比后再选择。",
+      "polarity": "neutral"
+    }
+  ]
+}

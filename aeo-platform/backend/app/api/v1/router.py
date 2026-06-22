@@ -8,6 +8,7 @@ from app.api.v1 import (
     alerts,
     analytics,
     auth,
+    brand_space,
     control_plane,
     entities,
     favicons,
@@ -39,6 +40,7 @@ api_router.include_router(favicons.router)
 api_router.include_router(touchpoints.router)
 api_router.include_router(files.router)
 api_router.include_router(intelligence_runs.router)
+api_router.include_router(brand_space.router)
 api_router.include_router(snapshots.router)
 api_router.include_router(tasks.router)
 api_router.include_router(global_tasks_router)

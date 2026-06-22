@@ -1,0 +1,2424 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Specta Brand Circle Board Prototype v0.4</title>
+  <style>
+    :root {
+      --brand: #1F7A6B;
+      --brand-dark: #17685B;
+      --brand-soft: #DCECE7;
+      --brand-border: rgba(31, 122, 107, 0.24);
+      --paper: #F8F6F1;
+      --paper-2: #F1EEE7;
+      --surface: #FFFFFF;
+      --surface-muted: #FAF9F5;
+      --ink: #1F2623;
+      --muted: #66706B;
+      --line: #DED8CC;
+      --input: #B7791F;
+      --prepare: #6D7054;
+      --fetch: #4B6475;
+      --review: #B44545;
+      --graph: #2F6B45;
+      --ok: #2F7A52;
+      --warn: #B7791F;
+      --risk: #B44545;
+      --soft-risk: #F7E6E2;
+      --soft-warn: #F7ECD5;
+      --soft-source: #E7EDF0;
+      --radius: 8px;
+      --font: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button, input {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 224px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #EEE9DE;
+      border-right: 1px solid var(--line);
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 6px 12px;
+      border-bottom: 1px solid rgba(122, 111, 94, 0.22);
+    }
+
+    .brand-dot {
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      background: var(--brand);
+      display: grid;
+      place-items: center;
+      color: white;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .brand-title {
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .brand-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .side-section {
+      display: grid;
+      gap: 6px;
+    }
+
+    .side-label {
+      color: var(--muted);
+      font-size: 12px;
+      padding: 0 8px;
+    }
+
+    .nav-item {
+      height: 36px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 10px;
+      border-radius: 8px;
+      color: #303A35;
+    }
+
+    .nav-item svg {
+      width: 16px;
+      height: 16px;
+      color: var(--muted);
+      stroke-width: 1.8;
+    }
+
+    .nav-item.active {
+      background: var(--brand-soft);
+      color: var(--brand-dark);
+      border: 1px solid var(--brand-border);
+    }
+
+    .side-card {
+      margin-top: auto;
+      background: rgba(255,255,255,0.55);
+      border: 1px solid rgba(119, 108, 91, 0.24);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .side-card strong {
+      font-size: 13px;
+    }
+
+    .side-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .workspace {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: 64px 48px minmax(0, 1fr);
+      height: 100vh;
+    }
+
+    .topbar {
+      background: var(--paper);
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+    }
+
+    .context-title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .context-title h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .context-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon-button {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+    }
+
+    .icon-button svg,
+    .primary svg,
+    .secondary svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 1.9;
+    }
+
+    .primary, .secondary {
+      height: 36px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      white-space: nowrap;
+    }
+
+    .primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+    }
+
+    .primary:hover {
+      background: var(--brand-dark);
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 22px;
+      background: #F3F0E9;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tab {
+      height: 32px;
+      padding: 0 12px;
+      color: var(--muted);
+      border-color: transparent;
+      background: transparent;
+    }
+
+    .tab.active {
+      color: var(--brand-dark);
+      background: var(--surface);
+      border-color: var(--brand-border);
+      box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+    }
+
+    .view {
+      display: none;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .view.active {
+      display: block;
+    }
+
+    .board-view {
+      height: 100%;
+      display: none;
+      grid-template-columns: minmax(800px, 1fr) 316px;
+      min-width: 0;
+    }
+
+    .view.board-view.active {
+      display: grid;
+    }
+
+    .canvas-shell {
+      position: relative;
+      overflow: auto;
+      padding: 20px;
+      background:
+        radial-gradient(circle at 1px 1px, rgba(78, 71, 59, 0.16) 1px, transparent 0) 0 0 / 18px 18px,
+        linear-gradient(180deg, #FAF8F3, #F1EDE4);
+    }
+
+    .canvas-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      background: rgba(250, 248, 243, 0.94);
+      border: 1px solid rgba(123, 113, 95, 0.22);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(61, 52, 37, 0.08);
+    }
+
+    .toolbar-left,
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .run-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      background: var(--brand);
+    }
+
+    .status-dot.paused {
+      background: #F59E0B;
+    }
+
+    .status-dot.stopped {
+      background: #E25757;
+    }
+
+    .canvas {
+      position: relative;
+      width: 1080px;
+      height: 700px;
+      margin-top: 18px;
+      transform: scale(0.84);
+      transform-origin: top left;
+    }
+
+    .node {
+      position: absolute;
+      width: 204px;
+      min-height: 78px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.94);
+      box-shadow: 0 10px 22px rgba(42, 36, 26, 0.08);
+      overflow: hidden;
+      z-index: 10;
+    }
+
+    .node:hover,
+    .node.selected {
+      border-color: rgba(31, 122, 107, 0.48);
+      box-shadow: 0 12px 26px rgba(42, 36, 26, 0.12);
+    }
+
+    .node.running {
+      animation: activeEdge 1.8s ease-in-out infinite;
+    }
+
+    @keyframes activeEdge {
+      0%, 100% { box-shadow: 0 10px 22px rgba(42, 36, 26, 0.08); }
+      50% { box-shadow: 0 10px 22px rgba(31, 122, 107, 0.16); }
+    }
+
+    .node-strip {
+      height: 5px;
+      background: var(--muted);
+    }
+
+    .node.input .node-strip { background: var(--input); }
+    .node.prepare .node-strip { background: var(--prepare); }
+    .node.fetch .node-strip { background: var(--fetch); }
+    .node.extract .node-strip { background: var(--brand); }
+    .node.review .node-strip { background: var(--review); }
+    .node.graph .node-strip { background: var(--graph); }
+    .node.output .node-strip { background: #7A746A; }
+
+    .node-body {
+      padding: 10px 12px 11px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .node-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .node-title {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .node-meta {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 20px;
+      padding: 0 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid var(--line);
+      background: #fff;
+      white-space: nowrap;
+    }
+
+    .chip.ok { border-color: rgba(47,122,82,0.28); background: #E6F0E8; color: #2F6B45; }
+    .chip.warn { border-color: rgba(183,121,31,0.28); background: var(--soft-warn); color: #7D561B; }
+    .chip.risk { border-color: rgba(180,69,69,0.26); background: var(--soft-risk); color: var(--risk); }
+    .chip.source { border-color: rgba(75,100,117,0.24); background: var(--soft-source); color: #405666; }
+
+    .progress {
+      height: 6px;
+      border-radius: 999px;
+      background: #E7E1D6;
+      overflow: hidden;
+    }
+
+    .progress span {
+      display: block;
+      height: 100%;
+      width: var(--value, 50%);
+      background: var(--brand);
+      border-radius: inherit;
+      transition: width 300ms ease;
+    }
+
+    .node.fetch .progress span { background: var(--fetch); }
+    .node.review .progress span { background: var(--review); }
+    .node.graph .progress span { background: var(--graph); }
+
+    .port {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      background: var(--muted);
+      top: 38px;
+      box-shadow: 0 0 0 1px var(--line);
+    }
+
+    .port.in { left: -5px; }
+    .port.out { right: -5px; }
+    .node.input .port { background: var(--input); }
+    .node.fetch .port { background: var(--fetch); }
+    .node.extract .port { background: var(--brand); }
+    .node.review .port { background: var(--review); }
+    .node.graph .port { background: var(--graph); }
+
+    .platform-group {
+      position: absolute;
+      left: 284px;
+      top: 88px;
+      width: 248px;
+      height: 474px;
+      border: 1px dashed rgba(75, 100, 117, 0.44);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.32);
+      z-index: 3;
+    }
+
+    .group-label {
+      position: absolute;
+      top: -24px;
+      left: 8px;
+      color: #405666;
+      font-size: 12px;
+      font-weight: 700;
+      background: #F8F6F1;
+      padding: 3px 7px;
+      border: 1px solid rgba(75,100,117,0.20);
+      border-radius: 6px;
+    }
+
+    .wire {
+      position: absolute;
+      background: rgba(94, 86, 72, 0.34);
+      z-index: 1;
+      overflow: hidden;
+    }
+
+    .wire.h { height: 2px; }
+    .wire.v { width: 2px; }
+
+    .wire::after {
+      content: "";
+      position: absolute;
+      width: 30px;
+      height: 2px;
+      background: rgba(31, 122, 107, 0.58);
+      animation: travelX 2.6s linear infinite;
+    }
+
+    .wire.v::after {
+      width: 2px;
+      height: 30px;
+      animation: travelY 2.6s linear infinite;
+    }
+
+    @keyframes travelX {
+      from { left: -32px; }
+      to { left: 100%; }
+    }
+
+    @keyframes travelY {
+      from { top: -32px; }
+      to { top: 100%; }
+    }
+
+    .inspector {
+      min-width: 0;
+      border-left: 1px solid var(--line);
+      background: var(--surface-muted);
+      padding: 16px;
+      overflow: auto;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .panel h2,
+    .panel h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .panel p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 12px;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .metric {
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+    }
+
+    .metric b {
+      display: block;
+      font-size: 18px;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .event-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 8px 1fr;
+      gap: 8px;
+      align-items: start;
+      font-size: 12px;
+      color: #3B443F;
+    }
+
+    .event i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--brand);
+      margin-top: 5px;
+    }
+
+    .event.warn i { background: var(--warn); }
+    .event.risk i { background: var(--risk); }
+    .event.source i { background: var(--fetch); }
+
+    .guardrail {
+      display: grid;
+      gap: 8px;
+    }
+
+    .rule-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+      font-size: 12px;
+    }
+
+    .graph-view,
+    .report-view {
+      height: 100%;
+      overflow: auto;
+      padding: 20px;
+      background: linear-gradient(180deg, #FAF8F3, #F2EFE7);
+    }
+
+    .graph-layout {
+      display: grid;
+      grid-template-columns: minmax(680px, 1fr) 360px;
+      gap: 16px;
+      height: calc(100vh - 152px);
+      min-height: 680px;
+    }
+
+    .graph-stage {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .stage-head {
+      height: 54px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+    }
+
+    .lens {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .lens button {
+      height: 28px;
+      padding: 0 9px;
+      font-size: 12px;
+    }
+
+    .lens button.active {
+      color: var(--brand-dark);
+      border-color: var(--brand-border);
+      background: var(--brand-soft);
+    }
+
+    .rings {
+      position: absolute;
+      inset: 54px 0 0 0;
+    }
+
+    .ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 1px solid rgba(122, 111, 94, 0.28);
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .ring.r1 { width: 180px; height: 180px; }
+    .ring.r2 { width: 330px; height: 330px; }
+    .ring.r3 { width: 500px; height: 500px; border-style: dashed; }
+
+    .entity {
+      position: absolute;
+      min-width: 86px;
+      height: 32px;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      font-size: 12px;
+      box-shadow: 0 8px 18px rgba(42, 36, 26, 0.08);
+      white-space: nowrap;
+    }
+
+    .entity.brand {
+      width: 88px;
+      height: 42px;
+      border-radius: 10px;
+      background: var(--brand);
+      color: #fff;
+      border-color: var(--brand);
+      font-weight: 700;
+    }
+
+    .entity.inner { border-color: rgba(47,122,82,0.36); background: #E9F2EA; color: #2F6B45; }
+    .entity.middle { border-color: rgba(183,121,31,0.30); background: #F7ECD5; color: #76531D; }
+    .entity.outer { border-style: dashed; color: var(--muted); }
+    .entity.risk { border-color: rgba(180,69,69,0.34); background: var(--soft-risk); color: var(--risk); }
+    .entity.competitor { border-color: rgba(75,100,117,0.36); background: var(--soft-source); color: #405666; }
+    .entity.review { border-style: dashed; border-color: rgba(180,69,69,0.44); background: #fff; color: var(--risk); }
+
+    .graph-side {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .review-item {
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .review-item strong {
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .actions button {
+      height: 28px;
+      padding: 0 9px;
+      font-size: 12px;
+    }
+
+    .report-layout {
+      display: grid;
+      grid-template-columns: minmax(680px, 1fr) 320px;
+      gap: 16px;
+      max-width: 1280px;
+      margin: 0 auto;
+      align-items: start;
+    }
+
+    .report-paper {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 24px 28px;
+      min-height: calc(100vh - 168px);
+    }
+
+    .report-paper h2 {
+      margin: 0 0 8px;
+      font-size: 22px;
+    }
+
+    .report-paper h3 {
+      margin: 26px 0 10px;
+      font-size: 15px;
+    }
+
+    .report-paper p {
+      line-height: 1.7;
+      color: #333C37;
+      max-width: 760px;
+    }
+
+    .report-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    .report-table th,
+    .report-table td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .report-table th {
+      color: var(--muted);
+      font-weight: 600;
+      background: #FAF8F3;
+    }
+
+    .quote {
+      border-left: 3px solid var(--brand);
+      padding: 10px 12px;
+      background: #F7F4EC;
+      margin: 10px 0;
+      line-height: 1.65;
+      color: #313B36;
+    }
+
+    .right-rail {
+      display: grid;
+      gap: 12px;
+      position: sticky;
+      top: 18px;
+    }
+
+    .mini-graph {
+      height: 170px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #FAF8F3;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .mini-graph .entity {
+      transform: scale(0.78);
+      transform-origin: center;
+      box-shadow: none;
+    }
+
+    .check-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: start;
+      padding: 9px 0;
+      border-top: 1px solid var(--line);
+      font-size: 12px;
+    }
+
+    .check-row:first-child { border-top: 0; }
+
+    .small {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    /* Visual alignment pass: clean node-runner look from the selected reference. */
+    :root {
+      --paper: #F7F9FC;
+      --paper-2: #F1F5F9;
+      --surface-muted: #F8FAFC;
+      --ink: #162033;
+      --muted: #64748B;
+      --line: #E2E8F0;
+      --fetch: #3E6F8F;
+      --soft-source: #E8F1F5;
+    }
+
+    body {
+      background: #F7F9FC;
+    }
+
+    .app {
+      grid-template-columns: 144px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #FFFFFF;
+      padding: 18px 0 12px;
+      gap: 20px;
+    }
+
+    .brand-mark {
+      padding: 4px 18px 18px;
+      border-bottom-color: #E2E8F0;
+    }
+
+    .brand-dot {
+      border-radius: 50%;
+      background: var(--brand);
+    }
+
+    .brand-title {
+      color: var(--brand);
+      font-size: 21px;
+      font-weight: 800;
+    }
+
+    .brand-subtitle {
+      display: none;
+    }
+
+    .side-label {
+      padding: 0 18px;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: #718096;
+    }
+
+    .nav-item {
+      height: 46px;
+      padding: 0 18px;
+      border-radius: 0;
+      border-left: 3px solid transparent;
+      color: #344054;
+    }
+
+    .nav-item.active {
+      border: 0;
+      border-left: 3px solid var(--brand);
+      background: #E8F5F2;
+      color: var(--brand-dark);
+    }
+
+    .side-card {
+      margin: auto 10px 0;
+      background: #FFFFFF;
+      border-color: #E2E8F0;
+    }
+
+    .workspace {
+      grid-template-rows: 72px 72px minmax(0, 1fr);
+    }
+
+    .topbar {
+      position: relative;
+      background: #FFFFFF;
+      border-bottom-color: #E2E8F0;
+    }
+
+    .context-title h1 {
+      font-size: 19px;
+      color: #101828;
+    }
+
+    .context-title span {
+      display: none;
+    }
+
+    .run-pill {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 12px;
+      border: 1px solid #E2E8F0;
+      border-radius: 8px;
+      background: #F8FAFC;
+      color: #475569;
+      font-size: 12px;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    }
+
+    .run-pill strong {
+      color: var(--brand-dark);
+      background: #E7F4F0;
+      border-radius: 999px;
+      padding: 5px 9px;
+    }
+
+    .run-pill.paused strong {
+      color: #92400E;
+      background: #FFF3D8;
+    }
+
+    .run-pill.stopped strong {
+      color: #B42318;
+      background: #FEE9E7;
+    }
+
+    .top-actions .secondary:first-child {
+      color: #334155;
+    }
+
+    .tabs {
+      padding: 12px 22px;
+      background: #FFFFFF;
+      border-bottom-color: #E2E8F0;
+      gap: 10px;
+    }
+
+    .tabs::before {
+      content: "Board: AI Visibility Monitor";
+      height: 36px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 14px;
+      border: 1px solid #E2E8F0;
+      border-radius: 8px;
+      color: #334155;
+      background: #FFFFFF;
+      margin-right: 16px;
+      font-size: 13px;
+    }
+
+    .tab {
+      height: 34px;
+      background: #F8FAFC;
+      border: 1px solid #E2E8F0;
+      color: #475569;
+    }
+
+    .tab.active {
+      color: var(--brand-dark);
+      border-color: #C7E4DE;
+      background: #FFFFFF;
+      box-shadow: 0 3px 9px rgba(15, 23, 42, 0.06);
+    }
+
+    .board-view {
+      grid-template-columns: minmax(840px, 1fr) 306px;
+    }
+
+    .canvas-shell {
+      padding: 16px 20px 56px;
+      background:
+        radial-gradient(circle at 1px 1px, rgba(26, 48, 74, 0.13) 1px, transparent 0) 0 0 / 17px 17px,
+        #FBFCFE;
+    }
+
+    .canvas-toolbar {
+      display: none;
+    }
+
+    .canvas {
+      margin-top: 14px;
+      transform: scale(0.84);
+    }
+
+    .node {
+      width: 205px;
+      min-height: 82px;
+      background: #FFFFFF;
+      border-color: #CBD5E1;
+      border-radius: 7px;
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+    }
+
+    .node:hover,
+    .node.selected {
+      border-color: rgba(31, 122, 107, 0.45);
+      box-shadow: 0 12px 28px rgba(31, 122, 107, 0.14);
+    }
+
+    .node.selected {
+      box-shadow: 0 0 0 2px rgba(31, 122, 107, 0.18), 0 14px 30px rgba(31, 122, 107, 0.16);
+    }
+
+    .node.fetch {
+      border-color: rgba(31, 122, 224, 0.45);
+    }
+
+    .node.fetch.running {
+      box-shadow: 0 0 0 1px rgba(31, 122, 224, 0.20), 0 14px 30px rgba(31, 122, 224, 0.18);
+    }
+
+    .node-strip {
+      height: 15px;
+      color: #FFFFFF;
+      font-size: 8px;
+      line-height: 15px;
+      font-weight: 800;
+      padding-left: 8px;
+      text-transform: uppercase;
+    }
+
+    .node.input .node-strip::before { content: "INPUT"; }
+    .node.prepare .node-strip::before { content: "PREPARE"; }
+    .node.fetch .node-strip::before { content: "FETCH"; }
+    .node.extract .node-strip::before { content: "EXTRACT"; }
+    .node.review .node-strip::before { content: "REVIEW"; }
+    .node.graph .node-strip::before { content: "GRAPH UPDATE"; }
+
+    .node.input .node-strip { background: #F59E0B; }
+    .node.prepare .node-strip { background: #F2B335; }
+    .node.fetch .node-strip { background: var(--fetch); }
+    .node.extract .node-strip { background: var(--brand); }
+    .node.review .node-strip { background: #E25757; }
+    .node.graph .node-strip { background: #0F6A43; }
+
+    .node-body {
+      padding: 12px 12px 11px;
+    }
+
+    .chip.source {
+      border-color: rgba(62, 111, 143, 0.22);
+      background: var(--soft-source);
+      color: var(--fetch);
+    }
+
+    .progress {
+      background: #E6EAF0;
+    }
+
+    .node.fetch .progress span {
+      background: var(--fetch);
+    }
+
+    .node.running .progress span {
+      animation: progressPulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes progressPulse {
+      0%, 100% { opacity: 0.72; }
+      50% { opacity: 1; }
+    }
+
+    .platform-group {
+      border: 1px solid rgba(148, 163, 184, 0.42);
+      background: rgba(248, 250, 252, 0.88);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.82);
+    }
+
+    .group-label {
+      background: #FFFFFF;
+      color: #334155;
+      border-color: #E2E8F0;
+    }
+
+    .rack-head,
+    .rack-footer {
+      position: absolute;
+      left: 14px;
+      right: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: #475569;
+      font-size: 11px;
+      z-index: 4;
+    }
+
+    .rack-head {
+      top: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #E2E8F0;
+      font-weight: 700;
+    }
+
+    .rack-footer {
+      bottom: 10px;
+      padding-top: 8px;
+      border-top: 1px solid #E2E8F0;
+    }
+
+    .rack-footer button {
+      height: 24px;
+      padding: 0 8px;
+      color: var(--brand-dark);
+      border-color: var(--brand-border);
+      background: #E8F5F2;
+      font-size: 11px;
+    }
+
+    .wire {
+      background: rgba(71, 85, 105, 0.52);
+    }
+
+    .wire::after {
+      background: rgba(31, 122, 107, 0.75);
+    }
+
+    .inspector {
+      background: #FFFFFF;
+      padding: 18px 16px;
+    }
+
+    .inspector::before {
+      content: "NODE INSPECTOR";
+      display: block;
+      color: #64748B;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      margin-bottom: 18px;
+    }
+
+    .inspector-tabs {
+      display: flex;
+      gap: 20px;
+      border-bottom: 1px solid #E2E8F0;
+      margin: -6px 0 18px;
+      padding-bottom: 10px;
+      color: #64748B;
+      font-size: 12px;
+    }
+
+    .inspector-tabs span {
+      cursor: pointer;
+    }
+
+    .inspector-tabs span.active {
+      color: var(--brand-dark);
+      font-weight: 700;
+      position: relative;
+    }
+
+    .inspector-tabs span.active::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -11px;
+      height: 2px;
+      background: var(--brand);
+    }
+
+    .inspector[data-tab="events"] .overview-panel,
+    .inspector[data-tab="events"] .output-panel,
+    .inspector[data-tab="events"] .config-panel,
+    .inspector[data-tab="output"] .overview-panel,
+    .inspector[data-tab="output"] .events-panel,
+    .inspector[data-tab="output"] .config-panel,
+    .inspector[data-tab="config"] .overview-panel,
+    .inspector[data-tab="config"] .events-panel,
+    .inspector[data-tab="config"] .output-panel,
+    .inspector[data-tab="overview"] .events-panel,
+    .inspector[data-tab="overview"] .output-panel,
+    .inspector[data-tab="overview"] .config-panel {
+      display: none;
+    }
+
+    .panel {
+      border: 0;
+      border-bottom: 1px solid #E2E8F0;
+      border-radius: 0;
+      padding: 0 0 16px;
+      box-shadow: none;
+      margin-bottom: 16px;
+    }
+
+    .patch-group {
+      display: grid;
+      gap: 8px;
+      padding: 8px 0 2px;
+    }
+
+    .patch-group-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .diff-box {
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      border: 1px solid #E2E8F0;
+      border-radius: 7px;
+      background: #F8FAFC;
+      font-size: 12px;
+      color: #334155;
+    }
+
+    .diff-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .diff-row b {
+      color: #0F172A;
+      font-weight: 700;
+    }
+
+    .review-zone {
+      position: absolute;
+      left: 60%;
+      top: 67%;
+      width: 250px;
+      height: 140px;
+      border: 1px dashed rgba(180, 69, 69, 0.38);
+      border-radius: 12px;
+      background: rgba(254, 242, 242, 0.36);
+    }
+
+    .review-zone::before {
+      content: "待审阅浮层";
+      position: absolute;
+      left: 12px;
+      top: 10px;
+      color: #B42318;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .entity.review {
+      cursor: pointer;
+    }
+
+    .entity.review.selected-review {
+      box-shadow: 0 0 0 2px rgba(180, 69, 69, 0.14), 0 8px 18px rgba(180, 69, 69, 0.16);
+    }
+
+    .output-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .output-table th,
+    .output-table td {
+      padding: 8px 0;
+      border-bottom: 1px solid #E2E8F0;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .output-table th {
+      color: #64748B;
+      font-weight: 600;
+    }
+
+    .state-note {
+      padding: 9px 10px;
+      border: 1px solid #E2E8F0;
+      border-radius: 8px;
+      background: #F8FAFC;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .guardrail-status {
+      display: grid;
+      gap: 8px;
+    }
+
+    .guardrail-banner {
+      border: 1px solid rgba(180,69,69,0.28);
+      background: #FEE9E7;
+      color: #B42318;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .trace-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .trace-item {
+      display: grid;
+      gap: 6px;
+      padding: 10px 0;
+      border-top: 1px solid #E2E8F0;
+      font-size: 12px;
+      color: #334155;
+    }
+
+    .trace-item:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .graph-view,
+    .report-view {
+      background: #F7F9FC;
+    }
+
+    .run-footer {
+      position: fixed;
+      left: 164px;
+      right: 326px;
+      bottom: 12px;
+      height: 38px;
+      display: none;
+      align-items: center;
+      justify-content: space-around;
+      background: rgba(255,255,255,0.96);
+      border: 1px solid #E2E8F0;
+      border-radius: 8px;
+      color: #475569;
+      font-size: 12px;
+      box-shadow: 0 6px 18px rgba(15,23,42,0.08);
+      z-index: 40;
+    }
+
+    #board.active + .run-footer {
+      display: flex;
+    }
+
+    .run-footer b {
+      color: #0F172A;
+    }
+
+    .floating-tools {
+      position: fixed;
+      left: 164px;
+      bottom: 62px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 42;
+    }
+
+    .tool-play,
+    .tool-icon {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+    }
+
+    .tool-play {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: white;
+    }
+
+    .tool-icon {
+      background: #FFFFFF;
+      border-color: #E2E8F0;
+      color: #334155;
+    }
+
+    .tool-icon.active {
+      border-color: var(--brand-border);
+      color: var(--brand-dark);
+      background: #E8F5F2;
+    }
+
+    .log-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(15, 23, 42, 0.22);
+      z-index: 100;
+    }
+
+    .log-modal.open {
+      display: grid;
+    }
+
+    .log-dialog {
+      width: 680px;
+      max-width: calc(100vw - 48px);
+      max-height: calc(100vh - 80px);
+      overflow: auto;
+      background: #FFFFFF;
+      border: 1px solid #E2E8F0;
+      border-radius: 10px;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+    }
+
+    .log-head {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      border-bottom: 1px solid #E2E8F0;
+    }
+
+    .log-body {
+      padding: 16px 18px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .log-line {
+      display: grid;
+      grid-template-columns: 84px 1fr auto;
+      gap: 12px;
+      align-items: start;
+      padding: 10px 0;
+      border-bottom: 1px solid #EEF2F7;
+      font-size: 12px;
+      color: #334155;
+    }
+
+    .log-line time {
+      color: #64748B;
+    }
+
+    .log-line code {
+      color: #0F172A;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    /* Motion intensity pass: make runtime state visibly active without changing the product palette. */
+    .status-dot {
+      animation: statusBeat 1.15s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+    }
+
+    .run-pill {
+      animation: runPillBreath 2.2s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+    }
+
+    .canvas-shell::before {
+      content: "";
+      position: absolute;
+      inset: 88px 306px 56px 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, transparent 0 42%, rgba(31, 122, 107, 0.11) 50%, transparent 58%),
+        linear-gradient(180deg, transparent, rgba(62, 111, 143, 0.06), transparent);
+      transform: translateX(-62%);
+      animation: boardSweep 4.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+      z-index: 2;
+    }
+
+    .canvas-shell.motion-burst::before {
+      animation-duration: 1.15s;
+    }
+
+    .canvas {
+      z-index: 3;
+    }
+
+    .wire {
+      height: 3px;
+    }
+
+    .wire.v {
+      width: 3px;
+    }
+
+    .wire::after {
+      width: 56px;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, rgba(31, 122, 107, 0.96), transparent);
+      box-shadow: 36px 0 0 rgba(31, 122, 107, 0.34), 78px 0 0 rgba(62, 111, 143, 0.26);
+      animation-duration: 1.05s;
+    }
+
+    .wire.v::after {
+      width: 3px;
+      height: 56px;
+      background: linear-gradient(180deg, transparent, rgba(31, 122, 107, 0.96), transparent);
+      box-shadow: 0 36px 0 rgba(31, 122, 107, 0.34), 0 78px 0 rgba(62, 111, 143, 0.26);
+      animation-duration: 1.05s;
+    }
+
+    .node.running {
+      animation: nodeRunPulse 1.15s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+      will-change: transform, box-shadow;
+    }
+
+    .node.running::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(100deg, transparent 0 34%, rgba(31, 122, 107, 0.16) 48%, transparent 62%);
+      transform: translateX(-120%);
+      animation: nodeScan 1.9s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+      z-index: 1;
+    }
+
+    .node.running .node-body,
+    .node.running .node-strip,
+    .node.running .port {
+      position: relative;
+      z-index: 2;
+    }
+
+    .node.running .progress span {
+      background-image: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.54), rgba(255,255,255,0));
+      background-size: 160% 100%;
+      animation: progressPulse 1s ease-in-out infinite, progressTravel 1.05s linear infinite;
+    }
+
+    .platform-group {
+      overflow: hidden;
+      animation: rackPulse 1.35s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+    }
+
+    .platform-group::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(180deg, transparent 0 18%, rgba(31, 122, 107, 0.12) 26%, transparent 36%),
+        repeating-linear-gradient(90deg, transparent 0 22px, rgba(31, 122, 107, 0.06) 22px 23px, transparent 23px 46px);
+      transform: translateY(-72%);
+      animation: rackScan 1.75s linear infinite;
+      z-index: 3;
+    }
+
+    .rack-head,
+    .rack-footer,
+    .group-label {
+      z-index: 5;
+    }
+
+    .rack-head span:last-child {
+      color: var(--brand-dark);
+      animation: valueTick 1.35s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+    }
+
+    .event-list .event:first-child,
+    .diff-box,
+    .guardrail-banner,
+    .trace-item:first-child {
+      animation: contentWake 1.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .review-zone {
+      animation: reviewLayerPulse 1.55s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+    }
+
+    .entity.review {
+      animation: reviewEntityPulse 1.1s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+    }
+
+    .review-item.motion-burst,
+    .entity.motion-burst {
+      animation: decisionFlash 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .rings::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--brand);
+      transform: rotate(0deg) translateX(250px);
+      transform-origin: 0 0;
+      animation: graphOrbit 4s linear infinite;
+      box-shadow: 0 0 0 6px rgba(31, 122, 107, 0.12);
+    }
+
+    .tool-play,
+    .tool-icon,
+    .actions button,
+    .rack-footer button {
+      transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, background 180ms ease;
+    }
+
+    .tool-play:active,
+    .tool-icon:active,
+    .actions button:active,
+    .rack-footer button:active {
+      transform: scale(0.94);
+    }
+
+    @keyframes statusBeat {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(31, 122, 107, 0.26); }
+      50% { transform: scale(1.45); box-shadow: 0 0 0 7px rgba(31, 122, 107, 0); }
+    }
+
+    @keyframes runPillBreath {
+      0%, 100% { box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04); }
+      50% { box-shadow: 0 0 0 1px rgba(31, 122, 107, 0.16), 0 8px 20px rgba(31, 122, 107, 0.08); }
+    }
+
+    @keyframes boardSweep {
+      0% { transform: translateX(-62%); opacity: 0; }
+      15% { opacity: 1; }
+      72% { opacity: 1; }
+      100% { transform: translateX(88%); opacity: 0; }
+    }
+
+    @keyframes nodeRunPulse {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-2px); }
+    }
+
+    @keyframes nodeScan {
+      0% { transform: translateX(-120%); opacity: 0; }
+      20% { opacity: 1; }
+      100% { transform: translateX(120%); opacity: 0; }
+    }
+
+    @keyframes progressTravel {
+      0% { background-position: 160% 0; }
+      100% { background-position: -60% 0; }
+    }
+
+    @keyframes rackPulse {
+      0%, 100% { border-color: rgba(148, 163, 184, 0.42); }
+      50% { border-color: rgba(31, 122, 107, 0.42); }
+    }
+
+    @keyframes rackScan {
+      from { transform: translateY(-72%); }
+      to { transform: translateY(82%); }
+    }
+
+    @keyframes valueTick {
+      0%, 100% { opacity: 0.72; }
+      50% { opacity: 1; }
+    }
+
+    @keyframes contentWake {
+      0% { transform: translateY(5px); opacity: 0.48; }
+      100% { transform: translateY(0); opacity: 1; }
+    }
+
+    @keyframes reviewLayerPulse {
+      0%, 100% { border-color: rgba(180, 69, 69, 0.38); background: rgba(254, 242, 242, 0.36); }
+      50% { border-color: rgba(180, 69, 69, 0.72); background: rgba(254, 242, 242, 0.56); }
+    }
+
+    @keyframes reviewEntityPulse {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
+    }
+
+    @keyframes decisionFlash {
+      0% { transform: scale(1); }
+      38% { transform: scale(1.025); box-shadow: 0 0 0 5px rgba(31, 122, 107, 0.10); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes graphOrbit {
+      from { transform: rotate(0deg) translateX(250px); }
+      to { transform: rotate(360deg) translateX(250px); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    @media (max-width: 1180px) {
+      .app { grid-template-columns: 72px minmax(0,1fr); }
+      .brand-title, .brand-subtitle, .side-label, .nav-item span, .side-card { display: none; }
+      .nav-item { justify-content: center; }
+      .board-view { grid-template-columns: minmax(760px, 1fr) 300px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand-mark">
+        <div class="brand-dot">S</div>
+        <div>
+          <div class="brand-title">Specta</div>
+          <div class="brand-subtitle">Brand Circle Workspace</div>
+        </div>
+      </div>
+      <div class="side-section">
+        <div class="side-label">Brand Space</div>
+        <div class="nav-item active"><i data-lucide="network"></i><span>Graph</span></div>
+        <div class="nav-item"><i data-lucide="workflow"></i><span>Boards</span></div>
+        <div class="nav-item"><i data-lucide="folder"></i><span>Assets</span></div>
+        <div class="nav-item"><i data-lucide="file-text"></i><span>Reports</span></div>
+      </div>
+      <div class="side-section">
+        <div class="side-label">Templates</div>
+        <div class="nav-item"><i data-lucide="radar"></i><span>全景抓取</span></div>
+        <div class="nav-item"><i data-lucide="users"></i><span>用户画像</span></div>
+        <div class="nav-item"><i data-lucide="upload"></i><span>手动问题</span></div>
+      </div>
+      <div class="side-card">
+        <strong>v0.4 prototype</strong>
+        <p>同步 PRD：画布驱动 Graph Update，报告解释图谱变化，风险和竞品必须有证据。</p>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div class="context-title">
+          <h1>Amway Brand Space <span style="font-size:14px;color:#64748B;">⌄</span></h1>
+          <span>Graph version 2026.06.17-04 · Board: AI Panorama Fetch</span>
+        </div>
+        <div class="run-pill" id="runPill">
+          <strong><span class="status-dot" id="topStatusDot"></span> <span id="runStateText">Running</span></strong>
+          <span>Graph Update</span>
+          <span>started 2m 14s ago</span>
+          <button id="viewRunLog" style="height:26px;padding:0 8px;color:#1F6FD0;background:#EEF6FF;border-color:#D8E9FF;">View run log</button>
+        </div>
+        <div class="top-actions">
+          <button class="secondary" id="pauseButton"><i data-lucide="pause"></i><span>Pause</span></button>
+          <button class="secondary" id="stopButton"><i data-lucide="square"></i><span>Stop</span></button>
+          <button class="primary" id="shareButton"><i data-lucide="share-2"></i>Share</button>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Prototype views">
+        <button class="tab" data-view="graph">Graph Home</button>
+        <button class="tab active" data-view="board">Board Runtime</button>
+        <button class="tab" data-view="report">Report Review</button>
+      </nav>
+
+      <section class="view graph-view" id="graph">
+        <div class="graph-layout">
+          <div class="graph-stage">
+            <div class="stage-head">
+              <div>
+                <strong>品牌圈层图谱</strong>
+                <div class="small">风险圈不折叠 · 待审阅浮层可见 · 本次更新 18 个 Patch</div>
+              </div>
+              <div class="lens">
+                <button class="active">圈层状态</button>
+                <button>本次更新</button>
+                <button>风险认知</button>
+                <button>竞品压力</button>
+              </div>
+            </div>
+            <div class="rings">
+              <div class="ring r3"></div>
+              <div class="ring r2"></div>
+              <div class="ring r1"></div>
+              <div class="review-zone"></div>
+              <div class="entity brand" style="left:50%;top:50%;transform:translate(-50%,-50%);">安利</div>
+              <div class="entity inner" style="left:48%;top:36%;">纽崔莱</div>
+              <div class="entity inner" style="left:59%;top:48%;">营养早餐</div>
+              <div class="entity middle" style="left:37%;top:56%;">体重管理</div>
+              <div class="entity middle" style="left:64%;top:62%;">主动健康</div>
+              <div class="entity outer" style="left:31%;top:34%;">长寿时代</div>
+              <div class="entity risk" style="left:70%;top:27%;">直销风险</div>
+              <div class="entity risk" style="left:74%;top:36%;">监管信息</div>
+              <div class="entity competitor" style="left:24%;top:64%;">汤臣倍健</div>
+              <div class="entity competitor" style="left:25%;top:72%;">Swisse</div>
+              <div class="entity review selected-review" data-review-entity="anti-aging" style="left:67%;top:75%;">关系抗衰</div>
+            </div>
+          </div>
+          <aside class="graph-side">
+            <div class="panel">
+              <h2>Graph Update Queue</h2>
+              <div class="patch-group">
+                <div class="patch-group-title"><span>已自动应用</span><span class="chip ok">3 auto_applied</span></div>
+                <div class="diff-box">
+                  <div class="diff-row"><span>营养早餐</span><b>connection 62 → 68</b></div>
+                  <div class="diff-row"><span>纽崔莱</span><b>alias merged</b></div>
+                  <div class="diff-row"><span>主动健康</span><b>evidence +6</b></div>
+                </div>
+              </div>
+              <div class="patch-group">
+                <div class="patch-group-title"><span>待审阅</span><span class="chip risk">2 needs_review</span></div>
+                <div class="review-item" data-patch="risk">
+                  <strong>监管信息 · 风险候选</strong>
+                  <p>情感 4/10，负面 evidence 占多数。禁止进入内圈，进入风险浮层。</p>
+                  <div class="diff-box">
+                    <div class="diff-row"><span>zone</span><b>inner_candidate → risk_layer</b></div>
+                    <div class="diff-row"><span>sentiment</span><b>4/10 · questioning majority</b></div>
+                  </div>
+                  <div class="actions"><button data-review-action="accept">接受 Patch</button><button data-review-action="reject">拒绝</button></div>
+                </div>
+                <div class="review-item" data-patch="competitor">
+                  <strong>汤臣倍健 · 竞品候选</strong>
+                  <p>比较置信度 0.74，含“替代选择”证据。生成竞品圈候选 Patch。</p>
+                  <div class="diff-box">
+                    <div class="diff-row"><span>relation</span><b>none → competes_with</b></div>
+                    <div class="diff-row"><span>confidence</span><b>0.74 · evidence span present</b></div>
+                  </div>
+                  <div class="actions"><button data-review-action="accept">接受 Patch</button><button data-review-action="reject">拒绝</button></div>
+                </div>
+              </div>
+            </div>
+            <div class="panel">
+              <h3 id="selectedEntityTitle">Selected Entity</h3>
+              <p id="selectedEntityDesc"><strong>关系抗衰</strong> 处于待审阅浮层。当前证据不足以进入内圈，接受后进入中圈候选，拒绝后保留在浮层。</p>
+              <div class="metric-grid">
+                <div class="metric"><b id="entityStrength">58</b><span>connection_strength</span></div>
+                <div class="metric"><b id="entitySentiment">6/10</b><span>sentiment score</span></div>
+                <div class="metric"><b id="entityMentions">11</b><span>mentions</span></div>
+                <div class="metric"><b id="entityZone">Review</b><span>recommended zone</span></div>
+              </div>
+              <div class="actions"><button id="acceptReviewEntity">接受进入中圈</button><button id="rejectReviewEntity">保留浮层</button></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view active board-view" id="board">
+        <div class="canvas-shell">
+          <div class="canvas-toolbar">
+            <div class="toolbar-left">
+              <button class="icon-button" title="Add node"><i data-lucide="plus"></i></button>
+              <button class="icon-button" title="Fit view"><i data-lucide="maximize-2"></i></button>
+              <span class="run-status"><span class="status-dot"></span><span id="runLabel">Running · AI Platform Fetch Group</span></span>
+            </div>
+            <div class="toolbar-right">
+              <button class="secondary"><i data-lucide="git-branch"></i>Replace Question Source</button>
+              <button class="secondary"><i data-lucide="file-check-2"></i>Open Report Guardrails</button>
+            </div>
+          </div>
+
+          <div class="canvas">
+            <div class="wire h" style="left:190px;top:164px;width:92px;"></div>
+            <div class="wire h" style="left:190px;top:400px;width:92px;"></div>
+            <div class="wire h" style="left:532px;top:164px;width:62px;"></div>
+            <div class="wire h" style="left:532px;top:400px;width:62px;"></div>
+            <div class="wire v" style="left:594px;top:164px;height:236px;"></div>
+            <div class="wire h" style="left:594px;top:282px;width:58px;"></div>
+            <div class="wire h" style="left:856px;top:282px;width:54px;"></div>
+            <div class="wire h" style="left:856px;top:448px;width:54px;"></div>
+            <div class="wire v" style="left:910px;top:282px;height:166px;"></div>
+
+            <div class="node input" data-node="seed" style="left:0;top:124px;">
+              <div class="node-strip"></div><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">Brand Entity Seed</div><div class="node-meta">BrandSeed · v0.1</div></div><span class="chip ok">ready</span></div>
+                <div class="progress" style="--value:100%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="node prepare" data-node="question" style="left:0;top:360px;">
+              <div class="node-strip"></div><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">Question Source</div><div class="node-meta">QuestionSet · 32 questions</div></div><span class="chip ok">done</span></div>
+                <div class="progress" style="--value:100%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="platform-group">
+              <div class="group-label">AI Platform Fetch Group</div>
+              <div class="rack-head">
+                <span>4 / 4 running</span>
+                <span>overall 56%</span>
+              </div>
+              <div class="rack-footer">
+                <span>Parallel rack · isolated retries</span>
+                <button id="runRackButton">Run all</button>
+              </div>
+            </div>
+
+            <div class="node fetch running" data-node="chatgpt" style="left:306px;top:124px;">
+              <div class="node-strip"></div><span class="port in"></span><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">ChatGPT Fetch</div><div class="node-meta">72% · 36 answers</div></div><span class="chip source">running</span></div>
+                <div class="progress" style="--value:72%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="node fetch running" data-node="deepseek" style="left:306px;top:226px;">
+              <div class="node-strip"></div><span class="port in"></span><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">DeepSeek Fetch</div><div class="node-meta">64% · 32 answers</div></div><span class="chip source">running</span></div>
+                <div class="progress" style="--value:64%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="node fetch running selected" data-node="kimi" style="left:306px;top:328px;">
+              <div class="node-strip"></div><span class="port in"></span><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">Kimi Fetch</div><div class="node-meta">48% · 24 answers</div></div><span class="chip source">running</span></div>
+                <div class="progress" style="--value:48%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="node fetch running" data-node="doubao" style="left:306px;top:430px;">
+              <div class="node-strip"></div><span class="port in"></span><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">Doubao Fetch</div><div class="node-meta">41% · 20 answers</div></div><span class="chip warn">retrying</span></div>
+                <div class="progress" style="--value:41%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="node extract running" data-node="normalize" style="left:652px;top:242px;">
+              <div class="node-strip"></div><span class="port in"></span><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">Answer Normalize</div><div class="node-meta">AnswerSet · incremental</div></div><span class="chip source">streaming</span></div>
+                <div class="progress" style="--value:52%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="node extract running" data-node="extract" style="left:652px;top:408px;">
+              <div class="node-strip"></div><span class="port in"></span><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">Entity Relation Extract</div><div class="node-meta">risk · competitor · sentiment</div></div><span class="chip warn">rules</span></div>
+                <div class="progress" style="--value:38%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="node review" data-node="review" style="left:944px;top:242px;">
+              <div class="node-strip"></div><span class="port in"></span><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">Review Inbox</div><div class="node-meta">risk · competitor · gray sentiment</div></div><span class="chip risk">7 items</span></div>
+                <div class="progress" style="--value:70%;"><span></span></div>
+              </div>
+            </div>
+
+            <div class="node graph running" data-node="patch" style="left:944px;top:408px;">
+              <div class="node-strip"></div><span class="port in"></span><span class="port out"></span>
+              <div class="node-body">
+                <div class="node-head"><div><div class="node-title">Graph Patch Apply</div><div class="node-meta">low-risk auto · high-impact review</div></div><span class="chip ok">12 applied</span></div>
+                <div class="progress" style="--value:66%;"><span></span></div>
+              </div>
+            </div>
+          </div>
+          <div class="floating-tools" aria-label="Canvas tools">
+            <button class="tool-play" id="resumeButton" title="Run board"><i data-lucide="play"></i></button>
+            <button class="tool-icon active" data-tool="pause" id="quickPauseButton" title="Pause board"><i data-lucide="pause"></i></button>
+            <button class="tool-icon" data-tool="stop" id="quickStopButton" title="Stop board"><i data-lucide="square"></i></button>
+            <button class="tool-icon" data-tool="events" title="Open events"><i data-lucide="list-checks"></i></button>
+            <button class="tool-icon" data-tool="output" title="Open output"><i data-lucide="panel-right-open"></i></button>
+          </div>
+        </div>
+
+        <aside class="inspector" data-tab="overview">
+          <div class="inspector-tabs">
+            <span class="active" data-inspector-tab="overview">Overview</span>
+            <span data-inspector-tab="events">Events</span>
+            <span data-inspector-tab="output">Output</span>
+            <span data-inspector-tab="config">Config</span>
+          </div>
+          <div class="panel overview-panel">
+            <h2 id="nodeTitle">Kimi Fetch</h2>
+            <p id="nodeDesc">平台节点独立运行，输出 answers.jsonl，并保留平台来源供 Graph Patch Stream 使用。</p>
+            <div class="metric-grid">
+              <div class="metric"><b id="metricProgress">48%</b><span>progress</span></div>
+              <div class="metric"><b id="metricAnswers">24</b><span>answers</span></div>
+              <div class="metric"><b id="metricLatency">2.1s</b><span>avg latency</span></div>
+              <div class="metric"><b id="metricStatus">running</b><span>status</span></div>
+            </div>
+          </div>
+
+          <div class="panel events-panel">
+            <h3>Graph Patch Stream</h3>
+            <div class="event-list" id="eventList">
+              <div class="event source"><i></i><span>entity_detected · 关系抗衰 · Kimi / Q12</span></div>
+              <div class="event risk"><i></i><span>risk_detected · 监管信息 · sentiment 4/10</span></div>
+              <div class="event warn"><i></i><span>review_required · 汤臣倍健 · confidence 0.74</span></div>
+              <div class="event"><i></i><span>graph_patch_applied · 营养早餐 +6%</span></div>
+            </div>
+          </div>
+
+          <div class="panel config-panel">
+            <h3>v0.4 Guardrails</h3>
+            <div class="guardrail">
+              <div class="rule-row"><span>情感 3-5 不进内圈</span><span class="chip ok">active</span></div>
+              <div class="rule-row"><span>竞品置信度低于 0.7 进入审阅</span><span class="chip ok">active</span></div>
+              <div class="rule-row"><span>风险关系不可被普通筛选隐藏</span><span class="chip ok">active</span></div>
+              <div class="rule-row"><span>报告需要后处理校验</span><span class="chip warn">queued</span></div>
+            </div>
+            <h3>Orchestrator Policy</h3>
+            <div class="state-note"><strong>Pause</strong>：允许当前请求完成，停止派发新问题；已产出的 AnswerSet 和 GraphPatchSet 保留。</div>
+            <div class="state-note"><strong>Stop</strong>：终止未开始任务，已写入 Assets 的产物保留，但未审阅 Patch 不会应用到图谱。</div>
+            <div class="state-note"><strong>Config</strong>：运行中只能改下一批任务参数，不能改已完成节点的 official output。</div>
+          </div>
+
+          <div class="panel output-panel">
+            <h3 id="outputTitle">Kimi Fetch Output</h3>
+            <table class="output-table">
+              <tbody id="outputTableBody">
+                <tr><th>Platform</th><td>Kimi</td></tr>
+                <tr><th>Answers</th><td>24 fetched · 0 failed</td></tr>
+                <tr><th>Entities</th><td>41 extracted downstream</td></tr>
+                <tr><th>Artifacts</th><td>answers/kimi/run_1023.jsonl<br>parsed/kimi/run_1023.parquet</td></tr>
+              </tbody>
+            </table>
+            <h3>Graph Preview</h3>
+            <div class="mini-graph">
+              <div class="entity brand" style="left:112px;top:70px;">Amway</div>
+              <div class="entity inner" style="left:178px;top:54px;">营养早餐</div>
+              <div class="entity risk" style="left:176px;top:106px;">监管信息</div>
+              <div class="entity competitor" style="left:34px;top:108px;">汤臣倍健</div>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <div class="run-footer">
+        <span><b>Run ID:</b> run_2026-06-17_1023</span>
+        <span><b>Status:</b> <span class="status-dot" id="footerStatusDot" style="display:inline-block;vertical-align:middle;"></span> <span id="footerStatusText">Running</span></span>
+        <span><b>Started:</b> 2026-06-17 10:23:14</span>
+        <span><b>Duration:</b> 00:02:14</span>
+        <span><b>Nodes:</b> 11</span>
+        <span><b>Connections:</b> 15</span>
+      </div>
+
+      <section class="view report-view" id="report">
+        <div class="report-layout">
+          <article class="report-paper">
+            <div class="small">Circle Report · Graph Update 2026.06.17-04</div>
+            <h2>安利品牌圈层更新解读</h2>
+            <p>本次更新不是把所有提及视为认可，而是先区分正面、负面、质疑和中性 evidence，再决定实体应进入内圈、中圈、风险圈、竞品圈或待审阅浮层。</p>
+
+            <h3>1. 本次核心变化</h3>
+            <table class="report-table">
+              <thead><tr><th>实体</th><th>变化</th><th>判断</th><th>依据</th></tr></thead>
+              <tbody>
+                <tr><td>营养早餐</td><td>中圈 → 内圈候选</td><td>正面 evidence 占多数</td><td>4 平台，18 条回答，情感 7/10</td></tr>
+                <tr><td>监管信息</td><td>内圈候选 → 风险浮层</td><td>负面 / 质疑 evidence 占多数</td><td>54 次提及，情感 4/10，禁止进入内圈</td></tr>
+                <tr><td>汤臣倍健</td><td>新增竞品候选</td><td>需要人工审阅</td><td>替代语境置信度 0.74，有 evidence span</td></tr>
+              </tbody>
+            </table>
+
+            <h3>2. 证据摘录</h3>
+            <div class="quote">Q08 / Kimi：用户询问中老年营养补充时，回答将纽崔莱与“日常早餐营养管理”建立正向关系。</div>
+            <div class="quote">Q17 / Doubao：回答提到“直销和监管历史仍会影响用户信任”，该 evidence 被标记为 questioning，不计入正面验证。</div>
+
+            <h3>3. 战略词分段判断</h3>
+            <table class="report-table">
+              <thead><tr><th>战略词</th><th>稳定度</th><th>证据量</th><th>结论</th></tr></thead>
+              <tbody>
+                <tr><td>营养早餐</td><td>64</td><td>34</td><td>已站稳：可放大传播，优先补充 ChatGPT 与 Kimi 的真实案例内容。</td></tr>
+                <tr><td>主动健康</td><td>55</td><td>22</td><td>有基础但需补强：建议在豆包补充中年健康管理场景证据。</td></tr>
+                <tr><td>监管信息</td><td>78</td><td>54</td><td>伴随风险：先澄清直销与合规风险，不进入正面内容资产。</td></tr>
+              </tbody>
+            </table>
+
+            <h3>4. 下一张画布建议</h3>
+            <p>建议运行“风险澄清问题画布”：聚焦直销、监管、拉人头、价格争议四类风险词，目标是在下一轮复测前形成可引用的澄清证据。</p>
+          </article>
+
+          <aside class="right-rail">
+            <div class="panel">
+              <h3>Graph Diff</h3>
+              <div class="mini-graph">
+                <div class="entity brand" style="left:112px;top:62px;">安利</div>
+                <div class="entity inner" style="left:162px;top:46px;">营养早餐</div>
+                <div class="entity risk" style="left:166px;top:100px;">监管信息</div>
+                <div class="entity competitor" style="left:30px;top:104px;">汤臣倍健</div>
+              </div>
+            </div>
+            <div class="panel">
+              <h3>Report Guardrails</h3>
+              <div class="guardrail-banner"><strong>BLOCK</strong>：报告生成后处理已运行。行动建议缺少明确平台与场景，当前版本不可发布，只能保存为 draft。</div>
+              <div class="guardrail-status">
+                <div class="check-row"><span>战略词结论相似度</span><span class="chip ok">PASS</span></div>
+                <div class="check-row"><span>竞品声明 evidence span</span><span class="chip ok">PASS</span></div>
+                <div class="check-row"><span>风险声明 evidence span</span><span class="chip ok">PASS</span></div>
+                <div class="check-row"><span>证据来源集中度</span><span class="chip warn">WARN · 42%</span></div>
+                <div class="check-row"><span>行动建议具体性</span><span class="chip risk">BLOCK</span></div>
+              </div>
+            </div>
+            <div class="panel">
+              <h3>Trace Chain</h3>
+              <div class="trace-list">
+                <div class="trace-item">
+                  <strong>结论：营养早餐进入内圈候选</strong>
+                  <span>Evidence：Q08 / Kimi / answer_1023_008 · positive span present</span>
+                  <span>Patch：patch_1023_014 · middle → inner_candidate</span>
+                </div>
+                <div class="trace-item">
+                  <strong>结论：监管信息进入风险浮层</strong>
+                  <span>Evidence：Q17 / Doubao / answer_1023_017 · questioning span present</span>
+                  <span>Patch：patch_1023_009 · inner_candidate → risk_layer</span>
+                </div>
+                <div class="trace-item">
+                  <strong>结论：汤臣倍健为竞品候选</strong>
+                  <span>Evidence：Q21 / ChatGPT / answer_1023_021 · alternative signal</span>
+                  <span>Patch：patch_1023_018 · competes_with · confidence 0.74</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button>定位到图谱</button>
+                <button>查看生成画布</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="log-modal" id="runLogModal" aria-hidden="true">
+    <div class="log-dialog" role="dialog" aria-modal="true" aria-labelledby="runLogTitle">
+      <div class="log-head">
+        <strong id="runLogTitle">Run log · run_2026-06-17_1023</strong>
+        <button class="icon-button" id="closeRunLog" title="Close run log"><i data-lucide="x"></i></button>
+      </div>
+      <div class="log-body">
+        <div class="log-line"><time>10:23:14</time><code>board.started</code><span>AI Visibility Monitor</span></div>
+        <div class="log-line"><time>10:23:26</time><code>questions.loaded</code><span>32 scenarios</span></div>
+        <div class="log-line"><time>10:24:01</time><code>fetch.parallel</code><span>ChatGPT, DeepSeek, Kimi, Doubao</span></div>
+        <div class="log-line"><time>10:24:52</time><code>risk_gate.applied</code><span>sentiment 3-5 blocked from inner circle</span></div>
+        <div class="log-line"><time>10:25:18</time><code>competitor_review.queued</code><span>confidence 0.74 · evidence span required</span></div>
+        <div class="log-line"><time>10:25:28</time><code>graph_patch.streaming</code><span>12 auto_applied · 7 needs_review</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script>
+    const tabs = document.querySelectorAll('.tab');
+    const views = document.querySelectorAll('.view');
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        tabs.forEach((item) => item.classList.remove('active'));
+        views.forEach((view) => view.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.view).classList.add('active');
+      });
+    });
+
+    const initialView = new URLSearchParams(window.location.search).get('view');
+    if (initialView && document.getElementById(initialView)) {
+      tabs.forEach((item) => item.classList.toggle('active', item.dataset.view === initialView));
+      views.forEach((view) => view.classList.toggle('active', view.id === initialView));
+    }
+
+    const nodeData = {
+      seed: ['Brand Entity Seed', '品牌输入节点产生 BrandSeed，是整个 Graph Update 的上下文根。', '100%', '1', '-', 'ready'],
+      question: ['Question Source', 'QuestionSet 可由问题模拟或手动上传产生，下游只校验类型契约。', '100%', '32', '-', 'done'],
+      chatgpt: ['ChatGPT Fetch', '平台节点独立运行，失败不会阻塞其他平台写入 Assets。', '72%', '36', '1.9s', 'running'],
+      deepseek: ['DeepSeek Fetch', '抓取结果保留平台来源，用于后续 evidence 和报告引用。', '64%', '32', '2.4s', 'running'],
+      kimi: ['Kimi Fetch', '平台节点独立运行，输出 answers.jsonl，并保留平台来源供 Graph Patch Stream 使用。', '48%', '24', '2.1s', 'running'],
+      doubao: ['Doubao Fetch', '当前平台正在重试；已完成回答仍可增量进入 Answer Normalize。', '41%', '20', '3.2s', 'retrying'],
+      normalize: ['Answer Normalize', '将多平台回答标准化为 AnswerSet，保留 question_id、platform、raw_ref。', '52%', '112', '0.8s', 'streaming'],
+      extract: ['Entity Relation Extract', '抽取风险、竞品、情感极性和 evidence span，输出 GraphPatchSet。', '38%', '18', '1.4s', 'rules'],
+      review: ['Review Inbox', '高影响 Patch 进入审阅：新增实体、风险、竞品、圈层迁移、别名合并。', '70%', '7', '-', 'needs_review'],
+      patch: ['Graph Patch Apply', '低风险 Patch 自动应用，高影响变化串行审阅后写入 Graph version。', '66%', '12', '0.5s', 'applying']
+    };
+
+    const outputData = {
+      seed: ['Brand Entity Seed Output', [['Brand', 'Amway'], ['Entities', '126 seed terms'], ['Artifacts', 'brand_seed/amway/entity_seed_v0.1.json'], ['Next', 'Question Source']]],
+      question: ['Question Source Output', [['Questions', '32 scenarios'], ['Source', 'simulation template + manual override'], ['Artifacts', 'questions/run_1023.json'], ['Contract', 'QuestionSet']]],
+      chatgpt: ['ChatGPT Fetch Output', [['Platform', 'ChatGPT'], ['Answers', '36 fetched · 0 failed'], ['Entities', '58 extracted downstream'], ['Artifacts', 'answers/chatgpt/run_1023.jsonl']]],
+      deepseek: ['DeepSeek Fetch Output', [['Platform', 'DeepSeek'], ['Answers', '32 fetched · 1 retry'], ['Entities', '47 extracted downstream'], ['Artifacts', 'answers/deepseek/run_1023.jsonl']]],
+      kimi: ['Kimi Fetch Output', [['Platform', 'Kimi'], ['Answers', '24 fetched · 0 failed'], ['Entities', '41 extracted downstream'], ['Artifacts', 'answers/kimi/run_1023.jsonl<br>parsed/kimi/run_1023.parquet']]],
+      doubao: ['Doubao Fetch Output', [['Platform', 'Doubao'], ['Answers', '20 fetched · 3 retrying'], ['Entities', '29 extracted downstream'], ['Artifacts', 'answers/doubao/run_1023.partial.jsonl']]],
+      normalize: ['Answer Normalize Output', [['AnswerSet', '112 normalized answers'], ['Fields', 'question_id, platform, raw_ref, evidence_span'], ['Artifacts', 'parsed/all/run_1023.parquet'], ['Contract', 'AnswerSet']]],
+      extract: ['Entity Relation Extract Output', [['Relations', '512 candidates'], ['Risk signals', '54 questioning spans'], ['Competitor candidates', '2 needs_review'], ['Artifacts', 'graph_patch_set/run_1023.json']]],
+      review: ['Review Inbox Output', [['Needs review', '7 patch candidates'], ['Risk patches', '3'], ['Competitor patches', '2'], ['Action', 'accept / reject before graph apply']]],
+      patch: ['Graph Patch Apply Output', [['Applied', '12 low-risk patches'], ['Blocked', '0'], ['Waiting', '7 needs_review'], ['Graph version', 'Amway Brand Graph v3.2.1']]]
+    };
+
+    function renderOutput(nodeKey) {
+      const output = outputData[nodeKey] || outputData.kimi;
+      document.getElementById('outputTitle').textContent = output[0];
+      document.getElementById('outputTableBody').innerHTML = output[1]
+        .map(([label, value]) => `<tr><th>${label}</th><td>${value}</td></tr>`)
+        .join('');
+    }
+
+    document.querySelectorAll('.node').forEach((node) => {
+      node.addEventListener('click', () => {
+        document.querySelectorAll('.node').forEach((item) => item.classList.remove('selected'));
+        node.classList.add('selected');
+        const item = nodeData[node.dataset.node];
+        document.getElementById('nodeTitle').textContent = item[0];
+        document.getElementById('nodeDesc').textContent = item[1];
+        document.getElementById('metricProgress').textContent = item[2];
+        document.getElementById('metricAnswers').textContent = item[3];
+        document.getElementById('metricLatency').textContent = item[4];
+        document.getElementById('metricStatus').textContent = item[5];
+        renderOutput(node.dataset.node);
+      });
+    });
+
+    const inspector = document.querySelector('.inspector');
+    function activateInspectorTab(tabName) {
+      const targetTab = document.querySelector(`[data-inspector-tab="${tabName}"]`);
+      if (!targetTab) return;
+      document.querySelectorAll('[data-inspector-tab]').forEach((item) => item.classList.remove('active'));
+      targetTab.classList.add('active');
+      inspector.dataset.tab = tabName;
+    }
+
+    document.querySelectorAll('[data-inspector-tab]').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        activateInspectorTab(tab.dataset.inspectorTab);
+      });
+    });
+
+    document.querySelectorAll('.tool-icon').forEach((tool) => {
+      tool.addEventListener('click', () => {
+        document.querySelectorAll('.tool-icon').forEach((item) => item.classList.remove('active'));
+        tool.classList.add('active');
+      });
+    });
+
+    const runPill = document.getElementById('runPill');
+    const runStateText = document.getElementById('runStateText');
+    const topStatusDot = document.getElementById('topStatusDot');
+    const footerStatusDot = document.getElementById('footerStatusDot');
+    const footerStatusText = document.getElementById('footerStatusText');
+    const runLabel = document.getElementById('runLabel');
+    const pauseButton = document.getElementById('pauseButton');
+    const stopButton = document.getElementById('stopButton');
+    const shareButton = document.getElementById('shareButton');
+    const resumeButton = document.getElementById('resumeButton');
+    const quickPauseButton = document.getElementById('quickPauseButton');
+    const quickStopButton = document.getElementById('quickStopButton');
+    const runRackButton = document.getElementById('runRackButton');
+    const canvasShell = document.querySelector('.canvas-shell');
+    const runtimeNodes = document.querySelectorAll('.node.fetch, .node.extract, .node.graph');
+
+    function burstMotion() {
+      canvasShell?.classList.remove('motion-burst');
+      requestAnimationFrame(() => {
+        canvasShell?.classList.add('motion-burst');
+        window.setTimeout(() => canvasShell?.classList.remove('motion-burst'), 900);
+      });
+    }
+
+    function addEvent(kind, text) {
+      const eventList = document.getElementById('eventList');
+      const event = document.createElement('div');
+      event.className = `event ${kind || ''}`;
+      event.innerHTML = `<i></i><span>${text}</span>`;
+      eventList.prepend(event);
+      burstMotion();
+    }
+
+    function setRunState(state) {
+      const labels = {
+        running: 'Running',
+        paused: 'Paused',
+        stopped: 'Stopped'
+      };
+      const label = labels[state];
+      runStateText.textContent = label;
+      footerStatusText.textContent = label;
+      runPill.classList.toggle('paused', state === 'paused');
+      runPill.classList.toggle('stopped', state === 'stopped');
+      topStatusDot.classList.toggle('paused', state === 'paused');
+      topStatusDot.classList.toggle('stopped', state === 'stopped');
+      footerStatusDot.classList.toggle('paused', state === 'paused');
+      footerStatusDot.classList.toggle('stopped', state === 'stopped');
+      runtimeNodes.forEach((node) => node.classList.toggle('running', state === 'running'));
+      runLabel.textContent = state === 'running'
+        ? 'Running · AI Platform Fetch Group'
+        : `${label} · graph_patch_stream retained`;
+      pauseButton.querySelector('span').textContent = state === 'paused' ? 'Resume' : 'Pause';
+    }
+
+    pauseButton.addEventListener('click', () => {
+      const nextState = runStateText.textContent === 'Paused' ? 'running' : 'paused';
+      setRunState(nextState);
+      addEvent(nextState === 'running' ? 'source' : 'warn', nextState === 'running' ? 'board_resumed · parallel fetch group' : 'board_paused · current requests finish, new dispatch stopped');
+    });
+
+    stopButton.addEventListener('click', () => {
+      setRunState('stopped');
+      addEvent('risk', 'board_stopped · artifacts retained, unapplied patches held');
+    });
+
+    resumeButton.addEventListener('click', () => {
+      setRunState('running');
+      addEvent('source', 'board_started · fetch nodes resumed');
+    });
+
+    quickPauseButton.addEventListener('click', () => pauseButton.click());
+    quickStopButton.addEventListener('click', () => stopButton.click());
+    runRackButton.addEventListener('click', () => {
+      setRunState('running');
+      addEvent('source', 'platform_rack_started · 4 platforms dispatched together');
+    });
+
+    shareButton.addEventListener('click', () => {
+      setRunState('running');
+      runLabel.textContent = 'Running · graph_patch_applied + report_guardrail_check';
+      addEvent('warn', 'report_guardrail_check · action specificity needs_review');
+    });
+
+    document.querySelector('[data-tool="events"]').addEventListener('click', () => activateInspectorTab('events'));
+    document.querySelector('[data-tool="output"]').addEventListener('click', () => activateInspectorTab('output'));
+
+    document.querySelectorAll('[data-review-action]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const item = button.closest('.review-item');
+        const action = button.dataset.reviewAction === 'accept' ? 'accepted' : 'rejected';
+        item.querySelector('strong').textContent = `${item.querySelector('strong').textContent} · ${action}`;
+        item.querySelectorAll('button').forEach((target) => target.disabled = true);
+        item.classList.add('motion-burst');
+        window.setTimeout(() => item.classList.remove('motion-burst'), 620);
+      });
+    });
+
+    document.querySelectorAll('[data-review-entity]').forEach((entity) => {
+      entity.addEventListener('click', () => {
+        document.querySelectorAll('[data-review-entity]').forEach((item) => item.classList.remove('selected-review'));
+        entity.classList.add('selected-review');
+        document.getElementById('selectedEntityTitle').textContent = 'Selected Entity · 待审阅';
+        document.getElementById('selectedEntityDesc').innerHTML = '<strong>关系抗衰</strong> 处于待审阅浮层。当前证据不足以进入内圈，接受后进入中圈候选，拒绝后保留在浮层。';
+      });
+    });
+
+    document.getElementById('acceptReviewEntity').addEventListener('click', () => {
+      document.getElementById('entityZone').textContent = 'Middle';
+      document.getElementById('selectedEntityDesc').innerHTML = '<strong>关系抗衰</strong> 已接受为中圈候选，等待下一轮 Graph Update 验证。';
+      const entity = document.querySelector('[data-review-entity="anti-aging"]');
+      entity?.classList.add('motion-burst');
+      window.setTimeout(() => entity?.classList.remove('motion-burst'), 620);
+    });
+
+    document.getElementById('rejectReviewEntity').addEventListener('click', () => {
+      document.getElementById('entityZone').textContent = 'Review';
+      document.getElementById('selectedEntityDesc').innerHTML = '<strong>关系抗衰</strong> 保留在待审阅浮层，不进入品牌圈层。';
+      const entity = document.querySelector('[data-review-entity="anti-aging"]');
+      entity?.classList.add('motion-burst');
+      window.setTimeout(() => entity?.classList.remove('motion-burst'), 620);
+    });
+
+    const runLogModal = document.getElementById('runLogModal');
+    document.getElementById('viewRunLog').addEventListener('click', () => {
+      runLogModal.classList.add('open');
+      runLogModal.setAttribute('aria-hidden', 'false');
+    });
+    document.getElementById('closeRunLog').addEventListener('click', () => {
+      runLogModal.classList.remove('open');
+      runLogModal.setAttribute('aria-hidden', 'true');
+    });
+    runLogModal.addEventListener('click', (event) => {
+      if (event.target === runLogModal) {
+        runLogModal.classList.remove('open');
+        runLogModal.setAttribute('aria-hidden', 'true');
+      }
+    });
+
+    if (window.lucide) {
+      window.lucide.createIcons();
+    }
+  </script>
+</body>
+</html>
