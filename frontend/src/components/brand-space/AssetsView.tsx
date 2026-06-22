@@ -37,6 +37,7 @@ interface AssetsViewProps {
   onCloseDetail?: () => void;
   onTraceTarget?: (link: ArtifactTraceLink) => void;
   onDownloadArtifact?: (artifact: ArtifactRef) => void;
+  onOpenBoard?: () => void;
   downloadingArtifactIds?: string[];
 }
 
@@ -223,6 +224,7 @@ export function AssetsView({
   onCloseDetail,
   onTraceTarget,
   onDownloadArtifact,
+  onOpenBoard,
   downloadingArtifactIds = [],
 }: AssetsViewProps) {
   const typeOptions = useMemo(() => {
@@ -340,7 +342,21 @@ export function AssetsView({
           ) : (
             <div className={styles.assetEmpty}>
               <FolderOpen className="h-5 w-5" />
-              <p>当前筛选下没有资产。</p>
+              <div>
+                <p>当前筛选下没有资产。</p>
+                <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+                  资产会在画布运行完成后生成，包括问题集、抓取答案、图谱补丁和报告文件。
+                </p>
+                {onOpenBoard ? (
+                  <button
+                    type="button"
+                    onClick={onOpenBoard}
+                    className="mt-3 inline-flex h-8 items-center rounded-lg bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)]"
+                  >
+                    去画布运行
+                  </button>
+                ) : null}
+              </div>
             </div>
           )}
         </section>

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { RiAddLine, RiSettings3Line } from '@remixicon/react';
+import { useRouter } from 'next/navigation';
+import { RiAddLine, RiGitBranchLine, RiSettings3Line } from '@remixicon/react';
 import { BrandAvatar } from './BrandAvatar';
 import { BrandManageDialog } from './BrandManageDialog';
 import {
@@ -15,6 +16,7 @@ interface DashboardBrandSidebarProps {
   selectedBrandId: string | null;
   onSelectBrand: (brandId: string) => void;
   onAddBrand?: () => void;
+  showBrandSpaceLink?: boolean;
 }
 
 export function DashboardBrandSidebar({
@@ -22,7 +24,9 @@ export function DashboardBrandSidebar({
   selectedBrandId,
   onSelectBrand,
   onAddBrand,
+  showBrandSpaceLink = true,
 }: DashboardBrandSidebarProps) {
+  const router = useRouter();
   const [manageOpen, setManageOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const { primary, internal, duplicates } = splitDashboardEntities(
@@ -123,6 +127,18 @@ export function DashboardBrandSidebar({
           </div>
         ) : null}
 
+        {showBrandSpaceLink && selectedBrandId ? (
+          <button
+            type="button"
+            onClick={() => router.push(`/brand-space?entity_id=${encodeURIComponent(selectedBrandId)}`)}
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[13px] border text-[13px] font-semibold text-[var(--brand-text)] transition-colors hover:border-[var(--brand-primary)]"
+            style={{ borderColor: 'var(--brand-border)', background: 'var(--brand-bg)' }}
+          >
+            <RiGitBranchLine className="h-4 w-4" />
+            进入品牌空间
+          </button>
+        ) : null}
+
         <button
           type="button"
           onClick={onAddBrand}
@@ -143,7 +159,9 @@ export function DashboardMobileBrandSwitcher({
   entities,
   selectedBrandId,
   onSelectBrand,
+  showBrandSpaceLink = true,
 }: DashboardBrandSidebarProps) {
+  const router = useRouter();
   const [manageOpen, setManageOpen] = useState(false);
   const selectedBrand = entities.find((entity) => entity.id === selectedBrandId) || entities[0];
   const selectedName = cleanEntityDisplayText(selectedBrand?.name, '未命名品牌');
@@ -195,6 +213,18 @@ export function DashboardMobileBrandSwitcher({
           <RiSettings3Line className="h-4 w-4" />
         </button>
       </div>
+
+      {showBrandSpaceLink && selectedBrand?.id ? (
+        <button
+          type="button"
+          onClick={() => router.push(`/brand-space?entity_id=${encodeURIComponent(selectedBrand.id)}`)}
+          className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[13px] border text-[13px] font-semibold text-[var(--brand-text)] transition-colors hover:border-[var(--brand-primary)]"
+          style={{ borderColor: 'var(--brand-border)', background: 'var(--brand-bg)' }}
+        >
+          <RiGitBranchLine className="h-4 w-4" />
+          进入品牌空间
+        </button>
+      ) : null}
 
       <BrandManageDialog open={manageOpen} onClose={() => setManageOpen(false)} />
     </section>
