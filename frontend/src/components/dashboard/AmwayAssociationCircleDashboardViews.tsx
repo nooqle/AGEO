@@ -3,7 +3,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  MessageCircle,
   RefreshCw,
   Upload,
   X,
@@ -3024,14 +3023,10 @@ export function AssociationReportPanel({
   projection,
   activeCenterTerm,
   groups,
-  onOpenChat,
-  isOpeningChat,
 }: {
   projection: OntologyAssociationCircleProjection;
   activeCenterTerm: string;
   groups: AssociationMapGroup[];
-  onOpenChat: () => void;
-  isOpeningChat?: boolean;
 }) {
   const nodes = projection.nodes || [];
   const actions = projection.association_actions || [];
@@ -3100,15 +3095,6 @@ export function AssociationReportPanel({
               >
                 <Download size={16} />
                 导出 HTML
-              </button>
-              <button
-                type="button"
-                onClick={onOpenChat}
-                disabled={isOpeningChat}
-                className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--brand-primary)] px-3 text-sm font-medium text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:opacity-60"
-              >
-                <MessageCircle size={16} />
-                进入对话
               </button>
             </div>
           </div>
@@ -5310,6 +5296,124 @@ function EvidenceScopeCard({ title, items }: { title: string; items: string[] })
   );
 }
 
+function buildExportOrbitSnapshotHtml(
+  centerTerm: string,
+  groups: AssociationMapGroup[] | undefined,
+  sampleScope: Record<string, unknown>,
+) {
+  if (!groups?.length) return '';
+  const associationGroups = groups.filter((group) => group.key !== 'risk');
+  const riskNodes = groups.find((group) => group.key === 'risk')?.nodes || [];
+  const entries = buildCommercialOrbitEntries(associationGroups, riskNodes);
+  const counts = {
+    strong: associationGroups.find((group) => group.key === 'strong')?.nodes.length || 0,
+    growth: associationGroups.find((group) => group.key === 'growth')?.nodes.length || 0,
+    story: associationGroups.find((group) => group.key === 'story')?.nodes.length || 0,
+    risk: riskNodes.length,
+  };
+  const labelEntries = entries
+    .filter((entry) => entry.labelPriority || nodeEvidenceCount(entry.node) >= 20 || nodePlatformCount(entry.node) >= 4)
+    .sort((left, right) => nodeEvidenceCount(right.node) - nodeEvidenceCount(left.node))
+    .slice(0, 44);
+  const topNodes = entries
+    .slice()
+    .sort((left, right) => nodeEvidenceCount(right.node) - nodeEvidenceCount(left.node))
+    .slice(0, 8);
+  const answerCount = sampleAnswerCount(sampleScope);
+  const platformCount = samplePlatformCount(sampleScope);
+  const labelIds = new Set(labelEntries.map((entry) => entry.node.node_id));
+  const nodeDots = entries.map((entry) => {
+    const x = entry.left * 12;
+    const y = entry.top * 6;
+    const radius = clampNumber(entry.size * 0.24, 3.2, 8.8);
+    const color = exportOrbitColor(entry.groupKey);
+    const opacity = labelIds.has(entry.node.node_id) ? 0.88 : 0.42;
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${radius.toFixed(1)}" fill="${color}" opacity="${opacity}" />`;
+  }).join('');
+  const nodeLinks = topNodes.map((entry) => {
+    const x = entry.left * 12;
+    const y = entry.top * 6;
+    return `<line x1="600" y1="300" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${exportOrbitColor(entry.groupKey)}" stroke-width="1.2" opacity="0.22" />`;
+  }).join('');
+  const labels = labelEntries.map((entry) => {
+    const tone = entry.groupKey;
+    const evidence = nodeEvidenceCount(entry.node);
+    const origin = entry.node.term_origin === 'strategy' || entry.node.origin_label === '战略词' ? '战' : '答';
+    const labelLeft = clampNumber(entry.left, 7.5, 92.5);
+    const labelTop = clampNumber(entry.top, 8, 92);
+    return `
+      <span
+        class="orbit-export-label orbit-label-${tone}"
+        style="left:${labelLeft.toFixed(2)}%;top:${labelTop.toFixed(2)}%;"
+        title="${escapeHtml(entry.node.term)} / ${evidence} 条证据 / ${nodePlatformCount(entry.node)} 个平台"
+      >
+        ${escapeHtml(entry.node.term)}
+        <em>${origin}</em>
+      </span>
+    `;
+  }).join('');
+  const topList = topNodes.map((entry, index) => `
+    <li>
+      <span>${index + 1}. ${escapeHtml(entry.node.term)}</span>
+      <b>${nodeEvidenceCount(entry.node)} 条</b>
+    </li>
+  `).join('');
+  return `
+    <section class="orbit-export-section">
+      <div class="orbit-export-head">
+        <div>
+          <div class="eyebrow">BRAND ASSOCIATION MAP</div>
+          <h2>${escapeHtml(centerTerm)}品牌联想图谱</h2>
+          <p>图谱来自本轮抓取回答后的实体抽取与校准结果。越靠近中心，说明回答越容易把该词带回品牌；红色节点表示需要单独解释的风险或竞争关系。</p>
+        </div>
+        <div class="orbit-export-metrics">
+          <div><b>${answerCount || '-'}</b><span>有效回答</span></div>
+          <div><b>${platformCount || '-'}</b><span>有效平台</span></div>
+          <div><b>${entries.length}</b><span>图谱节点</span></div>
+        </div>
+      </div>
+      <div class="orbit-export-wrap">
+        <svg class="orbit-export-svg" viewBox="0 0 1200 600" role="img" aria-label="${escapeHtml(centerTerm)}品牌联想圈层图">
+          <defs>
+            <radialGradient id="export-orbit-core" cx="50%" cy="50%" r="52%">
+              <stop offset="0%" stop-color="#e1f1ed" stop-opacity="0.92" />
+              <stop offset="62%" stop-color="#e1f1ed" stop-opacity="0.28" />
+              <stop offset="100%" stop-color="#fffdf8" stop-opacity="0" />
+            </radialGradient>
+          </defs>
+          <rect x="0" y="0" width="1200" height="600" rx="28" fill="#fffdf8" />
+          <ellipse cx="600" cy="300" rx="288" ry="104" fill="url(#export-orbit-core)" stroke="#8ecbc0" stroke-width="2" opacity="0.9" />
+          <ellipse cx="600" cy="300" rx="420" ry="151" fill="none" stroke="#d7ae72" stroke-width="2" stroke-dasharray="10 12" opacity="0.62" />
+          <ellipse cx="600" cy="300" rx="564" ry="203" fill="none" stroke="#c8c2b8" stroke-width="2" opacity="0.62" />
+          <ellipse cx="600" cy="342" rx="582" ry="230" fill="none" stroke="#d98279" stroke-width="1.5" stroke-dasharray="8 14" opacity="0.26" />
+          ${nodeLinks}
+          ${nodeDots}
+          <circle cx="600" cy="300" r="58" fill="#dff0ec" stroke="#1f7a6b" stroke-width="2.4" />
+          <text x="600" y="286" text-anchor="middle" font-size="15" fill="#1f7a6b">中心品牌</text>
+          <text x="600" y="324" text-anchor="middle" font-size="34" font-weight="700" fill="#1f7a6b">${escapeHtml(centerTerm)}</text>
+        </svg>
+        ${labels}
+      </div>
+      <div class="orbit-export-footer">
+        <div class="orbit-export-legend">
+          <span><i style="background:#1f7a6b"></i>稳定轨 ${counts.strong}</span>
+          <span><i style="background:#b9822d"></i>机会轨 ${counts.growth}</span>
+          <span><i style="background:#8f8a80"></i>观察轨 ${counts.story}</span>
+          <span><i style="background:#b95046"></i>风险关系 ${counts.risk}</span>
+        </div>
+        <ol class="orbit-export-top">${topList}</ol>
+      </div>
+    </section>
+  `;
+}
+
+function exportOrbitColor(groupKey: AssociationMapGroupKey) {
+  if (groupKey === 'risk') return '#b95046';
+  if (groupKey === 'growth') return '#b9822d';
+  if (groupKey === 'story') return '#8f8a80';
+  return '#1f7a6b';
+}
+
 function downloadAssociationReportHtml(
   centerTerm: string,
   sections: ReportNarrativeSection[],
@@ -5331,6 +5435,7 @@ function downloadAssociationReportHtml(
   const platformComparison = evidence?.platformComparison || [];
   const sampleScope = evidence?.sampleScope || {};
   const entityTerms = buildReportEntityTerms(groups, centerTerm);
+  const orbitSnapshotHtml = buildExportOrbitSnapshotHtml(centerTerm, groups, sampleScope);
 
   const sectionHtml = sections.map((section, index) => {
     const titleText = section.title || '';
@@ -5522,15 +5627,27 @@ function downloadAssociationReportHtml(
       color: #1f2933;
       background: #f7f4ed;
       font-family: ui-serif, "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
+      --brand-primary: #1f7a6b;
+      --success: #1f7a6b;
+      --error: #b95046;
+      --text-tertiary: #657184;
+      --bg-secondary: #f4eee2;
     }
     body { margin: 0; background: #f7f4ed; }
     main {
-      width: min(920px, calc(100vw - 48px));
+      width: min(1120px, calc(100vw - 48px));
       margin: 56px auto;
       border: 1px solid #ded8cc;
       background: #fffdf8;
       padding: 56px;
       box-shadow: 0 18px 50px rgba(31, 41, 51, 0.08);
+    }
+    .section-num {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px; margin-right: 10px; border-radius: 8px;
+      background: rgba(31,122,107,0.10); color: #1f7a6b;
+      font: 700 14px/1 ui-sans-serif, system-ui, sans-serif;
+      vertical-align: 2px;
     }
     .eyebrow {
       color: #657184;
@@ -5580,6 +5697,63 @@ function downloadAssociationReportHtml(
     .evidence-card ul { margin: 12px 0 0; padding-left: 20px; font: 14px/1.8 ui-sans-serif, system-ui, sans-serif; color: #384556; }
     blockquote { margin: 14px 0 0; padding-left: 14px; border-left: 3px solid #1f7a6b; color: #4b5565; font: 14px/1.8 ui-sans-serif, system-ui, sans-serif; }
     p strong, .action-paragraph strong { font-weight: 700; color: #1f2933; }
+
+    /* graph snapshot */
+    .orbit-export-section {
+      margin-top: 34px; padding: 28px; border: 1px solid #ebe5da;
+      border-radius: 24px; background: #fbf8f1;
+    }
+    .orbit-export-section h2 { margin-top: 4px; font-size: 28px; }
+    .orbit-export-section p { max-width: 720px; }
+    .orbit-export-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+    .orbit-export-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; min-width: 320px; }
+    .orbit-export-metrics div {
+      border: 1px solid #ebe5da; border-radius: 14px; background: #fffdf8;
+      padding: 12px 14px; text-align: center;
+    }
+    .orbit-export-metrics b { display: block; font: 700 26px/1.2 ui-sans-serif, system-ui, sans-serif; color: #1f2933; }
+    .orbit-export-metrics span { display: block; margin-top: 4px; font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; color: #657184; }
+    .orbit-export-wrap {
+      position: relative; margin-top: 24px; min-height: 520px;
+      border: 1px solid #ebe5da; border-radius: 22px; overflow: hidden; background: #fffdf8;
+    }
+    .orbit-export-svg { display: block; width: 100%; height: 520px; }
+    .orbit-export-label {
+      position: absolute; transform: translate(-50%, -50%);
+      display: inline-flex; align-items: center; gap: 5px;
+      max-width: 142px; padding: 4px 8px; border-radius: 999px;
+      border: 1px solid #e3ded3; background: rgba(255,253,248,0.92);
+      box-shadow: 0 2px 8px rgba(31,41,51,0.08);
+      color: #384556; font: 600 12px/1.3 ui-sans-serif, system-ui, sans-serif;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .orbit-export-label em {
+      flex: 0 0 auto; border-radius: 999px; padding: 1px 5px;
+      font: 700 10px/1.3 ui-sans-serif, system-ui, sans-serif;
+      background: rgba(31,122,107,0.10); color: #1f7a6b; font-style: normal;
+    }
+    .orbit-label-growth { border-color: rgba(185,130,45,0.34); }
+    .orbit-label-story { border-color: rgba(143,138,128,0.28); }
+    .orbit-label-risk { border-color: rgba(185,80,70,0.32); color: #6f403a; }
+    .orbit-label-risk em { background: rgba(185,80,70,0.10); color: #b95046; }
+    .orbit-export-footer {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
+      gap: 20px; margin-top: 18px; align-items: start;
+    }
+    .orbit-export-legend { display: flex; flex-wrap: wrap; gap: 10px; font: 13px/1.6 ui-sans-serif, system-ui, sans-serif; color: #384556; }
+    .orbit-export-legend span {
+      display: inline-flex; align-items: center; gap: 6px; border: 1px solid #ebe5da;
+      border-radius: 999px; background: #fffdf8; padding: 5px 10px;
+    }
+    .orbit-export-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+    .orbit-export-top {
+      margin: 0; padding: 12px 16px; border: 1px solid #ebe5da; border-radius: 14px;
+      background: #fffdf8; list-style: none; font: 13px/1.7 ui-sans-serif, system-ui, sans-serif;
+    }
+    .orbit-export-top li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-top: 1px solid #f0ebe2; }
+    .orbit-export-top li:first-child { border-top: 0; }
+    .orbit-export-top span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .orbit-export-top b { color: #1f2933; }
 
     /* takeaway 高亮框 */
     .takeaway-box-green, .takeaway-box-green-strong, .takeaway-box-red {
@@ -5640,6 +5814,7 @@ function downloadAssociationReportHtml(
     <div class="eyebrow">Specta AI 品牌圈层报告</div>
     <h1>${escapeHtml(centerTerm)}品牌圈层解读报告</h1>
     <div class="meta">由平台回答解析结果生成。外围节点来自回答证据，战略词只作为解释背景。</div>
+    ${orbitSnapshotHtml}
     ${sectionHtml}
     ${questionHtml}
     ${platformHtml}

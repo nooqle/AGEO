@@ -74,12 +74,10 @@ interface AmwayAssociationCircleDashboardProps {
   isRunSubmitting?: boolean;
   isProjectionLoading?: boolean;
   runError?: string | null;
-  isOpeningChat?: boolean;
   liveStageResults?: StageResult[];
   onSelectEntity: (entityId: string) => void;
   onSelectCenterTerm: (term: string) => void;
   onStart: (payload?: AssociationCircleStartPayload) => void;
-  onOpenChat: () => void;
   onOpenLatestReport: () => void;
 }
 
@@ -94,11 +92,9 @@ export function AmwayAssociationCircleDashboard({
   isRunSubmitting,
   isProjectionLoading,
   runError,
-  isOpeningChat,
   liveStageResults = [],
   onSelectCenterTerm,
   onStart,
-  onOpenChat,
 }: AmwayAssociationCircleDashboardProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [uploadedQuestions, setUploadedQuestions] = useState<UploadedAssociationQuestion[]>([]);
@@ -329,8 +325,6 @@ export function AmwayAssociationCircleDashboard({
                     projection={projection}
                     activeCenterTerm={activeCenterTerm}
                     groups={mapGroups}
-                    isOpeningChat={isOpeningChat}
-                    onOpenChat={onOpenChat}
                   />
                 </section>
               ) : (
