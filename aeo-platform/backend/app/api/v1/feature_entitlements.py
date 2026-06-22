@@ -18,6 +18,7 @@ from app.services.brand_association_circle_variant import (
 )
 from app.services.organization_feature_service import (
     FEATURE_AMWAYCHINA_CONSOLE,
+    ensure_amwaychina_console_entity,
     feature_enabled_for_account,
 )
 
@@ -83,7 +84,11 @@ async def get_amwaychina_entitlement(
             amway_entities.append((entity, aliases))
 
     if not amway_entities:
-        return _disabled_payload("amway_entity_missing")
+        entity = await ensure_amwaychina_console_entity(db, organization)
+        await db.commit()
+        await db.refresh(entity)
+        aliases = _entity_aliases(entity)
+        amway_entities.append((entity, aliases))
 
     entity, aliases = sorted(
         amway_entities,
