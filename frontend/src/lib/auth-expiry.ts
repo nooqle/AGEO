@@ -33,16 +33,32 @@ export function consumeAuthRedirectToast(): string | null {
   }
 }
 
+export function resolveAuthNextPath(nextPath: string | null | undefined, fallback: string): string {
+  const rawPath = (nextPath || fallback).trim();
+  if (!rawPath || !rawPath.startsWith('/') || rawPath.startsWith('//')) {
+    return fallback;
+  }
+
+  if (rawPath.startsWith('/auth') || rawPath.startsWith('/control-plane/login')) {
+    const nestedNext = new URL(rawPath, window.location.origin).searchParams.get('next');
+    return nestedNext ? resolveAuthNextPath(nestedNext, fallback) : fallback;
+  }
+
+  return rawPath;
+}
+
 function buildLoginPath(nextPath?: string): string {
   if (typeof window === 'undefined') {
     return '/auth';
   }
-  const resolvedNextPath =
+  const currentPath =
     nextPath
     || `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  const isControlPlane = resolvedNextPath.startsWith('/control-plane');
+  const isControlPlane = currentPath.startsWith('/control-plane');
+  const fallback = isControlPlane ? '/control-plane' : '/dashboard';
+  const resolvedNextPath = resolveAuthNextPath(currentPath, fallback);
   const basePath = isControlPlane ? '/control-plane/login' : '/auth';
-  return `${basePath}?next=${encodeURIComponent(resolvedNextPath || '/dashboard')}`;
+  return `${basePath}?next=${encodeURIComponent(resolvedNextPath)}`;
 }
 
 export function redirectToLoginForExpiredAuth(

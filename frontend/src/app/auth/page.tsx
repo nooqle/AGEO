@@ -27,7 +27,7 @@ import {
   getStoredAccessToken,
   setStoredAccessToken,
 } from '@/lib/auth-storage';
-import { consumeAuthRedirectToast } from '@/lib/auth-expiry';
+import { consumeAuthRedirectToast, resolveAuthNextPath } from '@/lib/auth-expiry';
 import { PublicBrand } from '@/components/layout/PublicBrand';
 import { api } from '@/services/api';
 import type { VerificationChannel } from '@/types/auth';
@@ -330,7 +330,10 @@ function InfoPanel({
 function AuthPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nextPath = useMemo(() => searchParams.get('next') || '/dashboard', [searchParams]);
+  const nextPath = useMemo(
+    () => resolveAuthNextPath(searchParams.get('next'), '/dashboard'),
+    [searchParams]
+  );
   const requestedMode = useMemo<Mode>(
     () => (searchParams.get('mode') === 'login' ? 'login' : 'apply'),
     [searchParams]

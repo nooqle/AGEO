@@ -16,7 +16,7 @@ import {
   getStoredAccessToken,
   setStoredAccessToken,
 } from '@/lib/auth-storage';
-import { consumeAuthRedirectToast } from '@/lib/auth-expiry';
+import { consumeAuthRedirectToast, resolveAuthNextPath } from '@/lib/auth-expiry';
 import { api } from '@/services/api';
 import type { AuthUser, VerificationChannel } from '@/types/auth';
 
@@ -102,7 +102,7 @@ function ControlPlaneLoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = useMemo(
-    () => searchParams.get('next') || '/control-plane',
+    () => resolveAuthNextPath(searchParams.get('next'), '/control-plane'),
     [searchParams]
   );
 
