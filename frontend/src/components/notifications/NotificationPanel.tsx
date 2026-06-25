@@ -151,11 +151,6 @@ export function NotificationPanel({
     }
   }, [isClosing]);
 
-  // Close on route change
-  useEffect(() => {
-    closePanel();
-  }, [router, closePanel]);
-
   const handleAlertClick = useCallback(
     (alert: MonitoringAlert) => {
       closePanel();
