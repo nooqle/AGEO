@@ -108,7 +108,7 @@ import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
 
-const BRAND_SPACE_DEFAULT_REAL_PLATFORMS = ['doubao', 'kimi', 'yuanbao'];
+const BRAND_SPACE_DEFAULT_REAL_PLATFORMS = ['doubao', 'yuanbao', 'kimi', 'deepseek'];
 const BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS = ['chatgpt', 'deepseek', 'kimi', 'doubao'];
 
 export function getApiBaseUrl(): string {

@@ -172,7 +172,12 @@ PLATFORM_TEMPLATES: list[dict[str, Any]] = [
     },
 ]
 
-BRAND_SPACE_DEFAULT_REAL_PLATFORMS: tuple[str, ...] = ("doubao", "kimi", "yuanbao")
+BRAND_SPACE_DEFAULT_REAL_PLATFORMS: tuple[str, ...] = (
+    "doubao",
+    "yuanbao",
+    "kimi",
+    "deepseek",
+)
 BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS: tuple[str, ...] = (
     "chatgpt",
     "deepseek",

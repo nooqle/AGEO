@@ -248,21 +248,25 @@ export function GraphHomeView({
               })}
             </svg>
 
-            {visibleEntities.map((entity) => (
-              <button
-                key={entity.id}
-                type="button"
-                onClick={() => selectGraphEntity(entity)}
-                className={entityClass(entity)}
-                style={{ left: `${entity.x}%`, top: `${entity.y}%` }}
-                aria-label={`查看实体：${entity.label}，圈层${zoneLabels[entity.zone]}，连接强度${entity.strength}`}
-              >
-                <span className={entity.zone === 'center' ? styles.entityCenter : styles.entityPoint} />
-                <span className="mt-2 block rounded-md bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)] shadow-sm">
-                  {entity.label}
-                </span>
-              </button>
-            ))}
+            {visibleEntities.map((entity) => {
+              const zoneLabel = zoneLabels[entity.zone] ?? '待分层';
+              const strengthLabel = Number.isFinite(entity.strength) ? Math.round(entity.strength) : 0;
+              return (
+                <button
+                  key={entity.id}
+                  type="button"
+                  onClick={() => selectGraphEntity(entity)}
+                  className={entityClass(entity)}
+                  style={{ left: `${entity.x}%`, top: `${entity.y}%` }}
+                  aria-label={`查看实体：${entity.label}，圈层${zoneLabel}，连接强度${strengthLabel}`}
+                >
+                  <span className={entity.zone === 'center' ? styles.entityCenter : styles.entityPoint} />
+                  <span className="mt-2 block rounded-md bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)] shadow-sm">
+                    {entity.label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </section>
 

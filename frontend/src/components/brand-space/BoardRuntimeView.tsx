@@ -102,6 +102,26 @@ function platformAbbreviation(platformKey: string) {
   return labels[key] ?? platformKey.slice(0, 2).toUpperCase();
 }
 
+function platformAnswerLabel(platform: PlatformFetchNode) {
+  if (platform.answers > 0) {
+    return platform.status === 'running' ? `${platform.answers} 条已回传` : `${platform.answers} 条回答`;
+  }
+  if (platform.status === 'running') {
+    return '抓取中';
+  }
+  return '0 条回答';
+}
+
+function platformFailureLabel(platform: PlatformFetchNode) {
+  if (platform.failures > 0) {
+    return `${platform.failures} 个失败`;
+  }
+  if (platform.status === 'running') {
+    return '统计中';
+  }
+  return '无失败';
+}
+
 function getNodeClass(node: BoardNode, selectedNodeId: string) {
   return classNames(
     styles.node,
@@ -350,35 +370,39 @@ export function BoardRuntimeView({
                   </span>
                 </div>
                 <div className="space-y-3">
-                  {platforms.map((platform) => (
-                    <button
-                      key={platform.id}
-                      type="button"
-                      onClick={() => onSelectNode('platform-rack')}
-                      className={classNames(styles.platformCard, platform.status === 'running' && styles.platformRunning, 'w-full rounded-xl p-3 text-left')}
-                      aria-label={`查看${platform.label}，进度${platform.progress}%，回答${platform.answers}条`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--bg-tertiary)] text-xs font-bold text-[var(--text-primary)]">
-                            {platformAbbreviation(platform.platformKey)}
-                          </span>
-                          <span>
-                            <span className="block text-sm font-semibold text-[var(--text-primary)]">{platform.label}</span>
-                            <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">{platform.model}</span>
-                          </span>
+                  {platforms.map((platform) => {
+                    const answerLabel = platformAnswerLabel(platform);
+                    const failureLabel = platformFailureLabel(platform);
+                    return (
+                      <button
+                        key={platform.id}
+                        type="button"
+                        onClick={() => onSelectNode('platform-rack')}
+                        className={classNames(styles.platformCard, platform.status === 'running' && styles.platformRunning, 'w-full rounded-xl p-3 text-left')}
+                        aria-label={`查看${platform.label}，进度${platform.progress}%，${answerLabel}，${failureLabel}`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--bg-tertiary)] text-xs font-bold text-[var(--text-primary)]">
+                              {platformAbbreviation(platform.platformKey)}
+                            </span>
+                            <span>
+                              <span className="block text-sm font-semibold text-[var(--text-primary)]">{platform.label}</span>
+                              <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">{platform.model}</span>
+                            </span>
+                          </div>
+                          <span className="text-xs font-semibold text-[var(--text-primary)]">{platform.progress}%</span>
                         </div>
-                        <span className="text-xs font-semibold text-[var(--text-primary)]">{platform.progress}%</span>
-                      </div>
-                      <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-tertiary)]">
-                        <span>{platform.answers} 条回答</span>
-                        <span>{platform.failures ? `${platform.failures} 个失败` : '无失败'}</span>
-                      </div>
-                      <div className="mt-3 h-1.5 rounded-full bg-[var(--bg-tertiary)]">
-                        <div className="h-full rounded-full bg-[var(--brand-primary)]" style={{ width: `${platform.progress}%` }} />
-                      </div>
-                    </button>
-                  ))}
+                        <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-tertiary)]">
+                          <span>{answerLabel}</span>
+                          <span>{failureLabel}</span>
+                        </div>
+                        <div className="mt-3 h-1.5 rounded-full bg-[var(--bg-tertiary)]">
+                          <div className="h-full rounded-full bg-[var(--brand-primary)]" style={{ width: `${platform.progress}%` }} />
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </section>
             ) : null}
