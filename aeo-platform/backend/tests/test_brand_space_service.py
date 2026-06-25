@@ -649,18 +649,20 @@ async def test_real_board_run_defaults_to_real_a4_platform_scope(tmp_path):
             execution_mode="real",
         )
 
-        assert payload["run"]["input_scope"]["platforms"] == ["doubao", "kimi", "yuanbao"]
+        expected_platforms = ["doubao", "yuanbao", "kimi", "deepseek"]
+        assert payload["run"]["input_scope"]["platforms"] == expected_platforms
         assert [platform["platformKey"] for platform in payload["platforms"]] == [
             "doubao",
-            "kimi",
             "yuanbao",
+            "kimi",
+            "deepseek",
         ]
         intelligence_run = await session.get(
             BrandIntelligenceRun,
             uuid.UUID(payload["run"]["brand_intelligence_run_id"]),
         )
         assert intelligence_run is not None
-        assert intelligence_run.input_scope["platforms"] == ["doubao", "kimi", "yuanbao"]
+        assert intelligence_run.input_scope["platforms"] == expected_platforms
 
     await engine.dispose()
 
