@@ -56,9 +56,27 @@
 
 .boardStage {
   position: relative;
-  min-width: 1120px;
+  width: 1120px;
+  margin: 0 auto;
   height: 720px;
   isolation: isolate;
+}
+
+.stageBand {
+  position: absolute;
+  z-index: 0;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-secondary) 58%, transparent);
+}
+
+.stageBand span {
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .canvas::after {
@@ -90,11 +108,15 @@
 
 .edgePath {
   fill: none;
-  stroke: color-mix(in srgb, var(--text-tertiary) 48%, transparent);
+  stroke: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
+}
+
+.edgeArrow {
+  fill: color-mix(in srgb, var(--text-tertiary) 70%, transparent);
 }
 
 .edgePathPulse {
@@ -133,7 +155,7 @@
   position: absolute;
   z-index: 2;
   width: 188px;
-  min-height: 106px;
+  height: 132px;
   transform: translate(-50%, -50%);
   border: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-elevated) 94%, var(--bg-primary) 6%);
@@ -200,7 +222,7 @@
   left: 55%;
   top: 36%;
   width: 270px;
-  min-height: 462px;
+  height: 520px;
   transform: translate(-50%, -50%);
   border: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-secondary) 74%, transparent);
@@ -246,19 +268,102 @@
   min-height: 520px;
   overflow: hidden;
   border: 1px solid var(--border-subtle);
-  background:
-    radial-gradient(circle at center, color-mix(in srgb, var(--brand-primary) 8%, transparent) 0 16%, transparent 17%),
-    color-mix(in srgb, var(--bg-elevated) 90%, var(--bg-primary) 10%);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg-primary) 8%);
+}
+
+.graphMap {
+  position: relative;
+  width: min(860px, calc(100% - 48px));
+  height: 500px;
+  margin: 10px auto;
+}
+
+.graphLegend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 560px;
+}
+
+.graphLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.graphLegend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--brand-primary);
+}
+
+.graphLegend span[data-zone='risk'] i {
+  background: var(--error);
+}
+
+.graphLegend span[data-zone='competitor'] i,
+.graphLegend span[data-zone='pending_review'] i {
+  background: var(--warning);
+}
+
+.graphLegend span[data-zone='middle'] i {
+  background: var(--info);
+}
+
+.graphZoneRing,
+.graphZoneRingOuter {
+  fill: none;
+  stroke: color-mix(in srgb, var(--border-subtle) 78%, transparent);
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.graphZoneRingOuter {
+  stroke-dasharray: 4 4;
 }
 
 .graphLink {
-  stroke: color-mix(in srgb, var(--text-tertiary) 45%, transparent);
-  stroke-width: 1;
+  stroke: color-mix(in srgb, var(--brand-primary) 44%, var(--text-tertiary) 56%);
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.graphLinkRisk {
+  stroke: color-mix(in srgb, var(--error) 62%, var(--text-tertiary) 38%);
+}
+
+.graphLinkCompetitor {
+  stroke: color-mix(in srgb, var(--warning) 70%, var(--text-tertiary) 30%);
+}
+
+.graphRelationLabel {
+  paint-order: stroke;
+  stroke: var(--bg-elevated);
+  stroke-width: 4px;
+  fill: var(--text-secondary);
+  font-size: 3px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
 }
 
 .graphEntity {
   position: absolute;
   transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  min-width: 104px;
 }
 
 .entityPoint {
@@ -270,12 +375,12 @@
 }
 
 .entityCenter {
-  height: 28px;
-  width: 28px;
+  height: 34px;
+  width: 34px;
   border-radius: 999px;
   background: var(--brand-primary);
   border: 3px solid var(--bg-elevated);
-  box-shadow: 0 0 0 7px var(--brand-bg);
+  box-shadow: 0 0 0 8px var(--brand-bg);
 }
 
 .entityRisk .entityPoint {
@@ -289,6 +394,32 @@
 .entityPending .entityPoint {
   background: var(--info);
   animation: status-pulse 2s ease-in-out infinite;
+}
+
+.entityLabel {
+  display: grid;
+  gap: 2px;
+  min-width: 92px;
+  max-width: 136px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, var(--bg-primary) 6%);
+  box-shadow: 0 8px 16px rgba(24, 30, 28, 0.06);
+  text-align: center;
+}
+
+.entityLabel strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.entityLabel em {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.2;
 }
 
 .queueItem {
@@ -1086,7 +1217,7 @@
   }
 
   .boardStage {
-    min-width: 1120px;
+    width: 1120px;
   }
 
   .reportHero {

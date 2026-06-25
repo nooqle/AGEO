@@ -80,6 +80,18 @@ const graphUpdateStatusLabels: Record<string, string> = {
   failed: '未应用',
 };
 
+const relationKindLabels: Record<string, string> = {
+  belongs_to: '归属',
+  associated_with: '关联',
+  solution_for: '方案',
+  risk_of: '风险',
+  competes_with: '竞品',
+  scenario_for: '场景',
+  update_strength: '增强',
+  add_risk_relation: '风险',
+  add_competitor_relation: '竞品',
+};
+
 const emptyEntity: GraphEntity = {
   id: 'empty-brand',
   label: '品牌中心',
@@ -191,6 +203,11 @@ export function GraphHomeView({
     return acc;
   }, {});
   const categoryOptions = ['all', ...Object.keys(categoryCounts)];
+  const zoneCounts = visibleEntities.reduce<Record<string, number>>((acc, entity) => {
+    if (entity.zone === 'center') return acc;
+    acc[entity.zone] = (acc[entity.zone] ?? 0) + 1;
+    return acc;
+  }, {});
   const timelineItems = graphUpdate
     ? [
         `本次更新：${graphUpdate.before_graph_version} → ${graphUpdate.after_graph_version}`,
@@ -236,37 +253,74 @@ export function GraphHomeView({
                 </div>
               ) : null}
             </div>
+            <div className={styles.graphLegend} aria-label="图谱图例">
+              {(['inner', 'middle', 'risk', 'competitor', 'pending_review'] as const).map((zone) => (
+                <span key={zone} data-zone={zone}>
+                  <i />
+                  {zoneLabels[zone]} {zoneCounts[zone] ?? 0}
+                </span>
+              ))}
+            </div>
           </div>
 
           <div className={classNames(styles.graphPanel, 'rounded-xl')}>
-            <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
-              {visibleRelations.map((relation) => {
-                const from = entityById.get(relation.from);
-                const to = entityById.get(relation.to);
-                if (!from || !to) return null;
-                return <line key={relation.id} x1={from.x} y1={from.y} x2={to.x} y2={to.y} className={styles.graphLink} />;
-              })}
-            </svg>
+            <div className={styles.graphMap}>
+              <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" aria-hidden>
+                <circle cx="50" cy="50" r="16" className={styles.graphZoneRing} />
+                <circle cx="50" cy="50" r="29" className={styles.graphZoneRing} />
+                <circle cx="50" cy="50" r="42" className={styles.graphZoneRingOuter} />
+                {visibleRelations.map((relation) => {
+                  const from = entityById.get(relation.from);
+                  const to = entityById.get(relation.to);
+                  if (!from || !to) return null;
+                  const strength = Math.max(0.35, Math.min(1, relation.strength || 0.35));
+                  return (
+                    <g key={relation.id}>
+                      <line
+                        x1={from.x}
+                        y1={from.y}
+                        x2={to.x}
+                        y2={to.y}
+                        className={classNames(
+                          styles.graphLink,
+                          relation.kind.includes('risk') && styles.graphLinkRisk,
+                          relation.kind.includes('compet') && styles.graphLinkCompetitor,
+                        )}
+                        style={{ strokeWidth: 1.4 + strength * 3 }}
+                      />
+                      <text
+                        x={(from.x + to.x) / 2}
+                        y={(from.y + to.y) / 2 - 2}
+                        className={styles.graphRelationLabel}
+                      >
+                        {relationKindLabels[relation.kind] ?? relation.kind} · {Math.round(strength * 100)}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
 
-            {visibleEntities.map((entity) => {
-              const zoneLabel = zoneLabels[entity.zone] ?? '待分层';
-              const strengthLabel = Number.isFinite(entity.strength) ? Math.round(entity.strength) : 0;
-              return (
-                <button
-                  key={entity.id}
-                  type="button"
-                  onClick={() => selectGraphEntity(entity)}
-                  className={entityClass(entity)}
-                  style={{ left: `${entity.x}%`, top: `${entity.y}%` }}
-                  aria-label={`查看实体：${entity.label}，圈层${zoneLabel}，连接强度${strengthLabel}`}
-                >
-                  <span className={entity.zone === 'center' ? styles.entityCenter : styles.entityPoint} />
-                  <span className="mt-2 block rounded-md bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)] shadow-sm">
-                    {entity.label}
-                  </span>
-                </button>
-              );
-            })}
+              {visibleEntities.map((entity) => {
+                const zoneLabel = zoneLabels[entity.zone] ?? '待分层';
+                const strengthLabel = Number.isFinite(entity.strength) ? Math.round(entity.strength) : 0;
+                return (
+                  <button
+                    key={entity.id}
+                    type="button"
+                    onClick={() => selectGraphEntity(entity)}
+                    className={entityClass(entity)}
+                    style={{ left: `${entity.x}%`, top: `${entity.y}%` }}
+                    aria-label={`查看实体：${entity.label}，圈层${zoneLabel}，连接强度${strengthLabel}`}
+                  >
+                    <span className={entity.zone === 'center' ? styles.entityCenter : styles.entityPoint} />
+                    <span className={styles.entityLabel}>
+                      <strong>{entity.label}</strong>
+                      <em>{zoneLabel} · {strengthLabel}</em>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </section>
 

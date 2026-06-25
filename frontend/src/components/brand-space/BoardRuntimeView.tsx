@@ -75,8 +75,27 @@ const STRESS_STAGE_NODE_THRESHOLD = 24;
 
 const nodeSize = {
   default: { width: 188, height: 132 },
-  rack: { width: 270, height: 560 },
+  rack: { width: 270, height: 520 },
 };
+
+const workflowLayout: Record<string, BoardNode['position']> = {
+  'brand-seed': { x: 12, y: 45 },
+  'question-set': { x: 30, y: 45 },
+  'platform-rack': { x: 52, y: 48 },
+  'answer-normalize': { x: 76, y: 24 },
+  'entity-match': { x: 76, y: 45 },
+  'graph-patch': { x: 76, y: 66 },
+  'anomaly-review': { x: 52, y: 82 },
+  'graph-update': { x: 76, y: 86 },
+};
+
+const stageBands = [
+  { label: '输入', x: 4, width: 16 },
+  { label: '准备', x: 22, width: 16 },
+  { label: '抓取', x: 41, width: 22 },
+  { label: '抽取', x: 68, width: 16 },
+  { label: '审阅 / 更新', x: 68, width: 16, lower: true },
+];
 
 function classNames(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(' ');
@@ -134,6 +153,10 @@ function getNodeClass(node: BoardNode, selectedNodeId: string) {
 
 function stageSizeForNodes(nodes: BoardNode[]) {
   return nodes.length > STRESS_STAGE_NODE_THRESHOLD ? stressBoardStage : boardStage;
+}
+
+function layoutNode(node: BoardNode): BoardNode {
+  return workflowLayout[node.id] ? { ...node, position: workflowLayout[node.id] } : node;
 }
 
 function nodeRect(node: BoardNode, stageSize = boardStage) {
@@ -220,9 +243,10 @@ export function BoardRuntimeView({
   onPatchDecision,
   pendingPatchDecisionIds = [],
 }: BoardRuntimeViewProps) {
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0];
+  const layoutNodes = nodes.map(layoutNode);
+  const selectedNode = layoutNodes.find((node) => node.id === selectedNodeId) ?? layoutNodes[0];
   const isRunning = runStatus === 'running';
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const nodeById = new Map(layoutNodes.map((node) => [node.id, node]));
   const platformRackNode = nodeById.get('platform-rack');
   const platformProgress = platforms.length
     ? Math.round(platforms.reduce((sum, platform) => sum + platform.progress, 0) / platforms.length)
@@ -270,14 +294,33 @@ export function BoardRuntimeView({
           <div
             className={styles.boardStage}
             data-brand-space-node-count={nodes.length}
-            style={{ minWidth: stageSize.width, height: stageSize.height }}
+            style={{ width: stageSize.width, height: stageSize.height }}
           >
+            {stageBands.map((band) => (
+              <div
+                key={`${band.label}-${band.x}`}
+                className={styles.stageBand}
+                style={{
+                  left: `${band.x}%`,
+                  width: `${band.width}%`,
+                  top: band.lower ? '57%' : '4%',
+                  height: band.lower ? '38%' : '52%',
+                }}
+              >
+                <span>{band.label}</span>
+              </div>
+            ))}
             <svg
               className={styles.edgeLayer}
               data-brand-space-edges="workflow"
               viewBox={`0 0 ${stageSize.width} ${stageSize.height}`}
               aria-hidden="true"
             >
+              <defs>
+                <marker id="brand-space-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" className={styles.edgeArrow} />
+                </marker>
+              </defs>
               {edges.map((edge, index) => {
                 const from = nodeById.get(edge.from);
                 const to = nodeById.get(edge.to);
@@ -287,6 +330,7 @@ export function BoardRuntimeView({
                   <g key={edge.id} data-brand-space-edge={edge.id} className={styles.edgeGroup}>
                     <path
                       d={path.d}
+                      markerEnd="url(#brand-space-arrow)"
                       className={classNames(
                         styles.edgePath,
                         edge.dashed && styles.edgePathDashed,
@@ -305,24 +349,12 @@ export function BoardRuntimeView({
                         />
                       </circle>
                     ) : null}
-                    <circle
-                      cx={path.start.x}
-                      cy={path.start.y}
-                      r="4"
-                      className={classNames(styles.edgePort, edge.active && isRunning && styles.edgePortActive)}
-                    />
-                    <circle
-                      cx={path.end.x}
-                      cy={path.end.y}
-                      r="4"
-                      className={classNames(styles.edgePort, edge.active && isRunning && styles.edgePortActive)}
-                    />
                   </g>
                 );
               })}
             </svg>
 
-            {nodes.filter((node) => node.id !== 'platform-rack').map((node) => (
+            {layoutNodes.filter((node) => node.id !== 'platform-rack').map((node) => (
               <button
                 key={node.id}
                 type="button"
